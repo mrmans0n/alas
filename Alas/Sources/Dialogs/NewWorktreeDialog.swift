@@ -223,8 +223,12 @@ struct NewWorktreeDialog: View {
                 onCancel: { issueSheetPresentation = nil },
                 onAttach: attachIssue
             )
+            .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
         }
-        .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
+        .modifier(RepoHookApprovalPresentationHandler(
+            approvalQueue: state.repoHookApprovalQueue,
+            isActive: issueSheetPresentation == nil
+        ))
     }
 
     private var presetProject: ProjectConfig? {

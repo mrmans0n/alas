@@ -824,4 +824,53 @@ struct NewWorktreeDialogPresentationTests {
         #expect(rootRequest == nil)
         #expect(await task.value == .approve)
     }
+
+    @Test func inactiveParentBindingHandsRuntimeApprovalToActiveChild() async {
+        let queue = RepoHookApprovalQueue()
+        let childPresenterID = UUID()
+        queue.registerDialogPresenter(id: childPresenterID)
+        defer {
+            queue.decide(.approve)
+            queue.unregisterDialogPresenter(id: childPresenterID)
+        }
+
+        let bytes = Data("echo session open".utf8)
+        let hook = RepoHook(
+            event: .sessionOpen,
+            source: .local,
+            bytes: bytes,
+            text: String(decoding: bytes, as: UTF8.self),
+            hash: RepoHookTrust.hash(event: .sessionOpen, bytes: bytes)
+        )
+        let task = Task {
+            await queue.requestDecision(
+                hook: hook,
+                projectID: "project",
+                context: .sessionOpen
+            )
+        }
+        await Task.yield()
+
+        let activeRequestID = queue.activeRequest?.id
+        let queueBinding = Binding<RepoHookApprovalRequest?>(
+            get: { queue.activeDialogRequest },
+            set: { queue.activeDialogRequest = $0 }
+        )
+        let parentBinding = RepoHookApprovalPresentationHandler(
+            approvalQueue: queue,
+            isActive: false
+        ).presentationBinding(for: queueBinding)
+        let childBinding = RepoHookApprovalPresentationHandler(approvalQueue: queue)
+            .presentationBinding(for: queueBinding)
+
+        #expect(activeRequestID != nil)
+        #expect(parentBinding.wrappedValue == nil)
+        #expect(childBinding.wrappedValue?.id == activeRequestID)
+
+        parentBinding.wrappedValue = nil
+        #expect(queue.activeRequest?.id == activeRequestID)
+
+        queue.decide(.approve)
+        #expect(await task.value == .approve)
+    }
 }

@@ -2,16 +2,30 @@ import SwiftUI
 
 struct RepoHookApprovalPresentationHandler: ViewModifier {
     let approvalQueue: RepoHookApprovalQueue
+    var isActive = true
     @State private var presenterID = UUID()
 
     func body(content: Content) -> some View {
         @Bindable var queue = approvalQueue
+        let requestBinding = presentationBinding(for: $queue.activeDialogRequest)
         content
             .onAppear { queue.registerDialogPresenter(id: presenterID) }
             .onDisappear { queue.unregisterDialogPresenter(id: presenterID) }
-            .sheet(item: $queue.activeDialogRequest) { request in
+            .sheet(item: requestBinding) { request in
                 RepoHookApprovalSheet(request: request, queue: queue)
             }
+    }
+
+    func presentationBinding(
+        for queueBinding: Binding<RepoHookApprovalRequest?>
+    ) -> Binding<RepoHookApprovalRequest?> {
+        Binding(
+            get: { isActive ? queueBinding.wrappedValue : nil },
+            set: { request in
+                guard isActive else { return }
+                queueBinding.wrappedValue = request
+            }
+        )
     }
 }
 
