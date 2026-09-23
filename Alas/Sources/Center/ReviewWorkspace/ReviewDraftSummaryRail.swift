@@ -328,6 +328,16 @@ struct ReviewDraftSummaryRail: View {
                     }
                     .padding(10)
                 }
+                .onAppear {
+                    // `.onChange` only fires on a transition, so a focus set
+                    // before this view mounts (rail expanded while a comment
+                    // is already focused) needs its own initial scroll.
+                    if let focusedDraftCommentID {
+                        proxy.scrollTo("review-draft-summary-comment-\(focusedDraftCommentID)", anchor: .center)
+                    } else if let focusedFeedbackID {
+                        proxy.scrollTo("review-summary-feedback-\(focusedFeedbackID)", anchor: .center)
+                    }
+                }
                 .onChange(of: focusedDraftCommentID) { _, newValue in
                     guard let newValue else { return }
                     withAnimation(.easeInOut(duration: 0.18)) {
