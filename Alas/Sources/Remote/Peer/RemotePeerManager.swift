@@ -204,7 +204,8 @@ final class RemotePeerManager {
     private struct ApprovedInbound {
         let request: RemotePeerPairingRequest
         let localPeer: ApprovalPeer
-        let previous: RemotePeer?
+        var previous: RemotePeer?
+        var previousOwner: String?
     }
     @ObservationIgnored private var approvedInbound: [String: ApprovedInbound] = [:]
     @ObservationIgnored private var approvedCounterCodes: Set<String> = []
@@ -550,7 +551,7 @@ final class RemotePeerManager {
     func noteApprovedPeerPairingArrived(requestID: String, request: RemotePeerPairingRequest, localPeer: ApprovalPeer) {
         notePeerPairingArrived(serverId: request.peerServerId, localDeviceId: request.localDeviceId)
         approvedInbound[requestID] = ApprovedInbound(request: request, localPeer: localPeer,
-                                                    previous: durableStateByServerId[request.peerServerId])
+                                                    previous: nil, previousOwner: nil)
     }
 
     func handleInboundApprovedPeer(requestID: String) async -> Bool {
@@ -568,10 +569,18 @@ final class RemotePeerManager {
         guard let attempt = approvedInbound.removeValue(forKey: requestID) else { return }
         let request = attempt.request
         startGenerationAtRedeem.removeValue(forKey: request.localDeviceId)
+        let predecessor = validPredecessor(of: attempt)
+        // A superseded attempt can be cancelled before its successor. Remove
+        // it from every retained rollback link so no later cancellation revives it.
+        for id in approvedInbound.keys where approvedInbound[id]?.previous?.localDeviceId == request.localDeviceId {
+            approvedInbound[id]?.previous = predecessor.peer
+            approvedInbound[id]?.previousOwner = predecessor.owner
+        }
         if lastUpsertOwnerByServerId[request.peerServerId] == request.counterCode,
            let peer = peers.first(where: { $0.serverId == request.peerServerId }),
            peer.localDeviceId == request.localDeviceId {
-            if let previous = attempt.previous {
+            lastUpsertOwnerByServerId[request.peerServerId] = predecessor.owner
+            if let previous = predecessor.peer {
                 // This attempt owns the confirmed device, so rollback restores the old one too.
                 if let index = peers.firstIndex(where: { $0.id == peer.id }) { peers[index].localDeviceId = nil }
                 restorePreviousState(previous, peerId: peer.id)
@@ -579,6 +588,21 @@ final class RemotePeerManager {
         }
         pairing.revoke(deviceId: request.localDeviceId)
         onRevokeDevice?(request.localDeviceId)
+    }
+
+    private func validPredecessor(of attempt: ApprovedInbound) -> (peer: RemotePeer?, owner: String?) {
+        var previous = attempt.previous
+        var owner = attempt.previousOwner
+        // Direct device revocation may precede its coordinator callback. Walk
+        // past any such revoked predecessor while its rollback record remains.
+        while let deviceID = previous?.localDeviceId,
+              !pairing.devices.contains(where: { $0.id == deviceID }) {
+            guard let ancestor = approvedInbound.values.first(where: { $0.request.localDeviceId == deviceID })
+            else { return (nil, nil) }
+            previous = ancestor.previous
+            owner = ancestor.previousOwner
+        }
+        return (previous, owner)
     }
 
     private func completeInboundPeer(_ request: RemotePeerPairingRequest, approvalID: String?,
@@ -658,6 +682,16 @@ final class RemotePeerManager {
                 pairing.revoke(deviceId: request.localDeviceId)
                 onRevokeDevice?(request.localDeviceId)
                 return false
+            }
+            if let approvalID {
+                // Snapshot at publication, after the await: another pairing may
+                // have established the durable relationship we are replacing.
+                let previous = durableStateByServerId[request.peerServerId]
+                let previousOwner = approvedInbound.values.first {
+                    $0.request.localDeviceId == previous?.localDeviceId
+                }?.request.counterCode
+                approvedInbound[approvalID]?.previous = previous
+                approvedInbound[approvalID]?.previousOwner = previousOwner
             }
             lastUpsertOwnerByServerId[request.peerServerId] = counterCode
             if approvalID != nil { pairing.commitApprovedPeer(deviceId: request.localDeviceId) }
