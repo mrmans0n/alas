@@ -418,6 +418,20 @@ struct RemoteAppStateAccessTests {
         #expect(!secondManager.sessionRows.contains { $0.id == "legacy-session" })
         #expect(firstManager.persistence.path != secondManager.persistence.path)
 
+        // A lease check can create a scoped database independently. It must
+        // not hide history already bound to the first project.
+        _ = try ACPSessionStore(path: Paths.acpSessionsDB(
+            forProjectId: fixture.first.projectId, worktreeId: fixture.first.id
+        ).path)
+        let firstProject = try #require(fixture.state.projects.first { $0.id == fixture.first.projectId })
+        let reopenedFirst = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [firstProject])
+        ))
+        reopenedFirst.projectsManager.insertOptimisticWorktree(fixture.first)
+        let reopenedFirstManager = try #require(reopenedFirst.acpManager(for: fixture.first))
+        await reopenedFirstManager.refreshRecentNow()
+        #expect(reopenedFirstManager.sessionRows.contains { $0.id == "legacy-session" })
+
         let secondProject = try #require(fixture.state.projects.first { $0.id == fixture.second.projectId })
         let reopened = AppState(store: ProjectMemoryStore(
             projectsFile: ProjectsFile(projects: [secondProject])

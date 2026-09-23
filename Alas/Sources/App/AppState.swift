@@ -11929,8 +11929,16 @@ final class AppState {
 
     private func acpSessionsDatabaseURL(for worktree: Worktree, owner: SessionOwnerID) -> URL {
         let scopedURL = Paths.acpSessionsDB(for: owner)
-        if FileManager.default.fileExists(atPath: scopedURL.path) { return scopedURL }
         let legacyURL = Paths.acpSessionsDB(forWorktreeId: worktree.id)
+        let ownerURL = URL(fileURLWithPath: legacyURL.path + ".owner")
+        if FileManager.default.fileExists(atPath: ownerURL.path) {
+            guard let recordedID = try? String(contentsOf: ownerURL, encoding: .utf8),
+                  recordedID == worktree.projectId,
+                  FileManager.default.fileExists(atPath: legacyURL.path)
+            else { return scopedURL }
+            return legacyURL
+        }
+        if FileManager.default.fileExists(atPath: scopedURL.path) { return scopedURL }
         let hasDuplicateProjectPath = otherProjectsStillListWorktree(
             id: worktree.id,
             exceptProjectId: worktree.projectId
@@ -11941,13 +11949,6 @@ final class AppState {
         // Older installations keyed history by path alone. Bind that file to
         // one existing project before another host can claim it. The marker
         // keeps the binding stable if projects are later reordered or removed.
-        let ownerURL = URL(fileURLWithPath: legacyURL.path + ".owner")
-        if FileManager.default.fileExists(atPath: ownerURL.path) {
-            guard let recordedID = try? String(contentsOf: ownerURL, encoding: .utf8),
-                  recordedID == worktree.projectId
-            else { return scopedURL }
-            return legacyURL
-        }
         guard let firstOwnerID = projects.first(where: { project in
             projectsManager.worktrees(projectId: project.id).contains { $0.id == worktree.id }
         })?.id else { return scopedURL }
