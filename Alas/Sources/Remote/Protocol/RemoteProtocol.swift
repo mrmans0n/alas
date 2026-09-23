@@ -34,6 +34,12 @@ struct RemoteServerIdentity: Equatable, Sendable {
         self.federationEnabled = federationEnabled
         self.peers = peers
     }
+
+    init(serverId: String, name: String, federationEnabled: Bool = false,
+         peers: [RemoteHelloPeer] = []) {
+        self.init(serverId: serverId, name: name, hubEnabled: false,
+                  federationEnabled: federationEnabled, peers: peers)
+    }
 }
 
 struct RemoteModelInfo: Codable, Equatable, Sendable {

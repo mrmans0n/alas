@@ -290,7 +290,9 @@ struct RemotePairingApprovalIntegrationTests {
                     pairedDeviceCount: self.pairing.devices.count, serverId: self.id, name: self.peer.name,
                     pairingApprovalVersion: self.enabled ? 1 : nil) })
             result.acceptsPeers = { self.enabled }
-            result.identity = { .init(serverId: self.id, name: self.peer.name, hubEnabled: true, federationEnabled: true) }
+            result.identity = { () -> RemoteServerIdentity in
+                RemoteServerIdentity(serverId: self.id, name: self.peer.name, federationEnabled: true)
+            }
             result.identityProof = { RemoteIdentityCrypto.sign(serverId: self.id, challenge: $0, with: self.signer.key) }
             result.approval = RemotePairingApprovalHTTP(coordinator: coordinator, enabled: { self.enabled })
             result.onPeerPaired = { request in

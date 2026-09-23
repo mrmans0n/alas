@@ -36,7 +36,9 @@ import Testing
                 RemoteDiagnosticsSnapshot(appName: "Alas", port: nil, addresses: [], usesPlainHTTP: true,
                     pairedDeviceCount: 0, pairingApprovalVersion: 99)
             },
-            identity: { RemoteServerIdentity(serverId: "receiver", name: "Mac", hubEnabled: false, federationEnabled: federation) },
+            identity: { () -> RemoteServerIdentity in
+                RemoteServerIdentity(serverId: "receiver", name: "Mac", federationEnabled: federation)
+            },
             signer: signer)
         #expect(server.diagnosticsSnapshot().pairingApprovalVersion == nil)
         server.approvalEnabled = { true }
@@ -56,7 +58,9 @@ import Testing
         let signer = RemoteIdentityKeyProvider(store: UnavailableApprovalStore())
         let server = RemoteServer(pairing: RemotePairingService(store: InMemoryDeviceStore()),
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())), provider: FakeSessionsProvider(),
-            identity: { RemoteServerIdentity(serverId: "receiver", name: "Mac", hubEnabled: false, federationEnabled: true) },
+            identity: { () -> RemoteServerIdentity in
+                RemoteServerIdentity(serverId: "receiver", name: "Mac", federationEnabled: true)
+            },
             signer: signer)
         server.approvalEnabled = { true }
         server.approvalCoordinator = RemotePairingApprovalCoordinator(localPeer: {
