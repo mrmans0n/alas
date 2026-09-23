@@ -27,6 +27,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### ✨ Features
 
 - Aggregate sessions from trusted Macs in the remote hub, route scoped messages to the owning peer, and keep peer session state in sync (#1419).
+- Run approved repository startup hooks for terminal sessions and new worktrees, with content-hash approvals and local or SSH loading.
 
 ### 🐛 Fixes
 

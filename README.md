@@ -168,6 +168,25 @@ note the `kind` discriminator and the `id` on each env/header entry:
 `.alas/scripts/` run scripts live in the same directory and are shared the
 same way.
 
+### Startup hooks
+
+Repositories can also provide shell hooks without adding executable files to
+the app:
+
+- `.alas/hooks/session-open.sh` runs when Alas opens a terminal session.
+- `.alas/hooks/worktree-create.sh` runs after Alas creates a worktree.
+
+Hooks are read from the selected local or SSH worktree as UTF-8 files no
+larger than 256 KiB. Alas accepts only regular files contained in that
+worktree, including a symlink whose resolved target remains contained, and
+never writes either hook path.
+
+Alas combines scripts as global, repository hook, then per-user project
+script. A project can inherit or append to that prefix, override it, or disable
+startup scripts. Workspace member setup applies its own mode after the project
+layer. Hook content must be approved per project and event; changing even one
+byte prompts again. A one-time skip omits only the repository layer.
+
 ## Develop
 
 Use Xcode 26 or later with the full Xcode installation selected as your active
