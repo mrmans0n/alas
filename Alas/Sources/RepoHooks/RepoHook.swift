@@ -35,3 +35,9 @@ enum RepoHookLoadResult: Equatable, Sendable {
     case loaded(RepoHook)
     case failed(source: RepoHookSource, message: String)
 }
+
+struct RepoHookFailure: Equatable, Sendable {
+    let event: RepoHookEvent
+    let source: RepoHookSource
+    let message: String
+}

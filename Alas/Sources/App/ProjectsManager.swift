@@ -274,6 +274,17 @@ final class ProjectsManager {
         return true
     }
 
+    @discardableResult
+    func revokeRepoHookApproval(projectId: String, hash: String) -> Bool {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }),
+              projects[idx].approvedRepoHookHashes.contains(hash)
+        else {
+            return false
+        }
+        projects[idx].approvedRepoHookHashes.removeAll { $0 == hash }
+        return true
+    }
+
     /// Enables/disables a repo-defined MCP server for this project by name.
     /// Callers persist via `AppState.saveProjects()`.
     func setRepoMCPServerDisabled(projectId: String, name: String, disabled: Bool) {

@@ -13,17 +13,27 @@ struct RepoHookApprovalSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Repository startup hook")
                 .font(.headline)
-            Text("\(request.hook.event.title) wants to run \(request.hook.event.relativePath) from \(sourceDescription).")
+            Text("\(request.event.title) hook at \(request.event.relativePath) from \(sourceDescription).")
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Approval applies only to these exact contents. Changed contents will require approval again.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Text(request.hook.text)
-                .font(.system(.body, design: .monospaced))
-                .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
-                .padding(10)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                .textSelection(.enabled)
+            if let hook = request.hook {
+                Text("Approval applies only to these exact contents. Changed contents will require approval again.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Text(hook.text)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
+                    .padding(10)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    .textSelection(.enabled)
+            } else if let failure = request.failure {
+                Text("Alas could not read this hook: \(failure.message)")
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+                Text("Retry the read or continue without this repository hook.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
             HStack {
                 if request.context.allowsCancel {
                     Button("Cancel", role: .cancel) {
@@ -31,13 +41,15 @@ struct RepoHookApprovalSheet: View {
                     }
                 }
                 Spacer()
-                Button(request.context.skipTitle) {
-                    queue.decide(.skip)
+                Button(request.failure == nil ? request.context.skipTitle : "Retry") {
+                    queue.decide(request.failure == nil ? .skip : .retry)
                 }
-                Button(approveTitle) {
-                    queue.decide(.approve)
+                if request.hook != nil {
+                    Button(approveTitle) {
+                        queue.decide(.approve)
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
             }
         }
         .padding(20)
@@ -48,7 +60,7 @@ struct RepoHookApprovalSheet: View {
     }
 
     private var sourceDescription: String {
-        switch request.hook.source {
+        switch request.source {
         case .local: "this Mac"
         case let .remote(host): host
         }
@@ -59,6 +71,7 @@ struct RepoHookApprovalSheet: View {
         case .sessionOpen: "Approve and open"
         case .worktreeCreate: "Approve and finish"
         case .workspaceMember: "Approve and finish member"
+        case .projectSettings: "Approve hook"
         }
     }
 }

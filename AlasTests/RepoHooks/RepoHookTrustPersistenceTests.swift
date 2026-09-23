@@ -44,6 +44,8 @@ struct RepoHookTrustPersistenceTests {
         #expect(!manager.approveRepoHook(projectId: "one", hash: "hash"))
         #expect(manager.isRepoHookApproved(projectId: "one", hash: "hash"))
         #expect(!manager.isRepoHookApproved(projectId: "two", hash: "hash"))
+        #expect(manager.revokeRepoHookApproval(projectId: "one", hash: "hash"))
+        #expect(!manager.isRepoHookApproved(projectId: "one", hash: "hash"))
     }
 
     private func project(id: String = "project-1", hashes: [String] = []) -> ProjectConfig {

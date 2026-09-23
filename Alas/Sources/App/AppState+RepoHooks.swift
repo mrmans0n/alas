@@ -2,10 +2,12 @@ import Foundation
 
 enum RepoHookPreflightError: LocalizedError {
     case cancelled
+    case approvalPersistenceFailed
 
     var errorDescription: String? {
         switch self {
         case .cancelled: "Repository hook approval was cancelled."
+        case .approvalPersistenceFailed: "Alas couldn't save this repository hook approval. The hook was not run."
         }
     }
 }
@@ -26,8 +28,16 @@ extension AppState {
             switch await repoHookLoader.load(event: event, worktreeRoot: worktree.path, host: project.host) {
             case .missing, .empty:
                 return nil
-            case .failed:
-                return nil
+            case let .failed(source, message):
+                let decision = await repoHookApprovalQueue.requestFailureDecision(
+                    failure: .init(event: event, source: source, message: message),
+                    context: context
+                )
+                switch decision {
+                case .retry, .approve: continue
+                case .skip: return nil
+                case .cancel: throw RepoHookPreflightError.cancelled
+                }
             case let .loaded(hook):
                 if projectsManager.isRepoHookApproved(projectId: project.id, hash: hook.hash) {
                     return hook.text
@@ -35,9 +45,7 @@ extension AppState {
 
                 switch await repoHookApprovalQueue.requestDecision(hook: hook, context: context) {
                 case .approve:
-                    if projectsManager.approveRepoHook(projectId: project.id, hash: hook.hash) {
-                        saveProjects()
-                    }
+                    try persistRepoHookApproval(projectId: project.id, hash: hook.hash)
                     return hook.text
                 case .skip:
                     return nil
@@ -47,6 +55,19 @@ extension AppState {
                     throw RepoHookPreflightError.cancelled
                 }
             }
+        }
+    }
+
+    func persistRepoHookApproval(projectId: String, hash: String) throws {
+        guard projectsManager.approveRepoHook(projectId: projectId, hash: hash) else {
+            if projectsManager.isRepoHookApproved(projectId: projectId, hash: hash) {
+                return
+            }
+            throw RepoHookPreflightError.approvalPersistenceFailed
+        }
+        guard saveProjects() else {
+            projectsManager.revokeRepoHookApproval(projectId: projectId, hash: hash)
+            throw RepoHookPreflightError.approvalPersistenceFailed
         }
     }
 

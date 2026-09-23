@@ -6,6 +6,7 @@ struct RepoHookApprovalContext: Equatable, Sendable {
         case sessionOpen
         case worktreeCreate
         case workspaceMember
+        case projectSettings
     }
 
     let kind: Kind
@@ -13,9 +14,10 @@ struct RepoHookApprovalContext: Equatable, Sendable {
     static let sessionOpen = Self(kind: .sessionOpen)
     static let worktreeCreate = Self(kind: .worktreeCreate)
     static let workspaceMember = Self(kind: .workspaceMember)
+    static let projectSettings = Self(kind: .projectSettings)
 
     var allowsCancel: Bool {
-        kind == .sessionOpen
+        kind == .sessionOpen || kind == .projectSettings
     }
 
     var skipTitle: String {
@@ -23,6 +25,7 @@ struct RepoHookApprovalContext: Equatable, Sendable {
         case .sessionOpen: "Continue without hook"
         case .worktreeCreate: "Finish without hook"
         case .workspaceMember: "Finish member without hook"
+        case .projectSettings: "Not now"
         }
     }
 }
@@ -35,9 +38,38 @@ enum RepoHookApprovalDecision: Equatable, Sendable {
 }
 
 struct RepoHookApprovalRequest: Identifiable, Equatable {
+    enum Content: Equatable {
+        case hook(RepoHook)
+        case failure(RepoHookFailure)
+    }
+
     let id: UUID
-    let hook: RepoHook
+    let content: Content
     let context: RepoHookApprovalContext
+
+    var hook: RepoHook? {
+        guard case let .hook(hook) = content else { return nil }
+        return hook
+    }
+
+    var failure: RepoHookFailure? {
+        guard case let .failure(failure) = content else { return nil }
+        return failure
+    }
+
+    var event: RepoHookEvent {
+        switch content {
+        case let .hook(hook): hook.event
+        case let .failure(failure): failure.event
+        }
+    }
+
+    var source: RepoHookSource {
+        switch content {
+        case let .hook(hook): hook.source
+        case let .failure(failure): failure.source
+        }
+    }
 }
 
 @MainActor
@@ -62,13 +94,21 @@ final class RepoHookApprovalQueue {
         hook: RepoHook,
         context: RepoHookApprovalContext
     ) async -> RepoHookApprovalDecision {
-        let id = UUID()
+        await requestDecision(.init(id: UUID(), content: .hook(hook), context: context))
+    }
+
+    func requestFailureDecision(
+        failure: RepoHookFailure,
+        context: RepoHookApprovalContext
+    ) async -> RepoHookApprovalDecision {
+        await requestDecision(.init(id: UUID(), content: .failure(failure), context: context))
+    }
+
+    private func requestDecision(_ request: RepoHookApprovalRequest) async -> RepoHookApprovalDecision {
+        let id = request.id
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
-                entries.append(.init(
-                    request: .init(id: id, hook: hook, context: context),
-                    continuation: continuation
-                ))
+                entries.append(.init(request: request, continuation: continuation))
             }
         } onCancel: {
             Task { @MainActor [weak self] in

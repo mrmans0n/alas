@@ -168,6 +168,10 @@ note the `kind` discriminator and the `id` on each env/header entry:
 `.alas/scripts/` run scripts live in the same directory and are shared the
 same way.
 
+These startup hooks are separate from `.alas/scripts/` run scripts: hooks use
+fixed event paths, run automatically at their event, and require approval of
+their exact contents.
+
 ### Startup hooks
 
 Repositories can also provide shell hooks without adding executable files to
@@ -186,6 +190,9 @@ script. A project can inherit or append to that prefix, override it, or disable
 startup scripts. Workspace member setup applies its own mode after the project
 layer. Hook content must be approved per project and event; changing even one
 byte prompts again. A one-time skip omits only the repository layer.
+
+An unreadable hook blocks that action until you retry or explicitly continue
+without the hook; a session-open action can also be cancelled.
 
 ## Develop
 

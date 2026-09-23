@@ -49,6 +49,20 @@ struct RepoHookApprovalQueueTests {
         #expect(queue.activeRequest == nil)
     }
 
+    @Test func unreadableHookOffersRetryAndContinueWithoutHook() async {
+        let queue = RepoHookApprovalQueue()
+        let failure = RepoHookFailure(event: .worktreeCreate, source: .local, message: "invalid UTF-8")
+        let task = Task {
+            await queue.requestFailureDecision(failure: failure, context: .workspaceMember)
+        }
+
+        await Task.yield()
+        #expect(queue.activeRequest?.failure == failure)
+        #expect(queue.activeRequest?.context.skipTitle == "Finish member without hook")
+        queue.decide(.retry)
+        #expect(await task.value == .retry)
+    }
+
     private func hook(_ text: String) -> RepoHook {
         let bytes = Data(text.utf8)
         return .init(
