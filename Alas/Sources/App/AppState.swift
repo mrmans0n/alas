@@ -2982,7 +2982,11 @@ final class AppState {
             sessions: WorkspaceCheckoutSessionStopper(
                 store: workspaceStore,
                 stop: { [weak self] checkout in try await self?.stopWorkspaceCheckoutSessions(checkout) }
-            )
+            ),
+            resolveRepoHook: { [weak self] request in
+                guard let self else { return nil }
+                return try await self.preparedWorkspaceRepoHook(request)
+            }
         )
         workspaceCheckoutCoordinator = coordinator
         return coordinator

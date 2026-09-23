@@ -57,4 +57,31 @@ extension AppState {
         }
         return mode == .useGlobal || mode == .appendToGlobal
     }
+
+    func preparedWorkspaceRepoHook(_ request: WorkspaceRepoHookRequest) async throws -> String? {
+        guard var project = projectsManager.projects.first(where: { $0.id == request.projectID }),
+              let mode = request.memberPolicy.projectWorktreeCreateMode,
+              let script = request.memberPolicy.projectWorktreeCreateScript
+        else {
+            return nil
+        }
+        project.startupScripts.worktreeCreateMode = mode
+        project.startupScripts.worktreeCreateScript = script
+        let path = URL(fileURLWithPath: request.worktreePath)
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path),
+            projectId: project.id,
+            name: path.lastPathComponent,
+            branch: "",
+            path: path,
+            status: .clean,
+            lastActivity: .now
+        )
+        return try await preparedRepoHook(
+            event: .worktreeCreate,
+            project: project,
+            worktree: worktree,
+            context: .workspaceMember
+        )
+    }
 }

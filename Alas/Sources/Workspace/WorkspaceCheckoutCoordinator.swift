@@ -194,6 +194,14 @@ actor ProjectMutationGate {
     }
 }
 
+struct WorkspaceRepoHookRequest: Sendable {
+    let projectID: String
+    let worktreePath: String
+    let memberPolicy: WorkspaceMemberConfigurationSnapshot
+}
+
+typealias WorkspaceRepoHookResolving = @Sendable (WorkspaceRepoHookRequest) async throws -> String?
+
 actor WorkspaceCheckoutCoordinator {
     private let store: WorkspaceStore
     private let git: any WorkspaceGitOperating
@@ -201,6 +209,7 @@ actor WorkspaceCheckoutCoordinator {
     private let projectMutationGate: ProjectMutationGate
     private let sessions: any WorkspaceCheckoutSessionStopping
     private let lifecycle: any WorkspaceCheckoutLifecycleOperating
+    private let resolveRepoHook: WorkspaceRepoHookResolving
     private let manifests: any WorkspaceCheckoutManifestWriting
     private let observer: any WorkspaceCheckoutObserving
     private var creationTasks: [UUID: Task<Void, Never>] = [:]
@@ -221,13 +230,15 @@ actor WorkspaceCheckoutCoordinator {
         sessions: any WorkspaceCheckoutSessionStopping = NoopWorkspaceCheckoutSessionStopper(),
         lifecycle: any WorkspaceCheckoutLifecycleOperating = WorkspaceCheckoutLifecycleOperator(),
         observer: any WorkspaceCheckoutObserving = WorkspaceCheckoutObserver(),
-        manifests: (any WorkspaceCheckoutManifestWriting)? = nil
+        manifests: (any WorkspaceCheckoutManifestWriting)? = nil,
+        resolveRepoHook: @escaping WorkspaceRepoHookResolving = { _ in nil }
     ) {
         self.store = store
         self.git = git
         self.scripts = scripts
         self.projectMutationGate = projectMutationGate
         self.sessions = sessions
+        self.resolveRepoHook = resolveRepoHook
         self.lifecycle = lifecycle
         self.observer = observer
         // Production uses the concrete Git operator and writes the manifest.
@@ -1618,12 +1629,32 @@ actor WorkspaceCheckoutCoordinator {
                 notifyLiveOperationWaiters(checkoutID: checkout.id)
             }
         }
+        let memberPolicy = await memberConfigurationSnapshot(
+            checkoutID: checkout.id,
+            memberID: plan.checkoutMemberID
+        )
+        let repoScript: String? = if let memberPolicy,
+                            memberPolicy.projectWorktreeCreateMode == .useGlobal || memberPolicy.projectWorktreeCreateMode == .appendToGlobal,
+                            memberPolicy.memberSetupScript?.mode == .inherit || memberPolicy.memberSetupScript?.mode == .append {
+            try await resolveRepoHook(.init(
+                projectID: plan.projectID,
+                worktreePath: plan.destinationPath,
+                memberPolicy: memberPolicy
+            ))
+        } else {
+            nil
+        }
+
         let setup = WorkspaceCheckoutSetupOperation(
             checkoutID: checkout.id,
             checkoutMemberID: plan.checkoutMemberID,
             executionLocation: checkout.executionLocation,
             worktreePath: plan.destinationPath,
-            script: await setupScript(checkoutID: checkout.id, memberID: plan.checkoutMemberID)
+            script: await setupScript(
+                checkoutID: checkout.id,
+                memberID: plan.checkoutMemberID,
+                repoScript: repoScript
+            )
         )
         try await updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
             member.checkpoint = .setupRunning
@@ -1654,20 +1685,37 @@ actor WorkspaceCheckoutCoordinator {
         waiters.forEach { $0.resume() }
     }
 
-    private func setupScript(checkoutID: UUID, memberID: UUID) async -> String {
+    private func setupScript(
+        checkoutID: UUID,
+        memberID: UUID,
+        repoScript: String?
+    ) async -> String {
         guard case .loaded(let state) = await store.load(),
               let checkout = state.checkouts.first(where: { $0.id == checkoutID }),
               let member = checkout.members.first(where: { $0.id == memberID })
         else { return "" }
         let shared = checkout.configurationSnapshot?.shared.worktreeCreateScript ?? ""
         let global = checkout.configurationSnapshot?.shared.globalWorktreeCreateScript ?? ""
-        let memberSnapshot = checkout.configurationSnapshot?.members[member.workspaceMemberID]
-        let memberScript = memberSnapshot?.setupScript ?? ""
-        let sharedInheritedGlobal = shared.inheritsGlobalSetupPrefix(global)
-        let memberOnlyScript = sharedInheritedGlobal && memberSnapshot?.setupScriptIncludesInheritedGlobalPrefix == true
-            ? memberScript.removingInheritedGlobalSetupPrefix(global)
-            : memberScript.trimmingCharacters(in: .whitespacesAndNewlines)
-        return [shared, memberOnlyScript].filter { !$0.isEmpty }.joined(separator: "\n")
+        guard let memberSnapshot = checkout.configurationSnapshot?.members[member.workspaceMemberID] else {
+            return shared
+        }
+        return WorkspaceConfigurationResolver.memberSetupScript(
+            sharedWorktreeCreateScript: shared,
+            globalWorktreeCreateScript: global,
+            member: memberSnapshot,
+            repoScript: repoScript
+        )
+    }
+
+    private func memberConfigurationSnapshot(
+        checkoutID: UUID,
+        memberID: UUID
+    ) async -> WorkspaceMemberConfigurationSnapshot? {
+        guard case .loaded(let state) = await store.load(),
+              let checkout = state.checkouts.first(where: { $0.id == checkoutID }),
+              let member = checkout.members.first(where: { $0.id == memberID })
+        else { return nil }
+        return checkout.configurationSnapshot?.members[member.workspaceMemberID]
     }
 
     private func updateMember(

@@ -113,6 +113,7 @@ private struct ProjectDialog: View {
     @State private var sessionOpenScript: String = ""
     @State private var worktreeCreateMode: ProjectStartupScriptMode = .useGlobal
     @State private var worktreeCreateScript: String = ""
+    @State private var repoHookPresentations: [RepoHookEvent: RepoHookPresentation] = [:]
     @State private var mcpServers: [ProjectMCPServer] = []
     @State private var mcpManagerPresented = false
     @State private var isValidating = false
@@ -140,9 +141,9 @@ private struct ProjectDialog: View {
     ]
 
     private let startupOptions: [(ProjectStartupScriptMode, String)] = [
-        (.useGlobal, "Use global"),
-        (.appendToGlobal, "Append to global"),
-        (.overrideGlobal, "Override global"),
+        (.useGlobal, "Use inherited"),
+        (.appendToGlobal, "Append to inherited"),
+        (.overrideGlobal, "Override inherited"),
         (.disabled, "Disabled"),
     ]
 
@@ -205,6 +206,7 @@ private struct ProjectDialog: View {
         .onAppear {
             populateInitialValues()
             Task { await loadAvatarPresetIfAvailable() }
+            Task { await loadRepoHookPresentations() }
         }
         .fileImporter(
             isPresented: $imagePickerPresented,
@@ -220,6 +222,7 @@ private struct ProjectDialog: View {
                     await loadAvatarPresetIfAvailable()
                 }
             }
+            Task { await loadRepoHookPresentations() }
         }
         .onChange(of: showHostPicker) { _, isOpen in
             if isOpen && sshHosts.isEmpty && !sshHostsLoading {
@@ -229,6 +232,7 @@ private struct ProjectDialog: View {
         .onChange(of: sshHost) { _, _ in
             sshConnectionIssue = nil
             errorMessage = nil
+            Task { await loadRepoHookPresentations() }
         }
         .onChange(of: location) { _, _ in
             sshConnectionIssue = nil
@@ -238,6 +242,7 @@ private struct ProjectDialog: View {
             repositorySearch = ""
             displayedRepositories = []
             loadRepositoryCatalogIfNeeded()
+            Task { await loadRepoHookPresentations() }
         }
         .onChange(of: repositorySearch) { _, _ in
             refreshDisplayedRepositories()
@@ -746,6 +751,9 @@ private struct ProjectDialog: View {
             Text("Startup scripts")
                 .font(.system(size: 12.5, weight: .semibold))
                 .foregroundColor(theme.color("fg"))
+            Text("Approved repository hooks run between global and project scripts when this project inherits or appends.")
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-muted"))
             VStack(alignment: .leading, spacing: 8) {
                 Text("Session open script")
                     .font(.system(size: 11.5, weight: .medium))
@@ -757,11 +765,9 @@ private struct ProjectDialog: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
+                repoHookStatusRow(for: .sessionOpen)
                 if sessionOpenMode == .appendToGlobal || sessionOpenMode == .overrideGlobal {
-                    ProjectStartupScriptEditor(
-                        text: $sessionOpenScript,
-                        minHeight: 60
-                    )
+                    ProjectStartupScriptEditor(text: $sessionOpenScript, minHeight: 60)
                 }
             }
             VStack(alignment: .leading, spacing: 8) {
@@ -775,13 +781,47 @@ private struct ProjectDialog: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
+                repoHookStatusRow(for: .worktreeCreate)
                 if worktreeCreateMode == .appendToGlobal || worktreeCreateMode == .overrideGlobal {
-                    ProjectStartupScriptEditor(
-                        text: $worktreeCreateScript,
-                        minHeight: 60
-                    )
+                    ProjectStartupScriptEditor(text: $worktreeCreateScript, minHeight: 60)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func repoHookStatusRow(for event: RepoHookEvent) -> some View {
+        let presentation = repoHookPresentations[event] ?? .checkAfterRepositoryAvailable
+        Text("\(event.relativePath): \(presentation.summary)")
+            .font(.system(size: 11))
+            .foregroundStyle(theme.color("fg-muted"))
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func loadRepoHookPresentations() async {
+        guard let inspection = hookInspection else {
+            repoHookPresentations = Dictionary(uniqueKeysWithValues: RepoHookEvent.allCases.map {
+                ($0, RepoHookPresentation.checkAfterRepositoryAvailable)
+            })
+            return
+        }
+        var loaded: [RepoHookEvent: RepoHookPresentation] = [:]
+        for event in RepoHookEvent.allCases {
+            let result = await state.repoHookLoader.load(event: event, worktreeRoot: inspection.path, host: inspection.host)
+            loaded[event] = RepoHookPresentation.make(result: result) {
+                state.projectsManager.isRepoHookApproved(projectId: inspection.projectID, hash: $0)
+            }
+        }
+        repoHookPresentations = loaded
+    }
+
+    private var hookInspection: (path: URL, host: String?, projectID: String)? {
+        switch mode {
+        case let .edit(project):
+            return (URL(fileURLWithPath: project.path), project.host, project.id)
+        case .add:
+            guard (location == .local || location == .remoteSSH), !path.isEmpty else { return nil }
+            return (URL(fileURLWithPath: path), location == .remoteSSH ? sshHost : nil, pendingProjectId)
         }
     }
 

@@ -8,7 +8,7 @@ enum ProjectAgentSelection: Hashable {
 
 // MARK: - ProjectStartupScriptMode
 /// How a project's per-repository startup script combines with the global default.
-enum ProjectStartupScriptMode: String, Codable, Equatable, CaseIterable {
+enum ProjectStartupScriptMode: String, Codable, Equatable, CaseIterable, Sendable {
     case useGlobal
     case appendToGlobal
     case overrideGlobal
@@ -19,7 +19,7 @@ enum ProjectStartupScriptMode: String, Codable, Equatable, CaseIterable {
 /// Per-repository startup-script configuration for terminal session open,
 /// worktree creation, and worktree agent override.
 /// Global settings in `AppConfig.Terminal` act as defaults.
-struct ProjectStartupScripts: Codable, Equatable {
+struct ProjectStartupScripts: Codable, Equatable, Sendable {
     var sessionOpenMode: ProjectStartupScriptMode
     var sessionOpenScript: String
     var worktreeCreateMode: ProjectStartupScriptMode
