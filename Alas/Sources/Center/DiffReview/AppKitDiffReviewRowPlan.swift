@@ -23,6 +23,11 @@ enum AppKitDiffReviewRowID {
 
     static func thread(fileID: DiffReviewFileID, threadID: String) -> String { "file:\(fileID.rawValue):thread:\(threadID)" }
     static func annotation(fileID: DiffReviewFileID, annotationID: String) -> String { "file:\(fileID.rawValue):annotation:\(annotationID)" }
+    /// Lookup key (not a row id) for `AppKitDiffReviewRowPlan.lineTargetByKey`,
+    /// mapping a raw file/side/line to whichever row currently renders it.
+    static func lineKey(fileID: DiffReviewFileID, side: DiffReviewInlineFeedbackSide, line: Int) -> String {
+        "file:\(fileID.rawValue):line:\(side.rawValue):\(line)"
+    }
     /// The draft review summary appended after the diff stack when the
     /// surface is too narrow for the trailing rail.
     static let reviewSummary = "review:summary"
@@ -356,6 +361,9 @@ struct AppKitDiffReviewRowPlan {
     let fallbackByTargetID: [String: String]
     let headerByFileID: [DiffReviewFileID: String]
     let placeholderByFileID: [DiffReviewFileID: String]
+    /// Maps `AppKitDiffReviewRowID.lineKey(...)` to the row rendering that
+    /// line, when the file's diff is expanded and the line is visible.
+    var lineTargetByKey: [String: String] = [:]
 }
 
 @MainActor
@@ -383,6 +391,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         var fallbackByTargetID: [String: String] = [:]
         var headerByFileID: [DiffReviewFileID: String] = [:]
         var placeholderByFileID: [DiffReviewFileID: String] = [:]
+        var lineTargetByKey: [String: String] = [:]
         let eligibility = DiffReviewRenderEligibility.renderRows(
             ordered: inputs.map(\.file.id),
             renderedRowCounts: inputs.map { $0.file.displayModel.map(DiffReviewRenderBudget.renderedRowCount) },
@@ -466,7 +475,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                 mapTargetsDirectly(input, into: &fallbackByTargetID)
             } else if let context = renderContext(for: input) {
                 appendFileAccessories(input, context: context, rows: &rows, fallbacks: &fallbackByTargetID)
-                appendTextRows(context, input: input, into: &rows, fallbacks: &fallbackByTargetID)
+                appendTextRows(context, input: input, into: &rows, fallbacks: &fallbackByTargetID, lineTargets: &lineTargetByKey)
             }
 
             let fileRowEndIndex = rows.count
@@ -481,7 +490,8 @@ enum AppKitDiffReviewRowPlanBuilder {
         rows.append(contentsOf: trailingRows)
         return AppKitDiffReviewRowPlan(
             corePlan: .init(rows: rows), fallbackByTargetID: fallbackByTargetID,
-            headerByFileID: headerByFileID, placeholderByFileID: placeholderByFileID
+            headerByFileID: headerByFileID, placeholderByFileID: placeholderByFileID,
+            lineTargetByKey: lineTargetByKey
         )
     }
 
@@ -557,7 +567,8 @@ enum AppKitDiffReviewRowPlanBuilder {
         _ context: DiffReviewRenderContext,
         input: AppKitDiffReviewRowInput,
         into rows: inout [AppKitDiffRowSpec],
-        fallbacks: inout [String: String]
+        fallbacks: inout [String: String],
+        lineTargets: inout [String: String]
     ) {
         let fusions = DiffReviewHunkFusionResolver.states(for: context.groups)
         for (groupIndex, group) in context.groups.enumerated() {
@@ -570,6 +581,10 @@ enum AppKitDiffReviewRowPlanBuilder {
                 fallbacks: &fallbacks
             )
             let groupID = AppKitDiffReviewRowID.groupHeader(fileID: input.file.id, groupID: group.id)
+            // Most hunks render as a single fused row (no local accessories),
+            // so a comment's line only ever resolves to the hunk's group row
+            // unless the finer-grained per-segment loop below overwrites it.
+            mapLines(group.displayGroup.rows, fileID: input.file.id, to: groupID, into: &lineTargets)
             if !group.containsLocalAccessories {
                 let rowInput = hunkInput(group: group, context: context, input: input, fusion: fusions[groupIndex])
                 let hunkPlan = DiffPaneRowPlanBuilder.build(input: rowInput, state: input.state.hunkPresentationState)
@@ -598,6 +613,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                         append(&rows, id: blockID, input: input, signature: rowBlock.rowsSignature.hashValue, height: segmentHeight(rowBlock.rows.count, input: input), includesActiveHighlight: true) {
                             AnyView(AppKitDiffReviewSegmentRowBody(rows: rowBlock.rows, rowsSignature: rowBlock.rowsSignature, group: group.displayGroup, input: input))
                         }
+                        mapLines(rowBlock.rows, fileID: input.file.id, to: blockID, into: &lineTargets)
                     case let .thread(thread):
                         let threadID = AppKitDiffReviewRowID.thread(fileID: input.file.id, threadID: thread.id)
                         append(
@@ -791,6 +807,27 @@ enum AppKitDiffReviewRowPlanBuilder {
         for comment in input.draftComments {
             let id = AppKitDiffReviewRowID.draftComment(.targetID(commentID: comment.id, fileID: input.file.id))
             fallbacks[id] = id
+        }
+    }
+
+    /// Records which row currently renders each old/new line so a raw
+    /// line/side scroll command (no comment id required) can resolve to it.
+    /// Called once per hunk with the coarse group row, then again per
+    /// segment block when the group also renders granular blocks — the
+    /// later, finer-grained call overwrites the coarser mapping.
+    private static func mapLines(
+        _ displayRows: [DiffDisplayRow],
+        fileID: DiffReviewFileID,
+        to rowID: String,
+        into lineTargets: inout [String: String]
+    ) {
+        for row in displayRows {
+            if let line = row.old?.lineNumber {
+                lineTargets[AppKitDiffReviewRowID.lineKey(fileID: fileID, side: .old, line: line)] = rowID
+            }
+            if let line = row.new?.lineNumber {
+                lineTargets[AppKitDiffReviewRowID.lineKey(fileID: fileID, side: .new, line: line)] = rowID
+            }
         }
     }
 

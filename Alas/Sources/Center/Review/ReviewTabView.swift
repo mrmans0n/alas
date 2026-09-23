@@ -82,9 +82,8 @@ struct ReviewTabView: View {
     @State private var errorMessage: String? = nil
     @State private var pendingReview: PendingReview?
     @State private var pendingReviewRailCollapsed = false
-    @State private var pendingCommentScrollCommand: DiffReviewDraftCommentScrollCommand?
-    @State private var pendingCommentScrollController = DiffReviewDraftCommentScrollController()
-    @State private var focusedPendingCommentID: String?
+    @State private var pendingCommentScrollCommand: DiffReviewLineScrollCommand?
+    @State private var pendingCommentScrollController = DiffReviewLineScrollController()
     @State private var showVerdictSheet = false
     @State private var wrapLines = false
     @State private var showWhitespace = false
@@ -392,18 +391,18 @@ struct ReviewTabView: View {
 
     // MARK: - Review surface
 
-    /// Rail click on a staged comment: focus its file in the diff and fire a
-    /// draft-comment scroll command. The AppKit resolver falls back to the
-    /// file header because staged comments render only in the rail, so the
-    /// viewport lands on the file the comment anchors to.
+    /// Rail click on a staged comment: focus its file and scroll the diff to
+    /// the comment's anchored line. Falls back to the file header for
+    /// file-level comments (no line) or lines outside a rendered/expanded
+    /// section of the diff.
     private func selectPendingComment(_ comment: StagedComment) {
         guard let session else { return }
         guard let fileID = ReviewTabCommentJump.fileID(for: comment, session: session) else { return }
-        focusedPendingCommentID = comment.id.uuidString
         selectedFileID = fileID
         pendingCommentScrollCommand = pendingCommentScrollController.command(
-            commentID: comment.id.uuidString,
-            fileID: fileID
+            fileID: fileID,
+            side: comment.side,
+            line: comment.line
         )
     }
 
@@ -422,8 +421,7 @@ struct ReviewTabView: View {
             lspContextForFile: { file in
                 makeLSPContext(relativePath: file.summary.path)
             },
-            focusedDraftCommentID: focusedPendingCommentID,
-            draftCommentScrollCommand: pendingCommentScrollCommand,
+            lineScrollCommand: pendingCommentScrollCommand,
             onSaveDraftComment: { _, path, _, anchor, body in
                 guard let pr = pendingReview else { return }
                 guard case .line(let side, let line, let endLine, _) = anchor else { return }

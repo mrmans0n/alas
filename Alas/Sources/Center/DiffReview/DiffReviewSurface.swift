@@ -72,6 +72,7 @@ struct DiffReviewSurface: View {
     var draftCommentsByFileID: [DiffReviewFileID: [ReviewDraftComment]] = [:]
     var focusedDraftCommentID: String? = nil
     var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand? = nil
+    var lineScrollCommand: DiffReviewLineScrollCommand? = nil
     var onDraftCommentReveal: (DiffReviewDraftCommentScrollCommand, Bool) -> Void = { _, _ in }
     var draftCommentActions = ReviewDraftCommentActions()
     var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
@@ -136,6 +137,7 @@ struct DiffReviewSurface: View {
         draftCommentsByFileID: [DiffReviewFileID: [ReviewDraftComment]] = [:],
         focusedDraftCommentID: String? = nil,
         draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand? = nil,
+        lineScrollCommand: DiffReviewLineScrollCommand? = nil,
         draftCommentActions: ReviewDraftCommentActions = ReviewDraftCommentActions(),
         onSelectDraftComment: @escaping (ReviewDraftComment) -> Void = { _ in },
         onSaveDraftComment: @escaping (DiffReviewFileID, String, String?, ReviewDraftCommentAnchor, String) -> Void = { _, _, _, _, _ in },
@@ -176,6 +178,7 @@ struct DiffReviewSurface: View {
         self.draftCommentsByFileID = draftCommentsByFileID
         self.focusedDraftCommentID = focusedDraftCommentID
         self.draftCommentScrollCommand = draftCommentScrollCommand
+        self.lineScrollCommand = lineScrollCommand
         self.onDraftCommentReveal = onDraftCommentReveal
         self.draftCommentActions = draftCommentActions
         self.onSelectDraftComment = onSelectDraftComment
@@ -329,6 +332,7 @@ struct DiffReviewSurface: View {
             fileCommand: scrollCommand,
             inlineFeedbackCommand: inlineFeedbackScrollCommand,
             draftCommentCommand: draftCommentScrollCommand,
+            lineCommand: lineScrollCommand,
             onNavigationFile: selectAppKitNavigationFile,
             onActiveFileChange: updateSelectedFileFromAppKitViewport,
             onProgrammaticScrollCompletion: finishAppKitProgrammaticScroll,

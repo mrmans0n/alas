@@ -562,6 +562,32 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(ids.contains(AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: target.id, fileID: file.id))))
     }
 
+    @Test func lineTargetsResolveToTheFusedHunkRowWhenNoLocalAccessoriesExist() {
+        let file = textFile()
+        let input = AppKitDiffReviewRowInput(file: file, state: AppKitDiffReviewFileState(), theme: theme)
+
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+        let groupRowID = plan.corePlan.rows.first { $0.id.contains(":group:") }?.id
+
+        #expect(groupRowID != nil)
+        #expect(plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .old, line: 1)] == groupRowID)
+        #expect(plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .new, line: 1)] == groupRowID)
+    }
+
+    @Test func lineTargetsResolveToTheExactSegmentRowWhenLocalAccessoriesForceGranularRendering() {
+        let file = textFile()
+        let draft = draftComment(fileID: file.id)
+        let input = AppKitDiffReviewRowInput(file: file, draftComments: [draft], state: AppKitDiffReviewFileState(), theme: theme)
+
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+        let newTarget = plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .new, line: 1)]
+        let oldTarget = plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .old, line: 1)]
+
+        #expect(newTarget?.contains(":segment:") == true)
+        #expect(oldTarget?.contains(":segment:") == true)
+        #expect(plan.corePlan.rows.contains { $0.id == newTarget })
+    }
+
     @Test func nonImagePlanClearsStaleImageState() async {
         let state = AppKitDiffReviewFileState()
         let provider = imageProvider {
