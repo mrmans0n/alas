@@ -106,6 +106,23 @@ struct AppKitDiffReviewScrollerTests {
         #expect(request?.lineTarget == AppKitDiffScrollLineTarget(side: .new, line: 42))
     }
 
+    @Test func unknownSideLineCommandsResolveThroughEitherRenderedSide() {
+        let fileID = fileID()
+        let rowID = "file:\(fileID.rawValue):segment:seg:rows:block"
+        for side in [DiffReviewInlineFeedbackSide.new, .old] {
+            let key = AppKitDiffReviewRowID.lineKey(fileID: fileID, side: side, line: 42)
+            let command = DiffReviewLineScrollCommand(fileID: fileID, side: .unknown, line: 42, generation: 1)
+
+            let request = AppKitDiffReviewScrollRequestResolver.request(
+                fileCommand: nil, inlineFeedbackCommand: nil, draftCommentCommand: nil,
+                lineCommand: command, plan: plan(fileID: fileID, lineTargetByKey: [key: rowID])
+            )
+
+            #expect(request?.targetID == rowID)
+            #expect(request?.lineTarget == AppKitDiffScrollLineTarget(side: side, line: 42))
+        }
+    }
+
     @Test func lineCommandsFallBackToTheFileHeaderWhenTheLineIsNotRendered() {
         let fileID = fileID()
         let command = DiffReviewLineScrollCommand(fileID: fileID, side: .new, line: 42, generation: 1)

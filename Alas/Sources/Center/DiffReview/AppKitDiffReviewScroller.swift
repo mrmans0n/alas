@@ -148,16 +148,23 @@ enum AppKitDiffReviewScrollRequestResolver {
         plan: AppKitDiffReviewRowPlan
     ) -> AppKitDiffScrollRequest {
         let headerID = plan.headerByFileID[command.fileID]
-        let exactID = command.line.flatMap { line in
-            plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: command.fileID, side: command.side, line: line)]
+        let exactTarget = command.line.flatMap { line -> (rowID: String, side: DiffReviewInlineFeedbackSide, line: Int)? in
+            let sides: [DiffReviewInlineFeedbackSide] = command.side == .unknown ? [.new, .old] : [command.side]
+            for side in sides {
+                let key = AppKitDiffReviewRowID.lineKey(fileID: command.fileID, side: side, line: line)
+                if let rowID = plan.lineTargetByKey[key] {
+                    return (rowID, side, line)
+                }
+            }
+            return nil
         }
         return .init(
-            targetID: exactID ?? headerID ?? AppKitDiffReviewRowID.header(fileID: command.fileID),
+            targetID: exactTarget?.rowID ?? headerID ?? AppKitDiffReviewRowID.header(fileID: command.fileID),
             fallbackID: headerID,
             alignment: .center,
             animated: true,
             generation: commandGeneration(command.generation, kind: .line),
-            lineTarget: exactID.flatMap { _ in command.line.map { AppKitDiffScrollLineTarget(side: command.side, line: $0) } }
+            lineTarget: exactTarget.map { AppKitDiffScrollLineTarget(side: $0.side, line: $0.line) }
         )
     }
 }
