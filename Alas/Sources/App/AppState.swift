@@ -8354,7 +8354,11 @@ final class AppState {
             return
         }
         closedTabHistory.record(ClosedTabEntry(
-            snapshot: .worktree(worktreeID: worktreeId, tab: tab),
+            snapshot: .worktree(
+                worktreeID: worktreeId,
+                projectID: worktree(withId: worktreeId)?.projectId,
+                tab: tab
+            ),
             placement: .init(tabID: tabId, orderedIDs: tabs.tabs(forWorktree: worktreeId).map(\.id))
         ))
         closeTab(worktreeId: worktreeId, tabId: tabId)
@@ -8692,7 +8696,14 @@ final class AppState {
         let local = tabs.tabs(forWorktree: worktreeID)
         return tabIDs.compactMap { tabID in
             guard let tab = local.first(where: { $0.id == tabID }) else { return nil }
-            return ClosedTabEntry(snapshot: .worktree(worktreeID: worktreeID, tab: tab), placement: .init(tabID: tabID, orderedIDs: local.map(\.id)))
+            return ClosedTabEntry(
+                snapshot: .worktree(
+                    worktreeID: worktreeID,
+                    projectID: worktree(withId: worktreeID)?.projectId,
+                    tab: tab
+                ),
+                placement: .init(tabID: tabID, orderedIDs: local.map(\.id))
+            )
         }
     }
 
@@ -8703,7 +8714,7 @@ final class AppState {
 
         while let entry = closedTabHistory.last {
             switch entry.snapshot {
-            case .worktree(let worktreeID, let tab):
+            case .worktree(let worktreeID, let projectID, let tab):
                 guard worktree(withId: worktreeID) != nil else {
                     closedTabHistory.remove(id: entry.id)
                     continue
@@ -8718,7 +8729,9 @@ final class AppState {
                     guard closedTabHistory.last?.id == entry.id else { continue }
                     guard !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(
                         forWorktreeId: worktreeID,
-                        projectId: projectAndWorktree(withWorktreeId: worktreeID)?.worktree.projectId ?? ""
+                        projectId: projectID
+                            ?? projectAndWorktree(withWorktreeId: worktreeID)?.worktree.projectId
+                            ?? ""
                     )) else {
                         closedTabHistory.remove(id: entry.id)
                         return

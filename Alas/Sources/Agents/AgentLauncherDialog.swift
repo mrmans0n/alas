@@ -878,7 +878,10 @@ struct AgentLauncherDialog: View {
         // session list.
         deletionRequest = nil
         deletionError = nil
-        startDiscovery(for: agent, manager: manager)
+        // Keep the discovered project: the overload's `nil` default would
+        // clear it, and the owner id alone cannot say which project's claim
+        // gates the next launch when two projects list the same path.
+        startDiscovery(for: agent, manager: manager, projectId: discoveryProjectId)
         requestInputFocus()
     }
 
