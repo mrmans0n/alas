@@ -75,6 +75,10 @@ enum RemoteClientMessage: Equatable, Sendable {
     case listBranches(projectId: String)
     case createWorktreeSession(projectId: String, base: String, branch: String, agentId: String)
     case createSession(worktreeId: String, agentId: String)
+    /// A same-path checkout can exist under two projects, so clients qualify
+    /// by project. The older `createSession` wire shape (no projectId) remains
+    /// for compatibility and resolves by first match.
+    case createSessionInProject(worktreeId: String, projectId: String, agentId: String)
     case subscribe(sessionId: String)
     case unsubscribe(sessionId: String)
     case permissionDecision(sessionId: String, requestId: Int, optionId: String, persistScope: String?)
@@ -130,6 +134,11 @@ extension RemoteClientMessage: Codable {
         case "createSession":
             self = .createSession(
                 worktreeId: try c.decode(String.self, forKey: .worktreeId),
+                agentId: try c.decode(String.self, forKey: .agentId))
+        case "createSessionInProject":
+            self = .createSessionInProject(
+                worktreeId: try c.decode(String.self, forKey: .worktreeId),
+                projectId: try c.decode(String.self, forKey: .projectId),
                 agentId: try c.decode(String.self, forKey: .agentId))
         case "subscribe": self = .subscribe(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "unsubscribe": self = .unsubscribe(sessionId: try c.decode(String.self, forKey: .sessionId))
@@ -248,6 +257,11 @@ extension RemoteClientMessage: Codable {
         case .createSession(let worktreeId, let agentId):
             try c.encode("createSession", forKey: .type)
             try c.encode(worktreeId, forKey: .worktreeId)
+            try c.encode(agentId, forKey: .agentId)
+        case .createSessionInProject(let worktreeId, let projectId, let agentId):
+            try c.encode("createSessionInProject", forKey: .type)
+            try c.encode(worktreeId, forKey: .worktreeId)
+            try c.encode(projectId, forKey: .projectId)
             try c.encode(agentId, forKey: .agentId)
         case .subscribe(let s): try c.encode("subscribe", forKey: .type)
         try c.encode(s, forKey: .sessionId)

@@ -9,7 +9,7 @@ protocol RemoteSessionsProvider: AnyObject {
     func remoteProjects() async -> [RemoteProjectOption]
     func remoteBranches(projectId: String) async -> RemoteBranchListResult
     func remoteAgents() -> [RemoteAgentOption]
-    func createRemoteSession(worktreeId: String, agentId: String) async -> RemoteCreateSessionResult
+    func createRemoteSession(worktreeId: String, projectId: String?, agentId: String) async -> RemoteCreateSessionResult
     func createRemoteWorktreeSession(
         projectId: String,
         base: String,

@@ -4258,7 +4258,11 @@ final class AppState {
         return await WorktreeCreationCompletion.wait(
             id: id,
             operationState: { self.projectsManager.operationState(forWorktreeId: id, projectId: projectId) },
-            worktree: { self.worktree(withId: id) },
+            // A worktree id is its path; a same-path checkout under another
+            // project shares it, and a global id-to-worktree lookup would
+            // report that other project's checkout as the newly created one.
+            // Resolution must stay within the creating project.
+            worktree: { self.projectsManager.worktrees(projectId: projectId).first(where: { $0.id == id }) },
             reconcile: { _ = try? await self.refreshProjectWorktrees(projectId: projectId) }
         )
     }
@@ -8729,12 +8733,16 @@ final class AppState {
         while let entry = closedTabHistory.last {
             switch entry.snapshot {
             case .worktree(let worktreeID, let projectID, let tab):
-                guard worktree(withId: worktreeID) != nil else {
+                guard worktree(withId: worktreeID, inProjectId: projectID) != nil else {
                     closedTabHistory.remove(id: entry.id)
                     continue
                 }
                 if case .terminal = tab {
-                    await reopenTerminalTab(entry: entry, worktreeID: worktreeID, tab: tab)
+                    // The snapshot recorded the project the tab was closed in:
+                    // a path-derived worktree id can exist under two projects,
+                    // so open the tab against the recorded one, not the first
+                    // project resolved from the id.
+                    await reopenTerminalTab(entry: entry, worktreeID: worktreeID, projectID: projectID, tab: tab)
                     return
                 }
                 if case .acpSession(let state) = tab {
@@ -8744,18 +8752,25 @@ final class AppState {
                     guard !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(
                         forWorktreeId: worktreeID,
                         projectId: projectID
-                            ?? projectAndWorktree(withWorktreeId: worktreeID)?.worktree.projectId
+                            ?? worktree(withId: worktreeID)?.projectId
                             ?? ""
                     )) else {
                         closedTabHistory.remove(id: entry.id)
                         return
                     }
-                    guard worktree(withId: worktreeID) != nil else {
+                    guard worktree(withId: worktreeID, inProjectId: projectID) != nil else {
                         closedTabHistory.remove(id: entry.id)
                         continue
                     }
                 }
-                selectWorktree(id: worktreeID)
+                // Focus the recorded project before restoring: a path-derived
+                // id can exist under two projects, and an id-only selection
+                // would pick the first project's same-path checkout.
+                if let projectID {
+                    focusGlobalWorktree(id: worktreeID, projectId: projectID)
+                } else {
+                    selectWorktree(id: worktreeID)
+                }
                 _ = tabs.restore(tab: tab, worktreeID: worktreeID, placement: entry.placement)
                 activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
                 closedTabHistory.remove(id: entry.id)
@@ -8764,7 +8779,7 @@ final class AppState {
         }
     }
 
-    private func reopenTerminalTab(entry: ClosedTabEntry, worktreeID: String, tab: Tab) async {
+    private func reopenTerminalTab(entry: ClosedTabEntry, worktreeID: String, projectID: String?, tab: Tab) async {
         guard case .terminal(let oldState) = tab else {
             return
         }
@@ -8776,7 +8791,11 @@ final class AppState {
             return
         }
 
-        guard let initialWorktree = worktree(withId: worktreeID),
+        // Resolve within the recorded project: a path-derived worktree id can
+        // exist under two projects, and the first match for the id may be the
+        // other project's checkout — which would hand this terminal B's session
+        // to A, or bypass B's deletion claim.
+        guard let initialWorktree = worktree(withId: worktreeID, inProjectId: projectID),
               let initialProject = projects.first(where: { $0.id == initialWorktree.projectId }) else {
             showFileActionError(
                 title: "Reopen Tab Failed",
@@ -8788,7 +8807,7 @@ final class AppState {
         await prepareRemoteAccelerationIfNeeded(for: initialProject)
 
         guard closedTabHistory.last?.id == entry.id else { return }
-        guard let worktree = worktree(withId: worktreeID),
+        guard let worktree = worktree(withId: worktreeID, inProjectId: projectID),
               let project = projects.first(where: { $0.id == worktree.projectId }) else {
             closedTabHistory.remove(id: entry.id)
             return
@@ -8904,6 +8923,17 @@ final class AppState {
         return nil
     }
 
+    /// Resolve a worktree within a recorded project when its path-derived id
+    /// also exists under another project. Falls back to id-only resolution when
+    /// the project is no longer registered or no longer lists that id.
+    func worktree(withId id: String, inProjectId projectId: String?) -> Worktree? {
+        if let projectId, projects.contains(where: { $0.id == projectId }),
+           let worktree = projectsManager.worktrees(projectId: projectId).first(where: { $0.id == id }) {
+            return worktree
+        }
+        return worktree(withId: id)
+    }
+
     private func worktree(atPersistedDestinationPath path: String?) -> Worktree? {
         guard let path, !path.isEmpty else { return nil }
         let targetPath = URL(fileURLWithPath: path).standardizedFileURL.path
@@ -8917,6 +8947,20 @@ final class AppState {
         return nil
     }
 
+    /// True when a project *other* than `exceptProjectId` still lists a
+    /// checkout with `id`. Worktree ids are path-derived, so two projects
+    /// (typically one per SSH host) can share one; the id-keyed runtime state —
+    /// tabs, terminals, ACP manager — belongs to all of them, so teardown only
+    /// happens when the last listing goes away.
+    private func otherProjectsStillListWorktree(id: String, exceptProjectId projectId: String) -> Bool {
+        for project in projects where project.id != projectId {
+            if projectsManager.worktrees(projectId: project.id).contains(where: { $0.id == id }) {
+                return true
+            }
+        }
+        return false
+    }
+
     private func projectAndWorktree(withWorktreeId id: String) -> (project: ProjectConfig, worktree: Worktree)? {
         if let focused = workspaceSelectedWorktree(matching: id),
            let project = projects.first(where: { $0.id == focused.worktree.projectId }) {
@@ -8926,6 +8970,18 @@ final class AppState {
             if let worktree = projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id }) {
                 return (project, worktree)
             }
+        }
+        return nil
+    }
+
+    /// Resolve within a recorded project when the caller carries one (a
+    /// path-derived id can exist under two projects). Falls back to id-only
+    /// resolution when the project is no longer registered or no longer lists
+    /// that id.
+    private func projectAndWorktree(withWorktreeId id: String, inProjectId projectId: String?) -> (project: ProjectConfig, worktree: Worktree)? {
+        if let worktree = worktree(withId: id, inProjectId: projectId),
+           let project = projects.first(where: { $0.id == worktree.projectId }) {
+            return (project, worktree)
         }
         return nil
     }
@@ -9954,19 +10010,31 @@ final class AppState {
             // the id. A checkout recreated at the same path keeps that id, so
             // release the claims for the items this batch removed regardless:
             // the removals succeeded, and whatever now holds that id is not
-            // the worktree that was being deleted.
+            // the worktree that was being deleted. The recreated checkout
+            // must not inherit the removed instance's metadata either — a
+            // different branch would otherwise surface a deleted checkout's
+            // issue preamble or gg mode.
             for worktreeID in removedWorktreeIDsByProject[projectId] ?? [] {
                 projectsManager.setOperationState(
                     forWorktreeId: worktreeID,
                     projectId: projectId,
                     state: nil
                 )
+                projectsManager.resetRemovedInstanceMetadata(
+                    id: worktreeID,
+                    projectId: projectId
+                )
             }
+            saveProjects()
         }
         // Per-item deletion skipped selection reconciliation because the list
-        // was still stale at that point. Now that every touched project has
-        // been refreshed, drop a selection that points at a deleted worktree.
-        if let current = selectedWorktreeId, !allWorktreeIds().contains(current) {
+        // was still stale mid-run. Now that every touched project has been
+        // refreshed, drop a selection that points at a removed worktree. The
+        // selected id is path-derived and may be shared by another project's
+        // checkout that was never deleted, so reconcile only when the id was
+        // *this batch's* removal — not merely when it's absent from the list.
+        if let current = selectedWorktreeId,
+           removedWorktreeIDsByProject.values.contains(where: { $0.contains(current) }) {
             selectWorktree(id: resolvedSelectionForActiveSpace())
         }
         return results
@@ -10941,6 +11009,21 @@ final class AppState {
                 // is no less capable of yielding to other main-actor work
                 // while it's open than `NSAlert.runModal()` is.
                 projectsManager.setOperationState(for: worktree, state: .preparingDelete)
+                // The app-wide force prompt holds one worktree at a time. A
+                // same-path checkout under another project can reach here while
+                // an earlier prompt is still up, and overwriting the slot would
+                // leave the earlier `.preparingDelete` claim with nothing left
+                // able to confirm or cancel it, blocking its sessions and
+                // deletion controls permanently. Keep the existing prompt and
+                // report this delete as needing force so the earlier one can
+                // still resolve.
+                guard pendingForceDeleteWorktree == nil else {
+                    projectsManager.setOperationState(
+                        for: worktree,
+                        state: .deleteFailed(message: "worktree requires force delete; confirm the pending force delete first or rerun with --force to delete")
+                    )
+                    return .needsForce
+                }
                 pendingForceDeleteWorktree = pending
                 return .needsForce
             } else if !force,
@@ -10969,7 +11052,16 @@ final class AppState {
             return .failed(message: "\(error)")
         }
 
-        let runHistoryPurgeTask = cleanupWorktreeState(worktreeId: worktree.id)
+        // Tabs, terminals, and the ACP manager for a worktree id are shared
+        // with any other project that lists a checkout at the same path.
+        // Deleting one project's checkout must not close the other project's
+        // tabs or dispose of its sessions, so only tear the runtime state down
+        // when no other project still lists that id.
+        let sharedRuntimeStateLives = otherProjectsStillListWorktree(
+            id: worktree.id,
+            exceptProjectId: worktree.projectId
+        )
+        let runHistoryPurgeTask = sharedRuntimeStateLives ? nil : cleanupWorktreeState(worktreeId: worktree.id)
         await runHistoryPurgeTask?.value
         if case .staged(let ticket) = outcome {
             do {
@@ -11009,8 +11101,16 @@ final class AppState {
                 // blocked from session admission forever. The removal this
                 // claim described has already succeeded, so release it either
                 // way: whatever the refreshed list holds under this id now is
-                // not the worktree that was being deleted.
+                // not the worktree that was being deleted. The recreated
+                // checkout must not inherit the removed instance's metadata
+                // (a different branch surfacing a deleted checkout's issue
+                // preamble, for example).
                 projectsManager.setOperationState(for: worktree, state: nil)
+                projectsManager.resetRemovedInstanceMetadata(
+                    id: worktree.id,
+                    projectId: worktree.projectId
+                )
+                saveProjects()
             } catch {
                 // The refresh reconciles the removed row away together with
                 // its `.deleting` claim and the project metadata that names
@@ -11028,7 +11128,11 @@ final class AppState {
                 )
                 saveProjects()
             }
-            if selectedWorktreeId == worktree.id {
+            // Same path-derived id under another project: the selected id
+            // belongs to that other project's checkout, so deleting this one
+            // must not retarget the selection into this project's siblings.
+            if selectedWorktreeId == worktree.id,
+               projectAndWorktree(withWorktreeId: selectedWorktreeId ?? "")?.project.id == worktree.projectId {
                 selectWorktree(id: selectionAfterRemoval(
                     removedFromProjectId: worktree.projectId,
                     removedAtIndex: removedIndex
@@ -12461,6 +12565,21 @@ final class AppState {
         )
     }
 
+    /// Open a new ACP session tab for a worktree the caller already holds.
+    /// Prefer this when the worktree was resolved on screen: a worktree id is
+    /// its path, so selected-worktree lookups return the first project listing
+    /// that path, and an ACP launch would qualify the claim with that other
+    /// project's identity.
+    func openNewACPSession(agentID: String, in worktree: Worktree, initialPrompt: String? = nil) {
+        guard let mgr = acpManager(for: worktree) else { return }
+        openNewACPSession(
+            agentID: agentID,
+            owner: mgr.owner,
+            projectId: worktree.projectId,
+            initialPrompt: initialPrompt
+        )
+    }
+
     /// `projectId` is the project whose claim gates this creation. Callers that
     /// hold a worktree pass it: a worktree owner carries only the path-derived
     /// id, and re-resolving the project from that id here would read another
@@ -13821,8 +13940,15 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
-    func createRemoteSession(worktreeId: String, agentId: String) async -> RemoteCreateSessionResult {
-        guard let resolved = projectAndWorktree(withWorktreeId: worktreeId),
+    /// The remote list's wire option carries only the path-derived id, so a
+    /// same-path checkout under another project matches both. The claim below
+    /// must be qualified with the project whose option the client picked —
+    /// resolving by first match would read another project's claim and either
+    /// block a clean one or admit a session into a deleting one. Prefer the
+    /// client's own projectId when it sent one.
+    func createRemoteSession(worktreeId: String, projectId: String? = nil, agentId: String) async -> RemoteCreateSessionResult {
+        let resolved = projectAndWorktree(withWorktreeId: worktreeId, inProjectId: projectId)
+        guard let resolved,
               projectsManager.visibleWorktrees(projectId: resolved.project.id).contains(where: { $0.id == worktreeId })
         else {
             return .failure("Worktree is no longer available.")

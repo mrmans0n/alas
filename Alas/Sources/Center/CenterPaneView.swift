@@ -348,7 +348,11 @@ struct CenterPaneView: View {
                             _ = await state.openWorkspaceCheckoutACPSession(checkout: checkout, agentID: agentId)
                         }
                     } else {
-                        state.openNewACPSession(agentID: agentId)
+                        // The pane resolved this worktree from the display
+                        // selection; a path-derived id can exist under two
+                        // projects, so open the session within this worktree's
+                        // project rather than re-resolving to the first match.
+                        state.openNewACPSession(agentID: agentId, in: worktree)
                     }
                 },
                 acpAgents: RepositoryAgentMenuPolicy.acpAgents(from: availableAgents),
