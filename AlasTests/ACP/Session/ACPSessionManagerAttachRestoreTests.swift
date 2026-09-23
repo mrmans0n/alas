@@ -748,6 +748,64 @@ struct ACPSessionManagerAttachRestoreTests {
             ACPConfigOption.currentValues(in: session.availableConfigOptions))
     }
 
+    @Test("live config-option persistence refreshes manager cache")
+    func liveConfigOptionPersistenceRefreshesManagerCache() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let initialValues: [String: ACPConfigValue] = ["effort": .string("medium")]
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            configOptionValues: initialValues
+        ))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: [],
+                configOptions: [ACPConfigOption(
+                    id: "effort",
+                    name: "Thinking",
+                    currentValue: "medium",
+                    options: [
+                        .init(id: "medium", name: "Medium"),
+                        .init(id: "high", name: "High"),
+                    ]
+                )]
+            ))
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        let updatedValues: [String: ACPConfigValue] = ["effort": .string("high")]
+        client.emit(.init(
+            sessionId: "remote-old",
+            update: .sessionConfigOptionsUpdate([ACPConfigOption(
+                id: "effort",
+                name: "Thinking",
+                currentValue: "high",
+                options: [
+                    .init(id: "medium", name: "Medium"),
+                    .init(id: "high", name: "High"),
+                ]
+            )])
+        ))
+        try await waitUntilAsync {
+            let persistedValues = (try? store.loadSession(id: "local"))?.configOptionValues
+            let cachedValues = await manager.persistedSessionRow(id: "local")?.configOptionValues
+            return persistedValues == updatedValues && cachedValues == updatedValues
+        }
+
+        let cachedRow = await manager.persistedSessionRow(id: "local")
+        #expect(cachedRow?.configOptionValues == updatedValues)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("reopened session reapplies a persisted config-option model after load")
     func reopenedSessionReappliesPersistedConfigOptionModel() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

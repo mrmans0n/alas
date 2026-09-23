@@ -3975,6 +3975,14 @@ extension ACPSessionManager {
                                           onModelsObserved: { [weak self] agentId, models in
                                               self?.onModelsObserved?(agentId, models)
                                           },
+                                          onPersistedConfigOptionValues: { [weak self] values in
+                                              guard let self, var row = self.persistedRows[sessionId] else {
+                                                  return
+                                              }
+                                              row.configOptionValues = values
+                                              self.persistedRows[sessionId] = row
+                                              self.replaceRecentRow(row)
+                                          },
                                           onResumeTranscriptTail: { [weak self] in
                                               self?.rememberTranscriptScrollAnchor(
                                                 sessionId: sessionId,

@@ -64,6 +64,7 @@ final class ACPSessionRunner {
     /// whoever calls `attach`; this covers changes reported later on the
     /// same connection.
     private let onModelsObserved: ((_ agentId: String, _ models: [ChipSpec.Item]) -> Void)?
+    private let onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
@@ -198,6 +199,7 @@ final class ACPSessionRunner {
          onPromptWorkChanged: (() -> Void)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
          onModelsObserved: ((_ agentId: String, _ models: [ChipSpec.Item]) -> Void)? = nil,
+         onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
@@ -226,6 +228,7 @@ final class ACPSessionRunner {
         self.onPromptWorkChanged = onPromptWorkChanged
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.onModelsObserved = onModelsObserved
+        self.onPersistedConfigOptionValues = onPersistedConfigOptionValues
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
         self.incomingUpdateCoalesceNanos = incomingUpdateCoalesceNanos
         self.suppressingLoadReplay = suppressingLoadReplay
@@ -1483,8 +1486,12 @@ final class ACPSessionRunner {
                 preserveTitle: preserveTitle,
                 fence: fence
             )
-        }, completion: { row in
-            completion?(row.flatMap { $0 } != nil)
+        }, completion: { [weak self] row in
+            let persistedRow = row.flatMap { $0 }
+            if let persistedRow {
+                self?.onPersistedConfigOptionValues?(persistedRow.configOptionValues)
+            }
+            completion?(persistedRow != nil)
         })
     }
 
