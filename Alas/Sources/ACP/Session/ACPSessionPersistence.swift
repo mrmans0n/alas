@@ -138,6 +138,7 @@ actor ACPSessionPersistence {
         titleSource: ACPSessionTitleSource,
         currentModel: String?,
         currentMode: String?,
+        configOptionValues: [String: ACPConfigValue],
         autoRun: Bool,
         preserveTitle: Bool,
         fence: ACPSessionLeaseFence?
@@ -151,6 +152,7 @@ actor ACPSessionPersistence {
             }
             row.currentModel = currentModel
             row.currentMode = currentMode
+            row.configOptionValues = configOptionValues
             row.autoRun = autoRun
             row.updatedAt = Int64(Date().timeIntervalSince1970)
             try store.upsertSession(row, preserveTitle: preserveTitle)

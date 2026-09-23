@@ -634,6 +634,107 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.currentModel == "sonnet")
     }
 
+    @Test("reopened session reapplies persisted mode and config options after load")
+    func reopenedSessionReappliesPersistedConfiguration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "omp",
+            currentMode: "plan",
+            configOptionValues: [
+                "effort": .string("high"),
+                "permission": .string("unrestricted"),
+                "autoApprove": .boolean(true),
+                "removed": .string("legacy"),
+                "effortWithStaleValue": .string("ultra"),
+            ]
+        ))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [],
+                availableModes: [
+                    .init(id: "default", name: "Default"),
+                    .init(id: "plan", name: "Plan"),
+                ],
+                currentModel: nil,
+                currentMode: "default",
+                promptSuggestions: [],
+                configOptions: [
+                    ACPConfigOption(
+                        id: "effort",
+                        name: "Thinking",
+                        currentValue: "medium",
+                        options: [
+                            .init(id: "medium", name: "Medium"),
+                            .init(id: "high", name: "High"),
+                        ]
+                    ),
+                    ACPConfigOption(
+                        id: "permission",
+                        name: "Permission",
+                        currentValue: "ask",
+                        options: [
+                            .init(id: "ask", name: "Ask"),
+                            .init(id: "unrestricted", name: "Unrestricted"),
+                        ]
+                    ),
+                    ACPConfigOption(
+                        id: "autoApprove",
+                        name: "Auto approve",
+                        type: "boolean",
+                        currentValue: .boolean(false)
+                    ),
+                    ACPConfigOption(
+                        id: "effortWithStaleValue",
+                        name: "Other effort",
+                        currentValue: "medium",
+                        options: [.init(id: "medium", name: "Medium")]
+                    ),
+                ]
+            ))
+        }
+        client.script(method: "session/set_mode") { _ in Data("{}".utf8) }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+        await manager.flushAllPersistence()
+
+        #expect(client.sent.map(\.method) == [
+            "initialize",
+            "session/load",
+            "session/set_mode",
+            "session/set_config_option",
+            "session/set_config_option",
+            "session/set_config_option",
+        ])
+        let modeParams = try #require(client.sent[2].params as? ACPSessionSetModeParams)
+        #expect(modeParams.modeId == "plan")
+        let configParams = try client.sent.dropFirst(3).map {
+            try #require($0.params as? ACPSessionSetConfigOptionParams)
+        }
+        #expect(configParams.map(\.configId) == ["effort", "permission", "autoApprove"])
+        #expect(configParams.map(\.value) == [
+            .string("high"),
+            .string("unrestricted"),
+            .boolean(true),
+        ])
+        #expect(session.currentMode == "plan")
+        #expect(ACPConfigOption.currentValues(in: session.availableConfigOptions) == [
+            "effort": .string("high"),
+            "permission": .string("unrestricted"),
+            "autoApprove": .boolean(true),
+            "effortWithStaleValue": .string("medium"),
+        ])
+        #expect(try store.loadSession(id: "local")?.configOptionValues ==
+            ACPConfigOption.currentValues(in: session.availableConfigOptions))
+    }
+
     @Test("reopened session reapplies a persisted config-option model after load")
     func reopenedSessionReappliesPersistedConfigOptionModel() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -2723,7 +2824,9 @@ struct ACPSessionManagerAttachRestoreTests {
     private func row(
         remoteSessionId: String?,
         agentId: String = "claude",
-        currentModel: String? = nil
+        currentModel: String? = nil,
+        currentMode: String? = nil,
+        configOptionValues: [String: ACPConfigValue] = [:]
     ) -> ACPSessionRow {
         ACPSessionRow(
             id: "local",
@@ -2732,7 +2835,8 @@ struct ACPSessionManagerAttachRestoreTests {
             titleSource: .placeholder,
             remoteSessionId: remoteSessionId,
             currentModel: currentModel,
-            currentMode: nil,
+            currentMode: currentMode,
+            configOptionValues: configOptionValues,
             autoRun: false,
             createdAt: 0,
             updatedAt: 0,

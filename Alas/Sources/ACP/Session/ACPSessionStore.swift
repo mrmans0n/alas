@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 17
+    static let targetSchemaVersion = 18
     let path: String
     let db: SQLiteDatabase
 
@@ -44,6 +44,7 @@ final class ACPSessionStore {
         if current < 15 { try migrate_to_v15() }
         if current < 16 { try migrate_to_v16() }
         if current < 17 { try migrate_to_v17() }
+        if current < 18 { try migrate_to_v18() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -288,6 +289,12 @@ final class ACPSessionStore {
         ON subagent_messages(session_id, subagent_session_id, seq)
         """)
     }
+
+    private func migrate_to_v18() throws {
+        let columns = try db.query("PRAGMA table_info(sessions)")
+        guard !columns.contains(where: { ($0["name"] as? String) == "config_option_values" }) else { return }
+        try db.exec("ALTER TABLE sessions ADD COLUMN config_option_values BLOB")
+    }
 }
 
 struct ACPSessionLease: Equatable, Sendable {
@@ -324,6 +331,7 @@ struct ACPSessionRow: Equatable, Sendable {
     var authStatus: ACPAuthStatus? = nil
     var currentModel: String?
     var currentMode: String?
+    var configOptionValues: [String: ACPConfigValue] = [:]
     var autoRun: Bool
     var helperProcStdoutOffset: Int64? = nil
     var helperProcStderrOffset: Int64? = nil
@@ -557,10 +565,10 @@ extension ACPSessionStore {
         try db.exec("""
         INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, origin, context_recovery_pending,
                               mcp_preamble_pending, mcp_preamble_sent,
-                              current_model, current_mode, auto_run, helper_proc_stdout_offset,
+                              current_model, current_mode, config_option_values, auto_run, helper_proc_stdout_offset,
                               helper_proc_stderr_offset, acp_broker_id, acp_broker_generation,
                               acp_broker_acknowledged_cursor, created_at, updated_at, last_opened_at, archived)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             title = CASE WHEN ? THEN sessions.title ELSE excluded.title END,
             title_source = CASE WHEN ? THEN sessions.title_source ELSE excluded.title_source END,
@@ -571,6 +579,7 @@ extension ACPSessionStore {
             mcp_preamble_sent = sessions.mcp_preamble_sent,
             current_model = excluded.current_model,
             current_mode = excluded.current_mode,
+            config_option_values = excluded.config_option_values,
             auto_run = excluded.auto_run,
             helper_proc_stdout_offset = COALESCE(excluded.helper_proc_stdout_offset, sessions.helper_proc_stdout_offset),
             helper_proc_stderr_offset = COALESCE(excluded.helper_proc_stderr_offset, sessions.helper_proc_stderr_offset),
@@ -589,7 +598,7 @@ extension ACPSessionStore {
             s.id, s.agentId, s.title, s.titleSource.rawValue, s.remoteSessionId, s.origin.rawValue,
             s.contextRecoveryPending ? 1 : 0,
             s.mcpPreamblePending, s.mcpPreambleSent ? 1 : 0,
-            s.currentModel, s.currentMode, s.autoRun ? 1 : 0,
+            s.currentModel, s.currentMode, try JSONEncoder().encode(s.configOptionValues), s.autoRun ? 1 : 0,
             s.helperProcStdoutOffset, s.helperProcStderrOffset,
             s.acpBrokerId, s.acpBrokerGeneration, s.acpBrokerAcknowledgedCursor,
             s.createdAt, s.updatedAt, s.lastOpenedAt, s.archived ? 1 : 0,
@@ -1064,6 +1073,8 @@ extension ACPSessionStore {
             },
             currentModel: r["current_model"] as? String,
             currentMode: r["current_mode"] as? String,
+            configOptionValues: (r["config_option_values"] as? Data)
+                .flatMap { try? JSONDecoder().decode([String: ACPConfigValue].self, from: $0) } ?? [:],
             autoRun: ((r["auto_run"] as? Int64) ?? 0) != 0,
             helperProcStdoutOffset: r["helper_proc_stdout_offset"] as? Int64,
             helperProcStderrOffset: r["helper_proc_stderr_offset"] as? Int64,

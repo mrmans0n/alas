@@ -170,6 +170,7 @@ struct HydrationResult: Sendable {
                 mcpPreambleSent: row.mcpPreambleSent,
                 authStatus: row.authStatus,
                 currentModel: row.currentModel, currentMode: row.currentMode,
+                configOptionValues: row.configOptionValues,
                 autoRun: row.autoRun,
                 createdAt: row.createdAt, updatedAt: row.updatedAt,
                 lastOpenedAt: lastOpenedAt,

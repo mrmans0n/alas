@@ -93,6 +93,28 @@ struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable {
         try c.encode(options, forKey: .options)
     }
 
+    static func currentValues(in options: [ACPConfigOption]) -> [String: ACPConfigValue] {
+        var values: [String: ACPConfigValue] = [:]
+        values.reserveCapacity(options.count)
+        for option in options {
+            if let value = option.currentValue {
+                values[option.id] = value
+            }
+        }
+        return values
+    }
+
+    func acceptsPersistedValue(_ value: ACPConfigValue) -> Bool {
+        switch (type, value) {
+        case ("boolean", .boolean):
+            return true
+        case ("select", .string(let id)):
+            return options.contains { $0.id == id }
+        default:
+            return false
+        }
+    }
+
     static func mergingSuccessfulSetResponse(
         _ configOptions: [ACPConfigOption],
         configId: String,

@@ -1557,6 +1557,7 @@ final class ACPSessionManager: ObservableObject {
         }
         row.currentModel = s.currentModel
         row.currentMode = s.currentMode
+        row.configOptionValues = ACPConfigOption.currentValues(in: s.availableConfigOptions)
         row.autoRun = s.autoRunEnabled
         row.updatedAt = now
         persistedRows[s.id] = row
@@ -3349,6 +3350,60 @@ extension ACPSessionManager {
         await waitForTeardown(sessionId: sessionId)
         await performAttach(to: sessionId, freshlyCreated: freshlyCreated)
     }
+    private func restoreConfigOptionValues(
+        _ persistedValues: [String: ACPConfigValue],
+        excluding excludedId: String?,
+        in session: ACPSession,
+        using runner: ACPSessionRunner
+    ) async {
+        let configIds = session.availableConfigOptions.map(\.id)
+        for configId in configIds where configId != excludedId {
+            guard let selectedValue = persistedValues[configId],
+                  let index = session.availableConfigOptions.firstIndex(where: { $0.id == configId })
+            else { continue }
+            let loadedOption = session.availableConfigOptions[index]
+            guard loadedOption.currentValue != selectedValue,
+                  loadedOption.acceptsPersistedValue(selectedValue)
+            else { continue }
+
+            session.availableConfigOptions[index] = ACPConfigOption(
+                id: loadedOption.id,
+                name: loadedOption.name,
+                type: loadedOption.type,
+                category: loadedOption.category,
+                currentValue: selectedValue,
+                options: loadedOption.options
+            )
+            let baselineConfigOptions = session.availableConfigOptions
+            let baselineConfigOptionsRevision = session.availableConfigOptionsRevision
+            do {
+                let remoteId = session.remoteSessionId ?? session.id
+                let updated = try await runner.connection.setConfigOption(
+                    sessionId: remoteId,
+                    configId: configId,
+                    value: selectedValue
+                )
+                if !updated.isEmpty,
+                   let merged = ACPConfigOption.mergingSuccessfulSetResponse(
+                       updated,
+                       configId: configId,
+                       selectedValue: selectedValue,
+                       currentConfigOptions: session.availableConfigOptions,
+                       baselineConfigOptions: baselineConfigOptions,
+                       baselineConfigOptionsRevision: baselineConfigOptionsRevision,
+                       currentConfigOptionsRevision: session.availableConfigOptionsRevision
+                   ) {
+                    session.availableConfigOptions = merged
+                }
+            } catch {
+                if let currentIndex = session.availableConfigOptions.firstIndex(where: { $0.id == configId }),
+                   session.availableConfigOptions[currentIndex].currentValue == selectedValue {
+                    session.availableConfigOptions[currentIndex] = loadedOption
+                }
+            }
+        }
+    }
+
 
     private func performAttach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async {
         guard let session = sessions[sessionId] else { return }
@@ -3357,6 +3412,10 @@ extension ACPSessionManager {
         case .idle, .disconnected, .failed: break
         }
         let persistedModel = freshlyCreated ? nil : session.currentModel
+        let persistedMode = freshlyCreated ? nil : session.currentMode
+        let persistedConfigOptionValues = freshlyCreated
+            ? [:]
+            : (persistedRows[sessionId]?.configOptionValues ?? [:])
         let firstRunAttach = freshlyCreated
             && !session.restoredFromPersistence
             && session.transcript.messages.isEmpty
@@ -4469,13 +4528,32 @@ extension ACPSessionManager {
                     break
                 }
             }
-            if let m = pendingMode.removeValue(forKey: sessionId),
+            let pendingModeToRestore = pendingMode.removeValue(forKey: sessionId)
+            let modeToRestore = pendingModeToRestore
+                ?? persistedMode.flatMap { persisted in
+                    persisted != loadedMode
+                        && result.availableModes.contains(where: { $0.id == persisted })
+                        ? persisted
+                        : nil
+                }
+            if let modeToRestore,
                session.currentMode == loadedMode {
-                session.currentMode = m
+                session.currentMode = modeToRestore
                 persist(session)
                 let remoteId = session.remoteSessionId ?? sessionId
-                try? await runner.connection.setMode(sessionId: remoteId, modeId: m)
+                try? await runner.connection.setMode(sessionId: remoteId, modeId: modeToRestore)
             }
+            let configBackedModelId: String? = {
+                guard case .configOption(let id) = session.chipState.models?.source else { return nil }
+                return id
+            }()
+            await restoreConfigOptionValues(
+                persistedConfigOptionValues,
+                excluding: configBackedModelId,
+                in: session,
+                using: runner
+            )
+            persist(session)
             guard session.agentState == .spawning else { return }
             let attachmentStillCurrent: Bool
             if isDisposed || sessions[sessionId] !== session || runners[sessionId] !== runner {
