@@ -76,6 +76,9 @@ struct RemoteDiscoveredInstanceResolver {
                 sawIdentityMismatch = true
                 continue
             }
+            // Once an endpoint reports another identity, an anonymous legacy
+            // reply cannot establish that this is the discovered peer.
+            if sawIdentityMismatch, info.serverId != instance.id { continue }
             var origins = [base]
             for address in info.addresses where address.kind != .localhost {
                 guard origins.count < RemotePairingLink.maxOrigins else { break }

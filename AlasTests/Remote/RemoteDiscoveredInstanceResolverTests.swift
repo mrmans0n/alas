@@ -171,4 +171,35 @@ struct RemoteDiscoveredInstanceResolverTests {
         let outcome = await resolver.origins(for: multi)
         #expect(outcome == .failure(.unreachable))
     }
+
+    @Test(arguments: [nil, ""] as [String?])
+    func missingIdentityCannotEraseAnEarlierMismatch(missing: String?) async {
+        let endpoints: [NWEndpoint] = [.hostPort(host: "10.0.0.1", port: 8765), .hostPort(host: "10.0.0.2", port: 8765)]
+        let peer = RemoteDiscoveredInstance(id: "srv-a", name: "Mac A", protocolVersion: 1, model: nil, endpoints: endpoints)
+        let resolver = RemoteDiscoveredInstanceResolver(resolve: { endpoint in
+            (endpoint == endpoints[0] ? "10.0.0.1" : "10.0.0.2", 8765)
+        }, fetch: { request in
+            let id = request.url!.host == "10.0.0.1" ? "wrong" : missing
+            return (Data(info(serverId: id, addresses: []).utf8),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        #expect(await resolver.resolvePeer(for: peer) == .failure(.identityMismatch))
+    }
+
+    @Test func exactIdentityCanRecoverAfterMismatchAndMissingIdentity() async {
+        let endpoints: [NWEndpoint] = (1...3).map { .hostPort(host: NWEndpoint.Host("10.0.0.\($0)"), port: 8765) }
+        let peer = RemoteDiscoveredInstance(id: "srv-a", name: "Mac A", protocolVersion: 1, model: nil, endpoints: endpoints)
+        let resolver = RemoteDiscoveredInstanceResolver(resolve: { endpoint in
+            ("10.0.0.\(endpoints.firstIndex(of: endpoint)! + 1)", 8765)
+        }, fetch: { request in
+            let id: String? = switch request.url!.host {
+            case "10.0.0.1": "wrong"
+            case "10.0.0.2": nil
+            default: "srv-a"
+            }
+            return (Data(info(serverId: id, addresses: []).utf8),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        #expect(await resolver.origins(for: peer) == .success(["http://10.0.0.3:8765"]))
+    }
 }
