@@ -25,13 +25,30 @@ enum ReviewTabPendingReviewPresentation {
 /// Falls back to the first loaded file when the comment's file is no longer
 /// part of the session (e.g. the diff refreshed after the comment was staged).
 enum ReviewTabCommentJump {
+    /// `matchedCommentFile` is false when `fileID` is the fallback file, not
+    /// the comment's own file — callers must not scroll to `comment.line` in
+    /// that case, since an unrelated file may coincidentally have that line.
+    struct Target {
+        let fileID: DiffReviewFileID
+        let matchedCommentFile: Bool
+    }
+
+    static func target(
+        for comment: StagedComment,
+        session: ReviewChangesLoadedSession
+    ) -> Target? {
+        if let match = session.summary.files.first(where: { $0.path == comment.filePath }) {
+            return Target(fileID: match.id, matchedCommentFile: true)
+        }
+        guard let fallback = session.summary.files.first else { return nil }
+        return Target(fileID: fallback.id, matchedCommentFile: false)
+    }
+
     static func fileID(
         for comment: StagedComment,
         session: ReviewChangesLoadedSession
     ) -> DiffReviewFileID? {
-        let match = session.summary.files.first { $0.path == comment.filePath }
-        if let match { return match.id }
-        return session.summary.files.first?.id
+        target(for: comment, session: session)?.fileID
     }
 }
 
@@ -397,12 +414,12 @@ struct ReviewTabView: View {
     /// section of the diff.
     private func selectPendingComment(_ comment: StagedComment) {
         guard let session else { return }
-        guard let fileID = ReviewTabCommentJump.fileID(for: comment, session: session) else { return }
-        selectedFileID = fileID
+        guard let target = ReviewTabCommentJump.target(for: comment, session: session) else { return }
+        selectedFileID = target.fileID
         pendingCommentScrollCommand = pendingCommentScrollController.command(
-            fileID: fileID,
+            fileID: target.fileID,
             side: comment.side,
-            line: comment.line
+            line: target.matchedCommentFile ? comment.line : nil
         )
     }
 

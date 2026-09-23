@@ -71,6 +71,32 @@ struct ReviewTabViewTests {
         #expect(ReviewTabCommentJump.fileID(for: staged, session: empty) == nil)
     }
 
+    @Test func commentJumpFlagsWhenTheFallbackFileDoesNotMatchTheComment() {
+        let files = [
+            DiffReviewFileSummary(
+                path: "Sources/A.swift", namespace: "pr", groupID: nil, groupTitle: nil,
+                status: .modified, additions: 1, deletions: 0, isRenderable: true
+            ),
+        ]
+        let session = DiffReviewLoadedSession(
+            files: files.map {
+                DiffReviewFileSectionModel(
+                    summary: $0, parsedDiff: nil, displayModel: nil,
+                    placeholderMessage: "No diff.", openFile: nil, contextProvider: nil
+                )
+            },
+            summary: DiffReviewSessionModel(files: files, groupsEnabled: false)
+        )
+
+        let matched = StagedComment(filePath: "Sources/A.swift", line: 10, side: .new, body: "note")
+        #expect(ReviewTabCommentJump.target(for: matched, session: session)?.matchedCommentFile == true)
+
+        let orphan = StagedComment(filePath: "Deleted/Nope.swift", line: 10, side: .new, body: "stale")
+        let orphanTarget = ReviewTabCommentJump.target(for: orphan, session: session)
+        #expect(orphanTarget?.matchedCommentFile == false)
+        #expect(orphanTarget?.fileID == files[0].id)
+    }
+
     @Test func finishReviewToolbarButtonRequiresSubmitCapabilityAndPendingReviewScope() {
         #expect(ReviewTabPendingReviewPresentation.showsToolbarFinishButton(
             canSubmitReview: true,

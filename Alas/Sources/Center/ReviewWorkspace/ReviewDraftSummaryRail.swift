@@ -814,7 +814,6 @@ struct ReviewDraftSummaryRail: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("review-draft-summary-comment-\(comment.id)")
-                .id("review-draft-summary-comment-\(comment.id)")
                 .accessibilityLabel(accessibilityLabel(for: comment))
             }
 
@@ -856,6 +855,7 @@ struct ReviewDraftSummaryRail: View {
             }
         }
         .padding(8)
+        .id("review-draft-summary-comment-\(comment.id)")
         .background(isFocused ? theme.color("accent-soft") : theme.color("bg-1"))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(
