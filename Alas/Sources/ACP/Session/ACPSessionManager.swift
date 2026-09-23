@@ -509,6 +509,11 @@ final class ACPSessionManager: ObservableObject {
     }
     private var deferredConfigOptionUpdates: [ACPSession.ID: [DeferredConfigOptionUpdate]] = [:]
     private var activeDeferredConfigOptionUpdates: [ACPSession.ID: [String: DeferredConfigOptionUpdate]] = [:]
+    private enum DeferredModelModeUpdate {
+        case model(String)
+        case mode(String)
+    }
+    private var deferredModelModeUpdates: [ACPSession.ID: [DeferredModelModeUpdate]] = [:]
 
     /// Toggle auto-run for a remotely-driven session. Writer-gated; persists.
     func setAutoRun(for id: ACPSession.ID, enabled: Bool) async {
@@ -517,15 +522,18 @@ final class ACPSessionManager: ObservableObject {
         persist(session)
     }
 
-    /// Select the agent model. Optimistically updates + persists, then issues the
-    /// agent RPC on the live runner — or records it pending until `attach`
-    /// registers one (post-takeover window). Writer-gated.
+    /// Select the agent model. Optimistically updates and persists, then sends
+    /// the RPC or records it for attach.
     func setModel(for id: ACPSession.ID, modelId: String) async {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         session.currentModel = modelId
         persist(session)
         guard let runner = runners[id] else {
             pendingModel[id] = modelId
+            return
+        }
+        guard !session.isRestoringPersistedConfigOptions else {
+            deferredModelModeUpdates[id, default: []].append(.model(modelId))
             return
         }
         let remoteId = session.remoteSessionId ?? id
@@ -539,6 +547,10 @@ final class ACPSessionManager: ObservableObject {
         persist(session)
         guard let runner = runners[id] else {
             pendingMode[id] = modeId
+            return
+        }
+        guard !session.isRestoringPersistedConfigOptions else {
+            deferredModelModeUpdates[id, default: []].append(.mode(modeId))
             return
         }
         let remoteId = session.remoteSessionId ?? id
@@ -819,6 +831,29 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
+    private func flushDeferredModelModeUpdates(
+        for session: ACPSession,
+        using runner: ACPSessionRunner
+    ) async {
+        let sessionId = session.id
+        while var queuedUpdates = deferredModelModeUpdates[sessionId],
+              !queuedUpdates.isEmpty {
+            let update = queuedUpdates.removeFirst()
+            deferredModelModeUpdates[sessionId] = queuedUpdates.isEmpty ? nil : queuedUpdates
+            let remoteId = session.remoteSessionId ?? sessionId
+            switch update {
+            case .model(let modelId):
+                try? await runner.connection.setModel(sessionId: remoteId, modelId: modelId)
+            case .mode(let modeId):
+                try? await runner.connection.setMode(sessionId: remoteId, modeId: modeId)
+            }
+            guard sessions[sessionId] === session, runners[sessionId] === runner else {
+                deferredModelModeUpdates[sessionId] = nil
+                return
+            }
+        }
+    }
+
     private func rollbackConfigOptionSelection(
         session: ACPSession,
         configId: String,
@@ -860,6 +895,10 @@ final class ACPSessionManager: ObservableObject {
     private func discardDeferredConfigOptionUpdates(for sessionId: ACPSession.ID) {
         deferredConfigOptionUpdates[sessionId] = nil
         activeDeferredConfigOptionUpdates[sessionId] = nil
+    }
+
+    private func discardDeferredModelModeUpdates(for sessionId: ACPSession.ID) {
+        deferredModelModeUpdates[sessionId] = nil
     }
 
     /// Sessions for which THIS instance holds the writer lease (backing store).
@@ -1653,6 +1692,7 @@ final class ACPSessionManager: ObservableObject {
         pendingMode.removeValue(forKey: id)
         pendingConfigOptionValues.removeValue(forKey: id)
         discardDeferredConfigOptionUpdates(for: id)
+        discardDeferredModelModeUpdates(for: id)
     }
 
     func deleteSession(id: ACPSession.ID) async throws {
@@ -1714,6 +1754,7 @@ final class ACPSessionManager: ObservableObject {
         pendingMode.removeValue(forKey: id)
         pendingConfigOptionValues.removeValue(forKey: id)
         discardDeferredConfigOptionUpdates(for: id)
+        discardDeferredModelModeUpdates(for: id)
 
         pendingQueueForceSends.removeValue(forKey: id)
         persistedRows.removeValue(forKey: id)
@@ -3319,6 +3360,7 @@ extension ACPSessionManager {
         pendingMode.removeValue(forKey: sessionId)
         pendingConfigOptionValues.removeValue(forKey: sessionId)
         discardDeferredConfigOptionUpdates(for: sessionId)
+        discardDeferredModelModeUpdates(for: sessionId)
 
         if let runner = runners.removeValue(forKey: sessionId) {
             runner.invalidateActivePrompt()
@@ -4994,6 +5036,7 @@ extension ACPSessionManager {
                 using: runner
             )
             await flushDeferredConfigOptionUpdates(for: session, using: runner)
+            await flushDeferredModelModeUpdates(for: session, using: runner)
             session.isRestoringPersistedConfigOptions = false
             persist(session)
             guard session.agentState == .spawning else { return }

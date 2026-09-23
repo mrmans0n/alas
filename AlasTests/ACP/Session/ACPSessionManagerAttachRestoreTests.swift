@@ -634,6 +634,88 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.currentModel == "sonnet")
     }
 
+    @Test("user model and mode edits follow reconnect restoration")
+    func userModelAndModeEditsFollowReconnectRestoration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        let modeGate = AttachPhaseGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "opus", name: "Opus"),
+                    .init(id: "haiku", name: "Haiku"),
+                ],
+                availableModes: [
+                    .init(id: "default", name: "Default"),
+                    .init(id: "plan", name: "Plan"),
+                    .init(id: "ask", name: "Ask"),
+                ],
+                currentModel: "opus",
+                currentMode: "default",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { _ in
+            await modelGate.enterAndWait()
+            return Data("{}".utf8)
+        }
+        client.scriptAsync(method: "session/set_mode") { _ in
+            await modeGate.enterAndWait()
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+
+        await manager.hydrateIfNeeded(id: "local")
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+        try await waitUntilAsync { await modelGate.hasEntered }
+
+        await manager.setModel(for: session.id, modelId: "haiku")
+        #expect(client.sent.filter { $0.method == "session/set_model" }.count == 1)
+        await modelGate.release()
+        try await waitUntilAsync { await modeGate.hasEntered }
+
+        await manager.setMode(for: session.id, modeId: "ask")
+        #expect(client.sent.filter { $0.method == "session/set_mode" }.count == 1)
+        await modeGate.release()
+        await attachTask.value
+        await manager.flushAllPersistence()
+
+        let selectionRequests = client.sent.filter {
+            $0.method == "session/set_model" || $0.method == "session/set_mode"
+        }
+        #expect(selectionRequests.map(\.method) == [
+            "session/set_model",
+            "session/set_mode",
+            "session/set_model",
+            "session/set_mode",
+        ])
+        let modelParams = try selectionRequests
+            .filter { $0.method == "session/set_model" }
+            .map { try #require($0.params as? ACPSessionSetModelParams) }
+        let modeParams = try selectionRequests
+            .filter { $0.method == "session/set_mode" }
+            .map { try #require($0.params as? ACPSessionSetModeParams) }
+        #expect(modelParams.map(\.modelId) == ["sonnet", "haiku"])
+        #expect(modeParams.map(\.modeId) == ["plan", "ask"])
+        #expect(session.currentModel == "haiku")
+        #expect(session.currentMode == "ask")
+        #expect(try store.loadSession(id: "local")?.currentModel == "haiku")
+        #expect(try store.loadSession(id: "local")?.currentMode == "ask")
+    }
+
     @Test("reopened session reapplies persisted mode and config options after load")
     func reopenedSessionReappliesPersistedConfiguration() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
