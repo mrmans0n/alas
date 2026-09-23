@@ -32,7 +32,7 @@ AlasTests/AppStateRunScriptCreationTests	subprocess	Conservative subprocess isol
 AlasTests/AppStateSpacesTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/AppStateTabAvailabilityTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/AppStateWorktreeArchiveBatchTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AppStateWorktreeCleanupBatchTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
+AlasTests/AppStateWorktreeCleanupBatchTests	slow-subprocess	Real-git deletion buckets (fixture init, worktree add, staged trash, per-item fingerprint and removal) exceed the default 120s aggregate deadline on CI while making progress; the invocation is killed at 120s and the definitions are only accounted on Xcode's restart. Allow 360 seconds per invocation.	#1423
 AlasTests/BeautifulMermaidBackendTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/BeautifulMermaidSmokeTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/CheckpointCoordinationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
