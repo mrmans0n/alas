@@ -101,7 +101,7 @@ struct AppStateCreateWorktreeCompletionTests {
         let result = await WorktreeCreationCompletion.wait(
             id: "pending",
             maxPolls: 1,
-            operationState: { .deleting },
+            operationState: { .deleting(projectId: "p") },
             worktree: { Self.worktree },
             sleep: {}
         )

@@ -47,10 +47,6 @@ struct AppConfig: Codable, Equatable {
     /// Preview gate for the Needs Attention inbox and project affordances.
     /// Events continue collecting while its presentation is disabled.
     var needsAttentionEnabled: Bool = false
-    /// Preview gate for scheduled run scripts and agent launches. While it is
-    /// off the scheduler never evaluates, so nothing fires and the Schedules
-    /// tab stays out of the right rail.
-    var schedulesEnabled: Bool = false
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
     var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
@@ -72,8 +68,6 @@ struct AppConfig: Codable, Equatable {
         var serverId: String = ""
         /// Name advertised in `hello`. Empty means "use the computer name".
         var displayName: String = ""
-        /// Experiment: lets the remote web client pair with several Macs.
-        var hubEnabled: Bool = false
         /// Experiment: lets this Mac pair with other Macs running Alas.
         var federationEnabled: Bool = false
         /// Advertise this Mac on the local network with Bonjour and browse for
@@ -88,7 +82,6 @@ struct AppConfig: Codable, Equatable {
             allowedOrigins: [String] = [],
             serverId: String = "",
             displayName: String = "",
-            hubEnabled: Bool = false,
             federationEnabled: Bool = false,
             discoverable: Bool = false
         ) {
@@ -99,14 +92,13 @@ struct AppConfig: Codable, Equatable {
             self.allowedOrigins = allowedOrigins
             self.serverId = serverId
             self.displayName = displayName
-            self.hubEnabled = hubEnabled
             self.federationEnabled = federationEnabled
             self.discoverable = discoverable
         }
 
         enum CodingKeys: String, CodingKey {
             case enabled, port, allowedHosts, preferredAdvertisedHost
-            case allowedOrigins, serverId, displayName, hubEnabled, federationEnabled, discoverable
+            case allowedOrigins, serverId, displayName, federationEnabled, discoverable
         }
 
         init(from decoder: Decoder) throws {
@@ -118,7 +110,6 @@ struct AppConfig: Codable, Equatable {
             allowedOrigins = (try? c.decode([String].self, forKey: .allowedOrigins)) ?? []
             serverId = (try? c.decode(String.self, forKey: .serverId)) ?? ""
             displayName = (try? c.decode(String.self, forKey: .displayName)) ?? ""
-            hubEnabled = (try? c.decode(Bool.self, forKey: .hubEnabled)) ?? false
             federationEnabled = (try? c.decode(Bool.self, forKey: .federationEnabled)) ?? false
             discoverable = (try? c.decode(Bool.self, forKey: .discoverable)) ?? false
         }
@@ -300,9 +291,12 @@ struct AppConfig: Codable, Equatable {
         /// (the agent runs tools without asking). Seeds the per-session value
         /// only; the composer bolt still wins afterward. Default: false.
         var acpAutoRunByDefault: Bool
+        /// Generate an on-device title when the ACP agent does not provide one.
+        /// Default: true; users can opt out in Chat settings.
+        var acpLocalTitlesEnabled: Bool
         var acpShowMinimap: Bool
-        /// When true, the chat transcript folds finished tool calls (bundling
-        /// consecutive ones together) into an expandable "Ran N tools" row.
+        /// When true, the chat transcript groups consecutive thinking and
+        /// finished tool calls into an expandable activity row.
         /// The active tool call always stays visible. Default: false.
         var acpCollapseFinishedToolCalls: Bool
         /// When true (default), every local ACP session gets the built-in
@@ -318,7 +312,7 @@ struct AppConfig: Codable, Equatable {
         enum CodingKeys: String, CodingKey {
             case notifyOnFinish, notifyOnAwaiting,
                  dismissedHookInstallNudges, dismissedACPSetupNudges,
-                 confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault, acpShowMinimap,
+                 confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault, acpLocalTitlesEnabled, acpShowMinimap,
                  acpCollapseFinishedToolCalls,
                  exposeAlasMCP, alasMCPTransport, acpDictationLocale
         }
@@ -329,6 +323,7 @@ struct AppConfig: Codable, Equatable {
              confirmCloseChatTabs: Bool = false,
              acpSendOnEnter: Bool = true,
              acpAutoRunByDefault: Bool = false,
+             acpLocalTitlesEnabled: Bool = true,
              acpShowMinimap: Bool = false,
              acpCollapseFinishedToolCalls: Bool = false,
              exposeAlasMCP: Bool = true,
@@ -342,6 +337,7 @@ struct AppConfig: Codable, Equatable {
             self.confirmCloseChatTabs = confirmCloseChatTabs
             self.acpSendOnEnter = acpSendOnEnter
             self.acpAutoRunByDefault = acpAutoRunByDefault
+            self.acpLocalTitlesEnabled = acpLocalTitlesEnabled
             self.acpShowMinimap = acpShowMinimap
             self.acpCollapseFinishedToolCalls = acpCollapseFinishedToolCalls
             self.exposeAlasMCP = exposeAlasMCP
@@ -358,6 +354,7 @@ struct AppConfig: Codable, Equatable {
             confirmCloseChatTabs = (try? c.decode(Bool.self, forKey: .confirmCloseChatTabs)) ?? false
             acpSendOnEnter = (try? c.decode(Bool.self, forKey: .acpSendOnEnter)) ?? true
             acpAutoRunByDefault = (try? c.decode(Bool.self, forKey: .acpAutoRunByDefault)) ?? false
+            acpLocalTitlesEnabled = (try? c.decode(Bool.self, forKey: .acpLocalTitlesEnabled)) ?? true
             acpShowMinimap = (try? c.decode(Bool.self, forKey: .acpShowMinimap)) ?? false
             acpCollapseFinishedToolCalls = (try? c.decode(Bool.self, forKey: .acpCollapseFinishedToolCalls)) ?? false
             exposeAlasMCP = (try? c.decode(Bool.self, forKey: .exposeAlasMCP)) ?? true
@@ -585,7 +582,6 @@ struct AppConfig: Codable, Equatable {
         files: Files(showIgnored: true, bookmarksPaneHeight: nil),
         workspacesEnabled: false,
         needsAttentionEnabled: false,
-        schedulesEnabled: false,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
         recentWorktreeRefs: [],
@@ -679,7 +675,6 @@ extension AppConfig {
              remote,
              workspacesEnabled,
              needsAttentionEnabled,
-             schedulesEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
@@ -924,7 +919,6 @@ extension AppConfig {
         workspacesEnabled = (try? c.decode(Bool.self, forKey: .workspacesEnabled)) ?? false
         // Needs Attention remains opt-in while its entry points are in preview.
         needsAttentionEnabled = (try? c.decode(Bool.self, forKey: .needsAttentionEnabled)) ?? false
-        schedulesEnabled = (try? c.decode(Bool.self, forKey: .schedulesEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]

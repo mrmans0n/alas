@@ -22,15 +22,8 @@ struct AppStateRightPaneRailAcceptanceTests {
         #expect(state.acceptsRightPaneTabShortcut(.agent))
     }
 
-    /// The Schedules shortcut must stay inert until its preview flag is on,
-    /// so the chord does nothing rather than opening a gated tab.
-    @Test func schedulesTabShortcutFollowsItsPreviewFlag() {
+    @Test func schedulesTabShortcutIsAlwaysLive() {
         let state = AppState()
-
-        state.config.schedulesEnabled = false
-        #expect(!state.acceptsRightPaneTabShortcut(.schedules))
-
-        state.config.schedulesEnabled = true
         #expect(state.acceptsRightPaneTabShortcut(.schedules))
     }
 }

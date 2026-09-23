@@ -139,6 +139,72 @@ struct ClosedTabAppStateTests {
         #expect(!fixture.state.canReopenClosedTab)
     }
 
+    /// A worktree id is its path, so the claim that gates a reopened tab must
+    /// be the project the tab was recorded from — which only the caller knows.
+    /// Here a same-path row under a deleting project is the first match for the
+    /// id, so re-deriving the project at close time (or at reopen time) tags
+    /// the tab with that deleting project and discards it on reopen, even
+    /// though it belongs to a clean one.
+    @Test func reopeningACPSessionUsesTheProjectsItsCloseCallerHeld() async {
+        let sharedID = "closed-tabs-shared-id"
+        // First in the project list, so it is the first match for the id.
+        let deletingProject = ProjectConfig(
+            id: "closed-tabs-deleting-project",
+            name: "Deleting",
+            path: "/tmp/closed-tabs-deleting-project",
+            color: "green",
+            addedAt: Date(timeIntervalSince1970: 0),
+            host: "other-host"
+        )
+        let ownProject = ProjectConfig(
+            id: "closed-tabs-own-project",
+            name: "Own",
+            path: "/tmp/closed-tabs-own-project",
+            color: "blue",
+            addedAt: Date(timeIntervalSince1970: 0)
+        )
+        let state = AppState(store: MemoryStore())
+        state.projectsManager = ProjectsManager(persistedProjects: [deletingProject, ownProject])
+        let own = Worktree(
+            id: sharedID,
+            projectId: ownProject.id,
+            name: "own",
+            branch: "own",
+            path: URL(fileURLWithPath: "/tmp/closed-tabs-own-\(UUID().uuidString)"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        state.projectsManager.insertOptimisticWorktree(own)
+        let deleting = Worktree(
+            id: sharedID,
+            projectId: deletingProject.id,
+            name: "deleting",
+            branch: "deleting",
+            path: URL(fileURLWithPath: "/tmp/closed-tabs-deleting-\(UUID().uuidString)"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        state.projectsManager.insertOptimisticWorktree(deleting)
+        state.projectsManager.setOperationState(
+            forWorktreeId: sharedID,
+            projectId: deletingProject.id,
+            state: .deleting(projectId: deletingProject.id)
+        )
+        _ = state.acpManager(for: own)
+
+        let tab = state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: "closed-tabs-own-chat", title: "Closed chat"),
+            to: own.id
+        )
+        // The close caller holds the clean project's checkout.
+        state.requestCloseTab(worktreeId: own.id, projectId: ownProject.id, tabId: tab.id)
+
+        await state.reopenLastClosedTab()
+
+        // The tab belongs to the clean project, so it comes back.
+        #expect(state.tabs.tabs(forWorktree: sharedID).contains { $0.id == tab.id })
+    }
+
     @Test func centerTabNavigationUsesTheWorktreeActiveTab() {
         let fixture = makeFixture()
         let first = fixture.state.tabs.appendEditor(

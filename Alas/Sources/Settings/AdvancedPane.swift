@@ -45,31 +45,6 @@ struct AdvancedPane: View {
                         ))
                     }
                     SettingsRow(
-                        name: "Scheduled runs",
-                        desc: "Adds a Schedules tab that runs scripts, and optionally opens a worktree with an agent, on a timer. Only fires while Alas is running."
-                    ) {
-                        AlasToggle(on: Binding(
-                            get: { state.config.schedulesEnabled },
-                            set: { state.setSchedulesEnabled($0) }
-                        ))
-                    }
-                    SettingsRow(
-                        name: "Remote hub",
-                        desc: "Lets the remote web client pair with several Macs and switch between them."
-                    ) {
-                        AlasToggle(on: Binding(
-                            get: { state.config.remote.hubEnabled },
-                            set: { enabled in
-                                state.config.remote.hubEnabled = enabled
-                                state.saveConfig()
-                                // Already-connected browsers only see hubEnabled in the
-                                // hello sent at handshake — push a fresh one so they
-                                // don't need a reload to notice the flag changed.
-                                state.remoteServer?.broadcastHello()
-                            }
-                        ))
-                    }
-                    SettingsRow(
                         name: "Remote peers",
                         desc: "Lets this Mac pair with other Macs running Alas."
                     ) {

@@ -821,13 +821,21 @@ extension ACPSessionStore {
         """, bindings: [title, titleSource.rawValue, updatedAt, id]) > 0
     }
 
-    func updateGeneratedTitleIfPlaceholder(id: String, title: String, updatedAt: Int64) throws -> Bool {
+    func updateFallbackTitleIfPlaceholder(id: String, title: String, updatedAt: Int64) throws -> Bool {
         try db.execChanges("""
         UPDATE sessions
         SET title = ?, title_source = ?, updated_at = ?
         WHERE id = ? AND archived = 0 AND title_source = ?
-        """, bindings: [title, ACPSessionTitleSource.generated.rawValue, updatedAt, id,
+        """, bindings: [title, ACPSessionTitleSource.fallback.rawValue, updatedAt, id,
                          ACPSessionTitleSource.placeholder.rawValue]) > 0
+    }
+    func updateLocalTitleIfFallback(id: String, title: String, updatedAt: Int64) throws -> Bool {
+        try db.execChanges("""
+        UPDATE sessions
+        SET title = ?, title_source = ?, updated_at = ?
+        WHERE id = ? AND archived = 0 AND title_source = ?
+        """, bindings: [title, ACPSessionTitleSource.local.rawValue, updatedAt, id,
+                         ACPSessionTitleSource.fallback.rawValue]) > 0
     }
 
     func updateGeneratedTitleIfNotManual(id: String, title: String, updatedAt: Int64) throws -> Bool {
@@ -835,7 +843,7 @@ extension ACPSessionStore {
         UPDATE sessions
         SET title = ?, title_source = ?, updated_at = ?
         WHERE id = ? AND archived = 0 AND title_source != ?
-        """, bindings: [title, ACPSessionTitleSource.generated.rawValue, updatedAt, id,
+        """, bindings: [title, ACPSessionTitleSource.provider.rawValue, updatedAt, id,
                          ACPSessionTitleSource.manual.rawValue]) > 0
     }
 

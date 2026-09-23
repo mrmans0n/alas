@@ -5,6 +5,307 @@ import CryptoKit
 
 @MainActor
 struct RemotePeerManagerTests {
+    @Test(arguments: ["cancel", "revoke"], [false, true])
+    func outboundRollbackCannotRestoreInvalidInboundPredecessor(action: String, hasOlderPeer: Bool) async throws {
+        for approvedOutbound in [false, true] {
+            let key = Curve25519.Signing.PrivateKey()
+            let publicKey = RemoteIdentityCrypto.publicKeyString(key.publicKey)
+            let pairing = RemotePairingService(store: InMemoryDeviceStore())
+            let store = InMemoryPeerStore()
+            let olderGrant = pairing.issueApprovedPeer(deviceName: "Old", peerServerId: "srv-a")
+            pairing.commitApprovedPeer(deviceId: olderGrant.deviceId)
+            let olderPeer = RemotePeer(id: "older", serverId: "srv-a", name: "Old", origins: ["http://10.0.0.1:8765"],
+                lastOrigin: nil, token: "older", publicKey: publicKey, protocolVersion: nil,
+                localDeviceId: olderGrant.deviceId, addedAt: Date())
+            let baseline = hasOlderPeer ? [olderPeer] : []
+            store.save(baseline)
+            let pairer = RemotePeerPairer(fetch: { request in
+                let body = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+                let challenge = try #require(body["challenge"] as? String)
+                let code = try #require(body["code"] as? String)
+                let proof = try #require(RemoteIdentityCrypto.sign(serverId: "srv-a", challenge: challenge, with: key))
+                let data = try JSONSerialization.data(withJSONObject: ["token": code, "serverId": "srv-a",
+                    "name": "A", "publicKey": proof.publicKey, "signature": proof.signature])
+                return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+            let manager = makeManager(store: store, pairing: pairing, pairer: pairer, links: Links(),
+                identity: .init(serverId: "srv-b", name: "B", origins: identity.origins, publicKey: publicKey),
+                reciprocalConfirmationTimeout: 0.2)
+            let grant = pairing.issueApprovedPeer(deviceName: "A", peerServerId: "srv-a")
+            manager.noteApprovedPeerPairingArrived(requestID: "inbound",
+                request: .init(peerServerId: "srv-a", peerName: "A", origins: olderPeer.origins,
+                    peerPublicKey: publicKey, counterCode: "inbound", localDeviceId: grant.deviceId, redeemedCode: ""),
+                localPeer: .init(serverID: "srv-b", publicKey: "local", name: "B", origins: identity.origins))
+            #expect(await manager.handleInboundApprovedPeer(requestID: "inbound"))
+            let outbound = Task {
+                if approvedOutbound {
+                    return await manager.addApprovedPeer(expectedPeer: .init(serverID: "srv-a", publicKey: publicKey,
+                        name: "A", origins: olderPeer.origins)) { _ in
+                            .paired(token: "outbound", serverId: "srv-a", name: "A", publicKey: publicKey, origin: olderPeer.origins[0])
+                        }
+                }
+                return await manager.addPeer(code: "outbound", origins: olderPeer.origins)
+            }
+            for _ in 0..<100 where manager.peers.first?.token != "outbound" {
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            #expect(manager.peers.first?.token == "outbound")
+            if action == "cancel" { manager.cancelApprovedPairing(requestID: "inbound") }
+            else { pairing.revoke(deviceId: grant.deviceId) }
+            #expect(await outbound.value == .reciprocalPairingFailed)
+            #expect(pairing.validate(token: grant.token) == nil)
+            #expect(manager.peers == baseline)
+            #expect(store.saved == baseline)
+        }
+    }
+
+    @Test(arguments: ["keep", "cancel", "revoke"], [false, true])
+    func approvedCancellationRestoresPeerCommittedDuringItsNetworkWait(predecessorAction: String, hasOlderPeer: Bool) async throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let publicKey = RemoteIdentityCrypto.publicKeyString(key.publicKey)
+        let localPeer = ApprovalPeer(serverID: "srv-b", publicKey: "local", name: "B", origins: identity.origins)
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let store = InMemoryPeerStore()
+        let olderGrant = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Old", peerServerId: "srv-a")
+        let olderPeer = RemotePeer(id: "older", serverId: "srv-a", name: "Old", origins: ["http://10.0.0.1:8765"],
+            lastOrigin: nil, token: "older", publicKey: publicKey, protocolVersion: nil,
+            localDeviceId: olderGrant.deviceId, addedAt: Date())
+        let baseline = hasOlderPeer ? [olderPeer] : []
+        store.save(baseline)
+        var entered: CheckedContinuation<Void, Never>?
+        var release: CheckedContinuation<Void, Never>?
+        let pairer = RemotePeerPairer(fetch: { request in
+            let body = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            let code = try #require(body["code"] as? String)
+            if code == "code-a" {
+                await withCheckedContinuation { continuation in
+                    release = continuation
+                    entered?.resume()
+                    entered = nil
+                }
+            }
+            let challenge = try #require(body["challenge"] as? String)
+            let proof = try #require(RemoteIdentityCrypto.sign(serverId: "srv-a", challenge: challenge, with: key))
+            let data = try JSONSerialization.data(withJSONObject: ["token": code, "serverId": "srv-a",
+                "name": "A", "publicKey": proof.publicKey, "signature": proof.signature])
+            return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        let manager = makeManager(store: store, pairing: pairing, pairer: pairer, links: Links())
+        func begin(_ id: String) -> RemotePeerRedeemResult {
+            let grant = pairing.issueApprovedPeer(deviceName: "A", peerServerId: "srv-a")
+            manager.noteApprovedPeerPairingArrived(requestID: id,
+                request: RemotePeerPairingRequest(peerServerId: "srv-a", peerName: "A", origins: ["http://10.0.0.1:8765"],
+                    peerPublicKey: publicKey, counterCode: "code-" + id, localDeviceId: grant.deviceId, redeemedCode: ""), localPeer: localPeer)
+            return grant
+        }
+        let grantA = begin("a")
+        var taskA: Task<Bool, Never>!
+        await withCheckedContinuation { continuation in
+            entered = continuation
+            taskA = Task { await manager.handleInboundApprovedPeer(requestID: "a") }
+        }
+        let grantB = begin("b")
+        #expect(await manager.handleInboundApprovedPeer(requestID: "b"))
+        let peerB = try #require(manager.peers.first)
+        let grantC = begin("c")
+        #expect(await manager.handleInboundApprovedPeer(requestID: "c"))
+        let peerC = try #require(manager.peers.first)
+        release?.resume()
+        #expect(await taskA.value)
+        #expect(manager.peers.first?.token == "code-a")
+        if predecessorAction == "cancel" {
+            manager.cancelApprovedPairing(requestID: "b")
+            manager.cancelApprovedPairing(requestID: "c")
+        }
+        if predecessorAction == "revoke" {
+            pairing.revoke(deviceId: grantB.deviceId)
+            pairing.revoke(deviceId: grantC.deviceId)
+        }
+        manager.cancelApprovedPairing(requestID: "a")
+        #expect(pairing.validate(token: grantA.token) == nil)
+        if predecessorAction != "keep" {
+            #expect(manager.peers == baseline)
+            #expect(store.saved == baseline)
+        } else {
+            #expect(manager.peers == [peerC])
+            #expect(store.saved == [peerC])
+            #expect(pairing.validate(token: grantB.token) == grantB.deviceId)
+            #expect(pairing.validate(token: grantC.token) == grantC.deviceId)
+            manager.cancelApprovedPairing(requestID: "c")
+            #expect(manager.peers == [peerB])
+            manager.cancelApprovedPairing(requestID: "b")
+            #expect(manager.peers == baseline)
+        }
+        #expect(pairing.validate(token: grantB.token) == nil)
+        #expect(pairing.validate(token: grantC.token) == nil)
+    }
+
+    @Test func unrelatedSavesPreserveOlderDurablePeerDuringApprovedWait() async throws {
+        let key = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let local = RemotePeerManager.LocalIdentity(serverId: "srv-b", name: "B", origins: identity.origins, publicKey: key)
+        let store = InMemoryPeerStore()
+        let old = RemotePeer(id: "old", serverId: "srv-a", name: "A", origins: ["http://10.0.0.1:8765"],
+            lastOrigin: nil, token: "old", publicKey: key, protocolVersion: nil, localDeviceId: nil, addedAt: Date())
+        let unrelated = RemotePeer(id: "other", serverId: "srv-c", name: "C", origins: ["http://10.0.0.3:8765"],
+            lastOrigin: nil, token: "other", publicKey: key, protocolVersion: nil, localDeviceId: nil, addedAt: Date())
+        store.save([old, unrelated])
+        let links = Links()
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: links, identity: local,
+                                  reciprocalConfirmationTimeout: 0.2)
+        manager.connectAll()
+        let peer = ApprovalPeer(serverID: "srv-a", publicKey: key, name: "A", origins: old.origins)
+        let attempt = Task { await manager.addApprovedPeer(expectedPeer: peer) { _ in
+            .paired(token: "new", serverId: peer.serverID, name: peer.name, publicKey: key, origin: peer.origins[0])
+        } }
+        for _ in 0..<100 {
+            if manager.peers.first?.token == "new" { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        #expect(manager.peers.first?.token == "new")
+        links.byPeerId[unrelated.id]?.emit(.hello(serverId: "srv-c", name: "Renamed C", protocolVersion: 1, federationEnabled: true))
+        #expect(store.saved.first?.token == "old")
+        #expect(store.saved.last?.name == "Renamed C")
+        #expect(await attempt.value == .reciprocalPairingFailed)
+        #expect(manager.peers.first == old)
+        #expect(store.saved.last?.name == "Renamed C")
+        manager.disconnectAll()
+    }
+
+    @Test func approvedPairKeepsFrozenReturnOriginsAndRejectsWrongRemotePin() async {
+        let key = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let local = RemotePeerManager.LocalIdentity(serverId: "srv-b", name: "B", origins: ["http://10.0.0.99:8765"], publicKey: key)
+        let frozen = ApprovalPeer(serverID: "srv-b", publicKey: key, name: "B", origins: identity.origins)
+        let peer = ApprovalPeer(serverID: "srv-a", publicKey: key, name: "A", origins: ["http://10.0.0.1:8765"])
+        let manager = makeManager(pairer: pairer([:], requests: Requests()), links: Links(), identity: local)
+        let result = await manager.addApprovedPeer(expectedPeer: peer, localPeer: frozen) { ad in
+            #expect(ad.origins == frozen.origins)
+            return .paired(token: "wrong", serverId: peer.serverID, name: peer.name, publicKey: nil, origin: peer.origins[0])
+        }
+        #expect(result == .identityUnproven)
+        #expect(manager.peers.isEmpty)
+    }
+
+    @Test func forgetDuringApprovedRedemptionPreventsPublication() async {
+        let key = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let local = RemotePeerManager.LocalIdentity(serverId: "srv-b", name: "B", origins: identity.origins, publicKey: key)
+        let store = InMemoryPeerStore()
+        let old = RemotePeer(id: "old", serverId: "srv-a", name: "A", origins: ["http://10.0.0.1:8765"],
+            lastOrigin: nil, token: "old", publicKey: key, protocolVersion: nil, localDeviceId: nil, addedAt: Date())
+        store.save([old])
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: Links(), identity: local)
+        let peer = ApprovalPeer(serverID: "srv-a", publicKey: key, name: "A", origins: old.origins)
+        let result = await manager.addApprovedPeer(expectedPeer: peer) { _ in
+            manager.forget(peerId: old.id)
+            return .paired(token: "new", serverId: peer.serverID, name: peer.name, publicKey: key, origin: peer.origins[0])
+        }
+        #expect(result == .cancelled)
+        #expect(manager.peers.isEmpty)
+        #expect(store.saved.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func approvedInboundCancellationRestoresOnlyItsOwnPreviousPeer(cancelBeforeReply: Bool) async throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let publicKey = RemoteIdentityCrypto.publicKeyString(key.publicKey)
+        let localKey = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let localPeer = ApprovalPeer(serverID: "srv-b", publicKey: localKey, name: "B", origins: identity.origins)
+        let store = InMemoryPeerStore()
+        let devices = InMemoryDeviceStore()
+        let pairing = RemotePairingService(store: devices)
+        let oldGrant = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "A", peerServerId: "srv-a")
+        let old = RemotePeer(id: "existing", serverId: "srv-a", name: "Old", origins: ["http://10.0.0.1:8765"],
+            lastOrigin: nil, token: "old-token", publicKey: publicKey, protocolVersion: nil,
+            localDeviceId: oldGrant.deviceId, addedAt: Date())
+        store.save([old])
+        let manager = makeManager(store: store, pairing: pairing,
+            pairer: provingPairer(serverId: "srv-a", key: key, requests: Requests()), links: Links())
+        let fresh = pairing.issueApprovedPeer(deviceName: "A", peerServerId: "srv-a")
+        let request = RemotePeerPairingRequest(peerServerId: "srv-a", peerName: "A", origins: old.origins,
+            peerPublicKey: publicKey, counterCode: "fresh-code", localDeviceId: fresh.deviceId, redeemedCode: "")
+        manager.noteApprovedPeerPairingArrived(requestID: "attempt", request: request, localPeer: localPeer)
+        if cancelBeforeReply { manager.cancelApprovedPairing(requestID: "attempt") }
+        #expect(await manager.handleInboundApprovedPeer(requestID: "attempt") == !cancelBeforeReply)
+        manager.cancelApprovedPairing(requestID: "attempt")
+        #expect(manager.peers == [old])
+        #expect(store.saved == [old])
+        #expect(pairing.validate(token: oldGrant.token) == oldGrant.deviceId)
+        #expect(pairing.validate(token: fresh.token) == nil)
+    }
+
+    @Test func approvedLostReplyRevokesAttemptDeviceEvenWhenOlderPeerExists() async throws {
+        let key = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let local = RemotePeerManager.LocalIdentity(serverId: "srv-b", name: "B", origins: identity.origins, publicKey: key)
+        let store = InMemoryPeerStore()
+        let devices = InMemoryDeviceStore()
+        let pairing = RemotePairingService(store: devices)
+        let oldGrant = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "A", peerServerId: "srv-a")
+        let old = RemotePeer(id: "old", serverId: "srv-a", name: "A", origins: ["http://10.0.0.1:8765"],
+            lastOrigin: nil, token: "old", publicKey: key, protocolVersion: nil, localDeviceId: oldGrant.deviceId, addedAt: Date())
+        store.save([old])
+        let manager = makeManager(store: store, pairing: pairing, pairer: pairer([:], requests: Requests()), links: Links(), identity: local)
+        let peer = ApprovalPeer(serverID: "srv-a", publicKey: key, name: "A", origins: old.origins)
+        var freshToken = ""
+        #expect(await manager.addApprovedPeer(expectedPeer: peer) { ad in
+            let result = try! pairing.redeemPeer(code: ad.counterCode!, deviceName: "A", peerServerId: "srv-a")
+            freshToken = result.token
+            await manager.handleInboundPeer(RemotePeerPairingRequest(peerServerId: "srv-a", peerName: "A", origins: old.origins,
+                peerPublicKey: key, counterCode: nil, localDeviceId: result.deviceId, redeemedCode: ad.counterCode!))
+            return .unreachable
+        } == .unreachable)
+        #expect(pairing.validate(token: freshToken) == nil)
+        #expect(pairing.validate(token: oldGrant.token) == oldGrant.deviceId)
+        #expect(store.saved == [old])
+    }
+
+    @Test func approvedPairRequiresPersistentIdentityBeforeNetwork() async {
+        let manager = makeManager(pairer: pairer([:], requests: Requests()), links: Links())
+        let peer = ApprovalPeer(serverID: "other", publicKey: "key", name: "Other", origins: ["http://10.0.0.1:8765"])
+        let result = await manager.addApprovedPeer(expectedPeer: peer) { _ in
+            Issue.record("Missing local identity must reject before redemption")
+            return .unreachable
+        }
+        #expect(result == .identityUnproven)
+    }
+
+    @Test func approvedPairWaitsForItsReciprocalAndPersistsOnlyOnSuccess() async throws {
+        let store = InMemoryPeerStore()
+        let devices = InMemoryDeviceStore()
+        let pairing = RemotePairingService(store: devices)
+        let key = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let peerKey = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let local = RemotePeerManager.LocalIdentity(serverId: "srv-b", name: "B", origins: identity.origins, publicKey: key)
+        let manager = makeManager(store: store, pairing: pairing, pairer: pairer([:], requests: Requests()),
+                                  links: Links(), identity: local)
+        let peer = ApprovalPeer(serverID: "srv-a", publicKey: peerKey, name: "A", origins: ["http://10.0.0.1:8765"])
+        let result = await manager.addApprovedPeer(expectedPeer: peer) { ad in
+            #expect(store.saved.isEmpty)
+            let code = ad.counterCode!
+            let grant = try! pairing.redeemPeer(code: code, deviceName: "A", peerServerId: "srv-a")
+            #expect(devices.saved.isEmpty)
+            await manager.handleInboundPeer(RemotePeerPairingRequest(peerServerId: "srv-a", peerName: "A",
+                origins: peer.origins, peerPublicKey: peerKey, counterCode: nil,
+                localDeviceId: grant.deviceId, redeemedCode: code))
+            return .paired(token: "outbound", serverId: "srv-a", name: "A", publicKey: peerKey, origin: peer.origins[0])
+        }
+        #expect(result == nil)
+        #expect(store.saved.first?.token == "outbound")
+        #expect(devices.saved.count == 1)
+    }
+
+    @Test func approvedPairNeverPersistsUnconfirmedPeer() async {
+        let store = InMemoryPeerStore()
+        let key = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let local = RemotePeerManager.LocalIdentity(serverId: "srv-b", name: "B", origins: identity.origins, publicKey: key)
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: Links(), identity: local)
+        let peer = ApprovalPeer(serverID: "srv-a", publicKey: key, name: "A", origins: ["http://10.0.0.1:8765"])
+        let result = await manager.addApprovedPeer(expectedPeer: peer) { _ in
+            .paired(token: "new", serverId: peer.serverID, name: peer.name, publicKey: key, origin: peer.origins[0])
+        }
+        #expect(result == .reciprocalPairingFailed)
+        #expect(store.saved.isEmpty)
+        #expect(manager.peers.isEmpty)
+    }
+
     @MainActor
     final class FakeLink: RemotePeerConnecting {
         var state: RemotePeerConnection.State = .idle

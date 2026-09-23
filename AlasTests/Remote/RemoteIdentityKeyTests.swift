@@ -153,6 +153,25 @@ struct RemoteIdentityKeyProviderTests {
                                             expectedPublicKey: provider.publicKey, challenge: challenge))
     }
 
+    @Test func approvalPayloadsAreSignedWithTheIdentityKey() throws {
+        let provider = RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
+        let requester = ApprovalPeer(serverID: "requester", publicKey: provider.publicKey,
+                                     name: "Requester", origins: ["https://requester.example"])
+        let receiverKey = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let receiver = ApprovalPeer(serverID: "receiver", publicKey: receiverKey,
+                                    name: "Receiver", origins: ["https://receiver.example"])
+        let payload = ApprovalPayload(operation: .submit, requestID: "request-1",
+                                      requester: requester, receiver: receiver,
+                                      attemptNonce: String(repeating: "a", count: 64),
+                                      operationNonce: String(repeating: "b", count: 64),
+                                      challenge: String(repeating: "c", count: 64),
+                                      expiresAtMilliseconds: 1_800_000_000_000, phase: .pending,
+                                      counterCode: nil, responseDigest: nil)
+        let signature = try #require(provider.signApproval(payload, reply: false))
+        #expect(ApprovalWire.verify(ApprovalEnvelope(payload: payload, signature: signature),
+                                    expectedKey: provider.publicKey, reply: false))
+    }
+
     // A key that cannot be persisted would differ on every launch, so peers
     // that pinned it would refuse this Mac with no way to tell that apart
     // from a real impersonation. Advertising nothing leaves records visibly

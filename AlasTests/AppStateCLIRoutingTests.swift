@@ -1091,7 +1091,7 @@ struct AppStateCLIRoutingTests {
             .appendingPathComponent(destination.lastPathComponent)
         let createdId = Worktree.makeId(path: canonicalDestination)
         #expect(response == .text(["creating feature/cli at \(destination.path)"]))
-        #expect(state.projectsManager.operationState(for: createdId) == .creating)
+        #expect(state.projectsManager.operationState(forWorktreeId: createdId, projectId: project.id) == .creating)
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == createdId })
     }
 
@@ -1149,12 +1149,12 @@ struct AppStateCLIRoutingTests {
         #expect(response == .text(["creating from-master at \(createdPath.path)"]))
         for _ in 0..<100 {
             if state.projectsManager.worktrees(projectId: project.id).contains(where: { $0.id == createdId }) &&
-                state.projectsManager.operationState(for: createdId) == nil {
+                state.projectsManager.operationState(forWorktreeId: createdId, projectId: project.id) == nil {
                 break
             }
             try? await Task.sleep(for: .milliseconds(50))
         }
-        #expect(state.projectsManager.operationState(for: createdId) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: createdId, projectId: project.id) == nil)
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == createdId })
     }
 
@@ -1173,7 +1173,7 @@ struct AppStateCLIRoutingTests {
         let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "delete-target", force: false, keepBranch: true))))
 
         #expect(response == .ok)
-        #expect(state.projectsManager.operationState(for: target.id) == .deleting)
+        #expect(state.projectsManager.operationState(forWorktreeId: target.id, projectId: project.id) == .deleting(projectId: project.id))
     }
 
     @Test func cliWorktreeDeleteIsIdempotentWhileDeleting() async throws {
@@ -1189,13 +1189,13 @@ struct AppStateCLIRoutingTests {
         )
         defer { try? FileManager.default.removeItem(at: main.path) }
         state.projectsManager.insertOptimisticWorktree(target)
-        state.projectsManager.setOperationState(id: target.id, state: .deleting)
+        state.projectsManager.setOperationState(forWorktreeId: target.id, projectId: project.id, state: .deleting(projectId: project.id))
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
         let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "feature/delete", force: true, keepBranch: true))))
 
         #expect(response == .ok)
-        #expect(state.projectsManager.operationState(for: target.id) == .deleting)
+        #expect(state.projectsManager.operationState(forWorktreeId: target.id, projectId: project.id) == .deleting(projectId: project.id))
     }
 
     @Test func cliWorktreeDeleteForceClearsStalePendingForceState() async throws {
@@ -1223,7 +1223,7 @@ struct AppStateCLIRoutingTests {
 
         #expect(response == .ok)
         #expect(state.pendingForceDeleteWorktree == nil)
-        #expect(state.projectsManager.operationState(for: target.id) == .deleting)
+        #expect(state.projectsManager.operationState(forWorktreeId: target.id, projectId: project.id) == .deleting(projectId: project.id))
     }
 
     /// Regression: a CLI delete that dismisses a leftover `.preparingDelete`
@@ -1243,7 +1243,7 @@ struct AppStateCLIRoutingTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
         let target = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "delete-stale-claim-target" })
 
-        state.projectsManager.setOperationState(id: target.id, state: .preparingDelete)
+        state.projectsManager.setOperationState(forWorktreeId: target.id, projectId: project.id, state: .preparingDelete)
         state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
             id: target.id,
             branch: target.branch,
@@ -1262,7 +1262,7 @@ struct AppStateCLIRoutingTests {
             return
         }
         #expect(state.pendingForceDeleteWorktree == nil)
-        #expect(state.projectsManager.operationState(for: target.id) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: target.id, projectId: project.id) == nil)
     }
 
     /// Regression: a `.preparingDelete` claim with no matching
@@ -1282,7 +1282,7 @@ struct AppStateCLIRoutingTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
         let target = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "delete-live-dialog-target" })
 
-        state.projectsManager.setOperationState(id: target.id, state: .preparingDelete)
+        state.projectsManager.setOperationState(forWorktreeId: target.id, projectId: project.id, state: .preparingDelete)
         #expect(state.pendingForceDeleteWorktree == nil)
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
@@ -1292,7 +1292,157 @@ struct AppStateCLIRoutingTests {
             Issue.record("Expected the CLI to refuse rather than race the live dialog")
             return
         }
-        #expect(state.projectsManager.operationState(for: target.id) == .preparingDelete)
+        #expect(state.projectsManager.operationState(forWorktreeId: target.id, projectId: project.id) == .preparingDelete)
+    }
+
+    /// Regression: a pending force prompt belongs to one project's worktree.
+    /// A worktree id is its path, so a CLI delete for a same-path checkout
+    /// under *another* project must not discard that prompt — which would
+    /// leave the other project's `.preparingDelete` claim with no prompt left
+    /// able to confirm or cancel it.
+    @Test func cliDeleteUnderAnotherProjectKeepsADuplicateIDsPendingForcePrompt() async throws {
+        let sharedID = "/srv/checkouts/member"
+        let otherProject = ProjectConfig(
+            id: "other-project",
+            name: "Other",
+            path: "/repos/other",
+            color: "#fff",
+            addedAt: .distantPast,
+            host: "other-host"
+        )
+        // Both projects are seeded through the store, which is how AppState
+        // takes its project list.
+        var store = MemoryStore()
+        store.projectsFile = ProjectsFile(projects: [otherProject])
+        let state = AppState(store: store)
+        let repo = try await makeRepo(name: "delete-pending-scope")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let project = try await state.projectsManager.addProject(path: repo, displayName: "test", color: "#000000")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let otherRow = Worktree(
+            id: sharedID,
+            projectId: otherProject.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: sharedID),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(otherRow)
+        state.projectsManager.setOperationState(
+            forWorktreeId: otherRow.id,
+            projectId: otherProject.id,
+            state: .preparingDelete
+        )
+        state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
+            id: sharedID,
+            branch: otherRow.branch,
+            projectId: otherProject.id,
+            repoPath: URL(fileURLWithPath: otherProject.path),
+            worktreePath: otherRow.path,
+            deleteBranchIfMerged: false,
+            removedIndex: 0
+        )
+
+        // A worktree in *this* project that happens to share the same
+        // path-derived id.
+        let thisProjectRow = Worktree(
+            id: sharedID,
+            projectId: project.id,
+            name: "feature",
+            branch: "feature",
+            path: URL(fileURLWithPath: "/repos/test/feature"),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(thisProjectRow)
+
+        _ = await state.cliDeleteWorktree(thisProjectRow, force: true, keepBranch: true)
+
+        // The other project's prompt and claim survive this project's delete.
+        #expect(state.pendingForceDeleteWorktree?.projectId == otherProject.id)
+        #expect(state.projectsManager.operationState(
+            forWorktreeId: sharedID,
+            projectId: otherProject.id
+        ) == .preparingDelete)
+    }
+
+    /// A worktree owner carries only the path-derived id, so an owner-based
+    /// ACP creation must be gated by the caller's project. Re-resolving the
+    /// first project that lists that id reads that project's claim instead:
+    /// here project B's checkout is deleting while project A lists the same
+    /// path and is focused and clean, so an id-only lookup admits a session
+    /// into the deleting checkout — and blocks the clean one.
+    @Test func ownerBasedACPCreationReadsTheCallersProjectClaim() async throws {
+        let sharedID = "/srv/checkouts/member"
+        // Seeded in this order, so project A is the first match for the id.
+        let project = ProjectConfig(
+            id: "clean-project",
+            name: "Clean",
+            path: "/repos/clean",
+            color: "#5fb7c4",
+            addedAt: .distantPast
+        )
+        let otherProject = ProjectConfig(
+            id: "other-project",
+            name: "Other",
+            path: "/repos/other",
+            color: "#fff",
+            addedAt: .distantPast,
+            host: "other-host"
+        )
+        var store = MemoryStore()
+        store.projectsFile = ProjectsFile(projects: [project, otherProject])
+        let state = AppState(store: store)
+
+        // The focused, clean project's row at the shared id.
+        let thisProjectRow = Worktree(
+            id: sharedID,
+            projectId: project.id,
+            name: "feature",
+            branch: "feature",
+            path: URL(fileURLWithPath: sharedID),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(thisProjectRow)
+        state.focusGlobalWorktree(id: sharedID, projectId: project.id)
+        // The other project's row at the same id, deleting.
+        let otherRow = Worktree(
+            id: sharedID,
+            projectId: otherProject.id,
+            name: "member",
+            branch: "member",
+            path: URL(fileURLWithPath: sharedID),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(otherRow)
+        state.projectsManager.setOperationState(
+            forWorktreeId: sharedID,
+            projectId: otherProject.id,
+            state: .deleting(projectId: otherProject.id)
+        )
+        // Materialize the owner's manager the way opening the launcher does.
+        _ = state.acpManager(for: otherRow)
+
+        // A caller holding the deleting project's checkout is refused.
+        let admittedForDeletingProject = state.openNewACPSession(
+            agentID: "test-agent",
+            owner: .worktree(sharedID),
+            projectId: otherProject.id
+        )
+        #expect(admittedForDeletingProject == nil)
+
+        // The same call for the clean project is admitted, so the refusal
+        // above is that project's claim and not a missing manager or agent.
+        let admittedForCleanProject = state.openNewACPSession(
+            agentID: "test-agent",
+            owner: .worktree(sharedID),
+            projectId: project.id
+        )
+        #expect(admittedForCleanProject != nil)
     }
 
     /// Regression test for the review palette ignoring a per-worktree

@@ -203,13 +203,7 @@ struct RightPaneView: View {
             case .run:
                 RunTabView(state: state, worktree: worktree)
             case .schedules:
-                // The flag can be switched off while this pane is showing
-                // Schedules; fall back rather than render a gated feature.
-                if state.config.schedulesEnabled {
-                    SchedulesTabView(state: state, worktree: worktree)
-                } else {
-                    RightPaneLoadingSkeletonView(activeTab: .changes)
-                }
+                SchedulesTabView(state: state, worktree: worktree)
             }
         } else {
             RightPaneLoadingSkeletonView(activeTab: rps.activeTab)
@@ -246,7 +240,6 @@ struct RightPaneView: View {
                 activeAgentCount: agentRollup.active.count,
                 activeRunCount: runningScriptNames.count,
                 activeScheduleCount: visibleSchedules.count { state.runScheduler.isRunning($0) },
-                schedulesEnabled: state.config.schedulesEnabled,
                 onAction: { action in handle(action, rps: rps) }
             )
         }

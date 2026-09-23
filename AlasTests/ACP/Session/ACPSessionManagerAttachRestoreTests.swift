@@ -1418,7 +1418,7 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.refreshMirror(sessionId: "local")
 
         #expect(session.title == "Adapter Title")
-        #expect(session.titleSource == .generated)
+        #expect(session.titleSource == .provider)
         #expect(manager.recent.first?.title == "Adapter Title")
         #expect(titleCallbacks.count == 1)
         #expect(titleCallbacks.first?.0 == "local")

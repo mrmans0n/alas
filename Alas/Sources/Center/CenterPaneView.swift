@@ -134,6 +134,7 @@ struct CenterPaneView: View {
     /// and rail for the whole launch, so its legacy reveal action cannot work.
     var rightPaneStartupSuppressed: Bool = false
     @Environment(\.theme) var theme
+    @Environment(\.approvalNotificationInset) private var approvalNotificationInset
     @State private var startupRecoveryReadyKey: String?
 
     var body: some View {
@@ -183,21 +184,22 @@ struct CenterPaneView: View {
                 onClose: {
                     state.requestCloseComposedCenterTab(
                         worktreeID: worktree.id,
+                        projectId: worktree.projectId,
                         sharedSessionOwner: sharedSessionOwner,
                         tabID: $0
                     )
                 },
                 onCloseOthers: { id in
-                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.others(keeping: id))
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, projectId: worktree.projectId, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.others(keeping: id))
                 },
                 onCloseAll: {
-                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.all())
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, projectId: worktree.projectId, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.all())
                 },
                 onCloseToLeft: { id in
-                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.left(of: id))
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, projectId: worktree.projectId, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.left(of: id))
                 },
                 onCloseToRight: { id in
-                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.right(of: id))
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, projectId: worktree.projectId, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.right(of: id))
                 },
                 onCopyPath: { id in
                     guard let tab = tabs.first(where: { $0.id == id }),
@@ -772,6 +774,7 @@ struct CenterPaneView: View {
                     }
                 }
                 .padding(12)
+                .padding(.bottom, approvalNotificationInset)
                 .animation(.easeOut(duration: 0.2), value: runScriptFailures.map(\.id))
             }
         }

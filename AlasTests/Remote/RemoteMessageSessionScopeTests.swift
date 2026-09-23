@@ -89,7 +89,7 @@ struct RemoteMessageSessionScopeTests {
     @Test func unscopedServerMessagesHaveNoIdAndAreUnchanged() {
         let summary = RemoteSessionSummary(id: "a", title: "t", agentId: "x", status: "idle", canDrive: false)
         let unscoped: [RemoteServerMessage] = [
-            .hello(protocolVersion: 1, serverId: "s", name: "n", hubEnabled: false),
+            .hello(protocolVersion: 1, serverId: "s", name: "n"),
             .identityProof(challenge: "c", publicKey: "k", signature: "s"),
             .sessionList(sessions: [summary]), .worktreeList(worktrees: []), .agentList(agents: []),
             .projectList(projects: []), .branchList(projectId: "p", branches: [], preferredBase: "main"),

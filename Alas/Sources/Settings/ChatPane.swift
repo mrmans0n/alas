@@ -14,12 +14,13 @@ struct ChatPane: View {
     enum RowLabels {
         static let fontFamily = "Font family"
         static let fontSize = "Font size"
-        static let collapseFinishedToolCalls = "Collapse finished tool calls"
+        static let collapseFinishedToolCalls = "Collapse activity"
         static let defaultLaunchSurface = "Default launch surface"
         static let sendOnEnter = "While busy, ⏎ queues; ⌥⏎ steers"
         static let dictationLanguage = "Dictation language"
         static let confirmCloseChatTabs = "Confirm before closing chat tabs"
         static let autoRun = "⚡ Auto-run"
+        static let onDeviceFallbackTitles = "On-device fallback titles"
     }
 
     enum FontPickerDefaults {
@@ -41,6 +42,7 @@ struct ChatPane: View {
         RowLabels.defaultLaunchSurface,
         RowLabels.sendOnEnter,
         RowLabels.confirmCloseChatTabs,
+        RowLabels.onDeviceFallbackTitles,
         RowLabels.autoRun,
         RowLabels.dictationLanguage,
     ]
@@ -81,7 +83,7 @@ struct ChatPane: View {
                         ), monospaced: true).frame(width: 80)
                     }
                     SettingsRow(name: RowLabels.collapseFinishedToolCalls,
-                                desc: "Fold finished tool calls into an expandable “Ran N tools” row, bundling consecutive ones together. The tool that is currently running always stays visible.") {
+                                desc: "Group consecutive thinking and finished tool calls into one expandable activity row. Progress messages and running tools stay visible.") {
                         AlasToggle(on: state.bind(\.harness.acpCollapseFinishedToolCalls))
                     }
                 }
@@ -126,6 +128,12 @@ struct ChatPane: View {
                                 state.saveConfig()
                             }
                         ))
+                    }
+                    SettingsRow(name: RowLabels.onDeviceFallbackTitles,
+                                desc: "When the agent doesn't name a chat, use an on-device model to suggest a title. Available on macOS 26 or later.") {
+                        AlasToggle(on: state.bind(\.harness.acpLocalTitlesEnabled))
+                            .accessibilityLabel(RowLabels.onDeviceFallbackTitles)
+                            .accessibilityValue(state.config.harness.acpLocalTitlesEnabled ? "On" : "Off")
                     }
                     SettingsRow(name: RowLabels.autoRun,
                                 desc: "New chat sessions start with auto-run on — the agent runs tools without asking for permission. Toggle per-session with the bolt in the composer.") {

@@ -5,6 +5,16 @@ import CryptoKit
 
 @MainActor
 struct RemoteHTTPResponderTests {
+    @Test func pairRejectsTwoAuthorizationMechanismsWithoutConsumingCode() throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let code = pairing.beginPairing()
+        let body = Data("{\"code\":\"\(code)\",\"deviceName\":\"phone\",\"approval\":{}}".utf8)
+        let reply = text(makeResponder(pairing: pairing).response(for: request("POST", "/pair"), body: body))
+        #expect(!reply.hasPrefix("HTTP/1.1 200"))
+        #expect(pairing.devices.isEmpty)
+        #expect(throws: Never.self) { try pairing.redeem(code: code, deviceName: "phone") }
+    }
+
     private let privateOrigin = "http://192.168.1.20:8765"
 
     private func makeResponder(pairing: RemotePairingService = RemotePairingService(store: InMemoryDeviceStore())) -> RemoteHTTPResponder {
@@ -25,6 +35,21 @@ struct RemoteHTTPResponderTests {
     }
 
     private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self) }
+
+    @Test func nativeApprovalRoutesDefaultToForbiddenWithoutCORS() {
+        for origin in [nil, "", "null", privateOrigin] as [String?] {
+            let out = text(makeResponder().response(for: request("POST", "/peer-approval/v1/challenge", origin: origin), body: Data()))
+            #expect(out.hasPrefix("HTTP/1.1 403 Forbidden"))
+            #expect(!out.contains("Access-Control-"))
+        }
+    }
+
+    @Test func diagnosticsWithoutApprovalCapabilityRemainDecodable() throws {
+        let body = Data(#"{"appName":"Alas","addresses":[],"usesPlainHTTP":true,"pairedDeviceCount":0}"#.utf8)
+        let snapshot = try JSONDecoder().decode(RemoteDiagnosticsSnapshot.self, from: body)
+        #expect(snapshot.pairingApprovalVersion == nil)
+        #expect(snapshot.serverId == nil)
+    }
 
     @Test func healthCarriesCORSHeadersForAnAllowedOrigin() {
         let out = text(makeResponder().response(for: request("GET", "/health", origin: privateOrigin), body: Data()))
@@ -117,7 +142,7 @@ struct RemoteHTTPResponderTests {
         )
         responder.acceptsPeers = { accepts }
         responder.onPeerPaired = { sink.requests.append($0) }
-        responder.identity = { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false) }
+        responder.identity = { RemoteServerIdentity(serverId: "srv-a", name: "Mac A") }
         if let signingKey {
             responder.identityProof = { challenge in
                 RemoteIdentityCrypto.sign(serverId: "srv-a", challenge: challenge, with: signingKey)

@@ -35,13 +35,16 @@ The subprocess list preserves the conservative isolation baseline gathered durin
 #1277; it does not assert every listed suite individually reproduced a hang.
 
 The build runner publishes compiled products and the test plan, then finishes.
-Two dependent test runners balance all seven ordinary batches and the subprocess
+Two dependent test runners balance all eight ordinary batches and the subprocess
 invocations by measured duration. Subprocess invocations still contain at most
 three suites. The macOS shell harnesses run on the builder. Each invocation
 has a wall-clock deadline, including startup and teardown: 360 seconds ordinary,
 120 seconds subprocess. The explicit `slow-subprocess` policy allows 360 seconds
 for measured longer-running suites: the checkpoint fault-injection suite passed
-locally in 229 seconds (286 seconds for its three-suite invocation). Planning
+locally in 229 seconds (286 seconds for its three-suite invocation), and the
+worktree cleanup batch suite (real git repos, worktree fixtures, and staged
+trash) was killed at the 120-second deadline on CI while its definitions passed
+on Xcode's restart. Planning
 checks that invocation limits plus termination and result-extraction allowances
 fit each 30-minute subprocess step. Tests retain Xcode's 60-second execution allowance.
 Failures do not prevent later invocations or batches from collecting evidence.

@@ -253,6 +253,56 @@ Inside an Alas-spawned terminal:
 5. Confirm title/body are filled with Summary and Testing sections.
 6. Toggle Draft, then create the PR from a disposable branch or cancel before submission during local-only testing.
 
+## Peer pairing by approval
+
+These checks need two Macs running Alas on a reachable LAN or tailnet. They
+remain pending until performed with two interactive instances. Enable remote
+access, federation, and discovery on both Macs and keep a window visible.
+
+1. On Mac A, open Settings > Remote > Peers and click Pair beside Mac B.
+   Confirm A says it is waiting for approval and offers Cancel. B shows a
+   bottom-right request card with the requester name, the mutual session
+   access explanation, the untrusted-name label, Allow, Decline, and a
+   remaining-time label. Before Allow, neither Mac has a new paired device
+   or peer, and B has not contacted A's advertised return address.
+2. On B, switch worktrees, open an empty workspace, and leave Remote settings.
+   The card must remain visible. Open the main and Settings windows together.
+   Confirm both display the same request without stealing keyboard focus.
+3. Click Allow in either B window. Both cards change to the pairing state;
+   repeated Allow and a decision from the other window cannot start another
+   exchange. Success appears only after reciprocal completion. Both Macs show
+   one peer with the expected identity and can view and control each other's
+   sessions without copying a code.
+4. Remove the new pairing and start again. Decline, including closing the
+   card, removes both copies of B's card and informs A. Neither Mac gains
+   credentials. An immediate new request from A must not create another card
+   during the 60-second decline suppression period.
+5. Start another request and Cancel on A. Confirm B's card disappears and no
+   peer is added. Repeat by closing A's settings pane. Leave another request
+   unanswered for 120 seconds and confirm both the card and waiting state end.
+   Allow near that deadline must not give submission another 120 seconds.
+6. While waiting, disable B's remote access, federation, or discovery, testing
+   each separately. The card disappears and the attempt grants no access.
+   Restart B during another pending request and confirm it is lost. A must
+   require an explicit retry to create a new prompt after failure.
+7. Interrupt the connection just after Allow, then restore it. Confirm a lost
+   redemption reply can recover without duplicate credentials or prompts.
+   Cancel during completion and verify credentials from that attempt disappear.
+   Repeat when an older pairing exists and verify the older peer still works.
+8. Use a long requester name. Its bounded text wraps and can be selected and
+   copied. Check keyboard navigation and VoiceOver labels for the card,
+   remaining time, Allow, and Decline. Return alone must never approve.
+   With several cards visible, click and scroll in the gaps between cards.
+   Both actions must reach the underlying content. This hit-testing check
+   remains unverified until performed in the running app.
+9. Pair with an older Alas build that has no approval capability. Confirm the
+   nearby-code fallback explains how to open the other Mac's pairing QR.
+   Copy code and Copy pairing link must work without manual transcription.
+   Verify legacy native code pairing and browser QR/link pairing still work.
+10. Check that an unreachable peer or invalid identity proof displays an error
+    instead of switching to code entry. Retry through a different advertised
+    address and confirm one attempt produces at most one pending card.
+
 ## Native GG Workflows
 
 Use a disposable GG repository with at least three mutable stack commits and a

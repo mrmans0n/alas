@@ -318,7 +318,7 @@ private final class WorktreeLaunchFixture {
             issueAttachment: issueAttachment
         )
         #expect(!id.isEmpty)
-        try await waitForOperationToClear(id: id)
+        try await waitForOperationToClear(id: id, projectId: project.id)
         if case .acp(_, let preparedPrompt?) = launchSurface {
             try await waitForPreparedPrompt(preparedPrompt, worktreeID: id)
         }
@@ -329,10 +329,10 @@ private final class WorktreeLaunchFixture {
         try? FileManager.default.removeItem(at: root)
     }
 
-    private func waitForOperationToClear(id: String, timeoutSeconds: Double = 10) async throws {
+    private func waitForOperationToClear(id: String, projectId: String, timeoutSeconds: Double = 10) async throws {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
-            if state.projectsManager.operationState(for: id) == nil { return }
+            if state.projectsManager.operationState(forWorktreeId: id, projectId: projectId) == nil { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         Issue.record("Timed out waiting for operationState to clear for id \(id)")

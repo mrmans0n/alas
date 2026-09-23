@@ -4,14 +4,13 @@ enum RightPaneSelectionState: Equatable {
     case empty
     case active(Worktree)
     case creating(Worktree)
-    case deleting(Worktree)
     case createFailed(Worktree)
 
     var showsRightPane: Bool {
         switch self {
         case .empty:
             false
-        case .active, .creating, .deleting, .createFailed:
+        case .active, .creating, .createFailed:
             true
         }
     }
@@ -31,14 +30,20 @@ struct RightPaneSelectionStateResolver {
         guard allowedWorktreeIDs?.contains(id) ?? true else { return .empty }
         guard checkoutFocusedWorktreeScope?.worktreeID == id || checkoutFocusedWorktreeScope == nil else { return .empty }
         guard let wt = findWorktree(by: id) else { return .empty }
-        if let op = projectsManager.operationState(for: wt.id) {
+        if let op = projectsManager.operationState(forWorktreeId: wt.id, projectId: wt.projectId) {
             switch op {
             case .preparingDelete:
                 return .active(wt)
             case .creating:
                 return .creating(wt)
             case .deleting:
-                return .deleting(wt)
+                // The worktree is being removed. Returning `.empty` unmounts
+                // the right pane (rail included) for this deletion only; the
+                // global `rightPaneVisible` preference is untouched, so the
+                // sibling the selection reconciles to reopens the pane. A
+                // claim opened for a same-path checkout under another project
+                // is filtered out by the qualified lookup above.
+                return .empty
             case .createFailed:
                 return .createFailed(wt)
             case .launchFailed, .deleteFailed:

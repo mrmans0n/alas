@@ -211,7 +211,7 @@ final class RemotePeerConnection: RemotePeerConnecting {
                 candidate.cancel(with: .goingAway, reason: nil)
                 return
             }
-            guard case .hello(let version, let serverId, let name, _, let federationEnabled, _) = first else {
+            guard case .hello(let version, let serverId, let name, let federationEnabled, _) = first else {
                 candidate.cancel(with: .protocolError, reason: nil)
                 continue
             }

@@ -43,7 +43,11 @@ extension AppState {
                     return hook.text
                 }
 
-                switch await repoHookApprovalQueue.requestDecision(hook: hook, context: context) {
+                switch await repoHookApprovalQueue.requestDecision(
+                    hook: hook,
+                    projectID: project.id,
+                    context: context
+                ) {
                 case .approve:
                     try persistRepoHookApproval(projectId: project.id, hash: hook.hash)
                     return hook.text

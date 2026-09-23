@@ -1,17 +1,26 @@
 import Foundation
 
 enum ClosedTabSnapshot: Equatable {
-    case worktree(worktreeID: String, tab: Tab)
+    /// Carries the originating project as well as the path-derived worktree id:
+    /// the id alone cannot say which project's row this tab belonged to when
+    /// two projects list a checkout at the same path, and reopening must read
+    /// that project's claim rather than the first project's.
+    case worktree(worktreeID: String, projectID: String?, tab: Tab)
 
     var tabID: TabID {
         switch self {
-        case .worktree(_, let tab): tab.id
+        case .worktree(_, _, let tab): tab.id
         }
     }
 
     var worktreeID: String? {
-        guard case .worktree(let worktreeID, _) = self else { return nil }
+        guard case .worktree(let worktreeID, _, _) = self else { return nil }
         return worktreeID
+    }
+
+    var projectID: String? {
+        guard case .worktree(_, let projectID, _) = self else { return nil }
+        return projectID
     }
 }
 
@@ -87,7 +96,7 @@ struct ClosedTabHistory: Equatable {
 
     mutating func purgeCommitPublishDraft(worktreeID: String, tabID: TabID) {
         entries.removeAll { entry in
-            guard case .worktree(let entryWorktreeID, .draftCommit(let state)) = entry.snapshot else {
+            guard case .worktree(let entryWorktreeID, _, .draftCommit(let state)) = entry.snapshot else {
                 return false
             }
             return entryWorktreeID == worktreeID

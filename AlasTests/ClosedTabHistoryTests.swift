@@ -8,7 +8,7 @@ struct ClosedTabHistoryTests {
 
     private func entry(_ id: String, worktreeID: String = "wt") -> ClosedTabEntry {
         ClosedTabEntry(
-            snapshot: .worktree(worktreeID: worktreeID, tab: tab(id)),
+            snapshot: .worktree(worktreeID: worktreeID, projectID: "project", tab: tab(id)),
             placement: .init(previousID: nil, nextID: nil, ordinal: 0)
         )
     }

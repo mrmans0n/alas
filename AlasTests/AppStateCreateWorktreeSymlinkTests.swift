@@ -19,11 +19,12 @@ struct AppStateCreateWorktreeSymlinkTests {
     private func waitForOperationToClear(
         _ mgr: ProjectsManager,
         id: String,
+        projectId: String,
         timeoutSeconds: Double = 10
     ) async throws {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
-            if mgr.operationState(for: id) == nil { return }
+            if mgr.operationState(forWorktreeId: id, projectId: projectId) == nil { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         Issue.record("Timed out waiting for operationState to clear for id \(id)")
@@ -72,7 +73,7 @@ struct AppStateCreateWorktreeSymlinkTests {
         )
         #expect(!optimisticId.isEmpty)
 
-        try await waitForOperationToClear(state.projectsManager, id: optimisticId)
+        try await waitForOperationToClear(state.projectsManager, id: optimisticId, projectId: project.id)
 
         // Exactly one row for the new branch, no lingering `.creating`
         // state, and the surviving row's id matches the optimistic id so
@@ -81,7 +82,7 @@ struct AppStateCreateWorktreeSymlinkTests {
         let newRows = trees.filter { $0.branch == "symlink-branch" }
         #expect(newRows.count == 1)
         #expect(newRows.first?.id == optimisticId)
-        #expect(state.projectsManager.operationState(for: optimisticId) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: optimisticId, projectId: project.id) == nil)
         #expect(state.selectedWorktreeId == optimisticId)
     }
 }

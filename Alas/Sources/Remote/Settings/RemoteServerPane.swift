@@ -10,10 +10,10 @@ struct RemoteServerPane: View {
     @State private var peerLink = ""
     @State private var peerError: String?
     @State private var isAddingPeer = false
-    /// The nearby instance whose inline code field is open, by `serverId`.
+    /// The nearby instance selected for approval or legacy code entry.
     @State private var selectedNearbyId: String?
+    @State private var selectedNearbyName = ""
     @State private var nearbyCode = ""
-    private let resolver = RemoteDiscoveredInstanceResolver.live
     /// Rotates the displayed pairing code well within its 120s TTL so the QR on
     /// screen is never stale. Prior codes stay valid until they expire, so a
     /// device that scanned just before a rotation still pairs.
@@ -121,7 +121,7 @@ struct RemoteServerPane: View {
                         if state.config.remote.federationEnabled {
                             SettingsRow(
                                 name: "Discoverable on this network",
-                                desc: "Advertise this Mac with Bonjour and list other Macs running Alas nearby. Pairing still needs the code the other Mac shows."
+                                desc: "Advertise this Mac with Bonjour and list other Macs running Alas nearby. Allow pairing requests on the receiving Mac."
                             ) {
                                 AlasToggle(on: Binding(
                                     get: { state.config.remote.discoverable },
@@ -169,6 +169,10 @@ struct RemoteServerPane: View {
                                     .font(.system(size: 14, weight: .semibold, design: .monospaced))
                                     .textSelection(.enabled)
                                     .padding(.top, 6)
+                                AlasButton(title: "Copy code", style: .subtle) {
+                                    copyAddress(code)
+                                }
+                                .padding(.top, 6)
                             }
                             AlasButton(title: "Copy pairing link", style: .subtle) {
                                 copyAddress(link)
@@ -262,7 +266,7 @@ struct RemoteServerPane: View {
                                 }
                             }
                             ForEach(nearby) { instance in
-                                SettingsRow(name: instance.name, desc: nearbyDescription(instance)) {
+                                SettingsRow(name: String(ApprovalWire.displayName(instance.name).prefix(200)), desc: nearbyDescription(instance)) {
                                     nearbyAction(instance)
                                 }
                             }
@@ -271,6 +275,7 @@ struct RemoteServerPane: View {
                                 EmptyView()
                             }
                         }
+                        nearbyApprovalStatus
                         SettingsRow(name: "Add peer", desc: "Copy the pairing link from the other Mac's Remote settings and paste it here.") {
                             HStack(spacing: 8) {
                                 AlasField(text: $peerLink, placeholder: "http://…/?code=…&hosts=…")
@@ -313,6 +318,7 @@ struct RemoteServerPane: View {
             // While a QR is on screen, keep it fresh by minting a new code.
             if pairingCode != nil { pairingCode = state.remotePairing.beginPairing() }
         }
+        .onDisappear { state.cancelNearbyApproval() }
     }
 
     private func addressLabel(_ address: RemoteAdvertisedAddress) -> String {
@@ -400,7 +406,7 @@ struct RemoteServerPane: View {
 
     private func nearbyDescription(_ instance: RemoteDiscoveredInstance) -> String {
         var parts: [String] = []
-        if let model = instance.model { parts.append(model) }
+        if let model = instance.model { parts.append(String(ApprovalWire.displayName(model).prefix(200))) }
         if instance.protocolVersion != RemoteProtocolVersion.current {
             parts.append("Needs a matching Alas version (protocol \(instance.protocolVersion)).")
         }
@@ -409,11 +415,16 @@ struct RemoteServerPane: View {
 
     @ViewBuilder
     private func nearbyAction(_ instance: RemoteDiscoveredInstance) -> some View {
-        if state.remotePeers.peers.contains(where: { $0.serverId == instance.id }) {
+        if selectedNearbyId == instance.id, nearbyApprovalIsActive {
+            Text("Pairing…")
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg-dim"))
+        } else if state.remotePeers.peers.contains(where: { $0.serverId == instance.id }) {
             Text("Paired")
                 .font(.system(size: 12))
                 .foregroundColor(theme.color("fg-dim"))
-        } else if selectedNearbyId == instance.id {
+        } else if case .legacy(let instanceID, _) = state.nearbyApprovalState,
+                  instanceID == instance.id, selectedNearbyId == instance.id {
             HStack(spacing: 8) {
                 AlasField(text: $nearbyCode, placeholder: "Code shown on that Mac", monospaced: true)
                     .frame(width: 170)
@@ -424,38 +435,100 @@ struct RemoteServerPane: View {
                 AlasButton(title: "Cancel", style: .subtle) {
                     selectedNearbyId = nil
                     nearbyCode = ""
+                    state.cancelNearbyApproval()
                 }
                 .disabled(isAddingPeer)
             }
         } else {
-            AlasButton(title: "Pair…", style: .subtle) {
+            AlasButton(title: "Pair", style: .subtle) {
                 selectedNearbyId = instance.id
+                selectedNearbyName = String(ApprovalWire.displayName(instance.name).prefix(200))
                 nearbyCode = ""
                 peerError = nil
+                state.startNearbyApproval(instance)
             }
-            .disabled(isAddingPeer)
+            .disabled(isAddingPeer || nearbyApprovalIsActive)
         }
     }
 
     private func pairNearby(_ instance: RemoteDiscoveredInstance) {
+        guard case .legacy(let instanceID, _) = state.nearbyApprovalState,
+              instanceID == instance.id else { return }
         isAddingPeer = true
         peerError = nil
         // Codes are minted uppercase; accept however the user typed it.
         let code = nearbyCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         Task { @MainActor in
             defer { isAddingPeer = false }
-            switch await resolver.origins(for: instance) {
-            case .failure(.unreachable):
-                peerError = "Couldn't reach \(instance.name). Make sure remote control is on there and both Macs are on the same network."
-            case .failure(.identityMismatch):
-                peerError = "A different Mac answered at \(instance.name)'s address. Wait a moment for the list to refresh and try again."
-            case .success(let origins):
-                if let error = await state.remotePeers.addPeer(code: code, origins: origins) {
-                    peerError = describe(error, viaLink: false)
-                } else {
-                    selectedNearbyId = nil
-                    nearbyCode = ""
+            switch await state.pairLegacyNearby(instance, code: code) {
+            case .paired:
+                selectedNearbyId = nil
+                nearbyCode = ""
+            case .pairing(let error):
+                peerError = describe(error, viaLink: false)
+            case .failed:
+                break
+            case .cancelled:
+                selectedNearbyId = nil
+                nearbyCode = ""
+            }
+        }
+    }
+
+    private var nearbyApprovalIsActive: Bool {
+        switch state.nearbyApprovalState {
+        case .resolving, .waiting, .completing: true
+        default: false
+        }
+    }
+
+    @ViewBuilder private var nearbyApprovalStatus: some View {
+        if state.nearbyApprovalState != .idle, selectedNearbyId != nil {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                HStack(alignment: .top, spacing: 8) {
+                    Text(nearbyApprovalMessage(now: context.date))
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.color("fg-dim"))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if nearbyApprovalIsActive {
+                        AlasButton(title: "Cancel", style: .subtle) { state.cancelNearbyApproval() }
+                            .accessibilityLabel("Cancel nearby pairing request")
+                    }
                 }
+                .padding(12)
+            }
+        }
+    }
+
+    private func nearbyApprovalMessage(now: Date) -> String {
+        switch state.nearbyApprovalState {
+        case .idle: return ""
+        case .resolving: return "Connecting to \(selectedNearbyName)…"
+        case .waiting(_, let expiresAt):
+            let seconds = max(0, Int(ceil(expiresAt.timeIntervalSince(now))))
+            return "Waiting for approval on \(selectedNearbyName)… \(seconds)s remaining."
+        case .completing: return "Pairing with \(selectedNearbyName)…"
+        case .legacy:
+            return "Open Remote settings on \(selectedNearbyName), choose Show pairing QR, and paste its code here."
+        case .paired: return "Paired with \(selectedNearbyName)."
+        case .declined: return "\(selectedNearbyName) declined the request. Click Pair to try again."
+        case .cancelled: return "Pairing request cancelled."
+        case .expired: return "Pairing request expired. Click Pair to try again."
+        case .failed(let failure):
+            switch failure {
+            case .resolution(.identityMismatch):
+                return "A different Mac answered at that address. Refresh the nearby list and try again."
+            case .resolution(.unreachable):
+                return "Couldn't reach that Mac. Check its remote access settings and network, then click Pair to try again."
+            case .pairing(let error): return describe(error, viaLink: false)
+            case .approval(.throttled), .approval(.capacity):
+                return "That Mac has too many pairing requests. Wait a moment, then click Pair to try again."
+            case .approval(.disabled): return "Pairing approval is unavailable. Check remote access settings on both Macs."
+            case .approval(.expired): return "Pairing request expired. Click Pair to try again."
+            case .approval:
+                return "Couldn't verify the pairing request. Click Pair to try again."
             }
         }
     }
@@ -470,12 +543,16 @@ struct RemoteServerPane: View {
                 : "That code wasn't accepted. Check it against the other Mac's screen — it refreshes every 45 seconds."
         case .originRejected:
             return "That Mac doesn't accept peers. Turn on Remote peers in its Advanced settings."
+        case .approvalExpired:
+            return "That pairing request expired. Click Pair to try again."
+        case .approvalDisabled:
+            return "Pairing approval is no longer available on that Mac."
         case .unreachable:
             return "Couldn't reach that Mac at any of its addresses."
         case .noLocalAddress:
             return "This Mac has no address the other Mac could reach it at. Check the addresses above in Remote settings."
         case .reciprocalPairingFailed:
-            return "Paired, but that Mac couldn't pair back to confirm it. Try again — it may need to reach this Mac at one of the addresses above."
+            return "That Mac couldn't pair back to confirm pairing. Try again after checking it can reach this Mac at one of the addresses above."
         case .cancelled:
             return "Cancelled — that peer was forgotten while pairing was still in progress."
         case .identityUnproven:

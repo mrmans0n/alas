@@ -123,11 +123,12 @@ struct WorktreeCreateFetchTests {
     private func waitForOperationToClear(
         _ mgr: ProjectsManager,
         id: String,
+        projectId: String,
         timeoutSeconds: Double = 10
     ) async throws {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
-            if mgr.operationState(for: id) == nil { return }
+            if mgr.operationState(forWorktreeId: id, projectId: projectId) == nil { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         Issue.record("Timed out waiting for operationState to clear for id \(id)")
@@ -167,8 +168,8 @@ struct WorktreeCreateFetchTests {
         )
         #expect(!id.isEmpty)
 
-        try await waitForOperationToClear(state.projectsManager, id: id)
-        #expect(state.projectsManager.operationState(for: id) == nil)
+        try await waitForOperationToClear(state.projectsManager, id: id, projectId: project.id)
+        #expect(state.projectsManager.operationState(forWorktreeId: id, projectId: project.id) == nil)
 
         // The new worktree should have the latest remote content because fetch ran first
         let wtContent = try String(contentsOf: dest.appendingPathComponent("a.txt"), encoding: .utf8)
@@ -198,8 +199,8 @@ struct WorktreeCreateFetchTests {
         )
         #expect(!id.isEmpty)
 
-        try await waitForOperationToClear(state.projectsManager, id: id)
-        #expect(state.projectsManager.operationState(for: id) == nil)
+        try await waitForOperationToClear(state.projectsManager, id: id, projectId: project.id)
+        #expect(state.projectsManager.operationState(forWorktreeId: id, projectId: project.id) == nil)
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
     }
 
@@ -230,8 +231,8 @@ struct WorktreeCreateFetchTests {
         )
         #expect(!id.isEmpty)
 
-        try await waitForOperationToClear(state.projectsManager, id: id)
-        #expect(state.projectsManager.operationState(for: id) == nil)
+        try await waitForOperationToClear(state.projectsManager, id: id, projectId: project.id)
+        #expect(state.projectsManager.operationState(forWorktreeId: id, projectId: project.id) == nil)
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
     }
 
@@ -258,8 +259,8 @@ struct WorktreeCreateFetchTests {
         )
         #expect(!id.isEmpty)
 
-        try await waitForOperationToClear(state.projectsManager, id: id)
-        #expect(state.projectsManager.operationState(for: id) == nil)
+        try await waitForOperationToClear(state.projectsManager, id: id, projectId: project.id)
+        #expect(state.projectsManager.operationState(forWorktreeId: id, projectId: project.id) == nil)
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
     }
 

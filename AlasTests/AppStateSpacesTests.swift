@@ -62,11 +62,12 @@ struct AppStateSpacesTests {
     private func waitForOperationToClear(
         _ manager: ProjectsManager,
         id: String,
+        projectId: String,
         timeoutSeconds: Double = 10
     ) async throws {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
-            if manager.operationState(for: id) == nil { return }
+            if manager.operationState(forWorktreeId: id, projectId: projectId) == nil { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         Issue.record("Timed out waiting for operationState to clear for id \(id)")
@@ -659,6 +660,6 @@ struct AppStateSpacesTests {
         #expect(state.spacesManager.space(id: "s2")?.lastSelectedWorktreeId == id)
         #expect(state.activeSpaceProjects.map(\.id) == ["p2"])
 
-        try await waitForOperationToClear(state.projectsManager, id: id)
+        try await waitForOperationToClear(state.projectsManager, id: id, projectId: p2.id)
     }
 }

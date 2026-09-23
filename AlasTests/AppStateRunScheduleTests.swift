@@ -381,25 +381,14 @@ struct AppStateRunScheduleTests {
         #expect(byWorktree == .skipped(reason: "Project is paused."))
     }
 
-    /// The preview flag owns the clock: with it off nothing is evaluated, so
-    /// no schedule can fire however many are saved.
-    @Test func theClockRunsOnlyWhileThePreviewFlagIsOn() throws {
+    @Test func theClockStartsWhenWorktreesLoad() throws {
         let fixture = try makeFixture()
         defer {
             fixture.state.runScheduler.stop()
             try? FileManager.default.removeItem(at: fixture.directory)
         }
-        fixture.state.config.schedulesEnabled = false
-
-        fixture.state.startRunSchedulerIfEnabled()
-        #expect(!fixture.state.runScheduler.isRunning)
-
-        fixture.state.setSchedulesEnabled(true)
-        #expect(fixture.state.config.schedulesEnabled)
+        fixture.state.startRunScheduler()
         #expect(fixture.state.runScheduler.isRunning)
-
-        fixture.state.setSchedulesEnabled(false)
-        #expect(!fixture.state.runScheduler.isRunning)
     }
 
     /// Deleting the worktree under an in-flight scheduled run discards its
@@ -542,7 +531,7 @@ struct AppStateRunScheduleTests {
         }
         #expect(terminals.count == 2)
         #expect(state.tabs.tabs(forWorktree: main.id).isEmpty)
-        #expect(state.projectsManager.operationState(for: created.id) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: created.id, projectId: project.id) == nil)
         // A background schedule never steals the selection.
         #expect(state.selectedWorktreeId == main.id)
     }
@@ -960,7 +949,7 @@ struct AppStateRunScheduleTests {
         #expect(manager.pendingModel[session.id] == "gpt-5")
         // The worktree is not left retryable: the tab exists and the session
         // itself carries the reason and the queued prompt.
-        #expect(state.projectsManager.operationState(for: created.id) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: created.id, projectId: project.id) == nil)
         guard case .launchFailed(let message) = outcome else {
             Issue.record("Expected the agent's failure to start to be reported, got \(outcome)")
             return
@@ -1072,7 +1061,7 @@ struct AppStateRunScheduleTests {
         let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
         // The script still ran in the new worktree; only the agent step failed.
         #expect(state.runRecords.record(worktreeID: created.id, scriptKey: "repo:setup.sh")?.status == .finished(.succeeded))
-        guard case .launchFailed(_, _, let surface) = state.projectsManager.operationState(for: created.id) else {
+        guard case .launchFailed(_, _, let surface) = state.projectsManager.operationState(forWorktreeId: created.id, projectId: project.id) else {
             Issue.record("Expected a retryable launchFailed state on the new worktree")
             return
         }

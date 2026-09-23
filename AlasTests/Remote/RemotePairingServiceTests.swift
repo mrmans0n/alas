@@ -12,6 +12,28 @@ final class InMemoryDeviceStore: RemoteDeviceStore {
 
 @MainActor
 struct RemotePairingServiceTests {
+    @Test func cancellingApprovedCounterCodeRevokesItsAlreadyRedeemedGrant() throws {
+        let store = InMemoryDeviceStore()
+        let service = RemotePairingService(store: store)
+        let code = service.beginApprovedPairing()
+        let grant = try service.redeemPeer(code: code, deviceName: "Peer", peerServerId: "peer")
+        service.cancelCode(code)
+        #expect(service.validate(token: grant.token) == nil)
+        #expect(store.saved.isEmpty)
+    }
+
+    @Test func approvedCredentialsStayProvisionalAcrossOtherSaves() throws {
+        let store = InMemoryDeviceStore()
+        let service = RemotePairingService(store: store)
+        let approved = service.issueApprovedPeer(deviceName: "Peer", peerServerId: "peer")
+        #expect(service.validate(token: approved.token) == approved.deviceId)
+        service.touch(deviceId: approved.deviceId)
+        _ = try service.redeem(code: service.beginPairing(), deviceName: "Browser")
+        #expect(RemotePairingService(store: store).validate(token: approved.token) == nil)
+        service.commitApprovedPeer(deviceId: approved.deviceId)
+        #expect(RemotePairingService(store: store).validate(token: approved.token) == approved.deviceId)
+    }
+
     private func make() -> RemotePairingService {
         RemotePairingService(store: InMemoryDeviceStore(), now: { Date(timeIntervalSince1970: 1000) })
     }

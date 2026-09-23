@@ -874,7 +874,7 @@ struct RemoteProtocolTests {
     }
 
     @Test func helloRoundTripsAndEncodesIdentityFields() throws {
-        let hello = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "srv-1", name: "Nacho's Mac", hubEnabled: true))
+        let hello = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "srv-1", name: "Nacho's Mac"))
         #expect(try roundTrip(hello) == hello)
         let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(hello)) as? [String: Any])
         #expect(object["type"] as? String == "hello")
@@ -884,10 +884,10 @@ struct RemoteProtocolTests {
         #expect(object["hubEnabled"] as? Bool == true)
     }
 
-    @Test func helloWithoutHubFlagDecodesDisabled() throws {
-        let data = Data(#"{"type":"hello","protocolVersion":1,"serverId":"s","name":"n"}"#.utf8)
+    @Test func helloIgnoresLegacyHubFlag() throws {
+        let data = Data(#"{"type":"hello","protocolVersion":1,"serverId":"s","name":"n","hubEnabled":false}"#.utf8)
         let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: data)
-        #expect(decoded == .hello(protocolVersion: 1, serverId: "s", name: "n", hubEnabled: false))
+        #expect(decoded == .hello(protocolVersion: 1, serverId: "s", name: "n"))
     }
 
     @Test func diagnosticsSnapshotDecodesWithoutIdentityFields() throws {
@@ -898,23 +898,23 @@ struct RemoteProtocolTests {
     }
 
     @Test func helloEncodesFederationEnabledAndDefaultsItOff() throws {
-        let on = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", hubEnabled: false, federationEnabled: true))
+        let on = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", federationEnabled: true))
         let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(on)) as? [String: Any])
         #expect(object["federationEnabled"] as? Bool == true)
 
         let legacy = Data(#"{"type":"hello","protocolVersion":1,"serverId":"s","name":"n","hubEnabled":false}"#.utf8)
         let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: legacy)
-        #expect(decoded == .hello(protocolVersion: 1, serverId: "s", name: "n", hubEnabled: false, federationEnabled: false))
+        #expect(decoded == .hello(protocolVersion: 1, serverId: "s", name: "n", federationEnabled: false))
     }
 
     @Test func helloCarriesPeersOnlyWhenThereAreAny() throws {
-        let none = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", hubEnabled: false, federationEnabled: true))
+        let none = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", federationEnabled: true))
         let noneObject = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(none)) as? [String: Any])
         #expect(noneObject["peers"] == nil)
 
         let peers = [RemoteHelloPeer(serverId: "srv-b", name: "Mac B", state: "online"),
                      RemoteHelloPeer(serverId: "srv-c", name: "Mac C", state: "offline")]
-        let some = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", hubEnabled: false,
+        let some = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n",
                                                                   federationEnabled: true, peers: peers))
         #expect(try roundTrip(some) == some)
         let someObject = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(some)) as? [String: Any])
@@ -924,7 +924,7 @@ struct RemoteProtocolTests {
 
         let legacy = Data(#"{"type":"hello","protocolVersion":1,"serverId":"s","name":"n"}"#.utf8)
         #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: legacy)
-                == .hello(protocolVersion: 1, serverId: "s", name: "n", hubEnabled: false))
+                == .hello(protocolVersion: 1, serverId: "s", name: "n"))
     }
 
     @Test func sessionSummaryOmitsServerFieldsWhenLocal() throws {

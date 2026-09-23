@@ -18,7 +18,12 @@ final class ACPComposerState: ObservableObject {
 
 enum ACPSessionTitleSource: String, Codable, Sendable {
     case placeholder
+    /// Legacy rows used this source for both prompt fallbacks and provider titles.
+    /// Treat them as authoritative until a provider or user explicitly renames them.
     case generated
+    case fallback
+    case local
+    case provider
     case manual
 }
 
@@ -429,7 +434,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
                 title = trimmed
-                titleSource = .generated
+                titleSource = .fallback
             }
         }
         return id
@@ -455,15 +460,18 @@ final class ACPSession: ObservableObject, Identifiable {
         return true
     }
 
-    private static func removingAlasWorkspaceContext(from text: String) -> String {
+    nonisolated static func removingAlasWorkspaceContext(from text: String) -> String {
         var result = text
         let openingTag = "<alas-workspace-context>"
         let closingTag = "</alas-workspace-context>"
-        while let openingRange = result.range(of: openingTag),
-              let closingRange = result.range(
-                  of: closingTag,
-                  range: openingRange.upperBound..<result.endIndex
-              ) {
+        while let openingRange = result.range(of: openingTag) {
+            guard let closingRange = result.range(
+                of: closingTag,
+                range: openingRange.upperBound..<result.endIndex
+            ) else {
+                result.removeSubrange(openingRange.lowerBound..<result.endIndex)
+                break
+            }
             result.removeSubrange(openingRange.lowerBound..<closingRange.upperBound)
         }
         return result
@@ -2809,7 +2817,7 @@ final class ACPSession: ObservableObject, Identifiable {
             let trimmed = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty, titleSource != .manual {
                 title = trimmed
-                titleSource = .generated
+                titleSource = .provider
             }
         }
         applyGoalMetadata(info.metadata)

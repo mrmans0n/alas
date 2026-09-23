@@ -8,6 +8,7 @@ struct NewProjectDialog: View {
 
     var body: some View {
         ProjectDialog(state: state, presented: $presented, mode: .add)
+            .modifier(ProjectDialogRepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
     }
 }
 
@@ -18,6 +19,18 @@ struct EditProjectDialog: View {
 
     var body: some View {
         ProjectDialog(state: state, presented: $presented, mode: .edit(project))
+            .modifier(ProjectDialogRepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
+    }
+}
+
+private struct ProjectDialogRepoHookApprovalPresentationHandler: ViewModifier {
+    let approvalQueue: RepoHookApprovalQueue
+
+    func body(content: Content) -> some View {
+        @Bindable var queue = approvalQueue
+        content.sheet(item: $queue.activeProjectSettingsRequest) { request in
+            RepoHookApprovalSheet(request: request, queue: queue)
+        }
     }
 }
 
@@ -866,6 +879,7 @@ private struct ProjectDialog: View {
                     }
                     let decision = await state.repoHookApprovalQueue.requestDecision(
                         hook: hook,
+                        projectID: inspection.projectID,
                         context: .projectSettings
                     )
                     guard requestID == repoHookInspectionID else { return }

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The "Ran N tools" / "Hide N tools" toggle standing at the head of a run
-/// of finished tool calls. Click to expand and see the individual cards.
+/// The activity disclosure for a run of thinking and finished tool calls.
+/// Click to expand and see the original messages.
 /// Mirrors `ACPThoughtView`'s accent-bar-plus-faint-header idiom so bundles
 /// read as the same kind of de-emphasized detail as thinking.
 ///
@@ -68,7 +68,7 @@ struct ACPToolCallGroupHeaderRow: View {
                 onToggle(!expanded)
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: "wrench.and.screwdriver")
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 10))
                         .foregroundStyle(
                             theme.color("fg-faint")
@@ -87,6 +87,7 @@ struct ACPToolCallGroupHeaderRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(label)
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         }
         .onChange(of: snapshot) { previous, current in
             absorb(from: previous, to: current)

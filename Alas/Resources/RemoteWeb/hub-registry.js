@@ -146,7 +146,6 @@ function makeServer({ origins, token, name, now }) {
     lastOrigin: normalized[0],
     token,
     protocolVersion: null,
-    hubEnabled: false,
     addedAt: now,
   };
 }
@@ -159,11 +158,12 @@ function normalizeDocument(doc) {
     .map((s) => {
       const origins = uniqueOrigins(s.origins);
       const lastOrigin = normalizeOrigin(s.lastOrigin);
+      const normalizedServer = { ...s };
+      delete normalizedServer.hubEnabled;
       return {
-        ...s,
+        ...normalizedServer,
         origins,
         lastOrigin: lastOrigin && origins.includes(lastOrigin) ? lastOrigin : origins[0],
-        hubEnabled: s.hubEnabled === true,
       };
     })
     .filter((s) => s.origins.length > 0);
@@ -239,7 +239,6 @@ function applyHello(doc, clientId, hello) {
   const helloName = typeof hello.name === "string" ? hello.name.trim() : "";
   const name = helloName || server.name;
   const protocolVersion = Number.isInteger(hello.protocolVersion) ? hello.protocolVersion : null;
-  const hubEnabled = hello.hubEnabled === true;
   const twin = serverId ? doc.servers.find((s) => s.id !== clientId && s.serverId === serverId) : null;
   if (twin) {
     twin.token = server.token;
@@ -247,7 +246,6 @@ function applyHello(doc, clientId, hello) {
     twin.lastOrigin = server.lastOrigin;
     twin.name = name;
     twin.protocolVersion = protocolVersion;
-    twin.hubEnabled = hubEnabled;
     doc.servers = doc.servers.filter((s) => s.id !== clientId);
     if (doc.activeId === clientId) doc.activeId = twin.id;
     return { server: twin, mergedFromId: clientId };
@@ -255,7 +253,6 @@ function applyHello(doc, clientId, hello) {
   server.serverId = serverId;
   server.name = name;
   server.protocolVersion = protocolVersion;
-  server.hubEnabled = hubEnabled;
   return { server, mergedFromId: null };
 }
 

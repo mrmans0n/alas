@@ -709,8 +709,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// id, so toggling updates it in place while its member rows are
         /// inserted or removed around it.
         ///
-        /// The token carries only the summary and the expanded flag. It
-        /// deliberately does NOT fold in the members' own row keys: the
+        /// The token includes the summary, expansion state, and member ids.
+        /// It deliberately does not include the members' own row keys: the
         /// header renders none of their content, and when expanded each
         /// member is its own row that re-renders itself. A late status or
         /// output update on one bundled call therefore re-renders that one
@@ -758,7 +758,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             return ACPTranscriptRowSpec(
                 id: group.id,
                 equalityToken: token(
-                    ToolCallGroupTokenInputs(summary: summary, expanded: expanded, window: window),
+                    ToolCallGroupTokenInputs(
+                        summary: summary, expanded: expanded, window: window,
+                        memberStableIds: memberStableIds
+                    ),
                     host: host
                 ),
                 build: {
@@ -778,6 +781,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let summary: ACPToolCallGroupSummary
             let expanded: Bool
             let window: ACPToolCallGroupHeaderAnimation.Window
+            // Thinking can extend a group without changing its tool count.
+            // Refresh the toggle closure so expansion includes those members.
+            let memberStableIds: [String]
         }
 
         static func messageRow(
