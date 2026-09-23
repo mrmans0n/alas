@@ -69,6 +69,7 @@ final class ACPSession: ObservableObject, Identifiable {
     }
     private(set) var availableConfigOptionsRevision = 0
     private(set) var hasReceivedConfigOptions = false
+    var isRestoringPersistedConfigOptions = false
     /// Runtime-only provider state learned from the adapter on each attach.
     @Published var providerCapabilities: EmptyObject?
     @Published var availableProviders: [ACPProviderInfo] = []

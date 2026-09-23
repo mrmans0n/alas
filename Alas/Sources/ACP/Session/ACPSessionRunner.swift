@@ -1464,7 +1464,10 @@ final class ACPSessionRunner {
         let titleSource = session.titleSource
         let currentModel = session.currentModel
         let currentMode = session.currentMode
-        let configOptionValues = ACPConfigOption.currentValues(in: session.availableConfigOptions)
+        let configOptionValues: [String: ACPConfigValue]? =
+            session.hasReceivedConfigOptions && !session.isRestoringPersistedConfigOptions
+                ? ACPConfigOption.currentValues(in: session.availableConfigOptions)
+                : nil
         let autoRun = session.autoRunEnabled
         let fence = leaseFenceProvider()
         let sessionId = sessionId

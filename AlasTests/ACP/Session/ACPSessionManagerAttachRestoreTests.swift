@@ -637,19 +637,21 @@ struct ACPSessionManagerAttachRestoreTests {
     @Test("reopened session reapplies persisted mode and config options after load")
     func reopenedSessionReappliesPersistedConfiguration() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
+        let persistedConfigOptionValues: [String: ACPConfigValue] = [
+            "effort": .string("high"),
+            "permission": .string("unrestricted"),
+            "autoApprove": .boolean(true),
+            "removed": .string("legacy"),
+            "effortWithStaleValue": .string("ultra"),
+        ]
         try store.upsertSession(row(
             remoteSessionId: "remote-old",
             agentId: "omp",
             currentMode: "plan",
-            configOptionValues: [
-                "effort": .string("high"),
-                "permission": .string("unrestricted"),
-                "autoApprove": .boolean(true),
-                "removed": .string("legacy"),
-                "effortWithStaleValue": .string("ultra"),
-            ]
+            configOptionValues: persistedConfigOptionValues
         ))
         let client = ACPMockClient()
+        let configGate = PromptGate()
         scriptInitialize(client)
         client.script(method: "session/load") { _ in
             try JSONEncoder().encode(ACPSessionNewResult(
@@ -697,16 +699,25 @@ struct ACPSessionManagerAttachRestoreTests {
             ))
         }
         client.script(method: "session/set_mode") { _ in Data("{}".utf8) }
-        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        client.scriptAsync(method: "session/set_config_option") { _ in
+            await configGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
         let manager = manager(store: store, client: client)
 
         let session = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: "local")
         session.autoRunEnabled = true
         manager.persist(session)
-        await manager.attach(to: session.id, freshlyCreated: false)
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+        try await waitUntilAsync { await configGate.hasEntered }
         await manager.flushAllPersistence()
-
+        #expect(try store.loadSession(id: "local")?.configOptionValues == persistedConfigOptionValues)
+        await configGate.release()
+        await attachTask.value
+        await manager.flushAllPersistence()
         #expect(client.sent.map(\.method) == [
             "initialize",
             "session/load",

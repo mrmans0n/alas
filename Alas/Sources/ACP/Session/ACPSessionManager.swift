@@ -1557,7 +1557,7 @@ final class ACPSessionManager: ObservableObject {
         }
         row.currentModel = s.currentModel
         row.currentMode = s.currentMode
-        if s.hasReceivedConfigOptions {
+        if s.hasReceivedConfigOptions && !s.isRestoringPersistedConfigOptions {
             row.configOptionValues = ACPConfigOption.currentValues(in: s.availableConfigOptions)
         }
         row.autoRun = s.autoRunEnabled
@@ -3417,6 +3417,7 @@ extension ACPSessionManager {
         let persistedConfigOptionValues = freshlyCreated
             ? [:]
             : (persistedRows[sessionId]?.configOptionValues ?? [:])
+        session.isRestoringPersistedConfigOptions = !freshlyCreated
         let firstRunAttach = freshlyCreated
             && !session.restoredFromPersistence
             && session.transcript.messages.isEmpty
@@ -4554,6 +4555,7 @@ extension ACPSessionManager {
                 in: session,
                 using: runner
             )
+            session.isRestoringPersistedConfigOptions = false
             persist(session)
             guard session.agentState == .spawning else { return }
             let attachmentStillCurrent: Bool
