@@ -100,6 +100,21 @@ import Testing
         }
     }
 
+    @Test func expiredApprovalRedemptionReportsExpiry() throws {
+        let f = ApprovalFixture()
+        let pending = try f.pending()
+        f.coordinator.decide(.allow, requestID: pending.payload.requestID)
+        let approved = try f.coordinator.receive(f.request(pending, operation: .status))
+        f.time.addTimeInterval(121)
+        let request = f.request(approved, operation: .redeem, counterCode: "counter")
+        #expect(throws: ApprovalFailure.expired) {
+            try f.coordinator.redeem(request) {
+                Issue.record("Expired redemption issued credentials")
+                return ApprovalIssuedResponse(body: Data(), deviceID: "device")
+            }
+        }
+    }
+
     @Test func redeemRejectsChangedMetadataAndWrongKey() throws {
         let f = ApprovalFixture()
         let pending = try f.pending()

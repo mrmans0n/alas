@@ -185,9 +185,12 @@ enum ApprovalFailure: Error, Equatable {
         let stored = record.entry.payload
         guard p.operation == .redeem, p.requester == stored.requester, p.receiver == stored.receiver,
               p.attemptNonce == stored.attemptNonce, p.challenge == stored.challenge,
-              p.expiresAtMilliseconds == stored.expiresAtMilliseconds, p.phase == stored.phase,
+              p.expiresAtMilliseconds == stored.expiresAtMilliseconds,
+              ApprovalWire.verify(envelope, expectedKey: stored.requester.publicKey, reply: false)
+        else { throw ApprovalFailure.unauthorized }
+        if record.entry.phase == .expired { throw ApprovalFailure.expired }
+        guard p.phase == stored.phase,
               p.counterCode?.isEmpty == false, p.responseDigest == nil,
-              ApprovalWire.verify(envelope, expectedKey: stored.requester.publicKey, reply: false),
               record.entry.phase == .approved else { throw ApprovalFailure.unauthorized }
         record.entry.phase = .redeeming
         record.entry.payload = Self.payload(stored, operation: .redeem, nonce: p.operationNonce, phase: .redeeming)
