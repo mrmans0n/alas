@@ -70,28 +70,23 @@ final class EditorDisplayDocument {
               source.length >= map.sourceLength - edit.oldLength,
               source.length - (map.sourceLength - edit.oldLength) == edit.newLength else { return false }
         var retained: [EditorDisplayHint] = []
-        var start = edit.location
-        var end = NSMaxRange(edit.oldRange)
         if !map.hintRuns.isEmpty {
-            guard let touched = try? map.linesTouched(by: edit.oldRange) else { return false }
             for run in map.hintRuns {
                 let hint = run.hint
                 let offset = hint.sourceOffset
-                if NSLocationInRange(offset, touched) || offset == map.sourceLength && NSMaxRange(touched) == offset {
-                    start = min(start, offset)
-                    end = max(end, offset)
-                } else {
-                    retained.append(.init(id: hint.id, sourceOffset: offset < edit.location ? offset : offset + edit.newLength - edit.oldLength,
-                                          label: hint.label, size: hint.size, parts: hint.parts, fontSize: hint.fontSize))
-                }
+                let oldEnd = NSMaxRange(edit.oldRange)
+                if edit.oldLength > 0, offset >= edit.location, offset < oldEnd { continue }
+                let shifted = offset < edit.location ? offset : offset + edit.newLength - edit.oldLength
+                retained.append(.init(id: hint.id, sourceOffset: shifted, label: hint.label,
+                                      size: hint.size, parts: hint.parts, fontSize: hint.fontSize))
             }
         }
         guard let replacementMap = try? EditorDisplayMap(source: source.string, revision: revision, hints: retained),
               (try? replacementMap.displaySegments(forSource: edit.newRange)) != nil,
-              let displayStart = try? map.displayOffset(forSource: start, affinity: .beforeHints),
-              let displayEnd = try? map.displayOffset(forSource: end, affinity: .afterHints),
+              let displayStart = try? map.displayOffset(forSource: edit.location, affinity: .beforeHints),
+              let displayEnd = try? map.displayOffset(forSource: NSMaxRange(edit.oldRange), affinity: .beforeHints),
               EditorSourceText.exactlyEqual(source.attributedSubstring(from: edit.newRange).string, edit.replacementText) else { return false }
-        let replacement = source.attributedSubstring(from: NSRange(location: start, length: end - start + edit.newLength - edit.oldLength))
+        let replacement = source.attributedSubstring(from: edit.newRange)
         storage.beginEditing()
         map = replacementMap
         storage.replaceCharacters(in: NSRange(location: displayStart, length: displayEnd - displayStart), with: replacement)
@@ -141,6 +136,32 @@ final class EditorDisplayDocument {
             for key in paintKeys { storage.removeAttribute(key, range: update.range) }
             storage.addAttributes(update.attributes, range: update.range)
         }
+        storage.endEditing()
+        return true
+    }
+
+    /// Removes marked-text presentation from source characters without replacing
+    /// the display document or its hint attachments.
+    func restoreSourceAttributes(source: NSAttributedString, revision: Int, range: NSRange) -> Bool {
+        guard revision == map.revision, source.length == map.sourceLength,
+              range.location >= 0, range.length >= 0, NSMaxRange(range) <= source.length,
+              (try? map.displaySegments(forSource: range)) != nil else { return false }
+        guard range.length > 0 else { return true }
+        var updates: [(range: NSRange, attributes: [NSAttributedString.Key: Any])] = []
+        var valid = true
+        source.enumerateAttributes(in: range) { attributes, sourceRange, stop in
+            guard let segments = try? map.displaySegments(forSource: sourceRange) else {
+                valid = false
+                stop.pointee = true
+                return
+            }
+            var attributes = attributes
+            attributes.removeValue(forKey: .attachment)
+            updates.append(contentsOf: segments.map { ($0, attributes) })
+        }
+        guard valid else { return false }
+        storage.beginEditing()
+        for update in updates { storage.setAttributes(update.attributes, range: update.range) }
         storage.endEditing()
         return true
     }

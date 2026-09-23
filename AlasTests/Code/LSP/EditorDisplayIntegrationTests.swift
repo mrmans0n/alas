@@ -392,7 +392,7 @@ struct EditorDisplayIntegrationTests {
         let request = try #require(completionRequest)
         #expect(request["params"]?["position"]?["line"] == .number("1"))
         #expect(request["params"]?["position"]?["character"] == .number("2"))
-        try view.displayAdapter?.updateHints([.init(id: "hint", sourceOffset: 1, label: "changed", size: CGSize(width: 90, height: 16))], revision: buffer.editGeneration)
+        try view.displayAdapter?.updateHints([.init(id: "hint", sourceOffset: 0, label: "changed", size: CGSize(width: 90, height: 16))], revision: buffer.editGeneration)
         let item = try LSPJSONValue.decode(from: Data(#"{"label":"print","additionalTextEdits":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"import Foo\n"}],"command":{"title":"Complete import","command":"completion.followup"}}"#.utf8))
         let response: LSPJSONValue = .object(["jsonrpc": .string("2.0"), "id": try #require(request["id"]), "result": .array([item])])
         transport.deliverFrame(String(decoding: try response.encodedData(), as: UTF8.self))
@@ -402,12 +402,14 @@ struct EditorDisplayIntegrationTests {
         view.insertTab(nil)
         for _ in 0..<200 where buffer.storage.string == "\npr" { try await Task.sleep(for: .milliseconds(10)) }
         #expect(buffer.storage.string == "import Foo\n\nprint")
+        #expect(view.displayAdapter?.document.map.hintRuns.map(\.hint.id) == ["hint"])
         for _ in 0..<200 where view.sourceSelectedRange != NSRange(location: 17, length: 0) { try await Task.sleep(for: .milliseconds(10)) }
         #expect(view.sourceSelectedRange == NSRange(location: 17, length: 0))
         try await Self.eventually("completion command edit preview") { window.attachedSheet != nil }
         let followup = try #require(window.attachedSheet?.contentViewController as? NSHostingController<WorkspaceEditPreview>).rootView
         if acceptFollowup == "stale" {
-            view.insertText(" user", replacementRange: NSRange(location: buffer.storage.length, length: 0))
+            view.setSourceSelectedRange(NSRange(location: buffer.storage.length, length: 0))
+            view.insertText(" user", replacementRange: NSRange(location: NSNotFound, length: 0))
             #expect(await followup.model.apply() == false)
             followup.close()
             #expect(buffer.storage.string == "import Foo\n\nprint user")

@@ -12,6 +12,7 @@ final class EditorSemanticLayer {
     private var projectionObserver: NSObjectProtocol?
     private var projectionWillChangeObserver: NSObjectProtocol?
     private var paintedRanges: [NSRange] = []
+    private var isProvisional = false
 
     isolated deinit {
         if let projectionObserver { NotificationCenter.default.removeObserver(projectionObserver) }
@@ -24,8 +25,10 @@ final class EditorSemanticLayer {
         self.isCurrent = isCurrent
         self.textView = textView
         if let textView {
-            projectionWillChangeObserver = NotificationCenter.default.addObserver(forName: .editorDisplayProjectionWillChange, object: textView, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.clearPaint() }
+            projectionWillChangeObserver = NotificationCenter.default.addObserver(forName: .editorDisplayProjectionWillChange, object: textView, queue: .main) { [weak self] notification in
+                let edit = notification.userInfo?[EditorDisplayProjectionUserInfo.sourceEdit] as? EditorTextEdit
+                let revision = notification.userInfo?[EditorDisplayProjectionUserInfo.revision] as? Int
+                MainActor.assumeIsolated { self?.projectionWillChange(edit: edit, revision: revision) }
             }
             projectionObserver = NotificationCenter.default.addObserver(forName: .editorDisplayProjectionDidChange, object: textView, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { guard let self else { return }
@@ -42,6 +45,7 @@ final class EditorSemanticLayer {
         self.spans = spans
         self.context = context
         sourceRevision = textView?.displayAdapter?.buffer.editGeneration
+        isProvisional = false
         reapply(theme: theme)
     }
 
@@ -50,6 +54,7 @@ final class EditorSemanticLayer {
         spans = []
         context = nil
         sourceRevision = nil
+        isProvisional = false
     }
 
     private func clearPaint() {
@@ -66,7 +71,8 @@ final class EditorSemanticLayer {
 
     func reapply(theme: EditorTheme) {
         self.theme = theme
-        guard let context, isCurrent(context), sourceRevision == textView?.displayAdapter?.buffer.editGeneration,
+        guard sourceRevision == textView?.displayAdapter?.buffer.editGeneration,
+              isProvisional || context.map(isCurrent) == true,
               let layoutManager, let storage = layoutManager.textStorage else { clear()
         return }
         let length = textView?.sourceAttributedText.length ?? storage.length
@@ -79,5 +85,50 @@ final class EditorSemanticLayer {
                 paintedRanges.append(range)
             }
         }
+    }
+
+    private func projectionWillChange(edit: EditorTextEdit?, revision: Int?) {
+        clearPaint()
+        guard let revision else {
+            clearState()
+            return
+        }
+        guard let edit else {
+            if sourceRevision != revision { clearState() }
+            return
+        }
+        guard sourceRevision.map({ $0 &+ 1 }) == revision else {
+            clearState()
+            return
+        }
+        spans = spans.compactMap { span in
+            let start = span.range.location
+            let end = NSMaxRange(span.range)
+            let oldEnd = NSMaxRange(edit.oldRange)
+            let delta = edit.newLength - edit.oldLength
+            if edit.oldLength == 0 {
+                let lineBreak = edit.replacementText.contains("\n") || edit.replacementText.contains("\r")
+                if end < edit.location || (lineBreak && end == edit.location) { return span }
+                if start > edit.location || (lineBreak && start == edit.location) {
+                    return HighlightSpan(range: NSRange(location: start + delta, length: span.range.length), capture: span.capture)
+                }
+                guard !lineBreak else { return nil }
+                return HighlightSpan(range: NSRange(location: start, length: span.range.length + delta), capture: span.capture)
+            }
+            if end <= edit.location { return span }
+            if start >= oldEnd {
+                return HighlightSpan(range: NSRange(location: start + delta, length: span.range.length), capture: span.capture)
+            }
+            return nil
+        }
+        sourceRevision = revision
+        isProvisional = true
+    }
+
+    private func clearState() {
+        spans = []
+        context = nil
+        sourceRevision = nil
+        isProvisional = false
     }
 }

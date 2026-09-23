@@ -89,6 +89,25 @@ struct EditorInlayLayoutTests {
             view.inlayAccessibilityActions?(retainedID).isEmpty == false
         }
         #expect(view.displayAdapter?.document.map.hintRuns.first?.hint.id == retainedID)
+        // rust-analyzer sends workspace/inlayHint/refresh after didChange. A
+        // refresh invalidates protocol data, but the current decorations must
+        // remain visible until the replacement request answers.
+        var refreshProjections = 0
+        let refreshObserver = NotificationCenter.default.addMainActorObserver(
+            forName: .editorDisplayProjectionWillChange,
+            object: view
+        ) { refreshProjections += 1 }
+        defer { NotificationCenter.default.removeObserver(refreshObserver) }
+        let beforeServerRefresh = requests.count
+        transport.deliverFrame(#"{"jsonrpc":"2.0","id":"refresh-inlays","method":"workspace/inlayHint/refresh"}"#)
+        try await eventually("server refresh request") { requests.count > beforeServerRefresh }
+        #expect(view.displayAdapter?.document.map.hintRuns.first?.hint.id == retainedID)
+        #expect(view.inlayAccessibilityActions?(retainedID).isEmpty == true)
+        #expect(refreshProjections == 0)
+        try reply(requests.last!)
+        try await eventually("server refresh response") {
+            view.inlayAccessibilityActions?(retainedID).isEmpty == false
+        }
         // Moving through a prefetched chunk and back must not request or
         // recreate the already-visible hints at the beginning of the file.
         let cachedID = try #require(view.displayAdapter?.document.map.hintRuns.first?.hint.id)
@@ -118,8 +137,9 @@ struct EditorInlayLayoutTests {
         try await eventually("settings disable") { view.displayAdapter?.document.map.hintRuns.isEmpty == true }
         #expect(buffer.editGeneration == revision)
         #expect(view.displayAdapter?.document.map.revision == version)
+        let beforeSettingsEnable = requests.count
         app.config.code.inlayHintsByLanguage["swift"] = .init()
-        try await eventually("settings enable request") { requests.count >= 4 }
+        try await eventually("settings enable request") { requests.count > beforeSettingsEnable }
         try reply(requests.last!)
         try await eventually("settings enable response") { view.displayAdapter?.document.map.hintRuns.count == 1 }
         let before = requests.count
@@ -267,11 +287,9 @@ struct EditorInlayLayoutTests {
         #expect(afterEdit.allSatisfy { before[$0.key] === $0.value })
 
         var mutations = 0
-        let observer = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: display, queue: .main) { [weak view] _ in
-            MainActor.assumeIsolated {
-                guard let storage = view?.textStorage, storage.editedMask.contains(.editedCharacters) else { return }
-                mutations += storage.editedRange.length
-            }
+        let observer = NotificationCenter.default.addMainActorObserver(forName: NSTextStorage.didProcessEditingNotification, object: display) { [weak view] in
+            guard let storage = view?.textStorage, storage.editedMask.contains(.editedCharacters) else { return }
+            mutations += storage.editedRange.length
         }
         defer { NotificationCenter.default.removeObserver(observer) }
         // A projection rebuild makes every owner of temporary attributes — the
@@ -340,6 +358,46 @@ struct EditorInlayLayoutTests {
         try layout.replace(hints, revision: buffer.editGeneration, settings: .init())
         try layout.replace(Array(hints[3 ..< 7]), covering: [middle], revision: buffer.editGeneration, settings: .init())
         #expect(view.displayAdapter?.document.map.hintRuns.count == 4)
+    }
+
+    @Test func shiftedHintResponseReusesTheProvisionalDecoration() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("let value = 1\n".utf8).write(to: root.appendingPathComponent("test.swift"))
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "test.swift")
+        await buffer.awaitLoadForTesting()
+        buffer.stopWatching()
+        defer { buffer.close(persistDirtySnapshot: false) }
+        let manager = NSLayoutManager(), container = NSTextContainer(size: CGSize(width: 900, height: 600))
+        manager.addTextContainer(container)
+        let view = CodeTextView(frame: CGRect(x: 0, y: 0, width: 900, height: 600), textContainer: container)
+        view.bindUndo(to: buffer)
+        try view.bindDisplay(to: buffer)
+        defer { try? view.bindDisplay(to: nil) }
+        func hint(character: Int) throws -> LSPInlayHint {
+            try LSPInlayHint(wireValue: LSPJSONValue.decode(from: Data(
+                #"{"position":{"line":0,"character":\#(character)},"label":": Int","kind":1}"#.utf8)))
+        }
+        let layout = EditorInlayLayout(textView: view)
+        try layout.replace([try hint(character: 9)], revision: buffer.editGeneration, settings: .init())
+        let originalRun = try #require(view.displayAdapter?.document.map.hintRuns.first)
+        let originalAttachment = try #require(view.textStorage?.attribute(.attachment, at: originalRun.displayOffset, effectiveRange: nil) as? EditorHintAttachment)
+
+        view.setSourceSelectedRange(NSRange(location: 9, length: 0))
+        view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let provisional = try #require(view.displayAdapter?.document.map.hintRuns.first)
+        #expect(provisional.hint.id == originalRun.hint.id)
+        #expect(provisional.hint.sourceOffset == 10)
+        #expect(view.textStorage?.attribute(.attachment, at: provisional.displayOffset, effectiveRange: nil) as? EditorHintAttachment === originalAttachment)
+
+        try layout.replace([try hint(character: 10)], revision: buffer.editGeneration, settings: .init())
+
+        let refreshed = try #require(view.displayAdapter?.document.map.hintRuns.first)
+        #expect(refreshed.hint.id == originalRun.hint.id)
+        #expect(view.textStorage?.attribute(.attachment, at: refreshed.displayOffset, effectiveRange: nil) as? EditorHintAttachment === originalAttachment)
+        #expect(view.inlayAccessibilityActions?(refreshed.hint.id).isEmpty == false)
     }
 
     /// A retained hint's id is frozen at the line/character it had when the

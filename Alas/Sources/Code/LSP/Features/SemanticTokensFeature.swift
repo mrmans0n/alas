@@ -36,15 +36,17 @@ final class SemanticTokensFeature {
                 self.pending = nil
                 let result = await self.request(next.range)
                 guard !Task.isCancelled else { return }
-                if self.revision == next.revision, let result { self.apply(result.spans, result.context) }
+                guard self.revision == next.revision else { continue }
+                if let result { self.apply(result.spans, result.context) }
+                else { self.clear() }
             }
         }
     }
 
-    func invalidate() {
+    func invalidate(preservingPresentation: Bool = false) {
         revision &+= 1
         pending = nil
-        clear()
+        if !preservingPresentation { clear() }
     }
 
     func stop() {

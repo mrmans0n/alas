@@ -36,7 +36,6 @@ final class EditorCompositionBridge {
             guard adapter.buffer.beginComposition(owner: owner, settle: { [weak self] in self?.commit() }, invalidate: { [weak self] in self?.invalidate() }) else { return }
             state = State(owner: owner, original: adapter.buffer.storage.string, selections: view.sourceSelectedRanges, originalRange: sourceRange,
                           typingAttributes: view.typingAttributes, range: sourceRange, attributed: attributed)
-            adapter.beginCompositionPresentation()
         }
         guard var current = state else { return }
         // Overlay coordinates describe the replacement, including explicit absolute
@@ -82,13 +81,14 @@ final class EditorCompositionBridge {
         }
         let final = adapter.buffer.storage.string
         let change = EditorSourceDifference(from: current.original, to: final)
+        let changedRange = NSRange(location: change.range.location, length: change.replacement.utf16.count)
         let old = (current.original as NSString).substring(with: change.range)
         let finalSelections = adapter.view?.sourceSelectedRanges ?? []
         state = nil
         adapter.buffer.endComposition(owner: current.owner)
-        adapter.buffer.registerSourceInverse(range: NSRange(location: change.range.location, length: change.replacement.utf16.count),
+        adapter.buffer.registerSourceInverse(range: changedRange,
                                              expected: change.replacement, replacement: old, selections: finalSelections, restoredSelections: current.selections)
-        adapter.finishCompositionPresentation()
+        adapter.finishCompositionPresentation(restoring: presentationRange(marked: current.range, changed: changedRange))
     }
 
     func cancel() {
@@ -98,8 +98,17 @@ final class EditorCompositionBridge {
         return }
         state = nil
         adapter.buffer.endComposition(owner: current.owner)
-        adapter.finishCompositionPresentation()
+        let changedRange = NSRange(location: change.range.location, length: change.replacement.utf16.count)
+        adapter.finishCompositionPresentation(restoring: presentationRange(marked: current.range, changed: changedRange))
         adapter.view?.restoreSourceSelections(current.selections)
+    }
+
+    private func presentationRange(marked: NSRange, changed: NSRange) -> NSRange {
+        let combined = changed.length > 0 ? NSUnionRange(marked, changed) : marked
+        let sourceLength = adapter.buffer.storage.length
+        let start = min(combined.location, sourceLength)
+        let end = min(NSMaxRange(combined), sourceLength)
+        return NSRange(location: start, length: max(0, end - start))
     }
 
     /// Foreign character edits win. Never write the old composition snapshot back.
@@ -107,7 +116,7 @@ final class EditorCompositionBridge {
         guard let current = state else { return }
         state = nil
         adapter.buffer.endComposition(owner: current.owner)
-        adapter.finishCompositionPresentation()
+        adapter.finishCompositionPresentation(restoring: current.range)
     }
 
     func applyOverlay() {

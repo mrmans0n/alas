@@ -820,7 +820,7 @@ final class CodeEditorCoordinator {
     // MARK: - Editor commands
 
     private func applyWorkspaceCompletion(_ completion: CompletionEditPlan, snapshot: String, context: EditorRequestContext) async -> Bool {
-        guard isLSPRequestCurrent(context), textView?.sourceString == snapshot, let renameFeature else { return false }
+        guard isLSPRequestCurrent(context), let textView, textView.sourceString == snapshot, let renameFeature else { return false }
         let coordinates = TextEditCoordinates.LineIndex(snapshot)
         var edits: [LSPTextEdit] = []
         for edit in completion.edits {
@@ -831,8 +831,10 @@ final class CodeEditorCoordinator {
         let generations = appState.tabs.workspaceEditGenerations(host: context.document.host, worktreeID: context.document.worktreeID)
         do {
             let plan = try await renameFeature.prepare(.init(changes: [context.document.uri: edits]), context: context, generations: generations)
-            guard !Task.isCancelled, isLSPRequestCurrent(context), textView?.sourceString == snapshot, !plan.requiresPreview else { return false }
-            return await renameFeature.makePreviewModel(plan: plan, context: context).apply()
+            guard !Task.isCancelled, isLSPRequestCurrent(context), textView.sourceString == snapshot, !plan.requiresPreview else { return false }
+            guard let expected = plan.finalSnapshots[context.document]?.content.flatMap({ String(data: $0, encoding: .utf8) }) else { return false }
+            textView.applyCompletionEdits(completion.edits, finalSelection: completion.finalSelection)
+            return textView.sourceString == expected
         } catch { return false }
     }
 
@@ -1108,7 +1110,7 @@ final class CodeEditorCoordinator {
         codeActionsFeature?.invalidatePicker()
         inlayLayout?.invalidateActions()
         inlayFeature?.invalidate(preservingPresentation: edit != nil)
-        semanticFeature?.invalidate()
+        semanticFeature?.invalidate(preservingPresentation: edit != nil)
         if let worktreeID = currentWorktreeId {
             appState.tabs.navigationStore(forWorktreeId: worktreeID).markResultsStale()
         }
@@ -1477,7 +1479,8 @@ final class CodeEditorCoordinator {
             scheduleInlayRefresh()
             for await _ in stream {
                 guard !Task.isCancelled, inlayBindingID == binding, inlayClient === next else { return }
-                inlayFeature?.invalidate()
+                inlayLayout?.invalidateActions()
+                inlayFeature?.invalidate(preservingPresentation: true)
                 scheduleInlayRefresh()
             }
             if !Task.isCancelled, inlayBindingID == binding, inlayClient === next { inlayFeature?.stop() }
