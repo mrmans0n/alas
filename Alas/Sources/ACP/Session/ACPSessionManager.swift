@@ -3358,17 +3358,16 @@ extension ACPSessionManager {
         in session: ACPSession,
         using runner: ACPSessionRunner
     ) async {
-        let configIds = session.availableConfigOptions.map(\.id)
-        for configId in configIds where configId != excludedId {
-            guard let selectedValue = persistedValues[configId],
-                  let index = session.availableConfigOptions.firstIndex(where: { $0.id == configId })
-            else { continue }
-            let loadedOption = session.availableConfigOptions[index]
-            guard loadedOption.currentValue != selectedValue,
+        let loadedOptions = session.availableConfigOptions
+        for loadedOption in loadedOptions where loadedOption.id != excludedId {
+            guard let selectedValue = persistedValues[loadedOption.id],
+                  let index = session.availableConfigOptions.firstIndex(where: { $0.id == loadedOption.id }),
+                  session.availableConfigOptions[index] == loadedOption,
+                  loadedOption.currentValue != selectedValue,
                   loadedOption.acceptsPersistedValue(selectedValue)
             else { continue }
 
-            session.availableConfigOptions[index] = ACPConfigOption(
+            let optimisticOption = ACPConfigOption(
                 id: loadedOption.id,
                 name: loadedOption.name,
                 type: loadedOption.type,
@@ -3376,19 +3375,20 @@ extension ACPSessionManager {
                 currentValue: selectedValue,
                 options: loadedOption.options
             )
+            session.availableConfigOptions[index] = optimisticOption
             let baselineConfigOptions = session.availableConfigOptions
             let baselineConfigOptionsRevision = session.availableConfigOptionsRevision
             do {
                 let remoteId = session.remoteSessionId ?? session.id
                 let updated = try await runner.connection.setConfigOption(
                     sessionId: remoteId,
-                    configId: configId,
+                    configId: loadedOption.id,
                     value: selectedValue
                 )
                 if !updated.isEmpty,
                    let merged = ACPConfigOption.mergingSuccessfulSetResponse(
                        updated,
-                       configId: configId,
+                       configId: loadedOption.id,
                        selectedValue: selectedValue,
                        currentConfigOptions: session.availableConfigOptions,
                        baselineConfigOptions: baselineConfigOptions,
@@ -3398,8 +3398,8 @@ extension ACPSessionManager {
                     session.availableConfigOptions = merged
                 }
             } catch {
-                if let currentIndex = session.availableConfigOptions.firstIndex(where: { $0.id == configId }),
-                   session.availableConfigOptions[currentIndex].currentValue == selectedValue {
+                if let currentIndex = session.availableConfigOptions.firstIndex(where: { $0.id == loadedOption.id }),
+                   session.availableConfigOptions[currentIndex] == optimisticOption {
                     session.availableConfigOptions[currentIndex] = loadedOption
                 }
             }

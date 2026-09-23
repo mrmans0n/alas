@@ -806,6 +806,121 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.detach(sessionId: session.id)
     }
 
+    @Test("configuration restoration preserves concurrent option changes")
+    func configurationRestorationPreservesConcurrentOptionChanges() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let persistedValues: [String: ACPConfigValue] = [
+            "effort": .string("high"),
+            "permission": .string("unrestricted"),
+        ]
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            configOptionValues: persistedValues
+        ))
+        let client = ACPMockClient()
+        let configGate = PromptGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: [],
+                configOptions: [
+                    ACPConfigOption(
+                        id: "effort",
+                        name: "Thinking",
+                        currentValue: "medium",
+                        options: [
+                            .init(id: "medium", name: "Medium"),
+                            .init(id: "high", name: "High"),
+                        ]
+                    ),
+                    ACPConfigOption(
+                        id: "permission",
+                        name: "Permission",
+                        currentValue: "ask",
+                        options: [
+                            .init(id: "ask", name: "Ask"),
+                            .init(id: "unrestricted", name: "Unrestricted"),
+                            .init(id: "allow", name: "Allow"),
+                        ]
+                    ),
+                ]
+            ))
+        }
+        client.scriptAsync(method: "session/set_config_option") { _ in
+            await configGate.waitInPrompt()
+            throw NSError(domain: "ACPSessionManagerAttachRestoreTests", code: 1)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+        try await waitUntilAsync { await configGate.hasEntered }
+
+        client.emit(.init(
+            sessionId: "remote-old",
+            update: .sessionConfigOptionsUpdate([
+                ACPConfigOption(
+                    id: "effort",
+                    name: "Reasoning",
+                    currentValue: "high",
+                    options: [
+                        .init(id: "high", name: "High"),
+                        .init(id: "ultra", name: "Ultra"),
+                    ]
+                ),
+                ACPConfigOption(
+                    id: "permission",
+                    name: "Permission",
+                    currentValue: "ask",
+                    options: [
+                        .init(id: "ask", name: "Ask"),
+                        .init(id: "unrestricted", name: "Unrestricted"),
+                        .init(id: "allow", name: "Allow"),
+                    ]
+                ),
+            ])
+        ))
+        try await waitUntilAsync {
+            session.availableConfigOptions.first { $0.id == "effort" }?.name == "Reasoning"
+        }
+        if let index = session.availableConfigOptions.firstIndex(where: { $0.id == "permission" }) {
+            let option = session.availableConfigOptions[index]
+            session.availableConfigOptions[index] = ACPConfigOption(
+                id: option.id,
+                name: option.name,
+                type: option.type,
+                category: option.category,
+                currentValue: .string("allow"),
+                options: option.options
+            )
+            manager.persist(session)
+        }
+
+        await configGate.release()
+        await attachTask.value
+        await manager.flushAllPersistence()
+
+        let configParams = try client.sent
+            .filter { $0.method == "session/set_config_option" }
+            .map { try #require($0.params as? ACPSessionSetConfigOptionParams) }
+        #expect(configParams.map(\.configId) == ["effort"])
+        #expect(session.availableConfigOptions.first { $0.id == "effort" }?.name == "Reasoning")
+        #expect(session.availableConfigOptions.first { $0.id == "effort" }?.currentValue == .string("high"))
+        #expect(session.availableConfigOptions.first { $0.id == "permission" }?.currentValue == .string("allow"))
+        #expect(try store.loadSession(id: "local")?.configOptionValues == [
+            "effort": .string("high"),
+            "permission": .string("allow"),
+        ])
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("reopened session reapplies a persisted config-option model after load")
     func reopenedSessionReappliesPersistedConfigOptionModel() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
