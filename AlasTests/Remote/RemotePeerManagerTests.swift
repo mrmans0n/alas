@@ -5,6 +5,60 @@ import CryptoKit
 
 @MainActor
 struct RemotePeerManagerTests {
+    @Test(arguments: ["cancel", "revoke"], [false, true])
+    func outboundRollbackCannotRestoreInvalidInboundPredecessor(action: String, hasOlderPeer: Bool) async throws {
+        for approvedOutbound in [false, true] {
+            let key = Curve25519.Signing.PrivateKey()
+            let publicKey = RemoteIdentityCrypto.publicKeyString(key.publicKey)
+            let pairing = RemotePairingService(store: InMemoryDeviceStore())
+            let store = InMemoryPeerStore()
+            let olderGrant = pairing.issueApprovedPeer(deviceName: "Old", peerServerId: "srv-a")
+            pairing.commitApprovedPeer(deviceId: olderGrant.deviceId)
+            let olderPeer = RemotePeer(id: "older", serverId: "srv-a", name: "Old", origins: ["http://10.0.0.1:8765"],
+                lastOrigin: nil, token: "older", publicKey: publicKey, protocolVersion: nil,
+                localDeviceId: olderGrant.deviceId, addedAt: Date())
+            let baseline = hasOlderPeer ? [olderPeer] : []
+            store.save(baseline)
+            let pairer = RemotePeerPairer(fetch: { request in
+                let body = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+                let challenge = try #require(body["challenge"] as? String)
+                let code = try #require(body["code"] as? String)
+                let proof = try #require(RemoteIdentityCrypto.sign(serverId: "srv-a", challenge: challenge, with: key))
+                let data = try JSONSerialization.data(withJSONObject: ["token": code, "serverId": "srv-a",
+                    "name": "A", "publicKey": proof.publicKey, "signature": proof.signature])
+                return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+            let manager = makeManager(store: store, pairing: pairing, pairer: pairer, links: Links(),
+                identity: .init(serverId: "srv-b", name: "B", origins: identity.origins, publicKey: publicKey),
+                reciprocalConfirmationTimeout: 0.2)
+            let grant = pairing.issueApprovedPeer(deviceName: "A", peerServerId: "srv-a")
+            manager.noteApprovedPeerPairingArrived(requestID: "inbound",
+                request: .init(peerServerId: "srv-a", peerName: "A", origins: olderPeer.origins,
+                    peerPublicKey: publicKey, counterCode: "inbound", localDeviceId: grant.deviceId, redeemedCode: ""),
+                localPeer: .init(serverID: "srv-b", publicKey: "local", name: "B", origins: identity.origins))
+            #expect(await manager.handleInboundApprovedPeer(requestID: "inbound"))
+            let outbound = Task {
+                if approvedOutbound {
+                    return await manager.addApprovedPeer(expectedPeer: .init(serverID: "srv-a", publicKey: publicKey,
+                        name: "A", origins: olderPeer.origins)) { _ in
+                            .paired(token: "outbound", serverId: "srv-a", name: "A", publicKey: publicKey, origin: olderPeer.origins[0])
+                        }
+                }
+                return await manager.addPeer(code: "outbound", origins: olderPeer.origins)
+            }
+            for _ in 0..<100 where manager.peers.first?.token != "outbound" {
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            #expect(manager.peers.first?.token == "outbound")
+            if action == "cancel" { manager.cancelApprovedPairing(requestID: "inbound") }
+            else { pairing.revoke(deviceId: grant.deviceId) }
+            #expect(await outbound.value == .reciprocalPairingFailed)
+            #expect(pairing.validate(token: grant.token) == nil)
+            #expect(manager.peers == baseline)
+            #expect(store.saved == baseline)
+        }
+    }
+
     @Test(arguments: ["keep", "cancel", "revoke"], [false, true])
     func approvedCancellationRestoresPeerCommittedDuringItsNetworkWait(predecessorAction: String, hasOlderPeer: Bool) async throws {
         let key = Curve25519.Signing.PrivateKey()

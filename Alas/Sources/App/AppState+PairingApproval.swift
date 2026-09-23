@@ -173,7 +173,7 @@ extension AppState {
             client.onSessionChange = { [weak self] session in
                 guard let self, self.nearbyApprovalGeneration == generation, session.payload.phase == .pending else { return }
                 self.nearbyApprovalState = .waiting(instanceID: instance.id,
-                    expiresAt: Date(timeIntervalSince1970: Double(session.payload.expiresAtMilliseconds) / 1_000))
+                    expiresAt: session.localDeadline)
             }
             let result = await client.request(localPeer: localPeer, target: target, expectedServerID: instance.id)
             guard !Task.isCancelled, self.nearbyApprovalGeneration == generation, self.canRequestPairingApproval else {

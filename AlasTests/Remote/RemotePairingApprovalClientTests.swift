@@ -17,6 +17,9 @@ struct RemotePairingApprovalClientTests {
         let requesterSigner = Signer()
         let receiverSigner = Signer()
         var time = Date(timeIntervalSince1970: 10_000)
+        var receiverOffset: TimeInterval = 0
+        var replyDelay: TimeInterval = 0
+        var statusCode: Int?
         var decision: ApprovalDecision? = .allow
         var failFirstOrigin = false
         var lostReply: ApprovalOperation?
@@ -41,7 +44,7 @@ struct RemotePairingApprovalClientTests {
         }
         lazy var coordinator: RemotePairingApprovalCoordinator = {
             let value = RemotePairingApprovalCoordinator(localPeer: { self.receiver },
-                signer: receiverSigner, now: { self.time })
+                signer: receiverSigner, now: { self.time + self.receiverOffset })
             value.setEnabled(true)
             return value
         }()
@@ -65,6 +68,9 @@ struct RemotePairingApprovalClientTests {
             #expect(request.timeoutInterval == 4)
             #expect(request.value(forHTTPHeaderField: "Origin") == nil)
             #expect((request.httpBody?.count ?? 0) <= 16 * 1024)
+            if let statusCode {
+                return (Data(), HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: nil, headerFields: nil)!)
+            }
             if failFirstOrigin && request.url?.host == "offline" { throw URLError(.cannotConnectToHost) }
             let data = try #require(request.httpBody)
             let operation: ApprovalOperation
@@ -96,6 +102,7 @@ struct RemotePairingApprovalClientTests {
                 }
                 if operation == .status { previousStatus = response }
             }
+            if operation == .submit { time += replyDelay }
             if lostReply == operation {
                 lostReply = nil
                 if cancelOnLoss { throw CancellationError() }
@@ -110,6 +117,67 @@ struct RemotePairingApprovalClientTests {
             if oversized { reply = Data(repeating: 32, count: 16 * 1024 + 1) }
             return (reply, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }
+    }
+
+    @Test(arguments: [-3_600.0, 3_600.0])
+    func receiverClockSkewDoesNotPreventApprovalOrRedemption(offset: TimeInterval) async {
+        let exchange = Exchange()
+        exchange.receiverOffset = offset
+        let client = exchange.client()
+        let result = await client.request(localPeer: exchange.requester, target: exchange.target, expectedServerID: "receiver")
+        guard case .approved(let session) = result else { Issue.record("Expected approval despite clock skew"); return }
+        #expect(session.payload.expiresAtMilliseconds == Int64((10_120 + offset) * 1_000))
+        #expect(session.localDeadline == Date(timeIntervalSince1970: 10_120))
+        let outcome = await client.redeem(session: session, advertisement: .init(serverId: "requester", name: "Requester",
+            origins: exchange.requester.origins, counterCode: "counter", publicKey: exchange.requester.publicKey))
+        #expect(outcome == .paired(token: "secret-token", serverId: "receiver", name: "Receiver",
+            publicKey: exchange.receiver.publicKey, origin: session.origin))
+    }
+
+    @Test(arguments: [-3_600.0, 3_600.0], [false, true])
+    func delayedSubmitRepliesAndRetriesKeepOriginalLocalDeadline(offset: TimeInterval, retry: Bool) async {
+        let exchange = Exchange()
+        exchange.receiverOffset = offset
+        exchange.replyDelay = 10
+        exchange.lostReply = retry ? .submit : nil
+        exchange.decision = nil
+        let client = exchange.client()
+        let result = await client.request(localPeer: exchange.requester, target: exchange.target, expectedServerID: "receiver")
+        #expect(result == .expired)
+        #expect(client.session?.localDeadline == Date(timeIntervalSince1970: 10_120))
+        #expect(exchange.time == Date(timeIntervalSince1970: 10_120))
+        let submits = exchange.calls.filter { $0.url?.lastPathComponent == "submit" }
+        #expect(submits.count == (retry ? 2 : 1))
+        if retry { #expect(submits.first?.httpBody == submits.last?.httpBody) }
+    }
+
+    @Test(arguments: [-3_600.0, 3_600.0], [117.0, 119.0])
+    func allowNearExpiryKeepsReceiverDeadline(offset: TimeInterval, elapsed: TimeInterval) async {
+        let exchange = Exchange()
+        exchange.receiverOffset = offset
+        exchange.afterReply = { operation in
+            if operation == .submit {
+                exchange.time += elapsed
+                if let entry = exchange.coordinator.entries.first { exchange.coordinator.decide(.allow, requestID: entry.id) }
+            }
+        }
+        let client = exchange.client()
+        let result = await client.request(localPeer: exchange.requester, target: exchange.target, expectedServerID: "receiver")
+        if elapsed == 119 { #expect(result == .expired); return }
+        guard case .approved(let session) = result else { Issue.record("Expected approval before deadline"); return }
+        // The receiver advances independently before redemption and refuses the stale authorization.
+        exchange.receiverOffset += 2
+        let outcome = await client.redeem(session: session, advertisement: .init(serverId: "requester", name: "Requester",
+            origins: exchange.requester.origins, counterCode: "counter", publicKey: exchange.requester.publicKey))
+        #expect(outcome == .identityUnproven)
+        #expect(exchange.issues == 0)
+    }
+
+    @Test func httpGoneMapsToExpiredResult() async {
+        let exchange = Exchange()
+        exchange.statusCode = 410
+        #expect(await exchange.client().request(localPeer: exchange.requester, target: exchange.target,
+            expectedServerID: "receiver") == .expired)
     }
 
     @Test func pendingApprovalPinsIdentityAndRedeemsOnlyAfterAllow() async throws {

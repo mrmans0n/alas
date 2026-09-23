@@ -342,14 +342,16 @@ enum ApprovalFailure: Error, Equatable {
     }
 
     private func trimTerminalRecords(at time: Int64) {
-        records = records.filter { _, record in
-            record.terminalAt.map { time - $0 < 120_000 } ?? true
+        for (id, record) in records where record.terminalAt.map({ time - $0 >= 120_000 }) ?? false {
+            records.removeValue(forKey: id)
+            onReleaseAttempt?(id)
         }
         let terminals = records.values.filter { $0.terminalAt != nil }.sorted {
             ($0.terminalAt!, $0.entry.id) < ($1.terminalAt!, $1.entry.id)
         }
         for record in terminals.prefix(max(0, terminals.count - 64)) {
             records.removeValue(forKey: record.entry.id)
+            onReleaseAttempt?(record.entry.id)
         }
     }
 

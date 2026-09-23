@@ -5,6 +5,8 @@ struct ApprovalSession: Equatable, Sendable, CustomStringConvertible, CustomDebu
     let payload: ApprovalPayload
     let receiverKey: String
     let origin: String
+    /// Requester clock only. Receiver timestamps remain unchanged in signed payloads.
+    let localDeadline: Date
     var description: String { "ApprovalSession(phase: \(payload.phase.rawValue))" }
     var debugDescription: String { description }
 }
@@ -27,6 +29,7 @@ final class RemotePairingApprovalClient {
     private struct Exchange {
         let request: URLRequest
         let envelope: ApprovalEnvelope
+        let localDeadline: Date
     }
     private var pending: Exchange?
 
@@ -55,7 +58,7 @@ final class RemotePairingApprovalClient {
             _ = try await perform(.submit)
             while let session {
                 try Task.checkCancellation()
-                guard milliseconds < session.payload.expiresAtMilliseconds else { return .expired }
+                guard now() < session.localDeadline else { return .expired }
                 switch session.payload.phase {
                 case .approved: return .approved(session)
                 case .declined: return .declined
@@ -64,7 +67,7 @@ final class RemotePairingApprovalClient {
                 case .pending:
                     try await sleep(.seconds(2))
                     try Task.checkCancellation()
-                    guard milliseconds < session.payload.expiresAtMilliseconds else { return .expired }
+                    guard now() < session.localDeadline else { return .expired }
                     _ = try await pollAuthenticatedSession()
                 default: throw ApprovalFailure.conflict
                 }
@@ -75,13 +78,14 @@ final class RemotePairingApprovalClient {
             // status, so the bounded cleanup requests can still reach the peer.
             if let session { await cancel(session: session) }
             if error is CancellationError || Task.isCancelled { return .cancelled }
+            if error as? ApprovalFailure == .expired { return .expired }
             return .failed(error as? ApprovalFailure ?? .invalid)
         }
     }
 
     func redeem(session: ApprovalSession, advertisement: RemotePeerAdvertisement) async -> RemotePeerPairer.Outcome {
         guard let current = self.session, current == session, current.payload.phase == .approved,
-              milliseconds < current.payload.expiresAtMilliseconds,
+              now() < current.localDeadline,
               advertisement.serverId == current.payload.requester.serverID,
               advertisement.publicKey == current.payload.requester.publicKey,
               advertisement.name == current.payload.requester.name,
@@ -96,7 +100,8 @@ final class RemotePairingApprovalClient {
                 let peer: RemotePeerAdvertisement
             }
             let body = try JSONEncoder().encode(Body(approval: envelope, deviceName: advertisement.name, peer: advertisement))
-            let exchange = Exchange(request: try makeRequest(origin: current.origin, path: "/pair", body: body), envelope: envelope)
+            let exchange = Exchange(request: try makeRequest(origin: current.origin, path: "/pair", body: body),
+                                    envelope: envelope, localDeadline: current.localDeadline)
             pending = exchange
             let data = try await exchangeReply(exchange)
             let pair = try verifiedPair(data, exchange: exchange)
@@ -131,6 +136,7 @@ final class RemotePairingApprovalClient {
             guard RemotePairingLink.normalizeOrigin(origin) == origin else { continue }
             do {
                 let request = try makeRequest(origin: origin, path: "/peer-approval/v1/challenge", body: body)
+                let deadline = now().addingTimeInterval(30)
                 let data = try await fetchReply(request)
                 guard let envelope = try? JSONDecoder().decode(ApprovalEnvelope.self, from: data) else {
                     throw ApprovalFailure.unauthorized
@@ -139,11 +145,10 @@ final class RemotePairingApprovalClient {
                 guard p.operation == .challenge, p.phase == .challenged,
                       p.requester == localPeer, p.receiver.serverID == expectedServerID,
                       p.attemptNonce == attemptNonce, p.counterCode == nil, p.responseDigest == nil,
-                      p.expiresAtMilliseconds > milliseconds,
-                      p.expiresAtMilliseconds <= milliseconds + 30_000,
                       ApprovalWire.verify(envelope, expectedKey: p.receiver.publicKey, reply: true)
                 else { throw ApprovalFailure.unauthorized }
-                update(envelope.payload, origin: origin, receiverKey: p.receiver.publicKey)
+                guard now() < deadline else { throw ApprovalFailure.expired }
+                update(envelope.payload, origin: origin, receiverKey: p.receiver.publicKey, localDeadline: deadline)
                 return
             } catch {
                 if error is CancellationError || Task.isCancelled { throw CancellationError() }
@@ -159,10 +164,13 @@ final class RemotePairingApprovalClient {
 
     private func perform(_ operation: ApprovalOperation) async throws -> ApprovalEnvelope {
         guard let session else { throw ApprovalFailure.invalid }
+        if operation == .submit, now() >= session.localDeadline { throw ApprovalFailure.expired }
         let envelope = try signed(operation)
         let request = try makeRequest(origin: session.origin, path: "/peer-approval/v1/\(operation.rawValue)",
                                       body: JSONEncoder().encode(envelope))
-        let exchange = Exchange(request: request, envelope: envelope)
+        // Capture before the first transmission. Exact retries keep this deadline.
+        let exchange = Exchange(request: request, envelope: envelope,
+            localDeadline: operation == .submit ? now().addingTimeInterval(120) : session.localDeadline)
         pending = exchange
         let data = try await exchangeReply(exchange)
         return try JSONDecoder().decode(ApprovalEnvelope.self, from: data)
@@ -196,12 +204,11 @@ final class RemotePairingApprovalClient {
                 guard reply.payload.counterCode == nil, reply.payload.responseDigest == nil,
                       reply.payload.challenge != exchange.envelope.payload.challenge else { throw ApprovalFailure.unauthorized }
                 if exchange.envelope.payload.operation == .submit {
-                    guard reply.payload.expiresAtMilliseconds > milliseconds,
-                          reply.payload.expiresAtMilliseconds <= milliseconds + 120_000 else { throw ApprovalFailure.expired }
+                    guard now() < exchange.localDeadline else { throw ApprovalFailure.expired }
                 } else if reply.payload.expiresAtMilliseconds != exchange.envelope.payload.expiresAtMilliseconds {
                     throw ApprovalFailure.unauthorized
                 }
-                update(reply.payload)
+                update(reply.payload, localDeadline: exchange.localDeadline)
             }
             pending = nil
             return data
@@ -242,9 +249,11 @@ final class RemotePairingApprovalClient {
         else { throw ApprovalFailure.unauthorized }
     }
 
-    private func update(_ payload: ApprovalPayload, origin: String? = nil, receiverKey: String? = nil) {
-        guard let origin = origin ?? session?.origin, let key = receiverKey ?? session?.receiverKey else { return }
-        let value = ApprovalSession(payload: payload, receiverKey: key, origin: origin)
+    private func update(_ payload: ApprovalPayload, origin: String? = nil, receiverKey: String? = nil,
+                        localDeadline: Date? = nil) {
+        guard let origin = origin ?? session?.origin, let key = receiverKey ?? session?.receiverKey,
+              let deadline = localDeadline ?? session?.localDeadline else { return }
+        let value = ApprovalSession(payload: payload, receiverKey: key, origin: origin, localDeadline: deadline)
         session = value
         onSessionChange?(value)
     }
@@ -272,5 +281,4 @@ final class RemotePairingApprovalClient {
         }
     }
 
-    private var milliseconds: Int64 { Int64(now().timeIntervalSince1970 * 1_000) }
 }

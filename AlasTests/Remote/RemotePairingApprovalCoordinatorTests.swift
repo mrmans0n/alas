@@ -306,6 +306,8 @@ import Testing
 
     @Test func challengeDeadlineAndTerminalRetention() throws {
         let f = ApprovalFixture()
+        var released: [String] = []
+        f.coordinator.onReleaseAttempt = { released.append($0) }
         let challenge = try f.challenge()
         f.time.addTimeInterval(30)
         #expect(throws: ApprovalFailure.expired) {
@@ -315,6 +317,7 @@ import Testing
         f.time.addTimeInterval(120)
         f.coordinator.expire()
         #expect(f.coordinator.entries.isEmpty)
+        #expect(released == [challenge.payload.requestID])
     }
 
     @Test func submissionLimitSpansAdmissionWindowBoundary() throws {

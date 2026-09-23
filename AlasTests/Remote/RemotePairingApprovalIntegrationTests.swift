@@ -5,11 +5,25 @@ import Testing
 
 @MainActor
 struct RemotePairingApprovalIntegrationTests {
-    @Test func requestDoesNotGrantAccessBeforeApproval() async {
+    @Test func signalWaitFinishesOnTimeoutAndCancellation() async throws {
+        let signal = ApprovalPairFixture.Signal()
+        await #expect(throws: ApprovalPairFixture.Signal.WaitError.timedOut) {
+            try await signal.wait(timeout: .milliseconds(10))
+        }
+        let waiter = Task { try await signal.wait() }
+        try await Task.sleep(for: .milliseconds(10))
+        waiter.cancel()
+        await #expect(throws: CancellationError.self) { try await waiter.value }
+        // Finishing abandoned waiters must remove their continuations.
+        signal.fire()
+        try await signal.wait()
+    }
+
+    @Test func requestDoesNotGrantAccessBeforeApproval() async throws {
         let pair = ApprovalPairFixture()
         defer { pair.close() }
         let request = Task { await pair.request() }
-        await pair.waitForPendingRequest()
+        try await pair.waitForPendingRequest()
         #expect(pair.devicesA.isEmpty && pair.devicesB.isEmpty)
         #expect(pair.peersA.isEmpty && pair.peersB.isEmpty)
         #expect(pair.callbackRequests.isEmpty)
@@ -26,7 +40,7 @@ struct RemotePairingApprovalIntegrationTests {
         let pair = ApprovalPairFixture()
         defer { pair.close() }
         let request = Task { await pair.request() }
-        await pair.waitForPendingRequest()
+        try await pair.waitForPendingRequest()
         pair.allow()
         pair.allow()
         pair.decline()
@@ -37,11 +51,11 @@ struct RemotePairingApprovalIntegrationTests {
     }
 
     @Test(arguments: ["cancel", "expiry", "shutdown", "restart"])
-    func terminalWaitingAttemptLeavesNoCredentials(reason: String) async {
+    func terminalWaitingAttemptLeavesNoCredentials(reason: String) async throws {
         let pair = ApprovalPairFixture()
         defer { pair.close() }
         let request = Task { await pair.request() }
-        await pair.waitForPendingRequest()
+        try await pair.waitForPendingRequest()
         switch reason {
         case "cancel": await pair.cancel()
         case "expiry": pair.advanceClock(by: 120); pair.pollGate.fire()
@@ -62,11 +76,11 @@ struct RemotePairingApprovalIntegrationTests {
         #expect(!pair.b.coordinator.entries.contains { $0.phase == .pending })
     }
 
-    @Test func allowDoesNotExtendSubmissionDeadline() async {
+    @Test func allowDoesNotExtendSubmissionDeadline() async throws {
         let pair = ApprovalPairFixture()
         defer { pair.close() }
         let request = Task { await pair.request() }
-        await pair.waitForPendingRequest()
+        try await pair.waitForPendingRequest()
         pair.advanceClock(by: 119)
         pair.allow()
         // The next two-second poll crosses the original submission deadline.
@@ -83,7 +97,7 @@ struct RemotePairingApprovalIntegrationTests {
         pair.dropRedeemReply = true
         pair.advanceAfterLostRedeem = 3
         let request = Task { await pair.request() }
-        await pair.waitForPendingRequest()
+        try await pair.waitForPendingRequest()
         pair.advanceClock(by: 117)
         pair.allow()
         #expect(await request.value == .paired)
@@ -110,9 +124,9 @@ struct RemotePairingApprovalIntegrationTests {
         let devicesA = pair.devicesA, devicesB = pair.devicesB
         pair.holdRedeemReply = true
         let request = Task { await pair.request() }
-        await pair.waitForPendingRequest()
+        try await pair.waitForPendingRequest()
         pair.allow()
-        await pair.issued.wait()
+        try await pair.issued.wait()
         #expect(pair.devicesB.count == devicesB.count + 1)
         request.cancel()
         pair.redeemGate.fire()
@@ -123,13 +137,13 @@ struct RemotePairingApprovalIntegrationTests {
         #expect(pair.a.deviceStore.saved == devicesA && pair.b.deviceStore.saved == devicesB)
     }
 
-    @Test func lostSubmitReplyAndAddressRetryCreateOnePrompt() async {
+    @Test func lostSubmitReplyAndAddressRetryCreateOnePrompt() async throws {
         let pair = ApprovalPairFixture()
         defer { pair.close() }
         pair.tryOfflineOrigin = true
         pair.dropSubmitReply = true
         let request = Task { await pair.request() }
-        await pair.waitForPendingRequest()
+        try await pair.waitForPendingRequest()
         #expect(pair.b.coordinator.entries.count == 1)
         #expect(pair.submitRequests.count == 2)
         #expect(pair.submitRequests.first?.httpBody == pair.submitRequests.last?.httpBody)
@@ -139,7 +153,7 @@ struct RemotePairingApprovalIntegrationTests {
         #expect(pair.devicesA.count == 1 && pair.devicesB.count == 1)
     }
 
-    @Test func legacyPeerStillPairsWithCodeAndBrowserLink() async throws {
+    @Test func legacyPeerStillPairsWithCodeAndBrowserCodeRedemption() async throws {
         let pair = ApprovalPairFixture()
         defer { pair.close() }
         let legacy = RemoteDiscoveredInstanceResolver.ResolvedPeer(origins: pair.b.peer.origins,
@@ -184,15 +198,38 @@ struct RemotePairingApprovalIntegrationTests {
         case failed(ApprovalFailure), pairingFailed(RemotePeerManager.AddError)
     }
     @MainActor final class Signal {
+        enum WaitError: Error { case timedOut }
         private var fired = false
-        private var waiters: [CheckedContinuation<Void, Never>] = []
-        func wait() async {
+        private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
+        func wait(timeout: Duration = .seconds(5)) async throws {
+            try Task.checkCancellation()
             if fired { return }
-            await withCheckedContinuation { waiters.append($0) }
+            let id = UUID()
+            let watchdog = Task { @MainActor in
+                do { try await Task.sleep(for: timeout) } catch { return }
+                self.finish(id, result: .failure(WaitError.timedOut))
+            }
+            defer { watchdog.cancel() }
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    if Task.isCancelled { continuation.resume(throwing: CancellationError()) }
+                    else { waiters[id] = continuation }
+                }
+            } onCancel: {
+                Task { @MainActor in self.finish(id, result: .failure(CancellationError())) }
+            }
+        }
+        private func finish(_ id: UUID, result: Swift.Result<Void, Error>) {
+            waiters.removeValue(forKey: id)?.resume(with: result)
+        }
+        func cancel() {
+            let continuations = waiters.values
+            waiters.removeAll()
+            for continuation in continuations { continuation.resume(throwing: CancellationError()) }
         }
         func fire() {
             fired = true
-            let continuations = waiters
+            let continuations = waiters.values
             waiters.removeAll()
             for continuation in continuations { continuation.resume() }
         }
@@ -280,7 +317,7 @@ struct RemotePairingApprovalIntegrationTests {
     lazy var client = RemotePairingApprovalClient(fetch: { try await self.fetch($0, from: self.a) }, signer: a.signer,
         now: { self.time }, sleep: { @MainActor _ in
             self.pending.fire()
-            await self.pollGate.wait()
+            try await self.pollGate.wait()
             self.advanceClock(by: 2)
         })
 
@@ -302,7 +339,7 @@ struct RemotePairingApprovalIntegrationTests {
         case .failed(let failure): return .failed(failure)
         }
     }
-    func waitForPendingRequest() async { await pending.wait() }
+    func waitForPendingRequest() async throws { try await pending.wait() }
     func allow() { decide(.allow) }
     func decline() { decide(.decline) }
     private func decide(_ decision: ApprovalDecision) {
@@ -326,7 +363,11 @@ struct RemotePairingApprovalIntegrationTests {
         for task in b.callbacks { await task.value }
         for task in a.callbacks { await task.value }
     }
-    func close() { a.manager.disconnectAll(); b.manager.disconnectAll() }
+    func close() {
+        for signal in [pending, pollGate, issued, redeemGate] { signal.cancel() }
+        for task in a.callbacks + b.callbacks { task.cancel() }
+        a.manager.disconnectAll(); b.manager.disconnectAll()
+    }
     func expectReciprocalPair() throws {
         #expect(devicesA.count == 1 && devicesB.count == 1)
         let peerA = try #require(peersA.first), peerB = try #require(peersB.first)
@@ -367,7 +408,7 @@ struct RemotePairingApprovalIntegrationTests {
             // Complete real reciprocal callbacks before delivering the original reply,
             // exercising the manager's early-confirmation buffering as well.
             await finishCallbacks()
-            if holdRedeemReply { issued.fire(); await redeemGate.wait() }
+            if holdRedeemReply { issued.fire(); try await redeemGate.wait() }
             if dropRedeemReply {
                 dropRedeemReply = false
                 advanceClock(by: advanceAfterLostRedeem)

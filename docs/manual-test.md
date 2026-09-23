@@ -292,6 +292,9 @@ access, federation, and discovery on both Macs and keep a window visible.
 8. Use a long requester name. Its bounded text wraps and can be selected and
    copied. Check keyboard navigation and VoiceOver labels for the card,
    remaining time, Allow, and Decline. Return alone must never approve.
+   With several cards visible, click and scroll in the gaps between cards.
+   Both actions must reach the underlying content. This hit-testing check
+   remains unverified until performed in the running app.
 9. Pair with an older Alas build that has no approval capability. Confirm the
    nearby-code fallback explains how to open the other Mac's pairing QR.
    Copy code and Copy pairing link must work without manual transcription.

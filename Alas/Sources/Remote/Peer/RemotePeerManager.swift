@@ -189,8 +189,8 @@ final class RemotePeerManager {
     /// The last known GENUINELY confirmed (or user-durable) state for a
     /// given identity — as opposed to `peers.first(where:)`, which can just
     /// as easily show another, still-uncommitted sibling attempt's own
-    /// provisional write. `addPeer` snapshots this as `previousState`
-    /// before its own round trip, specifically so that when its own
+    /// provisional write. `addPeer` captures this at publication,
+    /// after its own round trip, specifically so that when its own
     /// reciprocal exchange fails, rolling back reaches all the way to the
     /// last state actually worth keeping — not merely "whatever the row
     /// happened to hold a moment ago" — even across a chain of several
@@ -208,6 +208,10 @@ final class RemotePeerManager {
         var previousOwner: String?
     }
     @ObservationIgnored private var approvedInbound: [String: ApprovedInbound] = [:]
+    private typealias PairingPredecessor = (peer: RemotePeer?, owner: String?)
+    /// Inbound cancellation can invalidate a predecessor while outbound
+    /// pairing awaits reciprocal confirmation.
+    @ObservationIgnored private var outboundPredecessors: [String: PairingPredecessor] = [:]
     @ObservationIgnored private var approvedCounterCodes: Set<String> = []
     @ObservationIgnored private var provisionalOwners: Set<String> = []
 
@@ -354,6 +358,7 @@ final class RemotePeerManager {
         // name.
         let startedAt = Date()
         let counterCode = expectedPeer == nil ? pairing.beginPairing() : pairing.beginApprovedPairing()
+        defer { outboundPredecessors.removeValue(forKey: counterCode) }
         if expectedPeer != nil {
             approvedCounterCodes.insert(counterCode)
             provisionalOwners.insert(counterCode)
@@ -416,6 +421,10 @@ final class RemotePeerManager {
             // chain of several overlapping, ultimately-failed attempts,
             // rather than just undoing one sibling's edit into another's.
             let previousState = durableStateByServerId[serverId]
+            let previousOwner = approvedInbound.values.first {
+                $0.request.localDeviceId == previousState?.localDeviceId
+            }?.request.counterCode
+            outboundPredecessors[counterCode] = (previousState, previousOwner)
             lastUpsertOwnerByServerId[serverId] = counterCode
             upsert(serverId: serverId, name: name ?? origin, origins: origins,
                    lastOrigin: origin, token: token, publicKey: publicKey, localDeviceId: nil)
@@ -453,8 +462,13 @@ final class RemotePeerManager {
             // treat a genuine, later upsert as a no-op when its written
             // values coincidentally match this attempt's own.
             if lastUpsertOwnerByServerId[serverId] == counterCode {
-                if let previousState {
-                    restorePreviousState(previousState, peerId: peer.id)
+                let saved = outboundPredecessors[counterCode] ?? (peer: nil, owner: nil)
+                // Only retained approvals own this cancellation chain. Keep
+                // the existing restoration contract for older durable peers.
+                let predecessor = saved.owner == nil ? saved : validPredecessor(saved)
+                lastUpsertOwnerByServerId[serverId] = predecessor.owner
+                if let previous = predecessor.peer {
+                    restorePreviousState(previous, peerId: peer.id)
                 } else {
                     // Not `forget`: this is this attempt's own automatic
                     // rollback, not a user-initiated cancellation, and a
@@ -569,12 +583,18 @@ final class RemotePeerManager {
         guard let attempt = approvedInbound.removeValue(forKey: requestID) else { return }
         let request = attempt.request
         startGenerationAtRedeem.removeValue(forKey: request.localDeviceId)
-        let predecessor = validPredecessor(of: attempt)
+        let predecessor = validPredecessor((attempt.previous, attempt.previousOwner))
         // A superseded attempt can be cancelled before its successor. Remove
         // it from every retained rollback link so no later cancellation revives it.
         for id in approvedInbound.keys where approvedInbound[id]?.previous?.localDeviceId == request.localDeviceId {
             approvedInbound[id]?.previous = predecessor.peer
             approvedInbound[id]?.previousOwner = predecessor.owner
+        }
+        for code in outboundPredecessors.keys where outboundPredecessors[code]?.peer?.localDeviceId == request.localDeviceId {
+            outboundPredecessors[code] = predecessor
+        }
+        if durableStateByServerId[request.peerServerId]?.localDeviceId == request.localDeviceId {
+            durableStateByServerId[request.peerServerId] = predecessor.peer
         }
         if lastUpsertOwnerByServerId[request.peerServerId] == request.counterCode,
            let peer = peers.first(where: { $0.serverId == request.peerServerId }),
@@ -588,11 +608,12 @@ final class RemotePeerManager {
         }
         pairing.revoke(deviceId: request.localDeviceId)
         onRevokeDevice?(request.localDeviceId)
+        savePeers()
     }
 
-    private func validPredecessor(of attempt: ApprovedInbound) -> (peer: RemotePeer?, owner: String?) {
-        var previous = attempt.previous
-        var owner = attempt.previousOwner
+    private func validPredecessor(_ predecessor: PairingPredecessor) -> PairingPredecessor {
+        var previous = predecessor.peer
+        var owner = predecessor.owner
         // Direct device revocation may precede its coordinator callback. Walk
         // past any such revoked predecessor while its rollback record remains.
         while let deviceID = previous?.localDeviceId,

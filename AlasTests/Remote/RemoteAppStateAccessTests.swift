@@ -59,6 +59,7 @@ struct RemoteAppStateAccessTests {
         let state = AppState(store: MemoryStore())
         let exchange = RemotePairingApprovalClientTests.Exchange()
         exchange.time = Date()
+        exchange.receiverOffset = 3_600
         state.remoteApprovalSignerProvider = { exchange.requesterSigner }
         state.remoteApprovalResolver = { _ in .success(exchange.target) }
         state.remoteApprovalClientFactory = { signer in
@@ -79,6 +80,10 @@ struct RemoteAppStateAccessTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(exchange.coordinator.entries.first?.phase == .pending)
+        if case .waiting(_, let deadline) = state.nearbyApprovalState {
+            #expect(deadline.timeIntervalSinceNow > 110)
+            #expect(deadline.timeIntervalSinceNow <= 120)
+        } else { Issue.record("Expected waiting state with a local countdown") }
         #expect(exchange.issues == 0)
         let task = try #require(state.nearbyApprovalTask)
         switch setting {
