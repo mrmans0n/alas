@@ -224,6 +224,7 @@ struct NewWorktreeDialog: View {
                 onAttach: attachIssue
             )
         }
+        .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
     }
 
     private var presetProject: ProjectConfig? {
