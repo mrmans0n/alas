@@ -176,6 +176,45 @@ private final class WorktreeRegistrationLookup: @unchecked Sendable {
 }
 
 extension Process {
+    /// Runs git to completion for tests that must observe its effect inside a
+    /// callback that cannot `await` — notably `worktreeCleanupLauncher`, which
+    /// runs on the main actor between a successful removal and the refresh
+    /// that reconciles the removed row away.
+    ///
+    /// The child inherits nothing: with the runner capturing output, an
+    /// inherited stdout is a pipe whose buffer can fill while the caller is
+    /// blocked waiting for exit, which hangs the whole suite rather than
+    /// failing it. The wait is bounded for the same reason — a child that
+    /// never exits reports a failure here instead of stalling the test
+    /// process.
+    static func runBoundedGit(
+        _ arguments: [String],
+        cwd: URL,
+        timeout: TimeInterval = 30
+    ) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = arguments
+        process.currentDirectoryURL = cwd
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+        try process.run()
+        guard exited.wait(timeout: .now() + timeout) == .success else {
+            process.terminate()
+            throw ProcessError.launchFailed(
+                "git \(arguments.joined(separator: " ")) did not finish within \(Int(timeout))s"
+            )
+        }
+        guard process.terminationStatus == 0 else {
+            throw ProcessError.launchFailed(
+                "git \(arguments.joined(separator: " ")) exited with \(process.terminationStatus)"
+            )
+        }
+    }
+
     /// Breaks worktree removal for `worktree` at the git-administrative
     /// level, independent of whether the worktree's own directory still
     /// exists on disk (deleting its directory alone leaves git able to

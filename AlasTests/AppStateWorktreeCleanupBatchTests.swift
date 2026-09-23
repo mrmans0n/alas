@@ -311,14 +311,10 @@ struct AppStateWorktreeCleanupBatchTests {
                   !recreation.recreated
             else { return }
             recreation.recreated = true
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-            process.arguments = [
-                "worktree", "add", deletedPath.path, "-b", "recreated", "main",
-            ]
-            process.currentDirectoryURL = repoPath
-            try process.run()
-            process.waitUntilExit()
+            try Process.runBoundedGit(
+                ["worktree", "add", deletedPath.path, "-b", "recreated", "main"],
+                cwd: repoPath
+            )
         }
         defer { fixture.cleanUpAfterTest() }
         let target = fixture.worktrees[1]
