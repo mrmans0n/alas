@@ -103,6 +103,7 @@ struct AppKitDiffReviewScrollerTests {
 
         #expect(request?.targetID == rowID)
         #expect(request?.alignment == .center)
+        #expect(request?.lineTarget == AppKitDiffScrollLineTarget(side: .new, line: 42))
     }
 
     @Test func lineCommandsFallBackToTheFileHeaderWhenTheLineIsNotRendered() {

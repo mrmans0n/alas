@@ -251,7 +251,7 @@ struct DiffPaneSegmentView: NSViewRepresentable {
     }
 }
 
-final class DiffPaneTextDocumentContainerView: NSView {
+final class DiffPaneTextDocumentContainerView: NSView, AppKitDiffScrollLineTargetProviding {
     private let oldPane = DiffPaneTextScrollView()
     private let newPane = DiffPaneTextScrollView()
     private let stackedPane = DiffPaneTextScrollView()
@@ -267,6 +267,17 @@ final class DiffPaneTextDocumentContainerView: NSView {
 
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: measuredHeight)
+    }
+
+    func scrollTargetCenterY(for target: AppKitDiffScrollLineTarget) -> CGFloat? {
+        let pane = switch layoutMode {
+        case .split:
+            target.side == .old ? oldPane : newPane
+        case .stacked:
+            stackedPane
+        }
+        guard let paneCenterY = pane.scrollTargetCenterY(for: target) else { return nil }
+        return convert(NSPoint(x: pane.bounds.midX, y: paneCenterY), from: pane).y
     }
 
     #if DEBUG
@@ -844,6 +855,20 @@ final class DiffPaneTextScrollView: NSScrollView {
 
     func diffRowRects() -> [NSRect] {
         textView.diffRowRects()
+    }
+
+    func scrollTargetCenterY(for target: AppKitDiffScrollLineTarget) -> CGFloat? {
+        guard let lineIndex = textView.lineMetadata.firstIndex(where: { metadata in
+            guard let sourceLine = metadata.sourceLine else { return false }
+            return target.side.matches(sourceLine.anchor.side)
+                && sourceLine.highlightLineNumber(for: target.side) == target.line
+        }) else { return nil }
+        let rowRects = textView.diffRowRects()
+        guard rowRects.indices.contains(lineIndex) else { return nil }
+        return convert(
+            NSPoint(x: textView.bounds.midX, y: rowRects[lineIndex].midY),
+            from: textView
+        ).y
     }
 
     func synchronizeRowHeights(_ rowHeights: [CGFloat]) {

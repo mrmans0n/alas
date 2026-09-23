@@ -4,6 +4,39 @@ import Testing
 @testable import Alas
 
 @MainActor
+private final class ScrollTargetTestView: NSView, AppKitDiffScrollLineTargetProviding {
+    private let target: AppKitDiffScrollLineTarget
+    private let targetCenterY: CGFloat?
+
+    override var isFlipped: Bool { true }
+
+    init(target: AppKitDiffScrollLineTarget, targetCenterY: CGFloat?) {
+        self.target = target
+        self.targetCenterY = targetCenterY
+        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 500))
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("not used")
+    }
+
+    func scrollTargetCenterY(for target: AppKitDiffScrollLineTarget) -> CGFloat? {
+        target == self.target ? targetCenterY : nil
+    }
+}
+
+private struct ScrollTargetTestRepresentable: NSViewRepresentable {
+    let target: AppKitDiffScrollLineTarget
+    let targetCenterY: CGFloat?
+
+    func makeNSView(context: Context) -> ScrollTargetTestView {
+        ScrollTargetTestView(target: target, targetCenterY: targetCenterY)
+    }
+
+    func updateNSView(_ nsView: ScrollTargetTestView, context: Context) {}
+}
+
+@MainActor
 @Suite("AppKit diff scroller reconciliation")
 struct AppKitDiffScrollerReconcilerTests {
     private typealias Stack = (
@@ -68,6 +101,33 @@ struct AppKitDiffScrollerReconcilerTests {
 
         #expect(stack.pool.mountedIDs.contains("row-150"))
         #expect(stack.scrollView.scrollY > 2_000)
+    }
+
+    @Test("centers a rendered line inside a fused row")
+    func centersLineTargetInsideRow() {
+        let stack = makeStack()
+        let lineTarget = AppKitDiffScrollLineTarget(side: .new, line: 42)
+        let rows = [
+            spec("before", height: 20),
+            AppKitDiffRowSpec(
+                id: "fused-hunk",
+                ownerID: nil,
+                equalityToken: .init(0),
+                contentSignature: 0,
+                estimatedHeight: 500
+            ) {
+                AnyView(ScrollTargetTestRepresentable(target: lineTarget, targetCenterY: 470).frame(height: 500))
+            },
+            spec("after", height: 300),
+        ]
+        stack.reconciler.apply(plan: .init(rows: rows), contentWidth: stack.scrollView.contentWidth)
+
+        stack.reconciler.scroll(to: .init(
+            targetID: "fused-hunk", fallbackID: nil, alignment: .center, animated: false,
+            generation: 1, lineTarget: lineTarget
+        ))
+
+        #expect(abs(stack.scrollView.scrollY - 370) < 1)
     }
 
     @Test("inserting above the viewport preserves the anchor screen offset")

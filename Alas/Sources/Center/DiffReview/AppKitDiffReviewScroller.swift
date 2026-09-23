@@ -111,7 +111,8 @@ enum AppKitDiffReviewScrollRequestResolver {
             alignment: request!.alignment,
             animated: request!.animated,
             generation: generation,
-            snapsWhenFar: request!.snapsWhenFar
+            snapsWhenFar: request!.snapsWhenFar,
+            lineTarget: request!.lineTarget
         )
     }
 
@@ -155,7 +156,8 @@ enum AppKitDiffReviewScrollRequestResolver {
             fallbackID: headerID,
             alignment: .center,
             animated: true,
-            generation: commandGeneration(command.generation, kind: .line)
+            generation: commandGeneration(command.generation, kind: .line),
+            lineTarget: exactID.flatMap { _ in command.line.map { AppKitDiffScrollLineTarget(side: command.side, line: $0) } }
         )
     }
 }

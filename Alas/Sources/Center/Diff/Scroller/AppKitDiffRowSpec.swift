@@ -66,6 +66,17 @@ enum AppKitDiffScrollAlignment: Equatable {
     case center
 }
 
+struct AppKitDiffScrollLineTarget: Equatable {
+    let side: DiffReviewInlineFeedbackSide
+    let line: Int
+}
+
+@MainActor
+protocol AppKitDiffScrollLineTargetProviding {
+    /// Returns the target line's vertical center in this view's coordinate space.
+    func scrollTargetCenterY(for target: AppKitDiffScrollLineTarget) -> CGFloat?
+}
+
 struct AppKitDiffScrollRequest: Equatable {
     let targetID: String
     let fallbackID: String?
@@ -76,6 +87,8 @@ struct AppKitDiffScrollRequest: Equatable {
     /// though `animated` is true — used for file-click navigation so a
     /// multi-second slide doesn't get old on repeated clicks.
     var snapsWhenFar: Bool = false
+    /// Optional intra-row destination for fused diff rows that contain many lines.
+    var lineTarget: AppKitDiffScrollLineTarget? = nil
 }
 
 struct AppKitDiffScrollAnchor: Equatable {

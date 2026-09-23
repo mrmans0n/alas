@@ -142,6 +142,87 @@ struct DiffPaneAppKitScrollerTests {
         view.layoutSubtreeIfNeeded()
     }
 
+    private func expectScrollTargetToMatchRenderedLine(
+        layoutMode: DiffLayoutMode,
+        side: DiffReviewInlineFeedbackSide,
+        line: Int
+    ) throws {
+        let group = model(includesCollapsedContext: true).groups[0]
+        let rows = DiffPaneRowProjection.visibleRows(in: group, expandedCollapsedRowIDs: [])
+        let currentTheme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let codeDocument: DiffPaneTextDocumentBuilder.CodeDocument
+        switch layoutMode {
+        case .split:
+            let document = DiffPaneTextDocumentBuilder.buildSplit(
+                rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: currentTheme
+            )
+            codeDocument = side == .old ? document.oldCode : document.newCode
+        case .stacked:
+            codeDocument = DiffPaneTextDocumentBuilder.buildStacked(
+                rows: rows, fileExtension: "swift", font: font, showWhitespace: false, theme: currentTheme
+            ).code
+        }
+        let rowIndex = try #require(codeDocument.lines.firstIndex { metadata in
+            guard let sourceLine = metadata.sourceLine else { return false }
+            let sourceNumber = side == .old ? sourceLine.anchor.oldLine : sourceLine.anchor.newLine
+            return side.matches(sourceLine.anchor.side) && sourceNumber == line
+        })
+
+        let container = DiffPaneTextDocumentContainerView(frame: NSRect(x: 0, y: 0, width: 640, height: 120))
+        container.update(
+            rows: rows,
+            layoutMode: layoutMode,
+            wrapLines: false,
+            showWhitespace: false,
+            fileExtension: "swift",
+            font: font,
+            theme: currentTheme,
+            lspContext: nil
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 120),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        defer { window.orderOut(nil) }
+
+        let visiblePanes = allSubviews(of: container)
+            .compactMap { $0 as? DiffPaneTextScrollView }
+            .filter { !$0.isHidden }
+        let pane: DiffPaneTextScrollView
+        switch layoutMode {
+        case .split:
+            pane = try #require(side == .old ? visiblePanes.first : visiblePanes.last)
+        case .stacked:
+            pane = try #require(visiblePanes.first)
+        }
+        let textView = try #require(allSubviews(of: pane).compactMap { $0 as? DiffPaneCodeTextView }.first)
+        let rowRects = textView.diffRowRects()
+        let rowRect = try #require(rowRects.indices.contains(rowIndex) ? rowRects[rowIndex] : nil)
+        let expectedCenterY = container.convert(
+            NSPoint(x: textView.bounds.midX, y: rowRect.midY),
+            from: textView
+        ).y
+        let target = AppKitDiffScrollLineTarget(side: side, line: line)
+        let actualCenterY = try #require(container.scrollTargetCenterY(for: target))
+
+        #expect(abs(actualCenterY - expectedCenterY) < 0.5)
+        #expect(actualCenterY > container.bounds.height)
+    }
+
+    @Test("stacked review navigation resolves to the exact rendered source line")
+    func stackedScrollTargetUsesRenderedLineGeometry() throws {
+        try expectScrollTargetToMatchRenderedLine(layoutMode: .stacked, side: .new, line: 15)
+    }
+
+    @Test("split review navigation resolves to the exact rendered source line")
+    func splitScrollTargetUsesRenderedLineGeometry() throws {
+        try expectScrollTargetToMatchRenderedLine(layoutMode: .split, side: .new, line: 15)
+    }
+
     @Test("mounted pane ignores the stale AppKit scroller preference")
     func mountedPaneInteractions() throws {
         UserDefaults.standard.set(false, forKey: "alas.diff.appKitScroller")
