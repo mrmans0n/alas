@@ -299,27 +299,35 @@ struct AppStateWorktreeCleanupBatchTests {
         final class Recreation {
             var repoPath: URL?
             var deletedPath: URL?
+            var templatePath: URL?
             var recreated = false
         }
         let recreation = Recreation()
         // The cleanup launcher runs once the removal succeeded and before the
         // trailing refresh, so recreating the checkout here is exactly the
         // race: the refresh that follows sees a row at the removed id.
-        let fixture = try await makeCleanupFixture(worktreeCount: 2) { _ in
+        let fixture = try await makeCleanupFixture(worktreeCount: 3) { _ in
             guard let repoPath = recreation.repoPath,
                   let deletedPath = recreation.deletedPath,
+                  let templatePath = recreation.templatePath,
                   !recreation.recreated
             else { return }
             recreation.recreated = true
-            try Process.runBoundedGit(
-                ["worktree", "add", deletedPath.path, "-b", "recreated", "main"],
-                cwd: repoPath
+            try Process.registerWorktree(
+                deletedPath,
+                branch: "feature-2",
+                repoPath: repoPath,
+                template: templatePath
             )
         }
         defer { fixture.cleanUpAfterTest() }
         let target = fixture.worktrees[1]
         recreation.repoPath = fixture.repoPath
         recreation.deletedPath = target.path
+        // A sibling that survives the batch, so its git-administrative
+        // directory is available to copy.
+        let template = fixture.worktrees[2]
+        recreation.templatePath = template.path
 
         let results = await fixture.state.batchDeleteWorktrees([target], keepBranch: false)
 

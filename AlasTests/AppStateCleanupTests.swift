@@ -1105,6 +1105,7 @@ struct AppStateCleanupTests {
         final class Recreation {
             var repoPath: URL?
             var deletedPath: URL?
+            var templatePath: URL?
             var recreated = false
         }
         let recreation = Recreation()
@@ -1115,20 +1116,26 @@ struct AppStateCleanupTests {
                 probe.launchedTickets.append(ticket)
                 guard let repoPath = recreation.repoPath,
                       let deletedPath = recreation.deletedPath,
+                      let templatePath = recreation.templatePath,
                       !recreation.recreated
                 else { return }
                 recreation.recreated = true
-                try Process.runBoundedGit(
-                    ["worktree", "add", deletedPath.path, "-b", "recreated", "main"],
-                    cwd: repoPath
+                try Process.registerWorktree(
+                    deletedPath,
+                    branch: "feature/recreated-path-template",
+                    repoPath: repoPath,
+                    template: templatePath
                 )
             }
         )
         let repo = try await makeRepo(name: "delete-recreated-path")
         let linked = repo.deletingLastPathComponent()
             .appendingPathComponent("delete-recreated-path-linked-\(UUID().uuidString)")
+        let template = repo.deletingLastPathComponent()
+            .appendingPathComponent("delete-recreated-path-template-\(UUID().uuidString)")
         defer {
             try? FileManager.default.removeItem(at: linked)
+            try? FileManager.default.removeItem(at: template)
             try? FileManager.default.removeItem(at: repo)
             for ticket in probe.launchedTickets {
                 try? FileManager.default.removeItem(at: ticket.trashRoot)
@@ -1146,9 +1153,19 @@ struct AppStateCleanupTests {
             destination: linked,
             projectId: project.id
         )
+        // A sibling that survives this deletion, so the recreated checkout has
+        // a live git-administrative directory to copy.
+        _ = try await WorktreeService().add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/recreated-path-template",
+            destination: template,
+            projectId: project.id
+        )
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
         recreation.repoPath = repo
         recreation.deletedPath = linked
+        recreation.templatePath = template
 
         #expect(await state.cliDeleteWorktree(worktree, force: true, keepBranch: true) == .ok)
         try await waitForOperationState(state.projectsManager, id: worktree.id, projectId: project.id, equals: nil)

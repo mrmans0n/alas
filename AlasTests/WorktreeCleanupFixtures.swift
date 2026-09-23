@@ -176,43 +176,59 @@ private final class WorktreeRegistrationLookup: @unchecked Sendable {
 }
 
 extension Process {
-    /// Runs git to completion for tests that must observe its effect inside a
-    /// callback that cannot `await` — notably `worktreeCleanupLauncher`, which
-    /// runs on the main actor between a successful removal and the refresh
-    /// that reconciles the removed row away.
+    /// Recreates a git worktree registration for a checkout at `destination` —
+    /// the inverse of `corruptWorktreeRegistration`, and the only way a test
+    /// can put a checkout at a path *inside* the window between a successful
+    /// removal and the refresh that reconciles the removed row away
+    /// (`worktreeCleanupLauncher`).
     ///
-    /// The child inherits nothing: with the runner capturing output, an
-    /// inherited stdout is a pipe whose buffer can fill while the caller is
-    /// blocked waiting for exit, which hangs the whole suite rather than
-    /// failing it. The wait is bounded for the same reason — a child that
-    /// never exits reports a failure here instead of stalling the test
-    /// process.
-    static func runBoundedGit(
-        _ arguments: [String],
-        cwd: URL,
-        timeout: TimeInterval = 30
+    /// Written as files rather than `git worktree add` because that window is
+    /// the whole point of the test: a child process started there, with the
+    /// runner capturing output, wedges the test invocation instead of failing a
+    /// test. git discovers a checkout purely from its administrative files, so
+    /// a copied registration (with `gitdir` repointed) is indistinguishable
+    /// from a spawned one as far as `git worktree list` is concerned.
+    ///
+    /// `template` is a checkout the repository already lists — the fixture's
+    /// `worktree-1` — whose administrative directory carries the index, refs,
+    /// and `commondir` a live registration needs. The repository must already
+    /// contain `branch`; the fixture branches its worktrees off `main` up
+    /// front.
+    static func registerWorktree(
+        _ destination: URL,
+        branch: String,
+        repoPath: URL,
+        template: URL
     ) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = arguments
-        process.currentDirectoryURL = cwd
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
-        try process.run()
-        guard exited.wait(timeout: .now() + timeout) == .success else {
-            process.terminate()
-            throw ProcessError.launchFailed(
-                "git \(arguments.joined(separator: " ")) did not finish within \(Int(timeout))s"
-            )
+        let worktreesDir = repoPath.appendingPathComponent(".git/worktrees")
+        let templateAdmin = worktreesDir.appendingPathComponent(template.lastPathComponent)
+        let adminDir = worktreesDir.appendingPathComponent(destination.lastPathComponent)
+        if FileManager.default.fileExists(atPath: adminDir.path) {
+            try FileManager.default.removeItem(at: adminDir)
         }
-        guard process.terminationStatus == 0 else {
-            throw ProcessError.launchFailed(
-                "git \(arguments.joined(separator: " ")) exited with \(process.terminationStatus)"
-            )
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
         }
+        try FileManager.default.createDirectory(
+            at: destination,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(at: templateAdmin, to: adminDir)
+        try "\(destination.appendingPathComponent(".git").path)\n".write(
+            to: adminDir.appendingPathComponent("gitdir"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "ref: refs/heads/\(branch)\n".write(
+            to: adminDir.appendingPathComponent("HEAD"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "gitdir: \(adminDir.path)\n".write(
+            to: destination.appendingPathComponent(".git"),
+            atomically: true,
+            encoding: .utf8
+        )
     }
 
     /// Breaks worktree removal for `worktree` at the git-administrative
