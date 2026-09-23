@@ -971,8 +971,10 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let f = e
             .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
+                let closingWorktree = selectedWorktree()
                 state.handleCloseCenterShortcut(
-                    worktreeId: selectedWorktree()?.id,
+                    worktreeId: closingWorktree?.id,
+                    projectId: closingWorktree?.projectId,
                     sharedSessionOwner: selectedWorkspaceSessionOwner()
                 )
             }

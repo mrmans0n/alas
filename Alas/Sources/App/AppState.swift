@@ -3786,6 +3786,7 @@ final class AppState {
     /// close request path, including confirmation and closed-tab history.
     func requestCloseComposedCenterTab(
         worktreeID: String,
+        projectId: String? = nil,
         sharedSessionOwner: SessionOwnerID?,
         tabID: TabID
     ) {
@@ -3793,7 +3794,7 @@ final class AppState {
            tabs.tabs(for: sharedSessionOwner).contains(where: { $0.id == tabID }) {
             requestCloseSharedSessionTab(owner: sharedSessionOwner, tabID: tabID)
         } else {
-            requestCloseTab(worktreeId: worktreeID, tabId: tabID)
+            requestCloseTab(worktreeId: worktreeID, projectId: projectId, tabId: tabID)
         }
     }
 
@@ -3803,6 +3804,7 @@ final class AppState {
     /// generalized in the following slices.
     func closeComposedCenterTabs(
         worktreeID: String,
+        projectId: String? = nil,
         sharedSessionOwner: SessionOwnerID?,
         tabIDs: [TabID]
     ) {
@@ -3811,7 +3813,7 @@ final class AppState {
         } ?? [])
         let memberIDs = tabIDs.filter { !sharedIDs.contains($0) }
         if !memberIDs.isEmpty {
-            closeCenterTabs(worktreeId: worktreeID, tabIds: memberIDs)
+            closeCenterTabs(worktreeId: worktreeID, projectId: projectId, tabIds: memberIDs)
         }
         guard let sharedSessionOwner else { return }
         for tabID in tabIDs where sharedIDs.contains(tabID) {
@@ -7197,13 +7199,13 @@ final class AppState {
     /// Close the focused pane. If it was the last leaf, also closes the tab
     /// via the existing close-tab path (preserves today's ⌘W-on-unsplit
     /// behavior).
-    func closeFocusedPane(worktreeId: String) {
+    func closeFocusedPane(worktreeId: String, projectId: String? = nil) {
         guard let activeId = tabs.activeTabId(forWorktree: worktreeId),
               let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
               case .terminal = tab else { return }
         guard let outcome = tabs.removeFocusedLeaf(worktreeId: worktreeId, tabId: activeId) else { return }
         if case .tabRemoved = outcome {
-            requestCloseTab(worktreeId: worktreeId, tabId: activeId)
+            requestCloseTab(worktreeId: worktreeId, projectId: projectId, tabId: activeId)
         } else {
             let closedLeafId = outcome.closedLeafId
             scheduleRunScriptCompletionCancellation(sessionID: closedLeafId)
@@ -7454,20 +7456,24 @@ final class AppState {
 
     /// ⌘W router: if the active tab is a multi-pane terminal, close the focused
     /// pane; otherwise fall through to the existing tab-close behavior.
-    func handleCloseShortcut(worktreeId: String) {
+    func handleCloseShortcut(worktreeId: String, projectId: String? = nil) {
         if let activeId = tabs.activeTabId(forWorktree: worktreeId),
            let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
            case .terminal(let state) = tab,
            case .split = state.root {
-            closeFocusedPane(worktreeId: worktreeId)
+            closeFocusedPane(worktreeId: worktreeId, projectId: projectId)
             return
         }
         if let activeId = tabs.activeTabId(forWorktree: worktreeId) {
-            requestCloseTab(worktreeId: worktreeId, tabId: activeId)
+            requestCloseTab(worktreeId: worktreeId, projectId: projectId, tabId: activeId)
         }
     }
 
-    func handleCloseCenterShortcut(worktreeId: String?, sharedSessionOwner: SessionOwnerID? = nil) {
+    func handleCloseCenterShortcut(
+        worktreeId: String?,
+        projectId: String? = nil,
+        sharedSessionOwner: SessionOwnerID? = nil
+    ) {
         guard let worktreeId else { return }
         if let sharedSessionOwner,
            let activeId = centerTabComposition(
@@ -7478,7 +7484,7 @@ final class AppState {
             requestCloseSharedSessionTab(owner: sharedSessionOwner, tabID: activeId)
             return
         }
-        handleCloseShortcut(worktreeId: worktreeId)
+        handleCloseShortcut(worktreeId: worktreeId, projectId: projectId)
     }
 
     @discardableResult
@@ -8347,7 +8353,7 @@ final class AppState {
         tabs.close(worktreeId: worktreeId, tabId: tabId)
     }
 
-    func requestCloseTab(worktreeId: String, tabId: TabID) {
+    func requestCloseTab(worktreeId: String, projectId: String? = nil, tabId: TabID) {
         guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }) else { return }
         if let prompt = CloseTabConfirmationPolicy.prompt(for: tab, config: config),
            !confirmCloseTab(prompt) {
@@ -8356,7 +8362,7 @@ final class AppState {
         closedTabHistory.record(ClosedTabEntry(
             snapshot: .worktree(
                 worktreeID: worktreeId,
-                projectID: worktree(withId: worktreeId)?.projectId,
+                projectID: projectId ?? worktree(withId: worktreeId)?.projectId,
                 tab: tab
             ),
             placement: .init(tabID: tabId, orderedIDs: tabs.tabs(forWorktree: worktreeId).map(\.id))
@@ -8677,10 +8683,14 @@ final class AppState {
         cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
-    func closeCenterTabs(worktreeId: String, tabIds: [TabID]) {
+    func closeCenterTabs(worktreeId: String, projectId: String? = nil, tabIds: [TabID]) {
         let ids = Set(tabIds)
         guard !ids.isEmpty else { return }
-        closedTabHistory.record(contentsOf: closedTabEntries(worktreeID: worktreeId, tabIDs: tabIds))
+        closedTabHistory.record(contentsOf: closedTabEntries(
+            worktreeID: worktreeId,
+            projectId: projectId,
+            tabIDs: tabIds
+        ))
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = allTabs.map(\.id).filter(ids.contains)
         invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
@@ -8692,14 +8702,18 @@ final class AppState {
         cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
-    private func closedTabEntries(worktreeID: String, tabIDs: [TabID]) -> [ClosedTabEntry] {
+    private func closedTabEntries(
+        worktreeID: String,
+        projectId: String? = nil,
+        tabIDs: [TabID]
+    ) -> [ClosedTabEntry] {
         let local = tabs.tabs(forWorktree: worktreeID)
         return tabIDs.compactMap { tabID in
             guard let tab = local.first(where: { $0.id == tabID }) else { return nil }
             return ClosedTabEntry(
                 snapshot: .worktree(
                     worktreeID: worktreeID,
-                    projectID: worktree(withId: worktreeID)?.projectId,
+                    projectID: projectId ?? worktree(withId: worktreeID)?.projectId,
                     tab: tab
                 ),
                 placement: .init(tabID: tabID, orderedIDs: local.map(\.id))

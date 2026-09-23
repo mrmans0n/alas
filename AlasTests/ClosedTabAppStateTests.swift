@@ -140,33 +140,34 @@ struct ClosedTabAppStateTests {
     }
 
     /// A worktree id is its path, so the claim that gates a reopened tab must
-    /// be the one belonging to the project the tab was recorded from, captured
-    /// then. Re-deriving it at reopen time reads whichever project now lists
-    /// that id: here the recording project's row is gone from its project by
-    /// then, while a same-path row under another project — deleting — remains,
-    /// which would discard a tab that belongs to a clean project.
-    @Test func reopeningACPSessionUsesTheClaimCapturedWhenItWasClosed() async {
+    /// be the project the tab was recorded from — which only the caller knows.
+    /// Here a same-path row under a deleting project is the first match for the
+    /// id, so re-deriving the project at close time (or at reopen time) tags
+    /// the tab with that deleting project and discards it on reopen, even
+    /// though it belongs to a clean one.
+    @Test func reopeningACPSessionUsesTheProjectsItsCloseCallerHeld() async {
         let sharedID = "closed-tabs-shared-id"
-        let project = ProjectConfig(
+        // First in the project list, so it is the first match for the id.
+        let deletingProject = ProjectConfig(
+            id: "closed-tabs-deleting-project",
+            name: "Deleting",
+            path: "/tmp/closed-tabs-deleting-project",
+            color: "green",
+            addedAt: Date(timeIntervalSince1970: 0),
+            host: "other-host"
+        )
+        let ownProject = ProjectConfig(
             id: "closed-tabs-own-project",
             name: "Own",
             path: "/tmp/closed-tabs-own-project",
             color: "blue",
             addedAt: Date(timeIntervalSince1970: 0)
         )
-        let otherProject = ProjectConfig(
-            id: "closed-tabs-other-project",
-            name: "Other",
-            path: "/tmp/closed-tabs-other-project",
-            color: "green",
-            addedAt: Date(timeIntervalSince1970: 0),
-            host: "other-host"
-        )
         let state = AppState(store: MemoryStore())
-        state.projectsManager = ProjectsManager(persistedProjects: [project, otherProject])
+        state.projectsManager = ProjectsManager(persistedProjects: [deletingProject, ownProject])
         let own = Worktree(
             id: sharedID,
-            projectId: project.id,
+            projectId: ownProject.id,
             name: "own",
             branch: "own",
             path: URL(fileURLWithPath: "/tmp/closed-tabs-own-\(UUID().uuidString)"),
@@ -174,36 +175,33 @@ struct ClosedTabAppStateTests {
             lastActivity: Date(timeIntervalSince1970: 0)
         )
         state.projectsManager.insertOptimisticWorktree(own)
+        let deleting = Worktree(
+            id: sharedID,
+            projectId: deletingProject.id,
+            name: "deleting",
+            branch: "deleting",
+            path: URL(fileURLWithPath: "/tmp/closed-tabs-deleting-\(UUID().uuidString)"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        state.projectsManager.insertOptimisticWorktree(deleting)
+        state.projectsManager.setOperationState(
+            forWorktreeId: sharedID,
+            projectId: deletingProject.id,
+            state: .deleting(projectId: deletingProject.id)
+        )
         _ = state.acpManager(for: own)
 
         let tab = state.tabs.append(
             acpSession: ACPSessionTabState(sessionId: "closed-tabs-own-chat", title: "Closed chat"),
             to: own.id
         )
-        state.requestCloseTab(worktreeId: own.id, tabId: tab.id)
-
-        // The recording project's row is gone by reopen time; a same-path row
-        // under the other project remains, and that project is deleting.
-        state.projectsManager.removeOptimisticWorktree(id: sharedID, projectId: project.id)
-        let other = Worktree(
-            id: sharedID,
-            projectId: otherProject.id,
-            name: "other",
-            branch: "other",
-            path: URL(fileURLWithPath: "/tmp/closed-tabs-other-\(UUID().uuidString)"),
-            status: .clean,
-            lastActivity: Date(timeIntervalSince1970: 0)
-        )
-        state.projectsManager.insertOptimisticWorktree(other)
-        state.projectsManager.setOperationState(
-            forWorktreeId: sharedID,
-            projectId: otherProject.id,
-            state: .deleting(projectId: otherProject.id)
-        )
+        // The close caller holds the clean project's checkout.
+        state.requestCloseTab(worktreeId: own.id, projectId: ownProject.id, tabId: tab.id)
 
         await state.reopenLastClosedTab()
 
-        // The tab was closed from a clean project, so it comes back.
+        // The tab belongs to the clean project, so it comes back.
         #expect(state.tabs.tabs(forWorktree: sharedID).contains { $0.id == tab.id })
     }
 
