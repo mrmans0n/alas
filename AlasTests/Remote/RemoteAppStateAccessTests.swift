@@ -397,6 +397,104 @@ struct RemoteAppStateAccessTests {
         })
     }
 
+    @Test func duplicatePathKeepsLegacyACPHistoryWithOneProject() async throws {
+        let fixture = try makeSharedPathState()
+        defer { cleanupSharedPathFiles(fixture) }
+        let legacy = ACPSessionPersistence(path: Paths.acpSessionsDB(forWorktreeId: fixture.first.id).path)
+        let now = Int64(Date().timeIntervalSince1970)
+        try await legacy.upsertSession(ACPSessionRow(
+            id: "legacy-session", agentId: "test-agent", title: "Legacy history",
+            titleSource: .manual, currentModel: nil, currentMode: nil,
+            autoRun: false, createdAt: now, updatedAt: now,
+            lastOpenedAt: now, archived: false
+        ))
+
+        let firstManager = try #require(fixture.state.acpManager(for: fixture.first))
+        let secondManager = try #require(fixture.state.acpManager(for: fixture.second))
+        await firstManager.refreshRecentNow()
+        await secondManager.refreshRecentNow()
+
+        #expect(firstManager.sessionRows.contains { $0.id == "legacy-session" })
+        #expect(!secondManager.sessionRows.contains { $0.id == "legacy-session" })
+        #expect(firstManager.persistence.path != secondManager.persistence.path)
+
+        let secondProject = try #require(fixture.state.projects.first { $0.id == fixture.second.projectId })
+        let reopened = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [secondProject])
+        ))
+        reopened.projectsManager.insertOptimisticWorktree(fixture.second)
+        let reopenedManager = try #require(reopened.acpManager(for: fixture.second))
+        await reopenedManager.refreshRecentNow()
+        #expect(!reopenedManager.sessionRows.contains { $0.id == "legacy-session" })
+    }
+
+    @Test func reloadTabsBootstrapsEachProjectScopedACPOwner() async throws {
+        let fixture = try makeSharedPathState()
+        defer { cleanupSharedPathFiles(fixture) }
+        let scheduledID = "scheduled-on-host-b"
+        let scopedPath = Paths.acpSessionsDB(
+            forProjectId: fixture.second.projectId,
+            worktreeId: fixture.second.id
+        ).path
+        let persisted = ACPSessionPersistence(path: scopedPath)
+        let now = Int64(Date().timeIntervalSince1970)
+        try await persisted.upsertSession(ACPSessionRow(
+            id: scheduledID, agentId: "test-agent", title: "Scheduled",
+            titleSource: .manual, currentModel: nil, currentMode: nil,
+            autoRun: false, createdAt: now, updatedAt: now,
+            lastOpenedAt: now, archived: false
+        ))
+        try await persisted.upsertQueue(sessionId: scheduledID, items: [
+            QueuedPrompt(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(3600)),
+        ])
+        fixture.state.reloadTabs()
+
+        let firstOwner = SessionOwnerID.projectWorktree(
+            projectId: fixture.first.projectId, worktreeId: fixture.first.id
+        )
+        let secondOwner = SessionOwnerID.projectWorktree(
+            projectId: fixture.second.projectId, worktreeId: fixture.second.id
+        )
+        for _ in 0..<100 where fixture.state.acpManager(for: secondOwner)?.liveSession(for: scheduledID) == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(fixture.state.acpManager(for: firstOwner) != nil)
+        #expect(fixture.state.acpManager(for: secondOwner)?.liveSession(for: scheduledID) != nil)
+    }
+
+    @Test func remoteSessionSummariesUseTheManagersProjectForDuplicatePaths() async throws {
+        let fixture = try makeSharedPathState()
+        defer { cleanupSharedPathFiles(fixture) }
+        fixture.state.agentRegistry = AgentRegistry(
+            builtinState: [
+                "claude": BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil),
+            ],
+            customs: [],
+            installedIds: ["claude"]
+        )
+        fixture.state.remoteSessionAttachScheduler = { (_: ACPSessionManager, _: ACPSession.ID) in }
+
+        let result = await fixture.state.createRemoteSession(
+            worktreeId: fixture.second.id,
+            projectId: fixture.second.projectId,
+            agentId: "claude"
+        )
+        guard case .success(let created) = result else {
+            Issue.record("expected session creation for the second project, got \(result)")
+            return
+        }
+        #expect(created.projectId == fixture.second.projectId)
+        #expect(created.worktree?.projectName == "Host B")
+
+        let manager = try #require(fixture.state.acpManager(for: fixture.second))
+        try await seedStoredSession(id: created.id, title: "Host B session", in: manager)
+        let summaries = await fixture.state.sessionSummaries()
+        let listed = try #require(summaries.first { $0.id == created.id })
+        #expect(listed.projectId == fixture.second.projectId)
+        #expect(listed.worktree?.projectName == "Host B")
+    }
+
     @Test func remoteSessionSummariesMarkStoredRowsWithoutTabsInactive() async throws {
         var cleanupWorktreeId: String?
         defer {
@@ -2145,6 +2243,52 @@ struct RemoteAppStateAccessTests {
             status: source.status,
             lastActivity: source.lastActivity
         )
+    }
+
+    private func makeSharedPathState() throws -> (state: AppState, first: Worktree, second: Worktree) {
+        let sharedPath = "/tmp/shared-worktree-\(UUID().uuidString)"
+        let worktreeURL = URL(fileURLWithPath: sharedPath)
+        try FileManager.default.createDirectory(
+            at: worktreeURL.appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+        let lineageID = WorktreeService.localLineageID(forWorktreeAt: worktreeURL)
+        let firstProject = ProjectConfig(
+            id: "host-a-\(UUID().uuidString)", name: "Host A", path: "/repos/a",
+            color: "blue", addedAt: .distantPast, host: "host-a"
+        )
+        let secondProject = ProjectConfig(
+            id: "host-b-\(UUID().uuidString)", name: "Host B", path: "/repos/b",
+            color: "green", addedAt: .distantPast, host: "host-b"
+        )
+        let state = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [firstProject, secondProject])
+        ))
+        let first = Worktree(
+            id: sharedPath, projectId: firstProject.id, name: "feature-a",
+            branch: "feature-a", path: worktreeURL,
+            status: .clean, lastActivity: .distantPast, lineageID: lineageID
+        )
+        let second = Worktree(
+            id: sharedPath, projectId: secondProject.id, name: "feature-b",
+            branch: "feature-b", path: worktreeURL,
+            status: .clean, lastActivity: .distantPast, lineageID: lineageID
+        )
+        state.projectsManager.insertOptimisticWorktree(first)
+        state.projectsManager.insertOptimisticWorktree(second)
+        return (state, first, second)
+    }
+
+    private func cleanupSharedPathFiles(_ fixture: (state: AppState, first: Worktree, second: Worktree)) {
+        cleanupRemoteRenameFiles(worktreeId: fixture.first.id)
+        try? FileManager.default.removeItem(at: fixture.first.path)
+        try? FileManager.default.removeItem(atPath: Paths.acpSessionsDB(forWorktreeId: fixture.first.id).path + ".owner")
+        for projectID in [fixture.first.projectId, fixture.second.projectId] {
+            let db = Paths.acpSessionsDB(forProjectId: projectID, worktreeId: fixture.first.id)
+            try? FileManager.default.removeItem(at: db)
+            try? FileManager.default.removeItem(atPath: db.path + "-wal")
+            try? FileManager.default.removeItem(atPath: db.path + "-shm")
+        }
     }
 
     private func seedStoredSession(

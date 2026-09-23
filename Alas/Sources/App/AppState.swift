@@ -1763,9 +1763,10 @@ final class AppState {
                 await self.restoreWorkspaceCheckoutSessionTabsAfterReload(restoringActiveTabs: restoringActiveTabs)
             }
         }
-        let allWorktreeIds = projectsManager.projects.flatMap {
-            projectsManager.worktrees(projectId: $0.id).map(\.id)
+        let allWorktrees = projectsManager.projects.flatMap {
+            projectsManager.worktrees(projectId: $0.id)
         }
+        let allWorktreeIds = allWorktrees.map(\.id)
         if restoringActiveTabs {
             tabs.loadAll(worktreeIds: allWorktreeIds)
         } else {
@@ -1800,7 +1801,7 @@ final class AppState {
             await self?.reconcileInterruptedDelegations()
         }
         Task { @MainActor [weak self] in
-            await self?.bootstrapScheduledACPSessions(worktreeIds: allWorktreeIds)
+            await self?.bootstrapScheduledACPSessions(worktrees: allWorktrees)
         }
     }
 
@@ -2089,10 +2090,9 @@ final class AppState {
         for task in tasks { await task.value }
     }
 
-    private func bootstrapScheduledACPSessions(worktreeIds: [String]) async {
-        let tasks = worktreeIds.compactMap { worktreeId -> Task<Void, Never>? in
-            guard let worktree = worktree(withId: worktreeId),
-                  let manager = acpManager(for: worktree)
+    private func bootstrapScheduledACPSessions(worktrees: [Worktree]) async {
+        let tasks = worktrees.compactMap { worktree -> Task<Void, Never>? in
+            guard let manager = acpManager(for: worktree)
             else { return nil }
             return Task { @MainActor in
                 await bootstrapScheduledACPSessions(owner: manager.owner, manager: manager)
@@ -9181,9 +9181,8 @@ final class AppState {
 
     /// True when a project *other* than `exceptProjectId` still lists a
     /// checkout with `id`. Worktree ids are path-derived, so two projects
-    /// (typically one per SSH host) can share one; the id-keyed runtime state —
-    /// tabs, terminals, ACP manager — belongs to all of them, so teardown only
-    /// happens when the last listing goes away.
+    /// (typically one per SSH host) can share one. Tabs and terminals remain
+    /// path-shared; ACP managers are project-scoped.
     private func otherProjectsStillListWorktree(id: String, exceptProjectId projectId: String) -> Bool {
         for project in projects where project.id != projectId {
             if projectsManager.worktrees(projectId: project.id).contains(where: { $0.id == id }) {
@@ -11353,15 +11352,16 @@ final class AppState {
             return .failed(message: "\(error)")
         }
 
-        // Tabs, terminals, and the ACP manager for a worktree id are shared
-        // with any other project that lists a checkout at the same path.
-        // Deleting one project's checkout must not close the other project's
-        // tabs or dispose of its sessions, so only tear the runtime state down
-        // when no other project still lists that id.
+        // Tabs and terminals are path-shared with another project that lists
+        // this id. Keep those until the last listing goes away, but release
+        // this project's own ACP manager on every successful deletion.
         let sharedRuntimeStateLives = otherProjectsStillListWorktree(
             id: worktree.id,
             exceptProjectId: worktree.projectId
         )
+        if sharedRuntimeStateLives {
+            disposeACPManager(owner: Self.projectScopedACPOwner(for: worktree))
+        }
         let runHistoryPurgeTask = sharedRuntimeStateLives ? nil : cleanupWorktreeState(worktreeId: worktree.id)
         await runHistoryPurgeTask?.value
         if case .staged(let ticket) = outcome {
@@ -11929,14 +11929,38 @@ final class AppState {
 
     private func acpSessionsDatabaseURL(for worktree: Worktree, owner: SessionOwnerID) -> URL {
         let scopedURL = Paths.acpSessionsDB(for: owner)
+        if FileManager.default.fileExists(atPath: scopedURL.path) { return scopedURL }
+        let legacyURL = Paths.acpSessionsDB(forWorktreeId: worktree.id)
         let hasDuplicateProjectPath = otherProjectsStillListWorktree(
             id: worktree.id,
             exceptProjectId: worktree.projectId
         )
-        if hasDuplicateProjectPath || FileManager.default.fileExists(atPath: scopedURL.path) {
+        if hasDuplicateProjectPath && !FileManager.default.fileExists(atPath: legacyURL.path) {
             return scopedURL
         }
-        return Paths.acpSessionsDB(forWorktreeId: worktree.id)
+        // Older installations keyed history by path alone. Bind that file to
+        // one existing project before another host can claim it. The marker
+        // keeps the binding stable if projects are later reordered or removed.
+        let ownerURL = URL(fileURLWithPath: legacyURL.path + ".owner")
+        if FileManager.default.fileExists(atPath: ownerURL.path) {
+            guard let recordedID = try? String(contentsOf: ownerURL, encoding: .utf8),
+                  recordedID == worktree.projectId
+            else { return scopedURL }
+            return legacyURL
+        }
+        guard let firstOwnerID = projects.first(where: { project in
+            projectsManager.worktrees(projectId: project.id).contains { $0.id == worktree.id }
+        })?.id else { return scopedURL }
+        do {
+            try FileManager.default.createDirectory(
+                at: legacyURL.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try Data(firstOwnerID.utf8).write(to: ownerURL, options: .atomic)
+        } catch {
+            Self.logger.error("Could not bind legacy ACP history to project: \(error.localizedDescription, privacy: .public)")
+            return scopedURL
+        }
+        return firstOwnerID == worktree.projectId ? legacyURL : scopedURL
     }
 
     private func checkpointTerminalAdmissionDisabled(for checkout: WorkspaceCheckout) -> Bool {
@@ -14128,7 +14152,7 @@ extension AppState: RemoteSessionsProvider {
             agentId: session.agentId,
             status: RemoteSessionGateway.stateString(streamingState),
             canDrive: manager.isWriter(for: session.id),
-            projectId: projectAndWorktree(withWorktreeId: manager.worktreeId)?.project.id,
+            projectId: projectAndWorktree(withWorktreeId: manager.worktreeId, inProjectId: manager.owner.projectID)?.project.id,
             worktreeId: worktreeSummary == nil ? nil : manager.worktreeId,
             updatedAt: manager.sessionRows.first(where: { $0.id == session.id })?.updatedAt ?? 0,
             worktree: worktreeSummary
@@ -14143,7 +14167,7 @@ extension AppState: RemoteSessionsProvider {
             let worktreeSummary: RemoteWorktreeSummary?
             let projectId: String?
             let worktreeId: String?
-            if let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId) {
+            if let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId, inProjectId: mgr.owner.projectID) {
                 projectId = resolved.project.id
                 worktreeId = mgr.worktreeId
                 worktreeSummary = await remoteWorktreeSummary(project: resolved.project, worktree: resolved.worktree)

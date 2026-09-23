@@ -279,6 +279,51 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(firstManager.runners.isEmpty)
     }
 
+    @Test func deletingOneProjectDisposesOnlyItsScopedACPManager() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        let secondRepo = fixture.temporaryRoot.appendingPathComponent("second-repo")
+        try FileManager.default.createDirectory(at: secondRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: secondRepo)
+        let secondProject = try await fixture.state.projectsManager.addProject(
+            path: secondRepo,
+            displayName: "second",
+            color: "#5fb7c4"
+        )
+        let sibling = Worktree(
+            id: target.id,
+            projectId: secondProject.id,
+            name: target.name,
+            branch: target.branch,
+            path: target.path,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        fixture.state.projectsManager.insertOptimisticWorktree(sibling)
+        let firstManager = try #require(fixture.state.acpManager(for: target))
+        let secondManager = try #require(fixture.state.acpManager(for: sibling))
+        fixture.state.tabs.appendTerminal(
+            worktreeId: target.id,
+            title: "shared",
+            sessionId: "shared-session"
+        )
+        let preflight = try await WorktreeService().deletePreflight(worktreePath: target.path)
+        let authorization = WorktreeCleanupDeleteAuthorization(
+            sessionIDsByWorktree: [target.id: ["shared-session"]],
+            preflightByWorktree: [target.id: preflight]
+        )
+
+        let results = await fixture.state.batchDeleteWorktrees(
+            [target], keepBranch: true, authorization: authorization
+        )
+
+        #expect(results.map(\.outcome) == [.deleted])
+        #expect(fixture.state.acpManager(for: firstManager.owner) == nil)
+        #expect(fixture.state.acpManager(for: secondManager.owner) === secondManager)
+        #expect(!fixture.state.tabs.tabs(forWorktree: target.id).isEmpty)
+    }
+
     /// A batch holds each item's `.deleting` claim past the removal itself.
     /// The stale row stays in the visible list until the batch's trailing
     /// refresh, so releasing the claim per item would let that row resolve as
