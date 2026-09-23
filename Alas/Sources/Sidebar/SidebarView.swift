@@ -70,7 +70,10 @@ struct SidebarView: View {
                                         )
                                     },
                                     operationState: { wt in
-                                        state.projectsManager.operationState(for: wt.id)
+                                        state.projectsManager.operationState(
+                                            forWorktreeId: wt.id,
+                                            projectId: wt.projectId
+                                        )
                                     },
                                     harnessSummary: { worktreeId in
                                         let ids = state.tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
@@ -152,7 +155,10 @@ struct SidebarView: View {
                                     },
                                     onRetryCreate: { wt in
                                         let retry = Self.retryCreateParameters(
-                                            operationState: state.projectsManager.operationState(for: wt.id),
+                                            operationState: state.projectsManager.operationState(
+                                                forWorktreeId: wt.id,
+                                                projectId: wt.projectId
+                                            ),
                                             defaultBase: state.config.worktrees.baseBranch
                                         )
                                         Task { @MainActor in

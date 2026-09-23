@@ -30,22 +30,19 @@ struct RightPaneSelectionStateResolver {
         guard allowedWorktreeIDs?.contains(id) ?? true else { return .empty }
         guard checkoutFocusedWorktreeScope?.worktreeID == id || checkoutFocusedWorktreeScope == nil else { return .empty }
         guard let wt = findWorktree(by: id) else { return .empty }
-        if let op = projectsManager.operationState(for: wt.id) {
+        if let op = projectsManager.operationState(forWorktreeId: wt.id, projectId: wt.projectId) {
             switch op {
             case .preparingDelete:
                 return .active(wt)
             case .creating:
                 return .creating(wt)
-            case .deleting(let deletingProjectId):
-                // A worktree id is its path, so the same id can name a
-                // checkout under another host's project. Only the project
-                // that owns the claim is being removed; a duplicate id under
-                // a different project must keep its pane.
-                guard deletingProjectId == wt.projectId else { return .active(wt) }
+            case .deleting:
                 // The worktree is being removed. Returning `.empty` unmounts
                 // the right pane (rail included) for this deletion only; the
                 // global `rightPaneVisible` preference is untouched, so the
-                // sibling the selection reconciles to reopens the pane.
+                // sibling the selection reconciles to reopens the pane. A
+                // claim opened for a same-path checkout under another project
+                // is filtered out by the qualified lookup above.
                 return .empty
             case .createFailed:
                 return .createFailed(wt)

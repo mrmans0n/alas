@@ -320,6 +320,21 @@ final class ProjectsManager {
         worktreeOperationStates[worktreeId]
     }
 
+    /// The claim that applies to a specific worktree, which is more than the
+    /// id can say: an id is its path, and two projects (typically one per SSH
+    /// host) can list a checkout at the same path. States that name their
+    /// project only apply to that project's row; a foreign claim belongs to
+    /// the other project's checkout and leaves this one usable.
+    func operationState(forWorktreeId worktreeId: String, projectId: String) -> WorktreeOperationState? {
+        guard let state = worktreeOperationStates[worktreeId] else { return nil }
+        switch state {
+        case .deleting(let claimProjectId):
+            return claimProjectId == projectId ? state : nil
+        case .creating, .preparingDelete, .createFailed, .launchFailed, .deleteFailed:
+            return state
+        }
+    }
+
     func operationStatesSnapshot() -> [String: WorktreeOperationState] {
         worktreeOperationStates
     }

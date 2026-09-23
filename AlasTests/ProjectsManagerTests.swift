@@ -16,6 +16,39 @@ struct ProjectsManagerTests {
         return dir
     }
 
+    /// A worktree id is its path, so two projects (typically one per SSH host)
+    /// can hold a checkout at the same path. A claim that names its project
+    /// must only suppress that project's row; the other project's checkout is
+    /// unrelated and stays usable.
+    @Test func operationStateQualifiesDeletionClaimsByProject() {
+        let first = ProjectConfig(id: "first", name: "First", path: "/srv/first", color: "#fff", addedAt: .distantPast, host: "first-host")
+        let second = ProjectConfig(id: "second", name: "Second", path: "/srv/second", color: "#fff", addedAt: .distantPast, host: "second-host")
+        let sharedID = "/srv/checkouts/member"
+        let mgr = ProjectsManager(persistedProjects: [first, second])
+        mgr.setOperationState(id: sharedID, state: .deleting(projectId: first.id))
+
+        #expect(mgr.operationState(forWorktreeId: sharedID, projectId: first.id) == .deleting(projectId: first.id))
+        #expect(mgr.operationState(forWorktreeId: sharedID, projectId: second.id) == nil)
+        // The id-keyed lookup still reports the raw claim for callers that
+        // have no project context.
+        #expect(mgr.operationState(for: sharedID) == .deleting(projectId: first.id))
+    }
+
+    /// States that don't name a project apply to the id's row regardless of
+    /// which project asks — only the project-scoped deletion claim is
+    /// qualified.
+    @Test func operationStateQualificationLeavesUnscopedClaimsAlone() {
+        let first = ProjectConfig(id: "first", name: "First", path: "/srv/first", color: "#fff", addedAt: .distantPast, host: "first-host")
+        let second = ProjectConfig(id: "second", name: "Second", path: "/srv/second", color: "#fff", addedAt: .distantPast, host: "second-host")
+        let sharedID = "/srv/checkouts/member"
+        let mgr = ProjectsManager(persistedProjects: [first, second])
+        mgr.setOperationState(id: sharedID, state: .preparingDelete)
+
+        #expect(mgr.operationState(forWorktreeId: sharedID, projectId: first.id) == .preparingDelete)
+        #expect(mgr.operationState(forWorktreeId: sharedID, projectId: second.id) == .preparingDelete)
+        #expect(mgr.operationState(forWorktreeId: "absent", projectId: first.id) == nil)
+    }
+
     @Test func addProjectAppendsToList() async throws {
         let repo = try await makeRepo(name: "alpha")
         defer { try? FileManager.default.removeItem(at: repo) }
