@@ -1479,6 +1479,7 @@ final class CodeEditorCoordinator {
             scheduleInlayRefresh()
             for await _ in stream {
                 guard !Task.isCancelled, inlayBindingID == binding, inlayClient === next else { return }
+                inlayLayout?.invalidateActions()
                 inlayFeature?.invalidate(preservingPresentation: true)
                 scheduleInlayRefresh()
             }

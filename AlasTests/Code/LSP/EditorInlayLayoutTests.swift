@@ -102,6 +102,7 @@ struct EditorInlayLayoutTests {
         transport.deliverFrame(#"{"jsonrpc":"2.0","id":"refresh-inlays","method":"workspace/inlayHint/refresh"}"#)
         try await eventually("server refresh request") { requests.count > beforeServerRefresh }
         #expect(view.displayAdapter?.document.map.hintRuns.first?.hint.id == retainedID)
+        #expect(view.inlayAccessibilityActions?(retainedID).isEmpty == true)
         #expect(refreshProjections == 0)
         try reply(requests.last!)
         try await eventually("server refresh response") {
