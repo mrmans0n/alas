@@ -581,15 +581,12 @@ enum AppKitDiffReviewRowPlanBuilder {
                 fallbacks: &fallbacks
             )
             let groupID = AppKitDiffReviewRowID.groupHeader(fileID: input.file.id, groupID: group.id)
-            // Most hunks render as a single fused row (no local accessories),
-            // so visible lines resolve to the hunk's group row unless the
-            // finer-grained per-segment loop below overwrites them.
-            let visibleRows = DiffPaneRowProjection.visibleRows(
-                in: group.displayGroup,
-                expandedCollapsedRowIDs: input.state.expandedCollapsedRowIDs
-            )
-            mapLines(visibleRows, fileID: input.file.id, to: groupID, into: &lineTargets)
             if !group.containsLocalAccessories {
+                let visibleRows = DiffPaneRowProjection.visibleRows(
+                    in: group.displayGroup,
+                    expandedCollapsedRowIDs: input.state.expandedCollapsedRowIDs
+                )
+                mapLines(visibleRows, fileID: input.file.id, to: groupID, into: &lineTargets)
                 let rowInput = hunkInput(group: group, context: context, input: input, fusion: fusions[groupIndex])
                 let hunkPlan = DiffPaneRowPlanBuilder.build(input: rowInput, state: input.state.hunkPresentationState)
                 guard let hunk = hunkPlan.rows.first else { continue }
@@ -617,7 +614,11 @@ enum AppKitDiffReviewRowPlanBuilder {
                         append(&rows, id: blockID, input: input, signature: rowBlock.rowsSignature.hashValue, height: segmentHeight(rowBlock.rows.count, input: input), includesActiveHighlight: true) {
                             AnyView(AppKitDiffReviewSegmentRowBody(rows: rowBlock.rows, rowsSignature: rowBlock.rowsSignature, group: group.displayGroup, input: input))
                         }
-                        mapLines(rowBlock.rows, fileID: input.file.id, to: blockID, into: &lineTargets)
+                        let visibleRows = DiffPaneRowProjection.visibleRows(
+                            in: rowBlock.rows,
+                            expandedCollapsedRowIDs: input.state.expandedCollapsedRowIDs
+                        )
+                        mapLines(visibleRows, fileID: input.file.id, to: blockID, into: &lineTargets)
                     case let .thread(thread):
                         let threadID = AppKitDiffReviewRowID.thread(fileID: input.file.id, threadID: thread.id)
                         append(

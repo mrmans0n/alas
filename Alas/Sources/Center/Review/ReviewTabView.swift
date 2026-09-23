@@ -37,7 +37,13 @@ enum ReviewTabCommentJump {
         for comment: StagedComment,
         session: ReviewChangesLoadedSession
     ) -> Target? {
-        if let match = session.summary.files.first(where: { $0.path == comment.filePath }) {
+        let match: DiffReviewFileSummary?
+        if let fileID = comment.fileID {
+            match = session.summary.files.first(where: { $0.id == fileID })
+        } else {
+            match = session.summary.files.first(where: { $0.path == comment.filePath })
+        }
+        if let match {
             return Target(fileID: match.id, matchedCommentFile: true)
         }
         guard let fallback = session.summary.files.first else { return nil }
@@ -439,12 +445,13 @@ struct ReviewTabView: View {
                 makeLSPContext(relativePath: file.summary.path)
             },
             lineScrollCommand: pendingCommentScrollCommand,
-            onSaveDraftComment: { _, path, _, anchor, body in
+            onSaveDraftComment: { fileID, path, _, anchor, body in
                 guard let pr = pendingReview else { return }
                 guard case .line(let side, let line, let endLine, _) = anchor else { return }
                 pr.stage(StagedComment(
                     id: UUID(),
                     threadID: nil,
+                    fileID: fileID,
                     filePath: path,
                     line: line,
                     endLine: endLine,

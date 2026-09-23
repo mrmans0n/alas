@@ -610,6 +610,25 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .new, line: 8)] == groupRowID)
     }
 
+    @Test func expandedCollapsedContextLinesTargetTheirSegmentWhenLocalAccessoriesExist() throws {
+        let file = collapsibleTextFile()
+        let group = try #require(file.displayModel?.groups.first)
+        let collapsedRow = try #require(group.rows.first { $0.kind == .collapsed })
+        let state = AppKitDiffReviewFileState()
+        state.expandedCollapsedRowIDs = [collapsedRow.id]
+        let comment = draftComment(
+            fileID: file.id,
+            anchor: .line(side: .new, startLine: 8, endLine: nil, selectedText: "let value8 = 8")
+        )
+        let input = AppKitDiffReviewRowInput(file: file, draftComments: [comment], state: state, theme: theme)
+
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+        let target = plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .new, line: 8)]
+
+        #expect(target?.contains(":segment:") == true)
+        #expect(plan.corePlan.rows.contains { $0.id == target })
+    }
+
     @Test func lineTargetsResolveToTheExactSegmentRowWhenLocalAccessoriesForceGranularRendering() {
         let file = textFile()
         let draft = draftComment(fileID: file.id)

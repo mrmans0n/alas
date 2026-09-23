@@ -55,15 +55,30 @@ enum DiffPaneRowProjection {
             return DiffDisplayRowsSnapshot(rows: group.rows, signature: group.rowsSignature)
         }
 
-        var rows: [DiffDisplayRow] = []
-        rows.reserveCapacity(group.rows.count)
-        for row in group.rows {
-            rows.append(row)
+        return DiffDisplayRowsSnapshot(rows: visibleRows(
+            in: group.rows,
+            expandedCollapsedRowIDs: expandedCollapsedRowIDs
+        ))
+    }
+
+    static func visibleRows(
+        in sourceRows: [DiffDisplayRow],
+        expandedCollapsedRowIDs: Set<String>
+    ) -> [DiffDisplayRow] {
+        guard !expandedCollapsedRowIDs.isEmpty,
+              sourceRows.contains(where: { $0.kind == .collapsed && expandedCollapsedRowIDs.contains($0.id) })
+        else {
+            return sourceRows
+        }
+        var visibleRows: [DiffDisplayRow] = []
+        visibleRows.reserveCapacity(sourceRows.count)
+        for row in sourceRows {
+            visibleRows.append(row)
             if row.kind == .collapsed, expandedCollapsedRowIDs.contains(row.id) {
-                rows.append(contentsOf: row.collapsedRows)
+                visibleRows.append(contentsOf: row.collapsedRows)
             }
         }
-        return DiffDisplayRowsSnapshot(rows: rows)
+        return visibleRows
     }
 
     static func visibleRows(
