@@ -227,6 +227,7 @@ final class TerminalService {
         theme: Theme,
         forcedCwd: URL? = nil,
         startupScriptSuffix: String? = nil,
+        repoStartupScript: String? = nil,
         includeUserStartupScript: Bool = true,
         environmentOverrides: [String: String] = [:],
         environmentRemovals: Set<String> = [],
@@ -270,6 +271,7 @@ final class TerminalService {
         let effectiveScript = Self.effectiveStartupScript(
             global: cfg,
             project: project,
+            repoStartupScript: repoStartupScript,
             includeUserStartupScript: includeUserStartupScript,
             startupScriptSuffix: startupScriptSuffix
         )
@@ -1044,11 +1046,12 @@ final class TerminalService {
     nonisolated static func effectiveStartupScript(
         global: AppConfig.Terminal,
         project: ProjectConfig,
+        repoStartupScript: String? = nil,
         includeUserStartupScript: Bool,
         startupScriptSuffix: String?
     ) -> String {
         let baseScript = includeUserStartupScript
-            ? StartupScriptResolver.sessionOpenScript(global: global, repoScript: nil, project: project)
+            ? StartupScriptResolver.sessionOpenScript(global: global, repoScript: repoStartupScript, project: project)
             : ""
         return composeStartupScript(
             userStartupScript: baseScript,

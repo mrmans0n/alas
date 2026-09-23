@@ -165,6 +165,7 @@ final class AppState {
     /// Repo-local `.alas/` config, read per worktree with its own change cache.
     let repoConfigStore = RepoConfigStore()
     let repoHookApprovalQueue = RepoHookApprovalQueue()
+    @ObservationIgnored var repoHookLoader = RepoHookLoader()
     /// Project icons already resolved from repo files, keyed by the identity of
     /// the file that supplied them.
     let repoIconDisplayCache = RepoIconDisplayCache()
@@ -6817,9 +6818,17 @@ final class AppState {
         guard !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(for: worktree.id)) else {
             throw TerminalLaunchError.worktreeOperationInProgress
         }
+        let repoStartupScript = try await preparedRepoHook(
+            event: .sessionOpen,
+            project: project,
+            worktree: worktree,
+            context: .sessionOpen,
+            includeUserStartupScript: includeUserStartupScript
+        )
         return try openTerminalTab(
             for: worktree,
             startupScriptSuffix: startupScriptSuffix,
+            repoStartupScript: repoStartupScript,
             includeUserStartupScript: includeUserStartupScript,
             forceInheritParentEnv: forceInheritParentEnv,
             environmentOverrides: environmentOverrides,
@@ -6872,6 +6881,7 @@ final class AppState {
     func openTerminalTab(
         for worktree: Worktree,
         startupScriptSuffix: String? = nil,
+        repoStartupScript: String? = nil,
         includeUserStartupScript: Bool = true,
         forceInheritParentEnv: Bool = false,
         environmentOverrides: [String: String] = [:],
@@ -6915,6 +6925,7 @@ final class AppState {
                 worktree: worktree, project: project,
                 cfg: terminalConfig, theme: themeStore.current,
                 startupScriptSuffix: startupScriptSuffix,
+                repoStartupScript: repoStartupScript,
                 includeUserStartupScript: includeUserStartupScript,
                 environmentOverrides: environmentOverrides,
                 environmentRemovals: environmentRemovals,
