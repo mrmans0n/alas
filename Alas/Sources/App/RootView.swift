@@ -563,6 +563,18 @@ private struct RootPresentationHandlers: ViewModifier {
             .modifier(RootReviewMergePresentationHandlers(state: state))
             .modifier(RootGGPresentationHandlers(state: state))
             .modifier(RootUpdatePresentationHandlers(state: state))
+            .modifier(RootRepoHookApprovalPresentationHandler(state: state))
+    }
+}
+
+private struct RootRepoHookApprovalPresentationHandler: ViewModifier {
+    @Bindable var state: AppState
+
+    func body(content: Content) -> some View {
+        @Bindable var queue = state.repoHookApprovalQueue
+        content.sheet(item: $queue.activeRequest) { request in
+            RepoHookApprovalSheet(request: request, queue: queue)
+        }
     }
 }
 

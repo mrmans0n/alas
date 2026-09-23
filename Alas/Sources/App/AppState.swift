@@ -164,6 +164,7 @@ final class AppState {
     let worktreeUpstreamStatusStore = WorktreeUpstreamStatusStore()
     /// Repo-local `.alas/` config, read per worktree with its own change cache.
     let repoConfigStore = RepoConfigStore()
+    let repoHookApprovalQueue = RepoHookApprovalQueue()
     /// Project icons already resolved from repo files, keyed by the identity of
     /// the file that supplied them.
     let repoIconDisplayCache = RepoIconDisplayCache()
