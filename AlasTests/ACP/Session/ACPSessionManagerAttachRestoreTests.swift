@@ -2171,6 +2171,80 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
+    @Test("fresh attach serializes model edits before flushing queued prompts")
+    func freshAttachSerializesModelEditsBeforeFlushingQueuedPrompts() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: nil,
+            agentId: "codex",
+            currentModel: nil
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        let modelRequestCounter = PromptCounter()
+        scriptInitialize(client)
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                ],
+                availableModes: [],
+                currentModel: "opus",
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { _ in
+            if await modelRequestCounter.next() == 1 {
+                await modelGate.enterAndWait()
+            }
+            return Data("{}".utf8)
+        }
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.setModel(for: session.id, modelId: "sonnet")
+        session.enqueue(blocks: [.text("queued prompt")])
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: true)
+        }
+
+        try await waitUntilAsync { await modelGate.hasEntered }
+        await manager.setModel(for: session.id, modelId: "haiku")
+        #expect(client.sent.filter { $0.method == "session/set_model" }.count == 1)
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+        await modelGate.release()
+        await attachTask.value
+        try await waitUntil {
+            client.sent.map(\.method) == [
+                "initialize",
+                "session/new",
+                "session/set_model",
+                "session/set_model",
+                "session/prompt",
+            ]
+        }
+        await manager.flushAllPersistence()
+
+        #expect(client.sent.map(\.method) == [
+            "initialize",
+            "session/new",
+            "session/set_model",
+            "session/set_model",
+            "session/prompt",
+        ])
+        let modelParams = try client.sent
+            .filter { $0.method == "session/set_model" }
+            .map { try #require($0.params as? ACPSessionSetModelParams) }
+        #expect(modelParams.map(\.modelId) == ["sonnet", "haiku"])
+        #expect(session.currentModel == "haiku")
+        #expect(try store.loadSession(id: "local")?.currentModel == "haiku")
+    }
+
     @Test("reopened session stays detached when closed during model restoration")
     func reopenedSessionStaysDetachedWhenClosedDuringModelRestoration() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

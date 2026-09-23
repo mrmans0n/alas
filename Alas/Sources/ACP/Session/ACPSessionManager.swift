@@ -515,6 +515,13 @@ final class ACPSessionManager: ObservableObject {
     }
     private var deferredModelModeUpdates: [ACPSession.ID: [DeferredModelModeUpdate]] = [:]
 
+    private struct ModelModeRestorationGate {
+        let token: UUID
+        var inFlightEdits = 0
+        var waiters: [CheckedContinuation<Void, Never>] = []
+    }
+    private var modelModeRestorationGates: [ACPSession.ID: ModelModeRestorationGate] = [:]
+
     /// Toggle auto-run for a remotely-driven session. Writer-gated; persists.
     func setAutoRun(for id: ACPSession.ID, enabled: Bool) async {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
@@ -534,14 +541,29 @@ final class ACPSessionManager: ObservableObject {
             pendingModel[id] = modelId
             return
         }
+        var restorationGateToken = beginModelModeRestorationEdit(for: id)
+        defer {
+            if let restorationGateToken {
+                finishModelModeRestorationEdit(for: id, gateToken: restorationGateToken)
+            }
+        }
         guard await confirmedWriterLease(for: id), sessions[id] === session else { return }
+        let activeRestoreGateToken = modelModeRestorationGates[id]?.token
+        if activeRestoreGateToken != restorationGateToken {
+            if let restorationGateToken {
+                finishModelModeRestorationEdit(for: id, gateToken: restorationGateToken)
+            }
+            restorationGateToken = beginModelModeRestorationEdit(for: id)
+        }
         session.currentModel = modelId
         persist(session)
         guard let runner = runners[id] else {
             pendingModel[id] = modelId
             return
         }
-        guard !session.isRestoringPersistedConfigOptions else {
+        guard !session.isRestoringPersistedConfigOptions,
+              modelModeRestorationGates[id] == nil
+        else {
             deferredModelModeUpdates[id, default: []].append(.model(modelId))
             return
         }
@@ -560,14 +582,29 @@ final class ACPSessionManager: ObservableObject {
             pendingMode[id] = modeId
             return
         }
+        var restorationGateToken = beginModelModeRestorationEdit(for: id)
+        defer {
+            if let restorationGateToken {
+                finishModelModeRestorationEdit(for: id, gateToken: restorationGateToken)
+            }
+        }
         guard await confirmedWriterLease(for: id), sessions[id] === session else { return }
+        let activeRestoreGateToken = modelModeRestorationGates[id]?.token
+        if activeRestoreGateToken != restorationGateToken {
+            if let restorationGateToken {
+                finishModelModeRestorationEdit(for: id, gateToken: restorationGateToken)
+            }
+            restorationGateToken = beginModelModeRestorationEdit(for: id)
+        }
         session.currentMode = modeId
         persist(session)
         guard let runner = runners[id] else {
             pendingMode[id] = modeId
             return
         }
-        guard !session.isRestoringPersistedConfigOptions else {
+        guard !session.isRestoringPersistedConfigOptions,
+              modelModeRestorationGates[id] == nil
+        else {
             deferredModelModeUpdates[id, default: []].append(.mode(modeId))
             return
         }
@@ -869,6 +906,49 @@ final class ACPSessionManager: ObservableObject {
                 deferredModelModeUpdates[sessionId] = nil
                 return
             }
+        }
+    }
+
+    private func beginModelModeRestorationEdit(for sessionId: ACPSession.ID) -> UUID? {
+        guard var gate = modelModeRestorationGates[sessionId] else { return nil }
+        gate.inFlightEdits += 1
+        modelModeRestorationGates[sessionId] = gate
+        return gate.token
+    }
+
+    private func finishModelModeRestorationEdit(
+        for sessionId: ACPSession.ID,
+        gateToken: UUID
+    ) {
+        guard var gate = modelModeRestorationGates[sessionId],
+              gate.token == gateToken
+        else { return }
+        gate.inFlightEdits -= 1
+        guard gate.inFlightEdits == 0 else {
+            modelModeRestorationGates[sessionId] = gate
+            return
+        }
+        let waiters = gate.waiters
+        gate.waiters = []
+        modelModeRestorationGates[sessionId] = gate
+        waiters.forEach { $0.resume() }
+    }
+
+    private func waitForModelModeRestorationEdits(for sessionId: ACPSession.ID) async {
+        guard let gate = modelModeRestorationGates[sessionId],
+              gate.inFlightEdits > 0
+        else { return }
+        let gateToken = gate.token
+        await withCheckedContinuation { continuation in
+            guard var currentGate = modelModeRestorationGates[sessionId],
+                  currentGate.token == gateToken,
+                  currentGate.inFlightEdits > 0
+            else {
+                continuation.resume()
+                return
+            }
+            currentGate.waiters.append(continuation)
+            modelModeRestorationGates[sessionId] = currentGate
         }
     }
 
@@ -3897,6 +3977,7 @@ extension ACPSessionManager {
         }
         defer {
             session.isRestoringPersistedConfigOptions = false
+            modelModeRestorationGates[sessionId] = nil
             if session.firstRunConnectingPhase != nil {
                 session.firstRunConnectingPhase = nil
             }
@@ -4944,6 +5025,7 @@ extension ACPSessionManager {
             if attachingConnections[sessionId]?.connection === connection {
                 attachingConnections[sessionId] = nil
             }
+            modelModeRestorationGates[sessionId] = ModelModeRestorationGate(token: UUID())
             runners[sessionId] = runner
             keepElicitationCoordinator = true
             attachSucceeded = true
@@ -5062,37 +5144,47 @@ extension ACPSessionManager {
                 using: runner
             )
             await flushDeferredConfigOptionUpdates(for: session, using: runner)
-            await flushDeferredModelModeUpdates(for: session, using: runner)
             session.isRestoringPersistedConfigOptions = false
             persist(session)
             guard session.agentState == .spawning else { return }
-            let attachmentStillCurrent: Bool
-            if isDisposed || sessions[sessionId] !== session || runners[sessionId] !== runner {
-                attachmentStillCurrent = false
-            } else {
-                attachmentStillCurrent = await confirmedWriterLease(for: sessionId)
-                    && sessions[sessionId] === session
-                    && runners[sessionId] === runner
-                    && !isDisposed
-            }
-            guard attachmentStillCurrent else {
-                attachSucceeded = false
-                if runners[sessionId] === runner {
-                    runners[sessionId] = nil
-                    runner.stop()
-                    await runner.flushPersistence()
-                    if isDisposed {
-                        await runner.connection.shutdown()
-                    } else {
-                        await runner.connection.detach()
-                        session.agentState = .idle
-                        session.clearConnectionRecovery()
-                        beginMirroring(sessionId: sessionId)
-                    }
-                    await releaseWriterLease(sessionId: sessionId)
+            while true {
+                await waitForModelModeRestorationEdits(for: sessionId)
+                guard session.agentState == .spawning else { return }
+                await flushDeferredModelModeUpdates(for: session, using: runner)
+                guard session.agentState == .spawning else { return }
+                let attachmentStillCurrent: Bool
+                if isDisposed || sessions[sessionId] !== session || runners[sessionId] !== runner {
+                    attachmentStillCurrent = false
+                } else {
+                    attachmentStillCurrent = await confirmedWriterLease(for: sessionId)
+                        && sessions[sessionId] === session
+                        && runners[sessionId] === runner
+                        && !isDisposed
                 }
-                return
+                guard attachmentStillCurrent else {
+                    attachSucceeded = false
+                    if runners[sessionId] === runner {
+                        runners[sessionId] = nil
+                        runner.stop()
+                        await runner.flushPersistence()
+                        if isDisposed {
+                            await runner.connection.shutdown()
+                        } else {
+                            await runner.connection.detach()
+                            session.agentState = .idle
+                            session.clearConnectionRecovery()
+                            beginMirroring(sessionId: sessionId)
+                        }
+                        await releaseWriterLease(sessionId: sessionId)
+                    }
+                    return
+                }
+                guard modelModeRestorationGates[sessionId]?.inFlightEdits == 0,
+                      deferredModelModeUpdates[sessionId]?.isEmpty ?? true
+                else { continue }
+                break
             }
+            modelModeRestorationGates[sessionId] = nil
             session.agentState = .ready
             let completedRecovery = session.completeConnectionRecovery()
             scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
