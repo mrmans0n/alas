@@ -22,6 +22,7 @@ struct AppStateCleanupTests {
     private struct MemoryStore: PersistenceStoreProtocol {
         var config: AppConfig? = nil
         var projectsFile: ProjectsFile? = nil
+        var spacesFile: SpacesFile? = nil
 
         func write<T: Encodable>(_: T, to _: URL) throws {}
 
@@ -31,6 +32,9 @@ struct AppStateCleanupTests {
             }
             if T.self == ProjectsFile.self {
                 return projectsFile as? T
+            }
+            if T.self == SpacesFile.self {
+                return spacesFile as? T
             }
             return nil
         }
@@ -1093,6 +1097,96 @@ struct AppStateCleanupTests {
         #expect(probe.appendFinishedAtLaunch)
         #expect(try await history.entry(id: entry.id) == nil)
         #expect(FileManager.default.fileExists(atPath: ticket.stagedPath.path))
+    }
+
+    @Test func singleDeleteReconcilesSelectionWhenDuplicateIsOutsideActiveSpace() async throws {
+        let repo = try await makeRepo(name: "delete-selection-space")
+        let linked = repo.deletingLastPathComponent()
+            .appendingPathComponent("delete-selection-space-linked-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: linked)
+            try? FileManager.default.removeItem(at: repo)
+        }
+
+        let activeProject = ProjectConfig(
+            id: "active-space-project",
+            name: "Active project",
+            path: repo.path,
+            color: "#5fb7c4",
+            addedAt: .distantPast
+        )
+        let otherSpaceProject = ProjectConfig(
+            id: "other-space-project",
+            name: "Other-space project",
+            path: "/repos/other",
+            color: "#5fb7c4",
+            addedAt: .distantPast,
+            host: "other-host"
+        )
+        let spaces = SpacesFile(
+            activeSpaceId: "active-space",
+            spaces: [
+                SpaceConfig(
+                    id: "active-space",
+                    name: "Active",
+                    emoji: "🏠",
+                    projectIds: [activeProject.id],
+                    lastSelectedWorktreeId: nil,
+                    createdAt: .distantPast
+                ),
+                SpaceConfig(
+                    id: "other-space",
+                    name: "Other",
+                    emoji: "💼",
+                    projectIds: [otherSpaceProject.id],
+                    lastSelectedWorktreeId: nil,
+                    createdAt: .distantPast
+                ),
+            ]
+        )
+        let state = AppState(
+            store: MemoryStore(
+                projectsFile: ProjectsFile(projects: [activeProject, otherSpaceProject]),
+                spacesFile: spaces
+            ),
+            runHistoryStore: try RunHistoryStore(
+                path: repo.appendingPathComponent("run-history.sqlite").path
+            )
+        )
+        let projectWorktree = try await WorktreeService().add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/active-space-delete",
+            destination: linked,
+            projectId: activeProject.id
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: activeProject.id)
+        let target = try #require(state.projectsManager.worktrees(projectId: activeProject.id)
+            .first(where: { $0.id == projectWorktree.id }))
+        let otherSpaceDuplicate = Worktree(
+            id: target.id,
+            projectId: otherSpaceProject.id,
+            name: target.name,
+            branch: target.branch,
+            path: target.path,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(otherSpaceDuplicate)
+        #expect(state.activeSpaceProjects.map(\.id) == [activeProject.id])
+        state.selectWorktree(id: target.id)
+
+        #expect(await state.cliDeleteWorktree(target, force: true, keepBranch: true) == .ok)
+        try await waitForOperationState(state.projectsManager, id: target.id, projectId: activeProject.id, equals: nil)
+        try await waitForWorktreeRemoved(
+            state.projectsManager,
+            projectId: activeProject.id,
+            worktreeId: target.id
+        )
+
+        let mainWorktreeID = try #require(state.projectsManager.worktrees(projectId: activeProject.id).first?.id)
+        #expect(state.projectsManager.worktrees(projectId: otherSpaceProject.id).contains { $0.id == target.id })
+        #expect(state.selectedWorktreeId == mainWorktreeID)
     }
 
     /// A checkout recreated at the deleted path before the post-delete refresh

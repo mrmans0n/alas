@@ -530,7 +530,7 @@ extension AppState {
         guard !Task.isCancelled else {
             return .skipped(reason: "The schedule was removed while its agent was launching.")
         }
-        guard let session = acpManager(forWorktreeId: worktree.id)?.liveSession(for: prepared.sessionID) else {
+        guard let session = acpManager(for: worktree)?.liveSession(for: prepared.sessionID) else {
             let message = "Could not open a chat session for \(agentName) in \(worktree.branch)."
             reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
             return .launchFailed(message)

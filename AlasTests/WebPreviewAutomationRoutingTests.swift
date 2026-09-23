@@ -49,6 +49,23 @@ struct WebPreviewAutomationRoutingTests {
         _ = tabs.closeAll(worktreeId: "other")
     }
 
+    @Test func projectScopedWorktreeOwnerUsesThePathKeyedTabBucket() async throws {
+        let tabs = TabsManager(store: MemoryStore())
+        let owner = SessionOwnerID.projectWorktree(projectId: "project-a", worktreeId: "shared-path")
+        _ = tabs.openWebPreview(worktreeId: owner.tabStorageKey, url: URL(string: "https://example.com"))
+        let service = WebPreviewAutomationService(
+            tabs: tabs, owner: owner, isAuthorized: { true },
+            resolveOpen: { _ in throw WebPreviewAutomationError.unavailable },
+            focus: { _ in Issue.record("Listing cannot focus UI") }
+        )
+
+        let result = try await service.perform(.init(action: .list))
+        let previews = try #require(result["previews"] as? [[String: Any]])
+
+        #expect(previews.count == 1)
+        #expect(previews.first?["owner_key"] as? String == owner.storageKey)
+    }
+
     @Test func closedAndReopenedPreviewRejectsOldHandle() async throws {
         let tabs = TabsManager(store: MemoryStore())
         let owner = SessionOwnerID.worktree("owner")

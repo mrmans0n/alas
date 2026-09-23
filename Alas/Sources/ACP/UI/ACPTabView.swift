@@ -61,7 +61,7 @@ struct ACPTabView: View {
     }
 
     private var managerForOwnerBoundary: ACPSessionManager? {
-        if let owner {
+        if let owner, case .workspaceCheckout = owner {
             return state.acpManager(for: owner)
         }
         return state.acpManager(for: worktree)

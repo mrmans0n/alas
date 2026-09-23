@@ -199,6 +199,86 @@ struct AppStateWorktreeCleanupBatchTests {
         })
     }
 
+    @Test func batchCleansRuntimeAfterDeletingEveryProjectSharingAWorktreeID() async throws {
+        @MainActor
+        final class SharedPathRemoval {
+            weak var state: AppState?
+            var projectID = ""
+            var worktreeID = ""
+            var tickets: [WorktreeTrashCleanupTicket] = []
+        }
+        let removal = SharedPathRemoval()
+        let fixture = try await makeCleanupFixture(worktreeCount: 2) { ticket in
+            removal.tickets.append(ticket)
+            // A different project's refresh completes after this batch item
+            // has skipped runtime cleanup for the still-listed shared id,
+            // but before this batch's trailing refresh removes its own row.
+            removal.state?.projectsManager.dropRemovedWorktree(
+                id: removal.worktreeID,
+                projectId: removal.projectID
+            )
+        }
+        defer { fixture.cleanUpAfterTest() }
+        let firstProjectTarget = fixture.worktrees[1]
+        defer {
+            for ticket in removal.tickets {
+                try? FileManager.default.removeItem(at: ticket.trashRoot)
+            }
+        }
+
+        let secondRepo = fixture.temporaryRoot.appendingPathComponent("second-repo")
+        try FileManager.default.createDirectory(at: secondRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: secondRepo)
+        _ = try await Process.git(["config", "user.email", "t@e"], cwd: secondRepo)
+        _ = try await Process.git(["config", "user.name", "test"], cwd: secondRepo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: secondRepo)
+
+        let secondProject = try await fixture.state.projectsManager.addProject(
+            path: secondRepo,
+            displayName: "cleanup-fixture-second",
+            color: "#5fb7c4"
+        )
+        let samePathOnSecondHost = Worktree(
+            id: firstProjectTarget.id,
+            projectId: secondProject.id,
+            name: firstProjectTarget.name,
+            branch: firstProjectTarget.branch,
+            path: firstProjectTarget.path,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        fixture.state.projectsManager.insertOptimisticWorktree(samePathOnSecondHost)
+        removal.state = fixture.state
+        removal.projectID = secondProject.id
+        removal.worktreeID = firstProjectTarget.id
+
+        let firstManager = try #require(fixture.state.acpManager(for: firstProjectTarget))
+        fixture.state.tabs.appendTerminal(
+            worktreeId: firstProjectTarget.id,
+            title: "shared runtime",
+            sessionId: "shared-runtime-session"
+        )
+        let preflight = try await WorktreeService().deletePreflight(worktreePath: firstProjectTarget.path)
+        let authorization = WorktreeCleanupDeleteAuthorization(
+            sessionIDsByWorktree: [firstProjectTarget.id: ["shared-runtime-session"]],
+            preflightByWorktree: [firstProjectTarget.id: preflight]
+        )
+
+        let results = await fixture.state.batchDeleteWorktrees(
+            [firstProjectTarget],
+            keepBranch: true,
+            authorization: authorization
+        )
+
+        #expect(results.map(\.outcome) == [.deleted])
+        #expect(fixture.state.projectsManager
+            .worktrees(projectId: secondProject.id)
+            .allSatisfy { $0.id != firstProjectTarget.id })
+        #expect(fixture.state.tabs.tabs(forWorktree: firstProjectTarget.id).isEmpty)
+        #expect(fixture.state.acpManager(forWorktreeId: firstProjectTarget.id) == nil)
+        #expect(firstManager.runners.isEmpty)
+    }
+
     /// A batch holds each item's `.deleting` claim past the removal itself.
     /// The stale row stays in the visible list until the batch's trailing
     /// refresh, so releasing the claim per item would let that row resolve as

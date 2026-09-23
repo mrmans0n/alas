@@ -111,6 +111,7 @@ enum WebPreviewHostLookup {
 @Observable
 final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     let ownerKey: String
+    let sessionOwnerKey: String
     let remoteHost: String?
     let automationID = UUID().uuidString
     let webView: WKWebView
@@ -131,9 +132,10 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     let automationState = WebPreviewBrowserAutomationState()
     var automationDocumentGeneration: Int { navigationGeneration }
 
-    init(ownerKey: String, remoteHost: String?,
+    init(ownerKey: String, sessionOwnerKey: String? = nil, remoteHost: String?,
          resolveHost: @escaping WebPreviewNavigation.HostResolver = { await WebPreviewHostLookup.resolve($0) }) {
         self.ownerKey = ownerKey
+        self.sessionOwnerKey = sessionOwnerKey ?? ownerKey
         self.remoteHost = remoteHost
         self.resolveHost = resolveHost
         let configuration = WKWebViewConfiguration()
@@ -343,7 +345,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
                     error = "Could not encode the screenshot."
                     return
                 }
-                capture = WebPreviewCapture(ownerKey: ownerKey, url: url, capturedAt: capturedAt,
+                capture = WebPreviewCapture(ownerKey: ownerKey, sessionOwnerKey: sessionOwnerKey, url: url, capturedAt: capturedAt,
                     viewport: viewport,
                     devicePixelRatio: metrics?["scale"] ?? 1,
                     scrollPosition: CGPoint(x: metrics?["x"] ?? 0, y: metrics?["y"] ?? 0),

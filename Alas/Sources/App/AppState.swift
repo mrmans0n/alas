@@ -356,7 +356,13 @@ final class AppState {
     func checkpointACPAdmissionDisabledAfterDiscovery(owner: SessionOwnerID?, fallbackWorktree: Worktree?) async -> Bool {
         switch owner ?? fallbackWorktree.map({ .worktree($0.id) }) {
         case .worktree(let worktreeID):
+            if let fallbackWorktree, fallbackWorktree.id == worktreeID {
+                return await checkpointMutationsDisabledAfterDiscovery(for: fallbackWorktree)
+            }
             return await checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktreeID)
+        case .projectWorktree(let projectId, let worktreeID):
+            guard let worktree = worktree(withId: worktreeID, inProjectId: projectId) else { return true }
+            return await checkpointMutationsDisabledAfterDiscovery(for: worktree)
         case .workspaceCheckout(let checkoutID, let location):
             guard let checkout = workspacesManager.checkout(id: checkoutID),
                   checkout.executionLocation.normalized == location.normalized
@@ -2089,7 +2095,7 @@ final class AppState {
                   let manager = acpManager(for: worktree)
             else { return nil }
             return Task { @MainActor in
-                await bootstrapScheduledACPSessions(owner: .worktree(worktreeId), manager: manager)
+                await bootstrapScheduledACPSessions(owner: manager.owner, manager: manager)
             }
         }
         for task in tasks { await task.value }
@@ -2104,7 +2110,8 @@ final class AppState {
     }
 
     private func hasACPSessionTab(owner: SessionOwnerID, sessionId: ACPSession.ID) -> Bool {
-        tabs.tabs(for: owner).contains {
+        let ownerTabs = owner.worktreeID.map(tabs.tabs(forWorktree:)) ?? tabs.tabs(for: owner)
+        return ownerTabs.contains {
             guard case .acpSession(let state) = $0 else { return false }
             return state.sessionId == sessionId
         }
@@ -6374,6 +6381,9 @@ final class AppState {
         case .worktree(let worktreeId):
             guard let (project, _) = projectAndWorktree(withWorktreeId: worktreeId) else { return nil }
             return (projectId: project.id, worktreeId: worktreeId)
+        case .projectWorktree(let projectId, let worktreeId):
+            guard projectAndWorktree(withWorktreeId: worktreeId, inProjectId: projectId) != nil else { return nil }
+            return (projectId: projectId, worktreeId: worktreeId)
         case .workspaceCheckout(let checkoutId, _):
             let workspaceId = workspacesManager.checkout(id: checkoutId)?.workspaceID?.uuidString ?? ""
             return (projectId: workspaceId, worktreeId: owner.storageKey)
@@ -7297,7 +7307,7 @@ final class AppState {
 
     func closePaneForProcessExit(owner: SessionOwnerID, leafId: String) {
         switch owner {
-        case .worktree(let worktreeID):
+        case .worktree(let worktreeID), .projectWorktree(_, let worktreeID):
             closePaneForProcessExit(worktreeId: worktreeID, leafId: leafId)
         case .workspaceCheckout:
             let owningTabID = tabs.tabs(for: owner).first { tab in
@@ -7746,7 +7756,7 @@ final class AppState {
     @discardableResult
     func restoreTerminalTabIfNeededAsync(owner: SessionOwnerID, tabId: TabID) async throws -> Tab? {
         switch owner {
-        case .worktree(let worktreeID):
+        case .worktree(let worktreeID), .projectWorktree(_, let worktreeID):
             return try await restoreTerminalTabIfNeededAsync(worktreeId: worktreeID, tabId: tabId)
         case .workspaceCheckout(let checkoutID, _):
             return try await restoreCheckoutTerminalTabIfNeeded(checkoutID: checkoutID, owner: owner, tabID: tabId)
@@ -8335,12 +8345,16 @@ final class AppState {
     }
 
     func renameACPSessionTab(worktreeId: String, tabId: TabID) {
-        guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
+        guard let worktree = worktree(withId: worktreeId) else { return }
+        renameACPSessionTab(worktree: worktree, tabId: tabId)
+    }
+
+    func renameACPSessionTab(worktree: Worktree, tabId: TabID) {
+        guard let tab = tabs.tabs(forWorktree: worktree.id).first(where: { $0.id == tabId }),
               case .acpSession(let state) = tab,
-              let worktree = worktree(withId: worktreeId),
               let mgr = acpManager(for: worktree) else { return }
         renameACPSessionTab(tabState: state, manager: mgr) { [tabs] title in
-            _ = tabs.renameACPSession(worktreeId: worktreeId, tabId: tabId, title: title)
+            _ = tabs.renameACPSession(worktreeId: worktree.id, tabId: tabId, title: title)
         }
     }
 
@@ -8391,6 +8405,18 @@ final class AppState {
         }
     }
 
+    func copyACPSessionMarkdown(worktree: Worktree, tabId: TabID) {
+        Task { @MainActor in
+            await withHydratedACPSession(worktree: worktree, tabId: tabId) { session in
+                Clipboard.copy(ACPTranscriptMarkdown.document(
+                    title: session.title,
+                    agentName: agent(id: session.agentId)?.displayName,
+                    messages: session.transcript.messages
+                ))
+            }
+        }
+    }
+
     func copyACPSessionMarkdown(owner: SessionOwnerID, tabId: TabID) {
         Task { @MainActor in
             await withHydratedACPSession(owner: owner, tabId: tabId) { session in
@@ -8409,6 +8435,14 @@ final class AppState {
     func exportACPSessionMarkdown(worktreeId: String, tabId: TabID) {
         Task { @MainActor in
             await withHydratedACPSession(worktreeId: worktreeId, tabId: tabId) { session in
+                exportMarkdown(for: session)
+            }
+        }
+    }
+
+    func exportACPSessionMarkdown(worktree: Worktree, tabId: TabID) {
+        Task { @MainActor in
+            await withHydratedACPSession(worktree: worktree, tabId: tabId) { session in
                 exportMarkdown(for: session)
             }
         }
@@ -8459,9 +8493,15 @@ final class AppState {
     private func withHydratedACPSession(
         worktreeId: String, tabId: TabID, _ body: (ACPSession) -> Void
     ) async {
-        guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
+        guard let worktree = worktree(withId: worktreeId) else { return }
+        await withHydratedACPSession(worktree: worktree, tabId: tabId, body)
+    }
+
+    private func withHydratedACPSession(
+        worktree: Worktree, tabId: TabID, _ body: (ACPSession) -> Void
+    ) async {
+        guard let tab = tabs.tabs(forWorktree: worktree.id).first(where: { $0.id == tabId }),
               case .acpSession(let tabState) = tab,
-              let worktree = worktree(withId: worktreeId),
               let mgr = acpManager(for: worktree),
               mgr.placeholderSession(id: tabState.sessionId) != nil else { return }
         mgr.retainSession(id: tabState.sessionId)
@@ -8600,12 +8640,13 @@ final class AppState {
     }
 
     private func cleanupACPSession(owner: SessionOwnerID, sessionId: String) {
-        guard let manager = acpManagers[owner] else { return }
+        guard let manager = acpManager(for: owner, sessionID: sessionId) else { return }
+        let managerOwner = manager.owner
         if retainedScheduledSessionStillNeedsRunner(manager: manager, sessionId: sessionId) {
-            scheduleRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
+            scheduleRetainedACPSessionCleanup(owner: managerOwner, sessionId: sessionId)
             return
         }
-        cancelRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
+        cancelRetainedACPSessionCleanup(owner: managerOwner, sessionId: sessionId)
         // Flush any in-flight debounced draft write for this session
         // before the tab goes away. The manager itself stays alive
         // (other tabs may share it), so the global flush from
@@ -8622,7 +8663,7 @@ final class AppState {
             runner.stop()
         }
         let pendingID = UUID()
-        let pendingKey = owner.storageKey
+        let pendingKey = managerOwner.storageKey
         let task = Task { @MainActor in
             if let acpDetachRunner {
                 await acpDetachRunner(manager, sessionId)
@@ -8786,14 +8827,23 @@ final class AppState {
     }
 
     private func cancelRetainedACPSessionCleanup(owner: SessionOwnerID, sessionId: ACPSession.ID) {
-        let key = owner.storageKey
+        let key = retainedACPSessionCleanupKey(owner: owner, sessionId: sessionId)
+        guard let key else { return }
         guard let pending = retainedACPSessionCleanupTasks[key]?[sessionId] else { return }
         pending.task.cancel()
         retainedACPSessionCleanupTasks[key]?.removeValue(forKey: sessionId)
         if retainedACPSessionCleanupTasks[key]?.isEmpty == true {
             retainedACPSessionCleanupTasks.removeValue(forKey: key)
         }
-        acpManagers[owner]?.releaseSession(id: sessionId)
+        acpManager(for: owner, sessionID: sessionId)?.releaseSession(id: sessionId)
+    }
+
+    private func retainedACPSessionCleanupKey(owner: SessionOwnerID, sessionId: ACPSession.ID) -> String? {
+        if retainedACPSessionCleanupTasks[owner.storageKey]?[sessionId] != nil {
+            return owner.storageKey
+        }
+        guard case .worktree = owner else { return nil }
+        return retainedACPSessionCleanupTasks.first { $0.value[sessionId] != nil }?.key
     }
 
     private func cancelRetainedACPSessionCleanups(owner: SessionOwnerID) {
@@ -8808,13 +8858,13 @@ final class AppState {
     }
 
     private func clearRetainedACPSessionCleanup(owner: SessionOwnerID, sessionId: ACPSession.ID, id: UUID) {
-        let key = owner.storageKey
+        guard let key = retainedACPSessionCleanupKey(owner: owner, sessionId: sessionId) else { return }
         guard retainedACPSessionCleanupTasks[key]?[sessionId]?.id == id else { return }
         retainedACPSessionCleanupTasks[key]?.removeValue(forKey: sessionId)
         if retainedACPSessionCleanupTasks[key]?.isEmpty == true {
             retainedACPSessionCleanupTasks.removeValue(forKey: key)
         }
-        acpManagers[owner]?.releaseSession(id: sessionId)
+        acpManager(for: owner, sessionID: sessionId)?.releaseSession(id: sessionId)
     }
 
     private func awaitPendingACPDetach(worktreeId: String, sessionId: ACPSession.ID) async {
@@ -8822,7 +8872,15 @@ final class AppState {
     }
 
     private func awaitPendingACPDetach(owner: SessionOwnerID, sessionId: ACPSession.ID) async {
-        let key = owner.storageKey
+        let key: String?
+        if pendingACPDetachTasks[owner.storageKey]?[sessionId] != nil {
+            key = owner.storageKey
+        } else if case .worktree = owner {
+            key = pendingACPDetachTasks.first { $0.value[sessionId] != nil }?.key
+        } else {
+            key = nil
+        }
+        guard let key else { return }
         guard let pending = pendingACPDetachTasks[key]?[sessionId] else { return }
         await pending.task.value
         clearPendingACPDetach(worktreeId: key, sessionId: sessionId, id: pending.id)
@@ -9133,6 +9191,27 @@ final class AppState {
             }
         }
         return false
+    }
+
+    /// Whether another project can still supply this id to the current
+    /// navigation surface. A worktree in a different Space keeps its own
+    /// runtime state alive, but cannot keep the active Space's selection
+    /// pinned after this Space's selected row is deleted.
+    private func otherNavigationProjectsStillListWorktree(id: String, exceptProjectId projectId: String) -> Bool {
+        let selectableProjects: [ProjectConfig]
+        if let checkout = selectedWorkspaceCheckout {
+            guard checkoutScopedWorktreeIDs?.contains(id) == true else { return false }
+            let memberProjectIDs = Set(checkout.members
+                .filter { $0.availability == .available }
+                .map(\.projectID))
+            selectableProjects = projects.filter { memberProjectIDs.contains($0.id) }
+        } else {
+            selectableProjects = activeSpaceProjects
+        }
+        return selectableProjects.contains { project in
+            project.id != projectId
+                && projectsManager.visibleWorktrees(projectId: project.id).contains { $0.id == id }
+        }
     }
 
     private func projectAndWorktree(withWorktreeId id: String) -> (project: ProjectConfig, worktree: Worktree)? {
@@ -9977,6 +10056,7 @@ final class AppState {
         var results: [WorktreeBatchResult] = []
         var touchedProjectIds: Set<String> = []
         var removedWorktreeIDsByProject: [String: [String]] = [:]
+        var deferredSharedRuntimeCleanupIDs: Set<String> = []
 
         for worktree in worktrees {
             guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
@@ -10130,6 +10210,10 @@ final class AppState {
 
             let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
             let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
+            let sharedRuntimeStateLives = otherProjectsStillListWorktree(
+                id: worktree.id,
+                exceptProjectId: worktree.projectId
+            )
             projectsManager.setOperationState(for: worktree, state: .deleting(projectId: worktree.projectId))
 
             let outcome = await performDeleteWorktree(
@@ -10157,6 +10241,9 @@ final class AppState {
             ))
             if outcome == .deleted {
                 removedWorktreeIDsByProject[worktree.projectId, default: []].append(worktree.id)
+                if sharedRuntimeStateLives {
+                    deferredSharedRuntimeCleanupIDs.insert(worktree.id)
+                }
             }
             touchedProjectIds.insert(worktree.projectId)
         }
@@ -10200,6 +10287,20 @@ final class AppState {
                 )
             }
             saveProjects()
+        }
+        // Per-item deletion must preserve runtime state while another project
+        // still lists the same path. That other row can disappear before this
+        // batch's trailing refresh (for example, another project's delete
+        // finishes while this batch is suspended in file cleanup). Re-check
+        // deferred ids only after all touched project lists have reconciled,
+        // and tear down shared state exactly once when no owner remains.
+        for worktreeID in deferredSharedRuntimeCleanupIDs {
+            let isStillListed = projects.contains { project in
+                projectsManager.worktrees(projectId: project.id).contains { $0.id == worktreeID }
+            }
+            if !isStillListed {
+                await cleanupWorktreeState(worktreeId: worktreeID)?.value
+            }
         }
         // Per-item deletion skipped selection reconciliation because the list
         // was still stale mid-run. Now that every touched project has been
@@ -11330,10 +11431,12 @@ final class AppState {
             }
             // The refresh has removed this project's row, so it can no longer
             // be used to identify which project owned the selected id. Keep
-            // the id only when another project still lists that same path;
-            // otherwise reconcile away from the deleted worktree.
+            // the id only when another project can supply it to the current
+            // navigation surface; a duplicate confined to a different Space
+            // is still a valid owner of shared runtime state, but cannot
+            // resolve this Space's selection.
             if selectedWorktreeId == worktree.id,
-               !otherProjectsStillListWorktree(id: worktree.id, exceptProjectId: worktree.projectId) {
+               !otherNavigationProjectsStillListWorktree(id: worktree.id, exceptProjectId: worktree.projectId) {
                 selectWorktree(id: selectionAfterRemoval(
                     removedFromProjectId: worktree.projectId,
                     removedAtIndex: removedIndex
@@ -11728,7 +11831,7 @@ final class AppState {
         if let lineageID {
             terminalCount += checkpointWriterLeases.activeLeaseCount(lineageID: lineageID, excludingInstanceID: instanceId)
         }
-        var acpCount = checkpointACPLeaseCount(owner: .worktree(worktree.id))
+        var acpCount = checkpointACPLeaseCount(for: worktree)
         var workspaceName: String?
         var repositoryName = projects.first(where: { $0.id == worktree.projectId })?.name ?? worktree.name
 
@@ -11784,6 +11887,8 @@ final class AppState {
         switch session.owner {
         case .worktree(let worktreeID):
             return worktree(withId: worktreeID).flatMap(\.lineageID).map { [$0] } ?? []
+        case .projectWorktree(let projectId, let worktreeID):
+            return worktree(withId: worktreeID, inProjectId: projectId).flatMap(\.lineageID).map { [$0] } ?? []
         case .workspaceCheckout(let checkoutID, let location):
             guard let checkout = workspacesManager.checkout(id: checkoutID),
                   checkout.executionLocation.normalized == location.normalized
@@ -11803,6 +11908,35 @@ final class AppState {
         } catch {
             return acpManager(for: owner)?.hasActiveCheckpointWriter == true ? 1 : 0
         }
+    }
+
+    private func checkpointACPLeaseCount(for worktree: Worktree) -> Int {
+        let owner = Self.projectScopedACPOwner(for: worktree)
+        do {
+            let databaseURL = acpSessionsDatabaseURL(for: worktree, owner: owner)
+            return try ACPSessionStore(path: databaseURL.path).activeLeaseCount(
+                now: Int64(Date().timeIntervalSince1970),
+                staleAfter: ACPSessionManager.leaseStaleAfter
+            )
+        } catch {
+            return acpManager(for: worktree)?.hasActiveCheckpointWriter == true ? 1 : 0
+        }
+    }
+
+    private static func projectScopedACPOwner(for worktree: Worktree) -> SessionOwnerID {
+        .projectWorktree(projectId: worktree.projectId, worktreeId: worktree.id)
+    }
+
+    private func acpSessionsDatabaseURL(for worktree: Worktree, owner: SessionOwnerID) -> URL {
+        let scopedURL = Paths.acpSessionsDB(for: owner)
+        let hasDuplicateProjectPath = otherProjectsStillListWorktree(
+            id: worktree.id,
+            exceptProjectId: worktree.projectId
+        )
+        if hasDuplicateProjectPath || FileManager.default.fileExists(atPath: scopedURL.path) {
+            return scopedURL
+        }
+        return Paths.acpSessionsDB(forWorktreeId: worktree.id)
     }
 
     private func checkpointTerminalAdmissionDisabled(for checkout: WorkspaceCheckout) -> Bool {
@@ -11864,12 +11998,23 @@ final class AppState {
     /// Does not create a new manager — use `acpManager(for:)` when lazy
     /// creation is acceptable.
     func acpManager(forWorktreeId id: String) -> ACPSessionManager? {
-        acpManagers[.worktree(id)]
+        if let focused = workspaceSelectedWorktree(matching: id) {
+            return acpManager(for: focused.worktree)
+        }
+        let selectableWorktrees = navigationProjects.flatMap { project in
+            projectsManager.worktrees(projectId: project.id).filter { $0.id == id }
+        }
+        if selectableWorktrees.count == 1, let worktree = selectableWorktrees.first {
+            return acpManager(for: worktree)
+        }
+        guard selectableWorktrees.isEmpty else { return nil }
+        let existing = acpManagers.values.filter { $0.owner.worktreeID == id }
+        return existing.count == 1 ? existing.first : nil
     }
 
     /// The manager owns persisted history; center tabs only supply terminal rows.
     func agentSidebarRollup(for worktree: Worktree) -> AgentSidebarRollup {
-        let manager = acpManager(forWorktreeId: worktree.id)
+        let manager = acpManager(for: worktree)
         let terminalTabs = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> TerminalTabState? in
             guard case .terminal(let terminal) = tab else { return nil }
             return terminal
@@ -11886,7 +12031,7 @@ final class AppState {
             },
             terminalTabs: terminalTabs,
             harnessActivity: harness.activityBySession,
-            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host,
+            remoteHost: projects.first(where: { $0.id == worktree.projectId })?.host,
             delegatedParents: delegatedSessionParents
         ))
     }
@@ -11894,7 +12039,7 @@ final class AppState {
     func focusAgentSidebarRow(_ rowID: AgentSidebarRowID, in worktree: Worktree) async {
         switch rowID {
         case .acp(let sessionID):
-            guard let manager = acpManager(forWorktreeId: worktree.id),
+            guard let manager = acpManager(for: worktree),
                   manager.liveSession(for: sessionID) != nil
                     || manager.sessionRows.contains(where: { $0.id == sessionID && !$0.archived })
             else { return }
@@ -11941,23 +12086,42 @@ final class AppState {
     }
 
     func acpManager(for owner: SessionOwnerID) -> ACPSessionManager? {
-        acpManagers[owner]
+        if case .worktree(let worktreeId) = owner {
+            return acpManager(forWorktreeId: worktreeId)
+        }
+        return acpManagers[owner]
+    }
+
+    private func acpManager(for owner: SessionOwnerID, sessionID: ACPSession.ID) -> ACPSessionManager? {
+        if case .worktree(let worktreeID) = owner {
+            let matching = acpManagers.values.filter { manager in
+                manager.owner.worktreeID == worktreeID
+                    && (manager.liveSession(for: sessionID) != nil
+                        || manager.sessionRows.contains(where: { $0.id == sessionID }))
+            }
+            if matching.count == 1 { return matching.first }
+            if !matching.isEmpty { return nil }
+        }
+        return acpManager(for: owner)
     }
 
     /// Returns (or lazily creates) the ACP session manager for the given worktree.
     /// Store opening and migration happen lazily on the persistence actor.
     func acpManager(for worktree: Worktree) -> ACPSessionManager? {
-        let owner = SessionOwnerID.worktree(worktree.id)
+        let owner = Self.projectScopedACPOwner(for: worktree)
         if let existing = acpManagers[owner] { return existing }
-        let dbURL = Paths.acpSessionsDB(forWorktreeId: worktree.id)
+        let dbURL = acpSessionsDatabaseURL(for: worktree, owner: owner)
         let persistence = ACPSessionPersistence(path: dbURL.path)
+        let project = projects.first(where: { $0.id == worktree.projectId })
         let mgr = ACPSessionManager(
             worktreeId: worktree.id,
             worktreePath: worktree.path.path,
+            owner: owner,
             persistence: persistence,
             instanceId: instanceId,
             pid: Int64(ProcessInfo.processInfo.processIdentifier),
             hydratorPath: dbURL.path,
+            remoteHost: project?.host,
             onDirtyCheck: { [weak self] path in
                 self?.editorHasDirtyBuffer(for: path, worktreeId: worktree.id) ?? false
             },
@@ -11977,7 +12141,7 @@ final class AppState {
             onInputAwaiting: { [weak self] session, request in
                 guard let self,
                       self.config.harness.notifyOnAwaiting,
-                      let resolved = self.projectAndWorktree(withWorktreeId: worktree.id)
+                      let resolved = self.projectAndWorktree(withWorktreeId: worktree.id, inProjectId: worktree.projectId)
                 else { return }
                 self.harness.notifications.notifyACPQuestion(
                     agent: ACPHarnessBridge.agentKind(for: session.agentId),
@@ -11991,7 +12155,7 @@ final class AppState {
             onPlanAwaiting: { [weak self] session, request in
                 guard let self,
                       self.config.harness.notifyOnAwaiting,
-                      let resolved = self.projectAndWorktree(withWorktreeId: worktree.id)
+                      let resolved = self.projectAndWorktree(withWorktreeId: worktree.id, inProjectId: worktree.projectId)
                 else { return }
                 self.harness.notifications.notifyACPQuestion(
                     agent: ACPHarnessBridge.agentKind(for: session.agentId),
@@ -12712,7 +12876,10 @@ final class AppState {
     /// loops would keep the agent + permission / file handlers alive
     /// after the UI was torn down.
     func disposeACPManager(for worktreeId: String) {
-        disposeACPManager(owner: .worktree(worktreeId))
+        let owners = acpManagers.keys.filter { $0.worktreeID == worktreeId }
+        for owner in owners {
+            disposeACPManager(owner: owner)
+        }
     }
 
     private func disposeACPManager(owner: SessionOwnerID) {
@@ -12819,8 +12986,19 @@ final class AppState {
             ) else {
                 return nil
             }
+        } else if case .projectWorktree(let claimProjectId, let worktreeID) = owner {
+            guard !Self.blocksWorktreeSessionAdmission(
+                projectsManager.operationState(forWorktreeId: worktreeID, projectId: claimProjectId)
+            ) else { return nil }
         }
-        guard let mgr = acpManager(for: owner) else { return nil }
+        let manager: ACPSessionManager?
+        if let worktreeID = owner.worktreeID, let projectId,
+           let worktree = worktree(withId: worktreeID, inProjectId: projectId) {
+            manager = acpManager(for: worktree)
+        } else {
+            manager = acpManager(for: owner)
+        }
+        guard let mgr = manager else { return nil }
         let session = mgr.createSession(agentId: agentID, autoRunDefault: config.harness.acpAutoRunByDefault)
         if let initialPrompt, !initialPrompt.isEmpty {
             mgr.persistComposerDraft(
@@ -12829,7 +13007,11 @@ final class AppState {
             )
         }
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
-        tabs.append(acpSession: state, to: owner)
+        if let worktreeID = owner.worktreeID {
+            tabs.append(acpSession: state, to: worktreeID)
+        } else {
+            tabs.append(acpSession: state, to: owner)
+        }
         return state
     }
 
@@ -13188,10 +13370,10 @@ final class AppState {
 
     /// Pins the owner before suspension, including when sidebar focus reopens history.
     func openExistingACPSession(sessionId: ACPSession.ID, worktree: Worktree) async {
-        await awaitPendingACPDetach(owner: .worktree(worktree.id), sessionId: sessionId)
         guard let mgr = acpManager(for: worktree) else { return }
-        cancelRetainedACPSessionCleanup(owner: .worktree(worktree.id), sessionId: sessionId)
-        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else { return }
+        await awaitPendingACPDetach(owner: mgr.owner, sessionId: sessionId)
+        cancelRetainedACPSessionCleanup(owner: mgr.owner, sessionId: sessionId)
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(owner: mgr.owner, fallbackWorktree: worktree) else { return }
 
         // Focus the tab if it's already there.
         let tabIdToFocus: TabID? = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> TabID? in
@@ -14438,7 +14620,7 @@ extension AppState: RemoteSessionsProvider {
         attachments: [ACPMessage.Attachment],
         onResult: @escaping @MainActor (Bool) -> Void
     ) async {
-        guard let manager = acpManager(forWorktreeId: worktreeID),
+        guard let manager = acpManager(for: .worktree(worktreeID), sessionID: id),
               manager.liveSession(for: id) != nil else {
             onResult(false)
             return
@@ -14465,7 +14647,7 @@ extension AppState: RemoteSessionsProvider {
     }
 
     func stop(for id: String, worktreeID: String) async {
-        guard let manager = acpManager(forWorktreeId: worktreeID) else { return }
+        guard let manager = acpManager(for: .worktree(worktreeID), sessionID: id) else { return }
         await manager.interrupt(for: id)
     }
 
@@ -14585,9 +14767,14 @@ extension AppState: RemoteSessionsProvider {
     private func remoteWorktreeContext(sessionId: String) -> RemoteWorktreeContextResult {
         for mgr in acpManagers.values
         where mgr.liveSession(for: sessionId) != nil || mgr.sessionRows.contains(where: { $0.id == sessionId }) {
-            guard let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId) else {
-                return .worktreeUnavailable
+            if let projectId = mgr.owner.projectID {
+                guard let resolved = projectAndWorktree(
+                    withWorktreeId: mgr.worktreeId,
+                    inProjectId: projectId
+                ) else { return .worktreeUnavailable }
+                return .found(resolved.worktree)
             }
+            guard let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId) else { return .worktreeUnavailable }
             return .found(resolved.worktree)
         }
         return .sessionUnknown

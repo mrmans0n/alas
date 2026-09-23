@@ -48,12 +48,20 @@ struct WebPreviewAutomationService {
             }
             guard isAuthorized() else { throw WebPreviewAutomationError.denied }
             if let current = previews().first {
-                let browser = tabs.webPreviewBrowser(ownerKey: owner.storageKey, remoteHost: current.remoteHost)
+                let browser = tabs.webPreviewBrowser(
+                    ownerKey: owner.tabStorageKey,
+                    remoteHost: current.remoteHost,
+                    sessionOwnerKey: owner.storageKey
+                )
                 guard !browser.automationState.isBusy else { throw WebPreviewBrowserAutomationError.busy }
             }
-            let tab = tabs.openWebPreview(worktreeId: owner.storageKey, url: target.url, remoteHost: target.remoteHost)
+            let tab = tabs.openWebPreview(worktreeId: owner.tabStorageKey, url: target.url, remoteHost: target.remoteHost)
             guard case .webPreview(let state) = tab else { throw WebPreviewAutomationError.unavailable }
-            let browser = tabs.webPreviewBrowser(ownerKey: owner.storageKey, remoteHost: state.remoteHost)
+            let browser = tabs.webPreviewBrowser(
+                ownerKey: owner.tabStorageKey,
+                remoteHost: state.remoteHost,
+                sessionOwnerKey: owner.storageKey
+            )
             if let url = target.url, browser.webView.url != url {
                 _ = try await browser.automation(
                     command: .init(action: .navigate, previewID: browser.automationID, url: url.absoluteString),
@@ -65,7 +73,11 @@ struct WebPreviewAutomationService {
             return snapshot(state)
         }
         guard let state = previews().first else { throw WebPreviewAutomationError.unavailable }
-        let browser = tabs.webPreviewBrowser(ownerKey: owner.storageKey, remoteHost: state.remoteHost)
+        let browser = tabs.webPreviewBrowser(
+            ownerKey: owner.tabStorageKey,
+            remoteHost: state.remoteHost,
+            sessionOwnerKey: owner.storageKey
+        )
         guard browser.automationID == command.previewID, !browser.isClosed else { throw WebPreviewAutomationError.stale }
         let authorized = isAuthorized
         let result = try await browser.automation(command: command, isAuthorized: {
@@ -85,14 +97,18 @@ struct WebPreviewAutomationService {
     }
 
     private func previews() -> [WebPreviewTabState] {
-        tabs.tabs(forWorktree: owner.storageKey).compactMap {
-            guard case .webPreview(let state) = $0, state.ownerKey == owner.storageKey else { return nil }
+        tabs.tabs(forWorktree: owner.tabStorageKey).compactMap {
+            guard case .webPreview(let state) = $0, state.ownerKey == owner.tabStorageKey else { return nil }
             return state
         }
     }
 
     private func snapshot(_ state: WebPreviewTabState) -> [String: Any] {
-        let browser = tabs.webPreviewBrowser(ownerKey: owner.storageKey, remoteHost: state.remoteHost)
+        let browser = tabs.webPreviewBrowser(
+            ownerKey: owner.tabStorageKey,
+            remoteHost: state.remoteHost,
+            sessionOwnerKey: owner.storageKey
+        )
         var result = browser.automationSnapshot()
         result["version"] = 1
         result["preview_id"] = browser.automationID

@@ -185,7 +185,7 @@ final class TabsManager {
     /// Owner-aware session tab lookup. The worktree overload intentionally
     /// keeps its legacy raw key and storage filename.
     func tabs(for owner: SessionOwnerID) -> [Tab] {
-        byWorktree[owner.storageKey]?.tabs ?? []
+        byWorktree[owner.tabStorageKey]?.tabs ?? []
     }
 
     func commitEditorTab(worktreeId: String, currentSha: String) -> Tab? {
@@ -202,7 +202,7 @@ final class TabsManager {
     }
 
     func activeTabId(for owner: SessionOwnerID) -> TabID? {
-        byWorktree[owner.storageKey]?.activeTabId
+        byWorktree[owner.tabStorageKey]?.activeTabId
     }
 
     func activeTab(forWorktree id: String) -> Tab? {
@@ -237,7 +237,7 @@ final class TabsManager {
     }
 
     func moveTab(owner: SessionOwnerID, fromId: TabID, toId: TabID) {
-        moveTab(worktreeId: owner.storageKey, fromId: fromId, toId: toId)
+        moveTab(worktreeId: owner.tabStorageKey, fromId: fromId, toId: toId)
     }
 
     @discardableResult
@@ -267,7 +267,7 @@ final class TabsManager {
     }
 
     func load(owner: SessionOwnerID, restoringActiveTabs: Bool = true) {
-        let key = owner.storageKey
+        let key = owner.tabStorageKey
         if var file = try? store.readIfExists(TabsFile.self, from: tabsFile(forOwner: owner)) {
             if !restoringActiveTabs {
                 file.activeTabId = nil
@@ -326,14 +326,14 @@ final class TabsManager {
             runScriptLeafId: runScriptKey != nil ? leaf.id : nil
         )
         let tab = Tab.terminal(state)
-        append(tab, to: owner.storageKey)
+        append(tab, to: owner.tabStorageKey)
         return tab
     }
 
     @discardableResult
     func appendACP(owner: SessionOwnerID, sessionId: ACPSession.ID, title: String) -> Tab {
         let tab = Tab.acpSession(.init(sessionId: sessionId, title: title))
-        append(tab, to: owner.storageKey)
+        append(tab, to: owner.tabStorageKey)
         return tab
     }
 
@@ -395,7 +395,7 @@ final class TabsManager {
 
     @discardableResult
     func renameTerminal(owner: SessionOwnerID, tabId: TabID, title: String) -> Tab? {
-        renameTerminal(worktreeId: owner.storageKey, tabId: tabId, title: title)
+        renameTerminal(worktreeId: owner.tabStorageKey, tabId: tabId, title: title)
     }
 
     @discardableResult
@@ -415,7 +415,7 @@ final class TabsManager {
 
     @discardableResult
     func renameACPSession(owner: SessionOwnerID, tabId: TabID, title: String) -> Tab? {
-        renameACPSession(worktreeId: owner.storageKey, tabId: tabId, title: title)
+        renameACPSession(worktreeId: owner.tabStorageKey, tabId: tabId, title: title)
     }
 
     @discardableResult
@@ -513,7 +513,7 @@ final class TabsManager {
 
     @discardableResult
     func setFocusedLeaf(owner: SessionOwnerID, tabId: TabID, leafId: String) -> Tab? {
-        setFocusedLeaf(worktreeId: owner.storageKey, tabId: tabId, leafId: leafId)
+        setFocusedLeaf(worktreeId: owner.tabStorageKey, tabId: tabId, leafId: leafId)
     }
 
     /// Split the focused leaf into a 2-child split. The freshly-spawned session id
@@ -550,7 +550,7 @@ final class TabsManager {
         newLeafId: String, newSessionId: String,
         newLeafCwdLocation: ExecutionLocation? = nil
     ) -> Tab? {
-        splitFocusedLeaf(worktreeId: owner.storageKey, tabId: tabId, axis: axis, newLeafId: newLeafId, newSessionId: newSessionId, newLeafCwdLocation: newLeafCwdLocation)
+        splitFocusedLeaf(worktreeId: owner.tabStorageKey, tabId: tabId, axis: axis, newLeafId: newLeafId, newSessionId: newSessionId, newLeafCwdLocation: newLeafCwdLocation)
     }
 
     enum RemoveLeafOutcome {
@@ -605,7 +605,7 @@ final class TabsManager {
     }
 
     func removeLeaf(owner: SessionOwnerID, tabId: TabID, leafId: String) -> RemoveLeafOutcome? {
-        removeLeaf(worktreeId: owner.storageKey, tabId: tabId, leafId: leafId)
+        removeLeaf(worktreeId: owner.tabStorageKey, tabId: tabId, leafId: leafId)
     }
 
     /// Remove the focused leaf. Thin wrapper around `removeLeaf(worktreeId:tabId:leafId:)`.
@@ -636,7 +636,7 @@ final class TabsManager {
 
     @discardableResult
     func setSplitFraction(owner: SessionOwnerID, tabId: TabID, splitId: String, fraction: Double) -> Tab? {
-        setSplitFraction(worktreeId: owner.storageKey, tabId: tabId, splitId: splitId, fraction: fraction)
+        setSplitFraction(worktreeId: owner.tabStorageKey, tabId: tabId, splitId: splitId, fraction: fraction)
     }
 
     @discardableResult
@@ -659,7 +659,7 @@ final class TabsManager {
 
     @discardableResult
     func setLeafCwd(owner: SessionOwnerID, tabId: TabID, leafId: String, cwd: String) -> Tab? {
-        setLeafCwd(worktreeId: owner.storageKey, tabId: tabId, leafId: leafId, cwd: cwd)
+        setLeafCwd(worktreeId: owner.tabStorageKey, tabId: tabId, leafId: leafId, cwd: cwd)
     }
 
     /// Walks the tree and applies `transform` to the split with `splitId`.
@@ -898,7 +898,7 @@ final class TabsManager {
     @discardableResult
     func append(acpSession state: ACPSessionTabState, to owner: SessionOwnerID) -> Tab {
         let tab = Tab.acpSession(state)
-        append(tab, to: owner.storageKey)
+        append(tab, to: owner.tabStorageKey)
         return tab
     }
 
@@ -1054,12 +1054,19 @@ final class TabsManager {
     }
 
     @discardableResult
-    func webPreviewBrowser(ownerKey: String, remoteHost: String?) -> WebPreviewBrowser {
-        if let browser = webPreviewBrowsers[ownerKey], browser.remoteHost == remoteHost {
+    func webPreviewBrowser(ownerKey: String, remoteHost: String?, sessionOwnerKey: String? = nil) -> WebPreviewBrowser {
+        let resolvedSessionOwnerKey = sessionOwnerKey ?? ownerKey
+        if let browser = webPreviewBrowsers[ownerKey],
+           browser.remoteHost == remoteHost,
+           browser.sessionOwnerKey == resolvedSessionOwnerKey {
             return browser
         }
         clearWebPreviewBrowser(ownerKey: ownerKey)
-        let browser = WebPreviewBrowser(ownerKey: ownerKey, remoteHost: remoteHost)
+        let browser = WebPreviewBrowser(
+            ownerKey: ownerKey,
+            sessionOwnerKey: resolvedSessionOwnerKey,
+            remoteHost: remoteHost
+        )
         browser.onNavigate = { [weak self] url in
             self?.updateWebPreviewURL(worktreeId: ownerKey, url: url)
         }
@@ -1115,7 +1122,7 @@ final class TabsManager {
 
     @discardableResult
     func openWebPreview(owner: SessionOwnerID, url: URL? = nil, remoteHost: String? = nil) -> Tab {
-        openWebPreview(worktreeId: owner.storageKey, url: url, remoteHost: remoteHost ?? Self.remoteHost(for: owner))
+        openWebPreview(worktreeId: owner.tabStorageKey, url: url, remoteHost: remoteHost ?? Self.remoteHost(for: owner))
     }
 
     @discardableResult
@@ -1142,7 +1149,7 @@ final class TabsManager {
 
     @discardableResult
     func updateWebPreviewURL(owner: SessionOwnerID, url: URL) -> Tab? {
-        updateWebPreviewURL(worktreeId: owner.storageKey, url: url)
+        updateWebPreviewURL(worktreeId: owner.tabStorageKey, url: url)
     }
 
     private static func remoteHost(for owner: SessionOwnerID) -> String? {
@@ -1774,11 +1781,11 @@ final class TabsManager {
     }
 
     func activate(owner: SessionOwnerID, tabId: TabID) {
-        activate(worktreeId: owner.storageKey, tabId: tabId)
+        activate(worktreeId: owner.tabStorageKey, tabId: tabId)
     }
 
     func clearActiveTab(owner: SessionOwnerID) {
-        clearActiveTab(worktreeId: owner.storageKey)
+        clearActiveTab(worktreeId: owner.tabStorageKey)
     }
 
     func clearActiveTab(worktreeId: String) {
@@ -1860,13 +1867,13 @@ final class TabsManager {
     }
 
     func close(owner: SessionOwnerID, tabId: TabID) {
-        close(worktreeId: owner.storageKey, tabId: tabId)
+        close(worktreeId: owner.tabStorageKey, tabId: tabId)
     }
 
     /// Removes visible checkout tabs without changing any focused member's
     /// worktree bucket or deleting the checkout record itself.
     func archive(owner: SessionOwnerID) {
-        _ = closeAll(worktreeId: owner.storageKey)
+        _ = closeAll(worktreeId: owner.tabStorageKey)
     }
 
     @discardableResult
@@ -1986,7 +1993,7 @@ final class TabsManager {
     }
 
     private func tabsFile(forOwner owner: SessionOwnerID) -> URL {
-        tabsDirectory.appendingPathComponent("\(owner.storageKey).json")
+        tabsDirectory.appendingPathComponent("\(owner.tabStorageKey).json")
     }
 
     // MARK: - Buffer lifecycle

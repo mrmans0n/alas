@@ -526,7 +526,7 @@ final class TerminalService {
         }
         let name = ZmxSessionName.derive(owner: owner, leafId: id)
         switch owner {
-        case .worktree(let worktreeID):
+        case .worktree(let worktreeID), .projectWorktree(_, let worktreeID):
             closeSession(id: id, worktreeId: worktreeID)
             return
         case .workspaceCheckout(_, let location):
@@ -707,7 +707,7 @@ final class TerminalService {
 
     private nonisolated static func remoteHostForCleanup(session: TerminalSessionIdentity) -> String? {
         switch session.owner {
-        case .worktree:
+        case .worktree, .projectWorktree:
             return remoteHostForCleanup(worktreeId: session.worktreeId, projectPath: session.projectPath)
         case .workspaceCheckout(_, .local):
             return nil
@@ -937,7 +937,7 @@ final class TerminalService {
         })
         let ownerPrefixes = knownLeavesByOwner.map { owner, _ -> String in
             switch owner {
-            case .worktree:
+            case .worktree, .projectWorktree:
                 return ""
             case .workspaceCheckout(let checkoutID, let location):
                 return "alas-workspace-\(checkoutID.uuidString.lowercased())-\(ZmxSessionName.hash16(location.normalized.identityComponent))-"

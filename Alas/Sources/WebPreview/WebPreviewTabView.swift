@@ -28,10 +28,14 @@ struct WebPreviewTabView: View {
         }
     }
 
-    init(state: AppState, tab: WebPreviewTabState) {
+    init(state: AppState, tab: WebPreviewTabState, sessionOwnerKey: String) {
         self.state = state
         self.tab = tab
-        _browser = State(initialValue: state.tabs.webPreviewBrowser(ownerKey: tab.ownerKey, remoteHost: tab.remoteHost))
+        _browser = State(initialValue: state.tabs.webPreviewBrowser(
+            ownerKey: tab.ownerKey,
+            remoteHost: tab.remoteHost,
+            sessionOwnerKey: sessionOwnerKey
+        ))
     }
 
     var body: some View {
@@ -215,11 +219,19 @@ private struct WebPreviewFeedbackSheet: View {
                 .disabled(sending || capture.consoleErrors.isEmpty)
             Picker("Send to", selection: $sessionID) {
                 Text("Choose a session").tag("")
-                ForEach(WebPreviewFeedbackDelivery.recipients(state: state, ownerKey: capture.ownerKey)) { session in
+                ForEach(WebPreviewFeedbackDelivery.recipients(
+                    state: state,
+                    ownerKey: capture.ownerKey,
+                    sessionOwnerKey: capture.sessionOwnerKey
+                )) { session in
                     Text(session.title.isEmpty ? "Untitled chat" : session.title).tag(session.id)
                 }
             }.disabled(sending)
-            if WebPreviewFeedbackDelivery.recipients(state: state, ownerKey: capture.ownerKey).isEmpty {
+            if WebPreviewFeedbackDelivery.recipients(
+                state: state,
+                ownerKey: capture.ownerKey,
+                sessionOwnerKey: capture.sessionOwnerKey
+            ).isEmpty {
                 Text("No open writable chats for this preview.").font(.caption).foregroundStyle(.secondary)
             }
             if let error { Text(error).foregroundStyle(.red).font(.caption) }

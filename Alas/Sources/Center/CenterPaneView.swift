@@ -151,6 +151,12 @@ struct CenterPaneView: View {
                     state.tabs.tabs(for: owner).contains(where: { $0.id == id }) ? owner : nil
                 }
             }
+            let acpManagerForTab: (TabID) -> ACPSessionManager? = { id in
+                if let owner = sharedOwnerForTab(id), case .workspaceCheckout = owner {
+                    return state.acpManager(for: owner)
+                }
+                return state.acpManager(for: worktree)
+            }
             TabBarView(
                 tabs: tabs,
                 activeId: composition.activeId,
@@ -309,21 +315,21 @@ struct CenterPaneView: View {
                     if let owner = sharedOwnerForTab(id) {
                         state.renameACPSessionTab(owner: owner, tabId: id)
                     } else {
-                        state.renameACPSessionTab(worktreeId: worktree.id, tabId: id)
+                        state.renameACPSessionTab(worktree: worktree, tabId: id)
                     }
                 },
                 onCopyACPSession: { id in
                     if let owner = sharedOwnerForTab(id) {
                         state.copyACPSessionMarkdown(owner: owner, tabId: id)
                     } else {
-                        state.copyACPSessionMarkdown(worktreeId: worktree.id, tabId: id)
+                        state.copyACPSessionMarkdown(worktree: worktree, tabId: id)
                     }
                 },
                 onExportACPSession: { id in
                     if let owner = sharedOwnerForTab(id) {
                         state.exportACPSessionMarkdown(owner: owner, tabId: id)
                     } else {
-                        state.exportACPSessionMarkdown(worktreeId: worktree.id, tabId: id)
+                        state.exportACPSessionMarkdown(worktree: worktree, tabId: id)
                     }
                 },
                 onNewTerminal: openTerminal,
@@ -387,8 +393,7 @@ struct CenterPaneView: View {
                 titleLookup: { id in
                     guard let tab = tabs.first(where: { $0.id == id }) else { return nil }
                     if case .acpSession(let s) = tab,
-                       let mgr = sharedOwnerForTab(id).flatMap({ state.acpManager(for: $0) })
-                           ?? state.acpManager(forWorktreeId: worktree.id),
+                       let mgr = acpManagerForTab(id),
                        let session = mgr.sessions[s.sessionId] {
                         let t = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
                         return t.isEmpty ? nil : t
@@ -398,16 +403,14 @@ struct CenterPaneView: View {
                 transcriptLookup: { id in
                     guard let tab = tabs.first(where: { $0.id == id }),
                           case .acpSession(let s) = tab,
-                          let mgr = sharedOwnerForTab(id).flatMap({ state.acpManager(for: $0) })
-                              ?? state.acpManager(for: worktree),
+                          let mgr = acpManagerForTab(id),
                           let session = mgr.placeholderSession(id: s.sessionId) else { return nil }
                     return session.transcript
                 },
                 acpAgentLookup: { id in
                     guard let tab = tabs.first(where: { $0.id == id }),
                           case .acpSession(let s) = tab,
-                          let mgr = sharedOwnerForTab(id).flatMap({ state.acpManager(for: $0) })
-                              ?? state.acpManager(forWorktreeId: worktree.id),
+                          let mgr = acpManagerForTab(id),
                           let session = mgr.sessions[s.sessionId] else { return nil }
                     return state.agent(id: session.agentId)
                         ?? AgentBuiltins.entry(id: session.agentId)
@@ -677,8 +680,13 @@ struct CenterPaneView: View {
                         GGLandingTabView(state: state, tabState: s)
                             .id(s.id)
                     case .webPreview(let s):
-                        WebPreviewTabView(state: state, tab: s)
-                            .id(s.id + (s.remoteHost ?? ""))
+                        let previewSessionOwnerKey = activeSharedOwner?.storageKey
+                            ?? SessionOwnerID.projectWorktree(
+                                projectId: worktree.projectId,
+                                worktreeId: worktree.id
+                            ).storageKey
+                        WebPreviewTabView(state: state, tab: s, sessionOwnerKey: previewSessionOwnerKey)
+                            .id(s.id + (s.remoteHost ?? "") + previewSessionOwnerKey)
                             .onAppear { completeStartupRecoveryIfActive(s.id) }
                             .task { completeStartupRecoveryIfActive(s.id) }
                     case .runReport(let s):

@@ -23,6 +23,8 @@ enum ZmxSessionName {
         switch owner {
         case .worktree(let worktreeID):
             derive(worktreeId: worktreeID, leafId: leafId)
+        case .projectWorktree(_, let worktreeID):
+            derive(worktreeId: worktreeID, leafId: leafId)
         case .workspaceCheckout(let checkoutID, let location):
             "alas-workspace-\(checkoutID.uuidString.lowercased())-\(hash16(location.identityComponent))-\(hash16(leafId))"
         }

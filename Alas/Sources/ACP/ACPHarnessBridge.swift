@@ -49,7 +49,7 @@ final class ACPHarnessBridge {
     /// that ever enters the dict gets observed, and every session that
     /// leaves gets forgotten. Idempotent per worktree.
     func attach(manager: ACPSessionManager) {
-        let worktreeId = manager.worktreeId
+        let worktreeId = manager.owner.storageKey
         // Drop any prior attachment for the same worktree to avoid double-subs.
         detach(worktreeId: worktreeId)
 

@@ -32,7 +32,7 @@ struct AttentionNavigationEnvironment {
                     return false
                 }
                 switch destination.owner {
-                case .worktree(let worktreeID):
+                case .worktree(let worktreeID), .projectWorktree(_, let worktreeID):
                     if let leafID = destination.leafID {
                         _ = appState.tabs.setFocusedLeaf(worktreeId: worktreeID, tabId: destination.tabID, leafId: leafID)
                     }
@@ -650,6 +650,9 @@ extension AppState {
         switch owner {
         case .worktree(let worktreeID):
             guard let worktree = attentionWorktrees.first(where: { $0.worktree.id == worktreeID })?.worktree else { return nil }
+            return (worktree, owner)
+        case .projectWorktree(let projectId, let worktreeID):
+            guard let worktree = projectsManager.worktrees(projectId: projectId).first(where: { $0.id == worktreeID }) else { return nil }
             return (worktree, owner)
         case .workspaceCheckout(let checkoutID, let location):
             guard let checkout = workspacesManager.checkout(id: checkoutID),

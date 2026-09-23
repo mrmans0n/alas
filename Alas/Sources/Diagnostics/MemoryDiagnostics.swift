@@ -19,7 +19,7 @@ final class MemoryDiagnostics: ObservableObject {
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "mem")
 
     func attach(manager: ACPSessionManager) {
-        managers[manager.worktreeId] = manager
+        managers[manager.owner.storageKey] = manager
     }
 
     func detach(worktreeId: String) {

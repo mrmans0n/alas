@@ -38,7 +38,7 @@ enum CheckpointPathsError: Error, Equatable, Sendable {
 
 extension Paths {
     static func tabsFile(for owner: SessionOwnerID) -> URL {
-        tabsFile(forWorktreeId: owner.storageKey)
+        tabsFile(forWorktreeId: owner.tabStorageKey)
     }
 
     static func tabsFile(forWorktreeId id: String) -> URL {
@@ -66,6 +66,10 @@ extension Paths {
     /// histories intact and prevents equal paths on separate hosts colliding.
     static func acpSessionsDB(for owner: SessionOwnerID) -> URL {
         acpSessionsDB(forWorktreeId: owner.storageKey)
+    }
+
+    static func acpSessionsDB(forProjectId projectId: String, worktreeId: String) -> URL {
+        acpSessionsDB(for: .projectWorktree(projectId: projectId, worktreeId: worktreeId))
     }
 
     static var acpOrchestrationDB: URL {

@@ -27,6 +27,7 @@ struct TerminalSessionIdentity: Sendable {
     var worktreeId: String {
         switch owner {
         case .worktree(let id): id
+        case .projectWorktree(_, let id): id
         case .workspaceCheckout: owner.storageKey
         }
     }

@@ -1336,7 +1336,7 @@ final class ACPSessionManager: ObservableObject {
         self.instanceId = instanceId
         self.pid = pid
         let resolvedOwner = owner ?? .worktree(worktreeId)
-        self.worktreeId = resolvedOwner.storageKey
+        self.worktreeId = worktreeId
         self.worktreePath = worktreePath
         self.owner = resolvedOwner
         self.remoteHost = remoteHost

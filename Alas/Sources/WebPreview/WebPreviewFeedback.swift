@@ -4,6 +4,7 @@ import Foundation
 struct WebPreviewCapture: Identifiable {
     let id: UUID
     let ownerKey: String
+    let sessionOwnerKey: String?
     let url: URL
     let capturedAt: Date
     let viewport: CGSize
@@ -17,6 +18,7 @@ struct WebPreviewCapture: Identifiable {
     init(
         id: UUID = UUID(),
         ownerKey: String,
+        sessionOwnerKey: String? = nil,
         url: URL,
         capturedAt: Date = Date(),
         viewport: CGSize,
@@ -29,6 +31,7 @@ struct WebPreviewCapture: Identifiable {
     ) {
         self.id = id
         self.ownerKey = ownerKey
+        self.sessionOwnerKey = sessionOwnerKey
         self.url = url
         self.capturedAt = capturedAt
         self.viewport = viewport
@@ -110,14 +113,15 @@ enum WebPreviewFeedbackDelivery {
         case deliveryRejected
     }
 
-    static func recipients(state: AppState, ownerKey: String) -> [ACPSession] {
+    static func recipients(state: AppState, ownerKey: String, sessionOwnerKey: String? = nil) -> [ACPSession] {
         let openSessionIDs = state.tabs.tabs(forWorktree: ownerKey).compactMap { tab -> ACPSession.ID? in
             guard case .acpSession(let session) = tab else { return nil }
             return session.sessionId
         }
         return openSessionIDs.compactMap { sessionID in
             guard let session = state.session(for: sessionID),
-                  session.owner.storageKey == ownerKey,
+                  sessionOwnerKey.map({ session.owner.storageKey == $0 })
+                      ?? (session.owner.tabStorageKey == ownerKey),
                   state.isWriter(for: sessionID)
             else { return nil }
             return session
@@ -134,7 +138,8 @@ enum WebPreviewFeedbackDelivery {
         guard let session = state.session(for: sessionID) else {
             throw Error.sessionNotFound
         }
-        guard session.owner.storageKey == capture.ownerKey else {
+        guard capture.sessionOwnerKey.map({ session.owner.storageKey == $0 })
+            ?? (session.owner.tabStorageKey == capture.ownerKey) else {
             throw Error.sessionOwnerMismatch
         }
         let isOpen = state.tabs.tabs(forWorktree: capture.ownerKey).contains { tab in

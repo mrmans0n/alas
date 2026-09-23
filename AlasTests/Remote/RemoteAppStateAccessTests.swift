@@ -339,6 +339,64 @@ struct RemoteAppStateAccessTests {
         #expect(summaries.first?.updatedAt == 2)
     }
 
+    @Test func samePathWorktreesOnDifferentHostsGetDistinctACPSessionManagers() throws {
+        let sharedPath = "/tmp/shared-worktree-\(UUID().uuidString)"
+        let firstProject = ProjectConfig(
+            id: "host-a-\(UUID().uuidString)",
+            name: "Host A",
+            path: "/repos/a",
+            color: "blue",
+            addedAt: .distantPast,
+            host: "host-a"
+        )
+        let secondProject = ProjectConfig(
+            id: "host-b-\(UUID().uuidString)",
+            name: "Host B",
+            path: "/repos/b",
+            color: "green",
+            addedAt: .distantPast,
+            host: "host-b"
+        )
+        let state = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [firstProject, secondProject])
+        ))
+        let firstWorktree = Worktree(
+            id: sharedPath,
+            projectId: firstProject.id,
+            name: "feature",
+            branch: "feature",
+            path: URL(fileURLWithPath: sharedPath),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        let secondWorktree = Worktree(
+            id: sharedPath,
+            projectId: secondProject.id,
+            name: "feature",
+            branch: "feature",
+            path: URL(fileURLWithPath: sharedPath),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(firstWorktree)
+        state.projectsManager.insertOptimisticWorktree(secondWorktree)
+
+        let firstManager = try #require(state.acpManager(for: firstWorktree))
+        let secondManager = try #require(state.acpManager(for: secondWorktree))
+
+        #expect(firstManager !== secondManager)
+        #expect(firstManager.persistence.path != secondManager.persistence.path)
+        #expect(firstManager.remoteHost == "host-a")
+        #expect(secondManager.remoteHost == "host-b")
+
+        let tabState = ACPSessionTabState(sessionId: "project-scoped-tab", title: "Project-scoped")
+        state.tabs.append(acpSession: tabState, to: sharedPath)
+        #expect(state.tabs.tabs(for: secondManager.owner).contains {
+            guard case .acpSession(let stored) = $0 else { return false }
+            return stored.sessionId == tabState.sessionId
+        })
+    }
+
     @Test func remoteSessionSummariesMarkStoredRowsWithoutTabsInactive() async throws {
         var cleanupWorktreeId: String?
         defer {

@@ -8,6 +8,8 @@ extension AppState {
             projects.contains { project in
                 projectsManager.visibleWorktrees(projectId: project.id).contains { $0.id == id }
             }
+        case .projectWorktree(let projectId, let id):
+            projectsManager.visibleWorktrees(projectId: projectId).contains { $0.id == id }
         case .workspaceCheckout(let id, let location):
             config.workspacesEnabled && workspacesManager.checkouts.contains {
                 $0.id == id && $0.executionLocation.normalized == location.normalized && $0.archivedAt == nil
@@ -29,6 +31,11 @@ extension AppState {
                 case .worktree(let id):
                     if let worktree = self.worktree(withId: id) {
                         self.focusGlobalWorktree(id: id, projectId: worktree.projectId)
+                        self.activateWorktreeCenterTab(worktreeId: id, tabId: tabID)
+                    }
+                case .projectWorktree(let projectId, let id):
+                    if self.worktree(withId: id, inProjectId: projectId) != nil {
+                        self.focusGlobalWorktree(id: id, projectId: projectId)
                         self.activateWorktreeCenterTab(worktreeId: id, tabId: tabID)
                     }
                 case .workspaceCheckout(let id, _):

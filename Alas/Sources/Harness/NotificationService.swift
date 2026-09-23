@@ -203,6 +203,10 @@ final class NotificationService {
             case .worktree(let id):
                 userInfo["sessionOwnerKind"] = "worktree"
                 userInfo["sessionOwnerWorktreeId"] = id
+            case .projectWorktree(let projectId, let id):
+                userInfo["sessionOwnerKind"] = "worktree"
+                userInfo["sessionOwnerWorktreeId"] = id
+                userInfo["projectId"] = projectId
             case .workspaceCheckout(let id, let location):
                 userInfo["sessionOwnerKind"] = "workspaceCheckout"
                 userInfo["sessionOwnerCheckoutId"] = id.uuidString
