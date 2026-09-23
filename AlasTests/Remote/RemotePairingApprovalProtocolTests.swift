@@ -110,6 +110,26 @@ struct RemotePairingApprovalProtocolTests {
             expectedKey: value.requester.publicKey, reply: false))
     }
 
+    @Test func alternateBase64SpellingCannotAliasAKeyOrBypassSelfPairing() throws {
+        let rawKey = key.publicKey.rawRepresentation
+        let canonical = rawKey.base64EncodedString()
+        var aliasCharacters = Array(canonical)
+        let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+        let canonicalIndex = try #require(alphabet.firstIndex(of: aliasCharacters[42]))
+        aliasCharacters[42] = alphabet[canonicalIndex + 1]
+        let alias = String(aliasCharacters)
+        #expect(alias != canonical)
+        #expect(Data(base64Encoded: alias) == rawKey)
+
+        let value = payload(requester: peer(key: canonical),
+                            receiver: peer(id: "receiver", key: alias))
+        #expect(ApprovalWire.bytes(value, reply: false).isEmpty)
+
+        let validValue = payload(requester: peer(key: canonical))
+        let signed = try envelope(for: validValue)
+        #expect(!ApprovalWire.verify(signed, expectedKey: alias, reply: false))
+    }
+
     @Test func invalidPayloadsCannotBeEncodedOrVerified() throws {
         let publicKey = key.publicKey.rawRepresentation.base64EncodedString()
         let invalid = [
@@ -118,12 +138,16 @@ struct RemotePairingApprovalProtocolTests {
             payload(requester: peer(key: publicKey, name: String(repeating: "x", count: 201))),
             payload(requester: peer(key: "not base64")),
             payload(requester: peer(key: publicKey, origins: (0..<9).map { "https://\($0).example" })),
+            payload(requester: peer(key: publicKey,
+                                    origins: ["https://" + String(repeating: "a", count: 193)])),
             payload(requester: peer(key: publicKey, origins: ["ftp://requester.example"])),
             payload(requester: peer(key: publicKey), receiver: peer(id: "requester")),
             payload(requester: peer(key: publicKey), receiver: peer(id: "receiver", key: publicKey)),
             payload(requester: peer(key: publicKey), attemptNonce: "abc"),
             payload(requester: peer(key: publicKey), operationNonce: String(repeating: "G", count: 64)),
-            payload(requester: peer(key: publicKey), challenge: String(repeating: "0", count: 62))
+            payload(requester: peer(key: publicKey), challenge: String(repeating: "0", count: 62)),
+            payload(requester: peer(key: publicKey), counterCode: String(repeating: "x", count: 201)),
+            payload(requester: peer(key: publicKey), responseDigest: String(repeating: "x", count: 201))
         ]
         for value in invalid {
             #expect(ApprovalWire.bytes(value, reply: false).isEmpty)

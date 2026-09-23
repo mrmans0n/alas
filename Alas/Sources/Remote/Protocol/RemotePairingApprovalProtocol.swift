@@ -75,6 +75,7 @@ enum ApprovalWire {
 
     static func verify(_ envelope: ApprovalEnvelope, expectedKey: String, reply: Bool) -> Bool {
         guard let rawKey = Data(base64Encoded: expectedKey), rawKey.count == publicKeyByteCount,
+              rawKey.base64EncodedString() == expectedKey,
               let rawSignature = Data(base64Encoded: envelope.signature),
               rawSignature.count == signatureByteCount,
               let key = try? Curve25519.Signing.PublicKey(rawRepresentation: rawKey)
@@ -92,9 +93,10 @@ enum ApprovalWire {
 
     private static func isValid(_ payload: ApprovalPayload) -> Bool {
         guard isValidIdentifier(payload.requestID),
-              isValidPeer(payload.requester), isValidPeer(payload.receiver),
+              let requesterKey = validatedPublicKey(for: payload.requester),
+              let receiverKey = validatedPublicKey(for: payload.receiver),
               payload.requester.serverID != payload.receiver.serverID,
-              payload.requester.publicKey != payload.receiver.publicKey,
+              requesterKey != receiverKey,
               isHexNonce(payload.attemptNonce), isHexNonce(payload.operationNonce),
               isHexNonce(payload.challenge),
               isValidOptionalText(payload.counterCode),
@@ -104,14 +106,16 @@ enum ApprovalWire {
         return true
     }
 
-    private static func isValidPeer(_ peer: ApprovalPeer) -> Bool {
+    private static func validatedPublicKey(for peer: ApprovalPeer) -> Data? {
         guard isValidIdentifier(peer.serverID), isValidText(peer.name),
               let key = Data(base64Encoded: peer.publicKey), key.count == publicKeyByteCount,
+              key.base64EncodedString() == peer.publicKey,
               !peer.origins.isEmpty, peer.origins.count <= RemotePairingLink.maxOrigins
-        else { return false }
-        return peer.origins.allSatisfy { origin in
+        else { return nil }
+        guard peer.origins.allSatisfy({ origin in
             isValidText(origin) && RemotePairingLink.normalizeOrigin(origin) == origin
-        }
+        }) else { return nil }
+        return key
     }
 
     private static func isValidIdentifier(_ value: String) -> Bool {
