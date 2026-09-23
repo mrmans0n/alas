@@ -3,6 +3,7 @@ import Foundation
 struct StagedComment: Identifiable, Equatable, Codable, Sendable {
     let id: UUID
     let threadID: String?
+    let fileID: DiffReviewFileID?
     let filePath: String
     let line: Int?
     let endLine: Int?
@@ -13,6 +14,7 @@ struct StagedComment: Identifiable, Equatable, Codable, Sendable {
     init(
         id: UUID = UUID(),
         threadID: String? = nil,
+        fileID: DiffReviewFileID? = nil,
         filePath: String,
         line: Int?,
         endLine: Int? = nil,
@@ -22,6 +24,7 @@ struct StagedComment: Identifiable, Equatable, Codable, Sendable {
     ) {
         self.id = id
         self.threadID = threadID
+        self.fileID = fileID
         self.filePath = filePath
         self.line = line
         self.endLine = endLine

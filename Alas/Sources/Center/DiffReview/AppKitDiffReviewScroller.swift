@@ -1,5 +1,26 @@
 import SwiftUI
 
+/// Scrolls to the diff row containing a specific line, independent of any
+/// rendered comment marker. Used to jump to a staged PR comment's anchor,
+/// which — unlike agent draft comments — never renders as an inline row.
+/// `line` is `nil` for file-level comments, which have no line to resolve
+/// and simply target the file header.
+struct DiffReviewLineScrollCommand: Equatable {
+    let fileID: DiffReviewFileID
+    let side: DiffReviewInlineFeedbackSide
+    let line: Int?
+    let generation: Int
+}
+
+struct DiffReviewLineScrollController: Equatable {
+    private(set) var generation = 0
+
+    mutating func command(fileID: DiffReviewFileID, side: DiffReviewInlineFeedbackSide, line: Int?) -> DiffReviewLineScrollCommand {
+        generation += 1
+        return DiffReviewLineScrollCommand(fileID: fileID, side: side, line: line, generation: generation)
+    }
+}
+
 enum AppKitDiffReviewScrollRequestResolver {
     static func hasExactDraftCommentTarget(_ command: DiffReviewDraftCommentScrollCommand, in plan: AppKitDiffReviewRowPlan) -> Bool {
         plan.corePlan.rows.contains { $0.id == AppKitDiffReviewRowID.draftComment(command.targetID) }
@@ -9,12 +30,14 @@ enum AppKitDiffReviewScrollRequestResolver {
         case file(DiffReviewScrollCommand)
         case inlineFeedback(DiffReviewInlineFeedbackScrollCommand)
         case draftComment(DiffReviewDraftCommentScrollCommand)
+        case line(DiffReviewLineScrollCommand)
 
         var fileID: DiffReviewFileID {
             switch self {
             case .file(let command): command.id
             case .inlineFeedback(let command): command.fileID
             case .draftComment(let command): command.fileID
+            case .line(let command): command.fileID
             }
         }
     }
@@ -23,6 +46,7 @@ enum AppKitDiffReviewScrollRequestResolver {
         fileCommand: DiffReviewScrollCommand?,
         inlineFeedbackCommand: DiffReviewInlineFeedbackScrollCommand?,
         draftCommentCommand: DiffReviewDraftCommentScrollCommand?,
+        lineCommand: DiffReviewLineScrollCommand? = nil,
         plan: AppKitDiffReviewRowPlan
     ) -> AppKitDiffScrollRequest? {
         if let draftCommentCommand {
@@ -32,6 +56,9 @@ enum AppKitDiffReviewScrollRequestResolver {
                 generation: commandGeneration(draftCommentCommand.generation, kind: .draftComment),
                 plan: plan
             )
+        }
+        if let lineCommand {
+            return lineRequest(lineCommand, plan: plan)
         }
         if let inlineFeedbackCommand {
             return reviewItemRequest(
@@ -72,6 +99,10 @@ enum AppKitDiffReviewScrollRequestResolver {
             request = self.request(
                 fileCommand: nil, inlineFeedbackCommand: nil, draftCommentCommand: draftCommentCommand, plan: plan
             )
+        case .line(let lineCommand):
+            request = self.request(
+                fileCommand: nil, inlineFeedbackCommand: nil, draftCommentCommand: nil, lineCommand: lineCommand, plan: plan
+            )
         }
         precondition(request != nil, "A concrete review scroll command must resolve to a request")
         return .init(
@@ -80,14 +111,15 @@ enum AppKitDiffReviewScrollRequestResolver {
             alignment: request!.alignment,
             animated: request!.animated,
             generation: generation,
-            snapsWhenFar: request!.snapsWhenFar
+            snapsWhenFar: request!.snapsWhenFar,
+            lineTarget: request!.lineTarget
         )
     }
 
-    private enum Kind: Int { case file, inlineFeedback, draftComment }
+    private enum Kind: Int { case file, inlineFeedback, draftComment, line }
 
     private static func commandGeneration(_ generation: Int, kind: Kind) -> Int {
-        generation * 3 + kind.rawValue
+        generation * 4 + kind.rawValue
     }
 
     private static func reviewItemRequest(
@@ -104,6 +136,35 @@ enum AppKitDiffReviewScrollRequestResolver {
             alignment: .center,
             animated: true,
             generation: generation
+        )
+    }
+
+    /// Falls back to the file header when there's no line to target (a
+    /// file-level comment), or the line isn't in a rendered row — e.g. the
+    /// file is deferred/collapsed, or the line sits in a collapsed context
+    /// block that hasn't been expanded.
+    private static func lineRequest(
+        _ command: DiffReviewLineScrollCommand,
+        plan: AppKitDiffReviewRowPlan
+    ) -> AppKitDiffScrollRequest {
+        let headerID = plan.headerByFileID[command.fileID]
+        let exactTarget = command.line.flatMap { line -> (rowID: String, side: DiffReviewInlineFeedbackSide, line: Int)? in
+            let sides: [DiffReviewInlineFeedbackSide] = command.side == .unknown ? [.new, .old] : [command.side]
+            for side in sides {
+                let key = AppKitDiffReviewRowID.lineKey(fileID: command.fileID, side: side, line: line)
+                if let rowID = plan.lineTargetByKey[key] {
+                    return (rowID, side, line)
+                }
+            }
+            return nil
+        }
+        return .init(
+            targetID: exactTarget?.rowID ?? headerID ?? AppKitDiffReviewRowID.header(fileID: command.fileID),
+            fallbackID: headerID,
+            alignment: .center,
+            animated: true,
+            generation: commandGeneration(command.generation, kind: .line),
+            lineTarget: exactTarget.map { AppKitDiffScrollLineTarget(side: $0.side, line: $0.line) }
         )
     }
 }
@@ -140,6 +201,7 @@ struct AppKitDiffReviewScroller: View {
     let fileCommand: DiffReviewScrollCommand?
     let inlineFeedbackCommand: DiffReviewInlineFeedbackScrollCommand?
     let draftCommentCommand: DiffReviewDraftCommentScrollCommand?
+    var lineCommand: DiffReviewLineScrollCommand? = nil
     let onNavigationFile: (DiffReviewFileID, Int) -> Void
     let onActiveFileChange: (DiffReviewFileID) -> Void
     let onProgrammaticScrollCompletion: (Int) -> Void
@@ -180,12 +242,17 @@ struct AppKitDiffReviewScroller: View {
         .onChange(of: draftCommentCommand) { _, command in
             submit(command.map(AppKitDiffReviewScrollRequestResolver.Command.draftComment), using: plan)
         }
+        .onChange(of: lineCommand) { _, command in
+            submit(command.map(AppKitDiffReviewScrollRequestResolver.Command.line), using: plan)
+        }
         .copyFeedbackOverlay(message: inputs.lazy.compactMap { $0.state.copyFeedback.message }.first)
     }
 
     private func submitInitialCommand(using plan: AppKitDiffReviewRowPlan) {
         if let draftCommentCommand {
             submit(.draftComment(draftCommentCommand), using: plan)
+        } else if let lineCommand {
+            submit(.line(lineCommand), using: plan)
         } else if let inlineFeedbackCommand {
             submit(.inlineFeedback(inlineFeedbackCommand), using: plan)
         } else if let fileCommand {

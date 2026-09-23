@@ -47,6 +47,7 @@ struct PendingReviewTests {
         let comment = StagedComment(
             id: UUID(),
             threadID: "t1",
+            fileID: DiffReviewFileID(namespace: "staged", path: "Sources/Bar.swift"),
             filePath: "Sources/Bar.swift",
             line: 10,
             side: .old,
@@ -60,5 +61,25 @@ struct PendingReviewTests {
         #expect(pr2.staged[0].body == "Needs a test")
         #expect(pr2.staged[0].suggestion == "let x = 1")
         #expect(pr2.staged[0].side == .old)
+        #expect(pr2.staged[0].fileID == comment.fileID)
+    }
+
+    @Test func legacyStagedCommentDecodesWithoutFileIdentity() throws {
+        let json = """
+        [{
+          "id": "00000000-0000-0000-0000-000000000001",
+          "threadID": null,
+          "filePath": "Sources/Bar.swift",
+          "line": 10,
+          "endLine": null,
+          "side": "new",
+          "body": "Needs a test",
+          "suggestion": null
+        }]
+        """
+
+        let comments = try JSONDecoder().decode([StagedComment].self, from: Data(json.utf8))
+
+        #expect(comments.first?.fileID == nil)
     }
 }

@@ -34,6 +34,7 @@ final class AppKitDiffReviewFileState: ObservableObject {
     @Published var pendingDraftBody = ""
     @Published var draftComposerFocusRequestGeneration = 0 { didSet { structuralDidChange.send() } }
     @Published var quoteInsertionGeneration = 0 { didSet { structuralDidChange.send() } }
+    @Published var insertCodeGeneration = 0 { didSet { structuralDidChange.send() } }
     var expandedCollapsedRowIDs: Set<String> {
         get { hunkPresentationState.expandedCollapsedRowIDs }
         set { hunkPresentationState.setExpandedCollapsedRowIDs(newValue) }
@@ -119,6 +120,7 @@ final class AppKitDiffReviewFileState: ObservableObject {
         pendingDraftAnchor = nil
         pendingNonLineDraftAnchor = nil
         pendingDraftBody = ""
+        insertCodeGeneration = 0
     }
 
     func resetForRenderBudgetChange() {

@@ -23,6 +23,11 @@ enum AppKitDiffReviewRowID {
 
     static func thread(fileID: DiffReviewFileID, threadID: String) -> String { "file:\(fileID.rawValue):thread:\(threadID)" }
     static func annotation(fileID: DiffReviewFileID, annotationID: String) -> String { "file:\(fileID.rawValue):annotation:\(annotationID)" }
+    /// Lookup key (not a row id) for `AppKitDiffReviewRowPlan.lineTargetByKey`,
+    /// mapping a raw file/side/line to whichever row currently renders it.
+    static func lineKey(fileID: DiffReviewFileID, side: DiffReviewInlineFeedbackSide, line: Int) -> String {
+        "file:\(fileID.rawValue):line:\(side.rawValue):\(line)"
+    }
     /// The draft review summary appended after the diff stack when the
     /// surface is too narrow for the trailing rail.
     static let reviewSummary = "review:summary"
@@ -169,6 +174,7 @@ struct AppKitDiffReviewRowInput {
         state.pendingNonLineDraftAnchor = nil
         state.pendingDraftBody = ""
         state.quoteInsertionGeneration = 0
+        state.insertCodeGeneration = 0
         state.draftComposerFocusRequestGeneration &+= 1
     }
 
@@ -186,6 +192,7 @@ struct AppKitDiffReviewRowInput {
         state.pendingNonLineDraftAnchor = anchor
         state.pendingDraftBody = ""
         state.quoteInsertionGeneration = 0
+        state.insertCodeGeneration = 0
         state.draftComposerFocusRequestGeneration &+= 1
     }
 
@@ -194,6 +201,7 @@ struct AppKitDiffReviewRowInput {
         state.pendingNonLineDraftAnchor = nil
         state.pendingDraftBody = ""
         state.quoteInsertionGeneration = 0
+        state.insertCodeGeneration = 0
         state.isDraftComposerFocused = false
     }
 
@@ -353,6 +361,9 @@ struct AppKitDiffReviewRowPlan {
     let fallbackByTargetID: [String: String]
     let headerByFileID: [DiffReviewFileID: String]
     let placeholderByFileID: [DiffReviewFileID: String]
+    /// Maps `AppKitDiffReviewRowID.lineKey(...)` to the row rendering that
+    /// line, when the file's diff is expanded and the line is visible.
+    var lineTargetByKey: [String: String] = [:]
 }
 
 @MainActor
@@ -380,6 +391,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         var fallbackByTargetID: [String: String] = [:]
         var headerByFileID: [DiffReviewFileID: String] = [:]
         var placeholderByFileID: [DiffReviewFileID: String] = [:]
+        var lineTargetByKey: [String: String] = [:]
         let eligibility = DiffReviewRenderEligibility.renderRows(
             ordered: inputs.map(\.file.id),
             renderedRowCounts: inputs.map { $0.file.displayModel.map(DiffReviewRenderBudget.renderedRowCount) },
@@ -463,7 +475,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                 mapTargetsDirectly(input, into: &fallbackByTargetID)
             } else if let context = renderContext(for: input) {
                 appendFileAccessories(input, context: context, rows: &rows, fallbacks: &fallbackByTargetID)
-                appendTextRows(context, input: input, into: &rows, fallbacks: &fallbackByTargetID)
+                appendTextRows(context, input: input, into: &rows, fallbacks: &fallbackByTargetID, lineTargets: &lineTargetByKey)
             }
 
             let fileRowEndIndex = rows.count
@@ -478,7 +490,8 @@ enum AppKitDiffReviewRowPlanBuilder {
         rows.append(contentsOf: trailingRows)
         return AppKitDiffReviewRowPlan(
             corePlan: .init(rows: rows), fallbackByTargetID: fallbackByTargetID,
-            headerByFileID: headerByFileID, placeholderByFileID: placeholderByFileID
+            headerByFileID: headerByFileID, placeholderByFileID: placeholderByFileID,
+            lineTargetByKey: lineTargetByKey
         )
     }
 
@@ -554,7 +567,8 @@ enum AppKitDiffReviewRowPlanBuilder {
         _ context: DiffReviewRenderContext,
         input: AppKitDiffReviewRowInput,
         into rows: inout [AppKitDiffRowSpec],
-        fallbacks: inout [String: String]
+        fallbacks: inout [String: String],
+        lineTargets: inout [String: String]
     ) {
         let fusions = DiffReviewHunkFusionResolver.states(for: context.groups)
         for (groupIndex, group) in context.groups.enumerated() {
@@ -568,6 +582,11 @@ enum AppKitDiffReviewRowPlanBuilder {
             )
             let groupID = AppKitDiffReviewRowID.groupHeader(fileID: input.file.id, groupID: group.id)
             if !group.containsLocalAccessories {
+                let visibleRows = DiffPaneRowProjection.visibleRows(
+                    in: group.displayGroup,
+                    expandedCollapsedRowIDs: input.state.expandedCollapsedRowIDs
+                )
+                mapLines(visibleRows, fileID: input.file.id, to: groupID, into: &lineTargets)
                 let rowInput = hunkInput(group: group, context: context, input: input, fusion: fusions[groupIndex])
                 let hunkPlan = DiffPaneRowPlanBuilder.build(input: rowInput, state: input.state.hunkPresentationState)
                 guard let hunk = hunkPlan.rows.first else { continue }
@@ -595,6 +614,11 @@ enum AppKitDiffReviewRowPlanBuilder {
                         append(&rows, id: blockID, input: input, signature: rowBlock.rowsSignature.hashValue, height: segmentHeight(rowBlock.rows.count, input: input), includesActiveHighlight: true) {
                             AnyView(AppKitDiffReviewSegmentRowBody(rows: rowBlock.rows, rowsSignature: rowBlock.rowsSignature, group: group.displayGroup, input: input))
                         }
+                        let visibleRows = DiffPaneRowProjection.visibleRows(
+                            in: rowBlock.rows,
+                            expandedCollapsedRowIDs: input.state.expandedCollapsedRowIDs
+                        )
+                        mapLines(visibleRows, fileID: input.file.id, to: blockID, into: &lineTargets)
                     case let .thread(thread):
                         let threadID = AppKitDiffReviewRowID.thread(fileID: input.file.id, threadID: thread.id)
                         append(
@@ -765,6 +789,7 @@ enum AppKitDiffReviewRowPlanBuilder {
         var hasher = Hasher()
         hasher.combine(state.draftComposerFocusRequestGeneration)
         hasher.combine(state.quoteInsertionGeneration)
+        hasher.combine(state.insertCodeGeneration)
         return hasher.finalize()
     }
 
@@ -787,6 +812,27 @@ enum AppKitDiffReviewRowPlanBuilder {
         for comment in input.draftComments {
             let id = AppKitDiffReviewRowID.draftComment(.targetID(commentID: comment.id, fileID: input.file.id))
             fallbacks[id] = id
+        }
+    }
+
+    /// Records which row currently renders each old/new line so a raw
+    /// line/side scroll command (no comment id required) can resolve to it.
+    /// Called once per hunk with the coarse group row, then again per
+    /// segment block when the group also renders granular blocks — the
+    /// later, finer-grained call overwrites the coarser mapping.
+    private static func mapLines(
+        _ displayRows: [DiffDisplayRow],
+        fileID: DiffReviewFileID,
+        to rowID: String,
+        into lineTargets: inout [String: String]
+    ) {
+        for row in displayRows {
+            if let line = row.old?.lineNumber {
+                lineTargets[AppKitDiffReviewRowID.lineKey(fileID: fileID, side: .old, line: line)] = rowID
+            }
+            if let line = row.new?.lineNumber {
+                lineTargets[AppKitDiffReviewRowID.lineKey(fileID: fileID, side: .new, line: line)] = rowID
+            }
         }
     }
 
@@ -1611,9 +1657,34 @@ struct AppKitDiffReviewComposerRowBody: View {
     let input: AppKitDiffReviewRowInput
     @FocusState private var isFocused: Bool
 
+    /// Not private so tests can exercise the file/image-anchor branch
+    /// directly rather than relying on brittle accessibility-tree rendering.
+    var composerContext: ReviewDraftComposerContext? {
+        if let anchor = input.state.pendingDraftAnchor {
+            return ReviewDraftComposerContext(path: anchor.path, anchor: .line(
+                side: anchor.side,
+                startLine: anchor.line,
+                endLine: anchor.endLine,
+                selectedText: anchor.selectedText
+            ))
+        }
+        if input.state.pendingNonLineDraftAnchor != nil {
+            return ReviewDraftComposerContext(path: input.file.summary.path, anchor: input.state.pendingNonLineDraftAnchor)
+        }
+        return nil
+    }
+
     var body: some View {
         DiffFeedbackLaneView(lane: input.state.pendingDraftAnchor.map(DiffFeedbackLaneResolver.lane) ?? .full, layoutMode: input.layoutMode, rows: rows) {
             VStack(alignment: .leading, spacing: 10) {
+                if let composerContext {
+                    Text(composerContext.headerText)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(input.theme.color("fg-dim"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityIdentifier("diff-review-draft-composer-header")
+                }
                 ReviewDraftComposerTextEditor(
                     text: Binding(
                         get: { input.state.pendingDraftBody },
@@ -1632,6 +1703,9 @@ struct AppKitDiffReviewComposerRowBody: View {
                         baseColor: NSColor(input.theme.color("fg")),
                         monoSize: 12
                     ),
+                    composerContext: composerContext,
+                    insertCodeGeneration: input.state.insertCodeGeneration,
+                    onInsertCodeConsumed: { input.state.insertCodeGeneration = 0 },
                     onSave: input.savePendingDraft,
                     onCancel: input.clearPendingDraft
                 )
@@ -1657,6 +1731,15 @@ struct AppKitDiffReviewComposerRowBody: View {
                             .background(input.theme.color("bg-3"))
                             .clipShape(RoundedRectangle(cornerRadius: 5))
                             .accessibilityIdentifier("diff-review-draft-composer-quote")
+                    }
+                    if composerContext?.codeSnippet != nil {
+                        Button("Insert code") { input.state.insertCodeGeneration &+= 1 }
+                            .buttonStyle(.plain).font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(input.theme.color("fg-muted"))
+                            .padding(.horizontal, 8).frame(height: 24)
+                            .background(input.theme.color("bg-3"))
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                            .accessibilityIdentifier("diff-review-draft-composer-insert-code")
                     }
                     Spacer()
                     Button("Cancel", action: input.clearPendingDraft)

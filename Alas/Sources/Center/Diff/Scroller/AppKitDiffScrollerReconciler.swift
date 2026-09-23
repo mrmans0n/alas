@@ -233,7 +233,18 @@ final class AppKitDiffScrollerReconciler {
                 completion?()
                 return
             }
-            self.scrollView.setScrollY(measuredOffset, animated: false, completion: completion)
+            if let lineTarget = request.lineTarget,
+               let lineOffset = self.lineTargetScrollOffset(lineTarget, in: targetID, alignment: request.alignment) {
+                self.scrollView.setScrollY(lineOffset, animated: false)
+                self.layoutVisibleRows()
+                let settledOffset = self.lineTargetScrollOffset(lineTarget, in: targetID, alignment: request.alignment)
+                    ?? measuredOffset
+                self.scrollView.setScrollY(settledOffset, animated: false)
+                self.layoutVisibleRows()
+                completion?()
+            } else {
+                self.scrollView.setScrollY(measuredOffset, animated: false, completion: completion)
+            }
         }
         if isCurrent() {
             layoutVisibleRows()
@@ -241,6 +252,40 @@ final class AppKitDiffScrollerReconciler {
     }
 
     private var isLayingOutRows = false
+
+    private func lineTargetScrollOffset(
+        _ target: AppKitDiffScrollLineTarget,
+        in rowID: String,
+        alignment: AppKitDiffScrollAlignment
+    ) -> CGFloat? {
+        guard let rowView = pool.mountedView(id: rowID) else { return nil }
+        rowView.layoutSubtreeIfNeeded()
+        guard let documentPoint = lineTargetDocumentPoint(target, in: rowView) else { return nil }
+        let alignmentOffset: CGFloat = switch alignment {
+        case .top: 0
+        case .center: scrollView.viewportHeight / 2
+        }
+        return documentPoint.y - alignmentOffset
+    }
+
+    private func lineTargetDocumentPoint(
+        _ target: AppKitDiffScrollLineTarget,
+        in view: NSView
+    ) -> NSPoint? {
+        if let provider = view as? AppKitDiffScrollLineTargetProviding,
+           let centerY = provider.scrollTargetCenterY(for: target) {
+            return view.convert(
+                NSPoint(x: view.bounds.midX, y: centerY),
+                to: scrollView.flippedDocumentView
+            )
+        }
+        for subview in view.subviews {
+            if let point = lineTargetDocumentPoint(target, in: subview) {
+                return point
+            }
+        }
+        return nil
+    }
 
     private func layoutMountedRows() {
         guard !isLayingOutRows else {

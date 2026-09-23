@@ -314,18 +314,42 @@ struct ReviewDraftSummaryRail: View {
     private var expandedBody: some View {
         VStack(spacing: 0) {
             expandedHeader
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 10) {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(groupedComments) { group in
-                            commentGroup(group)
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        LazyVStack(alignment: .leading, spacing: 10) {
+                            ForEach(groupedComments) { group in
+                                commentGroup(group)
+                            }
+                        }
+                        if hasFeedback {
+                            feedbackSection
                         }
                     }
-                    if hasFeedback {
-                        feedbackSection
+                    .padding(10)
+                }
+                .onAppear {
+                    // `.onChange` only fires on a transition, so a focus set
+                    // before this view mounts (rail expanded while a comment
+                    // is already focused) needs its own initial scroll.
+                    if let focusedDraftCommentID {
+                        proxy.scrollTo("review-draft-summary-comment-\(focusedDraftCommentID)", anchor: .center)
+                    } else if let focusedFeedbackID {
+                        proxy.scrollTo("review-summary-feedback-\(focusedFeedbackID)", anchor: .center)
                     }
                 }
-                .padding(10)
+                .onChange(of: focusedDraftCommentID) { _, newValue in
+                    guard let newValue else { return }
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        proxy.scrollTo("review-draft-summary-comment-\(newValue)", anchor: .center)
+                    }
+                }
+                .onChange(of: focusedFeedbackID) { _, newValue in
+                    guard let newValue else { return }
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        proxy.scrollTo("review-summary-feedback-\(newValue)", anchor: .center)
+                    }
+                }
             }
         }
     }
@@ -712,6 +736,7 @@ struct ReviewDraftSummaryRail: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("review-summary-feedback-\(item.id)")
+        .id("review-summary-feedback-\(item.id)")
         .accessibilityLabel(feedbackAccessibilityLabel(for: item))
         .padding(8)
         .background(isFocused ? theme.color("accent-soft") : theme.color("bg-1"))
@@ -830,6 +855,7 @@ struct ReviewDraftSummaryRail: View {
             }
         }
         .padding(8)
+        .id("review-draft-summary-comment-\(comment.id)")
         .background(isFocused ? theme.color("accent-soft") : theme.color("bg-1"))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(

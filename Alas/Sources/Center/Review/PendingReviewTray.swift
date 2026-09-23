@@ -3,6 +3,7 @@ import SwiftUI
 struct PendingReviewRail: View {
     @Bindable var pendingReview: PendingReview
     @Binding var collapsed: Bool
+    var onSelectComment: (StagedComment) -> Void = { _ in }
     var onFinish: () -> Void = {}
 
     @Environment(\.theme) private var theme
@@ -88,31 +89,42 @@ struct PendingReviewRail: View {
     }
 
     private var commentList: some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(pendingReview.staged) { comment in
-                    commentRow(comment)
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(pendingReview.staged) { comment in
+                        commentRow(comment)
+                            .id(comment.id)
+                    }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
         }
     }
 
     private func commentRow(_ comment: StagedComment) -> some View {
         HStack(alignment: .top, spacing: 6) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(commentLabel(comment))
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundColor(theme.color("fg-dim"))
-                    .lineLimit(1)
-                Text(comment.body)
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.color("fg"))
-                    .lineLimit(2)
-                    .truncationMode(.tail)
+            Button {
+                onSelectComment(comment)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(commentLabel(comment))
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundColor(theme.color("fg-dim"))
+                        .lineLimit(1)
+                    Text(comment.body)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg"))
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            Spacer(minLength: 0)
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("pending-review-comment-select-\(comment.id)")
+            .help("Show in diff")
             Button {
                 pendingReview.remove(id: comment.id)
             } label: {
@@ -121,7 +133,14 @@ struct PendingReviewRail: View {
                     .foregroundColor(theme.color("fg-muted"))
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("pending-review-comment-delete-\(comment.id)")
+            .help("Remove staged comment")
         }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(theme.color("bg-1"))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
     }
 
     private func commentLabel(_ comment: StagedComment) -> String {

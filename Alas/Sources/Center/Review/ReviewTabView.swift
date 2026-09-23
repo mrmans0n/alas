@@ -21,6 +21,43 @@ enum ReviewTabPendingReviewPresentation {
     }
 }
 
+/// Maps a rail click on a staged comment to the file the diff should show.
+/// Falls back to the first loaded file when the comment's file is no longer
+/// part of the session (e.g. the diff refreshed after the comment was staged).
+enum ReviewTabCommentJump {
+    /// `matchedCommentFile` is false when `fileID` is the fallback file, not
+    /// the comment's own file — callers must not scroll to `comment.line` in
+    /// that case, since an unrelated file may coincidentally have that line.
+    struct Target {
+        let fileID: DiffReviewFileID
+        let matchedCommentFile: Bool
+    }
+
+    static func target(
+        for comment: StagedComment,
+        session: ReviewChangesLoadedSession
+    ) -> Target? {
+        let match: DiffReviewFileSummary?
+        if let fileID = comment.fileID {
+            match = session.summary.files.first(where: { $0.id == fileID })
+        } else {
+            match = session.summary.files.first(where: { $0.path == comment.filePath })
+        }
+        if let match {
+            return Target(fileID: match.id, matchedCommentFile: true)
+        }
+        guard let fallback = session.summary.files.first else { return nil }
+        return Target(fileID: fallback.id, matchedCommentFile: false)
+    }
+
+    static func fileID(
+        for comment: StagedComment,
+        session: ReviewChangesLoadedSession
+    ) -> DiffReviewFileID? {
+        target(for: comment, session: session)?.fileID
+    }
+}
+
 enum ReviewTabStartupRecoveryReadiness {
     static func reviewRefreshSettled(
         hasSnapshot: Bool,
@@ -68,6 +105,8 @@ struct ReviewTabView: View {
     @State private var errorMessage: String? = nil
     @State private var pendingReview: PendingReview?
     @State private var pendingReviewRailCollapsed = false
+    @State private var pendingCommentScrollCommand: DiffReviewLineScrollCommand?
+    @State private var pendingCommentScrollController = DiffReviewLineScrollController()
     @State private var showVerdictSheet = false
     @State private var wrapLines = false
     @State private var showWhitespace = false
@@ -233,7 +272,10 @@ struct ReviewTabView: View {
                ) {
                 PendingReviewRail(
                     pendingReview: pendingReview,
-                    collapsed: $pendingReviewRailCollapsed
+                    collapsed: $pendingReviewRailCollapsed,
+                    onSelectComment: { comment in
+                        selectPendingComment(comment)
+                    }
                 ) {
                     showVerdictSheet = true
                 }
@@ -372,6 +414,21 @@ struct ReviewTabView: View {
 
     // MARK: - Review surface
 
+    /// Rail click on a staged comment: focus its file and scroll the diff to
+    /// the comment's anchored line. Falls back to the file header for
+    /// file-level comments (no line) or lines outside a rendered/expanded
+    /// section of the diff.
+    private func selectPendingComment(_ comment: StagedComment) {
+        guard let session else { return }
+        guard let target = ReviewTabCommentJump.target(for: comment, session: session) else { return }
+        selectedFileID = target.fileID
+        pendingCommentScrollCommand = pendingCommentScrollController.command(
+            fileID: target.fileID,
+            side: comment.side,
+            line: target.matchedCommentFile ? comment.line : nil
+        )
+    }
+
     private func reviewSurface(_ session: ReviewChangesLoadedSession) -> some View {
         DiffReviewSurface(
             session: session,
@@ -387,12 +444,14 @@ struct ReviewTabView: View {
             lspContextForFile: { file in
                 makeLSPContext(relativePath: file.summary.path)
             },
-            onSaveDraftComment: { _, path, _, anchor, body in
+            lineScrollCommand: pendingCommentScrollCommand,
+            onSaveDraftComment: { fileID, path, _, anchor, body in
                 guard let pr = pendingReview else { return }
                 guard case .line(let side, let line, let endLine, _) = anchor else { return }
                 pr.stage(StagedComment(
                     id: UUID(),
                     threadID: nil,
+                    fileID: fileID,
                     filePath: path,
                     line: line,
                     endLine: endLine,
@@ -427,11 +486,12 @@ struct ReviewTabView: View {
             annotations: annotations,
             canReply: capabilities.canReply,
             canResolve: capabilities.canResolve,
-            onStageReply: { inlineThread, body in
+            onStageReply: { fileID, inlineThread, body in
                 guard let pr = pendingReview else { return }
                 pr.stage(StagedComment(
                     id: UUID(),
                     threadID: inlineThread.id,
+                    fileID: fileID,
                     filePath: inlineThread.filePath,
                     line: inlineThread.newLine,
                     side: inlineThread.isOldSide ? .old : .new,

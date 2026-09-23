@@ -81,6 +81,28 @@ struct AppKitDiffReviewRowPlanTests {
         ])
     }
 
+    @Test func nonLineDraftComposerBuildsContextFromTheFileAnchor() throws {
+        let file = textFile()
+        let state = AppKitDiffReviewFileState()
+        state.pendingNonLineDraftAnchor = .file
+        let input = AppKitDiffReviewRowInput(file: file, state: state, theme: theme)
+        let body = AppKitDiffReviewComposerRowBody(rows: [], input: input)
+
+        let context = try #require(body.composerContext)
+        #expect(context.headerText == "Adding a comment on Example.swift")
+    }
+
+    @Test func nonLineDraftComposerBuildsContextFromTheImageAnchor() throws {
+        let file = imageFile()
+        let state = AppKitDiffReviewFileState()
+        state.pendingNonLineDraftAnchor = .image(side: .new, normalizedX: 0.25, normalizedY: 0.75)
+        let input = AppKitDiffReviewRowInput(file: file, state: state, theme: theme)
+        let body = AppKitDiffReviewComposerRowBody(rows: [], input: input)
+
+        let context = try #require(body.composerContext)
+        #expect(context.headerText == "Adding a comment on logo.png")
+    }
+
     @Test func nonLineDraftComposerFollowsDraftCreationGate() {
         let file = textFile()
         let state = AppKitDiffReviewFileState()
@@ -560,6 +582,65 @@ struct AppKitDiffReviewRowPlanTests {
         let ids = AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.map(\.id)
 
         #expect(ids.contains(AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: target.id, fileID: file.id))))
+    }
+
+    @Test func lineTargetsResolveToTheFusedHunkRowWhenNoLocalAccessoriesExist() {
+        let file = textFile()
+        let input = AppKitDiffReviewRowInput(file: file, state: AppKitDiffReviewFileState(), theme: theme)
+
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+        let groupRowID = plan.corePlan.rows.first { $0.id.contains(":group:") }?.id
+
+        #expect(groupRowID != nil)
+        #expect(plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .old, line: 1)] == groupRowID)
+        #expect(plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .new, line: 1)] == groupRowID)
+    }
+
+    @Test func lineTargetsIncludeExpandedCollapsedContextRows() throws {
+        let file = collapsibleTextFile()
+        let group = try #require(file.displayModel?.groups.first)
+        let collapsedRow = try #require(group.rows.first { $0.kind == .collapsed })
+        let state = AppKitDiffReviewFileState()
+        state.expandedCollapsedRowIDs = [collapsedRow.id]
+        let input = AppKitDiffReviewRowInput(file: file, state: state, theme: theme)
+
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+        let groupRowID = try #require(plan.corePlan.rows.first { $0.id.contains(":group:") }?.id)
+
+        #expect(plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .new, line: 8)] == groupRowID)
+    }
+
+    @Test func expandedCollapsedContextLinesTargetTheirSegmentWhenLocalAccessoriesExist() throws {
+        let file = collapsibleTextFile()
+        let group = try #require(file.displayModel?.groups.first)
+        let collapsedRow = try #require(group.rows.first { $0.kind == .collapsed })
+        let state = AppKitDiffReviewFileState()
+        state.expandedCollapsedRowIDs = [collapsedRow.id]
+        let comment = draftComment(
+            fileID: file.id,
+            anchor: .line(side: .new, startLine: 8, endLine: nil, selectedText: "let value8 = 8")
+        )
+        let input = AppKitDiffReviewRowInput(file: file, draftComments: [comment], state: state, theme: theme)
+
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+        let target = plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .new, line: 8)]
+
+        #expect(target?.contains(":segment:") == true)
+        #expect(plan.corePlan.rows.contains { $0.id == target })
+    }
+
+    @Test func lineTargetsResolveToTheExactSegmentRowWhenLocalAccessoriesForceGranularRendering() {
+        let file = textFile()
+        let draft = draftComment(fileID: file.id)
+        let input = AppKitDiffReviewRowInput(file: file, draftComments: [draft], state: AppKitDiffReviewFileState(), theme: theme)
+
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [input])
+        let newTarget = plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .new, line: 1)]
+        let oldTarget = plan.lineTargetByKey[AppKitDiffReviewRowID.lineKey(fileID: file.id, side: .old, line: 1)]
+
+        #expect(newTarget?.contains(":segment:") == true)
+        #expect(oldTarget?.contains(":segment:") == true)
+        #expect(plan.corePlan.rows.contains { $0.id == newTarget })
     }
 
     @Test func nonImagePlanClearsStaleImageState() async {
