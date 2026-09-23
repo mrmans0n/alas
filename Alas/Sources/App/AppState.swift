@@ -56,6 +56,20 @@ enum WorkspaceDefinitionSaveError: LocalizedError {
     }
 }
 
+enum ProjectCreationError: LocalizedError, Equatable {
+    case projectPersistenceFailed
+    case projectAlreadyExists
+
+    var errorDescription: String? {
+        switch self {
+        case .projectPersistenceFailed:
+            "Could not save the new project."
+        case .projectAlreadyExists:
+            "A project with this ID already exists."
+        }
+    }
+}
+
 struct PendingRunScriptLaunch: Equatable {
     let id: UUID
     let worktreeID: String
@@ -4849,6 +4863,10 @@ final class AppState {
         mcpServers: [ProjectMCPServer] = [],
         approvedRepoHookHashes: [String] = []
     ) async throws {
+        guard !projectsManager.projects.contains(where: { $0.id == id }) else {
+            throw ProjectCreationError.projectAlreadyExists
+        }
+
         let project = try await projectsManager.addProject(
             path: path,
             displayName: displayName,
@@ -4860,7 +4878,11 @@ final class AppState {
             approvedRepoHookHashes: approvedRepoHookHashes
         )
         spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
-        saveProjects()
+        guard saveProjects() else {
+            spacesManager.removeProjectEverywhere(project.id)
+            projectsManager.removeProject(id: project.id)
+            throw ProjectCreationError.projectPersistenceFailed
+        }
         saveSpaces()
         _ = await refreshAllProjectTopologies()
         if let worktreeId = projectsManager.visibleWorktrees(projectId: project.id).first?.id {

@@ -199,6 +199,60 @@ struct AppStatePersistenceTests {
         #expect(reports.first?.message == "write rejected")
     }
 
+    @Test func projectCreationRollsBackDraftHookApprovalsWhenProjectsSaveFails() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-project-save-failure-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: repo)
+        _ = try await Process.git(["config", "user.name", "Test"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
+
+        var reports: [(title: String, message: String)] = []
+        let state = AppState(store: FailingStore()) { title, message in
+            reports.append((title, message))
+        }
+
+        await #expect(throws: (any Error).self) {
+            try await state.addProject(
+                path: repo,
+                displayName: "Draft project",
+                icon: .default(color: "#5fb7c4"),
+                id: "draft-project",
+                approvedRepoHookHashes: ["approved-hook"]
+            )
+        }
+
+        #expect(reports.map(\.title) == ["Projects Save Failed"])
+        #expect(state.projectsManager.projects.isEmpty)
+        #expect(state.spacesManager.activeSpace?.projectIds.contains("draft-project") == false)
+    }
+
+    @Test func addProjectRejectsExistingProjectID() async {
+        let existingProject = ProjectConfig(
+            id: "existing-project",
+            name: "Existing project",
+            path: "/tmp/existing-project",
+            color: "#5fb7c4",
+            addedAt: .distantPast
+        )
+        let state = AppState(
+            store: RecordingStore(initialProjectsFile: ProjectsFile(projects: [existingProject]))
+        )
+
+        await #expect(throws: ProjectCreationError.projectAlreadyExists) {
+            try await state.addProject(
+                path: URL(fileURLWithPath: "/tmp/new-project"),
+                displayName: "New project",
+                icon: .default(color: "#5fb7c4"),
+                id: existingProject.id
+            )
+        }
+
+        #expect(state.projectsManager.projects.map(\.id) == [existingProject.id])
+    }
+
     @Test func deletedWorktreeOverrideIsRemovedAndPersistedBeforeTopologyRefresh() throws {
         let persistedProject = ProjectConfig(
             id: "project",
