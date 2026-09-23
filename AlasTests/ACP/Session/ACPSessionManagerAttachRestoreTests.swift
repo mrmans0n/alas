@@ -752,11 +752,13 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.hydrateIfNeeded(id: "local")
         await manager.setModel(for: session.id, modelId: "haiku")
         await manager.setMode(for: session.id, modeId: "ask")
+        manager.renameSession(id: session.id, title: "Renamed", source: .manual)
         #expect(client.sent.isEmpty)
 
         await manager.flushAllPersistence()
         #expect(session.currentModel == "haiku")
         #expect(session.currentMode == "ask")
+        #expect(try store.loadSession(id: "local")?.title == "Renamed")
         #expect(try store.loadSession(id: "local")?.currentModel == "sonnet")
         #expect(try store.loadSession(id: "local")?.currentMode == "plan")
 
@@ -783,6 +785,109 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.currentMode == "ask")
         #expect(try store.loadSession(id: "local")?.currentModel == "haiku")
         #expect(try store.loadSession(id: "local")?.currentMode == "ask")
+    }
+
+    @Test("manual detach clears deferred model and mode picks")
+    func manualDetachClearsDeferredModelModePicks() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let firstClient = ACPMockClient()
+        let secondClient = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        scriptInitialize(firstClient)
+        scriptInitialize(secondClient)
+        firstClient.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [
+                    .init(id: "plan", name: "Plan"),
+                    .init(id: "act", name: "Act"),
+                ],
+                currentModel: "opus",
+                currentMode: "plan",
+                promptSuggestions: []
+            ))
+        }
+        firstClient.scriptAsync(method: "session/set_model") { _ in
+            await modelGate.enterAndWait()
+            return Data("{}".utf8)
+        }
+        secondClient.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [
+                    .init(id: "plan", name: "Plan"),
+                    .init(id: "act", name: "Act"),
+                ],
+                currentModel: "haiku",
+                currentMode: "act",
+                promptSuggestions: []
+            ))
+        }
+        secondClient.script(method: "session/set_model") { _ in Data("{}".utf8) }
+        secondClient.script(method: "session/set_mode") { _ in Data("{}".utf8) }
+
+        let clients = [firstClient, secondClient]
+        var connectionIndex = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                let client = clients[connectionIndex]
+                connectionIndex += 1
+                return ACPConnection(client: client)
+            }
+        )
+        let session = try #require(manager.placeholderSession(id: "local"))
+        manager.retainSession(id: session.id)
+        defer { manager.releaseSession(id: session.id) }
+
+        await manager.hydrateIfNeeded(id: session.id)
+        let firstAttach = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+        try await waitUntilAsync { await modelGate.hasEntered }
+
+        await manager.setModel(for: session.id, modelId: "haiku")
+        await manager.setMode(for: session.id, modeId: "act")
+        await manager.detach(sessionId: session.id)
+        await manager.setModel(for: session.id, modelId: "sonnet")
+        await manager.setMode(for: session.id, modeId: "plan")
+        await modelGate.release()
+        await firstAttach.value
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+        await manager.flushAllPersistence()
+
+        let modelParams = try secondClient.sent
+            .filter { $0.method == "session/set_model" }
+            .map { try #require($0.params as? ACPSessionSetModelParams) }
+        let modeParams = try secondClient.sent
+            .filter { $0.method == "session/set_mode" }
+            .map { try #require($0.params as? ACPSessionSetModeParams) }
+        #expect(modelParams.map(\.modelId) == ["sonnet"])
+        #expect(modeParams.map(\.modeId) == ["plan"])
+        #expect(session.currentModel == "sonnet")
+        #expect(session.currentMode == "plan")
+        #expect(try store.loadSession(id: session.id)?.currentModel == "sonnet")
+        #expect(try store.loadSession(id: session.id)?.currentMode == "plan")
     }
 
     @Test("model and mode picks are rejected on a live mirror")

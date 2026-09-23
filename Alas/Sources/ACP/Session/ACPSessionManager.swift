@@ -2020,9 +2020,9 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
-    /// Persist a session-level change (model/mode/title/autoRun/config options) and bump updated_at.
-    /// No-ops only when another live instance owns the writer lease (this pane
-    /// is a mirror); the writer and not-yet-leased cases persist normally.
+    /// Persist session-level changes and bump updated_at.
+    /// Pending model/mode picks remain memory-only until attach acquires
+    /// the writer lease.
     func persist(_ s: ACPSession, preserveTitle: Bool = true) {
         guard !isMirror(sessionId: s.id) else { return }
         guard var row = persistedRows[s.id] else { return }
@@ -2031,8 +2031,12 @@ final class ACPSessionManager: ObservableObject {
             row.title = s.title
             row.titleSource = s.titleSource
         }
-        row.currentModel = s.currentModel
-        row.currentMode = s.currentMode
+        if pendingModel[s.id] == nil {
+            row.currentModel = s.currentModel
+        }
+        if pendingMode[s.id] == nil {
+            row.currentMode = s.currentMode
+        }
         if s.hasReceivedConfigOptions {
             if s.isRestoringPersistedConfigOptions {
                 for (configId, value) in pendingConfigOptionValues[s.id] ?? [:] {
@@ -4030,6 +4034,7 @@ extension ACPSessionManager {
             attachingSessions.remove(sessionId)
             disposingAttachments.remove(sessionId)
             if !attachSucceeded {
+                discardDeferredModelModeUpdates(for: sessionId)
                 stopHeartbeat(sessionId: sessionId)
                 stopWriterWatch(sessionId: sessionId)
                 // A failed/aborted attach may have already spawned the supervised
@@ -6008,6 +6013,7 @@ extension ACPSessionManager {
             }
         }
         cancelAutoReconnect(sessionId: sessionId)
+        discardDeferredModelModeUpdates(for: sessionId)
         let session = sessions[sessionId]
         let shouldCloseRemote = closeRemote && session?.agentState != .disconnected
         let remoteSessionId = session?.remoteSessionId
