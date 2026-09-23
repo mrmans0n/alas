@@ -160,7 +160,7 @@ struct AppStateWorktreeCleanupBatchTests {
         let deletedIDs = results.filter { $0.outcome == .deleted }.map(\.worktreeId)
         #expect(deletedIDs.count == targets.count)
         #expect(deletedIDs.allSatisfy {
-            fixture.state.projectsManager.operationState(for: $0) == nil
+            fixture.state.projectsManager.operationState(forWorktreeId: $0, projectId: fixture.project.id) == nil
         })
     }
 
@@ -186,7 +186,7 @@ struct AppStateWorktreeCleanupBatchTests {
         let fixture = try await makeCleanupFixture(worktreeCount: 3) { _ in
             guard let state = observation.state else { return }
             observation.firstClaimAtLaunch.append(
-                state.projectsManager.operationState(for: observation.firstID)
+                state.projectsManager.operationState(forWorktreeId: observation.firstID, projectId: observation.projectID)
             )
             observation.firstListedAtLaunch.append(
                 state.projectsManager.worktrees(projectId: observation.projectID)
@@ -209,8 +209,8 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(observation.firstListedAtLaunch == [true, true])
         #expect(observation.firstClaimAtLaunch[1] == .deleting(projectId: fixture.project.id))
         // The claim is released once the trailing refresh reconciles the row.
-        #expect(fixture.state.projectsManager.operationState(for: first.id) == nil)
-        #expect(fixture.state.projectsManager.operationState(for: second.id) == nil)
+        #expect(fixture.state.projectsManager.operationState(forWorktreeId: first.id, projectId: fixture.project.id) == nil)
+        #expect(fixture.state.projectsManager.operationState(forWorktreeId: second.id, projectId: fixture.project.id) == nil)
     }
 
     /// When the batch's trailing refresh fails, the removed row must not stay
@@ -269,7 +269,7 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(!fixture.state.projectsManager
             .worktrees(projectId: fixture.project.id)
             .contains { $0.id == target.id })
-        #expect(fixture.state.projectsManager.operationState(for: target.id) == nil)
+        #expect(fixture.state.projectsManager.operationState(forWorktreeId: target.id, projectId: fixture.project.id) == nil)
         // ...and the persisted per-worktree metadata must go with it, or a
         // hosted project restores the deleted row from `cachedWorktrees` at
         // startup recovery and recreating the path inherits stale state.

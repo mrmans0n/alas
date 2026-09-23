@@ -17,36 +17,30 @@ struct ProjectsManagerTests {
     }
 
     /// A worktree id is its path, so two projects (typically one per SSH host)
-    /// can hold a checkout at the same path. A claim that names its project
-    /// must only suppress that project's row; the other project's checkout is
-    /// unrelated and stays usable.
-    @Test func operationStateQualifiesDeletionClaimsByProject() {
+    /// can hold a checkout at the same path. Claims are keyed by project *and*
+    /// id, so a claim opened for one project never suppresses the other's row
+    /// — and the two projects can hold independent claims at the same time
+    /// instead of overwriting each other.
+    @Test func operationStateKeysClaimsPerProject() {
         let first = ProjectConfig(id: "first", name: "First", path: "/srv/first", color: "#fff", addedAt: .distantPast, host: "first-host")
         let second = ProjectConfig(id: "second", name: "Second", path: "/srv/second", color: "#fff", addedAt: .distantPast, host: "second-host")
         let sharedID = "/srv/checkouts/member"
         let mgr = ProjectsManager(persistedProjects: [first, second])
-        mgr.setOperationState(id: sharedID, state: .deleting(projectId: first.id))
 
+        mgr.setOperationState(forWorktreeId: sharedID, projectId: first.id, state: .deleting(projectId: first.id))
         #expect(mgr.operationState(forWorktreeId: sharedID, projectId: first.id) == .deleting(projectId: first.id))
         #expect(mgr.operationState(forWorktreeId: sharedID, projectId: second.id) == nil)
-        // The id-keyed lookup still reports the raw claim for callers that
-        // have no project context.
-        #expect(mgr.operationState(for: sharedID) == .deleting(projectId: first.id))
-    }
-
-    /// States that don't name a project apply to the id's row regardless of
-    /// which project asks — only the project-scoped deletion claim is
-    /// qualified.
-    @Test func operationStateQualificationLeavesUnscopedClaimsAlone() {
-        let first = ProjectConfig(id: "first", name: "First", path: "/srv/first", color: "#fff", addedAt: .distantPast, host: "first-host")
-        let second = ProjectConfig(id: "second", name: "Second", path: "/srv/second", color: "#fff", addedAt: .distantPast, host: "second-host")
-        let sharedID = "/srv/checkouts/member"
-        let mgr = ProjectsManager(persistedProjects: [first, second])
-        mgr.setOperationState(id: sharedID, state: .preparingDelete)
-
-        #expect(mgr.operationState(forWorktreeId: sharedID, projectId: first.id) == .preparingDelete)
-        #expect(mgr.operationState(forWorktreeId: sharedID, projectId: second.id) == .preparingDelete)
         #expect(mgr.operationState(forWorktreeId: "absent", projectId: first.id) == nil)
+
+        // The other project claims the same path independently, and clearing
+        // one project's claim leaves the other's in place.
+        mgr.setOperationState(forWorktreeId: sharedID, projectId: second.id, state: .preparingDelete)
+        #expect(mgr.operationState(forWorktreeId: sharedID, projectId: first.id) == .deleting(projectId: first.id))
+        #expect(mgr.operationState(forWorktreeId: sharedID, projectId: second.id) == .preparingDelete)
+
+        mgr.setOperationState(forWorktreeId: sharedID, projectId: second.id, state: nil)
+        #expect(mgr.operationState(forWorktreeId: sharedID, projectId: first.id) == .deleting(projectId: first.id))
+        #expect(mgr.operationState(forWorktreeId: sharedID, projectId: second.id) == nil)
     }
 
     @Test func addProjectAppendsToList() async throws {
@@ -527,12 +521,12 @@ extension ProjectsManagerTests {
             lastActivity: Date()
         )
         mgr.insertOptimisticWorktree(optimistic)
-        mgr.setOperationState(id: optimistic.id, state: .creating)
+        mgr.setOperationState(forWorktreeId: optimistic.id, projectId: project.id, state: .creating)
 
         let after = mgr.worktrees(projectId: project.id)
         #expect(after.count == 2)
         #expect(after.contains { $0.id == optimistic.id })
-        #expect(mgr.operationState(for: optimistic.id) == .creating)
+        #expect(mgr.operationState(forWorktreeId: optimistic.id, projectId: project.id) == .creating)
 
         mgr.insertOptimisticWorktree(optimistic)
         #expect(mgr.worktrees(projectId: project.id).filter { $0.id == optimistic.id }.count == 1)
@@ -569,7 +563,7 @@ extension ProjectsManagerTests {
             lastActivity: Date(timeIntervalSince1970: 0)
         )
         mgr.insertOptimisticWorktree(optimistic)
-        mgr.setOperationState(id: optimistic.id, state: .creating)
+        mgr.setOperationState(forWorktreeId: optimistic.id, projectId: project.id, state: .creating)
 
         try await mgr.refreshWorktrees(projectId: project.id)
 
@@ -577,7 +571,7 @@ extension ProjectsManagerTests {
         let reconciled = try #require(trees.first { $0.id == optimistic.id })
         #expect(reconciled.name == live.name)
         #expect(reconciled.lastActivity == live.lastActivity)
-        #expect(mgr.operationState(for: optimistic.id) == .creating)
+        #expect(mgr.operationState(forWorktreeId: optimistic.id, projectId: project.id) == .creating)
     }
 
     @Test func refreshKeepsCreatingWorktreeUntilGitSeesIt() async throws {
@@ -598,12 +592,12 @@ extension ProjectsManagerTests {
             lastActivity: Date()
         )
         mgr.insertOptimisticWorktree(optimistic)
-        mgr.setOperationState(id: optimistic.id, state: .creating)
+        mgr.setOperationState(forWorktreeId: optimistic.id, projectId: project.id, state: .creating)
 
         try await mgr.refreshWorktrees(projectId: project.id)
 
         #expect(mgr.worktrees(projectId: project.id).contains { $0.id == optimistic.id })
-        #expect(mgr.operationState(for: optimistic.id) == .creating)
+        #expect(mgr.operationState(forWorktreeId: optimistic.id, projectId: project.id) == .creating)
     }
 
     @Test func refreshPreservesFailedWorktree() async throws {
@@ -625,7 +619,8 @@ extension ProjectsManagerTests {
         )
         mgr.insertOptimisticWorktree(optimistic)
         mgr.setOperationState(
-            id: optimistic.id,
+            forWorktreeId: optimistic.id,
+            projectId: project.id,
             state: .createFailed(
                 projectId: project.id,
                 message: "disk full",
@@ -639,7 +634,7 @@ extension ProjectsManagerTests {
         try await mgr.refreshWorktrees(projectId: project.id)
         let trees = mgr.worktrees(projectId: project.id)
         #expect(trees.contains { $0.id == optimistic.id })
-        #expect(mgr.operationState(for: optimistic.id) == .createFailed(
+        #expect(mgr.operationState(forWorktreeId: optimistic.id, projectId: project.id) == .createFailed(
             projectId: project.id,
             message: "disk full",
             base: "main",
@@ -668,7 +663,8 @@ extension ProjectsManagerTests {
         )
         mgr.insertOptimisticWorktree(optimistic)
         mgr.setOperationState(
-            id: optimistic.id,
+            forWorktreeId: optimistic.id,
+            projectId: project.id,
             state: .launchFailed(
                 projectId: project.id,
                 message: "agent missing",
@@ -679,7 +675,7 @@ extension ProjectsManagerTests {
         try await mgr.refreshWorktrees(projectId: project.id)
 
         #expect(!mgr.worktrees(projectId: project.id).contains { $0.id == optimistic.id })
-        #expect(mgr.operationState(for: optimistic.id) == nil)
+        #expect(mgr.operationState(forWorktreeId: optimistic.id, projectId: project.id) == nil)
     }
 
     @Test(arguments: [GGWorktreeMode.on, .off, .inherit])
@@ -710,7 +706,8 @@ extension ProjectsManagerTests {
         }
 
         mgr.setOperationState(
-            id: worktree.id,
+            forWorktreeId: worktree.id,
+            projectId: project.id,
             state: .createFailed(
                 projectId: project.id,
                 message: "transient",
@@ -723,7 +720,7 @@ extension ProjectsManagerTests {
         let changed = try await mgr.refreshWorktrees(projectId: project.id)
 
         #expect(changed)
-        #expect(mgr.operationState(for: worktree.id) == nil)
+        #expect(mgr.operationState(forWorktreeId: worktree.id, projectId: project.id) == nil)
         let trees = mgr.worktrees(projectId: project.id)
         #expect(trees.contains { $0.id == worktree.id })
         #expect(mgr.ggWorktreeMode(projectId: project.id, worktreeId: worktree.id) == mode)
@@ -754,7 +751,8 @@ extension ProjectsManagerTests {
         #expect(manager.worktrees(projectId: other.id).first?.id == sharedId)
 
         manager.setOperationState(
-            id: sharedId,
+            forWorktreeId: sharedId,
+            projectId: origin.id,
             state: .createFailed(
                 projectId: origin.id,
                 message: "transient",
@@ -767,12 +765,12 @@ extension ProjectsManagerTests {
 
         let otherChanged = try await manager.refreshWorktrees(projectId: other.id)
         #expect(!otherChanged)
-        #expect(manager.operationState(for: sharedId) != nil)
+        #expect(manager.operationState(forWorktreeId: sharedId, projectId: origin.id) != nil)
         #expect(manager.ggWorktreeMode(projectId: other.id, worktreeId: sharedId) == .inherit)
 
         let originChanged = try await manager.refreshWorktrees(projectId: origin.id)
         #expect(originChanged)
-        #expect(manager.operationState(for: sharedId) == nil)
+        #expect(manager.operationState(forWorktreeId: sharedId, projectId: origin.id) == nil)
         #expect(manager.ggWorktreeMode(projectId: origin.id, worktreeId: sharedId) == .on)
     }
 
@@ -793,13 +791,13 @@ extension ProjectsManagerTests {
             projectId: project.id
         )
         try await mgr.refreshWorktrees(projectId: project.id)
-        mgr.setOperationState(id: worktree.id, state: .deleting(projectId: project.id))
+        mgr.setOperationState(forWorktreeId: worktree.id, projectId: project.id, state: .deleting(projectId: project.id))
 
         try await svc.remove(repoPath: repo, worktree: worktree, deleteBranchIfMerged: false, force: false)
         try await mgr.refreshWorktrees(projectId: project.id)
 
         #expect(!mgr.worktrees(projectId: project.id).contains { $0.id == worktree.id })
-        #expect(mgr.operationState(for: worktree.id) == nil)
+        #expect(mgr.operationState(forWorktreeId: worktree.id, projectId: project.id) == nil)
     }
 
     @Test func refreshPreservesDeleteFailedStateForLiveWorktree() async throws {
@@ -810,11 +808,11 @@ extension ProjectsManagerTests {
         try await mgr.refreshWorktrees(projectId: project.id)
         let worktree = try #require(mgr.worktrees(projectId: project.id).first)
 
-        mgr.setOperationState(id: worktree.id, state: .deleteFailed(message: "permission denied"))
+        mgr.setOperationState(forWorktreeId: worktree.id, projectId: project.id, state: .deleteFailed(message: "permission denied"))
         try await mgr.refreshWorktrees(projectId: project.id)
 
         #expect(mgr.worktrees(projectId: project.id).contains { $0.id == worktree.id })
-        #expect(mgr.operationState(for: worktree.id) == .deleteFailed(message: "permission denied"))
+        #expect(mgr.operationState(forWorktreeId: worktree.id, projectId: project.id) == .deleteFailed(message: "permission denied"))
     }
 
     @Test func refreshClearsDeleteFailedWhenWorktreeDisappears() async throws {
@@ -834,14 +832,14 @@ extension ProjectsManagerTests {
             projectId: project.id
         )
         try await mgr.refreshWorktrees(projectId: project.id)
-        mgr.setOperationState(id: worktree.id, state: .deleteFailed(message: "permission denied"))
+        mgr.setOperationState(forWorktreeId: worktree.id, projectId: project.id, state: .deleteFailed(message: "permission denied"))
 
         // Simulate external removal; refresh should drop the ghost row.
         try await svc.remove(repoPath: repo, worktree: worktree, deleteBranchIfMerged: false, force: false)
         try await mgr.refreshWorktrees(projectId: project.id)
 
         #expect(!mgr.worktrees(projectId: project.id).contains { $0.id == worktree.id })
-        #expect(mgr.operationState(for: worktree.id) == nil)
+        #expect(mgr.operationState(forWorktreeId: worktree.id, projectId: project.id) == nil)
     }
 
     @Test func isMainTrueForPrimaryCheckout() async throws {

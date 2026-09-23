@@ -3463,7 +3463,7 @@ final class AppState {
 
     private func cleanupDeletedWorkspaceMemberRuntime(_ worktree: Worktree) async {
         cleanupWorktreeState(worktreeId: worktree.id)
-        projectsManager.setOperationState(id: worktree.id, state: nil)
+        projectsManager.setOperationState(for: worktree, state: nil)
         removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
         _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
         if selectedWorktreeId == worktree.id {
@@ -4040,7 +4040,7 @@ final class AppState {
             worktreeId: optimistic.id,
             mode: ggWorktreeMode
         )
-        projectsManager.setOperationState(id: optimistic.id, state: .creating)
+        projectsManager.setOperationState(forWorktreeId: optimistic.id, projectId: projectId, state: .creating)
         rightPaneStore.reevaluateGGGate(worktreeId: optimistic.id)
         if launchSurface != .delegated {
             selectWorktree(id: optimistic.id)
@@ -4107,7 +4107,7 @@ final class AppState {
                         saveProjects()
                     }
                     rightPaneStore.reevaluateGGGate(worktreeId: newWorktree.id)
-                    projectsManager.setOperationState(id: optimistic.id, state: nil)
+                    projectsManager.setOperationState(forWorktreeId: optimistic.id, projectId: projectId, state: nil)
                     if wasHidden {
                         saveProjects()
                     }
@@ -4141,8 +4141,9 @@ final class AppState {
                         mode: ggWorktreeMode
                     )
                     projectsManager.setOperationState(
-                        id: optimistic.id,
-                        state: .createFailed(
+                        forWorktreeId: optimistic.id,
+                        projectId: projectId,
+                                                state: .createFailed(
                             projectId: projectId,
                             message: error.localizedDescription,
                             base: base,
@@ -4160,8 +4161,9 @@ final class AppState {
                     mode: ggWorktreeMode
                 )
                 projectsManager.setOperationState(
-                    id: optimistic.id,
-                    state: .createFailed(
+                    forWorktreeId: optimistic.id,
+                    projectId: projectId,
+                                        state: .createFailed(
                         projectId: projectId,
                         message: msg,
                         base: base,
@@ -4542,8 +4544,9 @@ final class AppState {
         launchSurface: WorktreeLaunchSurface
     ) {
         projectsManager.setOperationState(
-            id: worktree.id,
-            state: .launchFailed(
+            forWorktreeId: worktree.id,
+            projectId: projectId,
+                        state: .launchFailed(
                 projectId: projectId,
                 message: error.localizedDescription,
                 launchSurface: launchSurface
@@ -4565,7 +4568,7 @@ final class AppState {
                 project: project,
                 refreshAvailability: true
             )
-            projectsManager.setOperationState(id: worktree.id, state: nil)
+            projectsManager.setOperationState(for: worktree, state: nil)
         } catch {
             markWorktreeLaunchFailed(
                 worktree: worktree,
@@ -5725,22 +5728,24 @@ final class AppState {
 
     private func completeReconciledCreateFailures(
         projectId: String,
-        previousOperationStates: [String: WorktreeOperationState]
+        previousOperationStates: [WorktreeOperationKey: WorktreeOperationState]
     ) async -> Bool {
         guard let project = projects.first(where: { $0.id == projectId }) else { return false }
         var changed = false
-        for (worktreeId, state) in previousOperationStates {
+        for (key, state) in previousOperationStates {
             guard case .createFailed(
-                let failedProjectId,
+                _,
                 _,
                 _,
                 _,
                 let launchSurface,
                 let issueAttachment
             ) = state,
-                failedProjectId == projectId,
-                projectsManager.operationState(forWorktreeId: worktreeId, projectId: projectId) == nil,
-                let worktree = projectsManager.worktrees(projectId: projectId).first(where: { $0.id == worktreeId })
+                key.projectId == projectId
+            else { continue }
+            let worktreeId = key.worktreeId
+            guard projectsManager.operationState(forWorktreeId: worktreeId, projectId: projectId) == nil,
+                  let worktree = projectsManager.worktrees(projectId: projectId).first(where: { $0.id == worktreeId })
             else { continue }
             guard reconciledCreateFailureCompletionClaims.insert(worktreeId).inserted else { continue }
 
@@ -5775,7 +5780,7 @@ final class AppState {
 #if DEBUG
     func completeReconciledCreateFailuresForTesting(
         projectId: String,
-        previousOperationStates: [String: WorktreeOperationState]
+        previousOperationStates: [WorktreeOperationKey: WorktreeOperationState]
     ) async -> Bool {
         await completeReconciledCreateFailures(
             projectId: projectId,
@@ -5938,7 +5943,7 @@ final class AppState {
         // can pick a sensible follow-up selection.
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
-        projectsManager.setOperationState(id: worktree.id, state: nil)
+        projectsManager.setOperationState(for: worktree, state: nil)
         projectsManager.setWorktreeHidden(
             projectId: worktree.projectId,
             path: worktree.path,
@@ -6098,7 +6103,7 @@ final class AppState {
                 continue
             }
             guard !hasLiveSessions(worktreeId: worktree.id),
-                  projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) == nil
+                  projectsManager.operationState(for: worktree) == nil
             else {
                 results.append(WorktreeBatchResult(
                     worktreeId: worktree.id,
@@ -6817,7 +6822,7 @@ final class AppState {
         await prepareRemoteAccelerationIfNeeded(for: project)
         try Task.checkCancellation()
         guard !Self.blocksWorktreeSessionAdmission(
-            projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId)
+            projectsManager.operationState(for: worktree)
         ) else {
             throw TerminalLaunchError.worktreeOperationInProgress
         }
@@ -6839,7 +6844,7 @@ final class AppState {
         forcedCwd: URL?
     ) throws -> OpenedTerminalSession {
         guard !Self.blocksWorktreeSessionAdmission(
-            projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId)
+            projectsManager.operationState(for: worktree)
         ) else {
             throw TerminalLaunchError.worktreeOperationInProgress
         }
@@ -6889,7 +6894,7 @@ final class AppState {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
         guard !Self.blocksWorktreeSessionAdmission(
-            projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId)
+            projectsManager.operationState(for: worktree)
         ) else {
             throw TerminalLaunchError.worktreeOperationInProgress
         }
@@ -9599,7 +9604,7 @@ final class AppState {
     /// re-validation-right-before-execution pattern.
     private func recheckWorkspaceOwnershipBeforeRemoval(_ worktree: Worktree) -> Bool {
         guard let refusal = workspaceOwnershipDeletionRefusal(for: worktree) else { return true }
-        projectsManager.setOperationState(id: worktree.id, state: .deleteFailed(message: refusal))
+        projectsManager.setOperationState(for: worktree, state: .deleteFailed(message: refusal))
         return false
     }
 
@@ -9629,7 +9634,7 @@ final class AppState {
             Task { @MainActor in
                 guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
                     projectsManager.setOperationState(
-                        id: worktree.id,
+                        for: worktree,
                         state: .deleteFailed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
                     )
                     return
@@ -9762,7 +9767,7 @@ final class AppState {
                 ) && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
             )
             guard sessionStateIsAcknowledged,
-                  projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) == nil,
+                  projectsManager.operationState(for: worktree) == nil,
                   ownershipIsValid
             else {
                 results.append(WorktreeBatchResult(
@@ -9834,7 +9839,7 @@ final class AppState {
                     guard postPreflightDirtyIsAcknowledged,
                           postPreflightSessionsAreAcknowledged,
                           postPreflightBranchMatches,
-                          projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) == nil,
+                          projectsManager.operationState(for: worktree) == nil,
                           postPreflightOwnershipIsValid
                     else {
                         results.append(WorktreeBatchResult(
@@ -9859,7 +9864,7 @@ final class AppState {
 
             let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
             let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
-            projectsManager.setOperationState(id: worktree.id, state: .deleting(projectId: worktree.projectId))
+            projectsManager.setOperationState(for: worktree, state: .deleting(projectId: worktree.projectId))
 
             let outcome = await performDeleteWorktree(
                 worktree: worktree,
@@ -10157,7 +10162,7 @@ final class AppState {
                 unavailableReasons[worktree.id] = "This worktree is managed by a Workspace Checkout"
                 continue
             }
-            guard projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) == nil else {
+            guard projectsManager.operationState(for: worktree) == nil else {
                 unavailableReasons[worktree.id] = "Another operation is in progress"
                 continue
             }
@@ -10226,7 +10231,7 @@ final class AppState {
                 unavailableReasons[worktree.id] = "This worktree is managed by a Workspace Checkout"
                 continue
             }
-            guard projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) == nil else {
+            guard projectsManager.operationState(for: worktree) == nil else {
                 unavailableReasons[worktree.id] = "Another operation is in progress"
                 continue
             }
@@ -10317,7 +10322,7 @@ final class AppState {
             ) && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
             guard dirtyIsAcknowledged,
                   sessionsAreAcknowledged,
-                  projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) == nil,
+                  projectsManager.operationState(for: worktree) == nil,
                   ownershipIsValid
             else {
                 results.append(.init(
@@ -10410,19 +10415,19 @@ final class AppState {
             keepBranch: keepBranch
         )
 
-        projectsManager.setOperationState(id: worktree.id, state: .preparingDelete)
+        projectsManager.setOperationState(for: worktree, state: .preparingDelete)
         guard confirmDeleteWorktree(
             Self.deleteConfirmation(branch: worktree.branch, keepBranch: keepBranch)
         ) else {
-            if projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) == .preparingDelete {
-                projectsManager.setOperationState(id: worktree.id, state: nil)
+            if projectsManager.operationState(for: worktree) == .preparingDelete {
+                projectsManager.setOperationState(for: worktree, state: nil)
             }
             return
         }
 
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
-        projectsManager.setOperationState(id: worktree.id, state: .deleting(projectId: worktree.projectId))
+        projectsManager.setOperationState(for: worktree, state: .deleting(projectId: worktree.projectId))
 
         Task { @MainActor in
             guard recheckWorkspaceOwnershipBeforeRemoval(worktree) else { return }
@@ -10449,11 +10454,11 @@ final class AppState {
             // `pendingForceDeleteWorktree` belongs to the live first
             // confirmation dialog (`beginDeleteWorktree`'s `NSAlert`), which
             // this call must never touch — see the guard below.
-            if projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) == .preparingDelete {
-                projectsManager.setOperationState(id: worktree.id, state: nil)
+            if projectsManager.operationState(for: worktree) == .preparingDelete {
+                projectsManager.setOperationState(for: worktree, state: nil)
             }
         }
-        switch projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) {
+        switch projectsManager.operationState(for: worktree) {
         case .deleting:
             return .ok
         case .preparingDelete:
@@ -10475,24 +10480,24 @@ final class AppState {
         // preflight), and an unclaimed gap here is exactly the
         // session-admission race `.preparingDelete` exists to close.
         // Released on every path that doesn't end in an actual deletion.
-        projectsManager.setOperationState(id: worktree.id, state: .preparingDelete)
+        projectsManager.setOperationState(for: worktree, state: .preparingDelete)
 
         guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
-            projectsManager.setOperationState(id: worktree.id, state: nil)
+            projectsManager.setOperationState(for: worktree, state: nil)
             return .error(Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
         }
         let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
         if !dirty.isEmpty && !force {
-            projectsManager.setOperationState(id: worktree.id, state: nil)
+            projectsManager.setOperationState(for: worktree, state: nil)
             return .error("worktree has unsaved editor changes; save them or rerun with --force to delete")
         }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
-            projectsManager.setOperationState(id: worktree.id, state: nil)
+            projectsManager.setOperationState(for: worktree, state: nil)
             return .error("Could not find the project for this worktree.")
         }
         let preflight = await Self.performDeletePreflight(worktreePath: worktree.path)
         if !force, preflight.requiresForce {
-            projectsManager.setOperationState(id: worktree.id, state: nil)
+            projectsManager.setOperationState(for: worktree, state: nil)
             if preflight.reasons.contains(.dirty) {
                 return .error("worktree has local changes; rerun with --force to delete")
             }
@@ -10506,7 +10511,7 @@ final class AppState {
         )
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
-        projectsManager.setOperationState(id: worktree.id, state: .deleting(projectId: worktree.projectId))
+        projectsManager.setOperationState(for: worktree, state: .deleting(projectId: worktree.projectId))
         Task { @MainActor in
             guard recheckWorkspaceOwnershipBeforeRemoval(worktree) else { return }
             await performDeleteWorktree(
@@ -10519,7 +10524,7 @@ final class AppState {
             if pendingForceDeleteWorktree?.id == worktree.id {
                 pendingForceDeleteWorktree = nil
                 projectsManager.setOperationState(
-                    id: worktree.id,
+                    for: worktree,
                     state: .deleteFailed(message: "worktree requires force delete; rerun with --force to delete")
                 )
             }
@@ -10823,7 +10828,7 @@ final class AppState {
     ) async -> WorktreeBatchOutcome {
         guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
             projectsManager.setOperationState(
-                id: worktree.id,
+                for: worktree,
                 state: .deleteFailed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
             )
             return .failed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
@@ -10842,7 +10847,7 @@ final class AppState {
                 )
                 && worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
             guard volatileStateIsStillAuthorized else {
-                projectsManager.setOperationState(id: worktree.id, state: nil)
+                projectsManager.setOperationState(for: worktree, state: nil)
                 return .skipped(reason: "Worktree changed since confirmation")
             }
         }
@@ -10858,11 +10863,11 @@ final class AppState {
                 authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
             )
         } catch is WorktreeDeleteContentFingerprintMismatch {
-            projectsManager.setOperationState(id: worktree.id, state: nil)
+            projectsManager.setOperationState(for: worktree, state: nil)
             return .skipped(reason: Self.changedDeleteRisksMessage)
         } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
             if stderr == Self.changedDeleteRisksMessage {
-                projectsManager.setOperationState(id: worktree.id, state: nil)
+                projectsManager.setOperationState(for: worktree, state: nil)
                 return .skipped(reason: Self.changedDeleteRisksMessage)
             }
             if !force,
@@ -10881,7 +10886,7 @@ final class AppState {
                 // reason the first confirmation does — this SwiftUI `.alert`
                 // is no less capable of yielding to other main-actor work
                 // while it's open than `NSAlert.runModal()` is.
-                projectsManager.setOperationState(id: worktree.id, state: .preparingDelete)
+                projectsManager.setOperationState(for: worktree, state: .preparingDelete)
                 pendingForceDeleteWorktree = pending
                 return .needsForce
             } else if !force,
@@ -10891,20 +10896,20 @@ final class AppState {
                 // with a modal mid-run: record the state and report it back so
                 // the sheet can tell the user to handle this one individually.
                 projectsManager.setOperationState(
-                    id: worktree.id,
+                    for: worktree,
                     state: .deleteFailed(message: stderr)
                 )
                 return .needsForce
             } else {
                 projectsManager.setOperationState(
-                    id: worktree.id,
+                    for: worktree,
                     state: .deleteFailed(message: stderr)
                 )
                 return .failed(message: stderr)
             }
         } catch {
             projectsManager.setOperationState(
-                id: worktree.id,
+                for: worktree,
                 state: .deleteFailed(message: "\(error)")
             )
             return .failed(message: "\(error)")
@@ -10978,7 +10983,7 @@ final class AppState {
         guard let worktree = projectsManager.worktrees(projectId: pending.projectId).first(where: { $0.id == pending.id })
         else { return }
 
-        projectsManager.setOperationState(id: pending.id, state: .deleting(projectId: pending.projectId))
+        projectsManager.setOperationState(forWorktreeId: pending.id, projectId: pending.projectId, state: .deleting(projectId: pending.projectId))
 
         Task { @MainActor in
             // This SwiftUI alert stays open for arbitrary user think-time —
@@ -11000,7 +11005,7 @@ final class AppState {
     func cancelForceDeletePendingWorktree() {
         if let pending = pendingForceDeleteWorktree,
            projectsManager.operationState(forWorktreeId: pending.id, projectId: pending.projectId) == .preparingDelete {
-            projectsManager.setOperationState(id: pending.id, state: nil)
+            projectsManager.setOperationState(forWorktreeId: pending.id, projectId: pending.projectId, state: nil)
         }
         pendingForceDeleteWorktree = nil
     }
@@ -12532,7 +12537,7 @@ final class AppState {
     ) async {
         guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else { return }
         guard !Self.blocksWorktreeSessionAdmission(
-            projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId)
+            projectsManager.operationState(for: worktree)
         ) else { return }
         guard let manager = acpManager(for: worktree) else { return }
         // The schedule that asked for this session can be removed while the
@@ -12624,7 +12629,7 @@ final class AppState {
                     autoRunDefault: config.harness.acpAutoRunByDefault
                 )
                 guard !Self.blocksWorktreeSessionAdmission(
-                    self.projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId)
+                    self.projectsManager.operationState(for: worktree)
                 ) else { return }
                 let tabState = ACPSessionTabState(sessionId: target.id, title: target.title)
                 let tab = tabs.append(acpSession: tabState, to: worktree.id)
@@ -12795,7 +12800,7 @@ final class AppState {
         await mgr.hydrateIfNeeded(id: sessionId)
         await deliverPendingDelegatedMessages(to: sessionId, manager: mgr)
         guard !Self.blocksWorktreeSessionAdmission(
-            projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId)
+            projectsManager.operationState(for: worktree)
         ) else { return }
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
         tabs.append(acpSession: state, to: worktree.id)

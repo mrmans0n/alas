@@ -2035,7 +2035,7 @@ struct RightPaneGGStackTests {
             projectGitWatcherFactory: { _ in watcher }
         )
         app.projectsManager.insertOptimisticWorktree(worktree)
-        app.projectsManager.setOperationState(id: worktree.id, state: nil)
+        app.projectsManager.setOperationState(for: worktree, state: nil)
         let state = app.rightPaneStore.state(
             for: worktree,
             baseBranch: "main",

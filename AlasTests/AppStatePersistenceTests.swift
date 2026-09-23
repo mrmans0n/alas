@@ -149,7 +149,7 @@ struct AppStatePersistenceTests {
         ]
         for row in rows {
             state.projectsManager.insertOptimisticWorktree(row)
-            state.projectsManager.setOperationState(id: row.id, state: nil)
+            state.projectsManager.setOperationState(for: row, state: nil)
         }
 
         state.setDefaultWorktreeOrdering(.branchAsc)

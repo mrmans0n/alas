@@ -32,7 +32,7 @@ struct ProjectsManagerHeadUpdatesTests {
         for wt in wts { mgr.insertOptimisticWorktree(wt) }
         // insertOptimisticWorktree is the only public seed API; clear any
         // operation state it implicitly leaves so updates apply.
-        for wt in wts { mgr.setOperationState(id: wt.id, state: nil) }
+        for wt in wts { mgr.setOperationState(for: wt, state: nil) }
     }
 
     private func wt(path: String, branch: String, projectId: String = "p1") -> Worktree {
@@ -121,7 +121,7 @@ struct ProjectsManagerHeadUpdatesTests {
         let (mgr, project) = makeManager()
         let row = wt(path: "/wts/feat", branch: "feat/intent")
         seed(mgr, projectId: project.id, [row])
-        mgr.setOperationState(id: row.id, state: .creating)
+        mgr.setOperationState(forWorktreeId: row.id, projectId: project.id, state: .creating)
 
         mgr.applyHeadUpdates(
             projectId: project.id,
@@ -137,7 +137,8 @@ struct ProjectsManagerHeadUpdatesTests {
         let row = wt(path: "/wts/feat", branch: "feat/intent")
         seed(mgr, projectId: project.id, [row])
         mgr.setOperationState(
-            id: row.id,
+            forWorktreeId: row.id,
+            projectId: project.id,
             state: .createFailed(
                 projectId: project.id,
                 message: "x",
@@ -162,7 +163,7 @@ struct ProjectsManagerHeadUpdatesTests {
         let (mgr, project) = makeManager()
         let row = wt(path: "/wts/feat", branch: "old")
         seed(mgr, projectId: project.id, [row])
-        mgr.setOperationState(id: row.id, state: .deleting(projectId: project.id))
+        mgr.setOperationState(forWorktreeId: row.id, projectId: project.id, state: .deleting(projectId: project.id))
 
         mgr.applyHeadUpdates(
             projectId: project.id,

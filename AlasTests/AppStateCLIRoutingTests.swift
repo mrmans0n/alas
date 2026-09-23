@@ -1091,7 +1091,7 @@ struct AppStateCLIRoutingTests {
             .appendingPathComponent(destination.lastPathComponent)
         let createdId = Worktree.makeId(path: canonicalDestination)
         #expect(response == .text(["creating feature/cli at \(destination.path)"]))
-        #expect(state.projectsManager.operationState(for: createdId) == .creating)
+        #expect(state.projectsManager.operationState(forWorktreeId: createdId, projectId: project.id) == .creating)
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == createdId })
     }
 
@@ -1149,12 +1149,12 @@ struct AppStateCLIRoutingTests {
         #expect(response == .text(["creating from-master at \(createdPath.path)"]))
         for _ in 0..<100 {
             if state.projectsManager.worktrees(projectId: project.id).contains(where: { $0.id == createdId }) &&
-                state.projectsManager.operationState(for: createdId) == nil {
+                state.projectsManager.operationState(forWorktreeId: createdId, projectId: project.id) == nil {
                 break
             }
             try? await Task.sleep(for: .milliseconds(50))
         }
-        #expect(state.projectsManager.operationState(for: createdId) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: createdId, projectId: project.id) == nil)
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == createdId })
     }
 
@@ -1173,7 +1173,7 @@ struct AppStateCLIRoutingTests {
         let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "delete-target", force: false, keepBranch: true))))
 
         #expect(response == .ok)
-        #expect(state.projectsManager.operationState(for: target.id) == .deleting(projectId: project.id))
+        #expect(state.projectsManager.operationState(forWorktreeId: target.id, projectId: project.id) == .deleting(projectId: project.id))
     }
 
     @Test func cliWorktreeDeleteIsIdempotentWhileDeleting() async throws {
@@ -1189,13 +1189,13 @@ struct AppStateCLIRoutingTests {
         )
         defer { try? FileManager.default.removeItem(at: main.path) }
         state.projectsManager.insertOptimisticWorktree(target)
-        state.projectsManager.setOperationState(id: target.id, state: .deleting(projectId: project.id))
+        state.projectsManager.setOperationState(forWorktreeId: target.id, projectId: project.id, state: .deleting(projectId: project.id))
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
         let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "feature/delete", force: true, keepBranch: true))))
 
         #expect(response == .ok)
-        #expect(state.projectsManager.operationState(for: target.id) == .deleting(projectId: project.id))
+        #expect(state.projectsManager.operationState(forWorktreeId: target.id, projectId: project.id) == .deleting(projectId: project.id))
     }
 
     @Test func cliWorktreeDeleteForceClearsStalePendingForceState() async throws {
@@ -1223,7 +1223,7 @@ struct AppStateCLIRoutingTests {
 
         #expect(response == .ok)
         #expect(state.pendingForceDeleteWorktree == nil)
-        #expect(state.projectsManager.operationState(for: target.id) == .deleting(projectId: project.id))
+        #expect(state.projectsManager.operationState(forWorktreeId: target.id, projectId: project.id) == .deleting(projectId: project.id))
     }
 
     /// Regression: a CLI delete that dismisses a leftover `.preparingDelete`
@@ -1243,7 +1243,7 @@ struct AppStateCLIRoutingTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
         let target = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "delete-stale-claim-target" })
 
-        state.projectsManager.setOperationState(id: target.id, state: .preparingDelete)
+        state.projectsManager.setOperationState(forWorktreeId: target.id, projectId: project.id, state: .preparingDelete)
         state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
             id: target.id,
             branch: target.branch,
@@ -1262,7 +1262,7 @@ struct AppStateCLIRoutingTests {
             return
         }
         #expect(state.pendingForceDeleteWorktree == nil)
-        #expect(state.projectsManager.operationState(for: target.id) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: target.id, projectId: project.id) == nil)
     }
 
     /// Regression: a `.preparingDelete` claim with no matching
@@ -1282,7 +1282,7 @@ struct AppStateCLIRoutingTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
         let target = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "delete-live-dialog-target" })
 
-        state.projectsManager.setOperationState(id: target.id, state: .preparingDelete)
+        state.projectsManager.setOperationState(forWorktreeId: target.id, projectId: project.id, state: .preparingDelete)
         #expect(state.pendingForceDeleteWorktree == nil)
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
@@ -1292,7 +1292,7 @@ struct AppStateCLIRoutingTests {
             Issue.record("Expected the CLI to refuse rather than race the live dialog")
             return
         }
-        #expect(state.projectsManager.operationState(for: target.id) == .preparingDelete)
+        #expect(state.projectsManager.operationState(forWorktreeId: target.id, projectId: project.id) == .preparingDelete)
     }
 
     /// Regression test for the review palette ignoring a per-worktree

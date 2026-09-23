@@ -22,7 +22,7 @@ struct ProjectsManagerWorktreeOrderingTests {
 
     private func seed(_ mgr: ProjectsManager, projectId: String, _ wts: [Worktree]) {
         for wt in wts { mgr.insertOptimisticWorktree(wt) }
-        for wt in wts { mgr.setOperationState(id: wt.id, state: nil) }
+        for wt in wts { mgr.setOperationState(for: wt, state: nil) }
     }
 
     private func wt(

@@ -540,7 +540,7 @@ struct AppStateRunScheduleTests {
         }
         #expect(terminals.count == 2)
         #expect(state.tabs.tabs(forWorktree: main.id).isEmpty)
-        #expect(state.projectsManager.operationState(for: created.id) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: created.id, projectId: project.id) == nil)
         // A background schedule never steals the selection.
         #expect(state.selectedWorktreeId == main.id)
     }
@@ -958,7 +958,7 @@ struct AppStateRunScheduleTests {
         #expect(manager.pendingModel[session.id] == "gpt-5")
         // The worktree is not left retryable: the tab exists and the session
         // itself carries the reason and the queued prompt.
-        #expect(state.projectsManager.operationState(for: created.id) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: created.id, projectId: project.id) == nil)
         guard case .launchFailed(let message) = outcome else {
             Issue.record("Expected the agent's failure to start to be reported, got \(outcome)")
             return
@@ -1070,7 +1070,7 @@ struct AppStateRunScheduleTests {
         let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
         // The script still ran in the new worktree; only the agent step failed.
         #expect(state.runRecords.record(worktreeID: created.id, scriptKey: "repo:setup.sh")?.status == .finished(.succeeded))
-        guard case .launchFailed(_, _, let surface) = state.projectsManager.operationState(for: created.id) else {
+        guard case .launchFailed(_, _, let surface) = state.projectsManager.operationState(forWorktreeId: created.id, projectId: project.id) else {
             Issue.record("Expected a retryable launchFailed state on the new worktree")
             return
         }

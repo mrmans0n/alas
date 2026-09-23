@@ -121,7 +121,7 @@ struct CenterSelectionStateResolverTests {
         let wt = Worktree(id: "wt1", projectId: "p1", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/a"), status: .clean, lastActivity: Date())
         let mgr = ProjectsManager(persistedProjects: [project])
         mgr.insertOptimisticWorktree(wt)
-        mgr.setOperationState(id: wt.id, state: .deleting(projectId: project.id))
+        mgr.setOperationState(forWorktreeId: wt.id, projectId: project.id, state: .deleting(projectId: project.id))
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: wt.id,
             projects: [project],
@@ -162,7 +162,7 @@ struct CenterSelectionStateResolverTests {
         let manager = ProjectsManager(persistedProjects: [deletingProject, selectedProject])
         manager.insertOptimisticWorktree(deletingRow)
         manager.insertOptimisticWorktree(selectedRow)
-        manager.setOperationState(id: sharedID, state: .deleting(projectId: deletingProject.id))
+        manager.setOperationState(forWorktreeId: sharedID, projectId: deletingProject.id, state: .deleting(projectId: deletingProject.id))
 
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: sharedID,
@@ -188,7 +188,7 @@ struct CenterSelectionStateResolverTests {
         let wt = Worktree(id: "wt1", projectId: "p1", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/a"), status: .clean, lastActivity: Date())
         let mgr = ProjectsManager(persistedProjects: [project])
         mgr.insertOptimisticWorktree(wt)
-        mgr.setOperationState(id: wt.id, state: .deleteFailed(message: "permission denied"))
+        mgr.setOperationState(forWorktreeId: wt.id, projectId: project.id, state: .deleteFailed(message: "permission denied"))
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: wt.id,
             projects: [project],
@@ -208,7 +208,7 @@ struct CenterSelectionStateResolverTests {
         let wt = Worktree(id: "wt1", projectId: "p1", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/a"), status: .clean, lastActivity: Date())
         let mgr = ProjectsManager(persistedProjects: [project])
         mgr.insertOptimisticWorktree(wt)
-        mgr.setOperationState(id: wt.id, state: .creating)
+        mgr.setOperationState(forWorktreeId: wt.id, projectId: project.id, state: .creating)
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: wt.id,
             projects: [project],
@@ -228,8 +228,9 @@ struct CenterSelectionStateResolverTests {
         let mgr = ProjectsManager(persistedProjects: [project])
         mgr.insertOptimisticWorktree(wt)
         mgr.setOperationState(
-            id: wt.id,
-            state: .createFailed(
+            forWorktreeId: wt.id,
+            projectId: project.id,
+                        state: .createFailed(
                 projectId: project.id,
                 message: "disk full",
                 base: "main",
