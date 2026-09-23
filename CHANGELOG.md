@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Internal
+
+- Run the web preview automation suite under subprocess CI isolation and split Swift batches seven ways so the subprocess lane fits its budget (#1426).
+
 ### ✨ Features
 
 - Aggregate sessions from trusted Macs in the remote hub, route scoped messages to the owning peer, and keep peer session state in sync (#1419).

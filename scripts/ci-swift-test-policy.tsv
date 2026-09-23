@@ -143,6 +143,7 @@ AlasTests/TerminalIntegrationActionsTests	subprocess	Conservative subprocess iso
 AlasTests/TerminalServiceZmxTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/TerminalSplitDragStateTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/TerminalTabStateCodableTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
+AlasTests/WebPreviewAutomationBrowserTests	subprocess	Real WKWebView against a loopback HTTP fixture; individual tests time out inside full ordinary batches but the suite passes focused execution. Evidence: ordinary-6-1 in run 35825480817 and shard 2 in run 35786644763.	#1426
 AlasTests/WorkspaceCheckoutLifecycleTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/WorkspaceCheckoutLocalIntegrationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/WorkspaceCheckoutRemoteInvocationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23

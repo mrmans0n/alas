@@ -35,7 +35,7 @@ The subprocess list preserves the conservative isolation baseline gathered durin
 #1277; it does not assert every listed suite individually reproduced a hang.
 
 The build runner publishes compiled products and the test plan, then finishes.
-Two dependent test runners balance all six ordinary batches and the subprocess
+Two dependent test runners balance all seven ordinary batches and the subprocess
 invocations by measured duration. Subprocess invocations still contain at most
 three suites. The macOS shell harnesses run on the builder. Each invocation
 has a wall-clock deadline, including startup and teardown: 360 seconds ordinary,
@@ -83,7 +83,7 @@ a fixed refresh sleep with a bounded condition wait. Measured batch totals:
 
 The following run, [35228291381](https://github.com/mrmans0n/alas/actions/runs/35228291381),
 again assigned every definition, produced no runtime skips or missing results,
-and passed all six subprocess batches. Its sole failure was
+and passed all seven subprocess batches. Its sole failure was
 `RenameFeatureTests/unopenedPreviewTargetsHaveNormalUndoInInitiatingEditor(resourceOnly:)`:
 it passed focused execution but failed in ordinary batch 3. That exact parameterized
 definition is quarantined under #1297; its sibling rename tests remain scheduled.
