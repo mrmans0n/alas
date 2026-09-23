@@ -665,6 +665,33 @@ struct EditorDisplayInputTests {
         #expect(f.view.sourceString == "abcd")
     }
 
+    @Test(arguments: [false, true]) func unchangedMarkedTextClearsClauseAttributes(cancel: Bool) async throws {
+        let f = try await Fixture("abc")
+        defer { f.remove() }
+        let adapter = try #require(f.view.displayAdapter)
+        try adapter.updateHints([
+            .init(id: "before", sourceOffset: 0, label: "x:", size: CGSize(width: 12, height: 16)),
+            .init(id: "after", sourceOffset: 3, label: "type:", size: CGSize(width: 40, height: 16))
+        ], revision: f.buffer.editGeneration)
+        let before = try #require(f.document.storage.attribute(.attachment, at: 0, effectiveRange: nil) as? EditorHintAttachment)
+        let after = try #require(f.document.storage.attribute(.attachment, at: 4, effectiveRange: nil) as? EditorHintAttachment)
+        f.view.setSourceSelectedRange(NSRange(location: 1, length: 1))
+        let marked = NSAttributedString(string: "b", attributes: [.markedClauseSegment: 2, .underlineStyle: 2])
+        f.view.setMarkedText(marked, selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        let display = try #require(adapter.displayRange(forSource: NSRange(location: 1, length: 1)))
+        #expect(f.document.storage.attribute(.markedClauseSegment, at: display.location, effectiveRange: nil) as? Int == 2)
+
+        if cancel { f.view.cancelOperation(nil) }
+        else { f.view.unmarkText() }
+
+        #expect(f.view.sourceString == "abc")
+        #expect(!f.view.hasMarkedText())
+        #expect(f.document.storage.attribute(.markedClauseSegment, at: display.location, effectiveRange: nil) == nil)
+        #expect(f.document.storage.attribute(.underlineStyle, at: display.location, effectiveRange: nil) == nil)
+        #expect(f.document.storage.attribute(.attachment, at: 0, effectiveRange: nil) as? EditorHintAttachment === before)
+        #expect(f.document.storage.attribute(.attachment, at: 4, effectiveRange: nil) as? EditorHintAttachment === after)
+    }
+
     @Test(arguments: ["deleteWordBackward:", "deleteWordForward:", "deleteToBeginningOfLine:", "deleteToEndOfLine:", "deleteToBeginningOfParagraph:", "deleteToEndOfParagraph:", "deleteBackwardByDecomposingPreviousCharacter:"])
     func everyDeletionFamilyLeavesHintOnlySelectionUntouched(selector: String) async throws {
         let f = try await Fixture("a🙂b")
