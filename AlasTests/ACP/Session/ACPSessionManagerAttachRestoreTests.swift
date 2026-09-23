@@ -748,6 +748,118 @@ struct ACPSessionManagerAttachRestoreTests {
             ACPConfigOption.currentValues(in: session.availableConfigOptions))
     }
 
+    @Test("failed config-option restoration retains valid saved values")
+    func failedConfigOptionRestorationRetainsValidSavedValues() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            configOptionValues: [
+                "effort": .string("high"),
+                "stale": .string("ultra"),
+                "removed": .string("obsolete"),
+            ]
+        ))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: "default",
+                promptSuggestions: [],
+                configOptions: [
+                    ACPConfigOption(
+                        id: "effort",
+                        name: "Thinking",
+                        currentValue: "medium",
+                        options: [
+                            .init(id: "medium", name: "Medium"),
+                            .init(id: "high", name: "High"),
+                        ]
+                    ),
+                    ACPConfigOption(
+                        id: "stale",
+                        name: "Other",
+                        currentValue: "medium",
+                        options: [.init(id: "medium", name: "Medium")]
+                    ),
+                ]
+            ))
+        }
+        client.script(method: "session/set_config_option") { _ in
+            throw ACPClientError.noScript(method: "session/set_config_option")
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+        let runner = try #require(manager.runners[session.id])
+        session.autoRunEnabled = true
+        manager.persist(session)
+        await manager.flushAllPersistence()
+        runner.persistSessionRow()
+        await runner.flushPersistence()
+        await manager.flushAllPersistence()
+
+        #expect(client.sent.map(\.method) == [
+            "initialize",
+            "session/load",
+            "session/set_config_option",
+        ])
+        #expect(ACPConfigOption.currentValues(in: session.availableConfigOptions) == [
+            "effort": .string("medium"),
+            "stale": .string("medium"),
+        ])
+        #expect(try store.loadSession(id: "local")?.configOptionValues == [
+            "effort": .string("high"),
+            "stale": .string("medium"),
+        ])
+    }
+
+    @Test("failed mode restoration keeps the agent-loaded mode")
+    func failedModeRestorationKeepsAgentLoadedMode() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [],
+                availableModes: [
+                    .init(id: "default", name: "Default"),
+                    .init(id: "plan", name: "Plan"),
+                ],
+                currentModel: nil,
+                currentMode: "default",
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/set_mode") { _ in
+            throw ACPClientError.noScript(method: "session/set_mode")
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+        await manager.flushAllPersistence()
+
+        #expect(client.sent.map(\.method) == [
+            "initialize",
+            "session/load",
+            "session/set_mode",
+        ])
+        #expect(session.currentMode == "default")
+        #expect(try store.loadSession(id: "local")?.currentMode == "default")
+    }
+
     @Test("live config-option persistence refreshes manager cache")
     func liveConfigOptionPersistenceRefreshesManagerCache() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

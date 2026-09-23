@@ -1558,7 +1558,7 @@ final class ACPSessionManager: ObservableObject {
         row.currentModel = s.currentModel
         row.currentMode = s.currentMode
         if s.hasReceivedConfigOptions && !s.isRestoringPersistedConfigOptions {
-            row.configOptionValues = ACPConfigOption.currentValues(in: s.availableConfigOptions)
+            row.configOptionValues = s.configOptionValuesForPersistence()
         }
         row.autoRun = s.autoRunEnabled
         row.updatedAt = now
@@ -3360,6 +3360,7 @@ extension ACPSessionManager {
     ) async {
         let loadedOptions = session.availableConfigOptions
         for loadedOption in loadedOptions where loadedOption.id != excludedId {
+            session.clearPendingConfigOptionRestoration(for: loadedOption.id)
             guard let selectedValue = persistedValues[loadedOption.id],
                   let index = session.availableConfigOptions.firstIndex(where: { $0.id == loadedOption.id }),
                   session.availableConfigOptions[index] == loadedOption,
@@ -3401,6 +3402,11 @@ extension ACPSessionManager {
                 if let currentIndex = session.availableConfigOptions.firstIndex(where: { $0.id == loadedOption.id }),
                    session.availableConfigOptions[currentIndex] == optimisticOption {
                     session.availableConfigOptions[currentIndex] = loadedOption
+                    session.retainConfigOptionRestoration(
+                        selectedValue,
+                        loadedValue: loadedOption.currentValue,
+                        for: loadedOption.id
+                    )
                 }
             }
         }
@@ -4548,10 +4554,19 @@ extension ACPSessionManager {
                 }
             if let modeToRestore,
                session.currentMode == loadedMode {
-                session.currentMode = modeToRestore
-                persist(session)
                 let remoteId = session.remoteSessionId ?? sessionId
-                try? await runner.connection.setMode(sessionId: remoteId, modeId: modeToRestore)
+                session.currentMode = modeToRestore
+                do {
+                    try await runner.connection.setMode(sessionId: remoteId, modeId: modeToRestore)
+                    if session.currentMode == modeToRestore {
+                        persist(session)
+                    }
+                } catch {
+                    if session.currentMode == modeToRestore {
+                        session.currentMode = loadedMode
+                        persist(session)
+                    }
+                }
             }
             let configBackedModelId: String? = {
                 guard case .configOption(let id) = session.chipState.models?.source else { return nil }
