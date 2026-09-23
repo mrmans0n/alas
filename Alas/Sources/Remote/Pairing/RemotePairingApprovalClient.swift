@@ -280,5 +280,4 @@ final class RemotePairingApprovalClient {
         default: throw ApprovalFailure.invalid
         }
     }
-
 }

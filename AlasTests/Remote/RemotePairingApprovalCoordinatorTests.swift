@@ -127,7 +127,8 @@ import Testing
             phase: p.phase, counterCode: "COUNTER", responseDigest: nil)
         let request = ApprovalEnvelope(payload: payload, signature: f.requesterSigner.signApproval(payload, reply: false)!)
         var issued = 0
-        let issue = { issued += 1; return ApprovalIssuedResponse(body: Data("reply".utf8), deviceID: "device") }
+        let issue = { issued += 1
+        return ApprovalIssuedResponse(body: Data("reply".utf8), deviceID: "device") }
         #expect(try f.coordinator.redeem(request, issue: issue) == Data("reply".utf8))
         #expect(try f.coordinator.redeem(request, issue: issue) == Data("reply".utf8))
         #expect(issued == 1)

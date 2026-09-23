@@ -58,9 +58,12 @@ struct RemotePairingApprovalIntegrationTests {
         try await pair.waitForPendingRequest()
         switch reason {
         case "cancel": await pair.cancel()
-        case "expiry": pair.advanceClock(by: 120); pair.pollGate.fire()
-        case "shutdown": pair.b.setEnabled(false); pair.pollGate.fire()
-        default: pair.b.restartApprovals(); pair.pollGate.fire()
+        case "expiry": pair.advanceClock(by: 120)
+        pair.pollGate.fire()
+        case "shutdown": pair.b.setEnabled(false)
+        pair.pollGate.fire()
+        default: pair.b.restartApprovals()
+        pair.pollGate.fire()
         }
         let result = await request.value
         switch reason {
@@ -265,7 +268,9 @@ struct RemotePairingApprovalIntegrationTests {
             makeConnection: { _, _ in Socket() }, now: { self.fixture.time })
         lazy var coordinator = makeCoordinator()
         init(id: String, origin: String, fixture: ApprovalPairFixture) {
-            self.id = id; self.origin = origin; self.fixture = fixture
+            self.id = id
+            self.origin = origin
+            self.fixture = fixture
         }
         func makeCoordinator() -> RemotePairingApprovalCoordinator {
             let value = RemotePairingApprovalCoordinator(localPeer: { self.peer }, signer: signer, now: { self.fixture.time })
@@ -275,7 +280,8 @@ struct RemotePairingApprovalIntegrationTests {
             pairing.onDeviceRevoked = { [weak value] in value?.invalidate(deviceID: $0) }
             return value
         }
-        func setEnabled(_ value: Bool) { enabled = value; coordinator.setEnabled(value) }
+        func setEnabled(_ value: Bool) { enabled = value
+        coordinator.setEnabled(value) }
         func restartApprovals() { coordinator = makeCoordinator() }
         func responder() -> RemoteHTTPResponder {
             var result = RemoteHTTPResponder(pairing: pairing,
@@ -352,7 +358,8 @@ struct RemotePairingApprovalIntegrationTests {
     }
     func advanceClock(by seconds: TimeInterval) {
         time += seconds
-        a.coordinator.expire(); b.coordinator.expire()
+        a.coordinator.expire()
+        b.coordinator.expire()
     }
     func pairWithCode() async -> RemotePeerManager.AddError? {
         let result = await a.manager.addPeer(code: b.pairing.beginPairing(), origins: b.peer.origins)
@@ -366,7 +373,8 @@ struct RemotePairingApprovalIntegrationTests {
     func close() {
         for signal in [pending, pollGate, issued, redeemGate] { signal.cancel() }
         for task in a.callbacks + b.callbacks { task.cancel() }
-        a.manager.disconnectAll(); b.manager.disconnectAll()
+        a.manager.disconnectAll()
+        b.manager.disconnectAll()
     }
     func expectReciprocalPair() throws {
         #expect(devicesA.count == 1 && devicesB.count == 1)
@@ -408,7 +416,8 @@ struct RemotePairingApprovalIntegrationTests {
             // Complete real reciprocal callbacks before delivering the original reply,
             // exercising the manager's early-confirmation buffering as well.
             await finishCallbacks()
-            if holdRedeemReply { issued.fire(); try await redeemGate.wait() }
+            if holdRedeemReply { issued.fire()
+            try await redeemGate.wait() }
             if dropRedeemReply {
                 dropRedeemReply = false
                 advanceClock(by: advanceAfterLostRedeem)

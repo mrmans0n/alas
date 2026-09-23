@@ -366,7 +366,8 @@ final class RemotePeerManager {
         let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins,
             counterCode: counterCode, publicKey: me.publicKey.isEmpty ? nil : me.publicKey)
         let outcome = await redeem(advertisement)
-        if Task.isCancelled { endAttempt(counterCode: counterCode); return .cancelled }
+        if Task.isCancelled { endAttempt(counterCode: counterCode)
+        return .cancelled }
         switch outcome {
         case .paired(let token, let serverId, let name, let publicKey, let origin):
             if let expectedPeer, serverId != expectedPeer.serverID || publicKey != expectedPeer.publicKey {

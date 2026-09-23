@@ -125,7 +125,8 @@ struct RemotePairingApprovalClientTests {
         exchange.receiverOffset = offset
         let client = exchange.client()
         let result = await client.request(localPeer: exchange.requester, target: exchange.target, expectedServerID: "receiver")
-        guard case .approved(let session) = result else { Issue.record("Expected approval despite clock skew"); return }
+        guard case .approved(let session) = result else { Issue.record("Expected approval despite clock skew")
+        return }
         #expect(session.payload.expiresAtMilliseconds == Int64((10_120 + offset) * 1_000))
         #expect(session.localDeadline == Date(timeIntervalSince1970: 10_120))
         let outcome = await client.redeem(session: session, advertisement: .init(serverId: "requester", name: "Requester",
@@ -163,8 +164,10 @@ struct RemotePairingApprovalClientTests {
         }
         let client = exchange.client()
         let result = await client.request(localPeer: exchange.requester, target: exchange.target, expectedServerID: "receiver")
-        if elapsed == 119 { #expect(result == .expired); return }
-        guard case .approved(let session) = result else { Issue.record("Expected approval before deadline"); return }
+        if elapsed == 119 { #expect(result == .expired)
+        return }
+        guard case .approved(let session) = result else { Issue.record("Expected approval before deadline")
+        return }
         // The receiver advances independently before redemption and refuses the stale authorization.
         exchange.receiverOffset += 2
         let outcome = await client.redeem(session: session, advertisement: .init(serverId: "requester", name: "Requester",
@@ -185,7 +188,8 @@ struct RemotePairingApprovalClientTests {
         exchange.failFirstOrigin = true
         let client = exchange.client()
         let result = await client.request(localPeer: exchange.requester, target: exchange.target, expectedServerID: "receiver")
-        guard case .approved(let session) = result else { Issue.record("Expected approval"); return }
+        guard case .approved(let session) = result else { Issue.record("Expected approval")
+        return }
         #expect(session.receiverKey == exchange.receiver.publicKey)
         #expect(session.origin == "http://receiver:8765")
         #expect(exchange.issues == 0)
@@ -243,7 +247,8 @@ struct RemotePairingApprovalClientTests {
         let exchange = Exchange()
         exchange.lostReply = operation
         let result = await exchange.client().request(localPeer: exchange.requester, target: exchange.target, expectedServerID: "receiver")
-        guard case .approved = result else { Issue.record("Expected recovered approval"); return }
+        guard case .approved = result else { Issue.record("Expected recovered approval")
+        return }
         let calls = exchange.calls.filter { $0.url?.lastPathComponent == operation.rawValue }
         #expect(calls.count >= 2)
         #expect(calls[0].httpBody == calls[1].httpBody)
@@ -254,10 +259,12 @@ struct RemotePairingApprovalClientTests {
     func cancellationRecoversLostReplyThenCancelsCurrentChallenge(operation: ApprovalOperation) async throws {
         let exchange = Exchange()
         let client = exchange.client()
-        if operation != .redeem { exchange.lostReply = operation; exchange.cancelOnLoss = true }
+        if operation != .redeem { exchange.lostReply = operation
+        exchange.cancelOnLoss = true }
         let result = await client.request(localPeer: exchange.requester, target: exchange.target, expectedServerID: "receiver")
         if operation == .redeem {
-            guard case .approved(let session) = result else { Issue.record("Expected approval"); return }
+            guard case .approved(let session) = result else { Issue.record("Expected approval")
+            return }
             exchange.lostReply = .redeem
             exchange.cancelOnLoss = true
             _ = await client.redeem(session: session, advertisement: .init(serverId: "requester", name: "Requester",

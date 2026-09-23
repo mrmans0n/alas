@@ -31,7 +31,8 @@ struct RemoteAppStateAccessTests {
         state.config.remote.port = port
         state.config.remote.allowedHosts = ["approval.test"]
         state.syncRemoteServer()
-        defer { state.config.remote.enabled = false; state.syncRemoteServer() }
+        defer { state.config.remote.enabled = false
+        state.syncRemoteServer() }
         for _ in 0..<50 where state.remotePort != port { try await Task.sleep(for: .milliseconds(20)) }
         let remote = RemotePairingApprovalClientTests.Exchange()
         let challenge = try state.remotePairingApprovals.challenge(requester: remote.requester,
@@ -45,9 +46,12 @@ struct RemoteAppStateAccessTests {
             signature: try #require(remote.requesterSigner.signApproval(submission, reply: false))))
         state.remotePairingApprovals.decide(.allow, requestID: p.requestID)
         switch setting {
-        case "discovery": state.config.remote.discoverable = false; state.syncRemotePeers()
-        case "federation": state.config.remote.federationEnabled = false; state.refreshRemoteAccessState()
-        case "remote": state.config.remote.enabled = false; state.syncRemoteServer()
+        case "discovery": state.config.remote.discoverable = false
+        state.syncRemotePeers()
+        case "federation": state.config.remote.federationEnabled = false
+        state.refreshRemoteAccessState()
+        case "remote": state.config.remote.enabled = false
+        state.syncRemoteServer()
         default: state.stopPairingApprovals()
         }
         #expect(state.remotePairingApprovals.entries.first?.phase == .cancelled)
@@ -73,7 +77,8 @@ struct RemoteAppStateAccessTests {
         let port = try availableTCPPort()
         state.config.remote.port = port
         state.syncRemoteServer()
-        defer { state.config.remote.enabled = false; state.syncRemoteServer() }
+        defer { state.config.remote.enabled = false
+        state.syncRemoteServer() }
         for _ in 0..<50 where state.remotePort != port { try await Task.sleep(for: .milliseconds(20)) }
         state.startNearbyApproval(.init(id: "receiver", name: "Other Mac", protocolVersion: 1, model: nil, endpoints: []))
         for _ in 0..<50 where exchange.coordinator.entries.first?.phase != .pending {
@@ -87,8 +92,10 @@ struct RemoteAppStateAccessTests {
         #expect(exchange.issues == 0)
         let task = try #require(state.nearbyApprovalTask)
         switch setting {
-        case "federation": state.config.remote.federationEnabled = false; state.syncRemotePeers()
-        case "remote": state.config.remote.enabled = false; state.refreshRemoteAccessState()
+        case "federation": state.config.remote.federationEnabled = false
+        state.syncRemotePeers()
+        case "remote": state.config.remote.enabled = false
+        state.refreshRemoteAccessState()
         case "shutdown": state.stopPairingApprovals()
         default: state.cancelNearbyApproval()
         }
@@ -111,7 +118,8 @@ struct RemoteAppStateAccessTests {
                            pairingApprovalVersion: nil))
         }
         state.syncRemoteServer()
-        defer { state.config.remote.enabled = false; state.syncRemoteServer() }
+        defer { state.config.remote.enabled = false
+        state.syncRemoteServer() }
         for _ in 0..<50 where state.remotePort != port { try await Task.sleep(for: .milliseconds(20)) }
         state.startNearbyApproval(.init(id: "receiver", name: "Other Mac", protocolVersion: 1, model: nil, endpoints: []))
         await state.nearbyApprovalTask?.value
@@ -149,7 +157,8 @@ struct RemoteAppStateAccessTests {
         let port = try availableTCPPort()
         state.config.remote.port = port
         state.syncRemoteServer()
-        defer { state.config.remote.enabled = false; state.syncRemoteServer() }
+        defer { state.config.remote.enabled = false
+        state.syncRemoteServer() }
         for _ in 0..<50 where state.remotePort != port { try await Task.sleep(for: .milliseconds(20)) }
         state.startNearbyApproval(.init(id: "receiver", name: "Other Mac", protocolVersion: 1, model: nil, endpoints: []))
         let task = try #require(state.nearbyApprovalTask)

@@ -306,7 +306,6 @@ struct RemotePeerManagerTests {
         #expect(manager.peers.isEmpty)
     }
 
-
     @MainActor
     final class FakeLink: RemotePeerConnecting {
         var state: RemotePeerConnection.State = .idle

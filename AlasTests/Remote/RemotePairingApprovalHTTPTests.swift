@@ -63,7 +63,9 @@ import Testing
             challenge: p.challenge, expiresAtMilliseconds: p.expiresAtMilliseconds, phase: p.phase,
             counterCode: "counter", responseDigest: nil)
         let envelope = ApprovalEnvelope(payload: payload, signature: f.caller.signApproval(payload, reply: false)!)
-        struct Pair: Encodable { let deviceName: String; let peer: RemotePeerAdvertisement; let approval: ApprovalEnvelope }
+        struct Pair: Encodable { let deviceName: String
+        let peer: RemotePeerAdvertisement
+        let approval: ApprovalEnvelope }
         func body(code: String = "counter", origins: [String]? = nil) throws -> Data {
             try JSONEncoder().encode(Pair(deviceName: p.requester.name,
                 peer: RemotePeerAdvertisement(serverId: p.requester.serverID, name: p.requester.name,
