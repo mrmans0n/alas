@@ -20,3 +20,46 @@ struct ACPComposerControlPresentationDictationTests {
         #expect(ACPComposerControlPresentation.micHelp(for: .unavailable) == "Dictation unavailable")
     }
 }
+
+@Suite("ACP composer compact controls")
+struct ACPComposerOverflowItemsTests {
+    @Test("compact menu keeps every available session setting in a stable order")
+    func allSettingsRemainAvailable() {
+        let items = ACPComposerOverflowItem.items(
+            hasMode: true,
+            hasThinking: true,
+            hasFastMode: true,
+            parameterIDs: ["context-window", "temperature"],
+            booleanIDs: ["sandbox"],
+            hasProvider: true,
+            hasAuthentication: true
+        )
+
+        #expect(items == [
+            .mode,
+            .thinking,
+            .fastMode,
+            .autoRun,
+            .parameter("context-window"),
+            .parameter("temperature"),
+            .boolean("sandbox"),
+            .provider,
+            .authentication,
+        ])
+    }
+
+    @Test("unavailable controls do not leave empty menu rows")
+    func absentSettingsAreOmitted() {
+        let items = ACPComposerOverflowItem.items(
+            hasMode: false,
+            hasThinking: false,
+            hasFastMode: false,
+            parameterIDs: [],
+            booleanIDs: [],
+            hasProvider: false,
+            hasAuthentication: false
+        )
+
+        #expect(items == [.autoRun])
+    }
+}
