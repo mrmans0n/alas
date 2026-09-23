@@ -168,6 +168,7 @@ enum ACPToolCallGrouping {
     /// `ACPTranscriptRenderRow`). Callers that memoize the result must
     /// include the expansion state in their cache key; `ACPVisibleRowsCache`
     /// does this via `ACPToolCallGroupExpansionSeeds.generation`.
+    @MainActor
     static func fold(
         rows: [ACPTranscriptVisibleRow],
         messages: [ACPMessage],
@@ -239,6 +240,7 @@ enum ACPToolCallGrouping {
     /// Work belonging to historical turns. A following user message is the
     /// durable completion boundary available both live and after transcript
     /// restoration; the turn's last agent row remains readable as its answer.
+    @MainActor
     private static func completedTurnKinds(
         for rows: [ACPTranscriptVisibleRow],
         in messages: [ACPMessage],
@@ -275,7 +277,9 @@ enum ACPToolCallGrouping {
 
         func record(user: Int, answer: Int) {
             guard user < answer, messages.indices.contains(answer) else { return }
-            let memberIndices = rows.lazy.map(\.index).filter { $0 > user && $0 < answer }
+            let memberIndices = rows.lazy.map(\.index).filter { index in
+                index > user && index < answer && isCompletedTurnWork(messages[index])
+            }
             guard !memberIndices.isEmpty else { return }
             let duration = messageCreatedAt(user).flatMap { start in
                 messageCreatedAt(answer).map { max(0, $0.timeIntervalSince(start)) }
@@ -302,6 +306,13 @@ enum ACPToolCallGrouping {
             record(user: latestUser, answer: currentTurnAnswerIndex)
         }
         return result
+    }
+
+    @MainActor
+    private static func isCompletedTurnWork(_ message: ACPMessage) -> Bool {
+        if isCollapsible(message) { return true }
+        guard case .agent(_, _, let buffer) = message else { return false }
+        return buffer.phase == .commentary
     }
 }
 
