@@ -1,6 +1,10 @@
 import SwiftUI
 
 enum ACPComposerControlPresentation {
+    static func modeUsesWarningTint(_ spec: ChipSpec) -> Bool {
+        spec.options.first(where: { $0.id == spec.currentId })?.kind == .fullAccess
+    }
+
     static func fastModeIconName(isEnabled: Bool) -> String {
         isEnabled ? "bolt.fill" : "bolt"
     }
@@ -561,7 +565,7 @@ struct ACPComposer: View {
         switch item {
         case .mode:
             if let mode = session.chipState.mode {
-                compactSelectRow("Mode", spec: mode, accent: theme.color("accent"))
+                compactSelectRow("Mode", spec: mode, accent: modeAccent(mode))
             }
         case .thinking:
             if let thinking = session.chipState.thinking {
@@ -960,7 +964,6 @@ struct ACPComposer: View {
     // MARK: - Chip builders driven by ACPChipState
 
     private func modeChip(_ spec: ChipSpec) -> some View {
-        let currentKind = spec.options.first(where: { $0.id == spec.currentId })?.kind
         return chip(spec: spec,
              label: chipLabel(prefix: "Mode", spec: spec),
              placeholder: "Mode",
@@ -968,7 +971,12 @@ struct ACPComposer: View {
              // per-action approval, so the chip switches to the warning
              // tint as a passive heads-up. Every other kind — including no
              // kind at all — keeps the standard accent.
-             accent: currentKind == .fullAccess ? theme.color("warn") : theme.color("accent"))
+             accent: modeAccent(spec))
+    }
+
+    private func modeAccent(_ spec: ChipSpec) -> Color {
+        ACPComposerControlPresentation.modeUsesWarningTint(spec)
+            ? theme.color("warn") : theme.color("accent")
     }
 
     private func thinkingChip(_ spec: ChipSpec) -> some View {

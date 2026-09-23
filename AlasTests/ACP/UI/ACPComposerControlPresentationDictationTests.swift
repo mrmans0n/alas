@@ -23,6 +23,19 @@ struct ACPComposerControlPresentationDictationTests {
 
 @Suite("ACP composer compact controls")
 struct ACPComposerOverflowItemsTests {
+    @Test("full-access mode retains its warning tint in compact controls")
+    func fullAccessWarns() {
+        let spec = ChipSpec(source: .mode, options: [
+            .init(id: "safe", name: "Safe", description: nil, kind: .standard),
+            .init(id: "full", name: "Full access", description: nil, kind: .fullAccess),
+        ], currentId: "full")
+
+        #expect(ACPComposerControlPresentation.modeUsesWarningTint(spec))
+        #expect(!ACPComposerControlPresentation.modeUsesWarningTint(
+            ChipSpec(source: .mode, options: spec.options, currentId: "safe")
+        ))
+    }
+
     @Test("compact menu keeps every available session setting in a stable order")
     func allSettingsRemainAvailable() {
         let items = ACPComposerOverflowItem.items(
