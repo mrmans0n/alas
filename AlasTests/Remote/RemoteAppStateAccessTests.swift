@@ -5,6 +5,200 @@ import Darwin
 
 @MainActor
 struct RemoteAppStateAccessTests {
+    @Test func disabledApprovalOverlayDoesNotLoadSigner() {
+        let state = AppState(store: MemoryStore())
+        var signerLoads = 0
+        state.remoteApprovalSignerProvider = {
+            signerLoads += 1
+            return RemotePairingApprovalClientTests.Signer()
+        }
+        #expect(state.remotePairingApprovals.entries.isEmpty)
+        state.syncPairingApprovalState()
+        state.refreshRemoteAccessState()
+        state.syncRemotePeers()
+        #expect(signerLoads == 0)
+    }
+
+    @Test(arguments: ["discovery", "federation", "remote", "shutdown"])
+    func approvalConfigurationChangesCancelIncomingWork(setting: String) async throws {
+        let state = AppState(store: MemoryStore())
+        let signer = RemotePairingApprovalClientTests.Signer()
+        state.remoteApprovalSignerProvider = { signer }
+        state.config.remote.enabled = true
+        state.config.remote.federationEnabled = true
+        state.config.remote.discoverable = true
+        let port = try availableTCPPort()
+        state.config.remote.port = port
+        state.config.remote.allowedHosts = ["approval.test"]
+        state.syncRemoteServer()
+        defer { state.config.remote.enabled = false
+        state.syncRemoteServer() }
+        for _ in 0..<50 where state.remotePort != port { try await Task.sleep(for: .milliseconds(20)) }
+        let remote = RemotePairingApprovalClientTests.Exchange()
+        let challenge = try state.remotePairingApprovals.challenge(requester: remote.requester,
+            attemptNonce: RemoteIdentityCrypto.randomChallenge())
+        let p = challenge.payload
+        let submission = ApprovalPayload(operation: .submit, requestID: p.requestID, requester: p.requester,
+            receiver: p.receiver, attemptNonce: p.attemptNonce, operationNonce: RemoteIdentityCrypto.randomChallenge(),
+            challenge: p.challenge, expiresAtMilliseconds: p.expiresAtMilliseconds, phase: p.phase,
+            counterCode: nil, responseDigest: nil)
+        _ = try state.remotePairingApprovals.receive(.init(payload: submission,
+            signature: try #require(remote.requesterSigner.signApproval(submission, reply: false))))
+        state.remotePairingApprovals.decide(.allow, requestID: p.requestID)
+        switch setting {
+        case "discovery": state.config.remote.discoverable = false
+        state.syncRemotePeers()
+        case "federation": state.config.remote.federationEnabled = false
+        state.refreshRemoteAccessState()
+        case "remote": state.config.remote.enabled = false
+        state.syncRemoteServer()
+        default: state.stopPairingApprovals()
+        }
+        #expect(state.remotePairingApprovals.entries.first?.phase == .cancelled)
+        #expect(state.remoteServer?.pairingApprovalVersion == nil)
+    }
+
+    @Test(arguments: ["cancel", "federation", "remote", "shutdown"])
+    func outgoingApprovalCancelsWithoutPairingBeforeAllow(setting: String) async throws {
+        let state = AppState(store: MemoryStore())
+        let exchange = RemotePairingApprovalClientTests.Exchange()
+        exchange.time = Date()
+        exchange.receiverOffset = 3_600
+        state.remoteApprovalSignerProvider = { exchange.requesterSigner }
+        state.remoteApprovalResolver = { _ in .success(exchange.target) }
+        state.remoteApprovalClientFactory = { signer in
+            RemotePairingApprovalClient(fetch: { try await exchange.fetch($0) }, signer: signer,
+                sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        }
+        state.config.remote.enabled = true
+        state.config.remote.federationEnabled = true
+        state.config.remote.serverId = "requester"
+        state.config.remote.allowedHosts = ["approval.test"]
+        let port = try availableTCPPort()
+        state.config.remote.port = port
+        state.syncRemoteServer()
+        defer { state.config.remote.enabled = false
+        state.syncRemoteServer() }
+        for _ in 0..<50 where state.remotePort != port { try await Task.sleep(for: .milliseconds(20)) }
+        state.startNearbyApproval(.init(id: "receiver", name: "Other Mac", protocolVersion: 1, model: nil, endpoints: []))
+        for _ in 0..<50 where exchange.coordinator.entries.first?.phase != .pending {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(exchange.coordinator.entries.first?.phase == .pending)
+        if case .waiting(_, let deadline) = state.nearbyApprovalState {
+            #expect(deadline.timeIntervalSinceNow > 110)
+            #expect(deadline.timeIntervalSinceNow <= 120)
+        } else { Issue.record("Expected waiting state with a local countdown") }
+        #expect(exchange.issues == 0)
+        let task = try #require(state.nearbyApprovalTask)
+        switch setting {
+        case "federation": state.config.remote.federationEnabled = false
+        state.syncRemotePeers()
+        case "remote": state.config.remote.enabled = false
+        state.refreshRemoteAccessState()
+        case "shutdown": state.stopPairingApprovals()
+        default: state.cancelNearbyApproval()
+        }
+        await task.value
+        #expect(state.nearbyApprovalState == .cancelled)
+        #expect(exchange.coordinator.entries.first?.phase == .cancelled)
+        #expect(exchange.issues == 0)
+    }
+
+    @Test(arguments: [true, false])
+    func missingCapabilityOffersCodeOnlyWhenIdentityMatches(mismatch: Bool) async throws {
+        let state = AppState(store: MemoryStore())
+        state.config.remote.enabled = true
+        state.config.remote.federationEnabled = true
+        state.config.remote.allowedHosts = ["approval.test"]
+        let port = try availableTCPPort()
+        state.config.remote.port = port
+        state.remoteApprovalResolver = { _ in
+            .success(.init(origins: ["http://other:8765"], serverID: mismatch ? "wrong" : "receiver",
+                           pairingApprovalVersion: nil))
+        }
+        state.syncRemoteServer()
+        defer { state.config.remote.enabled = false
+        state.syncRemoteServer() }
+        for _ in 0..<50 where state.remotePort != port { try await Task.sleep(for: .milliseconds(20)) }
+        state.startNearbyApproval(.init(id: "receiver", name: "Other Mac", protocolVersion: 1, model: nil, endpoints: []))
+        await state.nearbyApprovalTask?.value
+        if mismatch {
+            #expect(state.nearbyApprovalState == .failed(.resolution(.identityMismatch)))
+        } else {
+            #expect(state.nearbyApprovalState == .legacy(instanceID: "receiver", origins: ["http://other:8765"]))
+        }
+    }
+
+    @Test func legacyCodePairingResolvesFreshOriginsBeforeRedeeming() async {
+        let state = AppState(store: MemoryStore())
+        let instance = RemoteDiscoveredInstance(id: "receiver", name: "Other Mac", protocolVersion: 1,
+                                                model: nil, endpoints: [])
+        state.nearbyApprovalState = .legacy(instanceID: "receiver", origins: ["http://stale:8765"])
+        var resolvedInstances: [String] = []
+        state.remoteApprovalResolver = { instance in
+            resolvedInstances.append(instance.id)
+            return .success(.init(origins: ["http://fresh:8765"], serverID: "receiver",
+                                  pairingApprovalVersion: nil))
+        }
+        let origins = await state.resolveLegacyNearbyOrigins(for: instance)
+        if case .origins(let value) = origins {
+            #expect(value == ["http://fresh:8765"])
+        } else {
+            Issue.record("Expected fresh origins")
+        }
+        #expect(resolvedInstances == ["receiver"])
+    }
+
+    @Test func disablingFederationDuringRedemptionRevokesCounterCodeAndCancelsReceiver() async throws {
+        let state = AppState(store: MemoryStore())
+        let exchange = RemotePairingApprovalClientTests.Exchange()
+        exchange.time = Date()
+        var redeemSuspended = false
+        exchange.afterReply = { operation in
+            if operation == .redeem && !redeemSuspended {
+                redeemSuspended = true
+                try await Task.sleep(for: .seconds(3600))
+            }
+        }
+        state.remoteApprovalResolver = { _ in .success(exchange.target) }
+        state.remoteApprovalClientFactory = { signer in
+            RemotePairingApprovalClient(fetch: { try await exchange.fetch($0) }, signer: signer,
+                now: { exchange.time }, sleep: { _ in
+                    exchange.time += 2
+                    if let entry = exchange.coordinator.entries.first {
+                        exchange.coordinator.decide(.allow, requestID: entry.id)
+                    }
+                })
+        }
+        state.config.remote.enabled = true
+        state.config.remote.federationEnabled = true
+        state.config.remote.allowedHosts = ["approval.test"]
+        let port = try availableTCPPort()
+        state.config.remote.port = port
+        state.syncRemoteServer()
+        defer { state.config.remote.enabled = false
+        state.syncRemoteServer() }
+        for _ in 0..<50 where state.remotePort != port { try await Task.sleep(for: .milliseconds(20)) }
+        state.startNearbyApproval(.init(id: "receiver", name: "Other Mac", protocolVersion: 1, model: nil, endpoints: []))
+        let task = try #require(state.nearbyApprovalTask)
+        for _ in 0..<100 where !redeemSuspended { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(redeemSuspended)
+        #expect(exchange.issues == 1)
+        let request = try #require(exchange.calls.first { $0.url?.path == "/pair" })
+        struct Body: Decodable { let peer: RemotePeerAdvertisement }
+        let ad = try JSONDecoder().decode(Body.self, from: #require(request.httpBody)).peer
+        let counterCode = try #require(ad.counterCode)
+        state.config.remote.federationEnabled = false
+        state.syncRemotePeers()
+        await task.value
+        #expect(state.nearbyApprovalState == .cancelled)
+        #expect(exchange.coordinator.entries.first?.phase == .cancelled)
+        #expect(throws: RemoteServerError.unauthorized) {
+            try state.remotePairing.redeemPeer(code: counterCode, deviceName: "Receiver", peerServerId: "receiver")
+        }
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }

@@ -35,6 +35,22 @@ final class RemoteServer {
     /// has no identity key: pairing still works, but the resulting record
     /// stays unverified and phase 3 will not carry sessions over it.
     private let signer: (any RemoteIdentitySigning)?
+    var approvalCoordinator: RemotePairingApprovalCoordinator?
+    var approvalEnabled: @MainActor () -> Bool = { false }
+
+    var pairingApprovalVersion: Int? {
+        guard approvalCoordinator != nil, approvalEnabled(), identityProvider().federationEnabled,
+              let signer = signer as? any ApprovalSigning,
+              let key = Data(base64Encoded: signer.publicKey), key.count == 32,
+              key.base64EncodedString() == signer.publicKey else { return nil }
+        return 1
+    }
+
+    func diagnosticsSnapshot() -> RemoteDiagnosticsSnapshot {
+        var snapshot = diagnosticsProvider(port)
+        snapshot.pairingApprovalVersion = pairingApprovalVersion
+        return snapshot
+    }
     /// Peer-session routing handed to every gateway this server creates.
     /// Nil means clients see local sessions only. Read once per accepted
     /// connection, so setting it affects sockets opened from then on; the
@@ -53,6 +69,7 @@ final class RemoteServer {
     var onConnectionDeviceCountsChange: (([String: Int]) -> Void)?
     /// Fired on the main actor after another Alas instance paired here.
     var onPeerPaired: (@MainActor (RemotePeerPairingRequest) -> Void)?
+    var onApprovedPeerPaired: (@MainActor (RemotePeerPairingRequest, String, ApprovalPeer) -> Void)?
     /// Bonjour advertisement applied to the live listener, and to any listener
     /// `start()` creates later (a port-fallback restart must keep advertising).
     /// Nil means not discoverable.
@@ -237,13 +254,21 @@ final class RemoteServer {
         var configured = RemoteHTTPResponder(
             pairing: pairing,
             assets: assets,
-            diagnostics: { self.diagnosticsProvider(self.port) },
+            diagnostics: { self.diagnosticsSnapshot() },
             originPolicy: originPolicy
         )
         configured.acceptsPeers = { identity().federationEnabled }
         configured.onPeerPaired = { [weak self] request in self?.onPeerPaired?(request) }
+        configured.onApprovedPeerPaired = { [weak self] request, requestID, localPeer in
+            self?.onApprovedPeerPaired?(request, requestID, localPeer)
+        }
         configured.identity = identity
         configured.identityProof = proveIdentity
+        if let coordinator = approvalCoordinator {
+            configured.approval = RemotePairingApprovalHTTP(coordinator: coordinator, enabled: { [weak self] in
+                self?.pairingApprovalVersion == 1
+            })
+        }
         let responder = configured   // immutable copy so the escaping closure below captures a value
         let provider = self.provider   // captured strongly; the server owns it for its lifetime
         let federation = self.federation

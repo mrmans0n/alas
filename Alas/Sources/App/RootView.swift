@@ -31,6 +31,7 @@ enum RootWorkspaceVisibilityPolicy {
 struct RootView: View {
     @Bindable var state: AppState
     @State private var showNewProject = false
+    @State private var approvalStackHeight: CGFloat = 0
     @State private var editingProject: ProjectConfig?
     @State private var removingProject: ProjectConfig?
     @State private var newWorktreePresentation: NewWorktreePresentation?
@@ -42,6 +43,13 @@ struct RootView: View {
 
     var body: some View {
         rootContent
+            .environment(\.approvalNotificationInset, approvalStackHeight > 0 ? approvalStackHeight + 24 : 0)
+            .overlay(alignment: .bottomTrailing) {
+                RemotePairingApprovalStack(coordinator: state.remotePairingApprovals)
+                    .frame(maxWidth: 380)
+                    .padding(16)
+            }
+            .onPreferenceChange(ApprovalStackHeightKey.self) { approvalStackHeight = $0 }
             .environment(\.theme, state.themeStore.current)
             .onChange(of: state.themeStore.current.id, initial: true) { _, _ in
                 // `initial: true` is load-bearing: AppState.init() calls
@@ -1087,6 +1095,7 @@ private struct RootBaseHandlers: ViewModifier {
             }
         return s
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                state.stopPairingApprovals()
                 state.flushScheduledSpacesSave()
                 state.stopAllProjectGitWatchers()
                 state.tabs.snapshotDirtyBuffersForQuit()

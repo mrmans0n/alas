@@ -36,6 +36,8 @@ final class RemotePeerManager {
         case invalidLink
         case expiredCode
         case originRejected
+        case approvalExpired
+        case approvalDisabled
         case unreachable
         /// This Mac advertises no address a peer could dial back on, so the
         /// exchange cannot complete even if the far side is reachable.
@@ -189,8 +191,8 @@ final class RemotePeerManager {
     /// The last known GENUINELY confirmed (or user-durable) state for a
     /// given identity — as opposed to `peers.first(where:)`, which can just
     /// as easily show another, still-uncommitted sibling attempt's own
-    /// provisional write. `addPeer` snapshots this as `previousState`
-    /// before its own round trip, specifically so that when its own
+    /// provisional write. `addPeer` captures this at publication,
+    /// after its own round trip, specifically so that when its own
     /// reciprocal exchange fails, rolling back reaches all the way to the
     /// last state actually worth keeping — not merely "whatever the row
     /// happened to hold a moment ago" — even across a chain of several
@@ -201,6 +203,29 @@ final class RemotePeerManager {
     @ObservationIgnored private var durableStateByServerId: [String: RemotePeer] = [:]
     @ObservationIgnored private var connections: [String: any RemotePeerConnecting] = [:]
     @ObservationIgnored private var isActive = false
+    private struct ApprovedInbound {
+        let request: RemotePeerPairingRequest
+        let localPeer: ApprovalPeer
+        var previous: RemotePeer?
+        var previousOwner: String?
+    }
+    @ObservationIgnored private var approvedInbound: [String: ApprovedInbound] = [:]
+    private typealias PairingPredecessor = (peer: RemotePeer?, owner: String?)
+    /// Inbound cancellation can invalidate a predecessor while outbound
+    /// pairing awaits reciprocal confirmation.
+    @ObservationIgnored private var outboundPredecessors: [String: PairingPredecessor] = [:]
+    @ObservationIgnored private var approvedCounterCodes: Set<String> = []
+    @ObservationIgnored private var provisionalOwners: Set<String> = []
+
+    private func savePeers() {
+        store.save(peers.compactMap { peer in
+            isProvisional(peer.serverId) ? durableStateByServerId[peer.serverId] : peer
+        })
+    }
+
+    private func isProvisional(_ serverId: String) -> Bool {
+        lastUpsertOwnerByServerId[serverId].map { provisionalOwners.contains($0) } ?? false
+    }
 
     init(store: RemotePeerStore,
          pairing: RemotePairingService,
@@ -295,7 +320,30 @@ final class RemotePeerManager {
     func addPeer(code: String, origins: [String]) async -> AddError? {
         let code = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !code.isEmpty, !origins.isEmpty else { return .invalidLink }
+        return await completePairing(origins: origins, expectedPeer: nil, localPeer: nil) { ad in
+            await self.pairer.pair(origins: origins, code: code, deviceName: ad.name, advertisement: ad)
+        }
+    }
+
+    func addApprovedPeer(expectedPeer: ApprovalPeer, localPeer: ApprovalPeer? = nil,
+                         shouldPublish: () -> Bool = { true },
+                         redeem: (RemotePeerAdvertisement) async -> RemotePeerPairer.Outcome) async -> AddError? {
         let me = boundedIdentity()
+        guard !me.publicKey.isEmpty, RemotePeerAdvertisement.isPlausiblePublicKey(me.publicKey),
+              !expectedPeer.publicKey.isEmpty,
+              localPeer.map({ $0.serverID == me.serverId && $0.publicKey == me.publicKey }) ?? true
+        else { return .identityUnproven }
+        guard !wouldRebindIdentity(serverId: expectedPeer.serverID, publicKey: expectedPeer.publicKey)
+        else { return .identityRebindRefused }
+        return await completePairing(origins: expectedPeer.origins, expectedPeer: expectedPeer,
+                                     localPeer: localPeer, shouldPublish: shouldPublish, redeem: redeem)
+    }
+
+    private func completePairing(origins: [String], expectedPeer: ApprovalPeer?, localPeer: ApprovalPeer?,
+                                 shouldPublish: () -> Bool = { true },
+                                 redeem: (RemotePeerAdvertisement) async -> RemotePeerPairer.Outcome) async -> AddError? {
+        let me = localPeer.map { LocalIdentity(serverId: $0.serverID, name: $0.name, origins: $0.origins, publicKey: $0.publicKey) }
+            ?? boundedIdentity()
         // With no advertisable address the counter-code is unusable: the far
         // side's pair-back finds nothing to dial, gives up, and revokes the
         // device it just minted for us. Reporting success here and failing
@@ -313,10 +361,23 @@ final class RemotePeerManager {
         // INBOUND pairing created for the identity this reply turns out to
         // name.
         let startedAt = Date()
-        let counterCode = pairing.beginPairing()
-        let advertisement = advertisement(counterCode: counterCode)
-        switch await pairer.pair(origins: origins, code: code, deviceName: me.name, advertisement: advertisement) {
+        let counterCode = expectedPeer == nil ? pairing.beginPairing() : pairing.beginApprovedPairing()
+        defer { outboundPredecessors.removeValue(forKey: counterCode) }
+        if expectedPeer != nil {
+            approvedCounterCodes.insert(counterCode)
+            provisionalOwners.insert(counterCode)
+        }
+        let advertisement = RemotePeerAdvertisement(serverId: me.serverId, name: me.name, origins: me.origins,
+            counterCode: counterCode, publicKey: me.publicKey.isEmpty ? nil : me.publicKey)
+        let outcome = await redeem(advertisement)
+        if Task.isCancelled { endAttempt(counterCode: counterCode)
+        return .cancelled }
+        switch outcome {
         case .paired(let token, let serverId, let name, let publicKey, let origin):
+            if let expectedPeer, serverId != expectedPeer.serverID || publicKey != expectedPeer.publicKey {
+                endAttempt(counterCode: counterCode)
+                return .identityUnproven
+            }
             // An origin is an address, never an identity. Standing in for a
             // missing `serverId` with one would key the record — and the
             // `/health` probe's expected id, and the device records `forget`
@@ -365,9 +426,13 @@ final class RemotePeerManager {
             // chain of several overlapping, ultimately-failed attempts,
             // rather than just undoing one sibling's edit into another's.
             let previousState = durableStateByServerId[serverId]
+            let previousOwner = approvedInbound.values.first {
+                $0.request.localDeviceId == previousState?.localDeviceId
+            }?.request.counterCode
+            outboundPredecessors[counterCode] = (previousState, previousOwner)
+            lastUpsertOwnerByServerId[serverId] = counterCode
             upsert(serverId: serverId, name: name ?? origin, origins: origins,
                    lastOrigin: origin, token: token, publicKey: publicKey, localDeviceId: nil)
-            lastUpsertOwnerByServerId[serverId] = counterCode
             // `upsert` proves OUR call to A succeeded — nothing more. Our own
             // token is valid the instant A's HTTP reply arrives, so OUR
             // outbound link would come online just fine regardless of
@@ -382,7 +447,20 @@ final class RemotePeerManager {
             // the device it minted for us, but sends no error our way.
             guard let peer = peers.first(where: { $0.serverId == serverId }) else { return nil }
             if await waitForReciprocalRedemption(peerId: peer.id, counterCode: counterCode, ownFields: peer) {
-                return nil
+                if shouldPublish() { return nil }
+                if lastUpsertOwnerByServerId[serverId] == counterCode {
+                    let saved = outboundPredecessors[counterCode] ?? (peer: nil, owner: nil)
+                    let predecessor = saved.owner == nil ? saved : validPredecessor(saved)
+                    lastUpsertOwnerByServerId[serverId] = predecessor.owner
+                    if let confirmed = peers.first(where: { $0.id == peer.id })?.localDeviceId {
+                        pairing.revoke(deviceId: confirmed)
+                        onRevokeDevice?(confirmed)
+                    }
+                    if let previous = predecessor.peer { restorePreviousState(previous, peerId: peer.id) }
+                    else { removeProvisionalPeer(peerId: peer.id) }
+                }
+                endAttempt(counterCode: counterCode)
+                return .cancelled
             }
             // The wait gave up without finding a match, but a confirmation
             // could still land in the buffer right at that boundary, or
@@ -402,8 +480,13 @@ final class RemotePeerManager {
             // treat a genuine, later upsert as a no-op when its written
             // values coincidentally match this attempt's own.
             if lastUpsertOwnerByServerId[serverId] == counterCode {
-                if let previousState {
-                    restorePreviousState(previousState, peerId: peer.id)
+                let saved = outboundPredecessors[counterCode] ?? (peer: nil, owner: nil)
+                // Only retained approvals own this cancellation chain. Keep
+                // the existing restoration contract for older durable peers.
+                let predecessor = saved.owner == nil ? saved : validPredecessor(saved)
+                lastUpsertOwnerByServerId[serverId] = predecessor.owner
+                if let previous = predecessor.peer {
+                    restorePreviousState(previous, peerId: peer.id)
                 } else {
                     // Not `forget`: this is this attempt's own automatic
                     // rollback, not a user-initiated cancellation, and a
@@ -424,6 +507,12 @@ final class RemotePeerManager {
         case .originRejected:
             endAttempt(counterCode: counterCode)
             return .originRejected
+        case .approvalExpired:
+            endAttempt(counterCode: counterCode)
+            return .approvalExpired
+        case .approvalDisabled:
+            endAttempt(counterCode: counterCode)
+            return .approvalDisabled
         case .identityUnproven:
             endAttempt(counterCode: counterCode)
             return .identityUnproven
@@ -446,8 +535,18 @@ final class RemotePeerManager {
     /// nothing left to ever claim or sweep it.
     private func endAttempt(counterCode: String) {
         if let buffered = pendingReciprocalConfirmations.removeValue(forKey: counterCode) {
-            revokeIfOrphaned(serverId: buffered.serverId, localDeviceId: buffered.localDeviceId)
+            if approvedCounterCodes.contains(counterCode) {
+                pairing.revoke(deviceId: buffered.localDeviceId)
+                onRevokeDevice?(buffered.localDeviceId)
+            } else {
+                revokeIfOrphaned(serverId: buffered.serverId, localDeviceId: buffered.localDeviceId)
+            }
         }
+        if approvedCounterCodes.contains(counterCode), let deviceID = pairing.cancelCode(counterCode) {
+            onRevokeDevice?(deviceID)
+        }
+        approvedCounterCodes.remove(counterCode)
+        provisionalOwners.remove(counterCode)
         endedCounterCodes[counterCode] = Date()
     }
 
@@ -484,6 +583,75 @@ final class RemotePeerManager {
     /// are the responder and pair back; without one we are the initiator and
     /// only learn which local device record represents the peer.
     func handleInboundPeer(_ request: RemotePeerPairingRequest) async {
+        _ = await completeInboundPeer(request, approvalID: nil, localPeer: nil)
+    }
+
+    func noteApprovedPeerPairingArrived(requestID: String, request: RemotePeerPairingRequest, localPeer: ApprovalPeer) {
+        notePeerPairingArrived(serverId: request.peerServerId, localDeviceId: request.localDeviceId)
+        approvedInbound[requestID] = ApprovedInbound(request: request, localPeer: localPeer,
+                                                    previous: nil, previousOwner: nil)
+    }
+
+    func handleInboundApprovedPeer(requestID: String) async -> Bool {
+        guard let attempt = approvedInbound[requestID] else { return false }
+        let succeeded = await completeInboundPeer(attempt.request, approvalID: requestID, localPeer: attempt.localPeer)
+        if !succeeded { cancelApprovedPairing(requestID: requestID) }
+        return succeeded
+    }
+
+    func releaseApprovedPairing(requestID: String) {
+        approvedInbound.removeValue(forKey: requestID)
+    }
+
+    func cancelApprovedPairing(requestID: String) {
+        guard let attempt = approvedInbound.removeValue(forKey: requestID) else { return }
+        let request = attempt.request
+        startGenerationAtRedeem.removeValue(forKey: request.localDeviceId)
+        let predecessor = validPredecessor((attempt.previous, attempt.previousOwner))
+        // A superseded attempt can be cancelled before its successor. Remove
+        // it from every retained rollback link so no later cancellation revives it.
+        for id in approvedInbound.keys where approvedInbound[id]?.previous?.localDeviceId == request.localDeviceId {
+            approvedInbound[id]?.previous = predecessor.peer
+            approvedInbound[id]?.previousOwner = predecessor.owner
+        }
+        for code in outboundPredecessors.keys where outboundPredecessors[code]?.peer?.localDeviceId == request.localDeviceId {
+            outboundPredecessors[code] = predecessor
+        }
+        if durableStateByServerId[request.peerServerId]?.localDeviceId == request.localDeviceId {
+            durableStateByServerId[request.peerServerId] = predecessor.peer
+        }
+        if lastUpsertOwnerByServerId[request.peerServerId] == request.counterCode,
+           let peer = peers.first(where: { $0.serverId == request.peerServerId }),
+           peer.localDeviceId == request.localDeviceId {
+            lastUpsertOwnerByServerId[request.peerServerId] = predecessor.owner
+            if let previous = predecessor.peer {
+                // This attempt owns the confirmed device, so rollback restores the old one too.
+                if let index = peers.firstIndex(where: { $0.id == peer.id }) { peers[index].localDeviceId = nil }
+                restorePreviousState(previous, peerId: peer.id)
+            } else { removeProvisionalPeer(peerId: peer.id) }
+        }
+        pairing.revoke(deviceId: request.localDeviceId)
+        onRevokeDevice?(request.localDeviceId)
+        savePeers()
+    }
+
+    private func validPredecessor(_ predecessor: PairingPredecessor) -> PairingPredecessor {
+        var previous = predecessor.peer
+        var owner = predecessor.owner
+        // Direct device revocation may precede its coordinator callback. Walk
+        // past any such revoked predecessor while its rollback record remains.
+        while let deviceID = previous?.localDeviceId,
+              !pairing.devices.contains(where: { $0.id == deviceID }) {
+            guard let ancestor = approvedInbound.values.first(where: { $0.request.localDeviceId == deviceID })
+            else { return (nil, nil) }
+            previous = ancestor.previous
+            owner = ancestor.previousOwner
+        }
+        return (previous, owner)
+    }
+
+    private func completeInboundPeer(_ request: RemotePeerPairingRequest, approvalID: String?,
+                                      localPeer: ApprovalPeer?) async -> Bool {
         if let counterCode = request.counterCode {
             // `startGenerationAtRedeem`, captured synchronously at
             // redemption time by `notePeerPairingArrived`, is authoritative
@@ -502,12 +670,13 @@ final class RemotePeerManager {
             if wouldRebindIdentity(serverId: request.peerServerId, publicKey: request.peerPublicKey) {
                 pairing.revoke(deviceId: request.localDeviceId)
                 onRevokeDevice?(request.localDeviceId)
-                return
+                return false
             }
             let me = boundedIdentity()
-            let advertisement = advertisement(counterCode: nil)
+            let advertisement = localPeer.map { RemotePeerAdvertisement(serverId: $0.serverID, name: $0.name,
+                origins: $0.origins, counterCode: nil, publicKey: $0.publicKey) } ?? advertisement(counterCode: nil)
             guard case .paired(let token, let repliedServerId, _, let repliedPublicKey, let origin) = await pairer.pair(
-                origins: request.origins, code: counterCode, deviceName: me.name, advertisement: advertisement)
+                origins: request.origins, code: counterCode, deviceName: localPeer?.name ?? me.name, advertisement: advertisement)
             else {
                 // The peer already holds a token for this Mac: it was minted
                 // before this branch ran. Returning empty-handed would leave it
@@ -515,7 +684,7 @@ final class RemotePeerManager {
                 // the inbound grant back and let the exchange start over.
                 pairing.revoke(deviceId: request.localDeviceId)
                 onRevokeDevice?(request.localDeviceId)
-                return
+                return false
             }
             // The reply's own identity must confirm what the ORIGINAL /pair
             // request claimed. `request.origins` is attacker-controlled, so
@@ -526,7 +695,7 @@ final class RemotePeerManager {
             guard let repliedServerId, !repliedServerId.isEmpty, repliedServerId == request.peerServerId else {
                 pairing.revoke(deviceId: request.localDeviceId)
                 onRevokeDevice?(request.localDeviceId)
-                return
+                return false
             }
             // Same reasoning one level deeper: the advertised key is a claim
             // — public keys are public, so anyone can name someone else's —
@@ -540,7 +709,7 @@ final class RemotePeerManager {
                   !wouldRebindIdentity(serverId: request.peerServerId, publicKey: repliedPublicKey) else {
                 pairing.revoke(deviceId: request.localDeviceId)
                 onRevokeDevice?(request.localDeviceId)
-                return
+                return false
             }
             // The generation changed since this exchange started: either
             // the user forgot this peer (this SAME attempt's own, or a
@@ -553,15 +722,27 @@ final class RemotePeerManager {
             // relationship from this now-stale reply, undoing the user's
             // revocation just as surely as resurrecting the peer row
             // itself would.
-            guard forgetGeneration(for: request.peerServerId) == startGeneration else {
+            guard !Task.isCancelled, forgetGeneration(for: request.peerServerId) == startGeneration,
+                  approvalID.map({ approvedInbound[$0] != nil }) ?? true else {
                 pairing.revoke(deviceId: request.localDeviceId)
                 onRevokeDevice?(request.localDeviceId)
-                return
+                return false
             }
+            if let approvalID {
+                // Snapshot at publication, after the await: another pairing may
+                // have established the durable relationship we are replacing.
+                let previous = durableStateByServerId[request.peerServerId]
+                let previousOwner = approvedInbound.values.first {
+                    $0.request.localDeviceId == previous?.localDeviceId
+                }?.request.counterCode
+                approvedInbound[approvalID]?.previous = previous
+                approvedInbound[approvalID]?.previousOwner = previousOwner
+            }
+            lastUpsertOwnerByServerId[request.peerServerId] = counterCode
+            if approvalID != nil { pairing.commitApprovedPeer(deviceId: request.localDeviceId) }
             upsert(serverId: request.peerServerId, name: request.peerName, origins: request.origins,
                    lastOrigin: origin, token: token, publicKey: repliedPublicKey,
                    localDeviceId: request.localDeviceId)
-            lastUpsertOwnerByServerId[request.peerServerId] = counterCode
             // This branch's own upsert always carries a real
             // `localDeviceId` — the responder's own reciprocal round trip
             // completing IS the confirmation, with no separate wait step —
@@ -591,8 +772,11 @@ final class RemotePeerManager {
             // `revokeIfOrphaned`) rather than buffered on the chance
             // something later happens to sweep it out.
             if endedCounterCodes.removeValue(forKey: request.redeemedCode) != nil {
-                revokeIfOrphaned(serverId: request.peerServerId, localDeviceId: request.localDeviceId)
-                return
+                if approvedCounterCodes.contains(request.redeemedCode) {
+                    pairing.revoke(deviceId: request.localDeviceId)
+                    onRevokeDevice?(request.localDeviceId)
+                } else { revokeIfOrphaned(serverId: request.peerServerId, localDeviceId: request.localDeviceId) }
+                return false
             }
             let now = Date()
             // Sweep anything old enough that no attempt could still
@@ -620,6 +804,7 @@ final class RemotePeerManager {
                 serverId: request.peerServerId, publicKey: request.peerPublicKey,
                 localDeviceId: request.localDeviceId, receivedAt: now)
         }
+        return true
     }
 
     func forget(peerId: String) {
@@ -656,7 +841,7 @@ final class RemotePeerManager {
             pairing.revoke(deviceId: deviceId)
             onRevokeDevice?(deviceId)
         }
-        store.save(peers)
+        savePeers()
         onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
     }
 
@@ -736,8 +921,13 @@ final class RemotePeerManager {
                 confirmed.localDeviceId = buffered.localDeviceId
                 peers[index] = confirmed
                 lastUpsertOwnerByServerId[confirmed.serverId] = counterCode
+                if approvedCounterCodes.contains(counterCode) {
+                    pairing.commitApprovedPeer(deviceId: buffered.localDeviceId)
+                    provisionalOwners.remove(counterCode)
+                    approvedCounterCodes.remove(counterCode)
+                }
                 durableStateByServerId[confirmed.serverId] = confirmed
-                store.save(peers)
+                savePeers()
                 if isActive { connect(confirmed) }
                 return true
             }
@@ -771,7 +961,7 @@ final class RemotePeerManager {
         }
         peers[index] = restored
         durableStateByServerId[restored.serverId] = restored
-        store.save(peers)
+        savePeers()
         if isActive { connect(restored) }
     }
 
@@ -799,7 +989,7 @@ final class RemotePeerManager {
         connections[peerId] = nil
         states[peerId] = nil
         durableStateByServerId[peer.serverId] = nil
-        store.save(peers)
+        savePeers()
         onFederationEvent?(.availabilityChanged(serverId: peer.serverId))
     }
 
@@ -839,6 +1029,7 @@ final class RemotePeerManager {
             }
         case .hello(_, let name, let protocolVersion, _):
             guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
+            guard !isProvisional(peers[index].serverId) else { return }
             // The identity is deliberately NOT adopted from the frame. It is
             // the key everything else hangs off — the link's expected id, the
             // `/health` check, and the device records `forget` revokes — so
@@ -857,15 +1048,16 @@ final class RemotePeerManager {
             // or protocol version this snapshot last had — reverting
             // cosmetic metadata a working connection has since updated.
             durableStateByServerId[peers[index].serverId] = peers[index]
-            store.save(peers)
+            savePeers()
         case .originChanged(let origin):
             guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
+            guard !isProvisional(peers[index].serverId) else { return }
             peers[index].lastOrigin = origin
             // Same reasoning as `.hello` above: a stale durable snapshot
             // restored after a later failed re-pair could prefer a dead
             // origin again over the one this connection just proved works.
             durableStateByServerId[peers[index].serverId] = peers[index]
-            store.save(peers)
+            savePeers()
         case .message(let message):
             // Nothing may be consumed for a peer whose record is not bound
             // to verified key material: an unverified record is only as
@@ -888,7 +1080,7 @@ final class RemotePeerManager {
     /// pins the key and flips this to true.
     func carriesSessions(peerId: String) -> Bool {
         guard let peer = peers.first(where: { $0.id == peerId }) else { return false }
-        return peer.isVerified && states[peerId] == .online
+        return !isProvisional(peer.serverId) && peer.isVerified && states[peerId] == .online
     }
 
     private func upsert(serverId: String, name: String, origins: [String], lastOrigin: String,
@@ -938,8 +1130,8 @@ final class RemotePeerManager {
                               localDeviceId: localDeviceId, addedAt: now())
             peers.append(peer)
         }
-        store.save(peers)
-        if isActive { connect(peer) }
+        savePeers()
+        if isActive && !isProvisional(peer.serverId) { connect(peer) }
     }
 }
 

@@ -119,7 +119,7 @@ protocol RemoteIdentitySigning: AnyObject {
 /// builds an `AppState`) would be a cost paid by everyone for a feature most
 /// runs never reach.
 @MainActor
-final class RemoteIdentityKeyProvider: RemoteIdentitySigning {
+final class RemoteIdentityKeyProvider: RemoteIdentitySigning, ApprovalSigning {
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "remote-identity")
     /// The account name this Mac's private key is stored under.
     static let keyAccount = "peer-identity-key"
@@ -143,6 +143,14 @@ final class RemoteIdentityKeyProvider: RemoteIdentitySigning {
     func proof(challenge: String, serverId: String) -> RemoteIdentityProof? {
         guard !challenge.isEmpty, !serverId.isEmpty, let key = privateKey() else { return nil }
         return RemoteIdentityCrypto.sign(serverId: serverId, challenge: challenge, with: key)
+    }
+
+    func signApproval(_ payload: ApprovalPayload, reply: Bool) -> String? {
+        let transcript = ApprovalWire.bytes(payload, reply: reply)
+        guard !transcript.isEmpty, let key = privateKey(),
+              let signature = try? key.signature(for: transcript)
+        else { return nil }
+        return signature.base64EncodedString()
     }
 
     private func privateKey() -> Curve25519.Signing.PrivateKey? {

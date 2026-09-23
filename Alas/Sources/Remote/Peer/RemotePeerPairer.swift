@@ -15,6 +15,8 @@ struct RemotePeerPairer {
         case paired(token: String, serverId: String?, name: String?, publicKey: String?, origin: String)
         case expiredCode
         case originRejected
+        case approvalExpired
+        case approvalDisabled
         case unreachable
         /// An origin answered with key material but did not prove it holds
         /// the matching private key. Kept apart from `unreachable` because it
@@ -165,6 +167,10 @@ extension RemotePeerPairer.Outcome: CustomStringConvertible {
             return "expiredCode"
         case .originRejected:
             return "originRejected"
+        case .approvalExpired:
+            return "approvalExpired"
+        case .approvalDisabled:
+            return "approvalDisabled"
         case .unreachable:
             return "unreachable"
         case .identityUnproven:

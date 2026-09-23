@@ -134,6 +134,7 @@ struct CenterPaneView: View {
     /// and rail for the whole launch, so its legacy reveal action cannot work.
     var rightPaneStartupSuppressed: Bool = false
     @Environment(\.theme) var theme
+    @Environment(\.approvalNotificationInset) private var approvalNotificationInset
     @State private var startupRecoveryReadyKey: String?
 
     var body: some View {
@@ -773,6 +774,7 @@ struct CenterPaneView: View {
                     }
                 }
                 .padding(12)
+                .padding(.bottom, approvalNotificationInset)
                 .animation(.easeOut(duration: 0.2), value: runScriptFailures.map(\.id))
             }
         }

@@ -64,6 +64,12 @@ struct SettingsWindow: View {
         .frame(maxHeight: .infinity)
         .background(theme.color("bg-1"))
         .background(WindowConfigurator())
+        .background(SettingsPairingCloseObserver { state.cancelNearbyApproval() })
+        .overlay(alignment: .bottomTrailing) {
+            RemotePairingApprovalStack(coordinator: state.remotePairingApprovals)
+                .frame(maxWidth: 380)
+                .padding(16)
+        }
         .environment(\.theme, theme)
         .ignoresSafeArea()
         .onAppear {
@@ -88,4 +94,34 @@ struct SettingsWindow: View {
         section = pending
         state.pendingSettingsSection = nil
     }
+}
+
+/// A Settings scene can keep its view alive after its window closes.
+private struct SettingsPairingCloseObserver: NSViewRepresentable {
+    let onClose: () -> Void
+
+    func makeNSView(context: Context) -> SettingsPairingCloseView {
+        let view = SettingsPairingCloseView()
+        view.onClose = onClose
+        return view
+    }
+
+    func updateNSView(_ view: SettingsPairingCloseView, context: Context) {
+        view.onClose = onClose
+    }
+}
+
+private final class SettingsPairingCloseView: NSView {
+    var onClose: (() -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self)
+        if let window {
+            NotificationCenter.default.addObserver(self, selector: #selector(windowWillClose),
+                name: NSWindow.willCloseNotification, object: window)
+        }
+    }
+
+    @objc private func windowWillClose(_ notification: Notification) { onClose?() }
 }
