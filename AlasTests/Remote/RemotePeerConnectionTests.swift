@@ -127,7 +127,7 @@ struct RemotePeerConnectionTests {
                 RemoteDiagnosticsSnapshot(appName: "Alas", port: port, addresses: [],
                                           usesPlainHTTP: true, pairedDeviceCount: 0, serverId: serverId)
             },
-            identity: { RemoteServerIdentity(serverId: helloServerId, name: "Mac A", hubEnabled: false, federationEnabled: true) },
+            identity: { RemoteServerIdentity(serverId: helloServerId, name: "Mac A", federationEnabled: true) },
             signer: signer
         )
         try server.start(port: 0)
@@ -580,7 +580,7 @@ struct RemotePeerConnectionTests {
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
             provider: FakeSessionsProvider(),
-            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false, federationEnabled: federationEnabled) }
+            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", federationEnabled: federationEnabled) }
         )
         try server.start(port: 0)
         defer { server.stop() }

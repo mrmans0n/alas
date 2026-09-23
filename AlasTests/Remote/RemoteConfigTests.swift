@@ -74,14 +74,6 @@ struct RemoteConfigTests {
         #expect(back.remote.preferredAdvertisedHost == nil)
     }
 
-    @Test func remoteConfigHubFieldsDefault() {
-        let cfg = AppConfig.defaults
-        #expect(cfg.remote.allowedOrigins == [])
-        #expect(cfg.remote.serverId == "")
-        #expect(cfg.remote.displayName == "")
-        #expect(cfg.remote.hubEnabled == false)
-    }
-
     @Test func ensureServerIdAssignsOnceAndStaysStable() {
         var remote = AppConfig.Remote()
         #expect(remote.ensureServerId() == true)
@@ -91,31 +83,44 @@ struct RemoteConfigTests {
         #expect(remote.serverId == first)
     }
 
-    @Test func remoteConfigHubFieldsRoundTripJSON() throws {
+    @Test func remoteConfigIdentityFieldsRoundTripJSON() throws {
         var cfg = AppConfig.defaults
         cfg.remote.allowedOrigins = ["https://app.alas.build"]
         cfg.remote.serverId = "srv-1"
         cfg.remote.displayName = "Studio Mac"
-        cfg.remote.hubEnabled = true
         let data = try JSONEncoder().encode(cfg)
         let back = try JSONDecoder().decode(AppConfig.self, from: data)
         #expect(back.remote.allowedOrigins == ["https://app.alas.build"])
         #expect(back.remote.serverId == "srv-1")
         #expect(back.remote.displayName == "Studio Mac")
-        #expect(back.remote.hubEnabled == true)
     }
 
-    @Test func oldRemoteConfigWithoutHubFieldsDecodesDefaults() throws {
+    @Test func remoteHubFlagIsNotPersistedAndLegacySettingIsIgnored() throws {
         let data = try JSONEncoder().encode(AppConfig.defaults)
         var json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         var remote = try #require(json["remote"] as? [String: Any])
-        for key in ["allowedOrigins", "serverId", "displayName", "hubEnabled"] { remote.removeValue(forKey: key) }
+        #expect(remote["hubEnabled"] == nil)
+
+        remote["hubEnabled"] = false
+        json["remote"] = remote
+        let legacyData = try JSONSerialization.data(withJSONObject: json)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: legacyData)
+        let roundTrip = try JSONEncoder().encode(decoded)
+        let roundTripJSON = try #require(try JSONSerialization.jsonObject(with: roundTrip) as? [String: Any])
+        let roundTripRemote = try #require(roundTripJSON["remote"] as? [String: Any])
+        #expect(roundTripRemote["hubEnabled"] == nil)
+    }
+
+    @Test func oldRemoteConfigWithoutIdentityFieldsDecodesDefaults() throws {
+        let data = try JSONEncoder().encode(AppConfig.defaults)
+        var json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var remote = try #require(json["remote"] as? [String: Any])
+        for key in ["allowedOrigins", "serverId", "displayName"] { remote.removeValue(forKey: key) }
         json["remote"] = remote
         let back = try JSONDecoder().decode(AppConfig.self, from: try JSONSerialization.data(withJSONObject: json))
         #expect(back.remote.allowedOrigins == [])
         #expect(back.remote.serverId == "")
         #expect(back.remote.displayName == "")
-        #expect(back.remote.hubEnabled == false)
     }
 
     @Test func federationDefaultsOffAndRoundTrips() throws {

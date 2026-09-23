@@ -76,7 +76,7 @@ final class RemoteServer {
             )
         },
         identity: @escaping @MainActor () -> RemoteServerIdentity = {
-            RemoteServerIdentity(serverId: "", name: "Alas", hubEnabled: false)
+            RemoteServerIdentity(serverId: "", name: "Alas")
         },
         signer: (any RemoteIdentitySigning)? = nil
     ) {
@@ -191,9 +191,8 @@ final class RemoteServer {
         }
     }
 
-    /// Pushes a fresh `hello` to every authenticated connection — e.g. after
-    /// the "Remote hub" toggle changes, so already-connected browsers pick up
-    /// the new `hubEnabled` without waiting for a reconnect.
+    /// Pushes a fresh `hello` to every authenticated connection after the
+    /// advertised federation state changes.
     func broadcastHello() {
         for (oid, conn) in connections where connectionDevice[oid] != nil {
             conn.sendHello()

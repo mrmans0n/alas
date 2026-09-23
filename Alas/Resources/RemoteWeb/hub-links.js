@@ -26,7 +26,6 @@ function createLinks(deps, hooks) {
   const links = new Map();
   let activeId = null;
   let visible = true;
-  let idleAllowed = false;   // true once connectAll() has run; see disableIdle()
 
   function notify(link) { if (h.onStateChange) h.onStateChange(link); }
   function setState(link, state) {
@@ -115,12 +114,7 @@ function createLinks(deps, hooks) {
     link.reconnectDelay = INITIAL_RECONNECT_MS;
     link.state = "idle";
     notify(link);
-    // The active link always reconnects; an idle link only does when the
-    // hub is actually enabled — otherwise this would resurrect a socket
-    // disableIdle() (via applyHubFlag(false)) just suspended, e.g. when
-    // handleLinkHello's duplicate-merge branch calls update() right after
-    // the fresh hello turned the aggregate hub flag off.
-    if (link.role === "active" || idleAllowed) connect(link.id);
+    connect(link.id);
     return link;
   }
 
@@ -357,14 +351,10 @@ function createLinks(deps, hooks) {
   }
 
   function connectAll() {
-    idleAllowed = true;
     for (const link of links.values()) connect(link.id);
   }
 
-  // Closes every non-active socket (page hidden, or hub flag off). Does not
-  // itself change `idleAllowed` — it's also called on a mere visibility
-  // change (setVisible(false)), which must not "turn off" idle links for
-  // good the way disableIdle() below does.
+  // Closes every non-active socket while the page is hidden.
   function suspendIdle() {
     for (const link of links.values()) {
       if (link.role === "active") continue;
@@ -373,25 +363,10 @@ function createLinks(deps, hooks) {
     }
   }
 
-  // Called specifically when the hub feature itself turns off, as opposed to
-  // the page merely going to the background. Idle links must stay suspended
-  // across a later visibility change until the hub is re-enabled — a plain
-  // suspendIdle() (backgrounding) leaves them eligible to resume.
-  function disableIdle() {
-    idleAllowed = false;
-    suspendIdle();
-  }
-
   function setVisible(next) {
     visible = !!next;
     if (!visible) { suspendIdle(); return; }
     for (const link of links.values()) {
-      // The active link always resumes on visible-again regardless of the
-      // hub flag — that's ordinary single-server behavior. An idle link
-      // only resumes if the hub is actually enabled; otherwise a mere
-      // visibility cycle would resurrect the idle sockets disableIdle()
-      // just suspended.
-      if (link.role !== "active" && !idleAllowed) continue;
       if (link.state === "online" && link.role === "idle") startPolling(link);
       else connect(link.id);
     }
@@ -518,7 +493,7 @@ function createLinks(deps, hooks) {
     return tryAt(0, null);
   }
 
-  return { add, remove, update, get, all, activeLink, setActive, sendActive, connect, connectAll, suspendIdle, disableIdle, setVisible, retry, pair };
+  return { add, remove, update, get, all, activeLink, setActive, sendActive, connect, connectAll, suspendIdle, setVisible, retry, pair };
 }
 
 globalThis.RemoteHubLinks = {

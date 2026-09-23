@@ -143,7 +143,7 @@ final class RemoteConnection: @unchecked Sendable {
     }
 
     /// Pushes a fresh `hello` outside the initial handshake — e.g. when the
-    /// server's advertised identity (like `hubEnabled`) changes while a
+    /// server's advertised identity (like `federationEnabled`) changes while a
     /// client is already connected. `framesEnabled` is confined to `queue`,
     /// so it must be read there before hopping to MainActor to build the
     /// hello; a socket that hasn't finished its own handshake yet is left

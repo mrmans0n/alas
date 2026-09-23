@@ -43,8 +43,7 @@ struct RemoteFederationAggregationTests {
                 assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
                 provider: provider,
                 identity: {
-                    RemoteServerIdentity(serverId: serverId, name: name, hubEnabled: false,
-                                         federationEnabled: true)
+                    RemoteServerIdentity(serverId: serverId, name: name, federationEnabled: true)
                 },
                 signer: signer)
         }

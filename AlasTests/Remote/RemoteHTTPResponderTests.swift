@@ -117,7 +117,7 @@ struct RemoteHTTPResponderTests {
         )
         responder.acceptsPeers = { accepts }
         responder.onPeerPaired = { sink.requests.append($0) }
-        responder.identity = { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false) }
+        responder.identity = { RemoteServerIdentity(serverId: "srv-a", name: "Mac A") }
         if let signingKey {
             responder.identityProof = { challenge in
                 RemoteIdentityCrypto.sign(serverId: "srv-a", challenge: challenge, with: signingKey)

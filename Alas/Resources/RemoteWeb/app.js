@@ -2,7 +2,6 @@
 // paired Mac) are DOM-free modules; app.js owns the UI and drives the ACTIVE
 // link through send()/handle() exactly as the single-server client did.
 const hub = RemoteHubRegistry.load(localStorage, location.origin, location.hostname, Date.now());
-let hubUIEnabled = false;   // aggregate: true once ANY paired server has ever reported hello.hubEnabled
 const links = RemoteHubLinks.createLinks({
   createSocket: (url, protocols) => new WebSocket(url, protocols),
   fetch: (url, init) => fetch(url, init),
@@ -121,7 +120,7 @@ function armEscalation() {
   if (escalationTimer || escalated) return;   // don't re-arm while pending, or after we've already escalated
   escalationTimer = setTimeout(() => {
     escalationTimer = null;
-    if (!everConnected && hubUIEnabled) {
+    if (!everConnected) {
       // Launch fallback: the remembered server is not answering but another
       // paired Mac is — drive that one instead of parking on the outage gate.
       const online = links.all().filter((l) => l.state === "online" && l.id !== hub.activeId).map((l) => l.id);
@@ -169,15 +168,7 @@ function activeServer() { return hub.servers.find((s) => s.id === hub.activeId) 
 
 function connectedLabel() {
   const server = activeServer();
-  return hubUIEnabled && server ? (server.name || server.lastOrigin) : "Connected";
-}
-
-// Aggregate, not per-active-server: once ANY paired Mac has ever reported
-// hubEnabled, the hub UI stays available no matter which server is
-// currently active — switching to view a Mac whose own toggle is off must
-// never strand the user without a way back to the server list.
-function anyServerHasHubEnabled() {
-  return hub.servers.some((s) => s.hubEnabled === true);
+  return server ? (server.name || server.lastOrigin) : "Connected";
 }
 
 function handleLinkStateChange(link) {
@@ -258,10 +249,6 @@ function handleLinkHello(link, hello) {
   const result = RemoteHubRegistry.applyHello(hub, link.id, hello);
   if (!result) return;
   RemoteHubRegistry.save(localStorage, hub);
-  // Recompute the aggregate before the merge branch's early return too — the
-  // surviving entry's hubEnabled may have just changed and no other server
-  // is left to authorize the hub UI otherwise.
-  applyHubFlag(anyServerHasHubEnabled());
   if (result.mergedFromId) {
     // The Mac we just reached was already paired under another entry. Keep
     // the older entry (its id is what the UI references), give it the fresh
@@ -272,19 +259,6 @@ function handleLinkHello(link, hello) {
     return;
   }
   if (link.role === "active" && link.state === "online") setStatus(connectedLabel(), "ok");
-  refreshHubViews();
-}
-
-// Flag off → single-server client: no idle sockets, no Settings tab, chip as
-// before. Flag on → server list, add sheet, badges, tappable server chip.
-function applyHubFlag(enabled) {
-  hubUIEnabled = enabled;
-  $("tab-settings").disabled = !enabled;
-  $("hub-section").classList.toggle("hidden", !enabled);
-  $("settings-placeholder").classList.toggle("hidden", enabled);
-  $("status").classList.toggle("is-server", enabled);
-  if (!enabled && topLevelTab === "settings") showRepos();
-  if (enabled) links.connectAll(); else links.disableIdle();
   refreshHubViews();
 }
 
@@ -309,7 +283,7 @@ async function pairAndAdd(input, options) {
   RemoteHubRegistry.save(localStorage, hub);
   if (rePaired && links.get(server.id)) links.update(server); else links.add(server);
   if ((options && options.activate) || hub.activeId === server.id) switchServer(server.id);
-  else if (hubUIEnabled) links.connect(server.id);
+  else links.connect(server.id);
   return server;
 }
 
@@ -359,7 +333,7 @@ function switchServer(id) {
   everConnected = false;
   $("gate-pair").classList.add("hidden");
   const link = links.setActive(id);
-  applyHubFlag(anyServerHasHubEnabled());
+  links.connectAll();
   if (link.state === "online") return;   // setActive's own notify already ran onActiveOpen() for us
   if (link.state === "unauthorized") { showPairAgainGate(link); return; }
   // links.connect() is a no-op while blocked (see hub-links.js's connect()
@@ -1343,7 +1317,7 @@ function showRepos() {
 }
 
 function showSettings() {
-  if (currentSession || !hubUIEnabled) return;   // tab bar is hidden during session detail; the tab is disabled flag-off
+  if (currentSession) return;   // the tab bar is hidden during session detail
   topLevelTab = "settings";
   $("tab-settings").classList.add("is-active");
   $("tab-repos").classList.remove("is-active");
@@ -1355,7 +1329,7 @@ function showSettings() {
 $("tab-repos").addEventListener("click", showRepos);
 $("tab-settings").addEventListener("click", showSettings);
 $("fab-new-session").onclick = showCreateSheet;
-$("status").onclick = () => { if (hubUIEnabled && !currentSession) showSettings(); };
+$("status").onclick = () => { if (!currentSession) showSettings(); };
 
 // --- hub settings ------------------------------------------------------------
 
@@ -1384,7 +1358,6 @@ function serverSubtitle(server, link) {
 }
 
 function renderServerList() {
-  if (!hubUIEnabled) return;
   const box = $("server-list");
   box.innerHTML = "";
   for (const server of hub.servers) {
@@ -1417,7 +1390,7 @@ function renderServerList() {
 
 function renderSettingsBadge() {
   const badge = $("tab-settings-badge");
-  const total = hubUIEnabled ? RemoteHubRegistry.otherAttentionTotal(links.all(), hub.activeId) : 0;
+  const total = RemoteHubRegistry.otherAttentionTotal(links.all(), hub.activeId);
   badge.textContent = total > 0 ? String(total) : "";
   badge.classList.toggle("hidden", total === 0);
 }
@@ -1495,17 +1468,13 @@ function forgetServer(id) {
   RemoteHubRegistry.save(localStorage, hub);
   links.remove(id);
   if (!wasActive) {
-    // The forgotten server may have been the only one that had ever
-    // reported hubEnabled — recompute the aggregate, not just re-render,
-    // so the hub UI doesn't stay stuck on with no server actually
-    // authorizing it.
-    applyHubFlag(anyServerHasHubEnabled());
+    refreshHubViews();
     return;
   }
   const online = links.all().filter((l) => l.state === "online").map((l) => l.id);
   const next = RemoteHubRegistry.fallbackActiveId(hub, online);
   if (next) { switchServer(next); return; }
-  applyHubFlag(anyServerHasHubEnabled());
+  refreshHubViews();
   showPairGate();
 }
 
