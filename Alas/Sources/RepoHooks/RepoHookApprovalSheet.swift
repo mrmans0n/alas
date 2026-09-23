@@ -41,8 +41,15 @@ struct RepoHookApprovalSheet: View {
                     }
                 }
                 Spacer()
-                Button(request.failure == nil ? request.context.skipTitle : "Retry") {
-                    queue.decide(request.failure == nil ? .skip : .retry)
+                Button(request.context.skipTitle) {
+                    queue.decide(.skip)
+                }
+                .accessibilityIdentifier("repo-hook-approval-skip")
+                if request.failure != nil {
+                    Button("Retry") {
+                        queue.decide(.retry)
+                    }
+                    .accessibilityIdentifier("repo-hook-approval-retry")
                 }
                 if request.hook != nil {
                     Button(approveTitle) {
