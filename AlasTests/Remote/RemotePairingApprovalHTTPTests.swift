@@ -90,6 +90,11 @@ import Testing
         let first = try response(body())
         #expect(String(decoding: first, as: UTF8.self).hasPrefix("HTTP/1.1 200 OK"))
         #expect(try response(body()) == first)
+        f.coordinator.complete(requestID: p.requestID, succeeded: true)
+        f.enabled = false
+        f.coordinator.setEnabled(false)
+        responder.acceptsPeers = { false }
+        #expect(try response(body()) == first)
         #expect(callbacks == 1)
         #expect(pairing.devices.count == 1)
         #expect(store.saved.isEmpty)

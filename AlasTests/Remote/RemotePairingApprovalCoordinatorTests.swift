@@ -84,6 +84,33 @@ import Testing
         }
     }
 
+    @Test func completedPairingRetrySurvivesShutdownUntilRedeemDeadline() throws {
+        let f = ApprovalFixture()
+        let pending = try f.pending()
+        f.coordinator.decide(.allow, requestID: pending.payload.requestID)
+        let approved = try f.coordinator.receive(f.request(pending, operation: .status))
+        let request = f.request(approved, operation: .redeem, counterCode: "counter")
+        let bytes = try f.coordinator.redeem(request) {
+            ApprovalIssuedResponse(body: Data("pair credentials".utf8), deviceID: "device")
+        }
+        f.coordinator.complete(requestID: request.payload.requestID, succeeded: true)
+        f.coordinator.setEnabled(false)
+        #expect(f.coordinator.entries.first?.phase == .paired)
+        let recovered = try f.coordinator.redeem(request) {
+            Issue.record("A completed exact retry must not issue twice")
+            return ApprovalIssuedResponse(body: Data(), deviceID: "wrong")
+        }
+        #expect(recovered == bytes)
+        f.time.addTimeInterval(120)
+        f.coordinator.expire()
+        #expect(throws: ApprovalFailure.disabled) {
+            try f.coordinator.redeem(request) {
+                Issue.record("Expired retry cache issued credentials")
+                return ApprovalIssuedResponse(body: Data(), deviceID: "wrong")
+            }
+        }
+    }
+
     @Test(arguments: [ApprovalPhase.pending, .declined, .expired, .cancelled])
     func unauthorizedPhasesNeverIssue(phase: ApprovalPhase) throws {
         let f = ApprovalFixture()

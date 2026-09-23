@@ -72,23 +72,20 @@ struct RemotePairingApprovalStack: View {
 
     var body: some View {
         if !entries.isEmpty {
-            ScrollView {
-                VStack(alignment: .trailing, spacing: 8) {
-                    ForEach(entries) { entry in
-                        RemotePairingApprovalCard(entry: entry,
-                            allow: { coordinator.decide(.allow, requestID: entry.id) },
-                            decline: { coordinator.decide(.decline, requestID: entry.id) })
-                            .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-                    }
-                }
-                .background {
-                    GeometryReader { geometry in
-                        Color.clear.preference(key: ApprovalContentHeightKey.self, value: geometry.size.height)
-                    }.allowsHitTesting(false)
+            VStack(alignment: .trailing, spacing: 8) {
+                ForEach(entries) { entry in
+                    RemotePairingApprovalCard(entry: entry,
+                        allow: { coordinator.decide(.allow, requestID: entry.id) },
+                        decline: { coordinator.decide(.decline, requestID: entry.id) })
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(height: min(contentHeight, 420))
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(key: ApprovalContentHeightKey.self, value: geometry.size.height)
+                }.allowsHitTesting(false)
+            }
+            .frame(maxHeight: 420, alignment: .bottom)
             .onPreferenceChange(ApprovalContentHeightKey.self) { contentHeight = $0 }
             .preference(key: ApprovalStackHeightKey.self, value: min(contentHeight, 420))
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: entries.map(\.id))

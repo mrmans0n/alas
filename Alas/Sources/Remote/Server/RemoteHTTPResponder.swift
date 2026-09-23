@@ -158,8 +158,7 @@ struct RemoteHTTPResponder {
         guard let pr = try? JSONDecoder().decode(PairRequest.self, from: body) else { return unauthorized }
         guard (pr.code != nil) != (pr.approval != nil) else { return unauthorized }
         if let envelope = pr.approval {
-            guard !hasOrigin, acceptsPeers(), let approval, approval.enabled(),
-                  let callback = onApprovedPeerPaired else { return RemotePairingApprovalHTTP.failure(.disabled) }
+            guard !hasOrigin, let approval else { return RemotePairingApprovalHTTP.failure(.disabled) }
             guard body.count <= 16 * 1024 else {
                 return Self.http(status: "413 Payload Too Large", contentType: "application/json", body: Data())
             }
@@ -170,6 +169,8 @@ struct RemoteHTTPResponder {
                   pr.deviceName == p.requester.name else { return RemotePairingApprovalHTTP.failure(.unauthorized) }
             do {
                 let bytes = try approval.coordinator.redeem(envelope) {
+                    guard acceptsPeers(), approval.enabled(), let callback = onApprovedPeerPaired
+                    else { throw ApprovalFailure.disabled }
                     let result = pairing.issueApprovedPeer(deviceName: peer.name, peerServerId: peer.serverId)
                     do {
                         let proof = pr.challenge.flatMap { identityProof?($0) }

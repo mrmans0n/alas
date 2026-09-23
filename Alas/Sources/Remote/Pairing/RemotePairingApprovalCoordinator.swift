@@ -178,8 +178,8 @@ enum ApprovalFailure: Error, Equatable {
 
     func redeem(_ envelope: ApprovalEnvelope, issue: () throws -> ApprovalIssuedResponse) throws -> Data {
         expire()
-        guard enabled else { throw ApprovalFailure.disabled }
         if let cached = exactAuthenticatedRetry(envelope) { return cached }
+        guard enabled else { throw ApprovalFailure.disabled }
         let p = envelope.payload
         guard var record = records[p.requestID] else { throw ApprovalFailure.unauthorized }
         let stored = record.entry.payload
@@ -321,9 +321,9 @@ enum ApprovalFailure: Error, Equatable {
                 record.terminalAt = time
                 records[id] = record
                 invalidateRedeem(requestID: id)
-            case .paired, .declined, .cancelled, .expired, .failed:
-                records[id]?.redeemResponse = nil
-                records[id]?.redeemRequest = nil
+            case .paired:
+                break
+            case .declined, .cancelled, .expired, .failed:
                 onReleaseAttempt?(id)
                 break
             }
