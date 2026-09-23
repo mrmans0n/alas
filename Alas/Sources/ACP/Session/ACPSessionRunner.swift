@@ -61,6 +61,7 @@ final class ACPSessionRunner {
     private let localTitleGenerator: @Sendable (String) async -> String?
     private var providerTitleRevision = 0
     private var localTitleAttempted = false
+    private var localTitleTask: Task<Void, Never>?
     /// Fires whenever a live update changes what the agent has advertised as
     /// its models — an `availableModelsUpdate`, or a `sessionConfigOptionsUpdate`
     /// that could carry a model-shaped config option. The initial
@@ -1310,6 +1311,8 @@ final class ACPSessionRunner {
 
     func stop() {
         stopped = true
+        localTitleTask?.cancel()
+        localTitleTask = nil
         flushPendingIncomingUpdates(
             flushQueueWhenBoundaryReady: false,
             treatBufferedUpdatesAsPromptOwned: true
@@ -1540,8 +1543,10 @@ final class ACPSessionRunner {
         guard localTitlesEnabled() else { return }
         let revision = providerTitleRevision
         let fallback = session.title
-        Task { [weak self] in
-            guard let self, let title = await self.localTitleGenerator(candidate),
+        localTitleTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.localTitleTask = nil }
+            guard let title = await self.localTitleGenerator(candidate),
                   let title = ACPLocalTitleGenerator.validTitle(title),
                   !Task.isCancelled, !self.stopped, self.holdsLeaseForWrite(),
                   self.localTitlesEnabled(), self.providerTitleRevision == revision,

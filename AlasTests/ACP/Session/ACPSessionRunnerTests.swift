@@ -1067,6 +1067,36 @@ struct ACPSessionRunnerTests {
         #expect(restored.placeholderSession(id: "s")?.titleSource == .manual)
     }
 
+    @Test("stopping a session cancels pending local title generation")
+    func stopCancelsPendingLocalTitle() async throws {
+        let started = AsyncGate()
+        let cancellations = AsyncCounter()
+        let (runner, _, store) = try makeLocalTitleRunner(generate: { _ in
+            await started.open()
+            do {
+                try await Task.sleep(for: .seconds(3))
+            } catch {
+                _ = await cancellations.next()
+            }
+            return "Late local title"
+        })
+        let submitted = await withCheckedContinuation { continuation in
+            runner.send(text: "Please fix the account sync race", attachments: []) {
+                continuation.resume(returning: $0)
+            }
+        }
+        #expect(submitted)
+        await started.wait()
+        runner.stop()
+
+        for _ in 0..<50 where await cancellations.current() == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await cancellations.current() == 1)
+        await runner.flushPersistence()
+        #expect(try store.loadSession(id: "s")?.titleSource == .fallback)
+    }
+
     @Test("unavailable local model retains the immediate fallback")
     func unavailableLocalModelKeepsFallback() async throws {
         let calls = AsyncCounter()
