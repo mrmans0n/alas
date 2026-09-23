@@ -50,12 +50,15 @@ struct RepoHookApprovalSheet: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-                Text(hook.text)
-                    .font(.system(.body, design: .monospaced))
-                    .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
-                    .padding(10)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                    .textSelection(.enabled)
+                ScrollView(.vertical) {
+                    Text(hook.text)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, minHeight: 180, maxHeight: 280, alignment: .topLeading)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             } else if let failure = request.failure {
                 Text("This repository hook could not be prepared: \(failure.message)")
                     .font(.callout)

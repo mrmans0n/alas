@@ -8,7 +8,6 @@ struct NewProjectDialog: View {
 
     var body: some View {
         ProjectDialog(state: state, presented: $presented, mode: .add)
-            .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
     }
 }
 
@@ -19,7 +18,6 @@ struct EditProjectDialog: View {
 
     var body: some View {
         ProjectDialog(state: state, presented: $presented, mode: .edit(project))
-            .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
     }
 }
 
@@ -263,7 +261,10 @@ private struct ProjectDialog: View {
             }
         }
         .sheet(isPresented: $mcpManagerPresented) {
-            ProjectMCPServerManager(servers: $mcpServers)
+            ProjectMCPServerManager(
+                servers: $mcpServers,
+                approvalQueue: state.repoHookApprovalQueue
+            )
         }
         .sheet(isPresented: $sshSetupPresented, onDismiss: dismissSSHSetup) {
             SSHConnectionAssistant(
@@ -274,7 +275,12 @@ private struct ProjectDialog: View {
                 onRetry: startSSHSetup
             )
             .environment(\.theme, theme)
+            .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
         }
+        .modifier(RepoHookApprovalPresentationHandler(
+            approvalQueue: state.repoHookApprovalQueue,
+            isActive: !mcpManagerPresented && !sshSetupPresented
+        ))
     }
 
     @ViewBuilder

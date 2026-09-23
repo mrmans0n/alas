@@ -25,6 +25,7 @@
 		01C919A6F3868980D51539DD /* ACPInitializeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DF8B5E766D2B3649D2555ED /* ACPInitializeTests.swift */; };
 		01CBEF6793755D3D9B000BC1 /* CodeLanguageDetailViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E91A6AFCC9B3AEFB43D8946F /* CodeLanguageDetailViewTests.swift */; };
 		01D2A32A3366C5CF6A225004 /* GhosttyConfigBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BE23A4881B60D7F16A4ACA5 /* GhosttyConfigBuilderTests.swift */; };
+		01DD3FA2C246F67CAFF4E037 /* RepoHookApprovalSheetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D331C6C92DAAED460C8921FD /* RepoHookApprovalSheetTests.swift */; };
 		01F51F05BA5DD24D4FBC4B4B /* ShortcutActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00057A43DD2D53F8F79FAC43 /* ShortcutActionTests.swift */; };
 		02057616EE02B05DE778C99E /* RunTabPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E00B5DC5B34A5FCF2935BF /* RunTabPresentation.swift */; };
 		02264440C7A60BAD92DE7D9B /* RemotePairingApprovalCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DF111291C9E88FC3C00DC10 /* RemotePairingApprovalCoordinatorTests.swift */; };
@@ -3680,6 +3681,7 @@
 		D2F90D03073708AA01531533 /* GitService+Staging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GitService+Staging.swift"; sourceTree = "<group>"; };
 		D305FE622B772AE41ADBF3CF /* RunScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScheduler.swift; sourceTree = "<group>"; };
 		D33173D002A6484A1F486C66 /* WorkspaceModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceModelsTests.swift; sourceTree = "<group>"; };
+		D331C6C92DAAED460C8921FD /* RepoHookApprovalSheetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoHookApprovalSheetTests.swift; sourceTree = "<group>"; };
 		D3552BE48184E15F0BE6084C /* TrackedRevisionCodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackedRevisionCodingTests.swift; sourceTree = "<group>"; };
 		D36137279CD9028BB6FFED0B /* WorktreeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeServiceTests.swift; sourceTree = "<group>"; };
 		D36EA68CE127E24991ABD5A6 /* ReviewDraftCommentStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewDraftCommentStoreTests.swift; sourceTree = "<group>"; };
@@ -5806,6 +5808,7 @@
 			isa = PBXGroup;
 			children = (
 				F4F241A03D2C98CE983A436D /* RepoHookApprovalQueueTests.swift */,
+				D331C6C92DAAED460C8921FD /* RepoHookApprovalSheetTests.swift */,
 				0C9D29CB741846E7193F9142 /* RepoHookLoaderTests.swift */,
 				EF095FF9BA1BFE62695D8F90 /* RepoHookPresentationTests.swift */,
 				75D23CC5630E9E48A466E93B /* RepoHookTests.swift */,
@@ -9357,6 +9360,7 @@
 				B302771A4A89D6383726D290 /* RepoConfigTests.swift in Sources */,
 				133597E7D43CFE746EF4EF2B /* RepoGroupViewLayoutTests.swift in Sources */,
 				2F749C72F37EE233180831F0 /* RepoHookApprovalQueueTests.swift in Sources */,
+				01DD3FA2C246F67CAFF4E037 /* RepoHookApprovalSheetTests.swift in Sources */,
 				3C20ED58CB83C1D7274A1B5D /* RepoHookLoaderTests.swift in Sources */,
 				D73BDB59BADDCA9C79FC2ECA /* RepoHookPresentationTests.swift in Sources */,
 				4DA25B80BD1D27321301B1FE /* RepoHookTests.swift in Sources */,
