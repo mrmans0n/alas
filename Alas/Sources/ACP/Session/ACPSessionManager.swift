@@ -4033,8 +4033,10 @@ extension ACPSessionManager {
         defer {
             attachingSessions.remove(sessionId)
             disposingAttachments.remove(sessionId)
-            if !attachSucceeded {
+            if !attachSucceeded || session.agentState != .ready {
                 discardDeferredModelModeUpdates(for: sessionId)
+            }
+            if !attachSucceeded {
                 stopHeartbeat(sessionId: sessionId)
                 stopWriterWatch(sessionId: sessionId)
                 // A failed/aborted attach may have already spawned the supervised
