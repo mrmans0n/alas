@@ -9,6 +9,7 @@ struct RemoteDiagnosticsSnapshot: Codable, Equatable, Sendable {
     let pairedDeviceCount: Int
     let serverId: String?
     let name: String?
+    var pairingApprovalVersion: Int?
 
     init(
         appName: String,
@@ -17,7 +18,8 @@ struct RemoteDiagnosticsSnapshot: Codable, Equatable, Sendable {
         usesPlainHTTP: Bool,
         pairedDeviceCount: Int,
         serverId: String? = nil,
-        name: String? = nil
+        name: String? = nil,
+        pairingApprovalVersion: Int? = nil
     ) {
         self.appName = appName
         self.port = port
@@ -26,6 +28,7 @@ struct RemoteDiagnosticsSnapshot: Codable, Equatable, Sendable {
         self.pairedDeviceCount = pairedDeviceCount
         self.serverId = serverId
         self.name = name
+        self.pairingApprovalVersion = pairingApprovalVersion
     }
 }
 
@@ -54,8 +57,12 @@ struct RemoteHTTPResponder {
     /// to a key string anyone could have copied from a public advertisement.
     /// Shared with the socket's own proof, so both prove the same key.
     var identityProof: (@MainActor (String) -> RemoteIdentityProof?)?
+    var approval: RemotePairingApprovalHTTP?
 
     func response(for req: HTTPRequest, body: Data) -> Data {
+        if RemotePairingApprovalHTTP.operation(for: req.path) != nil {
+            return approval?.response(for: req, body: body) ?? RemotePairingApprovalHTTP.failure(.disabled)
+        }
         let cors = corsHeaders(for: req)
         if req.method == "OPTIONS", req.path == "/pair" {
             return Self.http(

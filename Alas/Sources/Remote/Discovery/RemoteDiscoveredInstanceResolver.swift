@@ -6,6 +6,12 @@ import Network
 /// whatever that Mac advertises about itself in `/remote-info` (tailnet and
 /// other interfaces), so the stored peer can be dialed later from elsewhere.
 struct RemoteDiscoveredInstanceResolver {
+    struct ResolvedPeer: Equatable, Sendable {
+        let origins: [String]
+        let serverID: String?
+        let pairingApprovalVersion: Int?
+    }
+
     enum Failure: Error, Equatable, Sendable {
         /// Bonjour could not resolve the endpoint, or the resolved address
         /// did not answer `/remote-info`.
@@ -51,6 +57,11 @@ struct RemoteDiscoveredInstanceResolver {
     /// informative failure to surface once every endpoint has been tried.
     func origins(for instance: RemoteDiscoveredInstance,
                  isolation: isolated (any Actor)? = #isolation) async -> Result<[String], Failure> {
+        await resolvePeer(for: instance).map(\.origins)
+    }
+
+    func resolvePeer(for instance: RemoteDiscoveredInstance,
+                     isolation: isolated (any Actor)? = #isolation) async -> Result<ResolvedPeer, Failure> {
         var sawIdentityMismatch = false
         for endpoint in instance.endpoints {
             guard let resolved = try? await resolve(endpoint),
@@ -71,7 +82,10 @@ struct RemoteDiscoveredInstanceResolver {
                 guard let origin = RemotePairingLink.normalizeOrigin(address.url), !origins.contains(origin) else { continue }
                 origins.append(origin)
             }
-            return .success(origins)
+            // Legacy peers may omit identity. Approval requires the diagnostics
+            // identity to agree with the discovered row before offering it.
+            return .success(ResolvedPeer(origins: origins, serverID: info.serverId,
+                pairingApprovalVersion: info.serverId == instance.id ? info.pairingApprovalVersion : nil))
         }
         return .failure(sawIdentityMismatch ? .identityMismatch : .unreachable)
     }

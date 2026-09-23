@@ -88,6 +88,8 @@ struct RemoteDiscoveredInstanceResolverTests {
         #expect(forbidden == .failure(.unreachable))
         let garbage = await resolver(body: "not json").origins(for: instance)
         #expect(garbage == .failure(.unreachable))
+        let wrongShape = await resolver(body: #"{"pairingApprovalVersion":"1"}"#).resolvePeer(for: instance)
+        #expect(wrongShape == .failure(.unreachable))
     }
 
     @Test func ipv6HostsAreBracketedInTheOrigin() async {

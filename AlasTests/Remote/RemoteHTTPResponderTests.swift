@@ -26,6 +26,21 @@ struct RemoteHTTPResponderTests {
 
     private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self) }
 
+    @Test func nativeApprovalRoutesDefaultToForbiddenWithoutCORS() {
+        for origin in [nil, "", "null", privateOrigin] as [String?] {
+            let out = text(makeResponder().response(for: request("POST", "/peer-approval/v1/challenge", origin: origin), body: Data()))
+            #expect(out.hasPrefix("HTTP/1.1 403 Forbidden"))
+            #expect(!out.contains("Access-Control-"))
+        }
+    }
+
+    @Test func diagnosticsWithoutApprovalCapabilityRemainDecodable() throws {
+        let body = Data(#"{"appName":"Alas","addresses":[],"usesPlainHTTP":true,"pairedDeviceCount":0}"#.utf8)
+        let snapshot = try JSONDecoder().decode(RemoteDiagnosticsSnapshot.self, from: body)
+        #expect(snapshot.pairingApprovalVersion == nil)
+        #expect(snapshot.serverId == nil)
+    }
+
     @Test func healthCarriesCORSHeadersForAnAllowedOrigin() {
         let out = text(makeResponder().response(for: request("GET", "/health", origin: privateOrigin), body: Data()))
         #expect(out.hasPrefix("HTTP/1.1 200 OK"))
