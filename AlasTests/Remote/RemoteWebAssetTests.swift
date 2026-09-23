@@ -95,6 +95,21 @@ struct RemoteWebAssetTests {
         #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v"#))
     }
 
+    @Test func remoteHubUpdatesBustPreviouslyCachedPWAAssets() throws {
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+        let versions = versionedAssets(in: html)
+
+        #expect((versions["/hub-registry.js"] ?? 0) > 1)
+        #expect((versions["/hub-links.js"] ?? 0) > 1)
+        #expect((versions["/app.js"] ?? 0) > 90)
+
+        let cacheVersion = try #require(
+            sw.matches(of: #/alas-remote-shell-v(\d+)/#).first.flatMap { Int($0.1) }
+        )
+        #expect(cacheVersion > 72)
+    }
+
     @Test func toolCardsUseExplicitToggleInsteadOfNativeDetails() throws {
         let app = try asset("app.js")
         let css = try asset("style.css")
