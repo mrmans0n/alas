@@ -200,6 +200,9 @@ final class RepoHookApprovalQueue {
                         waiters: [waiterID: continuation]
                     ))
                 }
+                if Task.isCancelled {
+                    resolve(waiterID: waiterID, decision: .cancel)
+                }
             }
         } onCancel: {
             Task { @MainActor [weak self] in

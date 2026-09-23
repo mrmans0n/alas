@@ -165,6 +165,28 @@ struct RepoHookApprovalQueueTests {
         #expect(await task.value == .retry)
     }
 
+    @Test func cancellationBeforeWaiterRegistrationDoesNotLeaveRequestQueued() async {
+        let queue = RepoHookApprovalQueue()
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await queue.requestDecision(
+                hook: hook("cancelled before registration"),
+                projectID: "project",
+                context: .sessionOpen
+            )
+        }
+
+        await Task.yield()
+        let pendingRequest = queue.activeRequest
+        if pendingRequest != nil {
+            queue.decide(.skip)
+        }
+
+        #expect(pendingRequest == nil)
+        #expect(await task.value == .cancel)
+        #expect(queue.activeRequest == nil)
+    }
+
     @Test func cancelledWaitingRequestResolvesOnlyThatRequest() async {
         let queue = RepoHookApprovalQueue()
         let firstTask = Task {
