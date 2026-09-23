@@ -4045,6 +4045,7 @@ final class AppState {
 
         let startupScript = StartupScriptResolver.worktreeCreateScript(
             global: config.terminal,
+            repoScript: nil,
             project: project
         )
             .trimmingCharacters(in: .whitespacesAndNewlines)

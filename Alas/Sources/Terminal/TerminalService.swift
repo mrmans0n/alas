@@ -1048,7 +1048,7 @@ final class TerminalService {
         startupScriptSuffix: String?
     ) -> String {
         let baseScript = includeUserStartupScript
-            ? StartupScriptResolver.sessionOpenScript(global: global, project: project)
+            ? StartupScriptResolver.sessionOpenScript(global: global, repoScript: nil, project: project)
             : ""
         return composeStartupScript(
             userStartupScript: baseScript,
