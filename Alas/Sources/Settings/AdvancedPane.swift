@@ -45,15 +45,6 @@ struct AdvancedPane: View {
                         ))
                     }
                     SettingsRow(
-                        name: "Scheduled runs",
-                        desc: "Adds a Schedules tab that runs scripts, and optionally opens a worktree with an agent, on a timer. Only fires while Alas is running."
-                    ) {
-                        AlasToggle(on: Binding(
-                            get: { state.config.schedulesEnabled },
-                            set: { state.setSchedulesEnabled($0) }
-                        ))
-                    }
-                    SettingsRow(
                         name: "Remote hub",
                         desc: "Lets the remote web client pair with several Macs and switch between them."
                     ) {

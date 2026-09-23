@@ -47,10 +47,6 @@ struct AppConfig: Codable, Equatable {
     /// Preview gate for the Needs Attention inbox and project affordances.
     /// Events continue collecting while its presentation is disabled.
     var needsAttentionEnabled: Bool = false
-    /// Preview gate for scheduled run scripts and agent launches. While it is
-    /// off the scheduler never evaluates, so nothing fires and the Schedules
-    /// tab stays out of the right rail.
-    var schedulesEnabled: Bool = false
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
     var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
@@ -585,7 +581,6 @@ struct AppConfig: Codable, Equatable {
         files: Files(showIgnored: true, bookmarksPaneHeight: nil),
         workspacesEnabled: false,
         needsAttentionEnabled: false,
-        schedulesEnabled: false,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
         recentWorktreeRefs: [],
@@ -679,7 +674,6 @@ extension AppConfig {
              remote,
              workspacesEnabled,
              needsAttentionEnabled,
-             schedulesEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
@@ -924,7 +918,6 @@ extension AppConfig {
         workspacesEnabled = (try? c.decode(Bool.self, forKey: .workspacesEnabled)) ?? false
         // Needs Attention remains opt-in while its entry points are in preview.
         needsAttentionEnabled = (try? c.decode(Bool.self, forKey: .needsAttentionEnabled)) ?? false
-        schedulesEnabled = (try? c.decode(Bool.self, forKey: .schedulesEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]
