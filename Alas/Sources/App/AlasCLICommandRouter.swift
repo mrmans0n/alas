@@ -7,6 +7,7 @@ struct AlasCLICommandRouter {
     var sessionCwdWorktree: (String, String) async -> Worktree? = { _, _ in nil }
     var resolveACPSessionOrigin: (String) -> ACPOrchestrationSessionOrigin? = { _ in nil }
     var originatingWorktree: (String) -> Worktree?
+    var originatingWorktreeInProject: (String, String) -> Worktree? = { _, _ in nil }
     var visibleWorktrees: () -> [Worktree]
     var openRelativeFile: (String, String) -> Void
     var openExternalFile: (URL, String) -> Void
@@ -159,7 +160,7 @@ struct AlasCLICommandRouter {
         let originOwner: SessionOwnerID?
         if let sessionId = request.sessionId,
            let worktreeId = sessionWorktreeId(sessionId),
-           let resolved = originatingWorktree(worktreeId) {
+           let resolved = originatingWorktreeForSession(worktreeId, owner: requestOwner) {
             origin = resolved
             originOwner = requestOwner ?? .worktree(resolved.id)
         } else if let sessionId = request.sessionId,
@@ -250,5 +251,12 @@ struct AlasCLICommandRouter {
         case .sessionList, .sessionNew, .sessionSend:
             preconditionFailure("Session commands are handled before generic origin resolution")
         }
+    }
+
+    private func originatingWorktreeForSession(_ id: String, owner: SessionOwnerID?) -> Worktree? {
+        if let projectID = owner?.projectID {
+            return originatingWorktreeInProject(id, projectID)
+        }
+        return originatingWorktree(id)
     }
 }

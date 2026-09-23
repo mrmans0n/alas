@@ -6539,7 +6539,7 @@ final class AppState {
                               manager.liveSession(for: sessionId) != nil
                           }),
                           let worktreeId = owner.worktreeID,
-                          let worktree = self.worktree(withId: worktreeId)
+                          let worktree = self.worktree(withId: worktreeId, inProjectId: owner.projectID)
                     else { return nil }
                     return .init(
                         origin: ACPOrchestrationSessionOrigin(
@@ -6595,7 +6595,7 @@ final class AppState {
                           manager.liveSession(for: sessionId) != nil
                       }),
                       let worktreeId = owner.worktreeID,
-                      let worktree = self.worktree(withId: worktreeId)
+                      let worktree = self.worktree(withId: worktreeId, inProjectId: owner.projectID)
                 else { return nil }
                 return ACPOrchestrationSessionOrigin(
                     sessionId: sessionId,
@@ -6605,6 +6605,9 @@ final class AppState {
             },
             originatingWorktree: { [weak self] worktreeId in
                 self?.worktree(withId: worktreeId)
+            },
+            originatingWorktreeInProject: { [weak self] worktreeId, projectID in
+                self?.worktree(withId: worktreeId, inProjectId: projectID)
             },
             visibleWorktrees: { [weak self] in
                 guard let self else { return [] }
@@ -12024,13 +12027,13 @@ final class AppState {
     /// creation is acceptable.
     func acpManager(forWorktreeId id: String) -> ACPSessionManager? {
         if let focused = workspaceSelectedWorktree(matching: id) {
-            return acpManager(for: focused.worktree)
+            return acpManagers[Self.projectScopedACPOwner(for: focused.worktree)]
         }
         let selectableWorktrees = navigationProjects.flatMap { project in
             projectsManager.worktrees(projectId: project.id).filter { $0.id == id }
         }
         if selectableWorktrees.count == 1, let worktree = selectableWorktrees.first {
-            return acpManager(for: worktree)
+            return acpManagers[Self.projectScopedACPOwner(for: worktree)]
         }
         guard selectableWorktrees.isEmpty else { return nil }
         let existing = acpManagers.values.filter { $0.owner.worktreeID == id }

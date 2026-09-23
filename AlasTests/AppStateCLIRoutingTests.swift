@@ -321,6 +321,53 @@ struct AppStateCLIRoutingTests {
         #expect(location?.worktreeId == worktree.id)
     }
 
+    @Test func acpCLIOriginKeepsProjectForSamePathWorktrees() async throws {
+        let sharedID = "/tmp/alas-cli-shared-\(UUID().uuidString)"
+        let legacyDB = Paths.acpSessionsDB(forWorktreeId: sharedID)
+        let firstProject = ProjectConfig(
+            id: "first-\(UUID().uuidString)", name: "First", path: "/repos/first",
+            color: "blue", addedAt: .distantPast
+        )
+        let secondProject = ProjectConfig(
+            id: "second-\(UUID().uuidString)", name: "Second", path: "/repos/second",
+            color: "green", addedAt: .distantPast
+        )
+        defer {
+            for path in [legacyDB.path, Paths.acpSessionsDB(forProjectId: secondProject.id, worktreeId: sharedID).path] {
+                for suffix in ["", "-wal", "-shm"] {
+                    try? FileManager.default.removeItem(atPath: path + suffix)
+                }
+            }
+            try? FileManager.default.removeItem(atPath: legacyDB.path + ".owner")
+        }
+        let state = AppState(store: MemoryStore(
+            projectsFile: ProjectsFile(projects: [firstProject, secondProject])
+        ))
+        let first = Worktree(
+            id: sharedID, projectId: firstProject.id, name: "first", branch: "first",
+            path: URL(fileURLWithPath: sharedID), status: .clean, lastActivity: .distantPast
+        )
+        let second = Worktree(
+            id: sharedID, projectId: secondProject.id, name: "second", branch: "second",
+            path: URL(fileURLWithPath: sharedID), status: .clean, lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(first)
+        state.projectsManager.insertOptimisticWorktree(second)
+        let manager = try #require(state.acpManager(for: second))
+        let session = manager.createSession(agentId: "pi")
+        let router = state.makeCLICommandRouter(
+            sessionWorktreeLookup: { $0 == session.id ? sharedID : nil },
+            sessionOwnerLookup: { $0 == session.id ? manager.owner : nil }
+        )
+
+        let response = await router.handle(.init(
+            version: 1, sessionId: session.id, cwd: nil, command: .worktree(.list)
+        ))
+
+        #expect(response == .text(AlasCLIWorktreeResolver.rows(worktrees: [second], currentWorktreeId: sharedID)))
+        #expect(router.resolveACPSessionOrigin(session.id)?.projectId == secondProject.id)
+    }
+
     @Test func routeTerminalOpenURLResolvesRelativePathAgainstShellCwd() async throws {
         let (state, project, worktree) = try await makeStateWithWorktree(name: "ghostty-relative")
         defer { try? FileManager.default.removeItem(at: worktree.path) }
