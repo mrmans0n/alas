@@ -2,6 +2,8 @@ import Foundation
 
 @MainActor
 struct RemotePairingApprovalHTTP {
+    static let capacityErrorMessage = "request capacity reached"
+
     struct ChallengeRequest: Codable {
         let requester: ApprovalPeer
         let attemptNonce: String
@@ -55,7 +57,8 @@ struct RemotePairingApprovalHTTP {
         case .unauthorized: error("401 Unauthorized", "unauthorized")
         case .disabled: error("403 Forbidden", "approval unavailable")
         case .expired: error("410 Gone", "request expired")
-        case .conflict, .capacity: error("409 Conflict", "request conflict")
+        case .conflict: error("409 Conflict", "request conflict")
+        case .capacity: error("409 Conflict", capacityErrorMessage)
         case .throttled: error("429 Too Many Requests", "try again later", headers: [("Retry-After", "2")])
         }
     }

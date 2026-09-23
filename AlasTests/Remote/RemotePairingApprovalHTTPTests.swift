@@ -162,6 +162,7 @@ import Testing
             let envelope = ApprovalEnvelope(payload: payload, signature: caller.signApproval(payload, reply: false)!)
             let response = try f.response("submit", body: JSONEncoder().encode(envelope))
             #expect(response.hasPrefix(index < 3 ? "HTTP/1.1 200" : "HTTP/1.1 409"))
+            if index == 3 { #expect(response.contains("request capacity reached")) }
         }
         #expect(f.coordinator.entries.filter { $0.phase == .pending }.count == 3)
         #expect(f.coordinator.entries.filter { $0.phase == .challenged }.count == 1)

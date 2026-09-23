@@ -274,7 +274,12 @@ final class RemotePairingApprovalClient {
         case 200: return data
         case 401: throw ApprovalFailure.unauthorized
         case 403: throw ApprovalFailure.disabled
-        case 409: throw ApprovalFailure.conflict
+        case 409:
+            struct ErrorBody: Decodable { let error: String }
+            if (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error == RemotePairingApprovalHTTP.capacityErrorMessage {
+                throw ApprovalFailure.capacity
+            }
+            throw ApprovalFailure.conflict
         case 410: throw ApprovalFailure.expired
         case 429: throw ApprovalFailure.throttled
         default: throw ApprovalFailure.invalid

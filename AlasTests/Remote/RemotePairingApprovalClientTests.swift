@@ -20,6 +20,7 @@ struct RemotePairingApprovalClientTests {
         var receiverOffset: TimeInterval = 0
         var replyDelay: TimeInterval = 0
         var statusCode: Int?
+        var errorMessage: String?
         var decision: ApprovalDecision? = .allow
         var failFirstOrigin = false
         var lostReply: ApprovalOperation?
@@ -69,7 +70,8 @@ struct RemotePairingApprovalClientTests {
             #expect(request.value(forHTTPHeaderField: "Origin") == nil)
             #expect((request.httpBody?.count ?? 0) <= 16 * 1024)
             if let statusCode {
-                return (Data(), HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: nil, headerFields: nil)!)
+                let body = errorMessage.map { Data("{\"error\":\"\($0)\"}".utf8) } ?? Data()
+                return (body, HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: nil, headerFields: nil)!)
             }
             if failFirstOrigin && request.url?.host == "offline" { throw URLError(.cannotConnectToHost) }
             let data = try #require(request.httpBody)
@@ -181,6 +183,21 @@ struct RemotePairingApprovalClientTests {
         exchange.statusCode = 410
         #expect(await exchange.client().request(localPeer: exchange.requester, target: exchange.target,
             expectedServerID: "receiver") == .expired)
+    }
+
+    @Test func httpCapacityConflictMapsToCapacityResult() async {
+        let exchange = Exchange()
+        exchange.statusCode = 409
+        exchange.errorMessage = "request capacity reached"
+        #expect(await exchange.client().request(localPeer: exchange.requester, target: exchange.target,
+            expectedServerID: "receiver") == .failed(.capacity))
+    }
+
+    @Test func genericHttpConflictRemainsConflict() async {
+        let exchange = Exchange()
+        exchange.statusCode = 409
+        #expect(await exchange.client().request(localPeer: exchange.requester, target: exchange.target,
+            expectedServerID: "receiver") == .failed(.conflict))
     }
 
     @Test func pendingApprovalPinsIdentityAndRedeemsOnlyAfterAllow() async throws {
