@@ -59,4 +59,29 @@ struct SemanticTokensSchedulingTests {
         feature.invalidate()
         #expect(clears == 1)
     }
+
+    @Test func failedLatestRequestClearsPresentationButStaleFailureDoesNot() async throws {
+        var clears = 0
+        var requests = 0
+        var completions: [CheckedContinuation<SemanticTokensFeature.Result?, Never>] = []
+        let feature = SemanticTokensFeature(request: { _ in
+            requests += 1
+            return await withCheckedContinuation { completions.append($0) }
+        }, apply: { _, _ in }, clear: { clears += 1 })
+        defer { feature.stop() }
+
+        feature.refresh(range: NSRange(location: 0, length: 1), debounce: .zero)
+        for _ in 0..<100 where requests < 1 { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(requests == 1)
+        feature.invalidate(preservingPresentation: true)
+        feature.refresh(range: NSRange(location: 1, length: 1), debounce: .zero)
+        completions[0].resume(returning: nil)
+        for _ in 0..<100 where requests < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(requests == 2)
+        #expect(clears == 0)
+
+        completions[1].resume(returning: nil)
+        for _ in 0..<100 where clears == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(clears == 1)
+    }
 }
