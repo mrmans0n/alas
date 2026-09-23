@@ -196,6 +196,62 @@ enum RemotePathContainment {
         return parseContainedReadResult(exitCode: result.exitCode, stdout: result.stdout, maxBytes: maxBytes)
     }
 
+    /// Bounded contained read for the repository hook allowlist. Unlike
+    /// `containedReadScript`, it follows the final symlink only after each
+    /// resolved target is checked to remain inside the worktree and outside
+    /// `.git`. Intermediate path components have already been physically
+    /// resolved by `containmentExcludingGitProbeCommand`.
+    static func containedResolvedReadScript(path: String, worktreeRoot: String, maxBytes: Int) -> String {
+        let probe = containmentExcludingGitProbeCommand(path: path, worktreeRoot: worktreeRoot)
+        let probeWithoutFinalExit = probe.hasSuffix("exit 0")
+            ? String(probe.dropLast("exit 0".count))
+            : probe
+        return probeWithoutFinalExit + """
+        current="$full_phys"; depth=0; \
+        while [ -L "$current" ]; do \
+        [ "$depth" -lt 40 ] || exit 8; \
+        link=$(readlink "$current") || exit 11; \
+        case "$link" in /*) candidate="$link" ;; *) candidate="$(dirname "$current")/$link" ;; esac; \
+        if [ -d "$candidate" ]; then current=$(cd "$candidate" && pwd -P) || exit 11; else \
+        parent=$(dirname "$candidate"); base=$(basename "$candidate"); current="$(cd "$parent" && pwd -P)/$base" || exit 11; \
+        fi; \
+        depth=$((depth + 1)); \
+        done; \
+        case "$current" in \
+        "$root_phys") rel="" ;; \
+        "$root_phys"/*) rel=${current#"$root_phys"/} ;; \
+        *) exit 6 ;; \
+        esac; \
+        rest="$rel"; \
+        while [ -n "$rest" ]; do \
+        case "$rest" in \
+        */*) comp=${rest%%/*}; rest=${rest#*/} ;; \
+        *) comp="$rest"; rest="" ;; \
+        esac; \
+        case "$comp" in .[Gg][Ii][Tt]) exit 7 ;; esac; \
+        done; \
+        [ -d "$current" ] && exit 9; \
+        [ -e "$current" ] || exit 10; \
+        [ -f "$current" ] || exit 12; \
+        size=$(stat -c %s -- "$current" 2>/dev/null || stat -f %z "$current") || exit 11; \
+        echo "$size"; \
+        head -c \(maxBytes + 1) "$current"
+        """
+    }
+
+    static func containedResolvedRead(host: String, path: String, worktreeRoot: String, maxBytes: Int) async throws -> ContainedReadOutcome {
+        let target = try lexicallyResolveInsideWorktree(path: path, worktreeRoot: worktreeRoot)
+        let result = try await RemoteExec.runData(
+            host: host,
+            cwd: nil,
+            command: containedResolvedReadScript(path: target, worktreeRoot: worktreeRoot, maxBytes: maxBytes)
+        )
+        if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
+            throw RemoteFileAccessError.connectionFailed(result.stderr)
+        }
+        return parseContainedReadResult(exitCode: result.exitCode, stdout: result.stdout, maxBytes: maxBytes)
+    }
+
     /// Pure parsing half of `containedRead`, split out so the
     /// stat-vs-actual-size reconciliation (the fix for the file-grew-during-
     /// read race described on `containedReadScript`) is directly testable

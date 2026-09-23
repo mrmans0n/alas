@@ -437,6 +437,7 @@
 		3755F90C83B34CB43E37196E /* AppState+RunSchedules.swift in Sources */ = {isa = PBXBuildFile; fileRef = 377761A3E22B405ADB5451F3 /* AppState+RunSchedules.swift */; };
 		376A08C73011C5CA9E445C4B /* ImageDiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D7D83CD76ABF9FED3B29F62 /* ImageDiffView.swift */; };
 		377280589802FA5CFA45B065 /* ReviewSessionSelectionPersister.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC4556BB4983FEF2A4E4A12D /* ReviewSessionSelectionPersister.swift */; };
+		37924AF88816E4CE6B4E9531 /* RepoHookLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 917899A07B40466C6B6F46C4 /* RepoHookLoader.swift */; };
 		37DD3F3B818131973DAA2B9B /* ACPMessageList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F79A184C86BE6C6BF72EB57 /* ACPMessageList.swift */; };
 		385D919650403F661CCE822C /* GGLandingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18E3BD9A15E5E342941AF18B /* GGLandingStore.swift */; };
 		387EF12B6875648E422956F7 /* Highlighted.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66E8A2A1A02BD06F4B782D03 /* Highlighted.swift */; };
@@ -473,6 +474,7 @@
 		3B925198F948BE8054662C43 /* AppKitDiffReviewPresentationStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBEC713703928ABF1942645D /* AppKitDiffReviewPresentationStateTests.swift */; };
 		3BB59F83CE03FF8497E60F49 /* WorkspaceCheckoutLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03A8831DA4C093678F8B158E /* WorkspaceCheckoutLifecycleTests.swift */; };
 		3BB7766DF1D9BF15098432F5 /* CommitDetails.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AF335AB8B3061C889A348B3 /* CommitDetails.swift */; };
+		3C20ED58CB83C1D7274A1B5D /* RepoHookLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C9D29CB741846E7193F9142 /* RepoHookLoaderTests.swift */; };
 		3C30C1EAE4786BB1BE42F994 /* ACPToolCallCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC3CF39EE3E5E2AB9B0968B3 /* ACPToolCallCard.swift */; };
 		3C4FFC880170CDC72FD93BFD /* AppKitDiffRowHostingPoolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB13AAAE5C140D3A47CEC44F /* AppKitDiffRowHostingPoolTests.swift */; };
 		3C57603EA801D8994B0B5525 /* RightPaneState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91C1705E68E97111E85D83F3 /* RightPaneState.swift */; };
@@ -2117,6 +2119,7 @@
 		0C4F66F89778A1995407BB50 /* ACPElicitation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPElicitation.swift; sourceTree = "<group>"; };
 		0C5373F76231F229D3F96AF3 /* session-update-config-option.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-update-config-option.json"; sourceTree = "<group>"; };
 		0C8541BE5617C7E212CCD034 /* FilesTabLoadingIndicatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesTabLoadingIndicatorTests.swift; sourceTree = "<group>"; };
+		0C9D29CB741846E7193F9142 /* RepoHookLoaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoHookLoaderTests.swift; sourceTree = "<group>"; };
 		0CB1655ABBE1D0CB79CAE1C3 /* AgentSidebarFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSidebarFormatting.swift; sourceTree = "<group>"; };
 		0CB5D1C8046EF9B6A95C41CD /* ACPRemoteMCPFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPRemoteMCPFilter.swift; sourceTree = "<group>"; };
 		0CC074B85082A8BB30EEAFA5 /* UpdateAvailableSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateAvailableSheet.swift; sourceTree = "<group>"; };
@@ -3142,6 +3145,7 @@
 		911C47748187EEA25C56E1C9 /* RightPaneToolbarModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneToolbarModelTests.swift; sourceTree = "<group>"; };
 		913D207D8F2040A975CC5DD9 /* WorktreeStatusScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeStatusScanner.swift; sourceTree = "<group>"; };
 		9160AF4DDD35E2A02262D868 /* GGService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGService.swift; sourceTree = "<group>"; };
+		917899A07B40466C6B6F46C4 /* RepoHookLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoHookLoader.swift; sourceTree = "<group>"; };
 		91B5694DB75F80C8D7B51E82 /* MergeConflictToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictToolbar.swift; sourceTree = "<group>"; };
 		91C1705E68E97111E85D83F3 /* RightPaneState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneState.swift; sourceTree = "<group>"; };
 		91DC3C89E04640A7453012E2 /* WorkspaceConfigurationResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceConfigurationResolverTests.swift; sourceTree = "<group>"; };
@@ -5361,6 +5365,7 @@
 			isa = PBXGroup;
 			children = (
 				B5022A0ACB6D0EC422C48069 /* RepoHook.swift */,
+				917899A07B40466C6B6F46C4 /* RepoHookLoader.swift */,
 				8244C2F640BB4D984161FDAD /* RepoHookTrust.swift */,
 			);
 			path = RepoHooks;
@@ -5745,6 +5750,7 @@
 		68A71285F4B44DE28022906E /* RepoHooks */ = {
 			isa = PBXGroup;
 			children = (
+				0C9D29CB741846E7193F9142 /* RepoHookLoaderTests.swift */,
 				75D23CC5630E9E48A466E93B /* RepoHookTests.swift */,
 			);
 			path = RepoHooks;
@@ -8310,6 +8316,7 @@
 				A7340B3C1C6B2BC7189F3695 /* RepoDot.swift in Sources */,
 				2C9C311A6DFC9DC5954F5CC2 /* RepoGroupView.swift in Sources */,
 				5BA1979B4DA8C30946CD2658 /* RepoHook.swift in Sources */,
+				37924AF88816E4CE6B4E9531 /* RepoHookLoader.swift in Sources */,
 				23B780BB356E5B89FCA12F5A /* RepoHookTrust.swift in Sources */,
 				D184F0B3D505BF9D90DFF5A4 /* RepoIconDisplayCache.swift in Sources */,
 				0480BCCA1A64270D2B368D29 /* RepoIconResolver.swift in Sources */,
@@ -9268,6 +9275,7 @@
 				AF8B192B3B321E98F62D2CAF /* RepoConfigStoreTests.swift in Sources */,
 				B302771A4A89D6383726D290 /* RepoConfigTests.swift in Sources */,
 				133597E7D43CFE746EF4EF2B /* RepoGroupViewLayoutTests.swift in Sources */,
+				3C20ED58CB83C1D7274A1B5D /* RepoHookLoaderTests.swift in Sources */,
 				4DA25B80BD1D27321301B1FE /* RepoHookTests.swift in Sources */,
 				C137DB1F0A977B7EF58735B2 /* RepoIconDisplayCacheTests.swift in Sources */,
 				6FD850ED8F7C6490451BCFF2 /* RepoIconResolverTests.swift in Sources */,
