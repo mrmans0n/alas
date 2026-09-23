@@ -60,19 +60,23 @@ struct RepoHookLoader: Sendable {
         guard !containsGitDirectory(resolved, relativeTo: root) else {
             return .failed("Hook resolves inside .git")
         }
-        guard FileManager.default.fileExists(atPath: resolved.path) else {
-            return .missing
+        let values: URLResourceValues
+        do {
+            values = try resolved.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        } catch {
+            if isMissingPathError(error) {
+                return .missing
+            }
+            return .failed("Could not read hook: \(error.localizedDescription)")
+        }
+        guard values.isRegularFile == true else {
+            return .failed("Hook is not a regular file")
+        }
+        guard (values.fileSize ?? 0) <= maximumBytes else {
+            return .failed("Hook exceeds the 256 KiB limit")
         }
 
         do {
-            let values = try resolved.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-            guard values.isRegularFile == true else {
-                return .failed("Hook is not a regular file")
-            }
-            guard (values.fileSize ?? 0) <= maximumBytes else {
-                return .failed("Hook exceeds the 256 KiB limit")
-            }
-
             let handle = try FileHandle(forReadingFrom: resolved)
             defer { try? handle.close() }
             let bytes = try handle.read(upToCount: maximumBytes + 1) ?? Data()
@@ -121,6 +125,16 @@ struct RepoHookLoader: Sendable {
         } catch {
             return .failed("Could not read hook: \(error.localizedDescription)")
         }
+    }
+
+    private static func isMissingPathError(_ error: Error) -> Bool {
+        let error = error as NSError
+        if error.domain == NSCocoaErrorDomain {
+            return error.code == CocoaError.Code.fileReadNoSuchFile.rawValue
+        }
+        guard error.domain == NSPOSIXErrorDomain else { return false }
+        return error.code == POSIXErrorCode.ENOENT.rawValue
+            || error.code == POSIXErrorCode.ENOTDIR.rawValue
     }
 
     private static func isContained(_ url: URL, by root: URL) -> Bool {

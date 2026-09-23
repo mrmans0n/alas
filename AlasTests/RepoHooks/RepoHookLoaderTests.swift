@@ -96,6 +96,31 @@ struct RepoHookLoaderTests {
         #expect(failed == .failed(source: .remote(host: "offline"), message: "connection failed"))
     }
 
+    @Test func reportsInaccessibleHooksAsReadFailures() async throws {
+        let root = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let hooksDirectory = root.appendingPathComponent(".alas/hooks")
+        try write(Data("echo protected".utf8), event: .sessionOpen, root: root)
+        let originalPermissions = try #require(
+            FileManager.default.attributesOfItem(atPath: hooksDirectory.path)[.posixPermissions]
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: originalPermissions],
+                ofItemAtPath: hooksDirectory.path
+            )
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: hooksDirectory.path)
+
+        let result = await RepoHookLoader().load(event: .sessionOpen, worktreeRoot: root, host: nil)
+
+        guard case let .failed(source, _) = result else {
+            Issue.record("expected an inaccessible hook to fail, got \(result)")
+            return
+        }
+        #expect(source == .local)
+    }
+
     private func makeRepository() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-repo-hook-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root.appendingPathComponent(".alas/hooks"), withIntermediateDirectories: true)
