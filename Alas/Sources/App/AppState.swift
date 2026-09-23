@@ -630,10 +630,9 @@ final class AppState {
         RemoteServerIdentity(
             serverId: config.remote.serverId,
             name: remoteDisplayName,
-            hubEnabled: config.remote.hubEnabled,
             federationEnabled: config.remote.federationEnabled,
-            // Only reach for the lazy manager when a server is up and the
-            // flag is on, for the same reason `syncRemotePeers` does.
+            // Only reach for the lazy manager when a server is up and peer
+            // federation is enabled, for the same reason `syncRemotePeers` does.
             peers: config.remote.federationEnabled && remoteServer != nil ? remotePeers.helloPeers : []
         )
     }
@@ -709,7 +708,7 @@ final class AppState {
                     )
                 },
                 identity: { [weak self] in
-                    self?.remoteServerIdentity() ?? RemoteServerIdentity(serverId: "", name: "Alas", hubEnabled: false)
+                    self?.remoteServerIdentity() ?? RemoteServerIdentity(serverId: "", name: "Alas")
                 },
                 signer: remoteIdentityKey
             )

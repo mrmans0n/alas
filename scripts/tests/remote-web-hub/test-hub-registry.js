@@ -127,7 +127,7 @@ assert.equal(registry.parseManualPairing("", "ABC"), null);
       version: 1,
       activeId: "gone",
       servers: [
-        { id: "c-1", token: "t", origins: ["10.0.0.1:8765", "http://10.0.0.1:8765"], lastOrigin: "nope" },
+        { id: "c-1", token: "t", origins: ["10.0.0.1:8765", "http://10.0.0.1:8765"], lastOrigin: "nope", hubEnabled: true },
         { id: "c-bad", origins: [] },
       ],
     }),
@@ -136,6 +136,7 @@ assert.equal(registry.parseManualPairing("", "ABC"), null);
   assert.equal(doc.servers.length, 1, "entries without a token or origins are dropped");
   assert.deepEqual(doc.servers[0].origins, ["http://10.0.0.1:8765"], "origins normalized and deduped");
   assert.equal(doc.servers[0].lastOrigin, "http://10.0.0.1:8765", "unknown lastOrigin falls back to the first origin");
+  assert.equal(Object.hasOwn(doc.servers[0], "hubEnabled"), false, "legacy hub flag is removed from loaded entries");
   assert.equal(doc.activeId, "c-1", "dangling activeId falls back to the first server");
 }
 
@@ -236,11 +237,11 @@ assert.equal(registry.parseManualPairing("", "ABC"), null);
   assert.equal(server.serverId, "srv-A");
   assert.equal(server.name, "Studio");
   assert.equal(server.protocolVersion, 1);
-  assert.equal(server.hubEnabled, true);
+  assert.equal(Object.hasOwn(server, "hubEnabled"), false);
 
   const blankName = registry.applyHello(doc, server.id, { type: "hello", protocolVersion: 1, serverId: "srv-A", name: "  " });
   assert.equal(blankName.server.name, "Studio", "blank hello name keeps the previous name");
-  assert.equal(blankName.server.hubEnabled, false, "missing hubEnabled means off");
+  assert.equal(Object.hasOwn(blankName.server, "hubEnabled"), false);
 
   assert.equal(registry.applyHello(doc, "nope", { type: "hello", serverId: "x", name: "y" }), null);
 }

@@ -171,7 +171,7 @@ struct RemoteServerIntegrationTests {
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
             provider: FakeSessionsProvider(),
-            identity: { RemoteServerIdentity(serverId: "srv-1", name: "Test Mac", hubEnabled: true) }
+            identity: { RemoteServerIdentity(serverId: "srv-1", name: "Test Mac") }
         )
         try server.start(port: 0)
         defer { server.stop() }
@@ -183,7 +183,7 @@ struct RemoteServerIntegrationTests {
         let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
         task.resume()
         let first = try await receiveServerMessage(task)
-        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", hubEnabled: true))
+        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac"))
         task.cancel(with: .goingAway, reason: nil)
     }
 
@@ -194,7 +194,7 @@ struct RemoteServerIntegrationTests {
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
             provider: FakeSessionsProvider(),
-            identity: { RemoteServerIdentity(serverId: "srv-1", name: "Test Mac", hubEnabled: false, federationEnabled: true) }
+            identity: { RemoteServerIdentity(serverId: "srv-1", name: "Test Mac", federationEnabled: true) }
         )
         try server.start(port: 0)
         defer { server.stop() }
@@ -205,41 +205,7 @@ struct RemoteServerIntegrationTests {
         let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
         task.resume()
         let first = try await receiveServerMessage(task)
-        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", hubEnabled: false, federationEnabled: true))
-        task.cancel(with: .goingAway, reason: nil)
-    }
-
-    // Regression: hubEnabled is only carried in the
-    // hello sent at handshake, so toggling "Remote hub" used to leave every
-    // already-connected browser stuck on the value it saw at connect time —
-    // broadcastHello() must push a fresh hello without dropping the socket.
-    @Test func broadcastHelloPushesUpdatedIdentityToAConnectedSocket() async throws {
-        let pairing = RemotePairingService(store: InMemoryDeviceStore())
-        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
-        var hubEnabled = false
-        let server = RemoteServer(
-            pairing: pairing,
-            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
-            provider: FakeSessionsProvider(),
-            identity: { RemoteServerIdentity(serverId: "srv-1", name: "Test Mac", hubEnabled: hubEnabled) }
-        )
-        try server.start(port: 0)
-        defer { server.stop() }
-        for _ in 0..<50 where server.port == nil {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        let port = try #require(server.port)
-
-        let task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:\(port)/ws")!, protocols: [token])
-        task.resume()
-        let first = try await receiveServerMessage(task)
-        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", hubEnabled: false))
-
-        hubEnabled = true
-        server.broadcastHello()
-        let second = try await receiveServerMessage(task)
-        #expect(second == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", hubEnabled: true))
-
+        #expect(first == .hello(protocolVersion: RemoteProtocolVersion.current, serverId: "srv-1", name: "Test Mac", federationEnabled: true))
         task.cancel(with: .goingAway, reason: nil)
     }
 
@@ -659,7 +625,7 @@ struct RemoteServerIntegrationTests {
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
             provider: FakeSessionsProvider(),
-            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false, federationEnabled: true) }
+            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", federationEnabled: true) }
         )
         try server.start(port: 0)
         for _ in 0..<50 where server.port == nil {
@@ -718,7 +684,7 @@ struct RemoteServerIntegrationTests {
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
             provider: FakeSessionsProvider(),
-            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false, federationEnabled: federationEnabled) }
+            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", federationEnabled: federationEnabled) }
         )
         try server.start(port: 0)
         defer { server.stop() }
@@ -769,7 +735,7 @@ struct RemoteServerIntegrationTests {
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
             provider: FakeSessionsProvider(),
-            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false, federationEnabled: true) }
+            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", federationEnabled: true) }
         )
         try server.start(port: 0)
         defer { server.stop() }
@@ -832,8 +798,7 @@ struct RemoteServerIntegrationTests {
             provider: FakeSessionsProvider(),
             identity: {
                 identityCalls += 1
-                return RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false,
-                                            federationEnabled: identityCalls <= 1)
+                return RemoteServerIdentity(serverId: "srv-a", name: "Mac A", federationEnabled: identityCalls <= 1)
             }
         )
         try server.start(port: 0)
@@ -881,7 +846,7 @@ struct RemoteServerIntegrationTests {
                 if identityCalls == 1 {
                     pairing.revoke(deviceId: peerResult.deviceId)
                 }
-                return RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false, federationEnabled: true)
+                return RemoteServerIdentity(serverId: "srv-a", name: "Mac A", federationEnabled: true)
             }
         )
         try server.start(port: 0)
@@ -1316,7 +1281,7 @@ struct RemoteServerIntegrationTests {
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
             provider: FakeSessionsProvider(),
-            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false, federationEnabled: true) }
+            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", federationEnabled: true) }
         )
         final class Sink { var requests: [RemotePeerPairingRequest] = [] }
         let sink = Sink()
@@ -1357,7 +1322,7 @@ struct RemoteServerIntegrationTests {
             pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
             provider: FakeSessionsProvider(),
-            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", hubEnabled: false) },
+            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A") },
             signer: RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
         )
         try server.start(port: 0)

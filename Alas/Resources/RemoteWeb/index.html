@@ -26,7 +26,7 @@
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.2 2.6l2.2 2.2-8 8-2.9.7.7-2.9z"/></svg>
     </button>
     <span id="nav-title">Alas</span>
-    <span id="status" class="chip" data-state="connecting">connecting…</span>
+    <span id="status" class="chip is-server" data-state="connecting">connecting…</span>
   </header>
   <div id="detail-tabs" class="tabs hidden" role="tablist">
     <button id="tab-chat" class="tab is-active" role="tab" type="button" aria-selected="true">
@@ -117,12 +117,11 @@
     </section>
     <section id="settings" class="view hidden">
       <h1>Settings</h1>
-      <div id="hub-section" class="hidden">
+      <div id="hub-section">
         <p class="sheet-label">Servers</p>
         <div id="server-list"></div>
         <button id="add-server" class="option-btn" type="button">Add server…</button>
       </div>
-      <p id="settings-placeholder" class="placeholder-card">Settings are coming soon.</p>
     </section>
   </main>
   <nav id="bottom-tabbar">
@@ -133,7 +132,7 @@
     <div class="bt-fabwrap"><button type="button" id="fab-new-session" aria-label="New session">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
     </button></div>
-    <button type="button" id="tab-settings" class="bt-tab" aria-label="Settings" disabled>
+    <button type="button" id="tab-settings" class="bt-tab" aria-label="Settings">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4"/></svg>
       <span>Settings</span>
       <span id="tab-settings-badge" class="tab-count hidden"></span>

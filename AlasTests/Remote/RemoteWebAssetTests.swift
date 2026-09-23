@@ -1091,7 +1091,7 @@ struct RemoteWebAssetTests {
         #expect(js.contains("function pairAndAdd(input, options)"))
         #expect(js.contains("function resetServerScopedState()"))
         #expect(js.contains("function switchServer(id)"))
-        #expect(js.contains("function applyHubFlag(enabled)"))
+        #expect(js.contains("links.connectAll();"))
         #expect(js.contains(#"document.addEventListener("visibilitychange""#))
         // The single-socket client is gone: the only WebSocket construction
         // is the factory handed to the link manager; no token key, no
@@ -1119,10 +1119,10 @@ struct RemoteWebAssetTests {
         let js = try asset("app.js")
         let css = try asset("style.css")
 
-        #expect(html.contains(#"<div id="hub-section" class="hidden">"#))
+        #expect(html.contains(#"<div id="hub-section">"#))
         #expect(html.contains(#"id="server-list""#))
         #expect(html.contains(#"id="add-server""#))
-        #expect(html.contains(#"id="settings-placeholder""#))
+        #expect(!html.contains("settings-placeholder"))
         #expect(html.contains(#"id="tab-settings-badge" class="tab-count hidden""#))
         #expect(html.contains(#"id="add-server-sheet" class="sheet hidden" role="dialog""#))
         #expect(html.contains(#"id="add-server-link""#))
@@ -1140,38 +1140,14 @@ struct RemoteWebAssetTests {
         #expect(js.contains("async function submitAddServer()"))
         #expect(js.contains("function forgetServer(id)"))
         #expect(js.contains("RemoteHubRegistry.otherAttentionTotal(links.all(), hub.activeId)"))
-        #expect(js.contains(#"$("tab-settings").disabled = !enabled;"#))
-        #expect(js.contains(#"$("status").onclick = () => { if (hubUIEnabled && !currentSession) showSettings(); };"#))
+        #expect(html.contains(#"id="tab-settings" class="bt-tab" aria-label="Settings">"#))
+        #expect(js.contains(#"$("status").onclick = () => { if (!currentSession) showSettings(); };"#))
 
         #expect(css.contains(".server-row {"))
         #expect(css.contains(".server-row.is-active"))
         #expect(css.contains("#tab-settings-badge"))
         #expect(css.contains(".dot.off"))
         #expect(css.contains(".dot.warn"))
-    }
-
-    // Flag off must look exactly like today: the tab stays disabled and no
-    // server row is ever rendered.
-    @Test func hubSurfacesStayHiddenUntilTheFlagIsOn() throws {
-        let html = try asset("index.html")
-        let js = try asset("app.js")
-        #expect(html.contains(#"id="tab-settings" class="bt-tab" aria-label="Settings" disabled"#))
-        let body = try #require(js.range(of: "function applyHubFlag(enabled) {").map { js[$0.lowerBound...].prefix(600) })
-        #expect(body.contains(#"$("hub-section").classList.toggle("hidden", !enabled);"#))
-        #expect(body.contains(#"$("settings-placeholder").classList.toggle("hidden", enabled);"#))
-        #expect(body.contains("if (enabled) links.connectAll(); else links.disableIdle();"))
-    }
-
-    // Regression: forgetServer's non-active branch
-    // used to only re-render, never recomputing the aggregate hub flag — so
-    // forgetting the one server that had ever reported hubEnabled, while it
-    // was inactive, left the hub UI stuck on with no server authorizing it.
-    @Test func forgettingAnInactiveServerRecomputesTheAggregateHubFlag() throws {
-        let js = try asset("app.js")
-        let body = try #require(js.range(of: "function forgetServer(id) {").map { js[$0.lowerBound...].prefix(700) })
-        #expect(body.contains("if (!wasActive) {"))
-        #expect(body.contains("applyHubFlag(anyServerHasHubEnabled());"))
-        #expect(!body.contains("if (!wasActive) { refreshHubViews(); return; }"))
     }
 
     // Regression: a disallowed cross-origin /pair
@@ -1188,19 +1164,6 @@ struct RemoteWebAssetTests {
         #expect(js.contains(#"res.status === 403"#))
     }
 
-    // Regression: setVisible() used to reconnect
-    // every idle link on a visibility change regardless of whether the hub
-    // was actually enabled, so backgrounding and foregrounding the page
-    // while the flag was off resurrected the idle sockets disableIdle()
-    // had just suspended.
-    @Test func idleLinksStaySuspendedAcrossAVisibilityCycleWhileTheHubIsOff() throws {
-        let js = try asset("hub-links.js")
-        #expect(js.contains("let idleAllowed = false;"))
-        #expect(js.contains("function disableIdle() {"))
-        let setVisible = try #require(js.range(of: "function setVisible(next) {").map { js[$0.lowerBound...].prefix(900) })
-        #expect(setVisible.contains(#"if (link.role !== "active" && !idleAllowed) continue;"#))
-    }
-
     // Regression: adopt() promoted a fallback
     // origin only in memory — the registry's own lastOrigin was never
     // updated, so a page reload retried the dead remembered origin first
@@ -1213,20 +1176,6 @@ struct RemoteWebAssetTests {
         let appJS = try asset("app.js")
         #expect(appJS.contains("onOriginChange: (link, origin) => {"))
         #expect(appJS.contains("RemoteHubRegistry.setLastOrigin(hub, link.id, origin);"))
-    }
-
-    // Regression: when a hello reveals that a link
-    // duplicates an already-paired server, handleLinkHello merged the two
-    // registry entries and returned before recomputing the aggregate hub
-    // flag — so a surviving entry whose fresh hello reported hubEnabled:
-    // false could leave the hub UI stuck on with nothing left authorizing it.
-    @Test func mergingADuplicateLinkRecomputesTheAggregateHubFlag() throws {
-        let js = try asset("app.js")
-        let body = try #require(js.range(of: "function handleLinkHello(link, hello) {").map { js[$0.lowerBound...].prefix(700) })
-        #expect(body.contains("applyHubFlag(anyServerHasHubEnabled());"))
-        let flagIndex = try #require(body.range(of: "applyHubFlag(anyServerHasHubEnabled());"))
-        let mergeIndex = try #require(body.range(of: "if (result.mergedFromId) {"))
-        #expect(flagIndex.lowerBound < mergeIndex.lowerBound, "the aggregate flag must be recomputed before the merge branch's early return")
     }
 
     // Regression: every pairing link advertises
@@ -1272,19 +1221,6 @@ struct RemoteWebAssetTests {
         #expect(stateChange.contains("showOriginBlockedGate(link);"))
         let switchServer = try #require(app.range(of: "function switchServer(id) {").map { app[$0.lowerBound...].prefix(900) })
         #expect(switchServer.contains(#"if (link.state === "blocked") { showOriginBlockedGate(link); return; }"#))
-    }
-
-    // Regression: handleLinkHello's duplicate-merge
-    // branch calls links.update() on the surviving idle link right after
-    // disableIdle() may have just suspended it — update() used to reconnect
-    // unconditionally, resurrecting that socket. See the node-executed
-    // "update() respects idleAllowed for non-active links" coverage in
-    // test-hub-links.js.
-    @Test func updateOnlyReconnectsIdleLinksWhenTheHubIsEnabled() throws {
-        let js = try asset("hub-links.js")
-        let update = try #require(js.range(of: "function update(server) {").map { js[$0.lowerBound...].prefix(900) })
-        #expect(update.contains(#"if (link.role === "active" || idleAllowed) connect(link.id);"#))
-        #expect(!update.contains("    connect(link.id);\n    return link;"), "update() must not reconnect unconditionally")
     }
 
     // Regression: every server advertises

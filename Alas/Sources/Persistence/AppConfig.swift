@@ -68,8 +68,6 @@ struct AppConfig: Codable, Equatable {
         var serverId: String = ""
         /// Name advertised in `hello`. Empty means "use the computer name".
         var displayName: String = ""
-        /// Experiment: lets the remote web client pair with several Macs.
-        var hubEnabled: Bool = false
         /// Experiment: lets this Mac pair with other Macs running Alas.
         var federationEnabled: Bool = false
         /// Advertise this Mac on the local network with Bonjour and browse for
@@ -84,7 +82,6 @@ struct AppConfig: Codable, Equatable {
             allowedOrigins: [String] = [],
             serverId: String = "",
             displayName: String = "",
-            hubEnabled: Bool = false,
             federationEnabled: Bool = false,
             discoverable: Bool = false
         ) {
@@ -95,14 +92,13 @@ struct AppConfig: Codable, Equatable {
             self.allowedOrigins = allowedOrigins
             self.serverId = serverId
             self.displayName = displayName
-            self.hubEnabled = hubEnabled
             self.federationEnabled = federationEnabled
             self.discoverable = discoverable
         }
 
         enum CodingKeys: String, CodingKey {
             case enabled, port, allowedHosts, preferredAdvertisedHost
-            case allowedOrigins, serverId, displayName, hubEnabled, federationEnabled, discoverable
+            case allowedOrigins, serverId, displayName, federationEnabled, discoverable
         }
 
         init(from decoder: Decoder) throws {
@@ -114,7 +110,6 @@ struct AppConfig: Codable, Equatable {
             allowedOrigins = (try? c.decode([String].self, forKey: .allowedOrigins)) ?? []
             serverId = (try? c.decode(String.self, forKey: .serverId)) ?? ""
             displayName = (try? c.decode(String.self, forKey: .displayName)) ?? ""
-            hubEnabled = (try? c.decode(Bool.self, forKey: .hubEnabled)) ?? false
             federationEnabled = (try? c.decode(Bool.self, forKey: .federationEnabled)) ?? false
             discoverable = (try? c.decode(Bool.self, forKey: .discoverable)) ?? false
         }
