@@ -326,6 +326,7 @@ final class RemotePeerManager {
     }
 
     func addApprovedPeer(expectedPeer: ApprovalPeer, localPeer: ApprovalPeer? = nil,
+                         shouldPublish: () -> Bool = { true },
                          redeem: (RemotePeerAdvertisement) async -> RemotePeerPairer.Outcome) async -> AddError? {
         let me = boundedIdentity()
         guard !me.publicKey.isEmpty, RemotePeerAdvertisement.isPlausiblePublicKey(me.publicKey),
@@ -335,10 +336,11 @@ final class RemotePeerManager {
         guard !wouldRebindIdentity(serverId: expectedPeer.serverID, publicKey: expectedPeer.publicKey)
         else { return .identityRebindRefused }
         return await completePairing(origins: expectedPeer.origins, expectedPeer: expectedPeer,
-                                     localPeer: localPeer, redeem: redeem)
+                                     localPeer: localPeer, shouldPublish: shouldPublish, redeem: redeem)
     }
 
     private func completePairing(origins: [String], expectedPeer: ApprovalPeer?, localPeer: ApprovalPeer?,
+                                 shouldPublish: () -> Bool = { true },
                                  redeem: (RemotePeerAdvertisement) async -> RemotePeerPairer.Outcome) async -> AddError? {
         let me = localPeer.map { LocalIdentity(serverId: $0.serverID, name: $0.name, origins: $0.origins, publicKey: $0.publicKey) }
             ?? boundedIdentity()
@@ -445,7 +447,20 @@ final class RemotePeerManager {
             // the device it minted for us, but sends no error our way.
             guard let peer = peers.first(where: { $0.serverId == serverId }) else { return nil }
             if await waitForReciprocalRedemption(peerId: peer.id, counterCode: counterCode, ownFields: peer) {
-                return nil
+                if shouldPublish() { return nil }
+                if lastUpsertOwnerByServerId[serverId] == counterCode {
+                    let saved = outboundPredecessors[counterCode] ?? (peer: nil, owner: nil)
+                    let predecessor = saved.owner == nil ? saved : validPredecessor(saved)
+                    lastUpsertOwnerByServerId[serverId] = predecessor.owner
+                    if let confirmed = peers.first(where: { $0.id == peer.id })?.localDeviceId {
+                        pairing.revoke(deviceId: confirmed)
+                        onRevokeDevice?(confirmed)
+                    }
+                    if let previous = predecessor.peer { restorePreviousState(previous, peerId: peer.id) }
+                    else { removeProvisionalPeer(peerId: peer.id) }
+                }
+                endAttempt(counterCode: counterCode)
+                return .cancelled
             }
             // The wait gave up without finding a match, but a confirmation
             // could still land in the buffer right at that boundary, or

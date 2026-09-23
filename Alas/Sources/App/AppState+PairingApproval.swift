@@ -184,7 +184,9 @@ extension AppState {
             case .approved(let session):
                 self.nearbyApprovalState = .completing(instanceID: instance.id)
                 let error = await self.remotePeers.addApprovedPeer(expectedPeer: session.payload.receiver,
-                    localPeer: localPeer) { advertisement in
+                    localPeer: localPeer, shouldPublish: {
+                        !Task.isCancelled && self.nearbyApprovalGeneration == generation && self.canRequestPairingApproval
+                    }) { advertisement in
                         await client.redeem(session: session, advertisement: advertisement)
                     }
                 if error != nil || Task.isCancelled || !self.canRequestPairingApproval {
