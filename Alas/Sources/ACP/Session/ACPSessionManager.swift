@@ -3404,7 +3404,6 @@ extension ACPSessionManager {
         }
     }
 
-
     private func performAttach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async {
         guard let session = sessions[sessionId] else { return }
         switch session.agentState {
