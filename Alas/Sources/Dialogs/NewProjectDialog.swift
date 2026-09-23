@@ -102,6 +102,7 @@ private struct ProjectDialog: View {
     @State private var iconSymbolName: String = "folder"
     @State private var iconEmoji: String = "🚀"
     @State private var iconImagePath: String?
+    @State private var imagePickerPresented = false
     @State private var pendingProjectId = UUID().uuidString
     @State private var avatarPreset: ProjectAvatarPreset?
     @State private var avatarPresetData: Data?
@@ -204,6 +205,13 @@ private struct ProjectDialog: View {
         .onAppear {
             populateInitialValues()
             Task { await loadAvatarPresetIfAvailable() }
+        }
+        .fileImporter(
+            isPresented: $imagePickerPresented,
+            allowedContentTypes: [.png, .jpeg, .gif, .webP]
+        ) { result in
+            guard case .success(let url) = result else { return }
+            loadProjectIconImage(from: url)
         }
         .onChange(of: path) { _, new in
             if case .add = mode, location == .local {
@@ -846,27 +854,26 @@ private struct ProjectDialog: View {
     }
 
     private func chooseProjectIconImage() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.png, .jpeg, .gif, .webP]
-        if panel.runModal() == .OK, let url = panel.url {
-            do {
-                try ProjectIconImageStaging.validateFileSize(at: url)
-                let data = try Data(contentsOf: url)
-                let staged = try ProjectIconImageStaging.stage(
-                    data: data,
-                    projectId: existingProjectIdForIconStorage()
-                )
-                iconImagePath = staged.imagePath
-                iconMode = .image
-                errorMessage = nil
-            } catch let stagingError as ProjectIconImageStaging.StagingError {
-                errorMessage = stagingError.userMessage
-            } catch {
-                errorMessage = "Couldn't load that image. Please try another file."
-            }
+        imagePickerPresented = true
+    }
+
+    private func loadProjectIconImage(from url: URL) {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        do {
+            try ProjectIconImageStaging.validateFileSize(at: url)
+            let data = try Data(contentsOf: url)
+            let staged = try ProjectIconImageStaging.stage(
+                data: data,
+                projectId: existingProjectIdForIconStorage()
+            )
+            iconImagePath = staged.imagePath
+            iconMode = .image
+            errorMessage = nil
+        } catch let stagingError as ProjectIconImageStaging.StagingError {
+            errorMessage = stagingError.userMessage
+        } catch {
+            errorMessage = "Couldn't load that image. Please try another file."
         }
     }
 
