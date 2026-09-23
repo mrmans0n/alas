@@ -78,6 +78,9 @@ func makeCleanupFixture(
 
         let state = AppState(
             store: persistence,
+            runHistoryStore: try? RunHistoryStore(
+                path: temporaryRoot.appendingPathComponent("run-history.sqlite").path
+            ),
             worktreeCleanupLauncher: worktreeCleanupLauncher,
             attentionStore: AttentionStore(url: attentionStoreURL, persistence: persistence)
         )
