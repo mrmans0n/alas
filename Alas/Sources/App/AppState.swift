@@ -1644,7 +1644,7 @@ final class AppState {
     }
 
     func acceptsRightPaneTabShortcut(_ tab: RightPaneTab) -> Bool {
-        RightPaneTab.available(schedulesEnabled: config.schedulesEnabled).contains(tab)
+        RightPaneTab.available().contains(tab)
     }
 
     func toggleSidebarVisibility() {

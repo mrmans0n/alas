@@ -379,25 +379,14 @@ struct AppStateRunScheduleTests {
         #expect(byWorktree == .skipped(reason: "Project is paused."))
     }
 
-    /// The preview flag owns the clock: with it off nothing is evaluated, so
-    /// no schedule can fire however many are saved.
-    @Test func theClockRunsOnlyWhileThePreviewFlagIsOn() throws {
+    @Test func theClockStartsWhenWorktreesLoad() throws {
         let fixture = try makeFixture()
         defer {
             fixture.state.runScheduler.stop()
             try? FileManager.default.removeItem(at: fixture.directory)
         }
-        fixture.state.config.schedulesEnabled = false
-
-        fixture.state.startRunSchedulerIfEnabled()
-        #expect(!fixture.state.runScheduler.isRunning)
-
-        fixture.state.setSchedulesEnabled(true)
-        #expect(fixture.state.config.schedulesEnabled)
+        fixture.state.startRunScheduler()
         #expect(fixture.state.runScheduler.isRunning)
-
-        fixture.state.setSchedulesEnabled(false)
-        #expect(!fixture.state.runScheduler.isRunning)
     }
 
     /// Deleting the worktree under an in-flight scheduled run discards its

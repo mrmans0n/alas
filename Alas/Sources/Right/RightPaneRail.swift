@@ -12,13 +12,12 @@ struct RightPaneRail: View {
     var activeAgentCount: Int = 0
     var activeRunCount: Int = 0
     var activeScheduleCount: Int = 0
-    var schedulesEnabled: Bool = false
     let onAction: (RightPaneRailAction) -> Void
 
     @Environment(\.theme) private var theme
 
     private var tabs: [RightPaneTab] {
-        RightPaneTab.available(schedulesEnabled: schedulesEnabled)
+        RightPaneTab.available()
     }
 
     var body: some View {
