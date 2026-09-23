@@ -22,6 +22,14 @@ struct AlasFieldCaretSyncTests {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
 
+    private func drainMainQueue() {
+        // RunLoop.run(until:) does not reliably service the main dispatch
+        // queue in test runners; drain it explicitly.
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async { semaphore.signal() }
+        _ = semaphore.wait(timeout: .now() + 2)
+    }
+
     private static func firstTextField(in view: NSView) -> NSTextField? {
         if let field = view as? NSTextField { return field }
         for subview in view.subviews {
@@ -40,12 +48,16 @@ struct AlasFieldCaretSyncTests {
     /// programmatic writes reach `updateNSView` mid-edit.
     private struct ObservedHost: View {
         @ObservedObject var model: NameModel
+        var get: () -> String
+        var set: (String) -> Void
+        init(model: NameModel, get: (() -> String)? = nil, set: ((String) -> Void)? = nil) {
+            self.model = model
+            self.get = get ?? { model.text }
+            self.set = set ?? { model.text = $0 }
+        }
         var body: some View {
             AlasField(
-                text: Binding(
-                    get: { model.text },
-                    set: { model.text = $0 }
-                ),
+                text: Binding(get: get, set: set),
                 monospaced: true,
                 disablesAutomaticTextSubstitutions: true
             )
@@ -95,5 +107,27 @@ struct AlasFieldCaretSyncTests {
         #expect(editor.selectedRange() == NSRange(location: 3, length: 0))
 
         window.orderOut(nil)
+    }
+
+    /// A caret placed at "the end" via grapheme count (`stringValue.count`)
+    /// lands inside any multi-unit UTF-16 character. `focusAndPlaceCaretAtEnd`
+    /// must use UTF-16 length.
+    @Test func focusCaretUsesUTF16Length() throws {
+        let field = AlasNSTextFieldView(frame: NSRect(x: 0, y: 0, width: 200, height: 28))
+        field.stringValue = "a\u{1F600}"
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 28),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = field
+
+        #expect(field.focusAndPlaceCaretAtEnd())
+
+        let editor = try! #require(field.currentEditor() as? NSTextView)
+        // "a" is 1 unit, the emoji 2 → caret must sit at 3, not 2 (which
+        // would split the surrogate pair and place the caret before it).
+        #expect(editor.selectedRange() == NSRange(location: 3, length: 0))
     }
 }
