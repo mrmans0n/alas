@@ -86,7 +86,7 @@ struct DiffReviewSurface: View {
     var annotations: [CheckAnnotation] = []
     var canReply: Bool = false
     var canResolve: Bool = false
-    var onStageReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    var onStageReply: (DiffReviewFileID, DiffInlineCommentThread, String) -> Void = { _, _, _ in }
     var canAddToReview: Bool = false
 
     @Environment(\.theme) private var theme
@@ -150,7 +150,7 @@ struct DiffReviewSurface: View {
         annotations: [CheckAnnotation] = [],
         canReply: Bool = false,
         canResolve: Bool = false,
-        onStageReply: @escaping (DiffInlineCommentThread, String) -> Void = { _, _ in },
+        onStageReply: @escaping (DiffReviewFileID, DiffInlineCommentThread, String) -> Void = { _, _, _ in },
         canAddToReview: Bool = false,
         onDraftCommentReveal: @escaping (DiffReviewDraftCommentScrollCommand, Bool) -> Void = { _, _ in }
     ) {
@@ -456,7 +456,7 @@ struct DiffReviewSurface: View {
                 onUnresolve: onUnresolve,
                 onEdit: onEdit,
                 onDelete: onDelete,
-                onStageReply: onStageReply
+                onStageReply: { thread, body in onStageReply(file.id, thread, body) }
             )
             let relayDraftActions = state.actionRelay.draftCommentActionsForRow
             let appKitDraftActions = ReviewDraftCommentActions(

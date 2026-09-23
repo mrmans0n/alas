@@ -486,11 +486,12 @@ struct ReviewTabView: View {
             annotations: annotations,
             canReply: capabilities.canReply,
             canResolve: capabilities.canResolve,
-            onStageReply: { inlineThread, body in
+            onStageReply: { fileID, inlineThread, body in
                 guard let pr = pendingReview else { return }
                 pr.stage(StagedComment(
                     id: UUID(),
                     threadID: inlineThread.id,
+                    fileID: fileID,
                     filePath: inlineThread.filePath,
                     line: inlineThread.newLine,
                     side: inlineThread.isOldSide ? .old : .new,
