@@ -959,6 +959,32 @@ struct ACPSessionManagerAttachRestoreTests {
         let cachedRow = await manager.persistedSessionRow(id: "local")
         #expect(cachedRow?.configOptionValues == updatedValues)
         let runner = try #require(manager.runners[session.id])
+        await runner.flushPersistence()
+        await manager.flushAllPersistence()
+
+        let newerValues: [String: ACPConfigValue] = ["effort": .string("medium")]
+        session.availableConfigOptions = [ACPConfigOption(
+            id: "effort",
+            name: "Thinking",
+            currentValue: "medium",
+            options: [
+                .init(id: "medium", name: "Medium"),
+                .init(id: "high", name: "High"),
+            ]
+        )]
+        manager.persist(session)
+        await manager.flushPersistence()
+        #expect(try store.loadSession(id: "local")?.configOptionValues == newerValues)
+
+        session.availableConfigOptions = [ACPConfigOption(
+            id: "effort",
+            name: "Thinking",
+            currentValue: "high",
+            options: [
+                .init(id: "medium", name: "Medium"),
+                .init(id: "high", name: "High"),
+            ]
+        )]
         runner.persistSessionRow()
         session.availableConfigOptions = [ACPConfigOption(
             id: "effort",
@@ -969,11 +995,10 @@ struct ACPSessionManagerAttachRestoreTests {
                 .init(id: "high", name: "High"),
             ]
         )]
-        let newerValues: [String: ACPConfigValue] = ["effort": .string("medium")]
-        manager.persist(session)
         await runner.flushPersistence()
         await manager.flushAllPersistence()
         #expect(await manager.persistedSessionRow(id: "local")?.configOptionValues == newerValues)
+        #expect(try store.loadSession(id: "local")?.configOptionValues == newerValues)
         await manager.detach(sessionId: session.id)
     }
 

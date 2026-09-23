@@ -3983,12 +3983,14 @@ extension ACPSessionManager {
                                               self?.onModelsObserved?(agentId, models)
                                           },
                                           onPersistedConfigOptionValues: { [weak self] values in
-                                              guard let self,
-                                                    let session = self.sessions[sessionId],
-                                                    ACPConfigOption.currentValues(in: session.availableConfigOptions) == values,
-                                                    var row = self.persistedRows[sessionId] else {
+                                              guard let self, let session = self.sessions[sessionId] else {
                                                   return
                                               }
+                                              guard ACPConfigOption.currentValues(in: session.availableConfigOptions) == values else {
+                                                  self.persist(session)
+                                                  return
+                                              }
+                                              guard var row = self.persistedRows[sessionId] else { return }
                                               row.configOptionValues = values
                                               self.persistedRows[sessionId] = row
                                               self.replaceRecentRow(row)
