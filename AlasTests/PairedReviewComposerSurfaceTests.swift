@@ -102,6 +102,30 @@ struct PairedReviewComposerSurfaceTests {
         #expect(model.text == "before\n\n\(context.codeSnippet!)\n\nafter")
     }
 
+    @Test func reviewDraftComposerResetsInsertCodeGenerationAfterInserting() async throws {
+        let context = ReviewDraftComposerContext(
+            path: "Sources/App.swift",
+            anchor: .line(side: .new, startLine: 2, endLine: nil, selectedText: "let value = 1")
+        )
+        let model = ReviewDraftComposerCapture(text: "beforeafter", composerContext: context)
+        let controller = NSHostingController(
+            rootView: ReviewDraftComposerCaptureHarness(model: model, theme: try! ThemeStore().current)
+        )
+        let window = attach(controller)
+        defer { window.orderOut(nil) }
+        await drain(controller.view)
+
+        let composer = try #require(textView(containing: model.text, in: controller.view))
+        composer.setSelectedRange(NSRange(location: 6, length: 0))
+        model.insertCodeGeneration += 1
+        await drain(controller.view)
+
+        // A coordinator recreated by row recycling starts with no memory of
+        // the consumed generation; only resetting the source to 0 keeps a
+        // stale, already-inserted generation from replaying.
+        #expect(model.insertCodeGeneration == 0)
+    }
+
     @Test func reviewDraftComposerInsertCodeIsANoOpWithoutAContext() async throws {
         let model = ReviewDraftComposerCapture(text: "beforeafter")
         let controller = NSHostingController(
@@ -492,6 +516,7 @@ private struct ReviewDraftComposerCaptureHarness: View {
             codeBlockStyle: model.codeBlockStyle,
             composerContext: model.composerContext,
             insertCodeGeneration: model.insertCodeGeneration,
+            onInsertCodeConsumed: { model.insertCodeGeneration = 0 },
             onSave: { model.saveCount += 1 },
             onCancel: { model.cancelCount += 1 }
         )

@@ -156,6 +156,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
     let codeBlockStyle: MarkdownCodeBlockStyle?
     var composerContext: ReviewDraftComposerContext? = nil
     var insertCodeGeneration: Int = 0
+    var onInsertCodeConsumed: () -> Void = {}
     let onSave: () -> Void
     let onCancel: () -> Void
 
@@ -169,6 +170,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         codeBlockStyle: MarkdownCodeBlockStyle? = nil,
         composerContext: ReviewDraftComposerContext? = nil,
         insertCodeGeneration: Int = 0,
+        onInsertCodeConsumed: @escaping () -> Void = {},
         onSave: @escaping () -> Void,
         onCancel: @escaping () -> Void
     ) {
@@ -181,6 +183,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         self.codeBlockStyle = codeBlockStyle
         self.composerContext = composerContext
         self.insertCodeGeneration = insertCodeGeneration
+        self.onInsertCodeConsumed = onInsertCodeConsumed
         self.onSave = onSave
         self.onCancel = onCancel
     }
@@ -369,6 +372,11 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
                 textView.performNativeTextInsertion {
                     textView.insertText(insertion, replacementRange: range)
                 }
+                // Reset the source generation so a coordinator recreated by
+                // row recycling (e.g. the composer scrolls offscreen and
+                // back) treats it as already consumed instead of replaying
+                // the insertion.
+                self.parent.onInsertCodeConsumed()
             }
         }
 

@@ -928,6 +928,7 @@ struct DiffTabView: View {
                 ),
                 composerContext: composerContext,
                 insertCodeGeneration: insertCodeGeneration,
+                onInsertCodeConsumed: { insertCodeGeneration = 0 },
                 onSave: savePendingDraft,
                 onCancel: clearPendingDraft
             )

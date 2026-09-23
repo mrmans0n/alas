@@ -1700,6 +1700,7 @@ struct AppKitDiffReviewComposerRowBody: View {
                     ),
                     composerContext: composerContext,
                     insertCodeGeneration: input.state.insertCodeGeneration,
+                    onInsertCodeConsumed: { input.state.insertCodeGeneration = 0 },
                     onSave: input.savePendingDraft,
                     onCancel: input.clearPendingDraft
                 )
