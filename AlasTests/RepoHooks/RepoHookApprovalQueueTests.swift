@@ -44,7 +44,7 @@ struct RepoHookApprovalQueueTests {
         let activeID = queue.activeRequest?.id
         #expect(queue.activeRequest?.hook == sharedHook)
         #expect(queue.activeRuntimeRequest?.id == activeID)
-        #expect(queue.activeProjectDialogRequest == nil)
+        #expect(queue.activeDialogRequest == nil)
 
         queue.decide(.approve)
         #expect(await firstTask.value == .approve)
@@ -90,37 +90,37 @@ struct RepoHookApprovalQueueTests {
     @Test func routesProjectSettingsRequestsToNestedPresenter() async {
         let queue = RepoHookApprovalQueue()
         let presenterID = UUID()
-        queue.registerProjectDialogPresenter(id: presenterID)
+        queue.registerDialogPresenter(id: presenterID)
         let task = Task {
             await queue.requestDecision(hook: hook("settings"), projectID: "project", context: .projectSettings)
         }
 
         await Task.yield()
-        #expect(queue.activeProjectDialogRequest?.id == queue.activeRequest?.id)
+        #expect(queue.activeDialogRequest?.id == queue.activeRequest?.id)
         #expect(queue.activeRuntimeRequest == nil)
         queue.decide(.approve)
         #expect(await task.value == .approve)
-        queue.unregisterProjectDialogPresenter(id: presenterID)
+        queue.unregisterDialogPresenter(id: presenterID)
     }
 
     @Test func routesRuntimeRequestsThroughOpenProjectDialogAndBackToRoot() async {
         let queue = RepoHookApprovalQueue()
         let presenterID = UUID()
-        queue.registerProjectDialogPresenter(id: presenterID)
+        queue.registerDialogPresenter(id: presenterID)
         let task = Task {
             await queue.requestDecision(hook: hook("runtime"), projectID: "project", context: .sessionOpen)
         }
 
         await Task.yield()
         let activeID = queue.activeRequest?.id
-        #expect(queue.activeProjectDialogRequest?.id == activeID)
+        #expect(queue.activeDialogRequest?.id == activeID)
         #expect(queue.activeRuntimeRequest == nil)
 
         queue.activeRuntimeRequest = nil
         #expect(queue.activeRequest?.id == activeID)
 
-        queue.unregisterProjectDialogPresenter(id: presenterID)
-        #expect(queue.activeProjectDialogRequest == nil)
+        queue.unregisterDialogPresenter(id: presenterID)
+        #expect(queue.activeDialogRequest == nil)
         #expect(queue.activeRuntimeRequest?.id == activeID)
         queue.decide(.approve)
         #expect(await task.value == .approve)
@@ -232,15 +232,15 @@ struct RepoHookApprovalQueueTests {
     @Test func presentsApprovedHookReviewReadOnlyInProjectDialogFIFO() async {
         let queue = RepoHookApprovalQueue()
         let presenterID = UUID()
-        queue.registerProjectDialogPresenter(id: presenterID)
+        queue.registerDialogPresenter(id: presenterID)
         let reviewedHook = hook("approved")
         let reviewTask = Task {
             await queue.requestReview(hook: reviewedHook)
         }
 
         await Task.yield()
-        #expect(queue.activeProjectDialogRequest?.isReadOnlyReview == true)
-        #expect(queue.activeProjectDialogRequest?.hook == reviewedHook)
+        #expect(queue.activeDialogRequest?.isReadOnlyReview == true)
+        #expect(queue.activeDialogRequest?.hook == reviewedHook)
 
         let approvalTask = Task {
             await queue.requestDecision(hook: hook("next"), projectID: "project", context: .projectSettings)
@@ -249,11 +249,11 @@ struct RepoHookApprovalQueueTests {
         queue.decide(.cancel)
         await reviewTask.value
 
-        #expect(queue.activeProjectDialogRequest?.isReadOnlyReview == false)
-        #expect(queue.activeProjectDialogRequest?.hook == hook("next"))
+        #expect(queue.activeDialogRequest?.isReadOnlyReview == false)
+        #expect(queue.activeDialogRequest?.hook == hook("next"))
         queue.decide(.approve)
         #expect(await approvalTask.value == .approve)
-        queue.unregisterProjectDialogPresenter(id: presenterID)
+        queue.unregisterDialogPresenter(id: presenterID)
     }
 
     private func hook(_ text: String) -> RepoHook {

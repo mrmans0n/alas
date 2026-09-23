@@ -8,7 +8,7 @@ struct NewProjectDialog: View {
 
     var body: some View {
         ProjectDialog(state: state, presented: $presented, mode: .add)
-            .modifier(ProjectDialogRepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
+            .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
     }
 }
 
@@ -19,22 +19,7 @@ struct EditProjectDialog: View {
 
     var body: some View {
         ProjectDialog(state: state, presented: $presented, mode: .edit(project))
-            .modifier(ProjectDialogRepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
-    }
-}
-
-private struct ProjectDialogRepoHookApprovalPresentationHandler: ViewModifier {
-    let approvalQueue: RepoHookApprovalQueue
-    @State private var presenterID = UUID()
-
-    func body(content: Content) -> some View {
-        @Bindable var queue = approvalQueue
-        content
-            .onAppear { queue.registerProjectDialogPresenter(id: presenterID) }
-            .onDisappear { queue.unregisterProjectDialogPresenter(id: presenterID) }
-            .sheet(item: $queue.activeProjectDialogRequest) { request in
-                RepoHookApprovalSheet(request: request, queue: queue)
-            }
+            .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
     }
 }
 

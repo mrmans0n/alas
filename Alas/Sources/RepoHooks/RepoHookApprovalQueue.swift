@@ -96,18 +96,18 @@ final class RepoHookApprovalQueue {
     }
 
     private var entries: [Entry] = []
-    private var projectDialogPresenterIDs = Set<UUID>()
+    private var dialogPresenterIDs = Set<UUID>()
 
-    private var hasProjectDialogPresenter: Bool {
-        !projectDialogPresenterIDs.isEmpty
+    private var hasDialogPresenter: Bool {
+        !dialogPresenterIDs.isEmpty
     }
 
-    func registerProjectDialogPresenter(id: UUID) {
-        _ = projectDialogPresenterIDs.insert(id)
+    func registerDialogPresenter(id: UUID) {
+        _ = dialogPresenterIDs.insert(id)
     }
 
-    func unregisterProjectDialogPresenter(id: UUID) {
-        _ = projectDialogPresenterIDs.remove(id)
+    func unregisterDialogPresenter(id: UUID) {
+        _ = dialogPresenterIDs.remove(id)
     }
 
     var activeRequest: RepoHookApprovalRequest? {
@@ -120,7 +120,7 @@ final class RepoHookApprovalQueue {
 
     var activeRuntimeRequest: RepoHookApprovalRequest? {
         get {
-            guard !hasProjectDialogPresenter,
+            guard !hasDialogPresenter,
                   let request = activeRequest,
                   request.context.kind != .projectSettings else {
                 return nil
@@ -128,7 +128,7 @@ final class RepoHookApprovalQueue {
             return request
         }
         set {
-            guard !hasProjectDialogPresenter,
+            guard !hasDialogPresenter,
                   newValue == nil,
                   let activeRequest,
                   activeRequest.context.kind != .projectSettings
@@ -139,13 +139,13 @@ final class RepoHookApprovalQueue {
         }
     }
 
-    var activeProjectDialogRequest: RepoHookApprovalRequest? {
+    var activeDialogRequest: RepoHookApprovalRequest? {
         get {
-            guard hasProjectDialogPresenter else { return nil }
+            guard hasDialogPresenter else { return nil }
             return activeRequest
         }
         set {
-            guard hasProjectDialogPresenter, newValue == nil else { return }
+            guard hasDialogPresenter, newValue == nil else { return }
             self.activeRequest = nil
         }
     }

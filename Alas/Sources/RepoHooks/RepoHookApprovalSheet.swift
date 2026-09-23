@@ -1,5 +1,20 @@
 import SwiftUI
 
+struct RepoHookApprovalPresentationHandler: ViewModifier {
+    let approvalQueue: RepoHookApprovalQueue
+    @State private var presenterID = UUID()
+
+    func body(content: Content) -> some View {
+        @Bindable var queue = approvalQueue
+        content
+            .onAppear { queue.registerDialogPresenter(id: presenterID) }
+            .onDisappear { queue.unregisterDialogPresenter(id: presenterID) }
+            .sheet(item: $queue.activeDialogRequest) { request in
+                RepoHookApprovalSheet(request: request, queue: queue)
+            }
+    }
+}
+
 struct RepoHookApprovalSheet: View {
     let request: RepoHookApprovalRequest
     @Bindable private var queue: RepoHookApprovalQueue
