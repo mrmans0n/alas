@@ -14,7 +14,7 @@ struct ChatPane: View {
     enum RowLabels {
         static let fontFamily = "Font family"
         static let fontSize = "Font size"
-        static let collapseFinishedToolCalls = "Collapse finished tool calls"
+        static let collapseFinishedToolCalls = "Collapse activity"
         static let defaultLaunchSurface = "Default launch surface"
         static let sendOnEnter = "While busy, ⏎ queues; ⌥⏎ steers"
         static let dictationLanguage = "Dictation language"
@@ -81,7 +81,7 @@ struct ChatPane: View {
                         ), monospaced: true).frame(width: 80)
                     }
                     SettingsRow(name: RowLabels.collapseFinishedToolCalls,
-                                desc: "Fold finished tool calls into an expandable “Ran N tools” row, bundling consecutive ones together. The tool that is currently running always stays visible.") {
+                                desc: "Group consecutive thinking and finished tool calls into one expandable activity row. Progress messages and running tools stay visible.") {
                         AlasToggle(on: state.bind(\.harness.acpCollapseFinishedToolCalls))
                     }
                 }

@@ -1,9 +1,7 @@
 import Foundation
 
-/// A run of one or more consecutive, already-finished tool-call rows that the
-/// transcript renders as one collapsed "Ran N tools" row instead of N cards —
-/// including a lone finished call, so every tool call is one click away
-/// instead of always taking up a full card.
+/// Consecutive thinking and finished tool calls rendered as one expandable
+/// activity row. The original messages remain available in transcript order.
 struct ACPTranscriptToolCallGroup: Equatable {
     static let idPrefix = "tcg-"
 
@@ -83,11 +81,11 @@ enum ACPToolCallGrouping {
         ACPSession.isFinalStatus(status)
     }
 
-    /// Finished ordinary tool calls only. Active calls, context-compaction
-    /// cards, subagent rows, file edits, and every other message kind end a
-    /// run. A subagent row is excluded even when its child has finished:
-    /// folding a whole child transcript into "Ran N tools" would bury it.
+    /// Thinking and finished ordinary tool calls share an activity group.
+    /// Active calls, context compaction, subagents, file edits, and readable
+    /// messages end the run so they remain visible outside the disclosure.
     static func isCollapsible(_ message: ACPMessage) -> Bool {
+        if case .thought = message { return true }
         guard case .toolCall(let toolCall) = message,
               isFinished(status: toolCall.status),
               ACPContextCompaction(toolCall: toolCall) == nil,
@@ -144,16 +142,6 @@ enum ACPToolCallGrouping {
                    first.index <= boundary, row.index > boundary {
                     flushRun()
                 }
-                // A run only breaks on a stable-name MISMATCH — both sides
-                // must actually carry a `name` for this to fire. Adapters
-                // that omit it (nil on both sides) keep today's permissive
-                // behavior: any consecutive finished calls fold together.
-                if let last = run.last,
-                   let lastName = toolCallName(for: last, in: messages),
-                   let candidateName = toolCallName(for: row, in: messages),
-                   lastName != candidateName {
-                    flushRun()
-                }
                 run.append(row)
                 if row.index == options.breakAfterIndex { flushRun() }
             } else {
@@ -163,13 +151,6 @@ enum ACPToolCallGrouping {
         }
         flushRun()
         return result
-    }
-
-    private static func toolCallName(for row: ACPTranscriptVisibleRow, in messages: [ACPMessage]) -> String? {
-        guard messages.indices.contains(row.index), case .toolCall(let toolCall) = messages[row.index] else {
-            return nil
-        }
-        return toolCall.nonEmptyName
     }
 }
 
@@ -191,13 +172,17 @@ struct ACPToolCallGroupSummary: Equatable {
     }
 
     var collapsedLabel: String {
-        "Ran \(count) \(count == 1 ? "tool" : "tools")" + failureSuffix
+        "Activity" + toolSuffix + failureSuffix
     }
 
     /// Keeps the failure count visible while open: it's the reason a reader
     /// most likely expanded the bundle in the first place.
     var expandedLabel: String {
-        "Hide \(count) \(count == 1 ? "tool" : "tools")" + failureSuffix
+        "Hide activity" + toolSuffix + failureSuffix
+    }
+
+    private var toolSuffix: String {
+        count > 0 ? " · \(count) \(count == 1 ? "tool call" : "tool calls")" : ""
     }
 
     private var failureSuffix: String {
