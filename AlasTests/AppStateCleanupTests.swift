@@ -864,6 +864,113 @@ struct AppStateCleanupTests {
         #expect(openedWorktreeIds == [worktreeID])
     }
 
+    /// Regression: two projects can hold reconciled `.createFailed` rows at
+    /// the same path-derived id. The completion claim used to be keyed by id
+    /// alone, so the first project's completion made the second project's
+    /// reconciliation look already done and its issue attachment and launch
+    /// surface were never applied.
+    @Test func reconciledCreateFailureCompletionRunsForEveryProjectSharingAnID() async throws {
+        let repo = try await makeRepo(name: "create-reconcile-two-projects")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let sharedID = "/srv/checkouts/member"
+        let otherProject = ProjectConfig(
+            id: "other-project",
+            name: "Other",
+            path: "/repos/other",
+            color: "#fff",
+            addedAt: .distantPast,
+            host: "other-host"
+        )
+        let store = MemoryStore(projectsFile: ProjectsFile(projects: [otherProject]))
+        let state = AppState(store: store)
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "create-reconcile-two-projects",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        // Both projects carry a live row at the same path-derived id, each
+        // with its own pending attachment to replay.
+        let otherRow = Worktree(
+            id: sharedID,
+            projectId: otherProject.id,
+            name: "feature",
+            branch: "feature",
+            path: URL(fileURLWithPath: sharedID),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(otherRow)
+        let thisProjectRow = Worktree(
+            id: sharedID,
+            projectId: project.id,
+            name: "feature",
+            branch: "feature",
+            path: URL(fileURLWithPath: sharedID),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(thisProjectRow)
+
+        let attachments: [String: IssueAttachment] = [
+            otherProject.id: IssueAttachment(
+                canonicalURL: URL(string: "https://github.com/acme/alas/issues/51")!,
+                providerLabel: "GitHub",
+                displayReference: "#51",
+                title: "other"
+            ),
+            project.id: IssueAttachment(
+                canonicalURL: URL(string: "https://github.com/acme/alas/issues/52")!,
+                providerLabel: "GitHub",
+                displayReference: "#52",
+                title: "this"
+            ),
+        ]
+        for owner in [otherProject, project] {
+            state.projectsManager.setOperationState(
+                forWorktreeId: sharedID,
+                projectId: owner.id,
+                state: .createFailed(
+                    projectId: owner.id,
+                    message: "refresh failed",
+                    base: "main",
+                    ggWorktreeMode: .inherit,
+                    launchSurface: .none,
+                    issueAttachment: attachments[owner.id]
+                )
+            )
+        }
+        let previousOperationStates = state.projectsManager.operationStatesSnapshot()
+        // The refresh clears a reconciled claim once the worktree is live in
+        // git; completion then runs against the pre-refresh snapshot. Model
+        // that ordering: both projects' claims are cleared before either
+        // completion runs.
+        for owner in [otherProject, project] {
+            state.projectsManager.setOperationState(
+                forWorktreeId: sharedID,
+                projectId: owner.id,
+                state: nil
+            )
+        }
+
+        for owner in [otherProject, project] {
+            _ = await state.completeReconciledCreateFailuresForTesting(
+                projectId: owner.id,
+                previousOperationStates: previousOperationStates
+            )
+        }
+
+        // Each project replayed its own attachment: the second project's
+        // completion was not treated as already claimed by the first's.
+        for owner in [otherProject, project] {
+            #expect(state.projectsManager.issueAttachment(
+                projectId: owner.id,
+                worktreeId: sharedID
+            ) == attachments[owner.id])
+        }
+    }
+
     @Test func successfulInheritCreationKeepsGGWorktreeModesSparse() async throws {
         let repo = try await makeRepo(name: "create-inherit-sparse")
         defer { try? FileManager.default.removeItem(at: repo) }

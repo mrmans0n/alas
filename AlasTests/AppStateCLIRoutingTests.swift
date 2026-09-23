@@ -1295,6 +1295,79 @@ struct AppStateCLIRoutingTests {
         #expect(state.projectsManager.operationState(forWorktreeId: target.id, projectId: project.id) == .preparingDelete)
     }
 
+    /// Regression: a pending force prompt belongs to one project's worktree.
+    /// A worktree id is its path, so a CLI delete for a same-path checkout
+    /// under *another* project must not discard that prompt — which would
+    /// leave the other project's `.preparingDelete` claim with no prompt left
+    /// able to confirm or cancel it.
+    @Test func cliDeleteUnderAnotherProjectKeepsADuplicateIDsPendingForcePrompt() async throws {
+        let sharedID = "/srv/checkouts/member"
+        let otherProject = ProjectConfig(
+            id: "other-project",
+            name: "Other",
+            path: "/repos/other",
+            color: "#fff",
+            addedAt: .distantPast,
+            host: "other-host"
+        )
+        // Both projects are seeded through the store, which is how AppState
+        // takes its project list.
+        var store = MemoryStore()
+        store.projectsFile = ProjectsFile(projects: [otherProject])
+        let state = AppState(store: store)
+        let repo = try await makeRepo(name: "delete-pending-scope")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let project = try await state.projectsManager.addProject(path: repo, displayName: "test", color: "#000000")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let otherRow = Worktree(
+            id: sharedID,
+            projectId: otherProject.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: sharedID),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(otherRow)
+        state.projectsManager.setOperationState(
+            forWorktreeId: otherRow.id,
+            projectId: otherProject.id,
+            state: .preparingDelete
+        )
+        state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
+            id: sharedID,
+            branch: otherRow.branch,
+            projectId: otherProject.id,
+            repoPath: URL(fileURLWithPath: otherProject.path),
+            worktreePath: otherRow.path,
+            deleteBranchIfMerged: false,
+            removedIndex: 0
+        )
+
+        // A worktree in *this* project that happens to share the same
+        // path-derived id.
+        let thisProjectRow = Worktree(
+            id: sharedID,
+            projectId: project.id,
+            name: "feature",
+            branch: "feature",
+            path: URL(fileURLWithPath: "/repos/test/feature"),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(thisProjectRow)
+
+        _ = await state.cliDeleteWorktree(thisProjectRow, force: true, keepBranch: true)
+
+        // The other project's prompt and claim survive this project's delete.
+        #expect(state.pendingForceDeleteWorktree?.projectId == otherProject.id)
+        #expect(state.projectsManager.operationState(
+            forWorktreeId: sharedID,
+            projectId: otherProject.id
+        ) == .preparingDelete)
+    }
+
     /// Regression test for the review palette ignoring a per-worktree
     /// base-branch override: a worktree whose right pane is already loaded
     /// (e.g. because the ReviewChanges tab that's opening the palette is

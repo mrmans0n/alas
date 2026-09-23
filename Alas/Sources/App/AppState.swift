@@ -424,7 +424,10 @@ final class AppState {
     @ObservationIgnored
     private var retainedACPSessionCleanupTasks: [String: [ACPSession.ID: PendingACPDetach]] = [:]
     @ObservationIgnored
-    private var reconciledCreateFailureCompletionClaims: Set<String> = []
+    /// Keyed by project as well as worktree id: two projects can hold
+    /// reconciled `.createFailed` rows at the same path, and both completions
+    /// must run.
+    private var reconciledCreateFailureCompletionClaims: Set<WorktreeOperationKey> = []
 #if DEBUG
     var pendingACPDetachCountForTesting: Int {
         pendingACPDetachTasks.values.reduce(0) { $0 + $1.count }
@@ -4018,7 +4021,9 @@ final class AppState {
                 return ""
             }
         }
-        reconciledCreateFailureCompletionClaims.remove(optimisticId)
+        reconciledCreateFailureCompletionClaims.remove(
+            WorktreeOperationKey(projectId: projectId, worktreeId: optimisticId)
+        )
         rightPaneStore.invalidateSnapshot(worktreeId: optimisticId)
         let optimistic = Worktree(
             id: optimisticId,
@@ -5747,7 +5752,7 @@ final class AppState {
             guard projectsManager.operationState(forWorktreeId: worktreeId, projectId: projectId) == nil,
                   let worktree = projectsManager.worktrees(projectId: projectId).first(where: { $0.id == worktreeId })
             else { continue }
-            guard reconciledCreateFailureCompletionClaims.insert(worktreeId).inserted else { continue }
+            guard reconciledCreateFailureCompletionClaims.insert(key).inserted else { continue }
 
             if let issueAttachment,
                projectsManager.issueAttachment(projectId: projectId, worktreeId: worktreeId) != issueAttachment {
@@ -10443,7 +10448,11 @@ final class AppState {
 
     @MainActor
     func cliDeleteWorktree(_ worktree: Worktree, force: Bool, keepBranch: Bool) async -> AlasCLIResponse {
-        if pendingForceDeleteWorktree?.id == worktree.id {
+        // Matched on project as well as id: a worktree id is its path, so a
+        // prompt opened for a same-path checkout under another project is a
+        // different worktree's prompt and must not be discarded here.
+        if pendingForceDeleteWorktree?.id == worktree.id,
+           pendingForceDeleteWorktree?.projectId == worktree.projectId {
             pendingForceDeleteWorktree = nil
             // That pending force prompt claimed the worktree via
             // `.preparingDelete`; discarding the prompt without releasing
@@ -10521,7 +10530,8 @@ final class AppState {
                 force: force,
                 removedIndex: removedIndex
             )
-            if pendingForceDeleteWorktree?.id == worktree.id {
+            if pendingForceDeleteWorktree?.id == worktree.id,
+               pendingForceDeleteWorktree?.projectId == worktree.projectId {
                 pendingForceDeleteWorktree = nil
                 projectsManager.setOperationState(
                     for: worktree,
