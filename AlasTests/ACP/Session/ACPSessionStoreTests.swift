@@ -15,6 +15,30 @@ struct ACPSessionStoreSchemaTests {
         #expect(try store.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
     }
 
+    @Test("round-trips session config option values")
+    func configOptionValuesRoundTrip() throws {
+        let store = try tmpStore()
+        let values: [String: ACPConfigValue] = [
+            "effort": .string("high"),
+            "autoApprove": .boolean(true),
+        ]
+        try store.upsertSession(.init(
+            id: "configured",
+            agentId: "omp",
+            title: "Configured",
+            currentModel: "gpt-5",
+            currentMode: "plan",
+            configOptionValues: values,
+            autoRun: false,
+            createdAt: 0,
+            updatedAt: 0,
+            lastOpenedAt: 0,
+            archived: false
+        ))
+
+        #expect(try store.loadSession(id: "configured")?.configOptionValues == values)
+    }
+
     @Test("re-opening doesn't double-apply migrations")
     func idempotent() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("acp-store-\(UUID()).sqlite")
@@ -40,6 +64,7 @@ struct ACPSessionStoreSchemaTests {
         #expect(sessionColumns.contains { ($0["name"] as? String) == "acp_broker_id" })
         #expect(sessionColumns.contains { ($0["name"] as? String) == "acp_broker_generation" })
         #expect(sessionColumns.contains { ($0["name"] as? String) == "acp_broker_acknowledged_cursor" })
+        #expect(sessionColumns.contains { ($0["name"] as? String) == "config_option_values" })
         #expect(try store.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
 
         _ = try ACPSessionStore(path: url.path)

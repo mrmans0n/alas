@@ -3,6 +3,7 @@ import Testing
 @testable import Alas
 
 @Suite("ACP tool-call grouping")
+@MainActor
 struct ACPToolCallGroupingTests {
     private func tool(_ id: String, status: String = "completed", name: String? = nil) -> ACPMessage {
         .toolCall(.init(toolCallId: id, title: "Read \(id)", kind: "read", status: status, name: name))
@@ -16,11 +17,18 @@ struct ACPToolCallGroupingTests {
         ))
     }
 
+    private func agent(_ id: String, _ text: String, phase: ACPMessagePhase) -> ACPMessage {
+        .agent(id: UUID(), messageId: id, StreamingText(text, phase: phase))
+    }
+
     private func fold(
         _ messages: [ACPMessage],
         enabled: Bool = true,
         breakAfterIndex: Int? = nil,
-        expandAll: Bool = false
+        expandAll: Bool = false,
+        currentTurnAnswerIndex: Int? = nil,
+        priorCurrentTurnCommentaryIndices: Set<Int> = [],
+        createdAts: [Int: Date] = [:]
     ) -> [ACPTranscriptRenderRow] {
         let rows = ACPTranscriptVisibleRow.rows(
             messages: messages, visibleHead: 0, visibleTail: messages.count,
@@ -28,7 +36,13 @@ struct ACPToolCallGroupingTests {
         )
         return ACPToolCallGrouping.fold(
             rows: rows, messages: messages,
-            options: .init(enabled: enabled, breakAfterIndex: breakAfterIndex),
+            options: .init(
+                enabled: enabled,
+                breakAfterIndex: breakAfterIndex,
+                currentTurnAnswerIndex: currentTurnAnswerIndex,
+                priorCurrentTurnCommentaryIndices: priorCurrentTurnCommentaryIndices
+            ),
+            messageCreatedAt: { createdAts[$0] },
             isExpanded: { _ in expandAll }
         )
     }
@@ -106,7 +120,6 @@ struct ACPToolCallGroupingTests {
     }
 
     @Test("agent text between tool calls splits the run")
-    @MainActor
     func agentTextSplitsRun() {
         let agent = ACPMessage.agent(id: UUID(), messageId: "m1", StreamingText("text"))
         let folded = fold([tool("a"), tool("b"), agent, tool("c"), tool("d")])
@@ -114,7 +127,6 @@ struct ACPToolCallGroupingTests {
     }
 
     @Test("thinking between tool calls stays in the same activity group")
-    @MainActor
     func thoughtSharesRun() {
         let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("hmm"))
         let folded = fold([tool("a"), tool("b"), thought, tool("c"), tool("d")])
@@ -122,7 +134,6 @@ struct ACPToolCallGroupingTests {
     }
 
     @Test("expanding mixed activity restores thinking and tools in their original order")
-    @MainActor
     func expandedMixedActivityPreservesOrder() {
         let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("hmm"))
         let messages = [thought, tool("a", name: "Read"), tool("b", name: "Bash")]
@@ -133,7 +144,6 @@ struct ACPToolCallGroupingTests {
     }
 
     @Test("thinking groups respect fork boundaries and visible progress messages")
-    @MainActor
     func mixedActivityBoundaries() {
         let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("hmm"))
         let progress = ACPMessage.agent(id: UUID(), messageId: "p1", StreamingText("Tests pass"))
@@ -145,8 +155,208 @@ struct ACPToolCallGroupingTests {
         ])
     }
 
-    @Test("consecutive thoughts occupy one expandable row")
+    @Test("a completed turn folds commentary and activity into one row before its final answer")
+    func completedTurnFoldsIntermediateWork() {
+        let user = ACPMessage.user(id: UUID(), messageId: "u1", text: "Fix it", attachments: [])
+        let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("reasoning"))
+        let progress = agent("p1", "Checking the tests", phase: .commentary)
+        let final = agent("f1", "Done.", phase: .finalAnswer)
+        let nextUser = ACPMessage.user(id: UUID(), messageId: "u2", text: "Thanks", attachments: [])
+
+        let folded = fold([user, thought, tool("a"), progress, tool("b"), final, nextUser])
+
+        #expect(ids(folded) == [
+            "acp-user:u1", "tcg-acp-thought:t1", "acp-agent:f1", "acp-user:u2",
+        ])
+        guard case .toolCallGroup(let group) = folded[1] else {
+            Issue.record("expected the completed work to be one disclosure")
+            return
+        }
+        #expect(group.members.map(\.stableId) == [
+            "acp-thought:t1", "tc-a", "acp-agent:p1", "tc-b",
+        ])
+    }
+
+    @Test("a completed turn keeps blockers outside its work disclosure")
+    func completedTurnKeepsBlockersVisible() {
+        let user = ACPMessage.user(id: UUID(), messageId: "u1", text: "Fix it", attachments: [])
+        let progress = agent("p1", "Waiting for approval", phase: .commentary)
+        let blockedTool = tool("blocked", status: "awaiting_permission")
+        let noticeId = UUID(uuidString: "00000000-0000-0000-0000-000000000123")!
+        let notice = ACPMessage.systemNotice(id: noticeId, text: "Blocked write outside worktree")
+        let final = agent("f1", "Unable to continue.", phase: .finalAnswer)
+        let nextUser = ACPMessage.user(id: UUID(), messageId: "u2", text: "Allow it", attachments: [])
+
+        let folded = fold([user, progress, blockedTool, notice, final, nextUser])
+
+        #expect(ids(folded) == [
+            "acp-user:u1", "tcg-acp-agent:p1", "tc-blocked", noticeId.uuidString,
+            "acp-agent:f1", "acp-user:u2",
+        ])
+    }
+
+    @Test("the current turn keeps only its latest commentary update visible")
+    func currentTurnKeepsOneLiveStatus() {
+        let user = ACPMessage.user(id: UUID(), messageId: "u1", text: "Fix it", attachments: [])
+        let firstUpdate = agent("p1", "Reading the code", phase: .commentary)
+        let latestUpdate = agent("p2", "Running the tests", phase: .commentary)
+
+        let folded = fold(
+            [user, firstUpdate, tool("a"), latestUpdate],
+            priorCurrentTurnCommentaryIndices: [1]
+        )
+
+        #expect(ids(folded) == [
+            "acp-user:u1", "tcg-acp-agent:p1", "acp-agent:p2",
+        ])
+        guard case .toolCallGroup(let group) = folded[1] else {
+            Issue.record("expected prior live work to be one disclosure")
+            return
+        }
+        #expect(group.members.map(\.stableId) == ["acp-agent:p1", "tc-a"])
+    }
+
+    @Test("the live-status fold never hides earlier ordinary agent prose")
+    func currentTurnKeepsOrdinaryAgentProseVisible() {
+        let user = ACPMessage.user(id: UUID(), messageId: "u1", text: "Fix it", attachments: [])
+        let ordinary = ACPMessage.agent(id: UUID(), messageId: "a1", StreamingText("A visible answer"))
+        let latestUpdate = agent("p1", "Running the tests", phase: .commentary)
+
+        let folded = fold([user, ordinary, tool("a"), latestUpdate])
+
+        #expect(ids(folded) == [
+            "acp-user:u1", "acp-agent:a1", "tcg-tc-a", "acp-agent:p1",
+        ])
+    }
+
+    @Test("a completed current turn carries its duration and keeps the final answer visible")
+    func completedCurrentTurnCarriesDuration() {
+        let user = ACPMessage.user(id: UUID(), messageId: "u1", text: "Fix it", attachments: [])
+        let progress = agent("p1", "Running the tests", phase: .commentary)
+        let final = agent("f1", "Done.", phase: .finalAnswer)
+        let folded = fold(
+            [user, progress, tool("a"), final],
+            currentTurnAnswerIndex: 3,
+            createdAts: [
+                0: Date(timeIntervalSince1970: 1_000),
+                3: Date(timeIntervalSince1970: 1_125),
+            ]
+        )
+
+        #expect(ids(folded) == ["acp-user:u1", "tcg-acp-agent:p1", "acp-agent:f1"])
+        guard case .toolCallGroup(let group) = folded[1] else {
+            Issue.record("expected completed work disclosure")
+            return
+        }
+        #expect(group.kind == .completedTurn(duration: 125))
+        guard case .toolCall(let toolCall) = tool("a") else {
+            Issue.record("expected tool-call fixture")
+            return
+        }
+        let summary = ACPToolCallGroupSummary(toolCalls: [toolCall], kind: group.kind)
+        #expect(summary.collapsedLabel == "Worked for 2m 5s · 1 tool call")
+        #expect(summary.expandedLabel == "Hide work · 1 tool call")
+    }
+
+    @Test("only an idle non-commentary tail completes the current turn")
+    func currentTurnCompletionPolicy() {
+        let user = ACPMessage.user(id: UUID(), messageId: "u1", text: "Fix it", attachments: [])
+        let commentary = agent("p1", "I need input", phase: .commentary)
+        let final = agent("f1", "Done.", phase: .finalAnswer)
+        let unphased = ACPMessage.agent(id: UUID(), messageId: "f2", StreamingText("Done."))
+
+        #expect(ACPToolCallGrouping.currentTurnAnswerIndex(
+            messages: [user, commentary], currentTurnUserIndex: 0, isTurnActive: false
+        ) == nil)
+        #expect(ACPToolCallGrouping.currentTurnAnswerIndex(
+            messages: [user, final], currentTurnUserIndex: 0, isTurnActive: true
+        ) == nil)
+        #expect(ACPToolCallGrouping.currentTurnAnswerIndex(
+            messages: [user, final], currentTurnUserIndex: 0, isTurnActive: false
+        ) == 1)
+        #expect(ACPToolCallGrouping.currentTurnAnswerIndex(
+            messages: [user, unphased], currentTurnUserIndex: 0, isTurnActive: false
+        ) == 1)
+        #expect(ACPToolCallGrouping.priorCurrentTurnCommentaryIndices(
+            messages: [user, commentary, unphased, final],
+            currentTurnUserIndex: 0,
+            visibleRange: 0..<4
+        ) == [1])
+    }
+
+    @Test("an older current-turn window folds commentary superseded outside the window")
     @MainActor
+    func nonTailWindowFoldsSupersededCommentary() {
+        let user = ACPMessage.user(id: UUID(), messageId: "u1", text: "Fix it", attachments: [])
+        let firstUpdate = agent("p1", "Reading the code", phase: .commentary)
+        let offscreenUpdate = agent("p2", "Editing the code", phase: .commentary)
+        let latestUpdate = agent("p3", "Running the tests", phase: .commentary)
+        let messages = [user, firstUpdate, tool("a"), offscreenUpdate, latestUpdate]
+
+        #expect(ACPToolCallGrouping.priorCurrentTurnCommentaryIndices(
+            messages: messages,
+            currentTurnUserIndex: 0,
+            visibleRange: 1..<3
+        ) == [1])
+    }
+
+    @Test("completed-turn classification only reads timestamps for visible turns")
+    func completedTurnClassificationIsWindowBounded() {
+        var messages: [ACPMessage] = []
+        for index in 0..<100 {
+            messages.append(.user(
+                id: UUID(), messageId: "old-user-\(index)", text: "Old", attachments: []
+            ))
+            messages.append(tool("old-tool-\(index)"))
+            messages.append(.agent(
+                id: UUID(), messageId: "old-answer-\(index)",
+                StreamingText("Done", phase: .finalAnswer)
+            ))
+        }
+        let currentUser = messages.count
+        messages.append(.user(id: UUID(), messageId: "u1", text: "Current", attachments: []))
+        messages.append(tool("current"))
+        let currentAnswer = messages.count
+        messages.append(agent("f1", "Done.", phase: .finalAnswer))
+
+        let rows = ACPTranscriptVisibleRow.rows(
+            messages: messages,
+            visibleHead: currentUser,
+            visibleTail: messages.count,
+            stableId: { $0.stableId }
+        )
+        var requestedTimestamps = Set<Int>()
+        let folded = ACPToolCallGrouping.fold(
+            rows: rows,
+            messages: messages,
+            options: .init(enabled: true, currentTurnAnswerIndex: currentAnswer),
+            messageCreatedAt: { index in
+                requestedTimestamps.insert(index)
+                return Date(timeIntervalSince1970: TimeInterval(index))
+            }
+        )
+
+        #expect(ids(folded) == ["acp-user:u1", "tcg-tc-current", "acp-agent:f1"])
+        #expect(requestedTimestamps == [currentUser, currentAnswer])
+    }
+
+    @Test("a leading pre-user row does not disable completed-turn classification")
+    func leadingNoticeKeepsCompletedTurnFold() {
+        let notice = ACPMessage.systemNotice(id: UUID(), text: "Connected")
+        let user = ACPMessage.user(id: UUID(), messageId: "u1", text: "Fix it", attachments: [])
+        let final = agent("f1", "Done.", phase: .finalAnswer)
+        let nextUser = ACPMessage.user(id: UUID(), messageId: "u2", text: "Thanks", attachments: [])
+
+        let folded = fold([notice, user, tool("a"), final, nextUser])
+
+        guard case .toolCallGroup(let group) = folded[2] else {
+            Issue.record("expected completed work disclosure")
+            return
+        }
+        #expect(group.kind == .completedTurn(duration: nil))
+    }
+
+    @Test("consecutive thoughts occupy one expandable row")
     func consecutiveThoughtsFold() {
         let messages = [
             ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("first")),

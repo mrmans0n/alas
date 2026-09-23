@@ -69,6 +69,7 @@ final class ACPSessionRunner {
     /// whoever calls `attach`; this covers changes reported later on the
     /// same connection.
     private let onModelsObserved: ((_ agentId: String, _ models: [ChipSpec.Item]) -> Void)?
+    private let onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
@@ -205,6 +206,7 @@ final class ACPSessionRunner {
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
          localTitleGenerator: @escaping @Sendable (String) async -> String? = { await ACPLocalTitleGenerator.generate(from: $0) },
          onModelsObserved: ((_ agentId: String, _ models: [ChipSpec.Item]) -> Void)? = nil,
+         onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
@@ -235,6 +237,7 @@ final class ACPSessionRunner {
         self.localTitlesEnabled = localTitlesEnabled
         self.localTitleGenerator = localTitleGenerator
         self.onModelsObserved = onModelsObserved
+        self.onPersistedConfigOptionValues = onPersistedConfigOptionValues
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
         self.incomingUpdateCoalesceNanos = incomingUpdateCoalesceNanos
         self.suppressingLoadReplay = suppressingLoadReplay
@@ -968,27 +971,14 @@ final class ACPSessionRunner {
                     )
                 }
             } else {
-                let hadConfigBackedModel: Bool
-                if case .configOption = session.chipState.models?.source {
-                    hadConfigBackedModel = true
-                } else {
-                    hadConfigBackedModel = false
-                }
                 let dirty = session.apply(params.update, worktreeRoot: worktreePath)
                 flushStreamingPersist()
-                let hasConfigBackedModel: Bool
-                if case .configOption = session.chipState.models?.source {
-                    hasConfigBackedModel = true
-                } else {
-                    hasConfigBackedModel = false
-                }
                 let isSubagentLifecycleUpdate: Bool
                 switch params.update {
                 case .subagentSpawned, .subagentStateUpdate: isSubagentLifecycleUpdate = true
                 default: isSubagentLifecycleUpdate = false
                 }
-                if case .sessionConfigOptionsUpdate = params.update,
-                   hadConfigBackedModel || hasConfigBackedModel {
+                if case .sessionConfigOptionsUpdate = params.update {
                     persistIndices(dirty)
                     persistSessionRow { persisted in
                         if persisted {
@@ -1475,10 +1465,10 @@ final class ACPSessionRunner {
     }
 
     /// Re-upsert the session's persistence row to capture changes to
-    /// title / model / mode / autoRun that the runner mutated directly.
-    /// `ACPSessionManager.persist` does the same thing plus a recent-
-    /// list refresh; the runner skips that because it has no manager
-    /// handle, and the next open via the manager picks up the new row.
+    /// title / model / mode / config options / autoRun that the runner mutated directly.
+    /// `ACPSessionManager.persist` does the same thing plus a recent-list refresh;
+    /// the runner skips that because it has no manager handle, and the next open
+    /// via the manager picks up the new row.
     func persistSessionRow(preserveTitle: Bool = true, completion: ((Bool) -> Void)? = nil) {
         guard holdsLeaseForWrite() else {
             completion?(false)
@@ -1488,6 +1478,10 @@ final class ACPSessionRunner {
         let titleSource = session.titleSource
         let currentModel = session.currentModel
         let currentMode = session.currentMode
+        let configOptionValues: [String: ACPConfigValue]? =
+            session.hasReceivedConfigOptions && !session.isRestoringPersistedConfigOptions
+                ? session.configOptionValuesForPersistence()
+                : nil
         let autoRun = session.autoRunEnabled
         let fence = leaseFenceProvider()
         let sessionId = sessionId
@@ -1498,12 +1492,17 @@ final class ACPSessionRunner {
                 titleSource: titleSource,
                 currentModel: currentModel,
                 currentMode: currentMode,
+                configOptionValues: configOptionValues,
                 autoRun: autoRun,
                 preserveTitle: preserveTitle,
                 fence: fence
             )
-        }, completion: { row in
-            completion?(row.flatMap { $0 } != nil)
+        }, completion: { [weak self] row in
+            let persistedRow = row.flatMap { $0 }
+            if let persistedRow {
+                self?.onPersistedConfigOptionValues?(persistedRow.configOptionValues)
+            }
+            completion?(persistedRow != nil)
         })
     }
 
