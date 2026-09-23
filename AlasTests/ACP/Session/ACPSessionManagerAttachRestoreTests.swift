@@ -809,6 +809,11 @@ struct ACPSessionManagerAttachRestoreTests {
         if let pendingUpdate {
             await pendingUpdate.value
         }
+        await manager.flushAllPersistence()
+        #expect(try store.loadSession(id: "local")?.configOptionValues == [
+            "effort": .string("high"),
+        ])
+
         await loadGate.release()
         await attachTask.value
         await manager.flushAllPersistence()
@@ -823,6 +828,84 @@ struct ACPSessionManagerAttachRestoreTests {
         ])
         #expect(try store.loadSession(id: "local")?.configOptionValues == [
             "effort": .string("high"),
+        ])
+    }
+
+    @Test("user config edits wait for persisted restoration requests")
+    func userConfigEditsWaitForPersistedRestorationRequests() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            configOptionValues: ["effort": .string("high")]
+        ))
+        let client = ACPMockClient()
+        let restoreGate = AttachPhaseGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: "default",
+                promptSuggestions: [],
+                configOptions: [
+                    ACPConfigOption(
+                        id: "effort",
+                        name: "Thinking",
+                        currentValue: "medium",
+                        options: [
+                            .init(id: "medium", name: "Medium"),
+                            .init(id: "high", name: "High"),
+                        ]
+                    ),
+                ]
+            ))
+        }
+        client.scriptAsync(method: "session/set_config_option") { _ in
+            await restoreGate.enterAndWait()
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+
+        await manager.hydrateIfNeeded(id: "local")
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+        try await waitUntilAsync { await restoreGate.hasEntered }
+
+        let restoreRequestsBeforeUserEdit = try client.sent
+            .filter { $0.method == "session/set_config_option" }
+            .map { try #require($0.params as? ACPSessionSetConfigOptionParams) }
+        #expect(restoreRequestsBeforeUserEdit.map(\.value) == [.string("high")])
+
+        _ = manager.setConfigOption(
+            for: session.id,
+            configId: "effort",
+            value: .string("medium")
+        )
+        await manager.flushAllPersistence()
+        #expect(try store.loadSession(id: "local")?.configOptionValues == [
+            "effort": .string("medium"),
+        ])
+
+        await restoreGate.release()
+        await attachTask.value
+        await manager.flushAllPersistence()
+
+        let configRequests = try client.sent
+            .filter { $0.method == "session/set_config_option" }
+            .map { try #require($0.params as? ACPSessionSetConfigOptionParams) }
+        #expect(configRequests.map(\.value) == [
+            .string("high"),
+            .string("medium"),
+        ])
+        #expect(ACPConfigOption.currentValues(in: session.availableConfigOptions) == [
+            "effort": .string("medium"),
+        ])
+        #expect(try store.loadSession(id: "local")?.configOptionValues == [
+            "effort": .string("medium"),
         ])
     }
 
