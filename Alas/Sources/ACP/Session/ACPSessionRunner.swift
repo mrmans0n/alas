@@ -959,27 +959,14 @@ final class ACPSessionRunner {
                     )
                 }
             } else {
-                let hadConfigBackedModel: Bool
-                if case .configOption = session.chipState.models?.source {
-                    hadConfigBackedModel = true
-                } else {
-                    hadConfigBackedModel = false
-                }
                 let dirty = session.apply(params.update, worktreeRoot: worktreePath)
                 flushStreamingPersist()
-                let hasConfigBackedModel: Bool
-                if case .configOption = session.chipState.models?.source {
-                    hasConfigBackedModel = true
-                } else {
-                    hasConfigBackedModel = false
-                }
                 let isSubagentLifecycleUpdate: Bool
                 switch params.update {
                 case .subagentSpawned, .subagentStateUpdate: isSubagentLifecycleUpdate = true
                 default: isSubagentLifecycleUpdate = false
                 }
-                if case .sessionConfigOptionsUpdate = params.update,
-                   hadConfigBackedModel || hasConfigBackedModel {
+                if case .sessionConfigOptionsUpdate = params.update {
                     persistIndices(dirty)
                     persistSessionRow { persisted in
                         if persisted {
@@ -1464,10 +1451,10 @@ final class ACPSessionRunner {
     }
 
     /// Re-upsert the session's persistence row to capture changes to
-    /// title / model / mode / autoRun that the runner mutated directly.
-    /// `ACPSessionManager.persist` does the same thing plus a recent-
-    /// list refresh; the runner skips that because it has no manager
-    /// handle, and the next open via the manager picks up the new row.
+    /// title / model / mode / config options / autoRun that the runner mutated directly.
+    /// `ACPSessionManager.persist` does the same thing plus a recent-list refresh;
+    /// the runner skips that because it has no manager handle, and the next open
+    /// via the manager picks up the new row.
     func persistSessionRow(preserveTitle: Bool = true, completion: ((Bool) -> Void)? = nil) {
         guard holdsLeaseForWrite() else {
             completion?(false)

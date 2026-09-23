@@ -702,6 +702,8 @@ struct ACPSessionManagerAttachRestoreTests {
 
         let session = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: "local")
+        session.autoRunEnabled = true
+        manager.persist(session)
         await manager.attach(to: session.id, freshlyCreated: false)
         await manager.flushAllPersistence()
 

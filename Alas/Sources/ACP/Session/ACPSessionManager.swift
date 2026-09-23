@@ -1544,7 +1544,7 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
-    /// Persist a session-level change (model/mode/title/autoRun) and bump updated_at.
+    /// Persist a session-level change (model/mode/title/autoRun/config options) and bump updated_at.
     /// No-ops only when another live instance owns the writer lease (this pane
     /// is a mirror); the writer and not-yet-leased cases persist normally.
     func persist(_ s: ACPSession, preserveTitle: Bool = true) {
@@ -1557,7 +1557,9 @@ final class ACPSessionManager: ObservableObject {
         }
         row.currentModel = s.currentModel
         row.currentMode = s.currentMode
-        row.configOptionValues = ACPConfigOption.currentValues(in: s.availableConfigOptions)
+        if s.hasReceivedConfigOptions {
+            row.configOptionValues = ACPConfigOption.currentValues(in: s.availableConfigOptions)
+        }
         row.autoRun = s.autoRunEnabled
         row.updatedAt = now
         persistedRows[s.id] = row
