@@ -213,6 +213,48 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(fixture.state.projectsManager.operationState(for: second.id) == nil)
     }
 
+    /// When the batch's trailing refresh fails, the removed row must not stay
+    /// behind: it would resolve as an ordinary worktree (remounting the right
+    /// pane this deletion collapsed, reopening session admission for a
+    /// checkout that is gone) and `allWorktreeIds()` would keep the deleted
+    /// selection alive. The row is dropped directly in that case.
+    @Test func failedTrailingRefreshStillDropsRemovedRows() async throws {
+        @MainActor
+        final class RefreshBreaker {
+            var repoPath: URL?
+            var movedTo: URL?
+        }
+        let breaker = RefreshBreaker()
+        // The cleanup launcher runs after the removal succeeded and before
+        // the trailing refresh, so breaking the repo here is what makes that
+        // refresh throw.
+        let fixture = try await makeCleanupFixture(worktreeCount: 2) { _ in
+            guard let repoPath = breaker.repoPath, breaker.movedTo == nil else { return }
+            let saved = FileManager.default.temporaryDirectory
+                .appendingPathComponent("alas-broken-repo-\(UUID().uuidString)")
+            try FileManager.default.moveItem(at: repoPath, to: saved)
+            breaker.movedTo = saved
+        }
+        defer {
+            if let saved = breaker.movedTo {
+                try? FileManager.default.moveItem(at: saved, to: fixture.repoPath)
+            }
+            fixture.cleanUpAfterTest()
+        }
+        let target = fixture.worktrees[1]
+        breaker.repoPath = fixture.repoPath
+
+        let results = await fixture.state.batchDeleteWorktrees([target], keepBranch: false)
+
+        #expect(results.map(\.outcome) == [.deleted])
+        // The refresh could not run, so the row must have been dropped by the
+        // failure fallback rather than left behind as an ordinary worktree.
+        #expect(!fixture.state.projectsManager
+            .worktrees(projectId: fixture.project.id)
+            .contains { $0.id == target.id })
+        #expect(fixture.state.projectsManager.operationState(for: target.id) == nil)
+    }
+
     @Test func emptySelectionReturnsNoResultsAndTouchesNothing() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
         defer { fixture.cleanUpAfterTest() }

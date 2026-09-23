@@ -9690,6 +9690,7 @@ final class AppState {
 
         var results: [WorktreeBatchResult] = []
         var touchedProjectIds: Set<String> = []
+        var removedWorktreeIDsByProject: [String: [String]] = [:]
 
         for worktree in worktrees {
             guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
@@ -9868,20 +9869,30 @@ final class AppState {
                 branch: worktree.branch,
                 outcome: outcome
             ))
+            if outcome == .deleted {
+                removedWorktreeIDsByProject[worktree.projectId, default: []].append(worktree.id)
+            }
             touchedProjectIds.insert(worktree.projectId)
         }
 
         for projectId in touchedProjectIds {
-            _ = try? await refreshProjectWorktrees(projectId: projectId)
-        }
-        // Each item held its `.deleting` claim through the batch so the stale
-        // row it describes never resolved as an ordinary one; the refresh
-        // above releases it for rows git no longer lists. This is the
-        // fallback for a refresh that failed, so a removed worktree never
-        // keeps a permanent claim.
-        for result in results where result.outcome == .deleted {
-            if projectsManager.operationState(for: result.worktreeId) == .deleting {
-                projectsManager.setOperationState(id: result.worktreeId, state: nil)
+            do {
+                _ = try await refreshProjectWorktrees(projectId: projectId)
+            } catch {
+                // The refresh is what reconciles removed rows (and their
+                // `.deleting` claims) out of the list. If it could not run,
+                // drop the rows this batch did remove instead of leaving them
+                // to resolve as ordinary worktrees: the removal already
+                // succeeded, and `allWorktreeIds()` below must not keep
+                // counting a deleted worktree either. Scoped to this
+                // project's own removals — worktree ids are path-derived, so
+                // the same id can exist under another host's project.
+                for worktreeID in removedWorktreeIDsByProject[projectId] ?? [] {
+                    projectsManager.removeOptimisticWorktree(
+                        id: worktreeID,
+                        projectId: projectId
+                    )
+                }
             }
         }
         // Per-item deletion skipped selection reconciliation because the list
@@ -10913,12 +10924,21 @@ final class AppState {
         // (batches, which refresh once at the end) reconcile the selection
         // themselves afterwards.
         if refreshAfter {
-            _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
-            // Reconciliation normally clears the claim above; this is the
-            // fallback for a refresh that failed, so a removed worktree never
-            // keeps a permanent claim behind.
-            if projectsManager.operationState(for: worktree.id) == .deleting {
-                projectsManager.setOperationState(id: worktree.id, state: nil)
+            do {
+                _ = try await refreshProjectWorktrees(projectId: worktree.projectId)
+            } catch {
+                // The refresh reconciles the removed row away together with
+                // its `.deleting` claim. When the refresh itself could not
+                // run, drop the row here instead of only releasing the claim:
+                // the removal already succeeded, and a row left behind
+                // resolves as an ordinary worktree — remounting the pane this
+                // deletion collapsed, reopening session admission for a
+                // checkout that is gone, and letting `selectionAfterRemoval`
+                // select it straight back.
+                projectsManager.removeOptimisticWorktree(
+                    id: worktree.id,
+                    projectId: worktree.projectId
+                )
             }
             if selectedWorktreeId == worktree.id {
                 selectWorktree(id: selectionAfterRemoval(
