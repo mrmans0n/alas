@@ -69,6 +69,7 @@ final class RemoteServer {
     var onConnectionDeviceCountsChange: (([String: Int]) -> Void)?
     /// Fired on the main actor after another Alas instance paired here.
     var onPeerPaired: (@MainActor (RemotePeerPairingRequest) -> Void)?
+    var onApprovedPeerPaired: (@MainActor (RemotePeerPairingRequest, String, ApprovalPeer) -> Void)?
     /// Bonjour advertisement applied to the live listener, and to any listener
     /// `start()` creates later (a port-fallback restart must keep advertising).
     /// Nil means not discoverable.
@@ -259,6 +260,9 @@ final class RemoteServer {
         )
         configured.acceptsPeers = { identity().federationEnabled }
         configured.onPeerPaired = { [weak self] request in self?.onPeerPaired?(request) }
+        configured.onApprovedPeerPaired = { [weak self] request, requestID, localPeer in
+            self?.onApprovedPeerPaired?(request, requestID, localPeer)
+        }
         configured.identity = identity
         configured.identityProof = proveIdentity
         if let coordinator = approvalCoordinator {

@@ -502,6 +502,16 @@ final class AppState {
     /// one.
     @ObservationIgnored
     private(set) lazy var remoteIdentityKey = RemoteIdentityKeyProvider()
+    @ObservationIgnored lazy var remotePairingApprovals = makePairingApprovalCoordinator()
+    var nearbyApprovalState: NearbyApprovalState = .idle
+    @ObservationIgnored var nearbyApprovalClient: RemotePairingApprovalClient?
+    @ObservationIgnored var nearbyApprovalTask: Task<Void, Never>?
+    @ObservationIgnored var nearbyApprovalGeneration = UUID()
+    @ObservationIgnored var approvalExpiryTask: Task<Void, Never>?
+    @ObservationIgnored var pairingApprovalsStopped = false
+    @ObservationIgnored var remoteApprovalSignerProvider: (() -> any ApprovalSigning)?
+    @ObservationIgnored var remoteApprovalResolver: ((RemoteDiscoveredInstance) async -> Result<RemoteDiscoveredInstanceResolver.ResolvedPeer, RemoteDiscoveredInstanceResolver.Failure>)?
+    @ObservationIgnored var remoteApprovalClientFactory: ((any ApprovalSigning) -> RemotePairingApprovalClient)?
     /// Outbound peers (other Macs running Alas). Lazy like `remotePairing`.
     @ObservationIgnored
     private(set) lazy var remotePeers: RemotePeerManager = {
@@ -659,6 +669,7 @@ final class AppState {
         remoteAdvertisedAddresses = makeRemoteAdvertisedAddresses(port: remotePort, interfaces: interfaces)
         remoteServer?.updateAccessPolicy(makeRemoteAccessPolicy(interfaces: interfaces))
         remoteServer?.updateOriginPolicy(makeRemoteOriginPolicy(interfaces: interfaces))
+        syncPairingApprovalState()
     }
 
     func remoteConnectedDeviceCounts() -> [String: Int] {
@@ -678,6 +689,7 @@ final class AppState {
     /// in `lastRemoteError` rather than thrown — the app must not crash because
     /// a port is busy.
     func syncRemoteServer() {
+        defer { syncPairingApprovalState() }
         if config.remote.enabled {
             if config.remote.ensureServerId() { saveConfig() }
             guard remoteServer == nil else {
@@ -725,6 +737,7 @@ final class AppState {
                 self?.remotePeers.notePeerPairingArrived(serverId: request.peerServerId, localDeviceId: request.localDeviceId)
                 Task { @MainActor in await self?.remotePeers.handleInboundPeer(request) }
             }
+            configurePairingApprovals(server: server)
             // Always set, flag or no flag: with federation off no link is
             // online, so `sessionCarryingPeers` is empty and the provider
             // routes nothing. Gating here instead would need a server
@@ -746,6 +759,7 @@ final class AppState {
                 lastRemoteError = error.localizedDescription
             }
         } else {
+            syncPairingApprovalState()
             // Only touch `remotePeers` when a server actually ran: the lazy
             // property builds the manager, which builds `remotePairing` too,
             // so an unconditional call would read `remote-peers.json` and
@@ -766,6 +780,7 @@ final class AppState {
     /// is on; peers stay stored either way. The Bonjour advertisement follows
     /// the same lifecycle, gated further by `discoverable`.
     func syncRemotePeers() {
+        syncPairingApprovalState()
         if config.remote.enabled, config.remote.federationEnabled, remoteServer != nil {
             remotePeers.connectAll()
         } else if remoteServer != nil {
