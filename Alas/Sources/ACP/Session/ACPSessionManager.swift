@@ -3433,6 +3433,7 @@ extension ACPSessionManager {
             session.firstRunConnectingPhase = nil
         }
         defer {
+            session.isRestoringPersistedConfigOptions = false
             if session.firstRunConnectingPhase != nil {
                 session.firstRunConnectingPhase = nil
             }
@@ -3982,7 +3983,10 @@ extension ACPSessionManager {
                                               self?.onModelsObserved?(agentId, models)
                                           },
                                           onPersistedConfigOptionValues: { [weak self] values in
-                                              guard let self, var row = self.persistedRows[sessionId] else {
+                                              guard let self,
+                                                    let session = self.sessions[sessionId],
+                                                    ACPConfigOption.currentValues(in: session.availableConfigOptions) == values,
+                                                    var row = self.persistedRows[sessionId] else {
                                                   return
                                               }
                                               row.configOptionValues = values

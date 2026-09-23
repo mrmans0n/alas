@@ -860,6 +860,49 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.currentMode == "default")
     }
 
+    @Test("failed attach releases config-option persistence deferral")
+    func failedAttachReleasesConfigOptionPersistenceDeferral() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            configOptionValues: ["effort": .string("medium")]
+        ))
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            throw ACPClientError.noScript(method: "initialize")
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        session.availableConfigOptions = [ACPConfigOption(
+            id: "effort",
+            name: "Thinking",
+            currentValue: "medium",
+            options: [
+                .init(id: "medium", name: "Medium"),
+                .init(id: "high", name: "High"),
+            ]
+        )]
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+        session.availableConfigOptions = [ACPConfigOption(
+            id: "effort",
+            name: "Thinking",
+            currentValue: "high",
+            options: [
+                .init(id: "medium", name: "Medium"),
+                .init(id: "high", name: "High"),
+            ]
+        )]
+        manager.persist(session)
+        await manager.flushAllPersistence()
+
+        #expect(client.sent.map(\.method) == ["initialize"])
+        #expect(try store.loadSession(id: "local")?.configOptionValues == [
+            "effort": .string("high"),
+        ])
+    }
+
     @Test("live config-option persistence refreshes manager cache")
     func liveConfigOptionPersistenceRefreshesManagerCache() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -915,6 +958,22 @@ struct ACPSessionManagerAttachRestoreTests {
 
         let cachedRow = await manager.persistedSessionRow(id: "local")
         #expect(cachedRow?.configOptionValues == updatedValues)
+        let runner = try #require(manager.runners[session.id])
+        runner.persistSessionRow()
+        session.availableConfigOptions = [ACPConfigOption(
+            id: "effort",
+            name: "Thinking",
+            currentValue: "medium",
+            options: [
+                .init(id: "medium", name: "Medium"),
+                .init(id: "high", name: "High"),
+            ]
+        )]
+        let newerValues: [String: ACPConfigValue] = ["effort": .string("medium")]
+        manager.persist(session)
+        await runner.flushPersistence()
+        await manager.flushAllPersistence()
+        #expect(await manager.persistedSessionRow(id: "local")?.configOptionValues == newerValues)
         await manager.detach(sessionId: session.id)
     }
 
