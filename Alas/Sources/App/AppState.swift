@@ -4800,7 +4800,8 @@ final class AppState {
         host: String? = nil,
         id: String = UUID().uuidString,
         startupScripts: ProjectStartupScripts = .defaults,
-        mcpServers: [ProjectMCPServer] = []
+        mcpServers: [ProjectMCPServer] = [],
+        approvedRepoHookHashes: [String] = []
     ) async throws {
         let project = try await projectsManager.addProject(
             path: path,
@@ -4809,7 +4810,8 @@ final class AppState {
             host: host,
             id: id,
             startupScripts: startupScripts,
-            mcpServers: mcpServers
+            mcpServers: mcpServers,
+            approvedRepoHookHashes: approvedRepoHookHashes
         )
         spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
         saveProjects()

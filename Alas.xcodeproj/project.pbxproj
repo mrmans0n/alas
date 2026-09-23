@@ -848,6 +848,7 @@
 		6C70755431CFBA41420A2F47 /* ACPSessionManagerRemoteRestoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 069895A7C4E29B3275D8320E /* ACPSessionManagerRemoteRestoreTests.swift */; };
 		6C800C9827E75F9F07C67DB9 /* AppConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B78A7E7888D552AFC80BA3AA /* AppConfigTests.swift */; };
 		6C9E804AB246E7BFF8906C17 /* MarkdownTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E09A66AE390C7748A8847C8E /* MarkdownTabView.swift */; };
+		6C9F1225A275FD666AAE6978 /* RepoHookTrustPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88740172B08C21080AF9057A /* RepoHookTrustPersistenceTests.swift */; };
 		6D4739E91C2657734B0F9669 /* RunScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = D305FE622B772AE41ADBF3CF /* RunScheduler.swift */; };
 		6D5DF06E64DA191F1EE4B057 /* RightPaneStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 795056B6AD803D2B555FC866 /* RightPaneStore.swift */; };
 		6DB690F830F4F1F4DE66A077 /* MCPLogo-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = F1A58F7A93F1809B98179ABB /* MCPLogo-LICENSE.txt */; };
@@ -3076,6 +3077,7 @@
 		881B46F8FCAF830239357372 /* ImageDiffDifferenceComputer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffDifferenceComputer.swift; sourceTree = "<group>"; };
 		88379ACE40F42BE4A3257659 /* ThemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeTests.swift; sourceTree = "<group>"; };
 		883981BBADF9816718091CE1 /* MergeScrollCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeScrollCoordinatorTests.swift; sourceTree = "<group>"; };
+		88740172B08C21080AF9057A /* RepoHookTrustPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoHookTrustPersistenceTests.swift; sourceTree = "<group>"; };
 		888112C4BC28BBC55C6804FA /* MermaidDiagramLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidDiagramLayoutTests.swift; sourceTree = "<group>"; };
 		888C6244788973A640F4F138 /* ACPMessageTimestampFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMessageTimestampFormatter.swift; sourceTree = "<group>"; };
 		88C6356C759B509DD81EDEBB /* ACPConfigOption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPConfigOption.swift; sourceTree = "<group>"; };
@@ -5752,6 +5754,7 @@
 			children = (
 				0C9D29CB741846E7193F9142 /* RepoHookLoaderTests.swift */,
 				75D23CC5630E9E48A466E93B /* RepoHookTests.swift */,
+				88740172B08C21080AF9057A /* RepoHookTrustPersistenceTests.swift */,
 			);
 			path = RepoHooks;
 			sourceTree = "<group>";
@@ -9277,6 +9280,7 @@
 				133597E7D43CFE746EF4EF2B /* RepoGroupViewLayoutTests.swift in Sources */,
 				3C20ED58CB83C1D7274A1B5D /* RepoHookLoaderTests.swift in Sources */,
 				4DA25B80BD1D27321301B1FE /* RepoHookTests.swift in Sources */,
+				6C9F1225A275FD666AAE6978 /* RepoHookTrustPersistenceTests.swift in Sources */,
 				C137DB1F0A977B7EF58735B2 /* RepoIconDisplayCacheTests.swift in Sources */,
 				6FD850ED8F7C6490451BCFF2 /* RepoIconResolverTests.swift in Sources */,
 				10200E95CB31BF4C7CEC0139 /* RepoMCPExternalSyncTests.swift in Sources */,
