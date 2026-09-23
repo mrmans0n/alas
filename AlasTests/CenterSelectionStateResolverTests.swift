@@ -135,6 +135,54 @@ struct CenterSelectionStateResolverTests {
         }
     }
 
+    /// A deletion claim under one project must not blank the center pane of a
+    /// same-path checkout selected under another — the right pane keeps that
+    /// duplicate active, and a blank center beside an active right pane is
+    /// exactly the mismatch this guards against.
+    @Test func deletingClaimUnderAnotherProjectKeepsTheDuplicateCheckoutCenterPane() {
+        let deletingProject = ProjectConfig(
+            id: "deleting-project",
+            name: "Deleting",
+            path: "/repos/deleting",
+            color: "#fff",
+            addedAt: .distantPast,
+            host: "deleting-host"
+        )
+        let selectedProject = ProjectConfig(
+            id: "selected-project",
+            name: "Selected",
+            path: "/repos/selected",
+            color: "#fff",
+            addedAt: .distantPast,
+            host: "selected-host"
+        )
+        let sharedID = "/srv/checkouts/member"
+        let deletingRow = Worktree(id: sharedID, projectId: deletingProject.id, name: "main", branch: "main", path: URL(fileURLWithPath: sharedID), status: .clean, lastActivity: .distantPast)
+        let selectedRow = Worktree(id: sharedID, projectId: selectedProject.id, name: "main", branch: "main", path: URL(fileURLWithPath: sharedID), status: .clean, lastActivity: .distantPast)
+        let manager = ProjectsManager(persistedProjects: [deletingProject, selectedProject])
+        manager.insertOptimisticWorktree(deletingRow)
+        manager.insertOptimisticWorktree(selectedRow)
+        manager.setOperationState(id: sharedID, state: .deleting(projectId: deletingProject.id))
+
+        let resolver = CenterSelectionStateResolver(
+            selectedWorktreeId: sharedID,
+            projects: [deletingProject, selectedProject],
+            projectsManager: manager,
+            allowedWorktreeIDs: [sharedID],
+            checkoutFocusedWorktreeScope: CheckoutFocusedWorktreeScope(
+                worktreeID: sharedID,
+                projectID: selectedProject.id,
+                executionLocation: .ssh("selected-host")
+            )
+        )
+
+        if case .worktree(let returned) = resolver.resolve() {
+            #expect(returned.projectId == selectedProject.id)
+        } else {
+            Issue.record("Expected the duplicate checkout under the selected project to keep a center pane")
+        }
+    }
+
     @Test func returnsDeleteFailedWhenDeleteFailedState() {
         let project = ProjectConfig(id: "p1", name: "A", path: "/tmp/a", color: "#fff", addedAt: Date())
         let wt = Worktree(id: "wt1", projectId: "p1", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/a"), status: .clean, lastActivity: Date())

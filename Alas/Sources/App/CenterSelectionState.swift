@@ -35,8 +35,14 @@ struct CenterSelectionStateResolver {
         if let op = projectsManager.operationState(for: id) {
             switch op {
             case .deleting(let deletingProjectId):
-                if let wt = findWorktree(by: id), wt.projectId == deletingProjectId { return .deleting(wt) }
-                return .empty
+                // Only the project that owns the claim is being removed. A
+                // worktree id is its path, so a same-path checkout under
+                // another project still has a center pane: fall through to
+                // the normal resolution instead of reporting no selection.
+                if let wt = findWorktree(by: id), wt.projectId == deletingProjectId {
+                    return .deleting(wt)
+                }
+                break
             case .creating:
                 if let wt = findWorktree(by: id) { return .creating(wt) }
                 return .empty
@@ -72,8 +78,12 @@ struct CenterSelectionStateResolver {
             if let wt = candidateWorktrees(projectId: project.id).first(where: { $0.id == id }) {
                 if let op = projectsManager.operationState(for: wt.id) {
                     switch op {
-                    case .creating, .deleting, .createFailed:
+                    case .creating, .createFailed:
                         return nil
+                    case .deleting(let deletingProjectId):
+                        // Same-path checkout under another project: its own
+                        // pane stays real, so keep resolving it.
+                        if deletingProjectId == wt.projectId { return nil }
                     case .preparingDelete, .launchFailed, .deleteFailed:
                         break
                     }
