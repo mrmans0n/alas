@@ -110,9 +110,30 @@ private struct AlasNSTextField: NSViewRepresentable {
                 if editor.string != editingValue, !editor.hasMarkedText() {
                     context.coordinator.editingValue = editor.string
                     if editor.string != text {
-                        context.coordinator.parent.text = editor.string
+                        // Publishing a binding write from inside the update
+                        // pass would be a reentrant state mutation, so defer
+                        // it. The guard re-reads the editor at execution time:
+                        // a keystroke that landed meanwhile stays authoritative,
+                        // and a programmatic write that arrived after this pass
+                        // (the binding now differs from `text`) is left alone.
+                        let adopted = editor.string
+                        let scheduledText = text
+                        context.coordinator.pendingAdoption = adopted
+                        DispatchQueue.main.async { [weak editor] in
+                            context.coordinator.pendingAdoption = nil
+                            guard let editor, editor.string == adopted else { return }
+                            guard context.coordinator.isEditing else { return }
+                            let currentText = context.coordinator.parent.text
+                            guard currentText == scheduledText, currentText != adopted else { return }
+                            context.coordinator.editingValue = adopted
+                            context.coordinator.parent.text = adopted
+                        }
                     }
-                } else {
+                } else if context.coordinator.pendingAdoption == nil {
+                    // An adoption is in flight: the still-stale binding value
+                    // must not clobber the editor before the deferred write
+                    // lands. Genuine programmatic changes wait one run-loop
+                    // turn and apply on the next update pass.
                     context.coordinator.replaceEditorText(editor, with: text)
                     context.coordinator.editingValue = text
                 }
@@ -148,6 +169,12 @@ private struct AlasNSTextField: NSViewRepresentable {
         var parent: AlasNSTextField
         var isEditing = false
         var editingValue: String?
+        /// Editor content whose binding adoption is scheduled but has not run
+        /// yet. The interim `updateNSView` pass between scheduling and
+        /// execution sees `editingValue == adopted` and would otherwise treat
+        /// the still-stale binding value as a programmatic change and clobber
+        /// the editor before the deferred write can land.
+        var pendingAdoption: String?
 
         init(_ parent: AlasNSTextField) {
             self.parent = parent
@@ -185,6 +212,7 @@ private struct AlasNSTextField: NSViewRepresentable {
         func controlTextDidEndEditing(_: Notification) {
             isEditing = false
             editingValue = nil
+            pendingAdoption = nil
         }
 
         func replaceEditorText(_ editor: NSTextView, with text: String) {
