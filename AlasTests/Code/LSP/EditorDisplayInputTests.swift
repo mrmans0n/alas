@@ -122,6 +122,24 @@ struct EditorDisplayInputTests {
         }
     }
 
+    @Test(arguments: [0, 5]) func newlineAtSemanticTokenBoundaryRetainsItsColor(offset: Int) async throws {
+        let f = try await Fixture("alpha beta")
+        defer { f.remove() }
+        try f.view.displayAdapter?.updateHints([], revision: f.buffer.editGeneration)
+        let layout = try #require(f.view.layoutManager)
+        let semantic = EditorSemanticLayer(layoutManager: layout, theme: EditorTheme(theme: try ThemeStore().current), textView: f.view, isCurrent: { _ in true })
+        let context = EditorRequestContext(document: .init(host: nil, worktreeID: "test", uri: "file:///test.txt"), version: 1,
+                                           serverGeneration: UUID(), range: .init(start: .init(line: 0, character: 0), end: .init(line: 0, character: 10)))
+        semantic.replace([HighlightSpan(range: NSRange(location: 0, length: 5), capture: .function)], context: context)
+
+        #expect(try #require(f.view.displayAdapter).replaceSource(NSRange(location: offset, length: 0), with: "\n"))
+
+        let shiftedStart = offset == 0 ? 1 : 0
+        for index in shiftedStart ..< shiftedStart + 5 {
+            #expect(layout.temporaryAttribute(.foregroundColor, atCharacterIndex: index, effectiveRange: nil) != nil)
+        }
+    }
+
     private final class TemporaryClearRecorder: NSLayoutManager {
         var clearedRanges: [NSRange] = []
         override func removeTemporaryAttribute(_ attrName: NSAttributedString.Key, forCharacterRange charRange: NSRange) {

@@ -107,11 +107,12 @@ final class EditorSemanticLayer {
             let oldEnd = NSMaxRange(edit.oldRange)
             let delta = edit.newLength - edit.oldLength
             if edit.oldLength == 0 {
-                if end < edit.location { return span }
-                if start > edit.location {
+                let lineBreak = edit.replacementText.contains("\n") || edit.replacementText.contains("\r")
+                if end < edit.location || (lineBreak && end == edit.location) { return span }
+                if start > edit.location || (lineBreak && start == edit.location) {
                     return HighlightSpan(range: NSRange(location: start + delta, length: span.range.length), capture: span.capture)
                 }
-                guard !edit.replacementText.contains("\n"), !edit.replacementText.contains("\r") else { return nil }
+                guard !lineBreak else { return nil }
                 return HighlightSpan(range: NSRange(location: start, length: span.range.length + delta), capture: span.capture)
             }
             if end <= edit.location { return span }
