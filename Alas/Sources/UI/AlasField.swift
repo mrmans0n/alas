@@ -97,8 +97,25 @@ private struct AlasNSTextField: NSViewRepresentable {
         if context.coordinator.isEditing, let editor = nsView.currentEditor() as? NSTextView {
             let editingValue = context.coordinator.editingValue ?? editor.string
             if editingValue != text {
-                context.coordinator.replaceEditorText(editor, with: text)
-                context.coordinator.editingValue = text
+                // The editor's content is the newest truth whenever it differs
+                // from the last value the delegate observed: a keystroke landed
+                // after `controlTextDidChange` and before this update pass, or
+                // the binding's producer raced the render. Clobbering it with
+                // `text` would eat that keystroke and clamp the caret into the
+                // stale string, so adopt the editor content into the binding
+                // instead. Only when the editor matches the coordinator's
+                // notion (a genuine programmatic change: issue attach, mode
+                // carry, prefix composition) does `text` take over. Composition
+                // (marked text) stays out of the binding until it commits.
+                if editor.string != editingValue, !editor.hasMarkedText() {
+                    context.coordinator.editingValue = editor.string
+                    if editor.string != text {
+                        context.coordinator.parent.text = editor.string
+                    }
+                } else {
+                    context.coordinator.replaceEditorText(editor, with: text)
+                    context.coordinator.editingValue = text
+                }
             }
         } else if nsView.stringValue != text {
             nsView.stringValue = text
@@ -172,12 +189,19 @@ private struct AlasNSTextField: NSViewRepresentable {
 
         func replaceEditorText(_ editor: NSTextView, with text: String) {
             let selectedRange = editor.selectedRange()
+            let oldLength = (editor.string as NSString).length
             editor.string = text
-            let length = (text as NSString).length
-            let location = min(selectedRange.location, length)
+            let newLength = (text as NSString).length
+            // A caret at the end of the old text means append mode: keep it at
+            // the end of the new text rather than clamping into the stale
+            // length, which parked the caret a character (or more) inside the
+            // string and made the next keystroke insert mid-word.
+            let location = selectedRange.location >= oldLength
+                ? newLength
+                : min(selectedRange.location, newLength)
             editor.setSelectedRange(NSRange(
                 location: location,
-                length: min(selectedRange.length, length - location)
+                length: min(selectedRange.length, newLength - location)
             ))
         }
     }
@@ -204,7 +228,7 @@ class AlasNSTextFieldView: NSTextField {
             return false
         }
         if let editor = currentEditor() as? NSTextView {
-            editor.setSelectedRange(NSRange(location: stringValue.count, length: 0))
+            editor.setSelectedRange(NSRange(location: (stringValue as NSString).length, length: 0))
         }
         return true
     }

@@ -225,6 +225,7 @@
 		1C0B0FA4AC7DE560EC879F8E /* WorkspaceCheckoutCoordinatorCreationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2271131E29C468C6C8108A09 /* WorkspaceCheckoutCoordinatorCreationTests.swift */; };
 		1C2015ABCBACE0F6B475AE9A /* WorkingTreeFlatRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 318E4E3130F42671D888DC5C /* WorkingTreeFlatRowTests.swift */; };
 		1C2C949642E10060172AB1BA /* ACPToolCallPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B77D7A400059AFD189D1CA5A /* ACPToolCallPresentationTests.swift */; };
+		1C55BF96A36B5840861CFECB /* AlasFieldCaretSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BF6876F1100644921459D2A /* AlasFieldCaretSyncTests.swift */; };
 		1C5D64F032EAD5EA28B2482B /* ACPComposerActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B0206F856D9639147D0A4BF /* ACPComposerActions.swift */; };
 		1CA94CF8D1CF50112D94BBC3 /* InAppNotificationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBD6101BD94163F5088493DA /* InAppNotificationView.swift */; };
 		1DCE55DBA4A9DC466D817D22 /* ProjectConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD77FB052C8B5A937B14A4AE /* ProjectConfig.swift */; };
@@ -2742,6 +2743,7 @@
 		5BAC89A6B9D5DC926AC18E13 /* MergeConflictTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictTabView.swift; sourceTree = "<group>"; };
 		5BB6172AE118D2F9A40FD534 /* AgentsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsPane.swift; sourceTree = "<group>"; };
 		5BE3B261CC2B780A40B2EF4E /* ACPAdapterTargetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAdapterTargetTests.swift; sourceTree = "<group>"; };
+		5BF6876F1100644921459D2A /* AlasFieldCaretSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasFieldCaretSyncTests.swift; sourceTree = "<group>"; };
 		5C05EF64FD7701A941C81837 /* RevisionFollowControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RevisionFollowControl.swift; sourceTree = "<group>"; };
 		5C8BF1EC24E449A302A1E25C /* CopyFeedbackState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyFeedbackState.swift; sourceTree = "<group>"; };
 		5C96772DABFBCF15691FFB37 /* DiffDisplayPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffDisplayPreferences.swift; sourceTree = "<group>"; };
@@ -4326,6 +4328,7 @@
 				FA730D3A9214ED3ECD15C0ED /* AlasCLIRequestTests.swift */,
 				FA0482EAA16C6A9987C16EE8 /* AlasCLIReviewTargetResolverTests.swift */,
 				311B7CA55176621C35DE3E92 /* AlasCLIWorktreeResolverTests.swift */,
+				5BF6876F1100644921459D2A /* AlasFieldCaretSyncTests.swift */,
 				169FC38D03727F34855EB521 /* AlasFieldTests.swift */,
 				83723FCAD41999E6E3723872 /* AlasGhosttyRuntimeCallbackTests.swift */,
 				69CE1F098A251F24BC352816 /* AlasGhosttySmokeTests.swift */,
@@ -8758,6 +8761,7 @@
 				8F4B6B83968BE4C1E6D0D912 /* AlasCLIRequestTests.swift in Sources */,
 				CEEDAC1603DF2F3BD9223238 /* AlasCLIReviewTargetResolverTests.swift in Sources */,
 				4780D23AF088EC5923A17102 /* AlasCLIWorktreeResolverTests.swift in Sources */,
+				1C55BF96A36B5840861CFECB /* AlasFieldCaretSyncTests.swift in Sources */,
 				F855DEEEE005795EC6B13544 /* AlasFieldTests.swift in Sources */,
 				22B41D8D137C4978CC4070C7 /* AlasGhosttyRuntimeCallbackTests.swift in Sources */,
 				B7F78A0034B7EC38072C1116 /* AlasGhosttySmokeTests.swift in Sources */,
