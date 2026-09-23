@@ -66,10 +66,10 @@ struct ACPToolCallGroupingTests {
         #expect(group.members.map(\.stableId) == ["tc-a", "tc-b", "tc-c"])
     }
 
-    @Test("consecutive tool calls with different names do not fold together")
-    func differentNamesBreakTheRun() {
+    @Test("consecutive tool calls with different names share one activity group")
+    func differentNamesShareTheRun() {
         let folded = fold([tool("a", name: "Bash"), tool("b", name: "Read"), tool("c", name: "Bash")])
-        #expect(ids(folded) == ["tcg-tc-a", "tcg-tc-b", "tcg-tc-c"])
+        #expect(ids(folded) == ["tcg-tc-a"])
     }
 
     @Test("a nil name on either side never breaks the run, matching adapters that omit name")
@@ -113,12 +113,49 @@ struct ACPToolCallGroupingTests {
         #expect(ids(folded) == ["tcg-tc-a", "acp-agent:m1", "tcg-tc-c"])
     }
 
-    @Test("a thinking row between tool calls splits the run")
+    @Test("thinking between tool calls stays in the same activity group")
     @MainActor
-    func thoughtSplitsRun() {
+    func thoughtSharesRun() {
         let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("hmm"))
         let folded = fold([tool("a"), tool("b"), thought, tool("c"), tool("d")])
-        #expect(ids(folded) == ["tcg-tc-a", "acp-thought:t1", "tcg-tc-c"])
+        #expect(ids(folded) == ["tcg-tc-a"])
+    }
+
+    @Test("expanding mixed activity restores thinking and tools in their original order")
+    @MainActor
+    func expandedMixedActivityPreservesOrder() {
+        let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("hmm"))
+        let messages = [thought, tool("a", name: "Read"), tool("b", name: "Bash")]
+        #expect(ids(fold(messages, expandAll: true)) == [
+            "tcg-acp-thought:t1", "acp-thought:t1", "tc-a", "tc-b",
+        ])
+        #expect(ids(fold(messages, enabled: false)) == ["acp-thought:t1", "tc-a", "tc-b"])
+    }
+
+    @Test("thinking groups respect fork boundaries and visible progress messages")
+    @MainActor
+    func mixedActivityBoundaries() {
+        let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("hmm"))
+        let progress = ACPMessage.agent(id: UUID(), messageId: "p1", StreamingText("Tests pass"))
+        #expect(ids(fold([thought, tool("a"), progress, tool("b")])) == [
+            "tcg-acp-thought:t1", "acp-agent:p1", "tcg-tc-b",
+        ])
+        #expect(ids(fold([tool("a"), thought, tool("b")], breakAfterIndex: 1)) == [
+            "tcg-tc-a", "tcg-tc-b",
+        ])
+    }
+
+    @Test("consecutive thoughts occupy one expandable row")
+    @MainActor
+    func consecutiveThoughtsFold() {
+        let messages = [
+            ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("first")),
+            ACPMessage.thought(id: UUID(), messageId: "t2", StreamingText("second")),
+        ]
+        #expect(ids(fold(messages)) == ["tcg-acp-thought:t1"])
+        #expect(ids(fold(messages, expandAll: true)) == [
+            "tcg-acp-thought:t1", "acp-thought:t1", "acp-thought:t2",
+        ])
     }
 
     @Test("a file edit card stays outside the bundle and splits the run")
@@ -257,20 +294,22 @@ struct ACPToolCallGroupSummaryTests {
 
     @Test("collapsed label pluralizes and appends the failure count")
     func collapsedLabel() {
-        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a"), tool("b")]).collapsedLabel == "Ran 2 tools")
-        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a")]).collapsedLabel == "Ran 1 tool")
+        #expect(ACPToolCallGroupSummary(toolCalls: []).collapsedLabel == "Activity")
+        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a"), tool("b")]).collapsedLabel == "Activity · 2 tool calls")
+        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a")]).collapsedLabel == "Activity · 1 tool call")
         #expect(ACPToolCallGroupSummary(toolCalls: [
             tool("a"), tool("b", status: "failed"), tool("c"),
-        ]).collapsedLabel == "Ran 3 tools · 1 failed")
+        ]).collapsedLabel == "Activity · 3 tool calls · 1 failed")
     }
 
     @Test("expanded label offers to hide the bundle and keeps the failure count")
     func expandedLabel() {
-        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a"), tool("b"), tool("c")]).expandedLabel == "Hide 3 tools")
-        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a")]).expandedLabel == "Hide 1 tool")
+        #expect(ACPToolCallGroupSummary(toolCalls: []).expandedLabel == "Hide activity")
+        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a"), tool("b"), tool("c")]).expandedLabel == "Hide activity · 3 tool calls")
+        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a")]).expandedLabel == "Hide activity · 1 tool call")
         #expect(ACPToolCallGroupSummary(toolCalls: [
             tool("a"), tool("b", status: "failed"), tool("c"),
-        ]).expandedLabel == "Hide 3 tools · 1 failed")
+        ]).expandedLabel == "Hide activity · 3 tool calls · 1 failed")
     }
 }
 
