@@ -1368,6 +1368,83 @@ struct AppStateCLIRoutingTests {
         ) == .preparingDelete)
     }
 
+    /// A worktree owner carries only the path-derived id, so an owner-based
+    /// ACP creation must be gated by the caller's project. Re-resolving the
+    /// first project that lists that id reads that project's claim instead:
+    /// here project B's checkout is deleting while project A lists the same
+    /// path and is focused and clean, so an id-only lookup admits a session
+    /// into the deleting checkout — and blocks the clean one.
+    @Test func ownerBasedACPCreationReadsTheCallersProjectClaim() async throws {
+        let sharedID = "/srv/checkouts/member"
+        // Seeded in this order, so project A is the first match for the id.
+        let project = ProjectConfig(
+            id: "clean-project",
+            name: "Clean",
+            path: "/repos/clean",
+            color: "#5fb7c4",
+            addedAt: .distantPast
+        )
+        let otherProject = ProjectConfig(
+            id: "other-project",
+            name: "Other",
+            path: "/repos/other",
+            color: "#fff",
+            addedAt: .distantPast,
+            host: "other-host"
+        )
+        var store = MemoryStore()
+        store.projectsFile = ProjectsFile(projects: [project, otherProject])
+        let state = AppState(store: store)
+
+        // The focused, clean project's row at the shared id.
+        let thisProjectRow = Worktree(
+            id: sharedID,
+            projectId: project.id,
+            name: "feature",
+            branch: "feature",
+            path: URL(fileURLWithPath: sharedID),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(thisProjectRow)
+        state.focusGlobalWorktree(id: sharedID, projectId: project.id)
+        // The other project's row at the same id, deleting.
+        let otherRow = Worktree(
+            id: sharedID,
+            projectId: otherProject.id,
+            name: "member",
+            branch: "member",
+            path: URL(fileURLWithPath: sharedID),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(otherRow)
+        state.projectsManager.setOperationState(
+            forWorktreeId: sharedID,
+            projectId: otherProject.id,
+            state: .deleting(projectId: otherProject.id)
+        )
+        // Materialize the owner's manager the way opening the launcher does.
+        _ = state.acpManager(for: otherRow)
+
+        // A caller holding the deleting project's checkout is refused.
+        let admittedForDeletingProject = state.openNewACPSession(
+            agentID: "test-agent",
+            owner: .worktree(sharedID),
+            projectId: otherProject.id
+        )
+        #expect(admittedForDeletingProject == nil)
+
+        // The same call for the clean project is admitted, so the refusal
+        // above is that project's claim and not a missing manager or agent.
+        let admittedForCleanProject = state.openNewACPSession(
+            agentID: "test-agent",
+            owner: .worktree(sharedID),
+            projectId: project.id
+        )
+        #expect(admittedForCleanProject != nil)
+    }
+
     /// Regression test for the review palette ignoring a per-worktree
     /// base-branch override: a worktree whose right pane is already loaded
     /// (e.g. because the ReviewChanges tab that's opening the palette is

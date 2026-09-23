@@ -4536,7 +4536,11 @@ final class AppState {
                 )
             } else {
                 guard let manager = acpManager(for: worktree) else { return nil }
-                openNewACPSession(agentID: agentId, owner: manager.owner)
+                openNewACPSession(
+                    agentID: agentId,
+                    owner: manager.owner,
+                    projectId: worktree.projectId
+                )
             }
             return nil
         }
@@ -12422,15 +12426,36 @@ final class AppState {
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId) else { return }
         guard let mgr = acpManager(for: worktree) else { return }
-        openNewACPSession(agentID: agentID, owner: mgr.owner, initialPrompt: initialPrompt)
+        openNewACPSession(
+            agentID: agentID,
+            owner: mgr.owner,
+            projectId: worktree.projectId,
+            initialPrompt: initialPrompt
+        )
     }
 
+    /// `projectId` is the project whose claim gates this creation. Callers that
+    /// hold a worktree pass it: a worktree owner carries only the path-derived
+    /// id, and re-resolving the project from that id here would read another
+    /// project's same-path checkout instead — admitting the session while this
+    /// project's checkout is being deleted, or blocking it while another
+    /// project's is.
     @discardableResult
-    func openNewACPSession(agentID: String, owner: SessionOwnerID, initialPrompt: String? = nil) -> ACPSessionTabState? {
+    func openNewACPSession(
+        agentID: String,
+        owner: SessionOwnerID,
+        projectId: String? = nil,
+        initialPrompt: String? = nil
+    ) -> ACPSessionTabState? {
         if case .worktree(let worktreeID) = owner {
-            let owner = projectAndWorktree(withWorktreeId: worktreeID)
+            let claimProjectId = projectId
+                ?? projectAndWorktree(withWorktreeId: worktreeID)?.project.id
+                ?? ""
             guard !Self.blocksWorktreeSessionAdmission(
-                projectsManager.operationState(forWorktreeId: worktreeID, projectId: owner?.worktree.projectId ?? "")
+                projectsManager.operationState(
+                    forWorktreeId: worktreeID,
+                    projectId: claimProjectId
+                )
             ) else {
                 return nil
             }

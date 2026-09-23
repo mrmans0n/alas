@@ -27,7 +27,12 @@ extension AppState {
         let prompt = RunScriptWritingHelp.prompt(
             scope: scope, scriptURL: scriptURL, worktreeRoot: currentWorktree.path, request: request
         )
-        guard let tab = openNewACPSession(agentID: agentID, owner: manager.owner, initialPrompt: prompt) else {
+        guard let tab = openNewACPSession(
+            agentID: agentID,
+            owner: manager.owner,
+            projectId: currentWorktree.projectId,
+            initialPrompt: prompt
+        ) else {
             throw RunScriptWritingHelpError.sessionUnavailable
         }
         focusGlobalWorktree(id: currentWorktree.id, projectId: currentWorktree.projectId)

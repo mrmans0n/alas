@@ -15,6 +15,10 @@ struct AgentLauncherDialog: View {
     @State private var chatAgent: AgentDefinition?
     @State private var discoveryModel: ACPSessionDiscoveryModel?
     @State private var discoveryOwner: SessionOwnerID?
+    /// The project whose claim gates the discovered owner's sessions. Kept
+    /// beside the owner because a worktree owner carries only the path-derived
+    /// id, which another project's same-path checkout also matches.
+    @State private var discoveryProjectId: String?
     @State private var selectedSessionIndex = 0
     @State private var loadingMore = false
     @State private var openingSessionId: String?
@@ -882,14 +886,19 @@ struct AgentLauncherDialog: View {
         guard let worktree = selectedWorktree(),
               let manager = appState.acpManager(for: worktree)
         else { return }
-        startDiscovery(for: agent, manager: manager)
+        startDiscovery(for: agent, manager: manager, projectId: worktree.projectId)
     }
 
-    private func startDiscovery(for agent: AgentDefinition, manager: ACPSessionManager) {
+    private func startDiscovery(
+        for agent: AgentDefinition,
+        manager: ACPSessionManager,
+        projectId: String? = nil
+    ) {
         let prior = discoveryModel
         let model = ACPSessionDiscoveryModel()
         discoveryModel = model
         discoveryOwner = manager.owner
+        discoveryProjectId = projectId
         Task {
             await prior?.stop()
             await model.start(manager: manager, agentId: agent.id)
@@ -908,9 +917,14 @@ struct AgentLauncherDialog: View {
     private func launchNewChat() {
         guard let chatAgent, openingSessionId == nil else { return }
         let owner = discoveryOwner
+        let projectId = discoveryProjectId
         Task { @MainActor in
             if let owner {
-                _ = appState.openNewACPSession(agentID: chatAgent.id, owner: owner)
+                _ = appState.openNewACPSession(
+                    agentID: chatAgent.id,
+                    owner: owner,
+                    projectId: projectId
+                )
             } else {
                 appState.openNewACPSession(agentID: chatAgent.id)
             }
