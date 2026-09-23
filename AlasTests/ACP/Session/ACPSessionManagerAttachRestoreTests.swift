@@ -815,6 +815,72 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.currentMode == "plan")
     }
 
+    @Test("model and mode picks wait for the initial lease claim")
+    func modelAndModePicksWaitForInitialLeaseClaim() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                ],
+                availableModes: [
+                    .init(id: "default", name: "Default"),
+                    .init(id: "plan", name: "Plan"),
+                    .init(id: "ask", name: "Ask"),
+                ],
+                currentModel: "sonnet",
+                currentMode: "default",
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/set_model") { _ in Data("{}".utf8) }
+        client.script(method: "session/set_mode") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+
+        // Simulate a stale local ownership marker while the first lease
+        // observation is pending. A pick must not write without its token.
+        session.agentState = .spawning
+        manager._ownedLeases.insert(session.id)
+        await manager.setModel(for: session.id, modelId: "haiku")
+        await manager.setMode(for: session.id, modeId: "ask")
+        await manager.flushAllPersistence()
+
+        #expect(client.sent.isEmpty)
+        #expect(session.currentModel == "haiku")
+        #expect(session.currentMode == "ask")
+        #expect(try store.loadSession(id: "local")?.currentModel == "sonnet")
+        #expect(try store.loadSession(id: "local")?.currentMode == "plan")
+
+        session.agentState = .idle
+        await manager.attach(to: session.id, freshlyCreated: false)
+        try await waitUntil {
+            client.sent.map(\.method) == [
+                "initialize",
+                "session/load",
+                "session/set_model",
+                "session/set_mode",
+            ]
+        }
+        await manager.flushAllPersistence()
+
+        #expect(session.currentModel == "haiku")
+        #expect(session.currentMode == "ask")
+        #expect(try store.loadSession(id: "local")?.currentModel == "haiku")
+        #expect(try store.loadSession(id: "local")?.currentMode == "ask")
+    }
+
     @Test("reopened session reapplies persisted mode and config options after load")
     func reopenedSessionReappliesPersistedConfiguration() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
