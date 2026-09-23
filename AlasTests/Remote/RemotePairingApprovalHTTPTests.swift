@@ -52,6 +52,47 @@ import Testing
 }
 
 @MainActor struct RemotePairingApprovalHTTPTests {
+    @Test func approvedPairBindsAdvertisementCachesReplyAndKeepsDeviceProvisional() throws {
+        let f = HTTPFixture()
+        let pending = try f.coordinator.receive(f.request(f.challenge(), .submit))
+        f.coordinator.decide(.allow, requestID: pending.payload.requestID)
+        let approved = try f.coordinator.receive(f.request(pending, .status))
+        let p = approved.payload
+        let payload = ApprovalPayload(operation: .redeem, requestID: p.requestID, requester: p.requester,
+            receiver: p.receiver, attemptNonce: p.attemptNonce, operationNonce: p.operationNonce,
+            challenge: p.challenge, expiresAtMilliseconds: p.expiresAtMilliseconds, phase: p.phase,
+            counterCode: "counter", responseDigest: nil)
+        let envelope = ApprovalEnvelope(payload: payload, signature: f.caller.signApproval(payload, reply: false)!)
+        struct Pair: Encodable { let deviceName: String; let peer: RemotePeerAdvertisement; let approval: ApprovalEnvelope }
+        func body(code: String = "counter", origins: [String]? = nil) throws -> Data {
+            try JSONEncoder().encode(Pair(deviceName: p.requester.name,
+                peer: RemotePeerAdvertisement(serverId: p.requester.serverID, name: p.requester.name,
+                    origins: origins ?? p.requester.origins, counterCode: code, publicKey: p.requester.publicKey), approval: envelope))
+        }
+        let store = InMemoryDeviceStore()
+        let pairing = RemotePairingService(store: store)
+        var responder = RemoteHTTPResponder(pairing: pairing,
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            diagnostics: { RemoteDiagnosticsSnapshot(appName: "Alas", port: 1, addresses: [], usesPlainHTTP: true, pairedDeviceCount: 0) })
+        responder.acceptsPeers = { true }
+        responder.approval = f.http
+        var callbacks = 0
+        responder.onApprovedPeerPaired = { _, _, _ in callbacks += 1 }
+        func response(_ body: Data, origin: String? = nil) -> Data {
+            responder.response(for: HTTPRequest(method: "POST", path: "/pair", query: [:],
+                headers: origin.map { ["origin": $0] } ?? [:]), body: body)
+        }
+        #expect(String(decoding: try response(body(), origin: "null"), as: UTF8.self).contains("403 Forbidden"))
+        #expect(String(decoding: try response(body(code: "changed")), as: UTF8.self).contains("401 Unauthorized"))
+        #expect(String(decoding: try response(body(origins: ["http://10.0.0.9:8765"])), as: UTF8.self).contains("401 Unauthorized"))
+        let first = try response(body())
+        #expect(String(decoding: first, as: UTF8.self).hasPrefix("HTTP/1.1 200 OK"))
+        #expect(try response(body()) == first)
+        #expect(callbacks == 1)
+        #expect(pairing.devices.count == 1)
+        #expect(store.saved.isEmpty)
+    }
+
     @Test(arguments: ["challenge", "submit", "status", "cancel"])
     func guardsRunBeforeDecoding(route: String) {
         let f = HTTPFixture()

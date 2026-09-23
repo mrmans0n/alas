@@ -5,6 +5,16 @@ import CryptoKit
 
 @MainActor
 struct RemoteHTTPResponderTests {
+    @Test func pairRejectsTwoAuthorizationMechanismsWithoutConsumingCode() throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let code = pairing.beginPairing()
+        let body = Data("{\"code\":\"\(code)\",\"deviceName\":\"phone\",\"approval\":{}}".utf8)
+        let reply = text(makeResponder(pairing: pairing).response(for: request("POST", "/pair"), body: body))
+        #expect(!reply.hasPrefix("HTTP/1.1 200"))
+        #expect(pairing.devices.isEmpty)
+        #expect(throws: Never.self) { try pairing.redeem(code: code, deviceName: "phone") }
+    }
+
     private let privateOrigin = "http://192.168.1.20:8765"
 
     private func makeResponder(pairing: RemotePairingService = RemotePairingService(store: InMemoryDeviceStore())) -> RemoteHTTPResponder {

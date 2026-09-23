@@ -19,6 +19,10 @@ final class RemotePairingService {
     // scanned) — each stays valid until its own expiry.
     private var pendingCodes: [PendingCode] = []
     private(set) var devices: [RemoteDevice]
+    private var provisionalDeviceIDs: Set<String> = []
+    private var provisionalCodes: Set<String> = []
+    private var provisionalDeviceByCode: [String: String] = [:]
+    @ObservationIgnored var onDeviceRevoked: ((String) -> Void)?
 
     /// How long a minted code stays redeemable. Not private: `RemotePeerManager`
     /// aligns how long it remembers an ended attempt's counter-code to this,
@@ -53,6 +57,7 @@ final class RemotePairingService {
     private func prunePendingCodes() {
         let t = now()
         pendingCodes.removeAll { $0.expiresAt < t }
+        provisionalCodes.formIntersection(Set(pendingCodes.map(\.code)))
     }
 
     /// Exchanges a valid pairing code for a fresh per-device token. The code is consumed.
@@ -71,6 +76,30 @@ final class RemotePairingService {
         try redeemCore(code: code, deviceName: deviceName, kind: .alasInstance, peerServerId: peerServerId)
     }
 
+    func issueApprovedPeer(deviceName: String, peerServerId: String) -> RemotePeerRedeemResult {
+        issue(deviceName: deviceName, kind: .alasInstance, peerServerId: peerServerId, provisional: true)
+    }
+
+    func beginApprovedPairing() -> String {
+        let code = beginPairing()
+        provisionalCodes.insert(code)
+        return code
+    }
+
+    func commitApprovedPeer(deviceId: String) {
+        provisionalDeviceIDs.remove(deviceId)
+        provisionalDeviceByCode = provisionalDeviceByCode.filter { $0.value != deviceId }
+        saveDevices()
+    }
+
+    @discardableResult func cancelCode(_ code: String) -> String? {
+        pendingCodes.removeAll { $0.code == code }
+        provisionalCodes.remove(code)
+        let deviceID = provisionalDeviceByCode.removeValue(forKey: code)
+        if let deviceID { revoke(deviceId: deviceID) }
+        return deviceID
+    }
+
     private func redeemCore(code: String, deviceName: String, kind: RemoteDeviceKind,
                             peerServerId: String?) throws -> RemotePeerRedeemResult {
         // Drop failures outside the window, then throttle if too many remain.
@@ -87,12 +116,21 @@ final class RemotePairingService {
         }
         pendingCodes.remove(at: idx)   // consume only the matched code
         recentFailedRedeems.removeAll()   // a successful pair clears the failure window
+        let provisional = provisionalCodes.remove(candidate) != nil
+        let result = issue(deviceName: deviceName, kind: kind, peerServerId: peerServerId, provisional: provisional)
+        if provisional { provisionalDeviceByCode[candidate] = result.deviceId }
+        return result
+    }
+
+    private func issue(deviceName: String, kind: RemoteDeviceKind, peerServerId: String?,
+                       provisional: Bool) -> RemotePeerRedeemResult {
         let token = Self.randomToken(byteCount: 32)
         let device = RemoteDevice(id: UUID().uuidString, name: deviceName,
                                   tokenHash: Self.hash(token), createdAt: now(), lastSeenAt: nil,
                                   kind: kind, peerServerId: peerServerId)
         devices.append(device)
-        store.save(devices)
+        if provisional { provisionalDeviceIDs.insert(device.id) }
+        saveDevices()
         return RemotePeerRedeemResult(token: token, deviceId: device.id)
     }
 
@@ -106,17 +144,28 @@ final class RemotePairingService {
     func touch(deviceId: String) {
         guard let i = devices.firstIndex(where: { $0.id == deviceId }) else { return }
         devices[i].lastSeenAt = now()
-        store.save(devices)
+        saveDevices()
     }
 
     func revoke(deviceId: String) {
         devices.removeAll { $0.id == deviceId }
-        store.save(devices)
+        provisionalDeviceIDs.remove(deviceId)
+        provisionalDeviceByCode = provisionalDeviceByCode.filter { $0.value != deviceId }
+        saveDevices()
+        onDeviceRevoked?(deviceId)
     }
 
     func revokeAll() {
+        let ids = devices.map(\.id)
         devices.removeAll()
-        store.save(devices)
+        provisionalDeviceIDs.removeAll()
+        provisionalDeviceByCode.removeAll()
+        saveDevices()
+        for id in ids { onDeviceRevoked?(id) }
+    }
+
+    private func saveDevices() {
+        store.save(devices.filter { !provisionalDeviceIDs.contains($0.id) })
     }
 
     // MARK: helpers

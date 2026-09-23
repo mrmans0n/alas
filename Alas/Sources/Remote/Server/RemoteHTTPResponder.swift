@@ -58,6 +58,7 @@ struct RemoteHTTPResponder {
     /// Shared with the socket's own proof, so both prove the same key.
     var identityProof: (@MainActor (String) -> RemoteIdentityProof?)?
     var approval: RemotePairingApprovalHTTP?
+    var onApprovedPeerPaired: (@MainActor (RemotePeerPairingRequest, String, ApprovalPeer) -> Void)?
 
     func response(for req: HTTPRequest, body: Data) -> Data {
         if RemotePairingApprovalHTTP.operation(for: req.path) != nil {
@@ -91,7 +92,7 @@ struct RemoteHTTPResponder {
             return Self.http(status: "200 OK", contentType: "application/json; charset=utf-8", body: data)
         }
         if req.method == "POST", req.path == "/pair" {
-            return pairResponse(body: body, extraHeaders: cors)
+            return pairResponse(body: body, extraHeaders: cors, hasOrigin: req.headers["origin"] != nil)
         }
         if req.method == "GET" {
             let path = req.path == "/" ? "/index.html" : req.path
@@ -119,9 +120,18 @@ struct RemoteHTTPResponder {
     /// Upper bound on peer-supplied display strings, which are stored and shown.
     private static let maxPeerTextLength = 200
 
-    private func pairResponse(body: Data, extraHeaders: [(String, String)]) -> Data {
+    private func pairResponse(body: Data, extraHeaders: [(String, String)], hasOrigin: Bool) -> Data {
+        let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+        let hasApproval = object?.keys.contains("approval") == true
+        if hasApproval {
+            guard !hasOrigin else { return RemotePairingApprovalHTTP.failure(.disabled) }
+            guard body.count <= 16 * 1024 else {
+                return Self.http(status: "413 Payload Too Large", contentType: "application/json", body: Data())
+            }
+        }
         struct PairRequest: Decodable {
-            let code: String
+            let code: String?
+            let approval: ApprovalEnvelope?
             let deviceName: String
             let peer: RemotePeerAdvertisement?
             /// A nonce the pairing peer minted. Present only for peer
@@ -140,12 +150,47 @@ struct RemoteHTTPResponder {
             let signature: String?
         }
         let unauthorized = Self.http(status: "401 Unauthorized", contentType: "application/json",
-                                     body: Data(#"{"error":"pairing failed"}"#.utf8), extraHeaders: extraHeaders)
+                                     body: Data(#"{"error":"pairing failed"}"#.utf8), extraHeaders: hasApproval ? [] : extraHeaders)
         func forbidden(_ error: String) -> Data {
             Self.http(status: "403 Forbidden", contentType: "application/json",
                       body: Data(#"{"error":"\#(error)"}"#.utf8), extraHeaders: extraHeaders)
         }
         guard let pr = try? JSONDecoder().decode(PairRequest.self, from: body) else { return unauthorized }
+        guard (pr.code != nil) != (pr.approval != nil) else { return unauthorized }
+        if let envelope = pr.approval {
+            guard !hasOrigin, acceptsPeers(), let approval, approval.enabled(),
+                  let callback = onApprovedPeerPaired else { return RemotePairingApprovalHTTP.failure(.disabled) }
+            guard body.count <= 16 * 1024 else {
+                return Self.http(status: "413 Payload Too Large", contentType: "application/json", body: Data())
+            }
+            let p = envelope.payload
+            guard let peer = pr.peer, peer.serverId == p.requester.serverID,
+                  peer.publicKey == p.requester.publicKey, peer.name == p.requester.name,
+                  peer.origins == p.requester.origins, peer.counterCode == p.counterCode,
+                  pr.deviceName == p.requester.name else { return RemotePairingApprovalHTTP.failure(.unauthorized) }
+            do {
+                let bytes = try approval.coordinator.redeem(envelope) {
+                    let result = pairing.issueApprovedPeer(deviceName: peer.name, peerServerId: peer.serverId)
+                    do {
+                        let proof = pr.challenge.flatMap { identityProof?($0) }
+                        let pairBody = try JSONEncoder().encode(PairReply(token: result.token,
+                            serverId: p.receiver.serverID, name: p.receiver.name,
+                            publicKey: p.receiver.publicKey, signature: proof?.signature))
+                        let reply = try approval.coordinator.pairReply(body: pairBody, for: envelope)
+                        callback(RemotePeerPairingRequest(peerServerId: peer.serverId, peerName: peer.name,
+                            origins: peer.origins, peerPublicKey: peer.publicKey, counterCode: peer.counterCode,
+                            localDeviceId: result.deviceId, redeemedCode: ""), p.requestID, p.receiver)
+                        return ApprovalIssuedResponse(body: reply, deviceID: result.deviceId)
+                    } catch {
+                        pairing.revoke(deviceId: result.deviceId)
+                        throw error
+                    }
+                }
+                return Self.http(status: "200 OK", contentType: "application/json", body: bytes)
+            } catch let failure as ApprovalFailure { return RemotePairingApprovalHTTP.failure(failure) }
+            catch { return RemotePairingApprovalHTTP.failure(.invalid) }
+        }
+        guard let code = pr.code else { return unauthorized }
         let token: String
         if let peer = pr.peer {
             guard acceptsPeers() else { return forbidden("federation disabled") }
@@ -176,15 +221,15 @@ struct RemoteHTTPResponder {
             if let ownServerId = identity?().serverId, !ownServerId.isEmpty, ownServerId == peer.serverId {
                 return forbidden("cannot pair with self")
             }
-            guard let result = try? pairing.redeemPeer(code: pr.code, deviceName: pr.deviceName,
+            guard let result = try? pairing.redeemPeer(code: code, deviceName: pr.deviceName,
                                                        peerServerId: peer.serverId) else { return unauthorized }
             token = result.token
             onPeerPaired?(RemotePeerPairingRequest(
                 peerServerId: peer.serverId, peerName: peer.name, origins: peer.origins,
                 peerPublicKey: peer.publicKey, counterCode: peer.counterCode,
-                localDeviceId: result.deviceId, redeemedCode: pr.code))
+                localDeviceId: result.deviceId, redeemedCode: code))
         } else {
-            guard let issued = try? pairing.redeem(code: pr.code, deviceName: pr.deviceName) else { return unauthorized }
+            guard let issued = try? pairing.redeem(code: code, deviceName: pr.deviceName) else { return unauthorized }
             token = issued
         }
         let id = identity?()

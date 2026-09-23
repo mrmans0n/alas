@@ -3,6 +3,10 @@ import Foundation
 import Observation
 
 enum ApprovalDecision: Equatable { case allow, decline }
+struct ApprovalIssuedResponse {
+    let body: Data
+    let deviceID: String
+}
 enum ApprovalFailure: Error, Equatable {
     case invalid, unauthorized, disabled, expired, conflict, throttled, capacity
     var retryAfterSeconds: Int? { self == .throttled ? 2 : nil }
@@ -21,6 +25,9 @@ enum ApprovalFailure: Error, Equatable {
         var lastReply: ApprovalEnvelope?
         var lastStatusAt: Int64?
         var terminalAt: Int64?
+        var redeemRequest: ApprovalEnvelope?
+        var redeemResponse: ApprovalIssuedResponse?
+        var redeemDeadline: Int64?
     }
 
     var entries: [Entry] { records.values.map(\.entry).sorted { $0.id < $1.id } }
@@ -32,6 +39,8 @@ enum ApprovalFailure: Error, Equatable {
     private let localPeer: () -> ApprovalPeer
     private let signer: any ApprovalSigning
     private let now: () -> Date
+    @ObservationIgnored var onCancelRedeeming: ((String) -> Void)?
+    @ObservationIgnored var onReleaseAttempt: ((String) -> Void)?
 
     init(localPeer: @escaping () -> ApprovalPeer, signer: any ApprovalSigning,
          now: @escaping () -> Date = Date.init) {
@@ -100,9 +109,14 @@ enum ApprovalFailure: Error, Equatable {
             return reply
         }
 
-        guard payload.challenge == stored.challenge else { throw ApprovalFailure.conflict }
+        // A cached redeem reply remains a cancellation capability for its own
+        // attempt even if a status poll subsequently rotated the challenge.
+        let cancellingRedeem = payload.operation == .cancel && payload.phase == .redeeming
+            && record.redeemRequest?.payload.challenge == payload.challenge
+            && record.redeemResponse != nil
+        guard payload.challenge == stored.challenge || cancellingRedeem else { throw ApprovalFailure.conflict }
         guard payload.expiresAtMilliseconds == stored.expiresAtMilliseconds,
-              payload.phase == stored.phase,
+              payload.phase == stored.phase || cancellingRedeem,
               payload.counterCode == nil, payload.responseDigest == nil
         else { throw ApprovalFailure.invalid }
         let time = milliseconds
@@ -135,6 +149,9 @@ enum ApprovalFailure: Error, Equatable {
             case .challenged, .pending, .approved, .redeeming:
                 record.entry.phase = .cancelled
                 record.terminalAt = time
+            case .paired where record.redeemResponse != nil:
+                record.entry.phase = .cancelled
+                record.terminalAt = time
             case .paired, .declined, .cancelled, .expired, .failed:
                 break
             }
@@ -154,8 +171,84 @@ enum ApprovalFailure: Error, Equatable {
         record.lastRequest = envelope
         record.lastReply = reply
         records[payload.requestID] = record
+        if record.entry.phase == .cancelled { invalidateRedeem(requestID: payload.requestID) }
         trimTerminalRecords(at: time)
         return reply
+    }
+
+    func redeem(_ envelope: ApprovalEnvelope, issue: () throws -> ApprovalIssuedResponse) throws -> Data {
+        expire()
+        guard enabled else { throw ApprovalFailure.disabled }
+        if let cached = exactAuthenticatedRetry(envelope) { return cached }
+        let p = envelope.payload
+        guard var record = records[p.requestID] else { throw ApprovalFailure.unauthorized }
+        let stored = record.entry.payload
+        guard p.operation == .redeem, p.requester == stored.requester, p.receiver == stored.receiver,
+              p.attemptNonce == stored.attemptNonce, p.challenge == stored.challenge,
+              p.expiresAtMilliseconds == stored.expiresAtMilliseconds, p.phase == stored.phase,
+              p.counterCode?.isEmpty == false, p.responseDigest == nil,
+              ApprovalWire.verify(envelope, expectedKey: stored.requester.publicKey, reply: false),
+              record.entry.phase == .approved else { throw ApprovalFailure.unauthorized }
+        record.entry.phase = .redeeming
+        record.entry.payload = Self.payload(stored, operation: .redeem, nonce: p.operationNonce, phase: .redeeming)
+        record.redeemDeadline = milliseconds + 120_000
+        records[p.requestID] = record
+        do {
+            let response = try issue()
+            guard records[p.requestID]?.entry.phase == .redeeming else {
+                onCancelRedeeming?(p.requestID)
+                throw ApprovalFailure.unauthorized
+            }
+            records[p.requestID]?.redeemRequest = envelope
+            records[p.requestID]?.redeemResponse = response
+            return response.body
+        } catch {
+            records[p.requestID]?.entry.phase = .failed
+            records[p.requestID]?.terminalAt = milliseconds
+            onCancelRedeeming?(p.requestID)
+            throw error
+        }
+    }
+
+    /// The pair body is hashed as encoded, so JSON key order cannot alter the proof.
+    func pairReply(body: Data, for request: ApprovalEnvelope) throws -> Data {
+        let p = request.payload
+        let digest = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
+        let payload = ApprovalPayload(operation: .redeem, requestID: p.requestID, requester: p.requester,
+            receiver: p.receiver, attemptNonce: p.attemptNonce, operationNonce: p.operationNonce,
+            challenge: p.challenge, expiresAtMilliseconds: p.expiresAtMilliseconds,
+            phase: .redeeming, counterCode: p.counterCode, responseDigest: digest)
+        return try JSONEncoder().encode(ApprovalPairReply(pairBody: body, proof: signed(payload)))
+    }
+
+    func complete(requestID: String, succeeded: Bool) {
+        expire()
+        guard records[requestID]?.entry.phase == .redeeming else { return }
+        records[requestID]?.entry.phase = succeeded ? .paired : .failed
+        records[requestID]?.terminalAt = milliseconds
+        if !succeeded { invalidateRedeem(requestID: requestID) }
+    }
+
+    func invalidate(deviceID: String) {
+        for id in records.keys where records[id]?.redeemResponse?.deviceID == deviceID {
+            records[id]?.entry.phase = .failed
+            records[id]?.terminalAt = milliseconds
+            invalidateRedeem(requestID: id)
+        }
+    }
+
+    private func exactAuthenticatedRetry(_ envelope: ApprovalEnvelope) -> Data? {
+        guard let record = records[envelope.payload.requestID], record.redeemRequest == envelope,
+              record.entry.phase == .redeeming || record.entry.phase == .paired,
+              ApprovalWire.verify(envelope, expectedKey: record.entry.payload.requester.publicKey, reply: false)
+        else { return nil }
+        return record.redeemResponse?.body
+    }
+
+    private func invalidateRedeem(requestID: String) {
+        records[requestID]?.redeemResponse = nil
+        records[requestID]?.redeemRequest = nil
+        onCancelRedeeming?(requestID)
     }
 
     func decide(_ decision: ApprovalDecision, requestID: String) {
@@ -190,7 +283,20 @@ enum ApprovalFailure: Error, Equatable {
                     record.terminalAt = record.entry.payload.expiresAtMilliseconds
                     records[id] = record
                 }
-            case .redeeming, .paired, .declined, .cancelled, .expired, .failed:
+            case .redeeming:
+                if let deadline = record.redeemDeadline, time >= deadline {
+                    record.entry.phase = .expired
+                    record.terminalAt = time
+                    records[id] = record
+                    invalidateRedeem(requestID: id)
+                }
+            case .paired:
+                if let deadline = record.redeemDeadline, time >= deadline {
+                    records[id]?.redeemResponse = nil
+                    records[id]?.redeemRequest = nil
+                    onReleaseAttempt?(id)
+                }
+            case .declined, .cancelled, .expired, .failed:
                 break
             }
         }
@@ -211,7 +317,11 @@ enum ApprovalFailure: Error, Equatable {
                 record.entry.phase = .cancelled
                 record.terminalAt = time
                 records[id] = record
+                invalidateRedeem(requestID: id)
             case .paired, .declined, .cancelled, .expired, .failed:
+                records[id]?.redeemResponse = nil
+                records[id]?.redeemRequest = nil
+                onReleaseAttempt?(id)
                 break
             }
         }

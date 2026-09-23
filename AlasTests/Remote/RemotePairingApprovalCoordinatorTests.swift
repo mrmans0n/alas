@@ -34,13 +34,14 @@ import Testing
 
     func request(_ reply: ApprovalEnvelope, operation: ApprovalOperation,
                  nonce: String = String(repeating: "b", count: 64),
-                 requester: ApprovalPeer? = nil, signer: CoordinatorSigner? = nil) -> ApprovalEnvelope {
+                 requester: ApprovalPeer? = nil, signer: CoordinatorSigner? = nil,
+                 counterCode: String? = nil) -> ApprovalEnvelope {
         let old = reply.payload
         let payload = ApprovalPayload(
             operation: operation, requestID: old.requestID, requester: requester ?? old.requester,
             receiver: old.receiver, attemptNonce: old.attemptNonce, operationNonce: nonce,
             challenge: old.challenge, expiresAtMilliseconds: old.expiresAtMilliseconds,
-            phase: old.phase, counterCode: nil, responseDigest: nil)
+            phase: old.phase, counterCode: counterCode, responseDigest: nil)
         return ApprovalEnvelope(payload: payload,
                                 signature: (signer ?? requesterSigner).signApproval(payload, reply: false)!)
     }
@@ -51,6 +52,94 @@ import Testing
 }
 
 @Suite @MainActor struct RemotePairingApprovalCoordinatorTests {
+    @Test func nearExpiryRedemptionCanRecoverLostReplyAndCancelAfterReciprocalSuccess() throws {
+        let f = ApprovalFixture()
+        let pending = try f.pending()
+        f.coordinator.decide(.allow, requestID: pending.payload.requestID)
+        f.time.addTimeInterval(119)
+        let approved = try f.coordinator.receive(f.request(pending, operation: .status))
+        let request = f.request(approved, operation: .redeem, counterCode: "counter")
+        let body = Data("pair credentials".utf8)
+        let bytes = try f.coordinator.redeem(request) {
+            ApprovalIssuedResponse(body: try f.coordinator.pairReply(body: body, for: request), deviceID: "device")
+        }
+        f.coordinator.complete(requestID: request.payload.requestID, succeeded: true)
+        f.time.addTimeInterval(10)
+        let recovered = try f.coordinator.redeem(request) {
+            Issue.record("An exact retry must not issue twice")
+            return ApprovalIssuedResponse(body: Data(), deviceID: "wrong")
+        }
+        #expect(recovered == bytes)
+        let reply = try JSONDecoder().decode(ApprovalPairReply.self, from: recovered)
+        #expect(reply.pairBody == body)
+        #expect(ApprovalWire.verify(reply.proof, expectedKey: f.receiver.publicKey, reply: true))
+        _ = try f.coordinator.receive(f.request(reply.proof, operation: .status))
+        var cancelled = false
+        f.coordinator.onCancelRedeeming = { _ in cancelled = true }
+        let cancelReply = try f.coordinator.receive(f.request(reply.proof, operation: .cancel))
+        #expect(cancelReply.payload.phase == .cancelled)
+        #expect(cancelled)
+        #expect(throws: ApprovalFailure.self) {
+            try f.coordinator.redeem(request) { ApprovalIssuedResponse(body: Data(), deviceID: "wrong") }
+        }
+    }
+
+    @Test(arguments: [ApprovalPhase.pending, .declined, .expired, .cancelled])
+    func unauthorizedPhasesNeverIssue(phase: ApprovalPhase) throws {
+        let f = ApprovalFixture()
+        let pending = try f.pending()
+        if phase == .declined { f.coordinator.decide(.decline, requestID: pending.payload.requestID) }
+        if phase == .expired { f.time.addTimeInterval(121) }
+        if phase == .cancelled { f.coordinator.cancelAll() }
+        let request = f.request(pending, operation: .redeem, counterCode: "counter")
+        #expect(throws: ApprovalFailure.self) {
+            try f.coordinator.redeem(request) {
+                Issue.record("Unauthorized redemption issued credentials")
+                return ApprovalIssuedResponse(body: Data(), deviceID: "device")
+            }
+        }
+    }
+
+    @Test func redeemRejectsChangedMetadataAndWrongKey() throws {
+        let f = ApprovalFixture()
+        let pending = try f.pending()
+        f.coordinator.decide(.allow, requestID: pending.payload.requestID)
+        let approved = try f.coordinator.receive(f.request(pending, operation: .status))
+        let altered = ApprovalPeer(serverID: f.requester.serverID, publicKey: f.requester.publicKey,
+                                   name: f.requester.name, origins: ["http://192.168.1.9:8765"])
+        for request in [f.request(approved, operation: .redeem, signer: CoordinatorSigner(), counterCode: "code"),
+                        f.request(approved, operation: .redeem, requester: altered, counterCode: "code")] {
+            #expect(throws: ApprovalFailure.unauthorized) {
+                try f.coordinator.redeem(request) { ApprovalIssuedResponse(body: Data(), deviceID: "device") }
+            }
+        }
+    }
+
+    @Test func redemptionIssuesOnceAndCancellationInvalidatesRetry() throws {
+        let f = ApprovalFixture()
+        let pending = try f.pending()
+        f.coordinator.decide(.allow, requestID: pending.payload.requestID)
+        let approved = try f.coordinator.receive(f.request(pending, operation: .status))
+        let p = approved.payload
+        let payload = ApprovalPayload(operation: .redeem, requestID: p.requestID, requester: p.requester,
+            receiver: p.receiver, attemptNonce: p.attemptNonce, operationNonce: String(repeating: "c", count: 64),
+            challenge: p.challenge, expiresAtMilliseconds: p.expiresAtMilliseconds,
+            phase: p.phase, counterCode: "COUNTER", responseDigest: nil)
+        let request = ApprovalEnvelope(payload: payload, signature: f.requesterSigner.signApproval(payload, reply: false)!)
+        var issued = 0
+        let issue = { issued += 1; return ApprovalIssuedResponse(body: Data("reply".utf8), deviceID: "device") }
+        #expect(try f.coordinator.redeem(request, issue: issue) == Data("reply".utf8))
+        #expect(try f.coordinator.redeem(request, issue: issue) == Data("reply".utf8))
+        #expect(issued == 1)
+        #expect(f.coordinator.entries.first?.phase == .redeeming)
+        var cancelled: String?
+        f.coordinator.onCancelRedeeming = { cancelled = $0 }
+        f.coordinator.cancelAll()
+        #expect(cancelled == p.requestID)
+        #expect(throws: ApprovalFailure.self) { try f.coordinator.redeem(request, issue: issue) }
+        #expect(issued == 1)
+    }
+
     @Test(arguments: [119.999, 120.0, 300.0])
     func allowChecksSubmissionDeadline(elapsed: Double) throws {
         let fixture = ApprovalFixture()

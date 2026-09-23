@@ -36,6 +36,11 @@ struct ApprovalEnvelope: Codable, Equatable, Sendable {
     let signature: String
 }
 
+struct ApprovalPairReply: Codable, Equatable, Sendable {
+    let pairBody: Data
+    let proof: ApprovalEnvelope
+}
+
 @MainActor
 protocol ApprovalSigning {
     var publicKey: String { get }
