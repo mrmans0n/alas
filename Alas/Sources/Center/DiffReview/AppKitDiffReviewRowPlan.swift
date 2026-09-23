@@ -582,9 +582,13 @@ enum AppKitDiffReviewRowPlanBuilder {
             )
             let groupID = AppKitDiffReviewRowID.groupHeader(fileID: input.file.id, groupID: group.id)
             // Most hunks render as a single fused row (no local accessories),
-            // so a comment's line only ever resolves to the hunk's group row
-            // unless the finer-grained per-segment loop below overwrites it.
-            mapLines(group.displayGroup.rows, fileID: input.file.id, to: groupID, into: &lineTargets)
+            // so visible lines resolve to the hunk's group row unless the
+            // finer-grained per-segment loop below overwrites them.
+            let visibleRows = DiffPaneRowProjection.visibleRows(
+                in: group.displayGroup,
+                expandedCollapsedRowIDs: input.state.expandedCollapsedRowIDs
+            )
+            mapLines(visibleRows, fileID: input.file.id, to: groupID, into: &lineTargets)
             if !group.containsLocalAccessories {
                 let rowInput = hunkInput(group: group, context: context, input: input, fusion: fusions[groupIndex])
                 let hunkPlan = DiffPaneRowPlanBuilder.build(input: rowInput, state: input.state.hunkPresentationState)
