@@ -4049,7 +4049,6 @@ final class AppState {
             selectWorktree(id: optimistic.id)
         }
 
-
         Task { @MainActor in
             do {
                 if self.config.worktrees.fetchRemoteBeforeCreate {
