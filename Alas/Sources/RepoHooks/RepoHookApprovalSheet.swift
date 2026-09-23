@@ -26,11 +26,11 @@ struct RepoHookApprovalSheet: View {
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
                     .textSelection(.enabled)
             } else if let failure = request.failure {
-                Text("Alas could not read this hook: \(failure.message)")
+                Text("This repository hook could not be prepared: \(failure.message)")
                     .font(.callout)
                     .foregroundStyle(.red)
                     .textSelection(.enabled)
-                Text("Retry the read or continue without this repository hook.")
+                Text("Retry or continue without this repository hook.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

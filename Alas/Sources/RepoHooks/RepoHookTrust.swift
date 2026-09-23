@@ -12,3 +12,40 @@ enum RepoHookTrust {
             .joined()
     }
 }
+
+struct RepoHookApprovalTarget: Equatable {
+    let projectID: String
+    let path: URL
+    let host: String?
+
+    init(projectID: String, path: URL, host: String?) {
+        self.projectID = projectID
+        self.path = path.standardizedFileURL
+        self.host = host?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+struct PendingRepoHookApprovals {
+    private(set) var target: RepoHookApprovalTarget?
+    private var hashes = Set<String>()
+
+    mutating func select(_ target: RepoHookApprovalTarget?) {
+        guard self.target != target else { return }
+        self.target = target
+        hashes.removeAll()
+    }
+
+    mutating func approve(_ hash: String, for target: RepoHookApprovalTarget) {
+        guard self.target == target else { return }
+        hashes.insert(hash)
+    }
+
+    func contains(_ hash: String, for target: RepoHookApprovalTarget) -> Bool {
+        self.target == target && hashes.contains(hash)
+    }
+
+    func approvedHashes(for target: RepoHookApprovalTarget?) -> [String] {
+        guard let target, self.target == target else { return [] }
+        return hashes.sorted()
+    }
+}

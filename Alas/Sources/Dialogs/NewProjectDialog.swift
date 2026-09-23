@@ -131,7 +131,7 @@ private struct ProjectDialog: View {
     @State private var worktreeCreateMode: ProjectStartupScriptMode = .useGlobal
     @State private var worktreeCreateScript: String = ""
     @State private var repoHookPresentations: [RepoHookEvent: RepoHookPresentation] = [:]
-    @State private var pendingRepoHookHashes = Set<String>()
+    @State private var pendingRepoHookApprovals = PendingRepoHookApprovals()
     @State private var repoHookInspectionID = UUID()
     @State private var repoHookInspectionTask: Task<Void, Never>?
     @State private var repoHookReviewTask: Task<Void, Never>?
@@ -838,6 +838,7 @@ private struct ProjectDialog: View {
     private func refreshRepoHookPresentations() {
         repoHookInspectionTask?.cancel()
         repoHookReviewTask?.cancel()
+        pendingRepoHookApprovals.select(repoHookApprovalTarget)
         let requestID = UUID()
         repoHookInspectionID = requestID
         repoHookInspectionTask = Task {
@@ -846,7 +847,7 @@ private struct ProjectDialog: View {
     }
 
     private func reviewRepoHook(_ event: RepoHookEvent) {
-        guard let inspection = hookInspection else { return }
+        guard let inspection = hookInspection, let approvalTarget = repoHookApprovalTarget else { return }
         repoHookReviewTask?.cancel()
         let requestID = repoHookInspectionID
         repoHookReviewTask = Task {
@@ -877,7 +878,7 @@ private struct ProjectDialog: View {
                 case let .loaded(hook):
                     guard requestID == repoHookInspectionID else { return }
                     if state.projectsManager.isRepoHookApproved(projectId: inspection.projectID, hash: hook.hash)
-                        || pendingRepoHookHashes.contains(hook.hash) {
+                        || pendingRepoHookApprovals.contains(hook.hash, for: approvalTarget) {
                         repoHookPresentations[event] = .approved(hook)
                         return
                     }
@@ -893,7 +894,7 @@ private struct ProjectDialog: View {
                             if case .edit = mode {
                                 try state.persistRepoHookApproval(projectId: inspection.projectID, hash: hook.hash)
                             } else {
-                                pendingRepoHookHashes.insert(hook.hash)
+                                pendingRepoHookApprovals.approve(hook.hash, for: approvalTarget)
                             }
                             repoHookPresentations[event] = .approved(hook)
                         } catch {
@@ -918,13 +919,18 @@ private struct ProjectDialog: View {
             })
             return
         }
+        let approvalTarget = RepoHookApprovalTarget(
+            projectID: inspection.projectID,
+            path: inspection.path,
+            host: inspection.host
+        )
         var loaded: [RepoHookEvent: RepoHookPresentation] = [:]
         for event in RepoHookEvent.allCases {
             let result = await state.repoHookLoader.load(event: event, worktreeRoot: inspection.path, host: inspection.host)
             guard requestID == repoHookInspectionID, !Task.isCancelled else { return }
             loaded[event] = RepoHookPresentation.make(result: result) {
                 state.projectsManager.isRepoHookApproved(projectId: inspection.projectID, hash: $0)
-                    || pendingRepoHookHashes.contains($0)
+                    || pendingRepoHookApprovals.contains($0, for: approvalTarget)
             }
         }
         guard requestID == repoHookInspectionID else { return }
@@ -939,6 +945,15 @@ private struct ProjectDialog: View {
             guard (location == .local || location == .remoteSSH), !path.isEmpty else { return nil }
             return (URL(fileURLWithPath: path), location == .remoteSSH ? sshHost : nil, pendingProjectId)
         }
+    }
+
+    private var repoHookApprovalTarget: RepoHookApprovalTarget? {
+        guard let inspection = hookInspection else { return nil }
+        return RepoHookApprovalTarget(
+            projectID: inspection.projectID,
+            path: inspection.path,
+            host: inspection.host
+        )
     }
 
     private var integrationsSection: some View {
@@ -1238,7 +1253,7 @@ private struct ProjectDialog: View {
                     id: pendingProjectId,
                     startupScripts: draftStartupScripts,
                     mcpServers: mcpServers,
-                    approvedRepoHookHashes: Array(pendingRepoHookHashes)
+                    approvedRepoHookHashes: pendingRepoHookApprovals.approvedHashes(for: repoHookApprovalTarget)
                 )
                 presented = false
             } catch {
@@ -1270,7 +1285,7 @@ private struct ProjectDialog: View {
                 id: pendingProjectId,
                 startupScripts: draftStartupScripts,
                 mcpServers: mcpServers,
-                approvedRepoHookHashes: Array(pendingRepoHookHashes)
+                approvedRepoHookHashes: pendingRepoHookApprovals.approvedHashes(for: repoHookApprovalTarget)
             )
             sshSetupPresented = false
             presented = false

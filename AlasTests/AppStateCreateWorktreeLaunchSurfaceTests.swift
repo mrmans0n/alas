@@ -9,6 +9,18 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         var errorDescription: String? { "Terminal failed to open" }
     }
 
+    private struct FailingStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {
+            throw NSError(
+                domain: "AppStateCreateWorktreeLaunchSurfaceTests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "write rejected"]
+            )
+        }
+
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
     private func makeRepo(name: String) async throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-launchsurface-\(name)-\(UUID().uuidString)")
@@ -85,6 +97,66 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         #expect(message == TerminalOpenFailure().localizedDescription)
         #expect(launchSurface == .terminal(agentId: "claude"))
         #expect(state.tabs.tabs(forWorktree: id).isEmpty)
+    }
+
+    @Test
+    func createWorktreeCanFinishWithoutHookWhenApprovalSaveFails() async throws {
+        let repo = try await makeRepo(name: "hook-save-failure")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState(
+            store: FailingStore(),
+            persistenceErrorHandler: { _, _ in }
+        )
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "hook-save-failure",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        state.repoHookLoader = RepoHookLoader { _, _, _ in
+            .data(Data("echo repository hook".utf8))
+        }
+
+        let id = await state.createWorktree(
+            projectId: project.id,
+            base: "main",
+            branch: "hook-save-failure",
+            destination: repo.appendingPathComponent("wt-hook-save-failure"),
+            runStartup: true,
+            launchSurface: .none
+        )
+
+        for _ in 0..<80 {
+            if state.repoHookApprovalQueue.activeRequest?.hook != nil { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        #expect(state.repoHookApprovalQueue.activeRequest?.hook?.event == .worktreeCreate)
+        guard state.repoHookApprovalQueue.activeRequest?.hook != nil else { return }
+        state.repoHookApprovalQueue.decide(.approve)
+
+        for _ in 0..<80 {
+            if state.repoHookApprovalQueue.activeRequest?.failure != nil { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        #expect(
+            state.repoHookApprovalQueue.activeRequest?.failure?.message
+                == "Alas couldn't save this repository hook approval. The hook was not run."
+        )
+        guard state.repoHookApprovalQueue.activeRequest?.failure != nil else { return }
+        state.repoHookApprovalQueue.decide(.skip)
+
+        try await waitForOperationToClear(state.projectsManager, id: id, projectId: project.id)
+        #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
+        #expect(
+            !state.projectsManager.isRepoHookApproved(
+                projectId: project.id,
+                hash: RepoHookTrust.hash(
+                    event: .worktreeCreate,
+                    bytes: Data("echo repository hook".utf8)
+                )
+            )
+        )
     }
 
     @Test

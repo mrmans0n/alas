@@ -49,8 +49,29 @@ extension AppState {
                     context: context
                 ) {
                 case .approve:
-                    try persistRepoHookApproval(projectId: project.id, hash: hook.hash)
-                    return hook.text
+                    while true {
+                        do {
+                            try persistRepoHookApproval(projectId: project.id, hash: hook.hash)
+                            return hook.text
+                        } catch {
+                            let failureDecision = await repoHookApprovalQueue.requestFailureDecision(
+                                failure: .init(
+                                    event: event,
+                                    source: hook.source,
+                                    message: error.localizedDescription
+                                ),
+                                context: context
+                            )
+                            switch failureDecision {
+                            case .retry, .approve:
+                                continue
+                            case .skip:
+                                return nil
+                            case .cancel:
+                                throw RepoHookPreflightError.cancelled
+                            }
+                        }
+                    }
                 case .skip:
                     return nil
                 case .retry:

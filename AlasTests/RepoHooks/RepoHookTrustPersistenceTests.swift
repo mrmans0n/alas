@@ -48,6 +48,44 @@ struct RepoHookTrustPersistenceTests {
         #expect(!manager.isRepoHookApproved(projectId: "one", hash: "hash"))
     }
 
+    @Test func pendingApprovalsAreClearedWhenRepositoryTargetChanges() {
+        let local = RepoHookApprovalTarget(
+            projectID: "pending",
+            path: URL(fileURLWithPath: "/tmp/alpha"),
+            host: nil
+        )
+        let remote = RepoHookApprovalTarget(
+            projectID: "pending",
+            path: URL(fileURLWithPath: "/tmp/alpha"),
+            host: "build-host"
+        )
+        let remoteWithoutHost = RepoHookApprovalTarget(
+            projectID: "pending",
+            path: URL(fileURLWithPath: "/tmp/alpha"),
+            host: ""
+        )
+        let otherRepository = RepoHookApprovalTarget(
+            projectID: "pending",
+            path: URL(fileURLWithPath: "/tmp/beta"),
+            host: "build-host"
+        )
+        var pending = PendingRepoHookApprovals()
+        pending.select(local)
+        pending.approve("hook-a", for: local)
+        #expect(pending.contains("hook-a", for: local))
+
+        pending.select(remoteWithoutHost)
+        #expect(!pending.contains("hook-a", for: remoteWithoutHost))
+        pending.approve("hook-empty-host", for: remoteWithoutHost)
+
+        pending.select(remote)
+        #expect(!pending.contains("hook-empty-host", for: remote))
+        pending.approve("hook-b", for: remote)
+        pending.select(otherRepository)
+
+        #expect(pending.approvedHashes(for: otherRepository).isEmpty)
+    }
+
     private func project(id: String = "project-1", hashes: [String] = []) -> ProjectConfig {
         ProjectConfig(
             id: id,
