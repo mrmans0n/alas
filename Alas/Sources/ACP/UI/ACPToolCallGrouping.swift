@@ -1,12 +1,23 @@
 import Foundation
 
-/// Consecutive thinking and finished tool calls rendered as one expandable
-/// activity row. The original messages remain available in transcript order.
+/// Consecutive transcript work rendered as one expandable activity row.
+/// The original messages remain available in transcript order.
 struct ACPTranscriptToolCallGroup: Equatable {
+    enum Kind: Equatable {
+        case activity
+        case completedTurn(duration: TimeInterval?)
+    }
+
     static let idPrefix = "tcg-"
 
     /// In transcript order; never empty.
     let members: [ACPTranscriptVisibleRow]
+    let kind: Kind
+
+    init(members: [ACPTranscriptVisibleRow], kind: Kind = .activity) {
+        self.members = members
+        self.kind = kind
+    }
 
     /// Derived from the first member so the id stays stable while the run
     /// grows at its tail: the reconciler then updates the mounted row in
@@ -69,6 +80,12 @@ enum ACPToolCallGrouping {
         /// Transcript index after which a run must end, so the fork divider
         /// (which follows the boundary row) never lands inside a bundle.
         var breakAfterIndex: Int? = nil
+        /// The final answer for the current (last) user turn once the session
+        /// is idle. Nil while that turn is still live or blocked.
+        var currentTurnAnswerIndex: Int? = nil
+        /// Commentary rows before the newest agent update in the current turn.
+        /// Carried in the cache key so late phase adoption can regroup them.
+        var priorCurrentTurnCommentaryIndices: Set<Int> = []
     }
 
     /// An explicit allowlist, not a blocklist: an adapter-specific status
@@ -79,6 +96,56 @@ enum ACPToolCallGrouping {
     /// deliberately renders unknown statuses.
     static func isFinished(status: String) -> Bool {
         ACPSession.isFinalStatus(status)
+    }
+
+    /// The current turn's answer once it is safe to convert prior activity
+    /// into a completed-work disclosure. Commentary is never an answer, and
+    /// an active session keeps even final-answer prose in its streaming form.
+    @MainActor
+    static func currentTurnAnswerIndex(
+        messages: [ACPMessage],
+        currentTurnUserIndex: Int?,
+        isTurnActive: Bool
+    ) -> Int? {
+        guard !isTurnActive,
+              let currentTurnUserIndex,
+              messages.indices.contains(currentTurnUserIndex),
+              case .user = messages[currentTurnUserIndex],
+              let candidate = (messages.index(after: currentTurnUserIndex)..<messages.endIndex)
+              .reversed().first(where: { index in
+                  if case .agent = messages[index] { return true }
+                  return false
+              }),
+              case .agent(_, _, let buffer) = messages[candidate],
+              buffer.phase != .commentary
+        else { return nil }
+        return candidate
+    }
+
+    /// Commentary updates superseded by a newer agent row in the current
+    /// turn. Ordinary unphased/final-answer prose is never hidden here.
+    @MainActor
+    static func priorCurrentTurnCommentaryIndices(
+        messages: [ACPMessage],
+        currentTurnUserIndex: Int?,
+        visibleRange: Range<Int>
+    ) -> Set<Int> {
+        guard let currentTurnUserIndex,
+              messages.indices.contains(currentTurnUserIndex),
+              let latestAgent = (messages.index(after: currentTurnUserIndex)..<messages.endIndex)
+              .reversed().first(where: { index in
+                  if case .agent = messages[index] { return true }
+                  return false
+              })
+        else { return [] }
+        let lower = max(currentTurnUserIndex + 1, visibleRange.lowerBound)
+        let upper = min(messages.endIndex, visibleRange.upperBound, latestAgent)
+        guard lower < upper else { return [] }
+
+        return Set((lower..<upper).filter { index in
+            guard case .agent(_, _, let buffer) = messages[index] else { return false }
+            return buffer.phase == .commentary
+        })
     }
 
     /// Thinking and finished ordinary tool calls share an activity group.
@@ -101,21 +168,30 @@ enum ACPToolCallGrouping {
     /// `ACPTranscriptRenderRow`). Callers that memoize the result must
     /// include the expansion state in their cache key; `ACPVisibleRowsCache`
     /// does this via `ACPToolCallGroupExpansionSeeds.generation`.
+    @MainActor
     static func fold(
         rows: [ACPTranscriptVisibleRow],
         messages: [ACPMessage],
         options: Options,
+        messageCreatedAt: (Int) -> Date? = { _ in nil },
         isExpanded: (ACPTranscriptToolCallGroup) -> Bool = { _ in false }
     ) -> [ACPTranscriptRenderRow] {
         guard options.enabled else { return rows.map(ACPTranscriptRenderRow.message) }
 
+        let completedTurnKinds = completedTurnKinds(
+            for: rows,
+            in: messages,
+            currentTurnAnswerIndex: options.currentTurnAnswerIndex,
+            messageCreatedAt: messageCreatedAt
+        )
         var result: [ACPTranscriptRenderRow] = []
         result.reserveCapacity(rows.count)
         var run: [ACPTranscriptVisibleRow] = []
+        var runKind: ACPTranscriptToolCallGroup.Kind?
 
         func flushRun() {
             if !run.isEmpty {
-                let group = ACPTranscriptToolCallGroup(members: run)
+                let group = ACPTranscriptToolCallGroup(members: run, kind: runKind ?? .activity)
                 if isExpanded(group) {
                     result.append(.toolCallGroupHeader(group))
                     for member in group.members {
@@ -126,11 +202,18 @@ enum ACPToolCallGrouping {
                 }
             }
             run.removeAll(keepingCapacity: true)
+            runKind = nil
         }
 
         for row in rows {
-            let collapsible = messages.indices.contains(row.index) && isCollapsible(messages[row.index])
+            let kind = completedTurnKinds[row.index]
+                ?? (options.priorCurrentTurnCommentaryIndices.contains(row.index)
+                    || (messages.indices.contains(row.index) && isCollapsible(messages[row.index]))
+                    ? .activity : nil)
+            let collapsible = messages.indices.contains(row.index)
+                && kind != nil
             if collapsible {
+                if !run.isEmpty, runKind != kind { flushRun() }
                 // A run that began at or before the fork boundary must not
                 // continue past it. Checking "crossed" rather than only
                 // "landed exactly on" it matters when the boundary message
@@ -142,6 +225,7 @@ enum ACPToolCallGrouping {
                    first.index <= boundary, row.index > boundary {
                     flushRun()
                 }
+                runKind = kind
                 run.append(row)
                 if row.index == options.breakAfterIndex { flushRun() }
             } else {
@@ -152,16 +236,99 @@ enum ACPToolCallGrouping {
         flushRun()
         return result
     }
+
+    /// Work belonging to historical turns. A following user message is the
+    /// durable completion boundary available both live and after transcript
+    /// restoration; the turn's last agent row remains readable as its answer.
+    @MainActor
+    private static func completedTurnKinds(
+        for rows: [ACPTranscriptVisibleRow],
+        in messages: [ACPMessage],
+        currentTurnAnswerIndex: Int?,
+        messageCreatedAt: (Int) -> Date?
+    ) -> [Int: ACPTranscriptToolCallGroup.Kind] {
+        guard let firstVisible = rows.first?.index,
+              let lastVisible = rows.last?.index,
+              messages.indices.contains(firstVisible),
+              messages.indices.contains(lastVisible)
+        else { return [:] }
+
+        let precedingUser = (messages.startIndex...firstVisible).reversed().first(where: {
+            if case .user = messages[$0] { return true }
+            return false
+        })
+        let firstVisibleUser = (firstVisible...lastVisible).first(where: {
+            if case .user = messages[$0] { return true }
+            return false
+        })
+        guard let firstUser = precedingUser ?? firstVisibleUser else { return [:] }
+
+        let afterVisible = messages.index(after: lastVisible)
+        let nextUser = (afterVisible..<messages.endIndex).first(where: { index in
+            if case .user = messages[index] { return true }
+            return false
+        })
+        let scanEnd = nextUser.map { messages.index(after: $0) } ?? messages.endIndex
+        let userIndices = (firstUser..<scanEnd).filter {
+            if case .user = messages[$0] { return true }
+            return false
+        }
+        var result: [Int: ACPTranscriptToolCallGroup.Kind] = [:]
+
+        func record(user: Int, answer: Int) {
+            guard user < answer, messages.indices.contains(answer) else { return }
+            let memberIndices = rows.lazy.map(\.index).filter { index in
+                index > user && index < answer && isCompletedTurnWork(messages[index])
+            }
+            guard !memberIndices.isEmpty else { return }
+            let duration = messageCreatedAt(user).flatMap { start in
+                messageCreatedAt(answer).map { max(0, $0.timeIntervalSince(start)) }
+            }
+            let kind = ACPTranscriptToolCallGroup.Kind.completedTurn(duration: duration)
+            for index in memberIndices { result[index] = kind }
+        }
+
+        for pair in zip(userIndices, userIndices.dropFirst()) {
+            let turnStart = pair.0 + 1
+            let nextUser = pair.1
+            guard turnStart < nextUser,
+                  let answer = (turnStart..<nextUser).last(where: {
+                      if case .agent = messages[$0] { return true }
+                      return false
+                  }),
+                  turnStart < answer
+            else { continue }
+            record(user: pair.0, answer: answer)
+        }
+        if let latestUser = userIndices.last,
+           let currentTurnAnswerIndex,
+           currentTurnAnswerIndex > latestUser {
+            record(user: latestUser, answer: currentTurnAnswerIndex)
+        }
+        return result
+    }
+
+    @MainActor
+    private static func isCompletedTurnWork(_ message: ACPMessage) -> Bool {
+        if isCollapsible(message) { return true }
+        guard case .agent(_, _, let buffer) = message else { return false }
+        return buffer.phase == .commentary
+    }
 }
 
-/// Header facts for a collapsed tool-call bundle.
+/// Header facts for a collapsed activity or completed-work bundle.
 struct ACPToolCallGroupSummary: Equatable {
     let count: Int
     let failedCount: Int
+    let kind: ACPTranscriptToolCallGroup.Kind
 
-    init(toolCalls: [ACPMessage.ToolCall]) {
+    init(
+        toolCalls: [ACPMessage.ToolCall],
+        kind: ACPTranscriptToolCallGroup.Kind = .activity
+    ) {
         count = toolCalls.count
         failedCount = toolCalls.filter { Self.isFailed(status: $0.status) }.count
+        self.kind = kind
     }
 
     /// Only "failed" can reach a bundle: "error" is not a terminal status
@@ -172,13 +339,37 @@ struct ACPToolCallGroupSummary: Equatable {
     }
 
     var collapsedLabel: String {
-        "Activity" + toolSuffix + failureSuffix
+        switch kind {
+        case .activity:
+            "Activity" + toolSuffix + failureSuffix
+        case .completedTurn(let duration):
+            completedLabel(duration: duration) + toolSuffix + failureSuffix
+        }
     }
 
     /// Keeps the failure count visible while open: it's the reason a reader
     /// most likely expanded the bundle in the first place.
     var expandedLabel: String {
-        "Hide activity" + toolSuffix + failureSuffix
+        switch kind {
+        case .activity:
+            "Hide activity" + toolSuffix + failureSuffix
+        case .completedTurn:
+            "Hide work" + toolSuffix + failureSuffix
+        }
+    }
+
+    private func completedLabel(duration: TimeInterval?) -> String {
+        guard let duration else { return "Worked" }
+        let seconds = max(0, Int(duration.rounded()))
+        if seconds < 60 { return "Worked for \(seconds)s" }
+        if seconds < 3_600 {
+            let minutes = seconds / 60
+            let remainder = seconds % 60
+            return remainder == 0 ? "Worked for \(minutes)m" : "Worked for \(minutes)m \(remainder)s"
+        }
+        let hours = seconds / 3_600
+        let minutes = (seconds % 3_600) / 60
+        return minutes == 0 ? "Worked for \(hours)h" : "Worked for \(hours)h \(minutes)m"
     }
 
     private var toolSuffix: String {
