@@ -522,10 +522,20 @@ final class ACPSessionManager: ObservableObject {
         persist(session)
     }
 
-    /// Select the agent model. Optimistically updates and persists, then sends
-    /// the RPC or records it for attach.
+    /// Selects a model optimistically. Without a runner, preserves it for
+    /// attach; with a runner, confirms writer ownership before the RPC.
     func setModel(for id: ACPSession.ID, modelId: String) async {
-        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
+        guard let session = sessions[id] else { return }
+        if runners[id] == nil {
+            let awaitingLeaseClaim = observedLeases[id] == nil
+                && isAwaitingInitialLeaseObservation(sessionId: id)
+            guard !isMirror(sessionId: id) || awaitingLeaseClaim else { return }
+            session.currentModel = modelId
+            pendingModel[id] = modelId
+            persist(session)
+            return
+        }
+        guard await confirmedWriterLease(for: id), sessions[id] === session else { return }
         session.currentModel = modelId
         persist(session)
         guard let runner = runners[id] else {
@@ -540,9 +550,19 @@ final class ACPSessionManager: ObservableObject {
         try? await runner.connection.setModel(sessionId: remoteId, modelId: modelId)
     }
 
-    /// Select the agent mode. Same semantics as `setModel`.
+    /// Selects a mode optimistically. Same lease and attach semantics as `setModel`.
     func setMode(for id: ACPSession.ID, modeId: String) async {
-        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
+        guard let session = sessions[id] else { return }
+        if runners[id] == nil {
+            let awaitingLeaseClaim = observedLeases[id] == nil
+                && isAwaitingInitialLeaseObservation(sessionId: id)
+            guard !isMirror(sessionId: id) || awaitingLeaseClaim else { return }
+            session.currentMode = modeId
+            pendingMode[id] = modeId
+            persist(session)
+            return
+        }
+        guard await confirmedWriterLease(for: id), sessions[id] === session else { return }
         session.currentMode = modeId
         persist(session)
         guard let runner = runners[id] else {
@@ -3892,6 +3912,14 @@ extension ACPSessionManager {
         // Only the lease holder runs a live agent + writes. If another
         // live instance owns this session, stay a read-only mirror.
         guard await acquireWriterLease(sessionId: sessionId) else {
+            let discardedModelSelection = pendingModel.removeValue(forKey: sessionId) != nil
+            let discardedModeSelection = pendingMode.removeValue(forKey: sessionId) != nil
+            if discardedModelSelection {
+                session.currentModel = persistedRows[sessionId]?.currentModel
+            }
+            if discardedModeSelection {
+                session.currentMode = persistedRows[sessionId]?.currentMode
+            }
             disposingAttachments.remove(sessionId)
             session.agentState = .idle
             session.clearConnectionRecovery()
