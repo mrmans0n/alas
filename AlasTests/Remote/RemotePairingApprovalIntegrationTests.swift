@@ -278,7 +278,7 @@ struct RemotePairingApprovalIntegrationTests {
     var peersA: [RemotePeer] { a.manager.peers }
     var peersB: [RemotePeer] { b.manager.peers }
     lazy var client = RemotePairingApprovalClient(fetch: { try await self.fetch($0, from: self.a) }, signer: a.signer,
-        now: { self.time }, sleep: { _ in
+        now: { self.time }, sleep: { @MainActor _ in
             self.pending.fire()
             await self.pollGate.wait()
             self.advanceClock(by: 2)

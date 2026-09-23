@@ -1,6 +1,9 @@
 # Peer pairing by approval
 
-Status: approved. See the [implementation plan](2026-09-23-peer-pairing-approval-implementation.md).
+Status: implemented, with interactive two-Mac acceptance checks pending. The
+focused automated checks have passed. See the
+[implementation plan](2026-09-23-peer-pairing-approval-implementation.md) and
+[manual acceptance checklist](../manual-test.md#peer-pairing-by-approval).
 
 ## Intent
 
@@ -199,6 +202,7 @@ selectable long names, fallback code copying, expiry, and an older peer.
 
 ## Review boundary
 
-This is a design document only. After review and approval, write the
-implementation plan and select its execution method before changing product
-code.
+The design and implementation plan were approved before implementation.
+Automated validation covers the protocol and reciprocal lifecycle. The
+interactive network, window, and accessibility checks listed above still
+require two runnable Macs.
