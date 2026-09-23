@@ -1,7 +1,10 @@
 import SwiftUI
 
 /// The right pane while the selected worktree is in a transitional
-/// operation state: `.creating`, `.deleting`, or `.createFailed`.
+/// operation state: `.creating` or `.createFailed`.
+///
+/// A worktree being *deleted* resolves to `.empty` instead — the pane
+/// unmounts so the removal takes its rail with it.
 ///
 /// Does not touch `RightPaneStore`, so no per-worktree state is allocated
 /// for a worktree that is not yet (or no longer) backed by a real path
@@ -17,7 +20,6 @@ import SwiftUI
 struct RightPaneTransitionalView: View {
     enum Kind {
         case creating
-        case deleting
         case createFailed
     }
 
@@ -90,33 +92,20 @@ struct RightPaneTransitionalView: View {
         switch kind {
         case .creating:
             RightPaneLoadingSkeletonView(activeTab: activeTab)
-        case .deleting:
-            CompactStateLabel(
-                systemIcon: "trash",
-                text: "Deleting worktree…",
-                tone: .neutral
-            )
         case .createFailed:
             CompactStateLabel(
                 systemIcon: "exclamationmark.triangle",
-                text: "Create failed — \(worktree.branch)",
-                tone: .warning
+                text: "Create failed — \(worktree.branch)"
             )
         }
     }
 }
 
-// MARK: - Compact label (deleting / createFailed)
+// MARK: - Compact label (createFailed)
 
 private struct CompactStateLabel: View {
-    enum Tone {
-        case neutral
-        case warning
-    }
-
     let systemIcon: String
     let text: String
-    let tone: Tone
 
     @Environment(\.theme) private var theme
 
@@ -124,20 +113,13 @@ private struct CompactStateLabel: View {
         VStack(spacing: 10) {
             Image(systemName: systemIcon)
                 .font(.system(size: 22))
-                .foregroundColor(iconColor)
+                .foregroundColor(theme.color("warning"))
             Text(text)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(theme.color("fg-muted"))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 16)
-    }
-
-    private var iconColor: Color {
-        switch tone {
-        case .neutral: return theme.color("fg-faint")
-        case .warning: return theme.color("warning")
-        }
     }
 }
 

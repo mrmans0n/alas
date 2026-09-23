@@ -270,8 +270,6 @@ struct RootView: View {
             )
         case .creating(let wt):
             RightPaneTransitionalView(state: state, worktree: wt, kind: .creating, collapsed: collapsed)
-        case .deleting(let wt):
-            RightPaneTransitionalView(state: state, worktree: wt, kind: .deleting, collapsed: collapsed)
         case .createFailed(let wt):
             RightPaneTransitionalView(state: state, worktree: wt, kind: .createFailed, collapsed: collapsed)
         }
@@ -973,8 +971,10 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let f = e
             .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
+                let closingWorktree = selectedWorktree()
                 state.handleCloseCenterShortcut(
-                    worktreeId: selectedWorktree()?.id,
+                    worktreeId: closingWorktree?.id,
+                    projectId: closingWorktree?.projectId,
                     sharedSessionOwner: selectedWorkspaceSessionOwner()
                 )
             }

@@ -461,11 +461,12 @@ struct RemoteAppStateAccessTests {
         state.projectsManager.insertOptimisticWorktree(deleting)
         state.projectsManager.insertOptimisticWorktree(createFailed)
         state.projectsManager.insertOptimisticWorktree(deleteFailed)
-        state.projectsManager.setOperationState(id: creating.id, state: .creating)
-        state.projectsManager.setOperationState(id: deleting.id, state: .deleting)
+        state.projectsManager.setOperationState(forWorktreeId: creating.id, projectId: creating.projectId, state: .creating)
+        state.projectsManager.setOperationState(forWorktreeId: deleting.id, projectId: deleting.projectId, state: .deleting(projectId: deleting.projectId))
         state.projectsManager.setOperationState(
-            id: createFailed.id,
-            state: .createFailed(
+            forWorktreeId: createFailed.id,
+            projectId: createFailed.projectId,
+                        state: .createFailed(
                 projectId: createFailed.projectId,
                 message: "failed",
                 base: "main",
@@ -474,7 +475,7 @@ struct RemoteAppStateAccessTests {
                 issueAttachment: nil
             )
         )
-        state.projectsManager.setOperationState(id: deleteFailed.id, state: .deleteFailed(message: "failed"))
+        state.projectsManager.setOperationState(forWorktreeId: deleteFailed.id, projectId: deleteFailed.projectId, state: .deleteFailed(message: "failed"))
 
         let ids = Set(await state.remoteWorktrees().map(\.id))
 

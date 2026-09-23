@@ -21,11 +21,12 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
     private func waitForOperationToClear(
         _ mgr: ProjectsManager,
         id: String,
+        projectId: String,
         timeoutSeconds: Double = 10
     ) async throws {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
-            if mgr.operationState(for: id) == nil { return }
+            if mgr.operationState(forWorktreeId: id, projectId: projectId) == nil { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         Issue.record("Timed out waiting for operationState to clear for id \(id)")
@@ -70,13 +71,13 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         )
         #expect(!id.isEmpty)
 
-        try await waitForOperationStateMatching(state.projectsManager, id: id) { operation in
+        try await waitForOperationStateMatching(state.projectsManager, id: id, projectId: project.id) { operation in
             if case .launchFailed = operation { return true }
             return false
         }
 
         guard case .launchFailed(_, let message, let launchSurface) =
-            state.projectsManager.operationState(for: id)
+            state.projectsManager.operationState(forWorktreeId: id, projectId: project.id)
         else {
             Issue.record("Expected launchFailed state")
             return
@@ -124,7 +125,7 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         )
         #expect(!id.isEmpty)
 
-        try await waitForOperationToClear(state.projectsManager, id: id)
+        try await waitForOperationToClear(state.projectsManager, id: id, projectId: project.id)
 
         // Exactly one ACP session tab on the new worktree, no terminal tab.
         let tabs = state.tabs.tabs(forWorktree: id)
@@ -175,13 +176,13 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         )
         #expect(!id.isEmpty)
 
-        try await waitForOperationStateMatching(state.projectsManager, id: id) { operation in
+        try await waitForOperationStateMatching(state.projectsManager, id: id, projectId: project.id) { operation in
             if case .launchFailed = operation { return true }
             return false
         }
 
         guard case .launchFailed(_, let message, let launchSurface) =
-            state.projectsManager.operationState(for: id)
+            state.projectsManager.operationState(forWorktreeId: id, projectId: project.id)
         else {
             Issue.record("Expected launchFailed state")
             return
@@ -226,13 +227,13 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         )
         #expect(!id.isEmpty)
 
-        try await waitForOperationStateMatching(state.projectsManager, id: id) { operation in
+        try await waitForOperationStateMatching(state.projectsManager, id: id, projectId: project.id) { operation in
             if case .launchFailed = operation { return true }
             return false
         }
 
         guard case .launchFailed(_, let message, let launchSurface) =
-            state.projectsManager.operationState(for: id)
+            state.projectsManager.operationState(forWorktreeId: id, projectId: project.id)
         else {
             Issue.record("Expected launchFailed state")
             return
@@ -281,7 +282,7 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
         )
         #expect(!id.isEmpty)
 
-        try await waitForOperationStateMatching(state.projectsManager, id: id) { operation in
+        try await waitForOperationStateMatching(state.projectsManager, id: id, projectId: project.id) { operation in
             if case .launchFailed = operation { return true }
             return false
         }
@@ -301,7 +302,7 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
 
         await state.retryWorktreeLaunch(failedWorktree, project: project)
 
-        #expect(state.projectsManager.operationState(for: id) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: id, projectId: project.id) == nil)
         let failedWorktreeTabs = state.tabs.tabs(forWorktree: id)
         let mainTabs = state.tabs.tabs(forWorktree: main.id)
         #expect(failedWorktreeTabs.contains {
@@ -317,11 +318,12 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
     private func waitForOperationStateMatching(
         _ mgr: ProjectsManager,
         id: String,
+        projectId: String,
         matches: (WorktreeOperationState?) -> Bool
     ) async throws {
         let deadline = Date().addingTimeInterval(10)
         while Date() < deadline {
-            if matches(mgr.operationState(for: id)) { return }
+            if matches(mgr.operationState(forWorktreeId: id, projectId: projectId)) { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         Issue.record("Timed out waiting for operationState to match for id \(id)")

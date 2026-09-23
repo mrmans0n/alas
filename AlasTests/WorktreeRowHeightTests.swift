@@ -123,9 +123,9 @@ struct WorktreeRowHeightTests {
         #expect(WorktreeRowView.statusText(for: .preparingDelete) == "Preparing deletion…")
         #expect(WorktreeRowView.showsProgress(operationState: .preparingDelete))
 
-        #expect(WorktreeRowView.isPending(operationState: .deleting))
-        #expect(WorktreeRowView.statusText(for: .deleting) == "Deleting…")
-        #expect(WorktreeRowView.showsProgress(operationState: .deleting))
+        #expect(WorktreeRowView.isPending(operationState: .deleting(projectId: "p")))
+        #expect(WorktreeRowView.statusText(for: .deleting(projectId: "p")) == "Deleting…")
+        #expect(WorktreeRowView.showsProgress(operationState: .deleting(projectId: "p")))
 
         #expect(!WorktreeRowView.showsProgress(operationState: .creating))
     }

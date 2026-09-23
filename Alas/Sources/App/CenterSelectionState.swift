@@ -32,19 +32,19 @@ struct CenterSelectionStateResolver {
         }
         guard allowedWorktreeIDs?.contains(id) ?? true else { return .empty }
         guard checkoutFocusedWorktreeScope?.worktreeID == id || checkoutFocusedWorktreeScope == nil else { return .empty }
-        if let op = projectsManager.operationState(for: id) {
+        // Qualified by project: a deletion claim opened for a same-path
+        // checkout under another project must not blank this one's pane.
+        if let wt = findWorktree(by: id),
+           let op = projectsManager.operationState(forWorktreeId: wt.id, projectId: wt.projectId) {
             switch op {
             case .deleting:
-                if let wt = findWorktree(by: id) { return .deleting(wt) }
-                return .empty
+                return .deleting(wt)
             case .creating:
-                if let wt = findWorktree(by: id) { return .creating(wt) }
-                return .empty
+                return .creating(wt)
             case .launchFailed:
                 break
             case .deleteFailed(let message):
-                if let wt = findWorktree(by: id) { return .deleteFailed(wt, message: message) }
-                return .empty
+                return .deleteFailed(wt, message: message)
             default:
                 break
             }
@@ -70,7 +70,7 @@ struct CenterSelectionStateResolver {
         for project in projects {
             guard matchesCheckoutScope(project: project, worktreeID: id) else { continue }
             if let wt = candidateWorktrees(projectId: project.id).first(where: { $0.id == id }) {
-                if let op = projectsManager.operationState(for: wt.id) {
+                if let op = projectsManager.operationState(forWorktreeId: wt.id, projectId: wt.projectId) {
                     switch op {
                     case .creating, .deleting, .createFailed:
                         return nil

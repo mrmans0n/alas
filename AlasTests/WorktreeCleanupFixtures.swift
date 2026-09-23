@@ -40,11 +40,20 @@ struct WorktreeCleanupFixture {
 /// the main worktree at position 0, so `fixture.worktrees[0]` is always main
 /// and the rest are ordinary feature worktrees named `feature-1`, `feature-2`, ….
 ///
+/// `worktreeCleanupLauncher` lets a test observe the point inside a deletion
+/// that runs after the removal succeeded but before the refresh that
+/// reconciles the removed row away.
+///
 /// Modeled on `WorktreeServiceTests.makeRepo` (repo + sibling worktrees) and
 /// `AppStateCleanupTests` (an `AppState` with a project registered against a
 /// real temporary repo).
 @MainActor
-func makeCleanupFixture(worktreeCount: Int) async throws -> WorktreeCleanupFixture {
+func makeCleanupFixture(
+    worktreeCount: Int,
+    worktreeCleanupLauncher: @escaping AppState.WorktreeCleanupLauncher = {
+        try WorktreeTrashCleaner.launch($0)
+    }
+) async throws -> WorktreeCleanupFixture {
     precondition(worktreeCount >= 1, "a fixture needs at least the main worktree")
 
     let temporaryRoot = FileManager.default.temporaryDirectory
@@ -69,6 +78,10 @@ func makeCleanupFixture(worktreeCount: Int) async throws -> WorktreeCleanupFixtu
 
         let state = AppState(
             store: persistence,
+            runHistoryStore: try? RunHistoryStore(
+                path: temporaryRoot.appendingPathComponent("run-history.sqlite").path
+            ),
+            worktreeCleanupLauncher: worktreeCleanupLauncher,
             attentionStore: AttentionStore(url: attentionStoreURL, persistence: persistence)
         )
         let project = try await state.projectsManager.addProject(
@@ -101,8 +114,16 @@ func makeCleanupFixture(worktreeCount: Int) async throws -> WorktreeCleanupFixtu
 final class WorktreeCleanupMemoryStore: PersistenceStoreProtocol, @unchecked Sendable {
     private let lock = NSLock()
     fileprivate(set) var readPaths: Set<String> = []
+    /// Last `ProjectsFile` written, so tests can assert what a code path
+    /// actually persisted (not just what it left in memory).
+    private(set) var writtenProjectsFile: ProjectsFile?
 
-    func write<T: Encodable>(_: T, to _: URL) throws {}
+    func write<T: Encodable>(_ value: T, to _: URL) throws {
+        guard let projects = value as? ProjectsFile else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        writtenProjectsFile = projects
+    }
 
     func readIfExists<T: Decodable>(_: T.Type, from url: URL) throws -> T? {
         lock.lock()
@@ -158,6 +179,61 @@ private final class WorktreeRegistrationLookup: @unchecked Sendable {
 }
 
 extension Process {
+    /// Recreates a git worktree registration for a checkout at `destination` —
+    /// the inverse of `corruptWorktreeRegistration`, and the only way a test
+    /// can put a checkout at a path *inside* the window between a successful
+    /// removal and the refresh that reconciles the removed row away
+    /// (`worktreeCleanupLauncher`).
+    ///
+    /// Written as files rather than `git worktree add` because that window is
+    /// the whole point of the test: a child process started there, with the
+    /// runner capturing output, wedges the test invocation instead of failing a
+    /// test. git discovers a checkout purely from its administrative files, so
+    /// a copied registration (with `gitdir` repointed) is indistinguishable
+    /// from a spawned one as far as `git worktree list` is concerned.
+    ///
+    /// `template` is a checkout the repository already lists — the fixture's
+    /// `worktree-1` — whose administrative directory carries the index, refs,
+    /// and `commondir` a live registration needs. The repository must already
+    /// contain `branch`; the fixture branches its worktrees off `main` up
+    /// front.
+    static func registerWorktree(
+        _ destination: URL,
+        branch: String,
+        repoPath: URL,
+        template: URL
+    ) throws {
+        let worktreesDir = repoPath.appendingPathComponent(".git/worktrees")
+        let templateAdmin = worktreesDir.appendingPathComponent(template.lastPathComponent)
+        let adminDir = worktreesDir.appendingPathComponent(destination.lastPathComponent)
+        if FileManager.default.fileExists(atPath: adminDir.path) {
+            try FileManager.default.removeItem(at: adminDir)
+        }
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
+        }
+        try FileManager.default.createDirectory(
+            at: destination,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(at: templateAdmin, to: adminDir)
+        try "\(destination.appendingPathComponent(".git").path)\n".write(
+            to: adminDir.appendingPathComponent("gitdir"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "ref: refs/heads/\(branch)\n".write(
+            to: adminDir.appendingPathComponent("HEAD"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "gitdir: \(adminDir.path)\n".write(
+            to: destination.appendingPathComponent(".git"),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
     /// Breaks worktree removal for `worktree` at the git-administrative
     /// level, independent of whether the worktree's own directory still
     /// exists on disk (deleting its directory alone leaves git able to

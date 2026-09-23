@@ -45,7 +45,10 @@ enum WorktreeOperationState: Equatable {
     /// the user is still deciding, then keep writing straight through the
     /// staging/audit window that follows a confirmed delete.
     case preparingDelete
-    case deleting
+    /// Carries the project that owns the claim: a worktree id is its path, and
+    /// the same path can exist under more than one host's project, so the id
+    /// alone cannot say which checkout is being removed.
+    case deleting(projectId: String)
     /// The raw GG policy is retry metadata only; AppState removes its effective
     /// optimistic overlay before entering this state.
     case createFailed(
@@ -60,12 +63,25 @@ enum WorktreeOperationState: Equatable {
     case deleteFailed(message: String)
 }
 
+/// Identity of a worktree claim inside a specific project. A worktree id is
+/// its path, so the project is part of the claim's identity: two projects
+/// (typically one per SSH host) can list a checkout at the same path.
+struct WorktreeOperationKey: Hashable {
+    var projectId: String
+    var worktreeId: String
+}
+
 @Observable
 @MainActor
 final class ProjectsManager {
     private(set) var projects: [ProjectConfig]
     private(set) var worktreesByProject: [String: [Worktree]] = [:]
-    private(set) var worktreeOperationStates: [String: WorktreeOperationState] = [:]
+    /// Keyed by project *and* worktree id: a worktree id is its own path, and
+    /// two projects (typically one per SSH host) can list a checkout at the
+    /// same path. Keying by id alone would let one project's claim overwrite
+    /// the other's, so cancelling a delete on one host would silently reopen
+    /// admission for a worktree the other host is still removing.
+    private(set) var worktreeOperationStates: [WorktreeOperationKey: WorktreeOperationState] = [:]
     private(set) var worktreeRefreshFailures: Set<String> = []
 
     private let git = GitService()
@@ -165,10 +181,9 @@ final class ProjectsManager {
                 RemoteHostRegistry.shared.unregister(root: worktree.path.path)
             }
         }
-        let ids = Set(worktreesByProject[id, default: []].map(\.id))
         projects.removeAll { $0.id == id }
         worktreesByProject.removeValue(forKey: id)
-        worktreeOperationStates = worktreeOperationStates.filter { !ids.contains($0.key) }
+        worktreeOperationStates = worktreeOperationStates.filter { $0.key.projectId != id }
     }
 
     func updateProject(id: String, update: ProjectUpdate) {
@@ -313,19 +328,34 @@ final class ProjectsManager {
         worktreesByProject[projectId] ?? []
     }
 
-    func operationState(for worktreeId: String) -> WorktreeOperationState? {
-        worktreeOperationStates[worktreeId]
+    /// The claim open for this exact worktree, looked up by project *and* id.
+    /// Both are needed: a worktree id is its own path, and two projects
+    /// (typically one per SSH host) can list a checkout at the same path.
+    func operationState(forWorktreeId worktreeId: String, projectId: String) -> WorktreeOperationState? {
+        worktreeOperationStates[WorktreeOperationKey(projectId: projectId, worktreeId: worktreeId)]
     }
 
-    func operationStatesSnapshot() -> [String: WorktreeOperationState] {
+    /// The claim for a worktree value, which carries both halves of the key.
+    func operationState(for worktree: Worktree) -> WorktreeOperationState? {
+        operationState(forWorktreeId: worktree.id, projectId: worktree.projectId)
+    }
+
+    /// Opens or clears a claim for a worktree value.
+    func setOperationState(for worktree: Worktree, state: WorktreeOperationState?) {
+        setOperationState(forWorktreeId: worktree.id, projectId: worktree.projectId, state: state)
+    }
+
+    /// Every claim currently open, keyed by project and worktree id.
+    func operationStatesSnapshot() -> [WorktreeOperationKey: WorktreeOperationState] {
         worktreeOperationStates
     }
 
-    func setOperationState(id: String, state: WorktreeOperationState?) {
+    func setOperationState(forWorktreeId worktreeId: String, projectId: String, state: WorktreeOperationState?) {
+        let key = WorktreeOperationKey(projectId: projectId, worktreeId: worktreeId)
         if let state {
-            worktreeOperationStates[id] = state
+            worktreeOperationStates[key] = state
         } else {
-            worktreeOperationStates.removeValue(forKey: id)
+            worktreeOperationStates.removeValue(forKey: key)
         }
     }
 
@@ -365,8 +395,30 @@ final class ProjectsManager {
 
     func removeOptimisticWorktree(id: String, projectId: String) {
         worktreesByProject[projectId]?.removeAll { $0.id == id }
-        worktreeOperationStates.removeValue(forKey: id)
+        worktreeOperationStates.removeValue(forKey: WorktreeOperationKey(projectId: projectId, worktreeId: id))
         applyWorktreeOrdering(projectId: projectId)
+    }
+
+    /// Drops a row that is known to be gone — the removal itself already
+    /// succeeded — together with the per-worktree project metadata a
+    /// successful refresh reconciles away with it (`cachedWorktrees`, hidden
+    /// paths, gg modes, issue attachments, remote host registration). Used
+    /// when the refresh that normally does that could not run; without it a
+    /// hosted project's deleted row would be restored from `cachedWorktrees`
+    /// at startup recovery. Callers persist via `saveProjects()`.
+    func dropRemovedWorktree(id: String, projectId: String) {
+        let removedRows = worktreesByProject[projectId, default: []].filter { $0.id == id }
+        let removedPaths = Set(removedRows.map { canonical($0.path) })
+        removeOptimisticWorktree(id: id, projectId: projectId)
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].cachedWorktrees.removeAll { $0.id == id }
+        projects[idx].hiddenWorktreePaths.removeAll { removedPaths.contains($0) }
+        projects[idx].ggWorktreeModes.removeValue(forKey: id)
+        projects[idx].issueAttachments.removeValue(forKey: id)
+        guard projects[idx].host != nil else { return }
+        for row in removedRows {
+            RemoteHostRegistry.shared.unregister(root: row.path.path)
+        }
     }
 
     func visibleWorktrees(projectId: String) -> [Worktree] {
@@ -514,9 +566,13 @@ final class ProjectsManager {
         let previousById = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
         let liveIds = Set(trees.map(\.id))
         var reconciled = trees
-        var clearOperationIds: [String] = []
+        var clearedOperationKeys: [WorktreeOperationKey] = []
         var resolvedCreateModes: [String: GGWorktreeMode] = [:]
-        for (id, opState) in Array(worktreeOperationStates) {
+        for (key, opState) in Array(worktreeOperationStates) {
+            // Only this project's claims are reconciled by this project's
+            // refresh; another project's row at the same path is untouched.
+            guard key.projectId == projectId else { continue }
+            let id = key.worktreeId
             guard previousById[id] != nil || liveIds.contains(id) else { continue }
             switch opState {
             case .creating:
@@ -537,18 +593,17 @@ final class ProjectsManager {
                 // path reuses the id, so an uncleared claim would block its
                 // new incarnation from session admission forever.
                 if !liveIds.contains(id) {
-                    clearOperationIds.append(id)
+                    clearedOperationKeys.append(key)
                 }
             case .deleting:
                 // If the row is gone from git, the deletion succeeded.
                 if !liveIds.contains(id) {
-                    clearOperationIds.append(id)
+                    clearedOperationKeys.append(key)
                 }
-            case .createFailed(let originProjectId, _, _, let ggWorktreeMode, _, _):
-                guard originProjectId == projectId else { continue }
+            case .createFailed(_, _, _, let ggWorktreeMode, _, _):
                 if liveIds.contains(id) {
                     // Worktree exists in git — transient failure is resolved; clear state.
-                    clearOperationIds.append(id)
+                    clearedOperationKeys.append(key)
                     resolvedCreateModes[id] = ggWorktreeMode
                 } else if let existing = previousById[id] {
                     // Preserve failed rows so they remain visible for retry/removal.
@@ -556,19 +611,19 @@ final class ProjectsManager {
                 }
             case .launchFailed:
                 if !liveIds.contains(id) {
-                    clearOperationIds.append(id)
+                    clearedOperationKeys.append(key)
                 }
             case .deleteFailed:
                 // If git still sees the worktree, keep it visible with the failed
                 // state so the user can retry or remove. If the worktree is gone
                 // (user fixed it externally), clear the ghost state.
                 if !liveIds.contains(id) {
-                    clearOperationIds.append(id)
+                    clearedOperationKeys.append(key)
                 }
             }
         }
-        for id in clearOperationIds {
-            worktreeOperationStates.removeValue(forKey: id)
+        for key in clearedOperationKeys {
+            worktreeOperationStates.removeValue(forKey: key)
         }
         reconcileRemoteHostRegistrations(project: project, previous: previous, reconciled: reconciled)
         worktreesByProject[projectId] = reconciled
@@ -679,7 +734,7 @@ final class ProjectsManager {
         var changed = false
         var changedPaths: Set<String> = []
         func canUpdate(_ worktree: Worktree) -> Bool {
-            if let op = worktreeOperationStates[worktree.id] {
+            if let op = operationState(forWorktreeId: worktree.id, projectId: projectId) {
                 switch op {
                 case .creating, .createFailed: return false
                 case .preparingDelete, .deleting, .launchFailed, .deleteFailed: return true

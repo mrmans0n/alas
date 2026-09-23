@@ -117,7 +117,7 @@ struct AppStateCleanupTests {
         gateEvaluationCount = 0
 
         state.projectsManager.setOperationState(
-            id: worktree.id,
+            for: worktree,
             state: .createFailed(
                 projectId: project.id,
                 message: "transient",
@@ -391,9 +391,9 @@ struct AppStateCleanupTests {
         #expect(!id.isEmpty)
         let trees = state.projectsManager.worktrees(projectId: project.id)
         #expect(trees.contains { $0.id == id })
-        #expect(state.projectsManager.operationState(for: id) == .creating)
+        #expect(state.projectsManager.operationState(forWorktreeId: id, projectId: project.id) == .creating)
 
-        try await waitForOperationState(state.projectsManager, id: id, equals: nil)
+        try await waitForOperationState(state.projectsManager, id: id, projectId: project.id, equals: nil)
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
     }
 
@@ -417,10 +417,10 @@ struct AppStateCleanupTests {
         )
 
         #expect(!id.isEmpty)
-        #expect(state.projectsManager.operationState(for: id) == .creating)
+        #expect(state.projectsManager.operationState(forWorktreeId: id, projectId: project.id) == .creating)
         #expect(state.selectedWorktreeId == id)
 
-        try await waitForOperationState(state.projectsManager, id: id, equals: nil)
+        try await waitForOperationState(state.projectsManager, id: id, projectId: project.id, equals: nil)
     }
 
     @Test func createWorktreeAppliesAndKeepsExplicitGGMode() async throws {
@@ -449,7 +449,7 @@ struct AppStateCleanupTests {
             state.projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id })
         )
         #expect(state.ggWorktreeMenuModel(project: project, worktree: optimistic).selectedMode == .off)
-        try await waitForOperationState(state.projectsManager, id: id, equals: nil)
+        try await waitForOperationState(state.projectsManager, id: id, projectId: project.id, equals: nil)
         #expect(state.projectsManager.ggWorktreeMode(projectId: project.id, worktreeId: id) == .off)
     }
 
@@ -474,7 +474,7 @@ struct AppStateCleanupTests {
             ggWorktreeMode: .on
         )
 
-        try await waitForOperationStateMatching(state.projectsManager, id: id) {
+        try await waitForOperationStateMatching(state.projectsManager, id: id, projectId: project.id) {
             if case .createFailed = $0 { return true }
             return false
         }
@@ -508,10 +508,10 @@ struct AppStateCleanupTests {
             launcherMode: .terminal
         )
 
-        #expect(state.projectsManager.operationState(for: id) == .creating)
+        #expect(state.projectsManager.operationState(forWorktreeId: id, projectId: project.id) == .creating)
         #expect(store.writtenProjectsFile != nil)
         #expect(store.writtenProjectsFile?.projects.first(where: { $0.id == project.id })?.ggWorktreeModes[id] == nil)
-        try await waitForOperationState(state.projectsManager, id: id, equals: nil)
+        try await waitForOperationState(state.projectsManager, id: id, projectId: project.id, equals: nil)
         #expect(store.writtenProjectsFile?.projects.first(where: { $0.id == project.id })?.ggWorktreeModes[id] == .on)
     }
 
@@ -537,7 +537,7 @@ struct AppStateCleanupTests {
         )
 
         #expect(id.isEmpty)
-        #expect(state.projectsManager.operationState(for: existing.id) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: existing.id, projectId: project.id) == nil)
         #expect(state.projectsManager.worktrees(projectId: project.id).filter { $0.id == existing.id }.count == 1)
     }
 
@@ -558,13 +558,13 @@ struct AppStateCleanupTests {
             launchSurface: .none
         )
 
-        try await waitForOperationStateMatching(state.projectsManager, id: id) { state in
+        try await waitForOperationStateMatching(state.projectsManager, id: id, projectId: project.id) { state in
             if case .createFailed = state { return true }
             return false
         }
 
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
-        if case .createFailed(_, let message, _, _, _, _) = state.projectsManager.operationState(for: id) {
+        if case .createFailed(_, let message, _, _, _, _) = state.projectsManager.operationState(forWorktreeId: id, projectId: project.id) {
             #expect(!message.isEmpty)
         } else {
             Issue.record("Expected createFailed state")
@@ -596,7 +596,7 @@ struct AppStateCleanupTests {
             launchSurface: .none,
             ggWorktreeMode: mode
         )
-        try await waitForOperationStateMatching(state.projectsManager, id: failedId) { state in
+        try await waitForOperationStateMatching(state.projectsManager, id: failedId, projectId: project.id) { state in
             if case .createFailed = state { return true }
             return false
         }
@@ -606,7 +606,7 @@ struct AppStateCleanupTests {
         #expect(state.ggWorktreeMenuModel(project: project, worktree: failedWorktree).selectedMode == .inherit)
 
         guard case .createFailed(_, _, let failedBase, let failedMode, _, _) =
-            state.projectsManager.operationState(for: failedId)
+            state.projectsManager.operationState(forWorktreeId: failedId, projectId: project.id)
         else {
             Issue.record("Expected createFailed state")
             return
@@ -615,7 +615,7 @@ struct AppStateCleanupTests {
         #expect(failedMode == mode)
 
         let retryParameters = SidebarView.retryCreateParameters(
-            operationState: state.projectsManager.operationState(for: failedId),
+            operationState: state.projectsManager.operationState(forWorktreeId: failedId, projectId: project.id),
             defaultBase: state.config.worktrees.baseBranch
         )
         #expect(retryParameters.base == retryBase)
@@ -634,8 +634,8 @@ struct AppStateCleanupTests {
         )
 
         #expect(retryId == failedId)
-        #expect(state.projectsManager.operationState(for: retryId) == .creating)
-        try await waitForOperationState(state.projectsManager, id: retryId, equals: nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: retryId, projectId: project.id) == .creating)
+        try await waitForOperationState(state.projectsManager, id: retryId, projectId: project.id, equals: nil)
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == retryId })
         #expect(state.projectsManager.ggWorktreeMode(projectId: project.id, worktreeId: retryId) == mode)
         #expect(state.projects.first(where: { $0.id == project.id })?.ggWorktreeModes[retryId] == mode)
@@ -676,13 +676,13 @@ struct AppStateCleanupTests {
             launchSurface: .acp(agentId: "missing-acp-agent", preparedPrompt: preparedPrompt),
             issueAttachment: attachment
         )
-        try await waitForOperationStateMatching(state.projectsManager, id: failedId) { state in
+        try await waitForOperationStateMatching(state.projectsManager, id: failedId, projectId: project.id) { state in
             if case .createFailed = state { return true }
             return false
         }
 
         let retryParameters = SidebarView.retryCreateParameters(
-            operationState: state.projectsManager.operationState(for: failedId),
+            operationState: state.projectsManager.operationState(forWorktreeId: failedId, projectId: project.id),
             defaultBase: state.config.worktrees.baseBranch
         )
         #expect(retryParameters.launchSurface == .acp(agentId: "missing-acp-agent", preparedPrompt: preparedPrompt))
@@ -701,7 +701,7 @@ struct AppStateCleanupTests {
         )
 
         #expect(retryId == failedId)
-        try await waitForOperationState(state.projectsManager, id: retryId, equals: nil)
+        try await waitForOperationState(state.projectsManager, id: retryId, projectId: project.id, equals: nil)
         try await waitForACPTab(
             state,
             worktreeId: retryId,
@@ -741,8 +741,9 @@ struct AppStateCleanupTests {
             text: "Fix issue #43."
         )
         state.projectsManager.setOperationState(
-            id: worktreeID,
-            state: .createFailed(
+            forWorktreeId: worktreeID,
+            projectId: project.id,
+                        state: .createFailed(
                 projectId: project.id,
                 message: "refresh failed",
                 base: "main",
@@ -754,7 +755,7 @@ struct AppStateCleanupTests {
 
         await state.refreshProjectTopology(projectId: project.id)
 
-        #expect(state.projectsManager.operationState(for: worktreeID) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: worktreeID, projectId: project.id) == nil)
         #expect(state.projectsManager.issueAttachment(projectId: project.id, worktreeId: worktreeID) == attachment)
         let acpTabs = state.tabs.tabs(forWorktree: worktreeID).compactMap { tab -> ACPSessionTabState? in
             if case .acpSession(let session) = tab { return session }
@@ -789,8 +790,9 @@ struct AppStateCleanupTests {
             text: "Fix issue #44."
         )
         state.projectsManager.setOperationState(
-            id: worktreeID,
-            state: .createFailed(
+            forWorktreeId: worktreeID,
+            projectId: project.id,
+                        state: .createFailed(
                 projectId: project.id,
                 message: "refresh all failed",
                 base: "main",
@@ -802,7 +804,7 @@ struct AppStateCleanupTests {
 
         await state.refreshAllProjectTopologies()
 
-        #expect(state.projectsManager.operationState(for: worktreeID) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: worktreeID, projectId: project.id) == nil)
         #expect(state.projectsManager.issueAttachment(projectId: project.id, worktreeId: worktreeID) == attachment)
         let acpTabs = state.tabs.tabs(forWorktree: worktreeID).compactMap { tab -> ACPSessionTabState? in
             if case .acpSession(let session) = tab { return session }
@@ -836,8 +838,9 @@ struct AppStateCleanupTests {
         _ = try await Process.git(["worktree", "add", destination.path, "-b", "reconciled-idempotent", "main"], cwd: repo)
         let worktreeID = Worktree.makeId(path: destination)
         state.projectsManager.setOperationState(
-            id: worktreeID,
-            state: .createFailed(
+            forWorktreeId: worktreeID,
+            projectId: project.id,
+                        state: .createFailed(
                 projectId: project.id,
                 message: "refresh failed",
                 base: "main",
@@ -859,6 +862,113 @@ struct AppStateCleanupTests {
         )
 
         #expect(openedWorktreeIds == [worktreeID])
+    }
+
+    /// Regression: two projects can hold reconciled `.createFailed` rows at
+    /// the same path-derived id. The completion claim used to be keyed by id
+    /// alone, so the first project's completion made the second project's
+    /// reconciliation look already done and its issue attachment and launch
+    /// surface were never applied.
+    @Test func reconciledCreateFailureCompletionRunsForEveryProjectSharingAnID() async throws {
+        let repo = try await makeRepo(name: "create-reconcile-two-projects")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let sharedID = "/srv/checkouts/member"
+        let otherProject = ProjectConfig(
+            id: "other-project",
+            name: "Other",
+            path: "/repos/other",
+            color: "#fff",
+            addedAt: .distantPast,
+            host: "other-host"
+        )
+        let store = MemoryStore(projectsFile: ProjectsFile(projects: [otherProject]))
+        let state = AppState(store: store)
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "create-reconcile-two-projects",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        // Both projects carry a live row at the same path-derived id, each
+        // with its own pending attachment to replay.
+        let otherRow = Worktree(
+            id: sharedID,
+            projectId: otherProject.id,
+            name: "feature",
+            branch: "feature",
+            path: URL(fileURLWithPath: sharedID),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(otherRow)
+        let thisProjectRow = Worktree(
+            id: sharedID,
+            projectId: project.id,
+            name: "feature",
+            branch: "feature",
+            path: URL(fileURLWithPath: sharedID),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(thisProjectRow)
+
+        let attachments: [String: IssueAttachment] = [
+            otherProject.id: IssueAttachment(
+                canonicalURL: URL(string: "https://github.com/acme/alas/issues/51")!,
+                providerLabel: "GitHub",
+                displayReference: "#51",
+                title: "other"
+            ),
+            project.id: IssueAttachment(
+                canonicalURL: URL(string: "https://github.com/acme/alas/issues/52")!,
+                providerLabel: "GitHub",
+                displayReference: "#52",
+                title: "this"
+            ),
+        ]
+        for owner in [otherProject, project] {
+            state.projectsManager.setOperationState(
+                forWorktreeId: sharedID,
+                projectId: owner.id,
+                state: .createFailed(
+                    projectId: owner.id,
+                    message: "refresh failed",
+                    base: "main",
+                    ggWorktreeMode: .inherit,
+                    launchSurface: .none,
+                    issueAttachment: attachments[owner.id]
+                )
+            )
+        }
+        let previousOperationStates = state.projectsManager.operationStatesSnapshot()
+        // The refresh clears a reconciled claim once the worktree is live in
+        // git; completion then runs against the pre-refresh snapshot. Model
+        // that ordering: both projects' claims are cleared before either
+        // completion runs.
+        for owner in [otherProject, project] {
+            state.projectsManager.setOperationState(
+                forWorktreeId: sharedID,
+                projectId: owner.id,
+                state: nil
+            )
+        }
+
+        for owner in [otherProject, project] {
+            _ = await state.completeReconciledCreateFailuresForTesting(
+                projectId: owner.id,
+                previousOperationStates: previousOperationStates
+            )
+        }
+
+        // Each project replayed its own attachment: the second project's
+        // completion was not treated as already claimed by the first's.
+        for owner in [otherProject, project] {
+            #expect(state.projectsManager.issueAttachment(
+                projectId: owner.id,
+                worktreeId: sharedID
+            ) == attachments[owner.id])
+        }
     }
 
     @Test func successfulInheritCreationKeepsGGWorktreeModesSparse() async throws {
@@ -883,7 +993,7 @@ struct AppStateCleanupTests {
             ggWorktreeMode: .inherit
         )
 
-        try await waitForOperationState(state.projectsManager, id: id, equals: nil)
+        try await waitForOperationState(state.projectsManager, id: id, projectId: project.id, equals: nil)
         #expect(state.projects.first(where: { $0.id == project.id })?.ggWorktreeModes[id] == nil)
 
         state.setWorktreeLaunchDefaults(
@@ -904,8 +1014,8 @@ struct AppStateCleanupTests {
         #expect(trees.count == 1)
         let wt = trees[0]
 
-        state.projectsManager.setOperationState(id: wt.id, state: .deleting)
-        #expect(state.projectsManager.operationState(for: wt.id) == .deleting)
+        state.projectsManager.setOperationState(forWorktreeId: wt.id, projectId: project.id, state: .deleting(projectId: project.id))
+        #expect(state.projectsManager.operationState(forWorktreeId: wt.id, projectId: project.id) == .deleting(projectId: project.id))
     }
 
     @Test func deleteWorktreeCleansAppStateBeforeLaunchingFileCleanup() async throws {
@@ -968,7 +1078,7 @@ struct AppStateCleanupTests {
         }
 
         #expect(await state.cliDeleteWorktree(worktree, force: true, keepBranch: true) == .ok)
-        try await waitForOperationState(state.projectsManager, id: worktree.id, equals: nil)
+        try await waitForOperationState(state.projectsManager, id: worktree.id, projectId: project.id, equals: nil)
         try await waitForWorktreeRemoved(
             state.projectsManager,
             projectId: project.id,
@@ -983,6 +1093,92 @@ struct AppStateCleanupTests {
         #expect(probe.appendFinishedAtLaunch)
         #expect(try await history.entry(id: entry.id) == nil)
         #expect(FileManager.default.fileExists(atPath: ticket.stagedPath.path))
+    }
+
+    /// A checkout recreated at the deleted path before the post-delete refresh
+    /// keeps the same path-derived id, so the refresh cannot tell the new row
+    /// apart from the removed one and leaves the `.deleting` claim in place —
+    /// hiding the new checkout from the right pane and blocking its sessions
+    /// forever. The removal has succeeded by then, so the claim is released
+    /// regardless of what now holds that id.
+    @Test func singleDeleteReleasesTheClaimWhenThePathIsRecreated() async throws {
+        final class Recreation {
+            var repoPath: URL?
+            var deletedPath: URL?
+            var templatePath: URL?
+            var recreated = false
+        }
+        let recreation = Recreation()
+        // Runs after the removal succeeded and before the post-delete refresh.
+        let probe = WorktreeCleanupProbe()
+        let state = AppState(
+            worktreeCleanupLauncher: { ticket in
+                probe.launchedTickets.append(ticket)
+                guard let repoPath = recreation.repoPath,
+                      let deletedPath = recreation.deletedPath,
+                      let templatePath = recreation.templatePath,
+                      !recreation.recreated
+                else { return }
+                recreation.recreated = true
+                try Process.registerWorktree(
+                    deletedPath,
+                    branch: "feature/recreated-path-template",
+                    repoPath: repoPath,
+                    template: templatePath
+                )
+            }
+        )
+        let repo = try await makeRepo(name: "delete-recreated-path")
+        let linked = repo.deletingLastPathComponent()
+            .appendingPathComponent("delete-recreated-path-linked-\(UUID().uuidString)")
+        let template = repo.deletingLastPathComponent()
+            .appendingPathComponent("delete-recreated-path-template-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: linked)
+            try? FileManager.default.removeItem(at: template)
+            try? FileManager.default.removeItem(at: repo)
+            for ticket in probe.launchedTickets {
+                try? FileManager.default.removeItem(at: ticket.trashRoot)
+            }
+        }
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "delete-recreated-path",
+            color: "#5fb7c4"
+        )
+        let worktree = try await WorktreeService().add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/recreated-path",
+            destination: linked,
+            projectId: project.id
+        )
+        // A sibling that survives this deletion, so the recreated checkout has
+        // a live git-administrative directory to copy.
+        _ = try await WorktreeService().add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/recreated-path-template",
+            destination: template,
+            projectId: project.id
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        recreation.repoPath = repo
+        recreation.deletedPath = linked
+        recreation.templatePath = template
+
+        #expect(await state.cliDeleteWorktree(worktree, force: true, keepBranch: true) == .ok)
+        try await waitForOperationState(state.projectsManager, id: worktree.id, projectId: project.id, equals: nil)
+
+        #expect(recreation.recreated)
+        // The recreated checkout carries the same path-derived id, so the
+        // refresh lists it and cannot clear the claim itself. The claim must
+        // not survive: it would hide the new checkout from the right pane and
+        // block its sessions for good.
+        #expect(state.projectsManager
+            .worktrees(projectId: project.id)
+            .contains { $0.id == worktree.id })
+        #expect(state.projectsManager.operationState(for: worktree) == nil)
     }
 
     @Test func cleanupLaunchFailureLeavesWorktreeDeletedForStaleRecovery() async throws {
@@ -1015,7 +1211,7 @@ struct AppStateCleanupTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
 
         #expect(await state.cliDeleteWorktree(worktree, force: true, keepBranch: true) == .ok)
-        try await waitForOperationState(state.projectsManager, id: worktree.id, equals: nil)
+        try await waitForOperationState(state.projectsManager, id: worktree.id, projectId: project.id, equals: nil)
         try await waitForWorktreeRemoved(
             state.projectsManager,
             projectId: project.id,
@@ -1027,7 +1223,7 @@ struct AppStateCleanupTests {
         #expect(probe.launchedTickets.count == 1)
         #expect(FileManager.default.fileExists(atPath: ticket.stagedPath.path))
         #expect(!state.projectsManager.worktrees(projectId: project.id).contains { $0.id == worktree.id })
-        #expect(state.projectsManager.operationState(for: worktree.id) == nil)
+        #expect(state.projectsManager.operationState(for: worktree) == nil)
     }
 
     // MARK: - Dirty-worktree force-delete state
@@ -1176,7 +1372,7 @@ struct AppStateCleanupTests {
 
         state.cancelForceDeletePendingWorktree()
         #expect(state.pendingForceDeleteWorktree == nil)
-        #expect(state.projectsManager.operationState(for: wt.id) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: wt.id, projectId: project.id) == nil)
     }
 
     /// Regression: the force-delete alert used to clear operation state to
@@ -1193,7 +1389,7 @@ struct AppStateCleanupTests {
         let trees = state.projectsManager.worktrees(projectId: project.id)
         let wt = try #require(trees.first)
 
-        state.projectsManager.setOperationState(id: wt.id, state: .preparingDelete)
+        state.projectsManager.setOperationState(forWorktreeId: wt.id, projectId: project.id, state: .preparingDelete)
         state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
             id: wt.id,
             branch: wt.branch,
@@ -1204,12 +1400,12 @@ struct AppStateCleanupTests {
             removedIndex: 0
         )
 
-        #expect(AppState.blocksWorktreeSessionAdmission(state.projectsManager.operationState(for: wt.id)))
+        #expect(AppState.blocksWorktreeSessionAdmission(state.projectsManager.operationState(forWorktreeId: wt.id, projectId: project.id)))
 
         state.cancelForceDeletePendingWorktree()
 
         #expect(state.pendingForceDeleteWorktree == nil)
-        #expect(state.projectsManager.operationState(for: wt.id) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: wt.id, projectId: project.id) == nil)
     }
 
     /// Regression: a worktree removed externally (another terminal, `git
@@ -1231,12 +1427,12 @@ struct AppStateCleanupTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
         let target = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "external-removal-target" })
 
-        state.projectsManager.setOperationState(id: target.id, state: .preparingDelete)
+        state.projectsManager.setOperationState(forWorktreeId: target.id, projectId: project.id, state: .preparingDelete)
 
         _ = try await Process.git(["worktree", "remove", "--force", worktreePath.path], cwd: repo)
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
 
-        #expect(state.projectsManager.operationState(for: target.id) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: target.id, projectId: project.id) == nil)
     }
 
     @Test func removeProjectClosesTabsForProjectWorktrees() async throws {
@@ -1547,7 +1743,7 @@ struct AppStateCleanupTests {
         let wt = trees[0]
 
         // Simulate a failed delete.
-        state.projectsManager.setOperationState(id: wt.id, state: .deleteFailed(message: "permission denied"))
+        state.projectsManager.setOperationState(forWorktreeId: wt.id, projectId: project.id, state: .deleteFailed(message: "permission denied"))
         state.projectsManager.setGGWorktreeMode(projectId: project.id, worktreeId: wt.id, mode: .on)
         state.selectedWorktreeId = wt.id
 
@@ -1559,7 +1755,7 @@ struct AppStateCleanupTests {
         #expect(state.projectsManager.visibleWorktrees(projectId: project.id).isEmpty)
         #expect(state.projectsManager.ggWorktreeMode(projectId: project.id, worktreeId: wt.id) == .on)
         // Operation state should be cleared.
-        #expect(state.projectsManager.operationState(for: wt.id) == nil)
+        #expect(state.projectsManager.operationState(forWorktreeId: wt.id, projectId: project.id) == nil)
         // Selection should move away because the worktree is no longer visible.
         #expect(state.selectedWorktreeId != wt.id)
     }
@@ -1576,7 +1772,7 @@ struct AppStateCleanupTests {
         state.tabs.appendTerminal(worktreeId: wt.id, title: "term", sessionId: "s1")
         #expect(state.tabs.tabs(forWorktree: wt.id).count == 1)
 
-        state.projectsManager.setOperationState(id: wt.id, state: .deleteFailed(message: "permission denied"))
+        state.projectsManager.setOperationState(forWorktreeId: wt.id, projectId: project.id, state: .deleteFailed(message: "permission denied"))
         state.selectedWorktreeId = wt.id
 
         state.archiveWorktree(wt)
@@ -1629,18 +1825,20 @@ struct AppStateCleanupTests {
     private func waitForOperationState(
         _ manager: ProjectsManager,
         id: String,
+        projectId: String,
         equals expected: WorktreeOperationState?
     ) async throws {
-        try await waitForOperationStateMatching(manager, id: id) { $0 == expected }
+        try await waitForOperationStateMatching(manager, id: id, projectId: projectId) { $0 == expected }
     }
 
     private func waitForOperationStateMatching(
         _ manager: ProjectsManager,
         id: String,
+        projectId: String,
         matches: (WorktreeOperationState?) -> Bool
     ) async throws {
         for _ in 0..<80 {
-            if matches(manager.operationState(for: id)) {
+            if matches(manager.operationState(forWorktreeId: id, projectId: projectId)) {
                 return
             }
             try await Task.sleep(nanoseconds: 100_000_000)

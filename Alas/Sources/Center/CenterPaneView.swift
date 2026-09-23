@@ -183,21 +183,22 @@ struct CenterPaneView: View {
                 onClose: {
                     state.requestCloseComposedCenterTab(
                         worktreeID: worktree.id,
+                        projectId: worktree.projectId,
                         sharedSessionOwner: sharedSessionOwner,
                         tabID: $0
                     )
                 },
                 onCloseOthers: { id in
-                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.others(keeping: id))
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, projectId: worktree.projectId, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.others(keeping: id))
                 },
                 onCloseAll: {
-                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.all())
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, projectId: worktree.projectId, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.all())
                 },
                 onCloseToLeft: { id in
-                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.left(of: id))
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, projectId: worktree.projectId, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.left(of: id))
                 },
                 onCloseToRight: { id in
-                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.right(of: id))
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, projectId: worktree.projectId, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.right(of: id))
                 },
                 onCopyPath: { id in
                     guard let tab = tabs.first(where: { $0.id == id }),
