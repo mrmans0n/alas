@@ -69,6 +69,19 @@ final class ACPSession: ObservableObject, Identifiable {
     }
     private(set) var availableConfigOptionsRevision = 0
     private(set) var hasReceivedConfigOptions = false
+    private var userConfigOptionEditRevisions: [String: UInt64] = [:]
+
+    func markUserConfigOptionEdit(for id: String) {
+        userConfigOptionEditRevisions[id, default: 0] &+= 1
+    }
+
+    func userConfigOptionEditRevision(for id: String) -> UInt64 {
+        userConfigOptionEditRevisions[id, default: 0]
+    }
+
+    func userConfigOptionEditRevisionsSnapshot() -> [String: UInt64] {
+        userConfigOptionEditRevisions
+    }
     var isRestoringPersistedConfigOptions = false
     private var pendingConfigOptionRestorations: [String: (value: ACPConfigValue, loadedValue: ACPConfigValue?)] = [:]
 

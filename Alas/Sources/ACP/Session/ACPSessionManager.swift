@@ -496,6 +496,7 @@ final class ACPSessionManager: ObservableObject {
     /// by session id. Applied in `attach`, before any queued prompt goes out.
     var pendingModel: [ACPSession.ID: String] = [:]
     var pendingMode: [ACPSession.ID: String] = [:]
+    private var pendingConfigOptionValues: [ACPSession.ID: [String: ACPConfigValue]] = [:]
 
     /// Toggle auto-run for a remotely-driven session. Writer-gated; persists.
     func setAutoRun(for id: ACPSession.ID, enabled: Bool) async {
@@ -530,6 +531,195 @@ final class ACPSessionManager: ObservableObject {
         }
         let remoteId = session.remoteSessionId ?? id
         try? await runner.connection.setMode(sessionId: remoteId, modeId: modeId)
+    }
+
+    /// Select a config option. Applies and persists the optimistic value on
+    /// the main actor, then sends the RPC or queues the choice for attach.
+    @discardableResult
+    func setConfigOption(
+        for id: ACPSession.ID,
+        configId: String,
+        value: ACPConfigValue
+    ) -> Task<Void, Never>? {
+        guard let session = sessions[id],
+              !isMirror(sessionId: id),
+              let index = session.availableConfigOptions.firstIndex(where: { $0.id == configId })
+        else { return nil }
+
+        let previousOption = session.availableConfigOptions[index]
+        guard previousOption.acceptsPersistedValue(value),
+              previousOption.currentValue != value
+        else { return nil }
+
+        let optimisticOption = ACPConfigOption(
+            id: previousOption.id,
+            name: previousOption.name,
+            type: previousOption.type,
+            category: previousOption.category,
+            currentValue: value,
+            options: previousOption.options
+        )
+        let updatesModel = previousOption.category == "model" || previousOption.category == "Model"
+        let isConfigBackedModel: Bool = {
+            guard case .configOption(let modelId) = session.chipState.models?.source else { return false }
+            return modelId == configId
+        }()
+        let previousModel = session.currentModel
+        session.markUserConfigOptionEdit(for: configId)
+        let editRevision = session.userConfigOptionEditRevision(for: configId)
+        session.availableConfigOptions[index] = optimisticOption
+        if updatesModel, case .string(let modelId) = value {
+            session.currentModel = modelId
+        }
+        persist(session)
+
+        let hasPendingValue = pendingConfigOptionValues[id]?[configId] != nil
+        let hasPendingModel = isConfigBackedModel && pendingModel[id] != nil
+        guard runners[id] != nil, !hasPendingValue, !hasPendingModel else {
+            if isConfigBackedModel, case .string(let modelId) = value {
+                pendingModel[id] = modelId
+            } else {
+                pendingConfigOptionValues[id, default: [:]][configId] = value
+            }
+            return nil
+        }
+
+        return Task { @MainActor [weak self] in
+            guard let self, self.sessions[id] === session else { return }
+            guard await self.confirmedWriterLease(for: id) else {
+                self.rollbackConfigOptionSelection(
+                    session: session,
+                    configId: configId,
+                    expectedOption: optimisticOption,
+                    rollbackOption: previousOption,
+                    value: value,
+                    editRevision: editRevision,
+                    previousModel: previousModel,
+                    updatesModel: updatesModel
+                )
+                return
+            }
+            guard self.sessions[id] === session,
+                  session.userConfigOptionEditRevision(for: configId) == editRevision,
+                  let currentIndex = session.availableConfigOptions.firstIndex(where: { $0.id == configId })
+            else { return }
+            guard let activeRunner = self.runners[id] else {
+                if isConfigBackedModel, case .string(let modelId) = value {
+                    self.pendingModel[id] = modelId
+                } else {
+                    self.pendingConfigOptionValues[id, default: [:]][configId] = value
+                }
+                return
+            }
+
+            let currentOption = session.availableConfigOptions[currentIndex]
+            guard currentOption.acceptsPersistedValue(value) else {
+                self.persist(session)
+                return
+            }
+            let rollbackOption = currentOption == optimisticOption ? previousOption : currentOption
+            let requestOption = ACPConfigOption(
+                id: currentOption.id,
+                name: currentOption.name,
+                type: currentOption.type,
+                category: currentOption.category,
+                currentValue: value,
+                options: currentOption.options
+            )
+            if currentOption != requestOption {
+                session.availableConfigOptions[currentIndex] = requestOption
+            }
+            if updatesModel, case .string(let modelId) = value {
+                session.currentModel = modelId
+            }
+
+            let remoteId = session.remoteSessionId ?? id
+            let baselineConfigOptions = session.availableConfigOptions
+            let baselineConfigOptionsRevision = session.availableConfigOptionsRevision
+            do {
+                let updated = try await activeRunner.connection.setConfigOption(
+                    sessionId: remoteId,
+                    configId: configId,
+                    value: value
+                )
+                guard self.sessions[id] === session else { return }
+                guard !updated.isEmpty else { return }
+                guard let merged = ACPConfigOption.mergingSuccessfulSetResponse(
+                    updated,
+                    configId: configId,
+                    selectedValue: value,
+                    currentConfigOptions: session.availableConfigOptions,
+                    baselineConfigOptions: baselineConfigOptions,
+                    baselineConfigOptionsRevision: baselineConfigOptionsRevision,
+                    currentConfigOptionsRevision: session.availableConfigOptionsRevision
+                ) else {
+                    self.persist(session)
+                    return
+                }
+                let previousModelSource = session.chipState.models?.source
+                session.availableConfigOptions = merged
+                if case .configOption(let modelId) = session.chipState.models?.source {
+                    session.currentModel = session.availableConfigOptions
+                        .first { $0.id == modelId }?.currentStringValue
+                } else if case .configOption = previousModelSource,
+                          session.chipState.models == nil {
+                    session.currentModel = nil
+                } else if updatesModel {
+                    session.currentModel = session.availableConfigOptions
+                        .first { $0.id == configId }?.currentStringValue
+                }
+                self.persist(session)
+            } catch {
+                self.rollbackConfigOptionSelection(
+                    session: session,
+                    configId: configId,
+                    expectedOption: requestOption,
+                    rollbackOption: rollbackOption,
+                    value: value,
+                    editRevision: editRevision,
+                    previousModel: previousModel,
+                    updatesModel: updatesModel
+                )
+            }
+        }
+    }
+
+    private func rollbackConfigOptionSelection(
+        session: ACPSession,
+        configId: String,
+        expectedOption: ACPConfigOption,
+        rollbackOption: ACPConfigOption,
+        value: ACPConfigValue,
+        editRevision: UInt64,
+        previousModel: String?,
+        updatesModel: Bool
+    ) {
+        guard sessions[session.id] === session,
+              session.userConfigOptionEditRevision(for: configId) == editRevision,
+              let index = session.availableConfigOptions.firstIndex(where: { $0.id == configId }),
+              session.availableConfigOptions[index] == expectedOption
+        else { return }
+
+        session.availableConfigOptions[index] = rollbackOption
+        if updatesModel,
+           case .string(let selectedModel) = value,
+           session.currentModel == selectedModel {
+            if let restoredModel = rollbackOption.currentStringValue {
+                session.currentModel = restoredModel
+            } else {
+                session.currentModel = previousModel
+            }
+        }
+        if session.isRestoringPersistedConfigOptions,
+           let persistedValue = persistedRows[session.id]?.configOptionValues[configId],
+           rollbackOption.acceptsPersistedValue(persistedValue) {
+            session.retainConfigOptionRestoration(
+                persistedValue,
+                loadedValue: rollbackOption.currentValue,
+                for: configId
+            )
+        }
+        persist(session)
     }
 
     /// Sessions for which THIS instance holds the writer lease (backing store).
@@ -1319,6 +1509,7 @@ final class ACPSessionManager: ObservableObject {
         transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
         pendingMode.removeValue(forKey: id)
+        pendingConfigOptionValues.removeValue(forKey: id)
     }
 
     func deleteSession(id: ACPSession.ID) async throws {
@@ -1378,6 +1569,7 @@ final class ACPSessionManager: ObservableObject {
         transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
         pendingMode.removeValue(forKey: id)
+        pendingConfigOptionValues.removeValue(forKey: id)
         pendingQueueForceSends.removeValue(forKey: id)
         persistedRows.removeValue(forKey: id)
         recent.removeAll { $0.id == id }
@@ -2964,6 +3156,7 @@ extension ACPSessionManager {
         // can't fire against a session another instance now drives.
         pendingModel.removeValue(forKey: sessionId)
         pendingMode.removeValue(forKey: sessionId)
+        pendingConfigOptionValues.removeValue(forKey: sessionId)
         if let runner = runners.removeValue(forKey: sessionId) {
             runner.invalidateActivePrompt()
             runner.stop()
@@ -3354,31 +3547,51 @@ extension ACPSessionManager {
     }
     private func restoreConfigOptionValues(
         _ persistedValues: [String: ACPConfigValue],
+        pendingUserValues: [String: ACPConfigValue],
+        userEditRevisionsAtAttachStart: [String: UInt64],
+        userEditRevisionsAtRestoreStart: [String: UInt64],
         excluding excludedId: String?,
         in session: ACPSession,
         using runner: ACPSessionRunner
     ) async {
         let loadedOptions = session.availableConfigOptions
+        var refreshedByRestoreResponse: [String: ACPConfigOption] = [:]
         for loadedOption in loadedOptions where loadedOption.id != excludedId {
             session.clearPendingConfigOptionRestoration(for: loadedOption.id)
-            guard let selectedValue = persistedValues[loadedOption.id],
-                  let index = session.availableConfigOptions.firstIndex(where: { $0.id == loadedOption.id }),
-                  session.availableConfigOptions[index] == loadedOption,
-                  loadedOption.currentValue != selectedValue,
-                  loadedOption.acceptsPersistedValue(selectedValue)
+            let pendingValue = pendingUserValues[loadedOption.id]
+            let expectedEditRevision = pendingValue == nil
+                ? userEditRevisionsAtAttachStart[loadedOption.id, default: 0]
+                : userEditRevisionsAtRestoreStart[loadedOption.id, default: 0]
+            guard session.userConfigOptionEditRevision(for: loadedOption.id) == expectedEditRevision,
+                  let selectedValue = pendingValue ?? persistedValues[loadedOption.id],
+                  let index = session.availableConfigOptions.firstIndex(where: { $0.id == loadedOption.id })
             else { continue }
 
+            let currentOption = session.availableConfigOptions[index]
+            guard currentOption == loadedOption
+                    || pendingValue != nil
+                    || refreshedByRestoreResponse[loadedOption.id] == currentOption,
+                  currentOption.currentValue != selectedValue,
+                  currentOption.acceptsPersistedValue(selectedValue)
+            else { continue }
+            let updatesModel = currentOption.category == "model" || currentOption.category == "Model"
+            let previousModel = session.currentModel
+
             let optimisticOption = ACPConfigOption(
-                id: loadedOption.id,
-                name: loadedOption.name,
-                type: loadedOption.type,
-                category: loadedOption.category,
+                id: currentOption.id,
+                name: currentOption.name,
+                type: currentOption.type,
+                category: currentOption.category,
                 currentValue: selectedValue,
-                options: loadedOption.options
+                options: currentOption.options
             )
             session.availableConfigOptions[index] = optimisticOption
+            if updatesModel, case .string(let modelId) = selectedValue {
+                session.currentModel = modelId
+            }
             let baselineConfigOptions = session.availableConfigOptions
             let baselineConfigOptionsRevision = session.availableConfigOptionsRevision
+            let editRevision = session.userConfigOptionEditRevision(for: loadedOption.id)
             do {
                 let remoteId = session.remoteSessionId ?? session.id
                 let updated = try await runner.connection.setConfigOption(
@@ -3396,15 +3609,41 @@ extension ACPSessionManager {
                        baselineConfigOptionsRevision: baselineConfigOptionsRevision,
                        currentConfigOptionsRevision: session.availableConfigOptionsRevision
                    ) {
+                    let refreshedOptionIds = updated.compactMap { responseOption -> String? in
+                        guard let baseline = baselineConfigOptions.first(where: { $0.id == responseOption.id }),
+                              let current = session.availableConfigOptions.first(where: { $0.id == responseOption.id }),
+                              current == baseline,
+                              responseOption != baseline
+                        else { return nil }
+                        return responseOption.id
+                    }
                     session.availableConfigOptions = merged
+                    if updatesModel {
+                        session.currentModel = merged.first { $0.id == loadedOption.id }?.currentStringValue
+                    }
+                    for id in refreshedOptionIds {
+                        if let option = merged.first(where: { $0.id == id }) {
+                            refreshedByRestoreResponse[id] = option
+                        }
+                    }
                 }
             } catch {
-                if let currentIndex = session.availableConfigOptions.firstIndex(where: { $0.id == loadedOption.id }),
+                if session.userConfigOptionEditRevision(for: loadedOption.id) == editRevision,
+                   let currentIndex = session.availableConfigOptions.firstIndex(where: { $0.id == loadedOption.id }),
                    session.availableConfigOptions[currentIndex] == optimisticOption {
-                    session.availableConfigOptions[currentIndex] = loadedOption
+                    session.availableConfigOptions[currentIndex] = currentOption
+                    if updatesModel,
+                       case .string(let selectedModel) = selectedValue,
+                       session.currentModel == selectedModel {
+                        if let restoredModel = currentOption.currentStringValue {
+                            session.currentModel = restoredModel
+                        } else {
+                            session.currentModel = previousModel
+                        }
+                    }
                     session.retainConfigOptionRestoration(
                         selectedValue,
-                        loadedValue: loadedOption.currentValue,
+                        loadedValue: currentOption.currentValue,
                         for: loadedOption.id
                     )
                 }
@@ -3423,6 +3662,7 @@ extension ACPSessionManager {
         let persistedConfigOptionValues = freshlyCreated
             ? [:]
             : (persistedRows[sessionId]?.configOptionValues ?? [:])
+        let userConfigOptionEditRevisionsAtAttachStart = session.userConfigOptionEditRevisionsSnapshot()
         session.isRestoringPersistedConfigOptions = !freshlyCreated
         let firstRunAttach = freshlyCreated
             && !session.restoredFromPersistence
@@ -4578,8 +4818,13 @@ extension ACPSessionManager {
                 guard case .configOption(let id) = session.chipState.models?.source else { return nil }
                 return id
             }()
+            let pendingUserConfigOptionValues = pendingConfigOptionValues.removeValue(forKey: sessionId) ?? [:]
+            let userConfigOptionEditRevisionsAtRestoreStart = session.userConfigOptionEditRevisionsSnapshot()
             await restoreConfigOptionValues(
                 persistedConfigOptionValues,
+                pendingUserValues: pendingUserConfigOptionValues,
+                userEditRevisionsAtAttachStart: userConfigOptionEditRevisionsAtAttachStart,
+                userEditRevisionsAtRestoreStart: userConfigOptionEditRevisionsAtRestoreStart,
                 excluding: configBackedModelId,
                 in: session,
                 using: runner
