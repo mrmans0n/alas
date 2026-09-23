@@ -635,17 +635,28 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             return fork
         }
 
-        /// Tool-call bundling inputs for this host. The fork boundary is a
-        /// forced run break so the divider spec can follow its boundary row.
+        /// Activity and completed-work bundling inputs for this host. The fork
+        /// boundary is a forced run break so the divider can follow its row.
         static func groupingOptions(host: ACPTranscriptScroller) -> ACPToolCallGrouping.Options {
             ACPToolCallGrouping.Options(
                 enabled: host.collapsesFinishedToolCalls,
-                breakAfterIndex: readyFork(host: host).map { $0.inheritedMessageCount - 1 }
+                breakAfterIndex: readyFork(host: host).map { $0.inheritedMessageCount - 1 },
+                currentTurnAnswerIndex: ACPToolCallGrouping.currentTurnAnswerIndex(
+                    messages: host.transcript.messages,
+                    currentTurnUserIndex: host.transcript.latestUserMessageIndex,
+                    isTurnActive: host.transcript.streamingState != .idle
+                ),
+                priorCurrentTurnCommentaryIndices:
+                    ACPToolCallGrouping.priorCurrentTurnCommentaryIndices(
+                        messages: host.transcript.messages,
+                        currentTurnUserIndex: host.transcript.latestUserMessageIndex,
+                        visibleRange: host.transcript.visibleHead..<host.transcript.visibleTailBound
+                    )
             )
         }
 
-        /// Window-sliced, plan-filtered, deduped rows with finished tool-call
-        /// runs folded per `groupingOptions`. Same builder the coordinator's
+        /// Window-sliced, plan-filtered, deduped rows with transcript work
+        /// folded per `groupingOptions`. Same builder the coordinator's
         /// memoized lookup uses, so row ids agree between the spec list and
         /// the scroll-anchor / minimap mapping.
         static func renderRows(
@@ -662,6 +673,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             return ACPToolCallGrouping.fold(
                 rows: rows, messages: transcript.messages,
                 options: groupingOptions(host: host),
+                messageCreatedAt: { transcript.createdAt(forMessageAt: $0) },
                 isExpanded: { group in expansionSeeds?.isExpanded(group) ?? false }
             )
         }
@@ -704,8 +716,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             ) == row.index
         }
 
-        /// The "Ran N tools" / "Hide N tools" toggle row for a run of
-        /// finished tool calls — collapsed or expanded, it is the same row
+        /// The toggle row for an activity or completed-work run. Collapsed or
+        /// expanded, it is the same row
         /// id, so toggling updates it in place while its member rows are
         /// inserted or removed around it.
         ///
@@ -729,7 +741,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 else { return nil }
                 return toolCall
             }
-            let summary = ACPToolCallGroupSummary(toolCalls: toolCalls)
+            let summary = ACPToolCallGroupSummary(toolCalls: toolCalls, kind: group.kind)
             let memberStableIds = group.members.map(\.stableId)
             // Folds any member not yet tagged (e.g. newly revealed by
             // backfill) into the run's existing lineage before reading it,

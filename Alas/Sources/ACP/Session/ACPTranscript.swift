@@ -35,7 +35,7 @@ final class ACPTranscript: ObservableObject {
     }
     private var pendingMessagesMutation: MessagesMutation?
     private var latestPlanMessageIndex: Int?
-    private var latestUserMessageIndex: Int?
+    private(set) var latestUserMessageIndex: Int?
     enum TextMessageKind: Hashable {
         case user
         case agent
