@@ -130,6 +130,26 @@ struct RemoteAppStateAccessTests {
         }
     }
 
+    @Test func legacyCodePairingResolvesFreshOriginsBeforeRedeeming() async {
+        let state = AppState(store: MemoryStore())
+        let instance = RemoteDiscoveredInstance(id: "receiver", name: "Other Mac", protocolVersion: 1,
+                                                model: nil, endpoints: [])
+        state.nearbyApprovalState = .legacy(instanceID: "receiver", origins: ["http://stale:8765"])
+        var resolvedInstances: [String] = []
+        state.remoteApprovalResolver = { instance in
+            resolvedInstances.append(instance.id)
+            return .success(.init(origins: ["http://fresh:8765"], serverID: "receiver",
+                                  pairingApprovalVersion: nil))
+        }
+        let origins = await state.resolveLegacyNearbyOrigins(for: instance)
+        if case .origins(let value) = origins {
+            #expect(value == ["http://fresh:8765"])
+        } else {
+            Issue.record("Expected fresh origins")
+        }
+        #expect(resolvedInstances == ["receiver"])
+    }
+
     @Test func disablingFederationDuringRedemptionRevokesCounterCodeAndCancelsReceiver() async throws {
         let state = AppState(store: MemoryStore())
         let exchange = RemotePairingApprovalClientTests.Exchange()

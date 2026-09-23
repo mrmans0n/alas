@@ -452,7 +452,7 @@ struct RemoteServerPane: View {
     }
 
     private func pairNearby(_ instance: RemoteDiscoveredInstance) {
-        guard case .legacy(let instanceID, let origins) = state.nearbyApprovalState,
+        guard case .legacy(let instanceID, _) = state.nearbyApprovalState,
               instanceID == instance.id else { return }
         isAddingPeer = true
         peerError = nil
@@ -460,12 +460,17 @@ struct RemoteServerPane: View {
         let code = nearbyCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         Task { @MainActor in
             defer { isAddingPeer = false }
-            if let error = await state.remotePeers.addPeer(code: code, origins: origins) {
-                peerError = describe(error, viaLink: false)
-            } else {
+            switch await state.pairLegacyNearby(instance, code: code) {
+            case .paired:
                 selectedNearbyId = nil
                 nearbyCode = ""
-                state.cancelNearbyApproval()
+            case .pairing(let error):
+                peerError = describe(error, viaLink: false)
+            case .failed:
+                break
+            case .cancelled:
+                selectedNearbyId = nil
+                nearbyCode = ""
             }
         }
     }

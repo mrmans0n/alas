@@ -17,6 +17,19 @@ enum NearbyApprovalState: Equatable {
     case failed(NearbyApprovalFailure)
 }
 
+enum NearbyLegacyPairingResult: Equatable {
+    case paired
+    case pairing(RemotePeerManager.AddError)
+    case failed(NearbyApprovalFailure)
+    case cancelled
+}
+
+enum NearbyLegacyOriginResolution: Equatable {
+    case origins([String])
+    case failed(NearbyApprovalFailure)
+    case cancelled
+}
+
 /// Holding this proxy does not read a store or create a key. The app supplies
 /// a signer only while the receiver's configuration permits approvals.
 @MainActor
@@ -200,6 +213,43 @@ extension AppState {
             case .expired: self.nearbyApprovalState = .expired
             case .failed(let failure): self.nearbyApprovalState = .failed(.approval(failure))
             }
+        }
+    }
+
+    func resolveLegacyNearbyOrigins(for instance: RemoteDiscoveredInstance) async -> NearbyLegacyOriginResolution {
+        guard case .legacy(let instanceID, _) = nearbyApprovalState, instanceID == instance.id else {
+            return .cancelled
+        }
+        let resolved: Result<RemoteDiscoveredInstanceResolver.ResolvedPeer, RemoteDiscoveredInstanceResolver.Failure>
+        if let resolve = remoteApprovalResolver { resolved = await resolve(instance) }
+        else { resolved = await RemoteDiscoveredInstanceResolver.live.resolvePeer(for: instance) }
+        guard case .legacy(let currentInstanceID, _) = nearbyApprovalState, currentInstanceID == instance.id else {
+            return .cancelled
+        }
+        switch resolved {
+        case .failure(let failure):
+            return .failed(.resolution(failure))
+        case .success(let target):
+            if let serverID = target.serverID, !serverID.isEmpty, serverID != instance.id {
+                return .failed(.resolution(.identityMismatch))
+            }
+            return .origins(target.origins)
+        }
+    }
+
+    func pairLegacyNearby(_ instance: RemoteDiscoveredInstance, code: String) async -> NearbyLegacyPairingResult {
+        switch await resolveLegacyNearbyOrigins(for: instance) {
+        case .cancelled:
+            return .cancelled
+        case .failed(let failure):
+            nearbyApprovalState = .failed(failure)
+            return .failed(failure)
+        case .origins(let origins):
+            if let error = await remotePeers.addPeer(code: code, origins: origins) {
+                return .pairing(error)
+            }
+            nearbyApprovalState = .paired(instanceID: instance.id)
+            return .paired
         }
     }
 
