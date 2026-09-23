@@ -760,7 +760,7 @@ extension ProjectsManagerTests {
             projectId: project.id
         )
         try await mgr.refreshWorktrees(projectId: project.id)
-        mgr.setOperationState(id: worktree.id, state: .deleting)
+        mgr.setOperationState(id: worktree.id, state: .deleting(projectId: project.id))
 
         try await svc.remove(repoPath: repo, worktree: worktree, deleteBranchIfMerged: false, force: false)
         try await mgr.refreshWorktrees(projectId: project.id)

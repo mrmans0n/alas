@@ -1173,7 +1173,7 @@ struct AppStateCLIRoutingTests {
         let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "delete-target", force: false, keepBranch: true))))
 
         #expect(response == .ok)
-        #expect(state.projectsManager.operationState(for: target.id) == .deleting)
+        #expect(state.projectsManager.operationState(for: target.id) == .deleting(projectId: project.id))
     }
 
     @Test func cliWorktreeDeleteIsIdempotentWhileDeleting() async throws {
@@ -1189,13 +1189,13 @@ struct AppStateCLIRoutingTests {
         )
         defer { try? FileManager.default.removeItem(at: main.path) }
         state.projectsManager.insertOptimisticWorktree(target)
-        state.projectsManager.setOperationState(id: target.id, state: .deleting)
+        state.projectsManager.setOperationState(id: target.id, state: .deleting(projectId: project.id))
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
         let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "feature/delete", force: true, keepBranch: true))))
 
         #expect(response == .ok)
-        #expect(state.projectsManager.operationState(for: target.id) == .deleting)
+        #expect(state.projectsManager.operationState(for: target.id) == .deleting(projectId: project.id))
     }
 
     @Test func cliWorktreeDeleteForceClearsStalePendingForceState() async throws {
@@ -1223,7 +1223,7 @@ struct AppStateCLIRoutingTests {
 
         #expect(response == .ok)
         #expect(state.pendingForceDeleteWorktree == nil)
-        #expect(state.projectsManager.operationState(for: target.id) == .deleting)
+        #expect(state.projectsManager.operationState(for: target.id) == .deleting(projectId: project.id))
     }
 
     /// Regression: a CLI delete that dismisses a leftover `.preparingDelete`

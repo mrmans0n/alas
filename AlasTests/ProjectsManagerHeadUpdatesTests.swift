@@ -162,7 +162,7 @@ struct ProjectsManagerHeadUpdatesTests {
         let (mgr, project) = makeManager()
         let row = wt(path: "/wts/feat", branch: "old")
         seed(mgr, projectId: project.id, [row])
-        mgr.setOperationState(id: row.id, state: .deleting)
+        mgr.setOperationState(id: row.id, state: .deleting(projectId: project.id))
 
         mgr.applyHeadUpdates(
             projectId: project.id,

@@ -904,8 +904,8 @@ struct AppStateCleanupTests {
         #expect(trees.count == 1)
         let wt = trees[0]
 
-        state.projectsManager.setOperationState(id: wt.id, state: .deleting)
-        #expect(state.projectsManager.operationState(for: wt.id) == .deleting)
+        state.projectsManager.setOperationState(id: wt.id, state: .deleting(projectId: project.id))
+        #expect(state.projectsManager.operationState(for: wt.id) == .deleting(projectId: project.id))
     }
 
     @Test func deleteWorktreeCleansAppStateBeforeLaunchingFileCleanup() async throws {

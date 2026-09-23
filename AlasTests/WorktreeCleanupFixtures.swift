@@ -111,8 +111,16 @@ func makeCleanupFixture(
 final class WorktreeCleanupMemoryStore: PersistenceStoreProtocol, @unchecked Sendable {
     private let lock = NSLock()
     fileprivate(set) var readPaths: Set<String> = []
+    /// Last `ProjectsFile` written, so tests can assert what a code path
+    /// actually persisted (not just what it left in memory).
+    private(set) var writtenProjectsFile: ProjectsFile?
 
-    func write<T: Encodable>(_: T, to _: URL) throws {}
+    func write<T: Encodable>(_ value: T, to _: URL) throws {
+        guard let projects = value as? ProjectsFile else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        writtenProjectsFile = projects
+    }
 
     func readIfExists<T: Decodable>(_: T.Type, from url: URL) throws -> T? {
         lock.lock()

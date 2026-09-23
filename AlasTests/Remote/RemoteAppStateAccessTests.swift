@@ -462,7 +462,7 @@ struct RemoteAppStateAccessTests {
         state.projectsManager.insertOptimisticWorktree(createFailed)
         state.projectsManager.insertOptimisticWorktree(deleteFailed)
         state.projectsManager.setOperationState(id: creating.id, state: .creating)
-        state.projectsManager.setOperationState(id: deleting.id, state: .deleting)
+        state.projectsManager.setOperationState(id: deleting.id, state: .deleting(projectId: deleting.projectId))
         state.projectsManager.setOperationState(
             id: createFailed.id,
             state: .createFailed(

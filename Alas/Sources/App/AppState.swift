@@ -9844,7 +9844,7 @@ final class AppState {
 
             let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
             let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
-            projectsManager.setOperationState(id: worktree.id, state: .deleting)
+            projectsManager.setOperationState(id: worktree.id, state: .deleting(projectId: worktree.projectId))
 
             let outcome = await performDeleteWorktree(
                 worktree: worktree,
@@ -9881,18 +9881,17 @@ final class AppState {
             } catch {
                 // The refresh is what reconciles removed rows (and their
                 // `.deleting` claims) out of the list. If it could not run,
-                // drop the rows this batch did remove instead of leaving them
-                // to resolve as ordinary worktrees: the removal already
+                // drop the rows this batch did remove — together with the
+                // project metadata naming them — instead of leaving them to
+                // resolve as ordinary worktrees: the removal already
                 // succeeded, and `allWorktreeIds()` below must not keep
                 // counting a deleted worktree either. Scoped to this
                 // project's own removals — worktree ids are path-derived, so
                 // the same id can exist under another host's project.
                 for worktreeID in removedWorktreeIDsByProject[projectId] ?? [] {
-                    projectsManager.removeOptimisticWorktree(
-                        id: worktreeID,
-                        projectId: projectId
-                    )
+                    projectsManager.dropRemovedWorktree(id: worktreeID, projectId: projectId)
                 }
+                saveProjects()
             }
         }
         // Per-item deletion skipped selection reconciliation because the list
@@ -10405,7 +10404,7 @@ final class AppState {
 
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
-        projectsManager.setOperationState(id: worktree.id, state: .deleting)
+        projectsManager.setOperationState(id: worktree.id, state: .deleting(projectId: worktree.projectId))
 
         Task { @MainActor in
             guard recheckWorkspaceOwnershipBeforeRemoval(worktree) else { return }
@@ -10489,7 +10488,7 @@ final class AppState {
         )
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
         let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
-        projectsManager.setOperationState(id: worktree.id, state: .deleting)
+        projectsManager.setOperationState(id: worktree.id, state: .deleting(projectId: worktree.projectId))
         Task { @MainActor in
             guard recheckWorkspaceOwnershipBeforeRemoval(worktree) else { return }
             await performDeleteWorktree(
@@ -10928,17 +10927,20 @@ final class AppState {
                 _ = try await refreshProjectWorktrees(projectId: worktree.projectId)
             } catch {
                 // The refresh reconciles the removed row away together with
-                // its `.deleting` claim. When the refresh itself could not
-                // run, drop the row here instead of only releasing the claim:
-                // the removal already succeeded, and a row left behind
-                // resolves as an ordinary worktree — remounting the pane this
-                // deletion collapsed, reopening session admission for a
-                // checkout that is gone, and letting `selectionAfterRemoval`
-                // select it straight back.
-                projectsManager.removeOptimisticWorktree(
+                // its `.deleting` claim and the project metadata that names
+                // it. When the refresh itself could not run, drop them here
+                // instead of only releasing the claim: the removal already
+                // succeeded, and a row left behind resolves as an ordinary
+                // worktree — remounting the pane this deletion collapsed,
+                // reopening session admission for a checkout that is gone,
+                // and letting `selectionAfterRemoval` select it straight
+                // back. Persisted metadata must go with it, or a hosted
+                // project would restore the deleted row at startup recovery.
+                projectsManager.dropRemovedWorktree(
                     id: worktree.id,
                     projectId: worktree.projectId
                 )
+                saveProjects()
             }
             if selectedWorktreeId == worktree.id {
                 selectWorktree(id: selectionAfterRemoval(
@@ -10958,7 +10960,7 @@ final class AppState {
         guard let worktree = projectsManager.worktrees(projectId: pending.projectId).first(where: { $0.id == pending.id })
         else { return }
 
-        projectsManager.setOperationState(id: pending.id, state: .deleting)
+        projectsManager.setOperationState(id: pending.id, state: .deleting(projectId: pending.projectId))
 
         Task { @MainActor in
             // This SwiftUI alert stays open for arbitrary user think-time —

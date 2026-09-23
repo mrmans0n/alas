@@ -207,7 +207,7 @@ struct AppStateWorktreeCleanupBatchTests {
         // The first item's row is still listed while the second one is being
         // removed, and must still read as deleting.
         #expect(observation.firstListedAtLaunch == [true, true])
-        #expect(observation.firstClaimAtLaunch[1] == .deleting)
+        #expect(observation.firstClaimAtLaunch[1] == .deleting(projectId: fixture.project.id))
         // The claim is released once the trailing refresh reconciles the row.
         #expect(fixture.state.projectsManager.operationState(for: first.id) == nil)
         #expect(fixture.state.projectsManager.operationState(for: second.id) == nil)
@@ -243,6 +243,23 @@ struct AppStateWorktreeCleanupBatchTests {
         }
         let target = fixture.worktrees[1]
         breaker.repoPath = fixture.repoPath
+        // Give the row metadata a successful refresh would have reconciled
+        // away with it, so the fallback can be held to the same standard.
+        fixture.state.projectsManager.setGGWorktreeMode(
+            projectId: fixture.project.id,
+            worktreeId: target.id,
+            mode: .off
+        )
+        fixture.state.projectsManager.setIssueAttachment(
+            projectId: fixture.project.id,
+            worktreeId: target.id,
+            attachment: IssueAttachment(
+                canonicalURL: URL(string: "https://example.test/42")!,
+                providerLabel: "GitHub",
+                displayReference: "#42",
+                title: "t"
+            )
+        )
 
         let results = await fixture.state.batchDeleteWorktrees([target], keepBranch: false)
 
@@ -253,6 +270,22 @@ struct AppStateWorktreeCleanupBatchTests {
             .worktrees(projectId: fixture.project.id)
             .contains { $0.id == target.id })
         #expect(fixture.state.projectsManager.operationState(for: target.id) == nil)
+        // ...and the persisted per-worktree metadata must go with it, or a
+        // hosted project restores the deleted row from `cachedWorktrees` at
+        // startup recovery and recreating the path inherits stale state.
+        #expect(fixture.state.projectsManager.ggWorktreeMode(
+            projectId: fixture.project.id,
+            worktreeId: target.id
+        ) == .inherit)
+        #expect(fixture.state.projectsManager.issueAttachment(
+            projectId: fixture.project.id,
+            worktreeId: target.id
+        ) == nil)
+        let persisted = fixture.persistence.writtenProjectsFile?.projects
+            .first { $0.id == fixture.project.id }
+        #expect(persisted?.cachedWorktrees.contains { $0.id == target.id } == false)
+        #expect(persisted?.ggWorktreeModes[target.id] == nil)
+        #expect(persisted?.issueAttachments[target.id] == nil)
     }
 
     @Test func emptySelectionReturnsNoResultsAndTouchesNothing() async throws {
@@ -385,7 +418,7 @@ struct AppStateWorktreeCleanupBatchTests {
     @Test func preparingDeleteBlocksWorktreeSessionAdmission() {
         #expect(AppState.blocksWorktreeSessionAdmission(.preparingDelete))
         #expect(AppState.blocksWorktreeSessionAdmission(.creating))
-        #expect(AppState.blocksWorktreeSessionAdmission(.deleting))
+        #expect(AppState.blocksWorktreeSessionAdmission(.deleting(projectId: "p")))
         #expect(!AppState.blocksWorktreeSessionAdmission(nil))
         #expect(!AppState.blocksWorktreeSessionAdmission(.deleteFailed(message: "x")))
     }

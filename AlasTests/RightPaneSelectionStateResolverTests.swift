@@ -131,7 +131,7 @@ struct RightPaneSelectionStateResolverTests {
         let wt = Worktree(id: "wt1", projectId: "p1", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/a"), status: .clean, lastActivity: Date())
         let mgr = ProjectsManager(persistedProjects: [project])
         mgr.insertOptimisticWorktree(wt)
-        mgr.setOperationState(id: wt.id, state: .deleting)
+        mgr.setOperationState(id: wt.id, state: .deleting(projectId: project.id))
         let resolver = RightPaneSelectionStateResolver(
             selectedWorktreeId: wt.id,
             projects: [project],
@@ -139,6 +139,54 @@ struct RightPaneSelectionStateResolverTests {
         )
         #expect(resolver.resolve() == .empty)
         #expect(!resolver.resolve().showsRightPane)
+    }
+
+    /// A worktree id is its path, so the same id can name a checkout under
+    /// another host's project (the case `checkoutScopeQualifiesDuplicateWorktreeIDs…`
+    /// covers). A deletion claim opened for one project must not collapse the
+    /// pane of the same-path worktree selected under the other.
+    @Test func deletingClaimUnderAnotherProjectDoesNotCollapseADuplicateIDPane() {
+        let deletingProject = ProjectConfig(
+            id: "deleting-project",
+            name: "Deleting",
+            path: "/repos/deleting",
+            color: "#fff",
+            addedAt: .distantPast,
+            host: "deleting-host"
+        )
+        let selectedProject = ProjectConfig(
+            id: "selected-project",
+            name: "Selected",
+            path: "/repos/selected",
+            color: "#fff",
+            addedAt: .distantPast,
+            host: "selected-host"
+        )
+        let sharedID = "/srv/checkouts/member"
+        let deletingRow = Worktree(id: sharedID, projectId: deletingProject.id, name: "main", branch: "main", path: URL(fileURLWithPath: sharedID), status: .clean, lastActivity: .distantPast)
+        let selectedRow = Worktree(id: sharedID, projectId: selectedProject.id, name: "main", branch: "main", path: URL(fileURLWithPath: sharedID), status: .clean, lastActivity: .distantPast)
+        let manager = ProjectsManager(persistedProjects: [deletingProject, selectedProject])
+        manager.insertOptimisticWorktree(deletingRow)
+        manager.insertOptimisticWorktree(selectedRow)
+        manager.setOperationState(id: sharedID, state: .deleting(projectId: deletingProject.id))
+
+        let resolver = RightPaneSelectionStateResolver(
+            selectedWorktreeId: sharedID,
+            projects: [deletingProject, selectedProject],
+            projectsManager: manager,
+            allowedWorktreeIDs: [sharedID],
+            checkoutFocusedWorktreeScope: CheckoutFocusedWorktreeScope(
+                worktreeID: sharedID,
+                projectID: selectedProject.id,
+                executionLocation: .ssh("selected-host")
+            )
+        )
+
+        if case .active(let returned) = resolver.resolve() {
+            #expect(returned.projectId == selectedProject.id)
+        } else {
+            Issue.record("Expected the duplicate id under the selected project to stay active")
+        }
     }
 
     @Test func createFailedWhenCreateFailedState() {

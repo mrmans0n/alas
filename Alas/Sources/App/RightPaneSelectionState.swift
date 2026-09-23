@@ -36,7 +36,12 @@ struct RightPaneSelectionStateResolver {
                 return .active(wt)
             case .creating:
                 return .creating(wt)
-            case .deleting:
+            case .deleting(let deletingProjectId):
+                // A worktree id is its path, so the same id can name a
+                // checkout under another host's project. Only the project
+                // that owns the claim is being removed; a duplicate id under
+                // a different project must keep its pane.
+                guard deletingProjectId == wt.projectId else { return .active(wt) }
                 // The worktree is being removed. Returning `.empty` unmounts
                 // the right pane (rail included) for this deletion only; the
                 // global `rightPaneVisible` preference is untouched, so the
