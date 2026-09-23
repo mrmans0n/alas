@@ -21,6 +21,7 @@ struct RemotePairingApprovalClientTests {
         var replyDelay: TimeInterval = 0
         var statusCode: Int?
         var errorMessage: String?
+        var redeemStatusCode: Int?
         var decision: ApprovalDecision? = .allow
         var failFirstOrigin = false
         var lostReply: ApprovalOperation?
@@ -72,6 +73,9 @@ struct RemotePairingApprovalClientTests {
             if let statusCode {
                 let body = errorMessage.map { Data("{\"error\":\"\($0)\"}".utf8) } ?? Data()
                 return (body, HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: nil, headerFields: nil)!)
+            }
+            if let redeemStatusCode, request.url?.path == "/pair" {
+                return (Data(), HTTPURLResponse(url: request.url!, statusCode: redeemStatusCode, httpVersion: nil, headerFields: nil)!)
             }
             if failFirstOrigin && request.url?.host == "offline" { throw URLError(.cannotConnectToHost) }
             let data = try #require(request.httpBody)
@@ -198,6 +202,22 @@ struct RemotePairingApprovalClientTests {
         exchange.statusCode = 409
         #expect(await exchange.client().request(localPeer: exchange.requester, target: exchange.target,
             expectedServerID: "receiver") == .failed(.conflict))
+    }
+
+    @Test(arguments: [(410, RemotePeerPairer.Outcome.approvalExpired),
+                      (403, .approvalDisabled)])
+    func redemptionPreservesApprovalFailure(statusCode: Int, expected: RemotePeerPairer.Outcome) async {
+        let exchange = Exchange()
+        let client = exchange.client()
+        guard case .approved(let session) = await client.request(localPeer: exchange.requester, target: exchange.target,
+                                                                  expectedServerID: "receiver") else {
+            Issue.record("Expected approval")
+            return
+        }
+        exchange.redeemStatusCode = statusCode
+        let outcome = await client.redeem(session: session, advertisement: .init(serverId: "requester", name: "Requester",
+            origins: exchange.requester.origins, counterCode: "counter", publicKey: exchange.requester.publicKey))
+        #expect(outcome == expected)
     }
 
     @Test func pendingApprovalPinsIdentityAndRedeemsOnlyAfterAllow() async throws {

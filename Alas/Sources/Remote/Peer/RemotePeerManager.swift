@@ -36,6 +36,8 @@ final class RemotePeerManager {
         case invalidLink
         case expiredCode
         case originRejected
+        case approvalExpired
+        case approvalDisabled
         case unreachable
         /// This Mac advertises no address a peer could dial back on, so the
         /// exchange cannot complete even if the far side is reachable.
@@ -490,6 +492,12 @@ final class RemotePeerManager {
         case .originRejected:
             endAttempt(counterCode: counterCode)
             return .originRejected
+        case .approvalExpired:
+            endAttempt(counterCode: counterCode)
+            return .approvalExpired
+        case .approvalDisabled:
+            endAttempt(counterCode: counterCode)
+            return .approvalDisabled
         case .identityUnproven:
             endAttempt(counterCode: counterCode)
             return .identityUnproven

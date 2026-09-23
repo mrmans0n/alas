@@ -538,6 +538,10 @@ struct RemoteServerPane: View {
                 : "That code wasn't accepted. Check it against the other Mac's screen — it refreshes every 45 seconds."
         case .originRejected:
             return "That Mac doesn't accept peers. Turn on Remote peers in its Advanced settings."
+        case .approvalExpired:
+            return "That pairing request expired. Click Pair to try again."
+        case .approvalDisabled:
+            return "Pairing approval is no longer available on that Mac."
         case .unreachable:
             return "Couldn't reach that Mac at any of its addresses."
         case .noLocalAddress:

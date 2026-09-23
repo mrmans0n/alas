@@ -110,7 +110,14 @@ final class RemotePairingApprovalClient {
                            publicKey: current.receiverKey, origin: current.origin)
         } catch {
             await cancel(session: session)
-            return error is ApprovalFailure ? .identityUnproven : .unreachable
+            switch error as? ApprovalFailure {
+            case .expired:
+                return .approvalExpired
+            case .disabled:
+                return .approvalDisabled
+            default:
+                return error is ApprovalFailure ? .identityUnproven : .unreachable
+            }
         }
     }
 
