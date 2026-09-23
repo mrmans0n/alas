@@ -20,6 +20,7 @@ struct ChatPane: View {
         static let dictationLanguage = "Dictation language"
         static let confirmCloseChatTabs = "Confirm before closing chat tabs"
         static let autoRun = "⚡ Auto-run"
+        static let onDeviceFallbackTitles = "On-device fallback titles"
     }
 
     enum FontPickerDefaults {
@@ -41,6 +42,7 @@ struct ChatPane: View {
         RowLabels.defaultLaunchSurface,
         RowLabels.sendOnEnter,
         RowLabels.confirmCloseChatTabs,
+        RowLabels.onDeviceFallbackTitles,
         RowLabels.autoRun,
         RowLabels.dictationLanguage,
     ]
@@ -126,6 +128,12 @@ struct ChatPane: View {
                                 state.saveConfig()
                             }
                         ))
+                    }
+                    SettingsRow(name: RowLabels.onDeviceFallbackTitles,
+                                desc: "When the agent doesn't name a chat, use an on-device model to suggest a title. Available on macOS 26 or later.") {
+                        AlasToggle(on: state.bind(\.harness.acpLocalTitlesEnabled))
+                            .accessibilityLabel(RowLabels.onDeviceFallbackTitles)
+                            .accessibilityValue(state.config.harness.acpLocalTitlesEnabled ? "On" : "Off")
                     }
                     SettingsRow(name: RowLabels.autoRun,
                                 desc: "New chat sessions start with auto-run on — the agent runs tools without asking for permission. Toggle per-session with the bolt in the composer.") {

@@ -11667,6 +11667,9 @@ final class AppState {
                     title: title
                 )
             },
+            localTitlesEnabled: { [weak self] in
+                self?.config.harness.acpLocalTitlesEnabled ?? false
+            },
             onInputAwaiting: { [weak self] session, request in
                 guard let self,
                       self.config.harness.notifyOnAwaiting,
@@ -12087,6 +12090,9 @@ final class AppState {
                     sessionId: sessionId,
                     title: title
                 )
+            },
+            localTitlesEnabled: { [weak self] in
+                self?.config.harness.acpLocalTitlesEnabled ?? false
             },
             onInputAwaiting: { [weak self] session, request in
                 guard let self,
@@ -13768,8 +13774,10 @@ extension AppState: RemoteSessionsProvider {
             let meaningfulTitle = !title.isEmpty && title != "New session"
             let sourceScore: Int
             switch row.titleSource {
-            case .manual: sourceScore = 3
-            case .generated: sourceScore = 2
+            case .manual: sourceScore = 5
+            case .provider, .generated: sourceScore = 4
+            case .local: sourceScore = 3
+            case .fallback: sourceScore = 2
             case .placeholder: sourceScore = 1
             }
             return (meaningfulTitle ? 100 : 0) + sourceScore

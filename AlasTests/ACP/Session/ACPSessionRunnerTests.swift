@@ -681,13 +681,13 @@ struct ACPSessionRunnerTests {
 
         try await waitUntil {
             session.title == "Adapter Title"
-                && session.titleSource == .generated
+                && session.titleSource == .provider
                 && callbackTitles == ["Adapter Title"]
         }
 
         let row = try #require(try store.loadSession(id: "s"))
         #expect(row.title == "Adapter Title")
-        #expect(row.titleSource == .generated)
+        #expect(row.titleSource == .provider)
     }
 
     @Test("session_info_update metadata updates live goal")
@@ -924,15 +924,226 @@ struct ACPSessionRunnerTests {
 
         try await waitUntil {
             session.title == "Replayed Adapter Title"
-                && session.titleSource == .generated
+                && session.titleSource == .provider
                 && callbackTitles == ["Replayed Adapter Title"]
         }
 
         let row = try #require(try store.loadSession(id: "s"))
         #expect(row.title == "Replayed Adapter Title")
-        #expect(row.titleSource == .generated)
+        #expect(row.titleSource == .provider)
         #expect(session.transcript.messages.isEmpty)
     }
+
+    @Test("local title updates the tab and stored history, then a provider title wins")
+    func localTitleThenProviderTitle() async throws {
+        var titles: [String] = []
+        let tabWorktreeID = "title-test-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: tabWorktreeID)) }
+        let tabs = TabsManager()
+        _ = tabs.append(acpSession: .init(sessionId: "s", title: "New session"), to: tabWorktreeID)
+        let (runner, mock, store) = try makeLocalTitleRunner(
+            generate: { _ in "Fix sign-in persistence" },
+            onTitle: {
+                titles.append($0)
+                _ = tabs.renameACPSessionTabs(worktreeId: tabWorktreeID, sessionId: "s", title: $0)
+            }
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        let submitted = await withCheckedContinuation { continuation in
+            runner.send(text: "Please fix sign-in persistence", attachments: []) {
+                continuation.resume(returning: $0)
+            }
+        }
+        #expect(submitted)
+        try await waitUntil { runner.session.titleSource == .local }
+        #expect(titles == ["Please fix sign-in persistence", "Fix sign-in persistence"])
+        let localRow = try #require(try store.loadSession(id: "s"))
+        #expect(tabs.tabs(forWorktree: tabWorktreeID).first?.title == "Fix sign-in persistence")
+        #expect(localRow.title == "Fix sign-in persistence")
+        #expect(localRow.titleSource == .local)
+        let localHistory = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: ACPMockClient()) }
+        )
+        #expect(localHistory.recent.first?.title == "Fix sign-in persistence")
+        #expect(localHistory.placeholderSession(id: "s")?.titleSource == .local)
+
+        mock.emit(.init(sessionId: "s", update: .sessionInfoUpdate(.init(
+            title: "Provider session title", updatedAt: nil
+        ))))
+        try await waitUntil { titles.last == "Provider session title" }
+        let providerRow = try #require(try store.loadSession(id: "s"))
+        #expect(providerRow.titleSource == .provider)
+        let restored = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: ACPMockClient()) }
+        )
+        let reopened = try #require(restored.placeholderSession(id: "s"))
+        #expect(reopened.title == "Provider session title")
+        #expect(reopened.titleSource == .provider)
+        #expect(tabs.tabs(forWorktree: tabWorktreeID).first?.title == "Provider session title")
+        let reopenedTabs = TabsManager()
+        reopenedTabs.loadAll(worktreeIds: [tabWorktreeID])
+        #expect(reopenedTabs.tabs(forWorktree: tabWorktreeID).first?.title == "Provider session title")
+        #expect(restored.recent.first?.title == "Provider session title")
+    }
+
+    @Test("provider title arriving during local generation cannot be replaced")
+    func providerTitleInvalidatesPendingLocalTitle() async throws {
+        let started = AsyncGate()
+        let release = AsyncGate()
+        var titles: [String] = []
+        let (runner, mock, store) = try makeLocalTitleRunner(
+            generate: { _ in
+                await started.open()
+                await release.wait()
+                return "Stale local title"
+            },
+            onTitle: { titles.append($0) }
+        )
+        runner.start()
+        defer { runner.stop() }
+        let submitted = await withCheckedContinuation { continuation in
+            runner.send(text: "Please fix the account sync race", attachments: []) {
+                continuation.resume(returning: $0)
+            }
+        }
+        #expect(submitted)
+        await started.wait()
+        mock.emit(.init(sessionId: "s", update: .sessionInfoUpdate(.init(
+            title: "Provider account sync", updatedAt: nil
+        ))))
+        try await waitUntil { titles.last == "Provider account sync" }
+        await release.open()
+        await runner.flushPersistence()
+        let row = try #require(try store.loadSession(id: "s"))
+        #expect(row.title == "Provider account sync")
+        #expect(row.titleSource == .provider)
+        #expect(runner.session.title == "Provider account sync")
+    }
+
+    @Test("manual rename during generation persists without a delayed local rename")
+    func manualRenameInvalidatesPendingLocalTitle() async throws {
+        let started = AsyncGate()
+        let release = AsyncGate()
+        var titles: [String] = []
+        let (runner, _, store) = try makeLocalTitleRunner(
+            generate: { _ in
+                await started.open()
+                await release.wait()
+                return "Stale local title"
+            },
+            onTitle: { titles.append($0) }
+        )
+        runner.start()
+        defer { runner.stop() }
+        let submitted = await withCheckedContinuation { continuation in
+            runner.send(text: "Please fix the account sync race", attachments: []) {
+                continuation.resume(returning: $0)
+            }
+        }
+        try await waitUntil { titles == ["Please fix the account sync race"] }
+        #expect(submitted)
+        await started.wait()
+        #expect(try store.renameSession(id: "s", title: "My account work", titleSource: .manual, updatedAt: 5))
+        runner.session.title = "My account work"
+        runner.session.titleSource = .manual
+        await release.open()
+        await runner.flushPersistence()
+        let row = try #require(try store.loadSession(id: "s"))
+        #expect(row.title == "My account work")
+        #expect(row.titleSource == .manual)
+        #expect(titles == ["Please fix the account sync race"])
+        let restored = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: ACPMockClient()) }
+        )
+        #expect(restored.recent.first?.title == "My account work")
+        #expect(restored.placeholderSession(id: "s")?.titleSource == .manual)
+    }
+
+    @Test("unavailable local model retains the immediate fallback")
+    func unavailableLocalModelKeepsFallback() async throws {
+        let calls = AsyncCounter()
+        let started = AsyncGate()
+        let (runner, mock, store) = try makeLocalTitleRunner(generate: { _ in
+            _ = await calls.next()
+            await started.open()
+            return nil
+        })
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        let first = await withCheckedContinuation { continuation in
+            runner.send(text: "Please fix the account sync race", attachments: []) {
+                continuation.resume(returning: $0)
+            }
+        }
+        #expect(first)
+        await started.wait()
+        await runner.flushPersistence()
+        let second = await withCheckedContinuation { continuation in
+            runner.send(text: "Please inspect the background task", attachments: []) {
+                continuation.resume(returning: $0)
+            }
+        }
+        #expect(second)
+        #expect(runner.session.title == "Please fix the account sync race")
+        #expect(try store.loadSession(id: "s")?.titleSource == .fallback)
+        let generationCount = await calls.current()
+        #expect(generationCount == 1)
+    }
+
+    @Test("opt-out never sends a request to the local model")
+    func localTitleOptOutKeepsFallback() async throws {
+        let calls = AsyncCounter()
+        let (runner, _, store) = try makeLocalTitleRunner(
+            generate: { _ in
+                _ = await calls.next()
+                return "Model title"
+            },
+            enabled: { false }
+        )
+        let submitted = await withCheckedContinuation { continuation in
+            runner.send(text: "Please fix the account sync race", attachments: []) {
+                continuation.resume(returning: $0)
+            }
+        }
+        #expect(submitted)
+        await runner.flushPersistence()
+        #expect(runner.session.title == "Please fix the account sync race")
+        #expect(try store.loadSession(id: "s")?.titleSource == .fallback)
+        let generationCount = await calls.current()
+        #expect(generationCount == 0)
+    }
+
+    @Test("short greeting waits for the first meaningful request")
+    func localTitleUsesFirstMeaningfulRequest() async throws {
+        let calls = AsyncCounter()
+        let (runner, _, store) = try makeLocalTitleRunner(generate: { _ in
+            _ = await calls.next()
+            return "Fix login flow"
+        })
+        let greeting = await withCheckedContinuation { continuation in
+            runner.send(text: "Hi", attachments: []) { continuation.resume(returning: $0) }
+        }
+        #expect(greeting)
+        let request = await withCheckedContinuation { continuation in
+            runner.send(text: "Please fix the login flow", attachments: []) {
+                continuation.resume(returning: $0)
+            }
+        }
+        #expect(request)
+        try await waitUntil { runner.session.titleSource == .local }
+        #expect(runner.session.title == "Fix login flow")
+        #expect(try store.loadSession(id: "s")?.titleSource == .local)
+        let generationCount = await calls.current()
+        #expect(generationCount == 1)
+    }
+
 
     @Test("suppressed retry history does not affect live retry status")
     func suppressedRetryHistoryDoesNotAffectLiveStatus() async throws {
@@ -4224,6 +4435,35 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.mcpPreambleSent == false)
     }
 
+    private func makeLocalTitleRunner(
+        generate: @escaping @Sendable (String) async -> String?,
+        onTitle: @escaping (String) -> Void = { _ in },
+        enabled: @escaping @MainActor () -> Bool = { true }
+    ) throws -> (ACPSessionRunner, ACPMockClient, ACPSessionStore) {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-local-title-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "New session", titleSource: .placeholder,
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false
+        ))
+        let mock = ACPMockClient()
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt",
+                                 title: "New session", titleSource: .placeholder)
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session, connection: ACPConnection(client: mock),
+            store: store, sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onSessionTitleUpdated: onTitle,
+            localTitlesEnabled: enabled,
+            localTitleGenerator: generate
+        )
+        return (runner, mock, store)
+    }
+
     private func waitUntil(
         timeoutNanoseconds: UInt64 = 1_000_000_000,
         _ condition: @escaping @MainActor () -> Bool
@@ -4493,6 +4733,8 @@ private actor AsyncCounter {
         value += 1
         return value
     }
+
+    func current() -> Int { value }
 }
 
 private final class DurableAcknowledgementRecorder: @unchecked Sendable {

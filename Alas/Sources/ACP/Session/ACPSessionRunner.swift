@@ -57,6 +57,10 @@ final class ACPSessionRunner {
     private let onMessageActivity: (() -> Void)?
     private let onPromptWorkChanged: (() -> Void)?
     private let onSessionTitleUpdated: ((String) -> Void)?
+    private let localTitlesEnabled: @MainActor () -> Bool
+    private let localTitleGenerator: @Sendable (String) async -> String?
+    private var providerTitleRevision = 0
+    private var localTitleAttempted = false
     /// Fires whenever a live update changes what the agent has advertised as
     /// its models — an `availableModelsUpdate`, or a `sessionConfigOptionsUpdate`
     /// that could carry a model-shaped config option. The initial
@@ -197,6 +201,8 @@ final class ACPSessionRunner {
          onMessageActivity: (() -> Void)? = nil,
          onPromptWorkChanged: (() -> Void)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
+         localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
+         localTitleGenerator: @escaping @Sendable (String) async -> String? = { await ACPLocalTitleGenerator.generate(from: $0) },
          onModelsObserved: ((_ agentId: String, _ models: [ChipSpec.Item]) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
@@ -225,6 +231,8 @@ final class ACPSessionRunner {
         self.onMessageActivity = onMessageActivity
         self.onPromptWorkChanged = onPromptWorkChanged
         self.onSessionTitleUpdated = onSessionTitleUpdated
+        self.localTitlesEnabled = localTitlesEnabled
+        self.localTitleGenerator = localTitleGenerator
         self.onModelsObserved = onModelsObserved
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
         self.incomingUpdateCoalesceNanos = incomingUpdateCoalesceNanos
@@ -1496,26 +1504,73 @@ final class ACPSessionRunner {
         })
     }
 
-    func persistGeneratedTitleIfStoredPlaceholder() {
+    func persistFallbackTitleIfStoredPlaceholder() {
         guard holdsLeaseForWrite() else { return }
         let now = Int64(Date().timeIntervalSince1970)
         let title = session.title
         let fence = leaseFenceProvider()
         let sessionId = sessionId
         enqueuePersistence({ persistence in
-            try await persistence.updateGeneratedTitleIfPlaceholder(
+            try await persistence.updateFallbackTitleIfPlaceholder(
                 id: sessionId,
                 title: title,
                 updatedAt: now,
                 fence: fence
             )
         }, completion: { [weak self] updated in
-            guard updated != true, let self else { return }
+            guard let self else { return }
+            if updated == true {
+                if self.session.titleSource == .fallback, self.session.title == title {
+                    self.onSessionTitleUpdated?(title)
+                }
+                return
+            }
             guard let row = try? await self.persistence.loadSession(id: self.sessionId),
                   row.titleSource != .placeholder else { return }
             self.session.title = row.title
             self.session.titleSource = row.titleSource
         })
+    }
+
+    private func generateLocalTitle(for text: String) {
+        guard !localTitleAttempted, session.titleSource == .fallback,
+              let candidate = ACPLocalTitleGenerator.candidate(from: text)
+        else { return }
+        localTitleAttempted = true
+        guard localTitlesEnabled() else { return }
+        let revision = providerTitleRevision
+        let fallback = session.title
+        Task { [weak self] in
+            guard let self, let title = await self.localTitleGenerator(candidate),
+                  let title = ACPLocalTitleGenerator.validTitle(title),
+                  !Task.isCancelled, !self.stopped, self.holdsLeaseForWrite(),
+                  self.localTitlesEnabled(), self.providerTitleRevision == revision,
+                  self.session.titleSource == .fallback, self.session.title == fallback
+            else { return }
+            let now = Int64(Date().timeIntervalSince1970)
+            let fence = self.leaseFenceProvider()
+            let sessionId = self.sessionId
+            self.enqueuePersistence({ persistence in
+                try await persistence.updateLocalTitleIfFallback(
+                    id: sessionId, title: title, updatedAt: now, fence: fence
+                )
+            }, completion: { [weak self] updated in
+                guard let self, !self.stopped, self.holdsLeaseForWrite() else { return }
+                if updated == true {
+                    guard self.providerTitleRevision == revision,
+                          self.session.titleSource == .fallback,
+                          self.session.title == fallback else { return }
+                    self.session.title = title
+                    self.session.titleSource = .local
+                    self.onSessionTitleUpdated?(title)
+                } else if let row = try? await self.persistence.loadSession(id: self.sessionId),
+                          row.titleSource == .manual || row.titleSource == .provider {
+                    self.session.title = row.title
+                    self.session.titleSource = row.titleSource
+                    self.onSessionTitleUpdated?(row.title)
+                }
+            })
+        }
     }
 
     func applySessionInfoTitle(_ info: ACPSessionInfoUpdate) {
@@ -1524,8 +1579,11 @@ final class ACPSessionRunner {
         case .absent:
             return
         case .null:
+            providerTitleRevision += 1
             clearSessionInfoTitle()
         case .value(let rawTitle):
+            guard !rawTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            providerTitleRevision += 1
             applySessionInfoTitleValue(rawTitle)
         }
     }
@@ -1537,7 +1595,7 @@ final class ACPSessionRunner {
 
         let now = Int64(Date().timeIntervalSince1970)
         session.title = trimmed
-        session.titleSource = .generated
+        session.titleSource = .provider
         let fence = leaseFenceProvider()
         let sessionId = sessionId
         enqueuePersistence({ persistence in
@@ -2481,7 +2539,17 @@ extension ACPSessionRunner {
                                                                   delegatedSource: delegatedSource)
                     self.persistFromIndex(before)
                     if self.session.title != titleBefore {
-                        self.persistGeneratedTitleIfStoredPlaceholder()
+                        self.persistFallbackTitleIfStoredPlaceholder()
+                    }
+                    if !self.localTitleAttempted, delegatedSource == nil,
+                       (!self.session.restoredFromPersistence || before == 0),
+                       !self.session.transcript.messages.dropLast().contains(where: {
+                           if case .user(_, _, let text, _, let source) = $0, source == nil {
+                               return ACPLocalTitleGenerator.candidate(from: text) != nil
+                           }
+                           return false
+                       }) {
+                        self.generateLocalTitle(for: Self.textPreview(of: blocks))
                     }
                     if let qid = queuedItemId,
                        let idx = self.session.queue.firstIndex(where: { $0.id == qid }) {
