@@ -58,6 +58,57 @@ struct RemoteAppStateAccessTests {
         #expect(state.remoteServer?.pairingApprovalVersion == nil)
     }
 
+    @Test func disabledApprovalKeepsExpiryTaskForRetainedPairedAttempt() async throws {
+        let state = AppState(store: MemoryStore())
+        let signer = RemotePairingApprovalClientTests.Signer()
+        state.remoteApprovalSignerProvider = { signer }
+        state.config.remote.enabled = true
+        state.config.remote.federationEnabled = true
+        state.config.remote.discoverable = true
+        let port = try availableTCPPort()
+        state.config.remote.port = port
+        state.config.remote.allowedHosts = ["approval.test"]
+        state.syncRemoteServer()
+        defer {
+            state.approvalExpiryTask?.cancel()
+            state.config.remote.enabled = false
+            state.syncRemoteServer()
+        }
+        for _ in 0..<50 where state.remotePort != port { try await Task.sleep(for: .milliseconds(20)) }
+
+        let remote = RemotePairingApprovalClientTests.Exchange()
+        let challenge = try state.remotePairingApprovals.challenge(requester: remote.requester,
+            attemptNonce: RemoteIdentityCrypto.randomChallenge())
+        let challenged = challenge.payload
+        let submit = ApprovalPayload(operation: .submit, requestID: challenged.requestID, requester: challenged.requester,
+            receiver: challenged.receiver, attemptNonce: challenged.attemptNonce,
+            operationNonce: RemoteIdentityCrypto.randomChallenge(), challenge: challenged.challenge,
+            expiresAtMilliseconds: challenged.expiresAtMilliseconds, phase: challenged.phase,
+            counterCode: nil, responseDigest: nil)
+        let pending = try state.remotePairingApprovals.receive(.init(payload: submit,
+            signature: try #require(remote.requesterSigner.signApproval(submit, reply: false))))
+        state.remotePairingApprovals.decide(.allow, requestID: challenged.requestID)
+        let approved = try state.remotePairingApprovals.receive(statusRequest(for: pending.payload,
+            signer: remote.requesterSigner))
+        let redeem = ApprovalPayload(operation: .redeem, requestID: approved.payload.requestID,
+            requester: approved.payload.requester, receiver: approved.payload.receiver,
+            attemptNonce: approved.payload.attemptNonce, operationNonce: RemoteIdentityCrypto.randomChallenge(),
+            challenge: approved.payload.challenge, expiresAtMilliseconds: approved.payload.expiresAtMilliseconds,
+            phase: approved.payload.phase, counterCode: "counter", responseDigest: nil)
+        _ = try state.remotePairingApprovals.redeem(.init(payload: redeem,
+            signature: try #require(remote.requesterSigner.signApproval(redeem, reply: false)))) {
+            ApprovalIssuedResponse(body: Data("reply".utf8), deviceID: "device")
+        }
+        state.remotePairingApprovals.complete(requestID: redeem.requestID, succeeded: true)
+
+        state.config.remote.discoverable = false
+        state.syncPairingApprovalState()
+
+        #expect(state.remotePairingApprovals.entries.first?.phase == .paired)
+        #expect(state.approvalExpiryTask != nil)
+        #expect(state.remoteServer?.pairingApprovalVersion == nil)
+    }
+
     @Test(arguments: ["cancel", "federation", "remote", "shutdown"])
     func outgoingApprovalCancelsWithoutPairingBeforeAllow(setting: String) async throws {
         let state = AppState(store: MemoryStore())
@@ -103,6 +154,17 @@ struct RemoteAppStateAccessTests {
         #expect(state.nearbyApprovalState == .cancelled)
         #expect(exchange.coordinator.entries.first?.phase == .cancelled)
         #expect(exchange.issues == 0)
+    }
+
+    private func statusRequest(for payload: ApprovalPayload,
+                               signer: any ApprovalSigning) throws -> ApprovalEnvelope {
+        let status = ApprovalPayload(operation: .status, requestID: payload.requestID, requester: payload.requester,
+            receiver: payload.receiver, attemptNonce: payload.attemptNonce,
+            operationNonce: RemoteIdentityCrypto.randomChallenge(), challenge: payload.challenge,
+            expiresAtMilliseconds: payload.expiresAtMilliseconds, phase: payload.phase,
+            counterCode: nil, responseDigest: nil)
+        return ApprovalEnvelope(payload: status,
+                                signature: try #require(signer.signApproval(status, reply: false)))
     }
 
     @Test(arguments: [true, false])

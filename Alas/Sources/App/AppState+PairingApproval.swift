@@ -105,7 +105,7 @@ extension AppState {
         if !canRequestPairingApproval { cancelNearbyApproval() }
         let enabled = canReceivePairingApproval && !approvalSigner().publicKey.isEmpty
         remotePairingApprovals.setEnabled(enabled)
-        guard enabled else {
+        guard enabled || !remotePairingApprovals.entries.isEmpty else {
             approvalExpiryTask?.cancel()
             approvalExpiryTask = nil
             return
@@ -114,8 +114,12 @@ extension AppState {
         approvalExpiryTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
-                guard let self, self.canReceivePairingApproval else { return }
+                guard let self else { return }
                 self.remotePairingApprovals.expire()
+                if !self.canReceivePairingApproval && self.remotePairingApprovals.entries.isEmpty {
+                    self.approvalExpiryTask = nil
+                    return
+                }
             }
         }
     }
