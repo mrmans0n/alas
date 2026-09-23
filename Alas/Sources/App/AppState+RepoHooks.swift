@@ -111,15 +111,15 @@ extension AppState {
             return nil
         }
 
-        let source = RemoteHostRegistry.shared.host(forPath: request.worktreePath)
-            .map { RepoHookSource.remote(host: $0) } ?? .local
-        let failure = RepoHookFailure(
-            event: .worktreeCreate,
-            source: source,
-            message: "The Workspace member's project trust record is unavailable, so its repository hook approval cannot be checked."
-        )
         while true {
             guard var project = projectsManager.projects.first(where: { $0.id == request.projectID }) else {
+                let source = RemoteHostRegistry.shared.host(forPath: request.worktreePath)
+                    .map { RepoHookSource.remote(host: $0) } ?? .local
+                let failure = RepoHookFailure(
+                    event: .worktreeCreate,
+                    source: source,
+                    message: "The Workspace member's project trust record is unavailable, so its repository hook approval cannot be checked."
+                )
                 let decision = await repoHookApprovalQueue.requestFailureDecision(
                     failure: failure,
                     context: .workspaceMember
