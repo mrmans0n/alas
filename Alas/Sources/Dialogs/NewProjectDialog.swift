@@ -823,14 +823,17 @@ private struct ProjectDialog: View {
                 .foregroundStyle(theme.color("fg-muted"))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
-            if case .approvalRequired = presentation {
+            switch presentation {
+            case .approved(_), .approvalRequired(_):
                 Button("Review") { reviewRepoHook(event) }
                     .buttonStyle(.borderless)
                     .font(.system(size: 11, weight: .medium))
-            } else if case .unreadable = presentation {
+            case .unreadable(_):
                 Button("Retry") { reviewRepoHook(event) }
                     .buttonStyle(.borderless)
                     .font(.system(size: 11, weight: .medium))
+            case .notFound, .checkAfterRepositoryAvailable:
+                EmptyView()
             }
         }
     }
@@ -880,6 +883,8 @@ private struct ProjectDialog: View {
                     if state.projectsManager.isRepoHookApproved(projectId: inspection.projectID, hash: hook.hash)
                         || pendingRepoHookApprovals.contains(hook.hash, for: approvalTarget) {
                         repoHookPresentations[event] = .approved(hook)
+                        await state.repoHookApprovalQueue.requestReview(hook: hook)
+                        guard requestID == repoHookInspectionID else { return }
                         return
                     }
                     let decision = await state.repoHookApprovalQueue.requestDecision(

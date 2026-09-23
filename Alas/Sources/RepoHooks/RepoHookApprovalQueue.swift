@@ -40,6 +40,7 @@ enum RepoHookApprovalDecision: Equatable, Sendable {
 struct RepoHookApprovalRequest: Identifiable, Equatable {
     enum Content: Equatable {
         case hook(RepoHook)
+        case review(RepoHook)
         case failure(RepoHookFailure)
     }
 
@@ -48,8 +49,14 @@ struct RepoHookApprovalRequest: Identifiable, Equatable {
     let context: RepoHookApprovalContext
 
     var hook: RepoHook? {
-        guard case let .hook(hook) = content else { return nil }
-        return hook
+        switch content {
+        case let .hook(hook), let .review(hook): hook
+        case .failure: nil
+        }
+    }
+
+    var isReadOnlyReview: Bool {
+        if case .review = content { true } else { false }
     }
 
     var failure: RepoHookFailure? {
@@ -59,14 +66,14 @@ struct RepoHookApprovalRequest: Identifiable, Equatable {
 
     var event: RepoHookEvent {
         switch content {
-        case let .hook(hook): hook.event
+        case let .hook(hook), let .review(hook): hook.event
         case let .failure(failure): failure.event
         }
     }
 
     var source: RepoHookSource {
         switch content {
-        case let .hook(hook): hook.source
+        case let .hook(hook), let .review(hook): hook.source
         case let .failure(failure): failure.source
         }
     }
@@ -165,6 +172,13 @@ final class RepoHookApprovalQueue {
     ) async -> RepoHookApprovalDecision {
         await requestDecision(
             .init(id: UUID(), content: .failure(failure), context: context),
+            coalescingKey: nil
+        )
+    }
+
+    func requestReview(hook: RepoHook) async {
+        _ = await requestDecision(
+            .init(id: UUID(), content: .review(hook), context: .projectSettings),
             coalescingKey: nil
         )
     }

@@ -207,6 +207,33 @@ struct RepoHookApprovalQueueTests {
         #expect(await continueTask.value == .skip)
     }
 
+    @Test func presentsApprovedHookReviewReadOnlyInProjectDialogFIFO() async {
+        let queue = RepoHookApprovalQueue()
+        let presenterID = UUID()
+        queue.registerProjectDialogPresenter(id: presenterID)
+        let reviewedHook = hook("approved")
+        let reviewTask = Task {
+            await queue.requestReview(hook: reviewedHook)
+        }
+
+        await Task.yield()
+        #expect(queue.activeProjectDialogRequest?.isReadOnlyReview == true)
+        #expect(queue.activeProjectDialogRequest?.hook == reviewedHook)
+
+        let approvalTask = Task {
+            await queue.requestDecision(hook: hook("next"), projectID: "project", context: .projectSettings)
+        }
+        await Task.yield()
+        queue.decide(.cancel)
+        await reviewTask.value
+
+        #expect(queue.activeProjectDialogRequest?.isReadOnlyReview == false)
+        #expect(queue.activeProjectDialogRequest?.hook == hook("next"))
+        queue.decide(.approve)
+        #expect(await approvalTask.value == .approve)
+        queue.unregisterProjectDialogPresenter(id: presenterID)
+    }
+
     private func hook(_ text: String) -> RepoHook {
         let bytes = Data(text.utf8)
         return .init(

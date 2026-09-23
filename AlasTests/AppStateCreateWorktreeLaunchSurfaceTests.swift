@@ -160,6 +160,43 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
     }
 
     @Test
+    func missingWorkspaceProjectRequiresAnExplicitHookDecision() async throws {
+        let state = AppState()
+        let request = WorkspaceRepoHookRequest(
+            projectID: "missing-\(UUID().uuidString)",
+            worktreePath: "/tmp/missing-workspace-project",
+            memberPolicy: WorkspaceMemberConfigurationSnapshot(
+                setupScript: "",
+                ggMode: .off,
+                mcpServers: [],
+                projectWorktreeCreateMode: .useGlobal,
+                projectWorktreeCreateScript: ""
+            )
+        )
+        let task = Task {
+            try await state.preparedWorkspaceRepoHook(request)
+        }
+
+        for _ in 0..<80 {
+            if state.repoHookApprovalQueue.activeRequest?.failure != nil { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        let failure = state.repoHookApprovalQueue.activeRequest?.failure
+        #expect(failure?.event == .worktreeCreate)
+        #expect(failure?.source == .local)
+        #expect(failure?.message == "The Workspace member's project trust record is unavailable, so its repository hook approval cannot be checked.")
+        #expect(state.repoHookApprovalQueue.activeRequest?.context == .workspaceMember)
+        guard failure != nil else {
+            task.cancel()
+            return
+        }
+
+        state.repoHookApprovalQueue.decide(.skip)
+        #expect(try await task.value == nil)
+    }
+
+    @Test
     func acpLaunchSurfaceOpensAcpSessionTab() async throws {
         let repo = try await makeRepo(name: "acp")
         defer { try? FileManager.default.removeItem(at: repo) }
