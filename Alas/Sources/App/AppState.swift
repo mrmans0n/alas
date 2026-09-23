@@ -9917,6 +9917,19 @@ final class AppState {
                     projectsManager.dropRemovedWorktree(id: worktreeID, projectId: projectId)
                 }
                 saveProjects()
+                continue
+            }
+            // The refresh clears a held claim only when git no longer lists
+            // the id. A checkout recreated at the same path keeps that id, so
+            // release the claims for the items this batch removed regardless:
+            // the removals succeeded, and whatever now holds that id is not
+            // the worktree that was being deleted.
+            for worktreeID in removedWorktreeIDsByProject[projectId] ?? [] {
+                projectsManager.setOperationState(
+                    forWorktreeId: worktreeID,
+                    projectId: projectId,
+                    state: nil
+                )
             }
         }
         // Per-item deletion skipped selection reconciliation because the list
@@ -10958,6 +10971,15 @@ final class AppState {
         if refreshAfter {
             do {
                 _ = try await refreshProjectWorktrees(projectId: worktree.projectId)
+                // The refresh clears the claim only for a row git no longer
+                // lists. A checkout recreated at the same path before this
+                // refresh ran keeps the same path-derived id, so it would
+                // inherit the claim and stay hidden from the right pane and
+                // blocked from session admission forever. The removal this
+                // claim described has already succeeded, so release it either
+                // way: whatever the refreshed list holds under this id now is
+                // not the worktree that was being deleted.
+                projectsManager.setOperationState(for: worktree, state: nil)
             } catch {
                 // The refresh reconciles the removed row away together with
                 // its `.deleting` claim and the project metadata that names

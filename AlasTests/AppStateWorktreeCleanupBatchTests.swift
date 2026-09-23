@@ -288,6 +288,60 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(persisted?.issueAttachments[target.id] == nil)
     }
 
+    /// A checkout recreated at the deleted path before the post-delete refresh
+    /// keeps the same path-derived id, so the refresh cannot tell the new row
+    /// apart from the removed one and leaves the `.deleting` claim in place —
+    /// which would hide the new checkout from the right pane and block its
+    /// sessions forever. The removal has succeeded by then, so the claim is
+    /// released regardless of what now holds that id.
+    @Test func deletionClaimIsReleasedWhenThePathIsRecreated() async throws {
+        @MainActor
+        final class Recreation {
+            var repoPath: URL?
+            var deletedPath: URL?
+            var recreated = false
+        }
+        let recreation = Recreation()
+        // The cleanup launcher runs once the removal succeeded and before the
+        // trailing refresh, so recreating the checkout here is exactly the
+        // race: the refresh that follows sees a row at the removed id.
+        let fixture = try await makeCleanupFixture(worktreeCount: 2) { _ in
+            guard let repoPath = recreation.repoPath,
+                  let deletedPath = recreation.deletedPath,
+                  !recreation.recreated
+            else { return }
+            recreation.recreated = true
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = [
+                "worktree", "add", deletedPath.path, "-b", "recreated", "main",
+            ]
+            process.currentDirectoryURL = repoPath
+            try process.run()
+            process.waitUntilExit()
+        }
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        recreation.repoPath = fixture.repoPath
+        recreation.deletedPath = target.path
+
+        let results = await fixture.state.batchDeleteWorktrees([target], keepBranch: false)
+
+        #expect(results.map(\.outcome) == [.deleted])
+        #expect(recreation.recreated)
+        // The recreated checkout carries the same path-derived id, so the
+        // trailing refresh lists it and cannot clear the claim itself. The
+        // claim must not survive: it would hide the new checkout from the
+        // right pane and block its sessions for good.
+        #expect(fixture.state.projectsManager
+            .worktrees(projectId: fixture.project.id)
+            .contains { $0.id == target.id })
+        #expect(fixture.state.projectsManager.operationState(
+            forWorktreeId: target.id,
+            projectId: fixture.project.id
+        ) == nil)
+    }
+
     @Test func emptySelectionReturnsNoResultsAndTouchesNothing() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
         defer { fixture.cleanUpAfterTest() }

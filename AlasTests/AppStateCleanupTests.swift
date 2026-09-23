@@ -1095,6 +1095,79 @@ struct AppStateCleanupTests {
         #expect(FileManager.default.fileExists(atPath: ticket.stagedPath.path))
     }
 
+    /// A checkout recreated at the deleted path before the post-delete refresh
+    /// keeps the same path-derived id, so the refresh cannot tell the new row
+    /// apart from the removed one and leaves the `.deleting` claim in place —
+    /// hiding the new checkout from the right pane and blocking its sessions
+    /// forever. The removal has succeeded by then, so the claim is released
+    /// regardless of what now holds that id.
+    @Test func singleDeleteReleasesTheClaimWhenThePathIsRecreated() async throws {
+        final class Recreation {
+            var repoPath: URL?
+            var deletedPath: URL?
+            var recreated = false
+        }
+        let recreation = Recreation()
+        // Runs after the removal succeeded and before the post-delete refresh.
+        let probe = WorktreeCleanupProbe()
+        let state = AppState(
+            worktreeCleanupLauncher: { ticket in
+                probe.launchedTickets.append(ticket)
+                guard let repoPath = recreation.repoPath,
+                      let deletedPath = recreation.deletedPath,
+                      !recreation.recreated
+                else { return }
+                recreation.recreated = true
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+                process.arguments = [
+                    "worktree", "add", deletedPath.path, "-b", "recreated", "main",
+                ]
+                process.currentDirectoryURL = repoPath
+                try process.run()
+                process.waitUntilExit()
+            }
+        )
+        let repo = try await makeRepo(name: "delete-recreated-path")
+        let linked = repo.deletingLastPathComponent()
+            .appendingPathComponent("delete-recreated-path-linked-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: linked)
+            try? FileManager.default.removeItem(at: repo)
+            for ticket in probe.launchedTickets {
+                try? FileManager.default.removeItem(at: ticket.trashRoot)
+            }
+        }
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "delete-recreated-path",
+            color: "#5fb7c4"
+        )
+        let worktree = try await WorktreeService().add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/recreated-path",
+            destination: linked,
+            projectId: project.id
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        recreation.repoPath = repo
+        recreation.deletedPath = linked
+
+        #expect(await state.cliDeleteWorktree(worktree, force: true, keepBranch: true) == .ok)
+        try await waitForOperationState(state.projectsManager, id: worktree.id, projectId: project.id, equals: nil)
+
+        #expect(recreation.recreated)
+        // The recreated checkout carries the same path-derived id, so the
+        // refresh lists it and cannot clear the claim itself. The claim must
+        // not survive: it would hide the new checkout from the right pane and
+        // block its sessions for good.
+        #expect(state.projectsManager
+            .worktrees(projectId: project.id)
+            .contains { $0.id == worktree.id })
+        #expect(state.projectsManager.operationState(for: worktree) == nil)
+    }
+
     @Test func cleanupLaunchFailureLeavesWorktreeDeletedForStaleRecovery() async throws {
         let repo = try await makeRepo(name: "delete-cleanup-launch-failure")
         let linked = repo.deletingLastPathComponent()
