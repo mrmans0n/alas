@@ -67,7 +67,7 @@ struct RightPaneView: View {
                         }
                     }
                 }
-                .modifier(RightPaneDialogs(rps: rps))
+                .modifier(RightPaneDialogs(rps: rps, approvalQueue: state.repoHookApprovalQueue))
             } else {
                 RightPaneLoadingSkeletonView(activeTab: .changes)
                     .sidebarChromeTheme(textContrast: override.textContrast)
@@ -344,6 +344,7 @@ private struct AgentSidebarManagerObserver: View {
 
 private struct RightPaneDialogs: ViewModifier {
     let rps: RightPaneState
+    let approvalQueue: RepoHookApprovalQueue
 
     func body(content: Content) -> some View {
         content
@@ -392,7 +393,7 @@ private struct RightPaneDialogs: ViewModifier {
                     Text("Apply this commit to the current branch.")
                 }
             )
-            .modifier(RightPaneSheets(rps: rps))
+            .modifier(RightPaneSheets(rps: rps, approvalQueue: approvalQueue))
             .modifier(RightPaneCheckpointDeletionDialog(rps: rps))
             .alert(
                 PendingStashDrop.alertTitle(for: rps.pendingStashDrop ?? .placeholder),
@@ -418,6 +419,7 @@ private struct RightPaneDialogs: ViewModifier {
 
 private struct RightPaneSheets: ViewModifier {
     let rps: RightPaneState
+    let approvalQueue: RepoHookApprovalQueue
 
     func body(content: Content) -> some View {
         content
@@ -433,18 +435,21 @@ private struct RightPaneSheets: ViewModifier {
                     },
                     onCancel: { rps.cancelStashChanges() }
                 )
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: approvalQueue))
             }
             .sheet(item: Binding(
                 get: { rps.pendingCheckpointCreation },
                 set: { if $0 == nil { rps.cancelCheckpointCreation() } }
             )) { _ in
                 CreateCheckpointSheet(rps: rps)
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: approvalQueue))
             }
             .sheet(item: Binding(
                 get: { rps.checkpointRestorePreview },
                 set: { if $0 == nil { rps.checkpointRestorePreview = nil } }
             )) { preview in
                 RestoreCheckpointSheet(rps: rps, preview: preview)
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: approvalQueue))
             }
     }
 }

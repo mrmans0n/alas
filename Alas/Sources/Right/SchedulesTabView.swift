@@ -59,12 +59,14 @@ struct SchedulesTabView: View {
             switch target {
             case .new:
                 RunScheduleEditorView(state: state, originWorktree: worktree, schedule: nil) { editing = nil }
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             case .existing(let id):
                 RunScheduleEditorView(
                     state: state,
                     originWorktree: worktree,
                     schedule: state.runScheduler.schedule(id: id)
                 ) { editing = nil }
+                    .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
         }
     }

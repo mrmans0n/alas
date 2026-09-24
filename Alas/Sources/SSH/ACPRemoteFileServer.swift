@@ -95,11 +95,11 @@ enum RemotePathContainment {
 
     /// Exit codes for `containedReadScript`, layered on top of
     /// `containmentExcludingGitProbeCommand`'s own 3/4/5/6/7 (see that
-    /// function's doc comment): 8 = resolves to a symlink; 9 = resolves to a
-    /// directory; 10 = resolves to something that no longer exists by the
-    /// time the read runs; 11 = `stat` on the resolved path failed; 12 =
-    /// resolves to something other than a regular file (a FIFO, socket, or
-    /// device — reading one of these would otherwise block indefinitely).
+    /// function's doc comment): 8 = symlink resolution failed; 9 = resolves to a
+    /// directory; 10 = missing target without following a final symlink; 11 =
+    /// symlink resolution or `stat` failed; 12 = resolves to something other
+    /// than a regular file (a FIFO, socket, or device — reading one of these
+    /// would otherwise block indefinitely).
     enum ContainedReadOutcome: Equatable {
         case ok(byteSize: Int, prefix: Data)
         case outsideWorktree
@@ -207,9 +207,10 @@ enum RemotePathContainment {
             ? String(probe.dropLast("exit 0".count))
             : probe
         return probeWithoutFinalExit + """
-        current="$full_phys"; depth=0; \
+        current="$full_phys"; depth=0; followed_symlink=0; \
         while [ -L "$current" ]; do \
         [ "$depth" -lt 40 ] || exit 8; \
+        followed_symlink=1; \
         link=$(readlink "$current") || exit 11; \
         case "$link" in /*) candidate="$link" ;; *) candidate="$(dirname "$current")/$link" ;; esac; \
         if [ -d "$candidate" ]; then current=$(cd "$candidate" && pwd -P) || exit 11; else \
@@ -231,7 +232,7 @@ enum RemotePathContainment {
         case "$comp" in .[Gg][Ii][Tt]) exit 7 ;; esac; \
         done; \
         [ -d "$current" ] && exit 9; \
-        [ -e "$current" ] || exit 10; \
+        if [ ! -e "$current" ]; then [ "$followed_symlink" -eq 1 ] && exit 11; exit 10; fi; \
         [ -f "$current" ] || exit 12; \
         size=$(stat -c %s -- "$current" 2>/dev/null || stat -f %z "$current") || exit 11; \
         echo "$size"; \

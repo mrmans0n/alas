@@ -181,6 +181,50 @@ struct ACPRemoteFileServerTests {
         #expect(String(data: result.stdout, encoding: .utf8) == "12\necho linked\n")
     }
 
+    @Test func containedResolvedReadScriptDistinguishesDanglingSymlinkFromMissingFile() async throws {
+        let root = try makeContainedReadRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let scripts = root.appendingPathComponent("scripts")
+        try FileManager.default.createDirectory(at: scripts, withIntermediateDirectories: true)
+
+        let missingPath = scripts.appendingPathComponent("missing.sh")
+        let missingCommand = RemotePathContainment.containedResolvedReadScript(
+            path: missingPath.path,
+            worktreeRoot: root.path,
+            maxBytes: 1_000_000
+        )
+        let missingResult = try await Process.runData("/bin/sh", args: ["-c", missingCommand])
+        let missingOutcome = RemotePathContainment.parseContainedReadResult(
+            exitCode: missingResult.exitCode,
+            stdout: missingResult.stdout,
+            maxBytes: 1_000_000
+        )
+
+        let danglingAlias = root.appendingPathComponent(".alas/hooks/session-open.sh")
+        try FileManager.default.createDirectory(
+            at: danglingAlias.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            atPath: danglingAlias.path,
+            withDestinationPath: "../../scripts/missing.sh"
+        )
+        let danglingCommand = RemotePathContainment.containedResolvedReadScript(
+            path: danglingAlias.path,
+            worktreeRoot: root.path,
+            maxBytes: 1_000_000
+        )
+        let danglingResult = try await Process.runData("/bin/sh", args: ["-c", danglingCommand])
+        let danglingOutcome = RemotePathContainment.parseContainedReadResult(
+            exitCode: danglingResult.exitCode,
+            stdout: danglingResult.stdout,
+            maxBytes: 1_000_000
+        )
+
+        #expect(missingOutcome == .missing)
+        #expect(danglingOutcome == .unreadable)
+    }
+
     @Test func containedResolvedReadScriptRejectsAFinalSymlinkOutsideTheWorktree() async throws {
         let root = try makeContainedReadRoot()
         let outside = try makeContainedReadRoot()
