@@ -1568,14 +1568,14 @@ final class AppState {
     func reconcileInterruptedDelegations() async {
         guard let records = try? await acpOrchestrationPersistence.incompleteDelegations() else { return }
         for record in records {
-            let worktree = record.childWorktreeId.flatMap {
+            let resolvedWorktree = record.childWorktreeId.flatMap {
                 worktree(withId: $0, inProjectId: record.projectId)
             } ?? worktree(
                 atPersistedDestinationPath: record.worktreeRequest.destinationPath,
                 inProjectId: record.projectId
             )
-            guard let worktree,
-                  let manager = acpManager(for: worktree)
+            guard let resolvedWorktree,
+                  let manager = acpManager(for: resolvedWorktree)
             else {
                 try? await acpOrchestrationPersistence.updatePhase(
                     childSessionId: record.childSessionId,
@@ -1585,10 +1585,10 @@ final class AppState {
                 )
                 continue
             }
-            if record.childWorktreeId != worktree.id {
+            if record.childWorktreeId != resolvedWorktree.id {
                 try? await acpOrchestrationPersistence.updateChildWorktree(
                     childSessionId: record.childSessionId,
-                    worktreeId: worktree.id,
+                    worktreeId: resolvedWorktree.id,
                     phase: .starting,
                     updatedAt: Int64(Date().timeIntervalSince1970)
                 )
