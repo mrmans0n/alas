@@ -11363,6 +11363,11 @@ final class AppState {
             exceptProjectId: worktree.projectId
         )
         if sharedRuntimeStateLives {
+            for tab in tabs.tabs(forWorktree: worktree.id) {
+                guard case .acpSession(let state) = tab,
+                      state.projectId == worktree.projectId else { continue }
+                tabs.close(worktreeId: worktree.id, tabId: tab.id)
+            }
             disposeACPManager(owner: Self.projectScopedACPOwner(for: worktree))
         }
         let runHistoryPurgeTask = sharedRuntimeStateLives ? nil : cleanupWorktreeState(worktreeId: worktree.id)
@@ -12038,6 +12043,22 @@ final class AppState {
         guard selectableWorktrees.isEmpty else { return nil }
         let existing = acpManagers.values.filter { $0.owner.worktreeID == id }
         return existing.count == 1 ? existing.first : nil
+    }
+
+    /// Resolve a path-shared ACP tab by its persisted project before falling
+    /// back to the displayed worktree for older, unqualified tab JSONs.
+    func acpManager(for tab: ACPSessionTabState, displayedIn worktree: Worktree) -> ACPSessionManager? {
+        if let projectId = tab.projectId {
+            guard let ownerWorktree = self.worktree(withId: worktree.id, inProjectId: projectId) else { return nil }
+            return acpManager(for: ownerWorktree)
+        }
+        let matching = acpManagers.values.filter { manager in
+            manager.owner.worktreeID == worktree.id
+                && (manager.liveSession(for: tab.sessionId) != nil
+                    || manager.sessionRows.contains(where: { $0.id == tab.sessionId }))
+        }
+        if matching.count == 1 { return matching.first }
+        return acpManager(for: worktree)
     }
 
     /// The manager owns persisted history; center tabs only supply terminal rows.
@@ -13034,7 +13055,7 @@ final class AppState {
                 for: session
             )
         }
-        let state = ACPSessionTabState(sessionId: session.id, title: session.title)
+        let state = ACPSessionTabState(sessionId: session.id, title: session.title, projectId: mgr.owner.projectID)
         if let worktreeID = owner.worktreeID {
             tabs.append(acpSession: state, to: worktreeID)
         } else {
@@ -13198,7 +13219,8 @@ final class AppState {
         let tab = tabs.append(
             acpSession: ACPSessionTabState(
                 sessionId: preparedPrompt.sessionID,
-                title: session.title
+                title: session.title,
+                projectId: worktree.projectId
             ),
             to: worktree.id
         )
@@ -13258,7 +13280,7 @@ final class AppState {
                 guard !Self.blocksWorktreeSessionAdmission(
                     self.projectsManager.operationState(for: worktree)
                 ) else { return }
-                let tabState = ACPSessionTabState(sessionId: target.id, title: target.title)
+                let tabState = ACPSessionTabState(sessionId: target.id, title: target.title, projectId: worktree.projectId)
                 let tab = tabs.append(acpSession: tabState, to: worktree.id)
                 activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
                 await manager.attach(
@@ -13291,7 +13313,7 @@ final class AppState {
                     targetAgentID: targetAgentID,
                     autoRunDefault: config.harness.acpAutoRunByDefault
                 )
-                let tabState = ACPSessionTabState(sessionId: target.id, title: target.title)
+                let tabState = ACPSessionTabState(sessionId: target.id, title: target.title, projectId: owner.projectID)
                 let tab = tabs.append(acpSession: tabState, to: owner)
                 tabs.activate(owner: owner, tabId: tab.id)
                 if let selectedWorktreeId {
@@ -13429,7 +13451,7 @@ final class AppState {
         guard !Self.blocksWorktreeSessionAdmission(
             projectsManager.operationState(for: worktree)
         ) else { return }
-        let state = ACPSessionTabState(sessionId: sessionId, title: title)
+        let state = ACPSessionTabState(sessionId: sessionId, title: title, projectId: worktree.projectId)
         tabs.append(acpSession: state, to: worktree.id)
     }
 
@@ -13465,7 +13487,7 @@ final class AppState {
         _ = mgr.placeholderSession(id: sessionId)
         await mgr.hydrateIfNeeded(id: sessionId)
         await deliverPendingDelegatedMessages(to: sessionId, manager: mgr)
-        let state = ACPSessionTabState(sessionId: sessionId, title: title)
+        let state = ACPSessionTabState(sessionId: sessionId, title: title, projectId: owner.projectID)
         let tab = tabs.append(acpSession: state, to: owner)
         tabs.activate(owner: owner, tabId: tab.id)
         if let selectedWorktreeId {
@@ -14401,7 +14423,7 @@ extension AppState: RemoteSessionsProvider {
 
         let session = manager.createSession(agentId: agent.id, autoRunDefault: config.harness.acpAutoRunByDefault)
         focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
-        let tabState = ACPSessionTabState(sessionId: session.id, title: session.title)
+        let tabState = ACPSessionTabState(sessionId: session.id, title: session.title, projectId: resolved.project.id)
         let tab = tabs.append(acpSession: tabState, to: resolved.worktree.id)
         activateWorktreeCenterTab(worktreeId: resolved.worktree.id, tabId: tab.id)
 

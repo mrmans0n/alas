@@ -4,6 +4,16 @@ import Foundation
 
 @MainActor
 struct TabsManagerTests {
+    @Test func acpTabPersistsProjectWhileDecodingLegacyUnscopedTabs() throws {
+        let scoped = ACPSessionTabState(sessionId: "scoped", title: "Scoped", projectId: "project-b")
+        let reopened = try JSONDecoder().decode(ACPSessionTabState.self, from: JSONEncoder().encode(scoped))
+        #expect(reopened == scoped)
+
+        let legacy = Data(#"{"id":"acp:legacy","sessionId":"legacy","title":"Legacy"}"#.utf8)
+        let oldTab = try JSONDecoder().decode(ACPSessionTabState.self, from: legacy)
+        #expect(oldTab.projectId == nil)
+    }
+
     @Test func tabsFileSkipsRemovedMissionCaseWithoutDroppingSupportedTabs() throws {
         let terminal = Tab.terminal(.init(id: "terminal-1", title: "Terminal", sessionId: "session-1"))
         let encodedTerminal = try #require(

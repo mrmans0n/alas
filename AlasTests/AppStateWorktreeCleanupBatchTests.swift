@@ -303,6 +303,14 @@ struct AppStateWorktreeCleanupBatchTests {
         fixture.state.projectsManager.insertOptimisticWorktree(sibling)
         let firstManager = try #require(fixture.state.acpManager(for: target))
         let secondManager = try #require(fixture.state.acpManager(for: sibling))
+        let firstTab = ACPSessionTabState(
+            sessionId: "first-owner-session", title: "First", projectId: fixture.project.id
+        )
+        let secondTab = ACPSessionTabState(
+            sessionId: "second-owner-session", title: "Second", projectId: secondProject.id
+        )
+        fixture.state.tabs.append(acpSession: firstTab, to: target.id)
+        fixture.state.tabs.append(acpSession: secondTab, to: target.id)
         fixture.state.tabs.appendTerminal(
             worktreeId: target.id,
             title: "shared",
@@ -310,7 +318,7 @@ struct AppStateWorktreeCleanupBatchTests {
         )
         let preflight = try await WorktreeService().deletePreflight(worktreePath: target.path)
         let authorization = WorktreeCleanupDeleteAuthorization(
-            sessionIDsByWorktree: [target.id: ["shared-session"]],
+            sessionIDsByWorktree: [target.id: ["shared-session", firstTab.sessionId, secondTab.sessionId]],
             preflightByWorktree: [target.id: preflight]
         )
 
@@ -321,7 +329,13 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(results.map(\.outcome) == [.deleted])
         #expect(fixture.state.acpManager(for: firstManager.owner) == nil)
         #expect(fixture.state.acpManager(for: secondManager.owner) === secondManager)
-        #expect(!fixture.state.tabs.tabs(forWorktree: target.id).isEmpty)
+        let remaining = fixture.state.tabs.tabs(forWorktree: target.id)
+        #expect(!remaining.contains { $0.id == firstTab.id })
+        #expect(remaining.contains { $0.id == secondTab.id })
+        #expect(remaining.contains {
+            if case .terminal = $0 { return true }
+            return false
+        })
     }
 
     /// A batch holds each item's `.deleting` claim past the removal itself.

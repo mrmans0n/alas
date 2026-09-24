@@ -59,7 +59,7 @@ extension AppState {
 
     func previewOpenTarget(_ command: WebPreviewCommand, owner: SessionOwnerID) async throws -> WebPreviewOpenTarget {
         guard previewOwnerIsAvailable(owner) else { throw WebPreviewAutomationError.denied }
-        let worktree = owner.worktreeID.flatMap { self.worktree(withId: $0) }
+        let worktree = owner.worktreeID.flatMap { self.worktree(withId: $0, inProjectId: owner.projectID) }
         let host = worktree.map { webPreviewRemoteHost(for: $0) } ?? owner.checkoutExecutionLocation?.sshHost
         if let raw = command.url, let url = RunEndpointPolicy.endpoint(from: raw) {
             return WebPreviewOpenTarget(url: url, remoteHost: host)

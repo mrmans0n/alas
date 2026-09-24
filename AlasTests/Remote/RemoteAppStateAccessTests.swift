@@ -378,6 +378,7 @@ struct RemoteAppStateAccessTests {
             status: .clean,
             lastActivity: .distantPast
         )
+        defer { cleanupSharedPathFiles((state: state, first: firstWorktree, second: secondWorktree)) }
         state.projectsManager.insertOptimisticWorktree(firstWorktree)
         state.projectsManager.insertOptimisticWorktree(secondWorktree)
 
@@ -388,6 +389,12 @@ struct RemoteAppStateAccessTests {
         #expect(firstManager.persistence.path != secondManager.persistence.path)
         #expect(firstManager.remoteHost == "host-a")
         #expect(secondManager.remoteHost == "host-b")
+
+        let secondSession = secondManager.createSession(agentId: "test-agent")
+        let secondTab = ACPSessionTabState(
+            sessionId: secondSession.id, title: "Host B session", projectId: secondProject.id
+        )
+        #expect(state.acpManager(for: secondTab, displayedIn: firstWorktree) === secondManager)
 
         let tabState = ACPSessionTabState(sessionId: "project-scoped-tab", title: "Project-scoped")
         state.tabs.append(acpSession: tabState, to: sharedPath)

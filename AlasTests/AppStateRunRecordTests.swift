@@ -32,11 +32,36 @@ struct AppStateRunRecordTests {
         }
     }
 
+    @Test func previewAutomationUsesTheProjectsHostForSharedPaths() async throws {
+        let fixture = try makeFixture(host: "host-a")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let firstProject = try #require(fixture.state.projects.first)
+        let secondProject = ProjectConfig(
+            id: "host-b-\(UUID().uuidString)", name: "Host B", path: "/repos/b",
+            color: "green", addedAt: .distantPast, host: "host-b"
+        )
+        fixture.state.projectsManager = ProjectsManager(persistedProjects: [firstProject, secondProject])
+        fixture.state.projectsManager.insertOptimisticWorktree(fixture.worktree)
+        let second = Worktree(
+            id: fixture.worktree.id, projectId: secondProject.id,
+            name: "shared", branch: "shared", path: fixture.worktree.path,
+            status: .clean, lastActivity: .distantPast
+        )
+        fixture.state.projectsManager.insertOptimisticWorktree(second)
+
+        let target = try await fixture.state.previewOpenTarget(
+            .init(action: .open, url: "http://localhost:5173"),
+            owner: .projectWorktree(projectId: secondProject.id, worktreeId: second.id)
+        )
+
+        #expect(target.remoteHost == "host-b")
+    }
+
     @Test func previewAutomationRequiresWritableOpenSession() async throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
-        let owner = SessionOwnerID.worktree(fixture.worktree.id)
         let manager = try #require(fixture.state.acpManager(for: fixture.worktree))
+        let owner = manager.owner
         let session = manager.createSession(id: "preview-caller-\(UUID())", agentId: "test")
         let router = fixture.state.makeCLICommandRouter(
             sessionWorktreeLookup: { _ in fixture.worktree.id }, sessionOwnerLookup: { _ in owner }
@@ -51,7 +76,7 @@ struct AppStateRunRecordTests {
         guard case .text(let lines) = allowed else { Issue.record("Writable open session must be accepted")
         return }
         #expect(lines.first?.contains("previews") == true)
-        _ = fixture.state.tabs.closeAll(worktreeId: owner.storageKey)
+        _ = fixture.state.tabs.closeAll(worktreeId: owner.tabStorageKey)
         let closed = await router.handle(request)
         guard case .error = closed else { Issue.record("Closed session tab must be denied")
         return }

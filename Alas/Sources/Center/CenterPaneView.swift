@@ -155,7 +155,10 @@ struct CenterPaneView: View {
                 if let owner = sharedOwnerForTab(id), case .workspaceCheckout = owner {
                     return state.acpManager(for: owner)
                 }
-                return state.acpManager(for: worktree)
+                guard let tab = tabs.first(where: { $0.id == id }), case .acpSession(let acpState) = tab else {
+                    return nil
+                }
+                return state.acpManager(for: acpState, displayedIn: worktree)
             }
             TabBarView(
                 tabs: tabs,
@@ -667,11 +670,15 @@ struct CenterPaneView: View {
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                     case .acpSession(let s):
+                        let tabManager = acpManagerForTab(s.id)
+                        let tabWorktree = tabManager?.owner.projectID.flatMap {
+                            state.worktree(withId: worktree.id, inProjectId: $0)
+                        } ?? worktree
                         ACPTabView(
                             sessionId: s.sessionId,
                             state: state,
-                            worktree: worktree,
-                            owner: activeSharedOwner,
+                            worktree: tabWorktree,
+                            owner: tabManager?.owner ?? activeSharedOwner,
                             onOpenPreview: selectedCheckoutForSharedOwner == nil ? nil : { openWebPreview() },
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )

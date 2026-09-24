@@ -945,10 +945,14 @@ struct ACPSessionTabState: Codable, Equatable, Identifiable {
     let id: TabID        // "acp:<sessionId>"
     let sessionId: ACPSession.ID
     var title: String
+    /// ACP persistence is project-scoped even though worktree tab files are
+    /// still path-keyed. Older tab JSONs omit this field.
+    let projectId: String?
 
-    init(sessionId: ACPSession.ID, title: String) {
+    init(sessionId: ACPSession.ID, title: String, projectId: String? = nil) {
         self.id = "acp:\(sessionId)"
         self.sessionId = sessionId
         self.title = title
+        self.projectId = projectId
     }
 }
