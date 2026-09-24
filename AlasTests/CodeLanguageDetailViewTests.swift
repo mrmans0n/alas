@@ -94,6 +94,52 @@ struct CodeLanguageDetailViewTests {
         #expect(code.inlayHints(for: "swift-new") == code.inlayHints)
     }
 
+    @Test func codePaneRefreshesInstalledStatusWithoutChangingTabs() async throws {
+        struct MemoryStore: PersistenceStoreProtocol {
+            func write<T: Encodable>(_: T, to _: URL) throws {}
+            func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+        }
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let command = directory.appendingPathComponent("test-language-server").path
+        let language = "test-language-\(UUID().uuidString)"
+        let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
+        state.config.code.languageServers = [
+            LanguageServerConfig(
+                language: language, extensions: ["testlang"], command: command,
+                args: [], env: [:], rootMarkers: [], enabled: true
+            )
+        ]
+
+        var renderedStatuses: [LanguageServerAvailability.Status] = []
+        var pane = CodePane(state: state)
+        pane.onStatusRenderedForTesting = { renderedLanguage, status in
+            if renderedLanguage == language { renderedStatuses.append(status) }
+        }
+        let controller = NSHostingController(rootView: pane.environment(\.theme, try ThemeStore().current))
+        controller.view.frame = NSRect(x: 0, y: 0, width: 680, height: 1400)
+        let window = NSWindow(contentViewController: controller)
+        window.setContentSize(controller.view.frame.size)
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+
+        controller.view.layoutSubtreeIfNeeded()
+        #expect(renderedStatuses.contains(.notInstalled))
+
+        await state.lspInstaller._spawnForTesting(
+            executable: "/bin/cp", arguments: ["/bin/echo", command], language: language
+        )
+        let deadline = Date().addingTimeInterval(2)
+        while !renderedStatuses.contains(.available), Date() < deadline {
+            controller.view.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(state.lspInstaller.state == .finished(language: language, exitCode: 0))
+        #expect(renderedStatuses.contains(.available))
+    }
+
     private func currentTheme() -> Theme {
         try! ThemeStore().current
     }

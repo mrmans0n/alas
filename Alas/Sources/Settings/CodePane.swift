@@ -8,6 +8,10 @@ struct CodePane: View {
     @State private var creatingNew = false
     @State private var installSheetVisible = false
     @State private var warningCharactersVisible = false
+    @State private var languageListRevision = 0
+    #if DEBUG
+    var onStatusRenderedForTesting: ((String, LanguageServerAvailability.Status) -> Void)?
+    #endif
 
     var body: some View {
         ScrollView {
@@ -74,7 +78,7 @@ struct CodePane: View {
 
                 SettingsGroup(title: "Languages") {
                     ForEach(allEntries(), id: \.id) { entry in
-                        let status = availability.status(for: entry)
+                        let status = status(for: entry)
                         SettingsRow(name: entry.language,
                                     desc: entry.extensions.joined(separator: ", ")) {
                             HStack(spacing: 8) {
@@ -100,6 +104,7 @@ struct CodePane: View {
                         }
                     }
                 }
+                .id(languageListRevision)
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
@@ -146,6 +151,12 @@ struct CodePane: View {
                 }
             }
         }
+        .onChange(of: state.lspInstaller.state) { _, newState in
+            if case .finished(_, 0) = newState {
+                // Executable availability is read from disk, not observable state.
+                languageListRevision &+= 1
+            }
+        }
     }
 
     private func allEntries() -> [LanguageServerConfig] {
@@ -154,6 +165,13 @@ struct CodePane: View {
     }
 
     private let availability = LanguageServerAvailability()
+    private func status(for entry: LanguageServerConfig) -> LanguageServerAvailability.Status {
+        let status = availability.status(for: entry)
+        #if DEBUG
+        onStatusRenderedForTesting?(entry.language, status)
+        #endif
+        return status
+    }
 
     private func statusBadge(_ status: LanguageServerAvailability.Status) -> some View {
         let label: String

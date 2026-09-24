@@ -194,10 +194,11 @@ Pre-req: a Swift project, `sourcekit-lsp` available via `xcrun --find sourcekit-
 ### Settings → Code
 
 1. Open Settings → Code. Confirm Swift is listed with a status badge.
-2. Edit the Swift entry, change the args (e.g. add `--log-level info`), Save. Restart Alas. Confirm the new args persist.
-3. Add a custom language entry (e.g. Rust → `rust-analyzer`). Save. Restart. Confirm the entry persists.
-4. Disable Swift. Reopen a `.swift` file. Confirm tree-sitter coloring still works but hover / diagnostics / go-to-def are gone.
-5. Re-enable Swift. Reopen the file. Confirm hover and diagnostics return after the server initializes.
+2. Install a missing language server from the Languages list. After installation succeeds, close the progress sheet. Confirm its badge changes to Available and its Install button disappears without switching settings tabs. If the install exits successfully but the configured executable is not found, the badge must remain Not installed.
+3. Edit the Swift entry, change the args (e.g. add `--log-level info`), Save. Restart Alas. Confirm the new args persist.
+4. Add a custom language entry (e.g. Rust → `rust-analyzer`). Save. Restart. Confirm the entry persists.
+5. Disable Swift. Reopen a `.swift` file. Confirm tree-sitter coloring still works but hover / diagnostics / go-to-def are gone.
+6. Re-enable Swift. Reopen the file. Confirm hover and diagnostics return after the server initializes.
 
 ## Editor — editable files (v1)
 
