@@ -8,10 +8,17 @@ struct RepoHookApprovalContext: Equatable, Sendable {
         case workspaceMember
         case projectSettings
 
-        var coalescingKind: Self {
+        func coalescingKind(for event: RepoHookEvent) -> Self {
             switch self {
-            case .workspaceMember: .worktreeCreate
-            default: self
+            case .workspaceMember:
+                .worktreeCreate
+            case .projectSettings:
+                switch event {
+                case .sessionOpen: .sessionOpen
+                case .worktreeCreate: .worktreeCreate
+                }
+            case .sessionOpen, .worktreeCreate:
+                self
             }
         }
     }
@@ -172,7 +179,7 @@ final class RepoHookApprovalQueue {
                 projectID: projectID,
                 event: hook.event,
                 hash: hook.hash,
-                context: context.kind.coalescingKind
+                context: context.kind.coalescingKind(for: hook.event)
             )
         )
     }
