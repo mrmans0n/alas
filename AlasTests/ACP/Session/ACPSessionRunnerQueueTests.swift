@@ -45,7 +45,8 @@ private final class ConnectionCurrentFlag: @unchecked Sendable {
 struct ACPSessionRunnerQueueTests {
     private func mkRunner(
         validateLease: (() async -> Bool)? = nil,
-        onPromptWorkChanged: (() -> Void)? = nil
+        onPromptWorkChanged: (() -> Void)? = nil,
+        isConnectionCurrent: (() -> Bool)? = nil
     ) throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-q-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -63,6 +64,7 @@ struct ACPSessionRunnerQueueTests {
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
             onPromptWorkChanged: onPromptWorkChanged,
+            isConnectionCurrent: isConnectionCurrent ?? { true },
             validateLease: validateLease)
         return (runner, mock, session, store)
     }
@@ -617,6 +619,70 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue[0].status == .pending)
         #expect(session.queue[0].lastError != nil)
         #expect(session.queue[0].brokerOperationKey != operationKey)
+    }
+
+    @Test("superseded prompt success does not consume shared state or finish its callback")
+    func supersededPromptSuccessDoesNotFinish() async throws {
+        let currentConnection = ConnectionCurrentFlag(true)
+        let (runner, mock, session, _) = try mkRunner(
+            isConnectionCurrent: { currentConnection.isCurrent }
+        )
+        let requestStarted = QueueTestGate()
+        let responseRelease = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await requestStarted.open()
+            await responseRelease.wait()
+            return Data("null".utf8)
+        }
+
+        session.pendingMCPPreamble = "keep for the replacement runner"
+        var finished: Bool?
+        runner.sendNow(
+            blocks: [.text("pending")],
+            queuedItemId: nil,
+            onPromptFinished: { finished = $0 }
+        )
+        await requestStarted.wait()
+
+        runner.invalidateActivePrompt()
+        runner.stop()
+        currentConnection.set(false)
+        await responseRelease.open()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(session.pendingMCPPreamble == "keep for the replacement runner")
+        #expect(finished == nil)
+    }
+
+    @Test("superseded prompt failure does not finish its callback")
+    func supersededPromptFailureDoesNotFinish() async throws {
+        let currentConnection = ConnectionCurrentFlag(true)
+        let (runner, mock, _, _) = try mkRunner(
+            isConnectionCurrent: { currentConnection.isCurrent }
+        )
+        let requestStarted = QueueTestGate()
+        let responseRelease = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await requestStarted.open()
+            await responseRelease.wait()
+            throw ACPClientError.jsonrpc(.init(code: -32042, message: "stale failure", data: nil))
+        }
+
+        var finished: Bool?
+        runner.sendNow(
+            blocks: [.text("pending")],
+            queuedItemId: nil,
+            onPromptFinished: { finished = $0 }
+        )
+        await requestStarted.wait()
+
+        runner.invalidateActivePrompt()
+        runner.stop()
+        currentConnection.set(false)
+        await responseRelease.open()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(finished == nil)
     }
 
     @Test("queued prompt response ack waits for durable queue pop and resumes draining")

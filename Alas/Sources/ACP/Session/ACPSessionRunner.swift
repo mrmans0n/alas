@@ -2862,6 +2862,7 @@ extension ACPSessionRunner {
                 )
                 let promptAcknowledgement = promptOutcome.acknowledgement
                 await MainActor.run {
+                    guard self.isConnectionCurrent() else { return }
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     // A cancelled/superseded prompt's response can still
@@ -2921,6 +2922,7 @@ extension ACPSessionRunner {
                 }
             } catch {
                 await MainActor.run {
+                    guard self.isConnectionCurrent() else { return }
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt

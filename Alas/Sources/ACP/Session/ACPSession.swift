@@ -2367,7 +2367,7 @@ final class ACPSession: ObservableObject, Identifiable {
         guard !queue.isEmpty else { return }
         var item = queue.removeFirst()
         item.status = .pending
-        if clearDispatchProvenance {
+        if clearDispatchProvenance || advancesBrokerOperationAttempt {
             item.dispatchedBrokerGeneration = nil
             item.deliveryUncertain = false
         }
