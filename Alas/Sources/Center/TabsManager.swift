@@ -302,8 +302,20 @@ final class TabsManager {
     }
 
     @discardableResult
-    func appendTerminal(worktreeId: String, title: String, sessionId: String, runScriptKey: String? = nil) -> Tab {
-        let state = TerminalTabState(id: UUID().uuidString, title: title, sessionId: sessionId, runScriptKey: runScriptKey)
+    func appendTerminal(
+        worktreeId: String,
+        projectId: String? = nil,
+        title: String,
+        sessionId: String,
+        runScriptKey: String? = nil
+    ) -> Tab {
+        let state = TerminalTabState(
+            id: UUID().uuidString,
+            title: title,
+            sessionId: sessionId,
+            projectId: projectId,
+            runScriptKey: runScriptKey
+        )
         let tab = Tab.terminal(state)
         append(tab, to: worktreeId)
         return tab
@@ -322,6 +334,7 @@ final class TabsManager {
             title: title,
             root: .leaf(leaf),
             focusedLeafId: leaf.id,
+            projectId: owner.projectID,
             runScriptKey: runScriptKey,
             runScriptLeafId: runScriptKey != nil ? leaf.id : nil
         )

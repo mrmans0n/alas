@@ -1179,6 +1179,78 @@ struct AppStateRunRecordTests {
         #expect(runRecord(fixture, worktree: other)?.status == .running)
     }
 
+    @Test func samePathProjectsKeepTheirRunScriptTabsIndependent() async throws {
+        let fixture = try makeFixture(waiter: { _ in
+            try await Task.sleep(for: .seconds(5))
+            return RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
+        })
+        defer {
+            fixture.state.cancelAllRunScriptCompletionTasks()
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+        let firstProject = try #require(fixture.state.projects.first)
+        let secondProject = ProjectConfig(
+            id: "project-b-\(UUID().uuidString)", name: "Project B", path: "/repos/b",
+            color: "green", addedAt: .distantPast
+        )
+        fixture.state.projectsManager = ProjectsManager(persistedProjects: [firstProject, secondProject])
+        fixture.state.projectsManager.insertOptimisticWorktree(fixture.worktree)
+        let second = Worktree(
+            id: fixture.worktree.id, projectId: secondProject.id, name: "shared", branch: "shared",
+            path: fixture.worktree.path, status: .clean, lastActivity: .distantPast
+        )
+        fixture.state.projectsManager.insertOptimisticWorktree(second)
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        fixture.state.runOrFocusScript(fixture.script, in: second)
+        for _ in 0..<100 {
+            guard !fixture.state.pendingScriptLaunchTasks.isEmpty else { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(fixture.state.pendingScriptLaunchTasks.isEmpty)
+        #expect(runRecord(fixture)?.status == .running)
+        #expect(runRecord(fixture, worktree: second)?.status == .running)
+
+        let runTabSessionIDs = fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).compactMap { tab -> String? in
+            guard case .terminal(let state) = tab, state.runScriptKey == fixture.script.key else { return nil }
+            return state.runScriptLeafId
+        }
+        #expect(Set(runTabSessionIDs) == ["session-1", "session-2"])
+
+        let firstRunTab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).first { tab in
+            guard case .terminal(let state) = tab else { return false }
+            return state.runScriptKey == fixture.script.key && state.projectId == firstProject.id
+        })
+        let secondRunTab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).first { tab in
+            guard case .terminal(let state) = tab else { return false }
+            return state.runScriptKey == fixture.script.key && state.projectId == secondProject.id
+        })
+        for (sessionID, projectID) in [("session-1", firstProject.id), ("session-2", secondProject.id)] {
+            fixture.state.terminal.registry.register(TerminalSession(
+                id: sessionID,
+                worktreeId: fixture.worktree.id,
+                projectId: projectID,
+                surface: AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO()),
+                executable: "/bin/zsh",
+                args: []
+            ))
+        }
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.worktree.id) == firstRunTab.id)
+        fixture.state.runOrFocusScript(fixture.script, in: second)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.worktree.id) == secondRunTab.id)
+
+        fixture.state.stopScript(fixture.script, in: second)
+
+        let remainingRunTabSessionIDs = fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).compactMap { tab -> String? in
+            guard case .terminal(let state) = tab, state.runScriptKey == fixture.script.key else { return nil }
+            return state.runScriptLeafId
+        }
+        #expect(remainingRunTabSessionIDs == ["session-1"])
+        #expect(runRecord(fixture)?.status == .running)
+        #expect(runRecord(fixture, worktree: second)?.status == .finished(.stopped))
+    }
+
     // MARK: - Panel independence
 
     /// The Run panel is a view onto `runRecords`; hiding it or switching the

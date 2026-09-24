@@ -6403,7 +6403,13 @@ final class AppState {
 
     private func sessionOwnerForCLI(_ sessionId: String) -> SessionOwnerID? {
         if let session = terminal.registry.session(for: sessionId) {
-            return session.owner
+            switch session.owner {
+            case .worktree(let worktreeId):
+                guard !session.projectId.isEmpty else { return session.owner }
+                return .projectWorktree(projectId: session.projectId, worktreeId: worktreeId)
+            case .projectWorktree, .workspaceCheckout:
+                return session.owner
+            }
         }
         if let owner = persistedLeafOwner(leafId: sessionId) {
             return owner
@@ -6456,8 +6462,9 @@ final class AppState {
             for worktree in projectsManager.worktrees(projectId: project.id) {
                 for tab in tabs.tabs(forWorktree: worktree.id) {
                     guard case .terminal(let state) = tab else { continue }
+                    guard state.projectId == nil || state.projectId == project.id else { continue }
                     if state.root.leaves().contains(where: { $0.id == leafId }) {
-                        return (project.id, worktree.id)
+                        return (state.projectId ?? project.id, worktree.id)
                     }
                 }
             }
@@ -6485,7 +6492,11 @@ final class AppState {
             for worktree in projectsManager.worktrees(projectId: project.id) {
                 for tab in tabs.tabs(forWorktree: worktree.id) {
                     guard case .terminal(let state) = tab else { continue }
+                    guard state.projectId == nil || state.projectId == project.id else { continue }
                     if state.root.leaves().contains(where: { $0.id == leafId }) {
+                        if let projectId = state.projectId {
+                            return .projectWorktree(projectId: projectId, worktreeId: worktree.id)
+                        }
                         return .worktree(worktree.id)
                     }
                 }
@@ -7146,7 +7157,13 @@ final class AppState {
         // above that equals `leafId` (we passed it in). The injected
         // `terminalSessionOpener` (test-only) generates its own id and we
         // honor it for backward-compat with existing tests.
-        let tab = tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id, runScriptKey: runScriptKey)
+        let tab = tabs.appendTerminal(
+            worktreeId: worktree.id,
+            projectId: project.id,
+            title: title,
+            sessionId: opened.id,
+            runScriptKey: runScriptKey
+        )
         return tab
     }
 

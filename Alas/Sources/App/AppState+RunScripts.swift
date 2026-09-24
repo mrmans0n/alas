@@ -252,7 +252,7 @@ extension AppState {
     func scriptTab(for script: RunScript, in worktree: Worktree) -> Tab? {
         tabs.tabs(forWorktree: worktree.id).first { tab in
             guard case .terminal(let state) = tab else { return false }
-            return state.runScriptKey == script.key
+            return state.runScriptKey == script.key && runScriptTabBelongs(state, to: worktree)
         }
     }
 
@@ -263,10 +263,29 @@ extension AppState {
         tabs.tabs(forWorktree: worktree.id).first { tab in
             guard case .terminal(let state) = tab,
                   state.runScriptKey == script.key,
+                  runScriptTabBelongs(state, to: worktree),
                   let runScriptLeafId = state.runScriptLeafId,
                   let leaf = state.root.find(leafId: runScriptLeafId)?.leaf
             else { return false }
             return terminal.registry.session(for: leaf.sessionId) != nil
+        }
+    }
+
+    private func runScriptTabBelongs(_ state: TerminalTabState, to worktree: Worktree) -> Bool {
+        if let projectId = state.projectId {
+            return projectId == worktree.projectId
+        }
+        if let runScriptLeafId = state.runScriptLeafId,
+           let session = terminal.registry.session(for: runScriptLeafId) {
+            return session.projectId == worktree.projectId
+        }
+        // Legacy tabs have no project marker. Keep them usable when their ID
+        // is unambiguous, but never let one project claim another's same-path
+        // tab after a duplicate checkout is present.
+        return !projects.contains { project in
+            guard project.id != worktree.projectId else { return false }
+            return projectsManager.worktrees(projectId: project.id).contains(where: { $0.id == worktree.id })
+                || project.cachedWorktrees.contains(where: { $0.id == worktree.id })
         }
     }
 

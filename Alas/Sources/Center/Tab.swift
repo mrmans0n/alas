@@ -733,6 +733,10 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
     var title: String
     var root: PaneNode
     var focusedLeafId: String
+    /// Project that opened this terminal. Tabs still share the path-keyed
+    /// bucket, but project identity is needed for same-path run-script and
+    /// CLI ownership decisions.
+    var projectId: String?
     /// Key of the RunScript this tab was launched from (`"<scope>:<fileName>"`).
     /// Nil for plain terminals. Persisted so run/focus dedup survives restarts.
     var runScriptKey: String?
@@ -744,11 +748,20 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
     /// goes away.
     var runScriptLeafId: String?
 
-    init(id: TabID, title: String, root: PaneNode, focusedLeafId: String, runScriptKey: String? = nil, runScriptLeafId: String? = nil) {
+    init(
+        id: TabID,
+        title: String,
+        root: PaneNode,
+        focusedLeafId: String,
+        projectId: String? = nil,
+        runScriptKey: String? = nil,
+        runScriptLeafId: String? = nil
+    ) {
         self.id = id
         self.title = title
         self.root = root
         self.focusedLeafId = focusedLeafId
+        self.projectId = projectId
         self.runScriptKey = runScriptKey
         self.runScriptLeafId = runScriptLeafId
     }
@@ -758,24 +771,26 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
     /// registry key and zmx session name (both keyed by leaf id since the
     /// switch to stable identity). Callers MUST pass the live
     /// `TerminalSession.id` here, not an unrelated string.
-    init(id: TabID, title: String, sessionId: String, runScriptKey: String? = nil) {
+    init(id: TabID, title: String, sessionId: String, projectId: String? = nil, runScriptKey: String? = nil) {
         let leafId = sessionId
         self.id = id
         self.title = title
         self.root = .leaf(PaneLeaf(id: leafId, sessionId: sessionId, lastCwd: nil))
         self.focusedLeafId = leafId
+        self.projectId = projectId
         self.runScriptKey = runScriptKey
         self.runScriptLeafId = runScriptKey != nil ? leafId : nil
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, root, focusedLeafId, sessionId, runScriptKey, runScriptLeafId
+        case id, title, root, focusedLeafId, sessionId, projectId, runScriptKey, runScriptLeafId
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(TabID.self, forKey: .id)
         self.title = try c.decode(String.self, forKey: .title)
+        self.projectId = try c.decodeIfPresent(String.self, forKey: .projectId)
         self.runScriptKey = try c.decodeIfPresent(String.self, forKey: .runScriptKey)
         self.runScriptLeafId = try c.decodeIfPresent(String.self, forKey: .runScriptLeafId)
         if let root = try c.decodeIfPresent(PaneNode.self, forKey: .root) {
@@ -806,6 +821,7 @@ struct TerminalTabState: Codable, Equatable, Identifiable {
         try c.encode(title, forKey: .title)
         try c.encode(root, forKey: .root)
         try c.encode(focusedLeafId, forKey: .focusedLeafId)
+        try c.encodeIfPresent(projectId, forKey: .projectId)
         try c.encodeIfPresent(runScriptKey, forKey: .runScriptKey)
         try c.encodeIfPresent(runScriptLeafId, forKey: .runScriptLeafId)
     }

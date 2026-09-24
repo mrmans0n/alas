@@ -309,6 +309,103 @@ struct AppStateCLIRoutingTests {
         })
     }
 
+    @Test func terminalPreviewAutomationUsesTheProjectOwnedPreview() async throws {
+        let (state, project, worktree) = try await makeStateWithWorktree(name: "terminal-preview-owner")
+        defer {
+            state.harness.socketServer.shutdown()
+            try? FileManager.default.removeItem(at: worktree.path)
+        }
+        let sessionID = "terminal-preview-owner-session"
+        let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
+        let session = TerminalSession(
+            id: sessionID,
+            worktreeId: worktree.id,
+            projectId: project.id,
+            surface: surface,
+            executable: "/bin/zsh",
+            args: []
+        )
+        state.terminal.registry.register(session)
+        _ = state.tabs.appendTerminal(
+            worktreeId: worktree.id,
+            projectId: project.id,
+            title: "Shell",
+            sessionId: sessionID
+        )
+        let owner = SessionOwnerID.projectWorktree(projectId: project.id, worktreeId: worktree.id)
+        _ = state.tabs.openWebPreview(owner: owner)
+        state.startHarness()
+
+        let handler = try #require(state.harness.socketServer.onCLIRequest)
+        let listResponse = await handler(.init(
+            version: 1,
+            sessionId: sessionID,
+            cwd: nil,
+            command: .preview(.init(action: .list))
+        ))
+        guard case .text(let listLines) = listResponse,
+              let listJSON = listLines.first?.data(using: .utf8),
+              let listPayload = try JSONSerialization.jsonObject(with: listJSON) as? [String: Any],
+              let previews = listPayload["previews"] as? [[String: Any]]
+        else {
+            Issue.record("A worktree terminal should be able to list its project's existing preview")
+            return
+        }
+        #expect(previews.count == 1)
+        #expect(previews.first?["tab_id"] as? String == "web-preview:\(worktree.id)")
+
+        let response = await handler(.init(
+            version: 1,
+            sessionId: sessionID,
+            cwd: nil,
+            command: .preview(.init(action: .open))
+        ))
+
+        guard case .text(let lines) = response,
+              let json = lines.first?.data(using: .utf8),
+              let payload = try JSONSerialization.jsonObject(with: json) as? [String: Any]
+        else {
+            Issue.record("A worktree terminal should be able to focus its project's existing preview")
+            return
+        }
+        #expect(payload["tab_id"] as? String == "web-preview:\(worktree.id)")
+    }
+
+    @Test func persistedTerminalPreviewAutomationUsesTheProjectOwnedPreview() async throws {
+        let (state, project, worktree) = try await makeStateWithWorktree(name: "persisted-terminal-preview-owner")
+        defer {
+            state.harness.socketServer.shutdown()
+            try? FileManager.default.removeItem(at: worktree.path)
+        }
+        let sessionID = "persisted-terminal-preview-owner-session"
+        _ = state.tabs.appendTerminal(
+            worktreeId: worktree.id,
+            projectId: project.id,
+            title: "Shell",
+            sessionId: sessionID
+        )
+        let owner = SessionOwnerID.projectWorktree(projectId: project.id, worktreeId: worktree.id)
+        _ = state.tabs.openWebPreview(owner: owner)
+        state.startHarness()
+
+        let handler = try #require(state.harness.socketServer.onCLIRequest)
+        let response = await handler(.init(
+            version: 1,
+            sessionId: sessionID,
+            cwd: nil,
+            command: .preview(.init(action: .open))
+        ))
+
+        guard case .text(let lines) = response,
+              let json = lines.first?.data(using: .utf8),
+              let payload = try JSONSerialization.jsonObject(with: json) as? [String: Any]
+        else {
+            Issue.record("A persisted terminal should be able to focus its project's existing preview")
+            return
+        }
+        #expect(payload["tab_id"] as? String == "web-preview:\(worktree.id)")
+    }
+
     @Test func harnessSessionLocationResolvesLiveACPSession() async throws {
         let (state, project, worktree) = try await makeStateWithWorktree(name: "live-acp-harness-location")
         defer { try? FileManager.default.removeItem(at: worktree.path) }

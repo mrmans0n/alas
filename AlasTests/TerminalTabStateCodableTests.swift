@@ -127,6 +127,13 @@ struct TerminalTabStateCodableTests {
         #expect(decoded.runScriptLeafId == "s1")
     }
 
+    @Test func roundTripsProjectIdForWorktreeOwnership() throws {
+        let state = TerminalTabState(id: "t1", title: "Shell", sessionId: "s1", projectId: "project-a")
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(TerminalTabState.self, from: data)
+        #expect(decoded.projectId == "project-a")
+    }
+
     @Test func backfillsRunScriptLeafIdForPayloadsPredatingIt() throws {
         // Persisted between runScriptKey's introduction and runScriptLeafId's:
         // has the key but not the leaf id.
