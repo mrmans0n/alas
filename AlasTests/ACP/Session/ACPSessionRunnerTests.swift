@@ -1879,6 +1879,183 @@ struct ACPSessionRunnerTests {
         #expect(text.value == "before edit")
     }
 
+    @Test("file writes stop when the runner is superseded during lease validation")
+    func fileWriteStopsWhenRunnerIsSupersededDuringLeaseValidation() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let worktree = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-write-race-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        let file = worktree.appendingPathComponent("edited.txt")
+        try "old\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let validationStarted = AsyncGate()
+        let validationCanFinish = AsyncGate()
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        var connectionIsCurrent = true
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: worktree.path,
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: {
+                await validationStarted.open()
+                await validationCanFinish.wait()
+                return true
+            }
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        let requestID = JSONRPCID.number(8)
+        mock.emitFile(.write(id: requestID, params: .init(
+            sessionId: "s", path: file.path, content: "new\n")))
+        await validationStarted.wait()
+
+        connectionIsCurrent = false
+        runner.stop()
+        await validationCanFinish.open()
+
+        try await waitUntil { mock.fileResponses[requestID] != nil }
+        guard case .failure(let error) = mock.fileResponses[requestID] else {
+            Issue.record("expected a superseded file write to be cancelled")
+            return
+        }
+        #expect(error.code == -32800)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "old\n")
+        #expect(!session.transcript.messages.contains {
+            if case .fileEdit = $0 { return true }
+            return false
+        })
+    }
+
+    @Test("remote file writes are not recorded after the lease is taken over")
+    func remoteFileWriteIsNotRecordedAfterLeaseTakeover() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let worktree = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-remote-write-race-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        let file = worktree.appendingPathComponent("edited.txt")
+        try "old\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let remoteWriteStarted = AsyncGate()
+        let remoteWriteCanFinish = AsyncGate()
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        var leaseIsValid = true
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: worktree.path,
+            remoteHost: "buildbox",
+            canWrite: { true },
+            validateLease: { leaseIsValid }
+        )
+        runner.remoteFileWriteForTesting = { path, content, beforeRemoteWrite in
+            try await beforeRemoteWrite()
+            await remoteWriteStarted.open()
+            await remoteWriteCanFinish.wait()
+            return ACPFileWriter.makeResult(oldText: "old\n", newText: content, path: path)
+        }
+        runner.start()
+        defer { runner.stop() }
+
+        let requestID = JSONRPCID.number(9)
+        mock.emitFile(.write(id: requestID, params: .init(
+            sessionId: "s", path: file.path, content: "new\n")))
+        await remoteWriteStarted.wait()
+
+        leaseIsValid = false
+        await remoteWriteCanFinish.open()
+
+        try await waitUntil { mock.fileResponses[requestID] != nil }
+        guard case .failure(let error) = mock.fileResponses[requestID] else {
+            Issue.record("expected the stale remote write to be rejected after lease validation")
+            return
+        }
+        #expect(error.code == -32003)
+        #expect(!session.transcript.messages.contains {
+            if case .fileEdit = $0 { return true }
+            return false
+        })
+    }
+
+    @Test("remote file writes stop if the lease is lost during preflight")
+    func remoteFileWriteStopsIfLeaseIsLostDuringPreflight() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let worktree = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-remote-preflight-race-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        let file = worktree.appendingPathComponent("edited.txt")
+        try "old\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let preflightStarted = AsyncGate()
+        let preflightCanContinue = AsyncGate()
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        var leaseIsValid = true
+        var remoteWriteStarted = false
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: worktree.path,
+            remoteHost: "buildbox",
+            canWrite: { true },
+            validateLease: { leaseIsValid }
+        )
+        runner.remoteFileWriteForTesting = { path, content, beforeRemoteWrite in
+            await preflightStarted.open()
+            await preflightCanContinue.wait()
+            try await beforeRemoteWrite()
+            remoteWriteStarted = true
+            return ACPFileWriter.makeResult(oldText: "old\n", newText: content, path: path)
+        }
+        runner.start()
+        defer { runner.stop() }
+
+        let requestID = JSONRPCID.number(10)
+        mock.emitFile(.write(id: requestID, params: .init(
+            sessionId: "s", path: file.path, content: "new\n")))
+        await preflightStarted.wait()
+
+        leaseIsValid = false
+        await preflightCanContinue.open()
+
+        try await waitUntil { mock.fileResponses[requestID] != nil }
+        guard case .failure(let error) = mock.fileResponses[requestID] else {
+            Issue.record("expected remote file write to stop when the lease was lost")
+            return
+        }
+        #expect(error.code == -32003)
+        #expect(!remoteWriteStarted)
+        #expect(!session.transcript.messages.contains {
+            if case .fileEdit = $0 { return true }
+            return false
+        })
+    }
+
     @Test("permission requests flush buffered updates before responding")
     func permissionRequestsFlushBufferedUpdatesBeforeResponding() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")

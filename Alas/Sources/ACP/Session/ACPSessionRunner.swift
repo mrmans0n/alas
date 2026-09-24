@@ -1,5 +1,13 @@
 import Foundation
 
+#if DEBUG
+typealias ACPRemoteFileWriteForTesting = @MainActor (
+    _ path: String,
+    _ content: String,
+    _ beforeRemoteWrite: @MainActor @Sendable () async throws -> Void
+) async throws -> ACPFileWriter.Result
+#endif
+
 @MainActor
 final class ACPSessionRunner {
     let session: ACPSession
@@ -73,6 +81,9 @@ final class ACPSessionRunner {
     private let onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private let isConnectionCurrent: () -> Bool
+#if DEBUG
+    var remoteFileWriteForTesting: ACPRemoteFileWriteForTesting?
+#endif
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
     private var cancelRequestsTask: Task<Void, Never>?
@@ -539,19 +550,70 @@ final class ACPSessionRunner {
                             result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
                         break
                     }
-                    if self.onDirtyCheck?(params.path) == true {
-                        self.appendAndPersistSystemNotice("Agent wrote to \(URL(fileURLWithPath: params.path).lastPathComponent) — you have unsaved changes in this file.")
+                    guard !Task.isCancelled, self.isConnectionCurrent() else {
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
+                        continue
                     }
+                    let editorHasUnsavedChanges = self.onDirtyCheck?(params.path) == true
                     do {
                         let res: ACPFileWriter.Result
                         if let remoteServer {
-                            res = try await remoteServer.write(path: params.path, content: params.content) {
-                                guard self.holdsLeaseForWrite() else {
+                            let beforeRemoteWrite: @MainActor @Sendable () async throws -> Void = {
+                                guard !Task.isCancelled, self.isConnectionCurrent() else {
+                                    throw CancellationError()
+                                }
+                                guard await self.hasConfirmedLeaseForSideEffect() else {
                                     throw ACPRemoteFileServer.ServerError.leaseLost
                                 }
+                                guard !Task.isCancelled, self.isConnectionCurrent() else {
+                                    throw CancellationError()
+                                }
+                            }
+#if DEBUG
+                            if let remoteFileWriteForTesting {
+                                res = try await remoteFileWriteForTesting(
+                                    params.path,
+                                    params.content,
+                                    beforeRemoteWrite
+                                )
+                            } else {
+                                res = try await remoteServer.write(
+                                    path: params.path,
+                                    content: params.content,
+                                    beforeRemoteWrite: beforeRemoteWrite
+                                )
+                            }
+#else
+                            res = try await remoteServer.write(
+                                path: params.path,
+                                content: params.content,
+                                beforeRemoteWrite: beforeRemoteWrite
+                            )
+#endif
+                            guard await self.hasConfirmedLeaseForSideEffect() else {
+                                self.connection.client.respondToFileRequest(
+                                    id: id,
+                                    result: .failure(.init(
+                                        code: -32003,
+                                        message: "lease lost to another instance",
+                                        data: nil
+                                    ))
+                                )
+                                continue
                             }
                         } else {
                             res = try writer.write(path: params.path, content: params.content)
+                        }
+                        guard !Task.isCancelled, self.isConnectionCurrent() else {
+                            self.connection.client.respondToFileRequest(
+                                id: id,
+                                result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
+                            continue
+                        }
+                        if editorHasUnsavedChanges {
+                            self.appendAndPersistSystemNotice("Agent wrote to \(URL(fileURLWithPath: params.path).lastPathComponent) — you have unsaved changes in this file.")
                         }
                         // Persist the worktree-relative path so the
                         // "Open diff" button can pass it straight to
@@ -567,12 +629,18 @@ final class ACPSessionRunner {
                         // the write succeeded.
                         let body = Data("null".utf8)
                         self.connection.client.respondToFileRequest(id: id, result: .success(body))
+                    } catch is CancellationError {
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
                     } catch ACPFileWriter.Error.outsideWorktree(let p) {
+                        guard !Task.isCancelled, self.isConnectionCurrent() else { continue }
                         self.appendAndPersistSystemNotice("Blocked write outside worktree: \(p)")
                         self.connection.client.respondToFileRequest(
                             id: id,
                             result: .failure(.init(code: -32001, message: "path outside worktree", data: nil)))
                     } catch ACPRemoteFileServer.ServerError.outsideWorktree(let p) {
+                        guard !Task.isCancelled, self.isConnectionCurrent() else { continue }
                         self.appendAndPersistSystemNotice("Blocked write outside worktree: \(p)")
                         self.connection.client.respondToFileRequest(
                             id: id,
