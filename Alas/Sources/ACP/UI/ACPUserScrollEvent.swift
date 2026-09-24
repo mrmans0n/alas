@@ -47,6 +47,13 @@ enum ACPUserScrollEvent {
         }
     }
 
+    /// Inputs allowed through the scroll handler's user-intent gate. A
+    /// scrollbar track click is navigation even when it moves downward; the
+    /// direction-sensitive tail-follow classifier handles pausing separately.
+    static func isScrollInput(_ type: NSEvent.EventType?, isScrollbarTrackHit: Bool) -> Bool {
+        isUserDriven(type) || (type == .leftMouseDown && isScrollbarTrackHit)
+    }
+
     static func isHeadPaginationDriven(
         _ type: NSEvent.EventType?,
         previousMinY: CGFloat? = nil,
@@ -59,7 +66,9 @@ enum ACPUserScrollEvent {
         // tail-follow pause detection, and require both scrollbar provenance
         // and actual upward geometry movement so tab/content clicks cannot
         // reveal older rows during restore or layout.
-        guard type == .leftMouseDown, isScrollbarTrackHit, let previousMinY, let newMinY else {
+        guard isScrollInput(type, isScrollbarTrackHit: isScrollbarTrackHit),
+              let previousMinY, let newMinY
+        else {
             return false
         }
         return newMinY < previousMinY - ACPScrollDirectionClassifier.upwardEpsilon

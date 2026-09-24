@@ -1163,15 +1163,20 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // Responsive scrolling often replaces NSApp.currentEvent with a
             // tracking event. Live-scroll notifications cover those gestures;
             // the fresh-event fallback also covers scrollbar track clicks.
+            let isScrollbarTrackHit = ACPUserScrollEvent.isScrollbarTrackMouseDown(eventIsFresh ? event : nil)
             let isHeadPaginationDriven = scroller.isUserScrollActive
                 || ACPUserScrollEvent.isHeadPaginationDriven(
                     currentEventType,
                     previousMinY: previousY,
                     newMinY: newY,
-                    isScrollbarTrackHit: ACPUserScrollEvent.isScrollbarTrackMouseDown(eventIsFresh ? event : nil)
+                    isScrollbarTrackHit: isScrollbarTrackHit
+                )
+            let hasUserScrollInput = scroller.isUserScrollActive
+                || ACPUserScrollEvent.isScrollInput(
+                    currentEventType, isScrollbarTrackHit: isScrollbarTrackHit
                 )
 
-            guard isHeadPaginationDriven else {
+            guard hasUserScrollInput else {
                 // Idle layout must neither disarm tail-follow nor strand it
                 // above the newest content until another model update arrives.
                 if host.session.followsTranscriptTail {
