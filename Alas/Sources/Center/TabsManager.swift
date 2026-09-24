@@ -5,12 +5,15 @@ struct TabsFile: Codable {
     var version: Int = 1
     var tabs: [Tab]
     var activeTabId: TabID?
+    /// Project-local selected tab IDs. The persisted key keeps its historical
+    /// name so existing editor selections continue to restore.
     var activeEditorTabIds: [String: TabID] = [:]
-    /// Draft commit state preserved across tab close/reopen.
-    /// Nil when no draft has been started in this worktree, or when the
-    /// draft has been committed/discarded. Survives close so the user's
-    /// in-progress subject/body isn't lost.
+    /// Legacy single draft slot for files written before project-scoped drafts.
+    /// New project-owned drafts are stored in `stashedDraftsByProject`.
     var stashedDraft: DraftCommitTabState? = nil
+    /// Project-owned drafts that were closed while another project shares the
+    /// same path-derived worktree ID.
+    var stashedDraftsByProject: [String: DraftCommitTabState] = [:]
 }
 
 extension TabsFile {
@@ -22,6 +25,7 @@ extension TabsFile {
         activeTabId = try? c.decode(TabID.self, forKey: .activeTabId)
         activeEditorTabIds = (try? c.decode([String: TabID].self, forKey: .activeEditorTabIds)) ?? [:]
         stashedDraft = try? c.decode(DraftCommitTabState.self, forKey: .stashedDraft)
+        stashedDraftsByProject = (try? c.decode([String: DraftCommitTabState].self, forKey: .stashedDraftsByProject)) ?? [:]
         tabs = ((try? c.decode([FailableTab].self, forKey: .tabs)) ?? []).compactMap(\.value)
     }
 
@@ -112,11 +116,33 @@ final class TabsManager {
     func tabs(
         forWorktree id: String,
         projectId: String,
-        includesLegacyUnownedEditors: Bool = false
+        includesLegacyUnownedEditors: Bool = false,
+        includesLegacyUnownedDraftCommits: Bool = false
     ) -> [Tab] {
         (byWorktree[id]?.tabs ?? []).filter { tab in
-            guard case .editor(let editor) = tab else { return true }
-            return editor.projectId == projectId || (includesLegacyUnownedEditors && editor.projectId == nil)
+            guard let belongsToProject = projectLocalTabBelongs(
+                tab,
+                projectId: projectId,
+                includesLegacyUnownedEditors: includesLegacyUnownedEditors,
+                includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
+            ) else { return true }
+            return belongsToProject
+        }
+    }
+
+    private func projectLocalTabBelongs(
+        _ tab: Tab,
+        projectId: String,
+        includesLegacyUnownedEditors: Bool,
+        includesLegacyUnownedDraftCommits: Bool
+    ) -> Bool? {
+        return switch tab {
+        case .editor(let editor):
+            editor.projectId == projectId || (includesLegacyUnownedEditors && editor.projectId == nil)
+        case .draftCommit(let draft):
+            draft.projectId == projectId || (includesLegacyUnownedDraftCommits && draft.projectId == nil)
+        default:
+            nil
         }
     }
 
@@ -224,31 +250,40 @@ final class TabsManager {
     func activeTabId(
         forWorktree id: String,
         projectId: String,
-        includesLegacyUnownedEditors: Bool = false
+        includesLegacyUnownedEditors: Bool = false,
+        includesLegacyUnownedDraftCommits: Bool = false
     ) -> TabID? {
         guard let file = byWorktree[id] else { return nil }
         if let activeTabId = file.activeTabId,
            let activeTab = file.tabs.first(where: { $0.id == activeTabId }) {
-            if case .editor(let editor) = activeTab {
-                if editor.projectId == projectId || (includesLegacyUnownedEditors && editor.projectId == nil) {
-                    return activeTabId
-                }
-            } else {
+            if projectLocalTabBelongs(
+                activeTab,
+                projectId: projectId,
+                includesLegacyUnownedEditors: includesLegacyUnownedEditors,
+                includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
+            ) != false {
                 return activeTabId
             }
         }
         if let remembered = file.activeEditorTabIds[projectId],
-           file.tabs.contains(where: { tab in
-               guard tab.id == remembered, case .editor(let editor) = tab else { return false }
-               return editor.projectId == projectId
-            }) {
+           let rememberedTab = file.tabs.first(where: { $0.id == remembered }),
+           projectLocalTabBelongs(
+               rememberedTab,
+               projectId: projectId,
+               includesLegacyUnownedEditors: includesLegacyUnownedEditors,
+               includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
+           ) == true {
             return remembered
         }
-        if let mostRecentEditor = file.tabs.reversed().first(where: { tab in
-            guard case .editor(let editor) = tab else { return false }
-            return editor.projectId == projectId || (includesLegacyUnownedEditors && editor.projectId == nil)
+        if let mostRecentProjectTab = file.tabs.reversed().first(where: { tab in
+            projectLocalTabBelongs(
+                tab,
+                projectId: projectId,
+                includesLegacyUnownedEditors: includesLegacyUnownedEditors,
+                includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
+            ) == true
         }) {
-            return mostRecentEditor.id
+            return mostRecentProjectTab.id
         }
         return nil
     }
@@ -1113,6 +1148,19 @@ final class TabsManager {
         byWorktree[worktreeId]?.stashedDraft
     }
 
+    func stashedDraft(
+        worktreeId: String,
+        projectId: String,
+        includesLegacyUnownedDraftCommit: Bool = false
+    ) -> DraftCommitTabState? {
+        guard let file = byWorktree[worktreeId] else { return nil }
+        if let draft = file.stashedDraftsByProject[projectId] { return draft }
+        guard let legacy = file.stashedDraft,
+              legacy.projectId == projectId || (includesLegacyUnownedDraftCommit && legacy.projectId == nil)
+        else { return nil }
+        return legacy
+    }
+
     @discardableResult
     func openOrFocusReviewChanges(worktreeId: String) -> Tab {
         if var file = byWorktree[worktreeId],
@@ -1416,13 +1464,24 @@ final class TabsManager {
     @discardableResult
     func openOrFocusDraftCommit(
         worktreeId: String,
+        projectId: String? = nil,
+        includesLegacyUnownedDraftCommit: Bool = false,
         resetAmend: Bool = false,
         preferredAction: DraftCommitPreferredAction? = nil
     ) -> Tab {
-        let baseState = DraftCommitTabState(worktreeId: worktreeId)
+        let baseState = DraftCommitTabState(worktreeId: worktreeId, projectId: projectId)
         if var file = byWorktree[worktreeId],
-           let idx = file.tabs.firstIndex(where: { $0.id == baseState.id }),
+           let idx = file.tabs.firstIndex(where: { tab in
+               guard case .draftCommit(let state) = tab else { return false }
+               if let projectId {
+                   return state.projectId == projectId || (includesLegacyUnownedDraftCommit && state.projectId == nil)
+               }
+               return state.projectId == nil
+           }),
            case .draftCommit(var existing) = file.tabs[idx] {
+            let adoptedLegacyDraft = projectId != nil && existing.projectId == nil
+                && includesLegacyUnownedDraftCommit
+            if adoptedLegacyDraft { existing.projectId = projectId }
             if resetAmend {
                 existing.prepareForNewCommit()
             }
@@ -1432,22 +1491,46 @@ final class TabsManager {
             let tab = Tab.draftCommit(existing)
             file.tabs[idx] = tab
             file.activeTabId = tab.id
+            rememberProjectLocalTab(tab, in: &file)
+            if adoptedLegacyDraft, let projectId,
+               let legacyStash = file.stashedDraft, legacyStash.projectId == nil {
+                var adoptedStash = legacyStash
+                adoptedStash.projectId = projectId
+                setStashedDraft(adoptedStash, forProjectId: projectId, in: &file)
+            }
             byWorktree[worktreeId] = file
             persist(worktreeId)
             return tab
         }
-        // No live tab — restore from the stash if present, otherwise start fresh.
-        var state = byWorktree[worktreeId]?.stashedDraft ?? baseState
+        // No live tab — restore only this project's stash. Old unowned data is
+        // adopted by the original project owner and never exposed to siblings.
+        var file = byWorktree[worktreeId] ?? TabsFile(tabs: [], activeTabId: nil)
+        var stashed: DraftCommitTabState?
+        var adoptedLegacyDraft = false
+        if let projectId {
+            stashed = file.stashedDraftsByProject[projectId]
+            if stashed == nil, let legacy = file.stashedDraft,
+               legacy.projectId == projectId || (includesLegacyUnownedDraftCommit && legacy.projectId == nil) {
+                var adopted = legacy
+                adoptedLegacyDraft = adopted.projectId == nil
+                if adoptedLegacyDraft { adopted.projectId = projectId }
+                stashed = adopted
+                if adoptedLegacyDraft {
+                    setStashedDraft(adopted, forProjectId: projectId, in: &file)
+                }
+            }
+        } else if let legacy = file.stashedDraft, legacy.projectId == nil {
+            stashed = legacy
+        }
+        var state = stashed ?? baseState
         if resetAmend {
             state.prepareForNewCommit()
         }
         if let preferredAction {
             state.preferredAction = preferredAction
         }
-        if var file = byWorktree[worktreeId],
-           file.stashedDraft != nil,
-           resetAmend || preferredAction != nil {
-            file.stashedDraft = state
+        if adoptedLegacyDraft || (stashed != nil && (resetAmend || preferredAction != nil)) {
+            setStashedDraft(state, forProjectId: state.projectId, in: &file)
             byWorktree[worktreeId] = file
             persist(worktreeId)
         }
@@ -1539,8 +1622,13 @@ final class TabsManager {
             byWorktree[worktreeId] = file
             return true
         }
-        guard file.stashedDraft?.id == tabId else { return false }
-        file.stashedDraft?.publishCheckpoint = checkpoint
+        if file.stashedDraft?.id == tabId {
+            file.stashedDraft?.publishCheckpoint = checkpoint
+        } else if let projectId = file.stashedDraftsByProject.first(where: { $0.value.id == tabId })?.key {
+            file.stashedDraftsByProject[projectId]?.publishCheckpoint = checkpoint
+        } else {
+            return false
+        }
         try persistThrowing(file, worktreeId: worktreeId)
         byWorktree[worktreeId] = file
         return true
@@ -1586,11 +1674,30 @@ final class TabsManager {
     /// Clear any stashed draft commit state for the given worktree.
     /// Used when the user explicitly discards the draft (via tab context
     /// menu) or after a successful commit consumes the draft.
-    func discardStashedDraft(worktreeId: String) {
-        let tabId = DraftCommitTabState(worktreeId: worktreeId).id
-        if commitPublishSessions[tabId]?.isRunning == false { commitPublishSessions[tabId] = nil }
-        guard var file = byWorktree[worktreeId], file.stashedDraft != nil else { return }
-        file.stashedDraft = nil
+    func discardStashedDraft(
+        worktreeId: String,
+        projectId: String? = nil,
+        includesLegacyUnownedDraftCommit: Bool = false
+    ) {
+        guard var file = byWorktree[worktreeId] else { return }
+        let draft = projectId.flatMap { file.stashedDraftsByProject[$0] }
+            ?? file.stashedDraft.flatMap { legacy in
+                guard projectId == nil || legacy.projectId == projectId
+                    || (includesLegacyUnownedDraftCommit && legacy.projectId == nil)
+                else { return nil }
+                return legacy
+            }
+        guard let draft else { return }
+        if commitPublishSessions[draft.id]?.isRunning == false { commitPublishSessions[draft.id] = nil }
+        if let projectId {
+            if file.stashedDraft?.id == draft.id {
+                file.stashedDraft = nil
+            } else {
+                file.stashedDraftsByProject[projectId] = nil
+            }
+        } else {
+            file.stashedDraft = nil
+        }
         byWorktree[worktreeId] = file
         persist(worktreeId)
     }
@@ -1637,8 +1744,7 @@ final class TabsManager {
             byWorktree[worktreeId] = file
             return tab
         }
-        guard file.stashedDraft != nil else { return nil }
-        file.stashedDraft = nil
+        guard removeStashedDraft(tabId: tabId, from: &file) else { return nil }
         try persistThrowing(file, worktreeId: worktreeId)
         byWorktree[worktreeId] = file
         return nil
@@ -1663,7 +1769,7 @@ final class TabsManager {
             file.tabs[existingIdx] = tab
             file.tabs.remove(at: idx)
             file.activeTabId = tab.id
-            file.stashedDraft = nil
+            removeStashedDraft(tabId: draftTabId, from: &file)
             return tab
         }
         let editor = CommitEditorTabState(
@@ -1678,8 +1784,25 @@ final class TabsManager {
         if file.activeTabId == draftTabId {
             file.activeTabId = tab.id
         }
-        file.stashedDraft = nil
+        removeStashedDraft(tabId: draftTabId, from: &file)
         return tab
+    }
+
+    @discardableResult
+    private func removeStashedDraft(tabId: TabID, from file: inout TabsFile) -> Bool {
+        var removed = false
+        if file.stashedDraft?.id == tabId {
+            file.stashedDraft = nil
+            removed = true
+        }
+        let projectIds = file.stashedDraftsByProject.compactMap { projectId, draft in
+            draft.id == tabId ? projectId : nil
+        }
+        for projectId in projectIds {
+            file.stashedDraftsByProject[projectId] = nil
+            removed = true
+        }
+        return removed
     }
 
     @discardableResult
@@ -1866,10 +1989,8 @@ final class TabsManager {
     func activate(worktreeId: String, tabId: TabID) {
         var file = byWorktree[worktreeId] ?? TabsFile(tabs: [], activeTabId: nil)
         file.activeTabId = tabId
-        if let tab = file.tabs.first(where: { $0.id == tabId }),
-           case .editor(let editor) = tab,
-           let projectId = editor.projectId {
-            file.activeEditorTabIds[projectId] = tabId
+        if let tab = file.tabs.first(where: { $0.id == tabId }) {
+            rememberProjectLocalTab(tab, in: &file)
         }
         byWorktree[worktreeId] = file
         persist(worktreeId)
@@ -1902,15 +2023,13 @@ final class TabsManager {
             file.tabs.insert(tab, at: index)
             file.activeTabId = tab.id
         }
-        if case .editor(let editor) = tab, let projectId = editor.projectId {
-            file.activeEditorTabIds[projectId] = tab.id
-        }
+        rememberProjectLocalTab(tab, in: &file)
         byWorktree[worktreeID] = file
         persist(worktreeID)
         return tab.id
     }
 
-    /// Capture a draft commit tab's state into `file.stashedDraft` before
+    /// Capture a draft commit tab's state into its owner's stash before
     /// removal. Non-empty drafts and recovery checkpoints stash so they survive
     /// close/reopen. Empty drafts without recovery state CLEAR the stash so a
     /// user who opens an old stashed draft, wipes the text, and closes the tab
@@ -1921,7 +2040,11 @@ final class TabsManager {
               case .draftCommit(let state) = tab else { return }
         let hasSubject = !state.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasBody = !state.bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        file.stashedDraft = (hasSubject || hasBody || state.publishCheckpoint != nil) ? state : nil
+        setStashedDraft(
+            (hasSubject || hasBody || state.publishCheckpoint != nil) ? state : nil,
+            forProjectId: state.projectId,
+            in: &file
+        )
     }
 
     private func clearWebPreviewBrowsers(for tabs: some Sequence<Tab>) {
@@ -2063,11 +2186,34 @@ final class TabsManager {
         var file = byWorktree[worktreeId] ?? TabsFile(tabs: [], activeTabId: nil)
         file.tabs.append(tab)
         file.activeTabId = tab.id
-        if case .editor(let editor) = tab, let projectId = editor.projectId {
-            file.activeEditorTabIds[projectId] = editor.id
-        }
+        rememberProjectLocalTab(tab, in: &file)
         byWorktree[worktreeId] = file
         persist(worktreeId)
+    }
+
+    private func rememberProjectLocalTab(_ tab: Tab, in file: inout TabsFile) {
+        let projectId: String? = switch tab {
+        case .editor(let state): state.projectId
+        case .draftCommit(let state): state.projectId
+        default: nil
+        }
+        if let projectId { file.activeEditorTabIds[projectId] = tab.id }
+    }
+
+    private func setStashedDraft(
+        _ draft: DraftCommitTabState?,
+        forProjectId projectId: String?,
+        in file: inout TabsFile
+    ) {
+        guard let projectId else {
+            file.stashedDraft = draft
+            return
+        }
+        file.stashedDraftsByProject[projectId] = draft
+        if let legacyDraft = file.stashedDraft,
+           legacyDraft.projectId == projectId || legacyDraft.id == draft?.id {
+            file.stashedDraft = nil
+        }
     }
 
     private func persist(_ worktreeId: String) {

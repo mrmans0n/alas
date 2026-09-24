@@ -8,6 +8,16 @@ struct DraftCommitTabStateTests {
         #expect(s.id == "draft-commit:wt-1")
     }
 
+    @Test func projectOwnedDraftIdsIncludeProjectIdentity() {
+        let projectA = DraftCommitTabState(worktreeId: "shared-path", projectId: "project-a")
+        let projectB = DraftCommitTabState(worktreeId: "shared-path", projectId: "project-b")
+
+        #expect(projectA.id != projectB.id)
+        #expect(projectA.id == "draft-commit-project:project-a:shared-path")
+        #expect(projectA.projectId == "project-a")
+        #expect(projectB.projectId == "project-b")
+    }
+
     @Test func initialFieldsAreEmpty() {
         let s = DraftCommitTabState(worktreeId: "wt-1")
         #expect(s.subject == "")
@@ -22,6 +32,7 @@ struct DraftCommitTabStateTests {
         #expect(state.preferredAction == .commit)
         #expect(state.createReviewRequestAsDraft == false)
         #expect(state.publishCheckpoint == nil)
+        #expect(state.projectId == nil)
     }
 
     @Test func legacyDraftJSONDecodesNewFieldsWithDefaults() throws {

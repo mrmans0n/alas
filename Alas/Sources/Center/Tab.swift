@@ -589,6 +589,7 @@ struct CommitEditorTabState: Codable, Equatable, Identifiable {
 struct DraftCommitTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeId: String
+    var projectId: String?
     var subject: String
     var bodyText: String
     var amend: Bool
@@ -601,6 +602,7 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case id
         case worktreeId
+        case projectId
         case subject
         case bodyText
         case amend
@@ -617,6 +619,7 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
 
     init(
         worktreeId: String,
+        projectId: String? = nil,
         subject: String = "",
         bodyText: String = "",
         amend: Bool = false,
@@ -625,8 +628,9 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
         createReviewRequestAsDraft: Bool = false,
         publishCheckpoint: CommitPublishCheckpoint? = nil
     ) {
-        self.id = "draft-commit:\(worktreeId)"
+        self.id = projectId.map { "draft-commit-project:\($0):\(worktreeId)" } ?? "draft-commit:\(worktreeId)"
         self.worktreeId = worktreeId
+        self.projectId = projectId
         self.subject = subject
         self.bodyText = bodyText
         self.amend = amend
@@ -641,6 +645,7 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(TabID.self, forKey: .id)
         worktreeId = try container.decode(String.self, forKey: .worktreeId)
+        projectId = try container.decodeIfPresent(String.self, forKey: .projectId)
         subject = try container.decode(String.self, forKey: .subject)
         bodyText = try container.decode(String.self, forKey: .bodyText)
         amend = try container.decode(Bool.self, forKey: .amend)
@@ -655,6 +660,7 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(worktreeId, forKey: .worktreeId)
+        try container.encodeIfPresent(projectId, forKey: .projectId)
         try container.encode(subject, forKey: .subject)
         try container.encode(bodyText, forKey: .bodyText)
         try container.encode(amend, forKey: .amend)

@@ -174,6 +174,99 @@ struct DraftCommitTabsManagerTests {
         #expect(mgr.activeTabId(forWorktree: worktreeId) == first.id)
     }
 
+    @Test func samePathProjectsKeepDraftCommitTabsAndStashesIsolated() {
+        let worktreeId = "draft-commit-tabs-mgr-shared-path-\(UUID().uuidString)"
+        let tabsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-draft-project-scope-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tabsDirectory) }
+        let manager = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDirectory)
+
+        let projectADraft = manager.openOrFocusDraftCommit(worktreeId: worktreeId, projectId: "project-a")
+        manager.updateDraftCommit(worktreeId: worktreeId, tabId: projectADraft.id) { state in
+            state.subject = "A's draft"
+            state.bodyText = "Only project A"
+            state.amend = true
+            state.publishCheckpoint = makePublishCheckpoint()
+        }
+        let projectBDraft = manager.openOrFocusDraftCommit(worktreeId: worktreeId, projectId: "project-b")
+        manager.updateDraftCommit(worktreeId: worktreeId, tabId: projectBDraft.id) { state in
+            state.subject = "B's draft"
+            state.bodyText = "Only project B"
+        }
+
+        #expect(projectADraft.id != projectBDraft.id)
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-a").compactMap(\.draftCommitState).map(\.subject) == ["A's draft"])
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-b").compactMap(\.draftCommitState).map(\.subject) == ["B's draft"])
+        #expect(manager.activeTabId(forWorktree: worktreeId, projectId: "project-a") == projectADraft.id)
+        #expect(manager.activeTabId(forWorktree: worktreeId, projectId: "project-b") == projectBDraft.id)
+
+        manager.close(worktreeId: worktreeId, tabId: projectADraft.id)
+        manager.close(worktreeId: worktreeId, tabId: projectBDraft.id)
+
+        #expect(manager.stashedDraft(worktreeId: worktreeId, projectId: "project-a")?.subject == "A's draft")
+        #expect(manager.stashedDraft(worktreeId: worktreeId, projectId: "project-a")?.publishCheckpoint == makePublishCheckpoint())
+        #expect(manager.stashedDraft(worktreeId: worktreeId, projectId: "project-b")?.subject == "B's draft")
+        #expect(manager.stashedDraft(worktreeId: worktreeId, projectId: "project-b")?.publishCheckpoint == nil)
+
+        let reloaded = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDirectory)
+        reloaded.loadAll(worktreeIds: [worktreeId])
+        let reopenedB = reloaded.openOrFocusDraftCommit(worktreeId: worktreeId, projectId: "project-b")
+        let reopenedA = reloaded.openOrFocusDraftCommit(worktreeId: worktreeId, projectId: "project-a")
+
+        #expect(reopenedA.id == projectADraft.id)
+        #expect(reopenedB.id == projectBDraft.id)
+        #expect(reopenedA.draftCommitState?.subject == "A's draft")
+        #expect(reopenedA.draftCommitState?.amend == true)
+        #expect(reopenedA.draftCommitState?.publishCheckpoint == makePublishCheckpoint())
+        #expect(reopenedB.draftCommitState?.subject == "B's draft")
+        #expect(reloaded.tabs(forWorktree: worktreeId, projectId: "project-a").compactMap(\.draftCommitState).map(\.subject) == ["A's draft"])
+        #expect(reloaded.tabs(forWorktree: worktreeId, projectId: "project-b").compactMap(\.draftCommitState).map(\.subject) == ["B's draft"])
+
+        #expect(reloaded.replaceDraftWithCommitEditor(
+            worktreeId: worktreeId,
+            draftTabId: projectADraft.id,
+            baseRef: "main",
+            newSha: "a-commit",
+            title: "A's commit"
+        ) != nil)
+        #expect(reloaded.stashedDraft(worktreeId: worktreeId, projectId: "project-a") == nil)
+        #expect(reloaded.stashedDraft(worktreeId: worktreeId, projectId: "project-b")?.subject == "B's draft")
+    }
+
+    @Test func projectOwnerAdoptsOnlyItsLegacyStashedDraft() {
+        let worktreeId = "draft-commit-tabs-mgr-legacy-shared-path-\(UUID().uuidString)"
+        let tabsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-draft-legacy-project-scope-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tabsDirectory) }
+        let manager = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDirectory)
+        let legacyDraft = manager.openOrFocusDraftCommit(worktreeId: worktreeId)
+        manager.updateDraftCommit(worktreeId: worktreeId, tabId: legacyDraft.id) { state in
+            state.subject = "Legacy draft"
+        }
+        manager.close(worktreeId: worktreeId, tabId: legacyDraft.id)
+
+        #expect(manager.stashedDraft(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            includesLegacyUnownedDraftCommit: true
+        )?.subject == "Legacy draft")
+        #expect(manager.stashedDraft(worktreeId: worktreeId, projectId: "project-b") == nil)
+
+        let adopted = manager.openOrFocusDraftCommit(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            includesLegacyUnownedDraftCommit: true
+        )
+        let sibling = manager.openOrFocusDraftCommit(worktreeId: worktreeId, projectId: "project-b")
+
+        #expect(adopted.id == legacyDraft.id)
+        #expect(adopted.draftCommitState?.projectId == "project-a")
+        #expect(adopted.draftCommitState?.subject == "Legacy draft")
+        #expect(sibling.draftCommitState?.subject == "")
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-a").compactMap(\.draftCommitState).map(\.subject) == ["Legacy draft"])
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-b").compactMap(\.draftCommitState).map(\.subject) == [""])
+    }
+
     @Test func openOrFocusDraftCommitForNewCommit_resetsLiveAmendBeforeFocusing() {
         let worktreeId = "draft-commit-tabs-mgr-new-live"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
@@ -487,6 +580,13 @@ struct DraftCommitTabsManagerTests {
             destination: .gg(),
             nextPhase: .push
         )
+    }
+}
+
+private extension Tab {
+    var draftCommitState: DraftCommitTabState? {
+        guard case .draftCommit(let state) = self else { return nil }
+        return state
     }
 }
 

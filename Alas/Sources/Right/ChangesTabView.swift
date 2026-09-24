@@ -1043,46 +1043,86 @@ struct ChangesTabView: View {
         }
     }
 
+    private var includesLegacyUnownedDraftCommit: Bool {
+        appState.legacyEditorOwnerProjectId(forWorktreeId: rps.worktree.id) == rps.worktree.projectId
+    }
+
     private var currentDraft: DraftCommitTabState? {
-        for tab in appState.tabs.tabs(forWorktree: rps.worktree.id) {
+        for tab in appState.tabs.tabs(
+            forWorktree: rps.worktree.id,
+            projectId: rps.worktree.projectId,
+            includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommit
+        ) {
             if case .draftCommit(let state) = tab { return state }
         }
-        return appState.tabs.stashedDraft(worktreeId: rps.worktree.id)
+        return appState.tabs.stashedDraft(
+            worktreeId: rps.worktree.id,
+            projectId: rps.worktree.projectId,
+            includesLegacyUnownedDraftCommit: includesLegacyUnownedDraftCommit
+        )
     }
 
     private var hasDraftTab: Bool {
-        let live = appState.tabs.tabs(forWorktree: rps.worktree.id).contains { tab in
+        let live = appState.tabs.tabs(
+            forWorktree: rps.worktree.id,
+            projectId: rps.worktree.projectId,
+            includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommit
+        ).contains { tab in
             if case .draftCommit = tab { return true } else { return false }
         }
         if live { return true }
-        return appState.tabs.stashedDraft(worktreeId: rps.worktree.id) != nil
+        return appState.tabs.stashedDraft(
+            worktreeId: rps.worktree.id,
+            projectId: rps.worktree.projectId,
+            includesLegacyUnownedDraftCommit: includesLegacyUnownedDraftCommit
+        ) != nil
     }
 
     private var draftNonEmpty: Bool {
-        let live = appState.tabs.tabs(forWorktree: rps.worktree.id).first { tab in
+        let live = appState.tabs.tabs(
+            forWorktree: rps.worktree.id,
+            projectId: rps.worktree.projectId,
+            includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommit
+        ).first { tab in
             if case .draftCommit = tab { return true } else { return false }
         }
         if case .draftCommit(let s) = live {
             if !s.subject.isEmpty || !s.bodyText.isEmpty { return true }
         }
-        if let stashed = appState.tabs.stashedDraft(worktreeId: rps.worktree.id) {
+        if let stashed = appState.tabs.stashedDraft(
+            worktreeId: rps.worktree.id,
+            projectId: rps.worktree.projectId,
+            includesLegacyUnownedDraftCommit: includesLegacyUnownedDraftCommit
+        ) {
             return !stashed.subject.isEmpty || !stashed.bodyText.isEmpty
         }
         return false
     }
 
     private func openDraftTab() {
-        _ = appState.tabs.openOrFocusDraftCommit(worktreeId: rps.worktree.id, preferredAction: .commit)
+        _ = appState.tabs.openOrFocusDraftCommit(
+            worktreeId: rps.worktree.id,
+            projectId: rps.worktree.projectId,
+            includesLegacyUnownedDraftCommit: includesLegacyUnownedDraftCommit,
+            preferredAction: .commit
+        )
     }
 
     private func openPublishTab() {
-        _ = appState.tabs.openOrFocusDraftCommit(worktreeId: rps.worktree.id, preferredAction: .publish)
+        _ = appState.tabs.openOrFocusDraftCommit(
+            worktreeId: rps.worktree.id,
+            projectId: rps.worktree.projectId,
+            includesLegacyUnownedDraftCommit: includesLegacyUnownedDraftCommit,
+            preferredAction: .publish
+        )
     }
 
     private func handleGGPreparationAction(_ action: GGChangesPreparationAction) {
         if let preferredAction = Self.draftPreferredAction(for: action) {
             _ = appState.tabs.openOrFocusDraftCommit(
                 worktreeId: rps.worktree.id,
+                projectId: rps.worktree.projectId,
+                includesLegacyUnownedDraftCommit: includesLegacyUnownedDraftCommit,
                 resetAmend: true,
                 preferredAction: preferredAction
             )

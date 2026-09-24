@@ -2760,18 +2760,21 @@ final class AppState {
             ?? (selectedWorktreeId == focusedWorktreeID ? selectedWorktreeProjectId : nil)
         let includesLegacyUnownedEditors = projectID != nil
             && legacyEditorOwnerProjectId(forWorktreeId: focusedWorktreeID) == projectID
+        let includesLegacyUnownedDraftCommits = includesLegacyUnownedEditors
         let focusedTabs = projectID.map {
             tabs.tabs(
                 forWorktree: focusedWorktreeID,
                 projectId: $0,
-                includesLegacyUnownedEditors: includesLegacyUnownedEditors
+                includesLegacyUnownedEditors: includesLegacyUnownedEditors,
+                includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
             )
         } ?? tabs.tabs(forWorktree: focusedWorktreeID)
         let activeFocusedTabID = projectID.map {
             tabs.activeTabId(
                 forWorktree: focusedWorktreeID,
                 projectId: $0,
-                includesLegacyUnownedEditors: includesLegacyUnownedEditors
+                includesLegacyUnownedEditors: includesLegacyUnownedEditors,
+                includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
             )
         } ?? tabs.activeTabId(forWorktree: focusedWorktreeID)
         guard let sharedSessionOwner else {
@@ -9729,14 +9732,24 @@ final class AppState {
         let projectId = selectedWorktreeProjectId
         let includesLegacyUnownedEditors = projectId != nil
             && legacyEditorOwnerProjectId(forWorktreeId: worktreeId) == projectId
+        let includesLegacyUnownedDraftCommits = includesLegacyUnownedEditors
         guard let activeId = projectId.map({
             tabs.activeTabId(
                 forWorktree: worktreeId,
                 projectId: $0,
-                includesLegacyUnownedEditors: includesLegacyUnownedEditors
+                includesLegacyUnownedEditors: includesLegacyUnownedEditors,
+                includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
             )
         }) ?? tabs.activeTabId(forWorktree: worktreeId) else { return nil }
-        return tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId })
+        let visibleTabs = projectId.map {
+            tabs.tabs(
+                forWorktree: worktreeId,
+                projectId: $0,
+                includesLegacyUnownedEditors: includesLegacyUnownedEditors,
+                includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
+            )
+        } ?? tabs.tabs(forWorktree: worktreeId)
+        return visibleTabs.first(where: { $0.id == activeId })
     }
 
     var hasActiveEditorTab: Bool {
