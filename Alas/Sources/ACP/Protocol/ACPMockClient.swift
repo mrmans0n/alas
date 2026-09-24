@@ -77,7 +77,15 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     }
 
     func send(_ request: ACPRequest) async throws -> ACPResponse {
+        try await send(request, onRequestHandoff: {})
+    }
+
+    func send(
+        _ request: ACPRequest,
+        onRequestHandoff: @Sendable () -> Void
+    ) async throws -> ACPResponse {
         sent.append(request)
+        onRequestHandoff()
         if let script = responseScripts[request.method] {
             return try await script(request)
         }

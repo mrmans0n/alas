@@ -5862,7 +5862,7 @@ extension ACPSessionManager {
         draft: ACPComposerDraft?,
         waitForModelModeSelections: Bool,
         onCompleted: @escaping @MainActor (Bool) -> Void,
-        onDispatchRegistered: (@MainActor () -> Void)? = nil
+        onDispatchRegistered: (@Sendable () -> Void)? = nil
     ) -> Bool {
         guard let session = sessions[sessionId] else { return false }
         if case .needsAuth = session.setupState {

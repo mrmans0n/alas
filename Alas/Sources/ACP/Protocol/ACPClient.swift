@@ -55,6 +55,14 @@ protocol ACPClient: AnyObject {
     /// Sends a request and awaits a JSON-RPC response (raw bytes of the `result` field).
     func send(_ request: ACPRequest) async throws -> ACPResponse
 
+    /// Reports when the request reaches the client's dispatch boundary.
+    /// Concrete clients should override this to report their transport
+    /// enqueue point; the default preserves ordering at the `send` call.
+    func send(
+        _ request: ACPRequest,
+        onRequestHandoff: @Sendable () -> Void
+    ) async throws -> ACPResponse
+
     /// Sends a fire-and-forget JSON-RPC notification. Used for spec-
     /// compliant methods that don't reply, e.g. `session/cancel`,
     /// where awaiting a reply would suspend the caller indefinitely.
@@ -152,6 +160,14 @@ extension ACPClient {
 
     func detach() async {
         await shutdown()
+    }
+
+    func send(
+        _ request: ACPRequest,
+        onRequestHandoff: @Sendable () -> Void
+    ) async throws -> ACPResponse {
+        onRequestHandoff()
+        return try await send(request)
     }
 }
 

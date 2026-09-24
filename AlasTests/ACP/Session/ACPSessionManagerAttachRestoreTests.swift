@@ -1104,6 +1104,113 @@ struct ACPSessionManagerAttachRestoreTests {
         ])
     }
 
+    @Test("a later model pick waits for prompt RPC handoff")
+    func laterModelPickWaitsForPromptRPCHandoff() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        let checkpointGate = PromptGate()
+        let promptGate = PromptGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [.init(id: "plan", name: "Plan")],
+                currentModel: "sonnet",
+                currentMode: "plan",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { request in
+            let params = try #require(request.params as? ACPSessionSetModelParams)
+            if params.modelId == "haiku" {
+                await modelGate.enterAndWait()
+            }
+            return Data("{}".utf8)
+        }
+        client.scriptAsync(method: "session/prompt") { _ in
+            await promptGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
+        let manager = manager(
+            store: store,
+            client: client,
+            onCheckpointCapture: { _, _ in
+                await checkpointGate.waitInPrompt()
+                return nil
+            }
+        )
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        let initialRequestCount = client.sent.count
+
+        let firstSelection = manager.enqueueModelSelection(for: session.id, modelId: "haiku")
+        try await waitUntilAsync { await modelGate.hasEntered }
+        var promptCompleted: Bool?
+        let accepted = manager.submit(
+            sessionId: session.id,
+            text: "submit before changing the model again",
+            attachments: [],
+            intent: .auto
+        ) { succeeded in
+            promptCompleted = succeeded
+        }
+        #expect(accepted)
+        let laterSelection = manager.enqueueModelSelection(for: session.id, modelId: "opus")
+
+        await modelGate.release()
+        await firstSelection.value
+        try await waitUntilAsync { await checkpointGate.hasEntered }
+        await Task.yield()
+
+        let beforeHandoff = client.sent.dropFirst(initialRequestCount).filter {
+            $0.method == "session/set_model" || $0.method == "session/prompt"
+        }
+        #expect(beforeHandoff.map(\.method) == ["session/set_model"])
+        #expect((beforeHandoff.first?.params as? ACPSessionSetModelParams)?.modelId == "haiku")
+
+        await checkpointGate.release()
+        try await waitUntil {
+            client.sent.dropFirst(initialRequestCount).contains { $0.method == "session/prompt" }
+        }
+        try await waitUntil {
+            client.sent.dropFirst(initialRequestCount).contains {
+                guard $0.method == "session/set_model",
+                      let params = $0.params as? ACPSessionSetModelParams else { return false }
+                return params.modelId == "opus"
+            }
+        }
+        await laterSelection.value
+
+        let orderedRequests = client.sent.dropFirst(initialRequestCount).filter {
+            $0.method == "session/set_model" || $0.method == "session/prompt"
+        }
+        #expect(orderedRequests.map(\.method) == [
+            "session/set_model",
+            "session/prompt",
+            "session/set_model",
+        ])
+        #expect(orderedRequests.compactMap {
+            ($0.params as? ACPSessionSetModelParams)?.modelId
+        } == ["haiku", "opus"])
+
+        await promptGate.release()
+        try await waitUntil { promptCompleted != nil }
+        #expect(promptCompleted == true)
+    }
+
     @Test("detaching cancels a prompt behind model selection")
     func detachingCancelsPromptBehindModelSelection() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -4208,13 +4315,15 @@ struct ACPSessionManagerAttachRestoreTests {
         store: ACPSessionStore,
         client: ACPMockClient,
         mcpProjectContextProvider: ACPSessionManager.MCPProjectContextProvider? = nil,
-        onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil
+        onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
+        onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil
     ) -> ACPSessionManager {
         ACPSessionManager(
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
             onQueueChanged: onQueueChanged,
+            onCheckpointCapture: onCheckpointCapture,
             setupEvaluator: { _ in .ready },
             connectionFactory: { _, _, _ in ACPConnection(client: client) },
             mcpProjectContextProvider: mcpProjectContextProvider

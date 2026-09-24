@@ -2,6 +2,23 @@ import Foundation
 import Testing
 @testable import Alas
 
+private final class DispatchRegistrationFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var isRegistered: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func markRegistered() {
+        lock.lock()
+        value = true
+        lock.unlock()
+    }
+}
+
 @MainActor
 @Suite("ACPSessionRunner queue routing")
 struct ACPSessionRunnerQueueTests {
@@ -61,16 +78,16 @@ struct ACPSessionRunnerQueueTests {
         let probe = StrictSingleFlightPromptProbe()
         mock.scriptAsync(method: "session/prompt") { _ in try await probe.send() }
 
-        var firstDispatchRegistered = false
+        let dispatchFlag = DispatchRegistrationFlag()
         runner.sendRegistered(
             text: "first",
             attachments: [],
             intent: .auto,
-            onDispatchRegistered: { firstDispatchRegistered = true }
+            onDispatchRegistered: { dispatchFlag.markRegistered() }
         )
         await leaseGate.waitUntilEntered()
         #expect(session.transcript.streamingState == .idle)
-        #expect(!firstDispatchRegistered)
+        #expect(!dispatchFlag.isRegistered)
 
         runner.send(blocks: [.text("second")], intent: .auto)
         #expect(session.queue.map(\.blocks) == [[.text("second")]])
@@ -78,7 +95,7 @@ struct ACPSessionRunnerQueueTests {
 
         await leaseGate.release()
         await probe.waitUntilFirstStarted()
-        #expect(firstDispatchRegistered)
+        #expect(dispatchFlag.isRegistered)
         #expect(session.transcript.streamingState == .sending)
         #expect(await probe.callCount == 1)
         await probe.releaseFirst()

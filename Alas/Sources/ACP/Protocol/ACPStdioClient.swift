@@ -420,6 +420,13 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     // MARK: - Outbound
 
     func send(_ request: ACPRequest) async throws -> ACPResponse {
+        try await send(request, onRequestHandoff: {})
+    }
+
+    func send(
+        _ request: ACPRequest,
+        onRequestHandoff: @Sendable () -> Void
+    ) async throws -> ACPResponse {
         let id = nextRequestID()
 
         let body = try Self.encode(envelopeFor: request, id: id)
@@ -427,6 +434,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             stateLock.lock()
             if didDrainPending {
                 stateLock.unlock()
+                onRequestHandoff()
                 cont.resume(throwing: ACPClientError.notRunning)
                 return
             }
@@ -434,6 +442,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             stateLock.unlock()
             do {
                 try transport.send(body)
+                onRequestHandoff()
             } catch {
                 stateLock.lock()
                 // If a concurrent drainPending (shutdown()/`.exited`) already
@@ -443,6 +452,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 let stillPending = pending.removeValue(forKey: id) != nil
                 stateLock.unlock()
                 if stillPending { cont.resume(throwing: error) }
+                onRequestHandoff()
             }
         }
     }

@@ -54,6 +54,33 @@ struct ACPStdioClientTests {
         await client.shutdown()
     }
 
+    @Test("send reports handoff after writing the JSON-RPC frame")
+    func sendReportsHandoffAfterTransportWrite() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+        let handoffFrameCount = ResultBox<Int>()
+        let requestTask = Task {
+            try await client.send(
+                ACPRequest(method: "session/prompt"),
+                onRequestHandoff: { handoffFrameCount.set(transport.sentFrames.count) }
+            )
+        }
+
+        let observedFrameCount = await boundedResult {
+            while !Task.isCancelled {
+                if let count = handoffFrameCount.get() { return count }
+                try? await Task.sleep(for: .milliseconds(2))
+            }
+            return -1
+        }
+        #expect(observedFrameCount == 1)
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":null}"#.utf8))
+        let response = try await requestTask.value
+        #expect(response.body == Data("null".utf8))
+        await client.shutdown()
+    }
+
     @Test("session update defers frame consumption until durable acknowledgement")
     func sessionUpdateDefersFrameConsumption() async throws {
         let transport = FakeJSONRPCTransport()

@@ -349,7 +349,15 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     func send(_ request: ACPRequest) async throws -> ACPResponse {
+        try await send(request, onRequestHandoff: {})
+    }
+
+    func send(
+        _ request: ACPRequest,
+        onRequestHandoff: @Sendable () -> Void
+    ) async throws -> ACPResponse {
         if let replayed = cachedResponse(for: request.method) {
+            onRequestHandoff()
             return ACPResponse(body: try replayed.data)
         }
         let generation = try currentGeneration()
@@ -393,6 +401,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         defer {
             endAwaitingOperationCompletion(operationKey)
         }
+        onRequestHandoff()
         while true {
             let result = try await service.send(ACPBrokerSendParams(
                 brokerId: brokerId,

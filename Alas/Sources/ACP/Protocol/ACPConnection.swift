@@ -1,5 +1,26 @@
 import Foundation
 
+private final class ACPRequestHandoff: @unchecked Sendable {
+    private let lock = NSLock()
+    private var hasFired = false
+    private let action: @Sendable () -> Void
+
+    init(_ action: @escaping @Sendable () -> Void) {
+        self.action = action
+    }
+
+    func fire() {
+        lock.lock()
+        guard !hasFired else {
+            lock.unlock()
+            return
+        }
+        hasFired = true
+        lock.unlock()
+        action()
+    }
+}
+
 struct ACPInitializeOutcome: Equatable {
     let promptCapabilities: ACPInitializeResult.ACPPromptCapabilities
     let authMethods: [ACPInitializeResult.ACPAuthMethod]
@@ -261,11 +282,26 @@ final class ACPConnection: @unchecked Sendable {
         sessionId: String,
         blocks: [ACPContentBlock],
         brokerOperationKey: String? = nil,
-        acknowledgeDurableConsumption: Bool = true
+        acknowledgeDurableConsumption: Bool = true,
+        onRequestHandoff: (@Sendable () -> Void)? = nil
     ) async throws -> ACPPromptOutcome {
-        let resp = try await client.send(ACPRequest(method: "session/prompt",
-                                                    params: ACPSessionPromptParams(sessionId: sessionId, prompt: blocks),
-                                                    brokerOperationKey: brokerOperationKey))
+        let request = ACPRequest(
+            method: "session/prompt",
+            params: ACPSessionPromptParams(sessionId: sessionId, prompt: blocks),
+            brokerOperationKey: brokerOperationKey
+        )
+        let resp: ACPResponse
+        if let onRequestHandoff {
+            let handoff = ACPRequestHandoff(onRequestHandoff)
+            do {
+                resp = try await client.send(request, onRequestHandoff: { handoff.fire() })
+            } catch {
+                handoff.fire()
+                throw error
+            }
+        } else {
+            resp = try await client.send(request)
+        }
         let quota = (try? JSONDecoder().decode(ACPSessionPromptResult.self, from: resp.body))?.quota
         if acknowledgeDurableConsumption {
             resp.acknowledgeDurableConsumption()

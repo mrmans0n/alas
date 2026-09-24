@@ -1907,7 +1907,7 @@ extension ACPSessionRunner {
         attachments: [ACPMessage.Attachment],
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft? = nil,
-        onDispatchRegistered: @escaping @MainActor () -> Void,
+        onDispatchRegistered: @escaping @Sendable () -> Void,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         sendRegistered(
@@ -2055,7 +2055,7 @@ extension ACPSessionRunner {
         blocks: [ACPContentBlock],
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft? = nil,
-        onDispatchRegistered: (@MainActor () -> Void)? = nil,
+        onDispatchRegistered: (@Sendable () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         if case .schedule(let date) = intent {
@@ -2431,7 +2431,7 @@ extension ACPSessionRunner {
         delegatedSource: ACPDelegatedPromptSource? = nil,
         recordUserPrompt: Bool = true,
         draft: ACPComposerDraft? = nil,
-        onDispatchRegistered: (@MainActor () -> Void)? = nil,
+        onDispatchRegistered: (@Sendable () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
@@ -2528,7 +2528,7 @@ extension ACPSessionRunner {
         brokerOperationKey: String? = nil,
         recordUserPrompt: Bool = true,
         draft: ACPComposerDraft? = nil,
-        onDispatchRegistered: (@MainActor () -> Void)? = nil,
+        onDispatchRegistered: (@Sendable () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         flushPendingIncomingUpdates()
@@ -2626,12 +2626,10 @@ extension ACPSessionRunner {
                     }
                     self.resetStreamingPersistBuffer()
                     self.session.transcript.streamingState = .sending
-                    onDispatchRegistered?()
                     return (true, messageID)
                 }
                 self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending
-                onDispatchRegistered?()
                 return (true, nil)
             }
             guard promptRecording.proceeded else {
@@ -2681,19 +2679,22 @@ extension ACPSessionRunner {
                 if let pendingForkContext { privateBlocks.append(.text(pendingForkContext)) }
                 wireBlocks.insert(contentsOf: privateBlocks, at: 0)
                 guard await self.hasConfirmedLeaseForSideEffect() else {
+                    onDispatchRegistered?()
                     throw CancellationError()
                 }
                 // Hydration suspends for file I/O. A steer can invalidate this
                 // prompt while that work is in progress, so verify ownership
                 // again before sending a stale RPC.
                 guard await MainActor.run(body: { self.activePromptID == promptID }) else {
+                    onDispatchRegistered?()
                     throw CancellationError()
                 }
                 let promptOutcome = try await self.connection.prompt(
                     sessionId: remoteId,
                     blocks: wireBlocks,
                     brokerOperationKey: brokerOperationKey,
-                    acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil
+                    acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil,
+                    onRequestHandoff: onDispatchRegistered
                 )
                 let promptAcknowledgement = promptOutcome.acknowledgement
                 await MainActor.run {
