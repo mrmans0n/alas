@@ -660,7 +660,6 @@ struct ACPInputField: NSViewRepresentable {
                     chip.addAttributes([
                         .imageAttachmentURI: uri,
                         .imageAttachmentMime: mimeType,
-                        .toolTip: fileURL.lastPathComponent,
                     ], range: NSRange(location: 0, length: chip.length))
                     result.append(chip)
                 }
@@ -862,6 +861,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
         super.didChangeText()
         // Trigger placeholder redraw when text becomes (non-)empty.
         needsDisplay = true
+        // An edit moves or destroys the chip under the cursor — close the
+        // hover popover so it can't linger at a stale anchor.
+        dismissImageChipHover()
         // A manual edit while a dictation span is open (typing elsewhere,
         // pasting) leaves the underlying speech session mid-utterance —
         // it keeps analyzing and will emit more corrections for that same
@@ -903,6 +905,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     func dismissFloatingPanels() {
         dismissSlashPanel()
         closeMentionPanel()
+        dismissImageChipHover()
     }
 
     override func keyDown(with event: NSEvent) {
@@ -1084,6 +1087,99 @@ final class ACPNSTextView: PairedDelimiterTextView {
         coordinator?.worktreeRoot.lastPathComponent ?? "default"
     }
 
+    // MARK: - Image chip hover preview
+
+    private var imageChipHover: ACPImageChipHoverController?
+
+    /// Character range + file URL when `point` sits on an image chip
+    /// (a character tagged with `.imageAttachmentURI`), nil otherwise.
+    /// `location` clamps to the container length, which is what the layout
+    /// manager answers for glyph-range lookups.
+    func imageChipRange(at point: NSPoint) -> (range: NSRange, fileURL: URL)? {
+        guard let layoutManager, let textContainer, let textStorage, textStorage.length > 0 else { return nil }
+        // Convert from view space (includes textContainerInset) to container
+        // space first, matching how the layout manager maps points to glyphs.
+        let containerPoint = NSPoint(
+            x: point.x - textContainerInset.width,
+            y: point.y - textContainerInset.height
+        )
+        var fraction: CGFloat = 0
+        let characterIndex = layoutManager.characterIndex(
+            for: containerPoint,
+            in: textContainer,
+            fractionOfDistanceBetweenInsertionPoints: &fraction
+        )
+        guard characterIndex != NSNotFound, characterIndex < textStorage.length else { return nil }
+        var chipRange = NSRange()
+        let attrs = textStorage.attributes(at: characterIndex, effectiveRange: &chipRange)
+        guard let uri = attrs[.imageAttachmentURI] as? String,
+              let fileURL = URL(string: uri) else { return nil }
+        return (range: chipRange, fileURL: fileURL)
+    }
+
+    /// View-space rect of the chip's glyphs (inset 1pt, mirroring the cell
+    /// draw) for anchoring the hover popover.
+    func imageChipAnchorRect(for range: NSRange) -> NSRect? {
+        guard let layoutManager, let textContainer else { return nil }
+        guard range.location < (string as NSString).length else { return nil }
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else { return nil }
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        rect.origin.x += textContainerOrigin.x
+        rect.origin.y += textContainerOrigin.y
+        return rect.insetBy(dx: 1, dy: 1)
+    }
+
+    /// Identifies our hover tracking area across `updateTrackingAreas`
+    /// rebuilds without touching areas other code may have added.
+    private static let hoverTrackingAreaKind = "alas.acp.imageChipHover"
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        // Remove only our hover area, matched by userInfo; areas registered
+        // by other owners stay untouched.
+        for area in trackingAreas
+        where area.owner === self && area.userInfo?[Self.hoverTrackingAreaKind] != nil {
+            removeTrackingArea(area)
+        }
+        addTrackingArea(
+            NSTrackingArea(
+                rect: bounds,
+                options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+                owner: self,
+                userInfo: [Self.hoverTrackingAreaKind: true]
+            )
+        )
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let point = convert(event.locationInWindow, from: nil)
+        if let chip = imageChipRange(at: point) {
+            imageChipHoverController().scheduleShow(range: chip.range, fileURL: chip.fileURL, in: self)
+        } else {
+            imageChipHoverController().hide()
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        imageChipHoverController().hide()
+    }
+
+    private func imageChipHoverController() -> ACPImageChipHoverController {
+        if let imageChipHover { return imageChipHover }
+        let controller = ACPImageChipHoverController()
+        imageChipHover = controller
+        return controller
+    }
+
+    /// Closes the hover popover (if showing) — called on edits, so the
+    /// preview can never linger over a chip the user just changed.
+    func dismissImageChipHover() {
+        imageChipHover?.hide()
+    }
+
     static let maxImagesPerMessage = 10
 
     private func currentImageChipCount() -> Int {
@@ -1113,7 +1209,6 @@ final class ACPNSTextView: PairedDelimiterTextView {
             chipString.addAttributes([
                 .imageAttachmentURI: staged.url.absoluteString,
                 .imageAttachmentMime: staged.mimeType,
-                .toolTip: staged.url.lastPathComponent,
             ], range: NSRange(location: 0, length: chipString.length))
             // Color the trailing space and reset typingAttributes so text the
             // user types right after the chip is the normal label color
