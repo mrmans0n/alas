@@ -7,6 +7,11 @@ import Testing
 @Suite("Repo MCP trust banner presentation")
 @MainActor
 struct RepoMCPTrustBannerPresentationTests {
+    private struct MemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
     @Test func reviewSheetOwnsRuntimeHookApprovals() async throws {
         let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
         let server = ProjectMCPServer(
@@ -14,17 +19,18 @@ struct RepoMCPTrustBannerPresentationTests {
             name: "linear",
             transport: .http(url: "https://mcp.example.com", headers: [])
         )
-        let banner = RepoMCPTrustBanner(
+        let reviewSheet = RepoMCPTrustBanner(
             pendingServers: [server],
             approvalQueue: state.repoHookApprovalQueue,
             onApproveAll: {},
             onDeclineAll: {}
         )
+        .reviewSheet
         .environment(\.theme, try ThemeStore().current)
-        let controller = NSHostingController(rootView: banner)
-        controller.view.frame = NSRect(x: 0, y: 0, width: 520, height: 160)
+        let controller = NSHostingController(rootView: reviewSheet)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 520, height: 420)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 160),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 420),
             styleMask: [.titled],
             backing: .buffered,
             defer: false
@@ -32,11 +38,8 @@ struct RepoMCPTrustBannerPresentationTests {
         window.contentViewController = controller
         window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil) }
-
-        let reviewButton = try #require(allSubviews(of: controller.view).compactMap { $0 as? NSButton }.first {
-            $0.title == "Review…"
-        })
-        reviewButton.performClick(nil)
+        controller.view.layoutSubtreeIfNeeded()
+        await Task.yield()
 
         let bytes = Data("echo session open".utf8)
         let hook = RepoHook(
@@ -59,10 +62,6 @@ struct RepoMCPTrustBannerPresentationTests {
 
         #expect(nestedRequest?.context == .sessionOpen)
         #expect(await task.value == .approve)
-    }
-
-    private func allSubviews(of view: NSView) -> [NSView] {
-        view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
     }
 
     private func waitUntil(_ condition: () -> Bool) async {

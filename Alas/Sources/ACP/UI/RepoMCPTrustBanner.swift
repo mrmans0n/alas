@@ -53,7 +53,7 @@ struct RepoMCPTrustBanner: View {
         }
     }
 
-    private var reviewSheet: some View {
+    var reviewSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Repo-defined MCP servers")
                 .font(.system(size: 16, weight: .semibold))

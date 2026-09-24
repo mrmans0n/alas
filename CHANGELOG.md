@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.7] - 2026-09-24
+
+### ✨ Features
+
+- Make scheduled tabs available by default and remove the Remote Hub feature flag (#1440, #1443).
+- Approve nearby peer pairing inside Alas and run trusted repository startup hooks when a worktree opens (#1434, #1435).
+- Generate fallback ACP session titles on-device, group transcript activity into readable sections, and fold completed turn activity (#1433, #1441, #1444).
+- Scroll to staged review comments from the draft summary and include the selected comment in the composer context (#1442).
+
+### 🐛 Fixes
+
+- Restore ACP model and mode choices after reconnecting or detaching, serialize reconnect edits, and avoid duplicate ACP form prompts (#1430, #1431, #1446, #1450).
+- Adapt composer controls to narrow windows and collapse the right rail when its selected worktree is deleted (#1423, #1448).
+- Remove the duplicate remote server identity initializer (#1447).
+
 ## [0.19.6] - 2026-09-23
 
 ### 🐛 Fixes

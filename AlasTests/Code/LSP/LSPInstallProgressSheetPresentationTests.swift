@@ -7,6 +7,11 @@ import Testing
 @Suite("LSP install progress approval presentation")
 @MainActor
 struct LSPInstallProgressSheetPresentationTests {
+    private struct MemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
     @Test func sheetOwnsRuntimeHookApprovals() async throws {
         let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
         let sheet = LSPInstallProgressSheet(
