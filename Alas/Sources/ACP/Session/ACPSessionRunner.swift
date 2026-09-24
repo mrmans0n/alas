@@ -529,11 +529,9 @@ final class ACPSessionRunner {
                     // the session lease (takeover), deny the request rather
                     // than modifying the working tree on behalf of a session
                     // another instance now owns.
-                    // Note: terminal execution is also covered — Fix 1's
-                    // prompt stand-down tears the runner down within ~100 ms
-                    // of a takeover ping, and runner.stop() calls
-                    // terminalHost.killAll(), so in-flight terminal commands
-                    // are already gated by that path.
+                    // Terminal side effects also revalidate ownership after
+                    // their lease await, so a superseded request cannot resume
+                    // and execute after stop()'s killAll().
                     //
                     // Unlike the read path, the write stays fully on the main
                     // actor. An in-app editor save also runs on the main actor,
@@ -1443,6 +1441,11 @@ final class ACPSessionRunner {
                     id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
                 break
             }
+            guard !Task.isCancelled, isConnectionCurrent() else {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
+                break
+            }
             do {
                 let res = try host.create(p)
                 self.connection.client.respondToTerminalRequest(
@@ -1501,6 +1504,11 @@ final class ACPSessionRunner {
                     id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
                 break
             }
+            guard !Task.isCancelled, isConnectionCurrent() else {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
+                break
+            }
             do {
                 try host.kill(p)
                 self.connection.client.respondToTerminalRequest(
@@ -1521,6 +1529,11 @@ final class ACPSessionRunner {
             guard await hasConfirmedLeaseForSideEffect() else {
                 self.connection.client.respondToTerminalRequest(
                     id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
+                break
+            }
+            guard !Task.isCancelled, isConnectionCurrent() else {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
                 break
             }
             do {

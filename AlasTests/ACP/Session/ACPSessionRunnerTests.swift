@@ -3940,7 +3940,11 @@ struct ACPSessionRunnerTests {
 
     private func makeRunner(
         onUserCancel: (() -> Void)? = nil,
-        onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil
+        onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
+        session suppliedSession: ACPSession? = nil,
+        isConnectionCurrent: @escaping () -> Bool = { true },
+        canWrite: (() -> Bool)? = nil,
+        validateLease: (() async -> Bool)? = nil
     ) throws -> (ACPSessionRunner, ACPMockClient) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -3949,7 +3953,8 @@ struct ACPSessionRunnerTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
 
         let mock = ACPMockClient()
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let session = suppliedSession
+            ?? ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: mock),
@@ -3957,9 +3962,25 @@ struct ACPSessionRunnerTests {
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
             onUserCancel: onUserCancel,
-            onCheckpointCapture: onCheckpointCapture
+            onCheckpointCapture: onCheckpointCapture,
+            isConnectionCurrent: isConnectionCurrent,
+            canWrite: canWrite,
+            validateLease: validateLease
         )
         return (runner, mock)
+    }
+
+    private func createLongRunningTerminal(id: JSONRPCID, using mock: ACPMockClient) async throws -> String? {
+        mock.emitTerminal(.create(id: id, params: .init(
+            sessionId: "s", command: "/bin/sleep", args: ["60"],
+            env: nil, cwd: nil, outputByteLimit: nil
+        )))
+        try await waitUntil { mock.terminalResponses[id] != nil }
+        guard case .success(let body)? = mock.terminalResponses[id] else {
+            Issue.record("expected terminal/create to start a live process")
+            return nil
+        }
+        return try JSONDecoder().decode(ACPTerminalCreateResult.self, from: body).terminalId
     }
 
     // MARK: - onPersist callback tests
@@ -4503,6 +4524,132 @@ struct ACPSessionRunnerTests {
         // No terminal must have been created on the host.
         #expect(runner.session.terminalHost.terminals.isEmpty,
                 "no terminal must be created when the lease is held by another instance")
+    }
+
+    @Test("terminal create is cancelled when its runner is superseded during lease validation")
+    func terminalCreateStopsWhenRunnerIsSupersededDuringLeaseValidation() async throws {
+        let validationStarted = AsyncGate()
+        let validationCanFinish = AsyncGate()
+        var connectionIsCurrent = true
+        let (runner, mock) = try makeRunner(
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: {
+                await validationStarted.open()
+                await validationCanFinish.wait()
+                return true
+            }
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        let requestID = JSONRPCID.number(100)
+        mock.emitTerminal(.create(id: requestID, params: .init(
+            sessionId: "s", command: "/bin/sleep", args: ["60"],
+            env: nil, cwd: nil, outputByteLimit: nil
+        )))
+        await validationStarted.wait()
+
+        connectionIsCurrent = false
+        runner.stop()
+        await validationCanFinish.open()
+
+        try await waitUntil { mock.terminalResponses[requestID] != nil }
+        guard case .failure(let error)? = mock.terminalResponses[requestID] else {
+            Issue.record("expected a superseded terminal/create request to be cancelled")
+            return
+        }
+        #expect(error.code == -32800)
+        #expect(runner.session.terminalHost.terminals.isEmpty)
+    }
+
+    @Test("terminal kill is cancelled when its runner is superseded during lease validation")
+    func terminalKillStopsWhenRunnerIsSupersededDuringLeaseValidation() async throws {
+        let validationStarted = AsyncGate()
+        let validationCanFinish = AsyncGate()
+        var connectionIsCurrent = true
+        let (runner, mock) = try makeRunner(
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: {
+                await validationStarted.open()
+                await validationCanFinish.wait()
+                return true
+            }
+        )
+        runner.start()
+        let (replacementRunner, replacementMock) = try makeRunner(session: runner.session)
+        replacementRunner.start()
+        defer {
+            runner.stop()
+            replacementRunner.stop()
+        }
+
+        guard let terminalID = try await createLongRunningTerminal(
+            id: .number(101), using: replacementMock
+        ), let terminal = runner.session.terminalHost.terminal(id: terminalID) else { return }
+
+        let requestID = JSONRPCID.number(102)
+        mock.emitTerminal(.kill(id: requestID, params: .init(
+            sessionId: "s", terminalId: terminalID
+        )))
+        await validationStarted.wait()
+
+        connectionIsCurrent = false
+        await validationCanFinish.open()
+
+        try await waitUntil { mock.terminalResponses[requestID] != nil }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        guard case .failure(let error)? = mock.terminalResponses[requestID] else {
+            Issue.record("expected a superseded terminal/kill request to be cancelled")
+            return
+        }
+        #expect(error.code == -32800)
+        #expect(terminal.exitStatus == nil)
+    }
+
+    @Test("terminal release is cancelled when its runner is superseded during lease validation")
+    func terminalReleaseStopsWhenRunnerIsSupersededDuringLeaseValidation() async throws {
+        let validationStarted = AsyncGate()
+        let validationCanFinish = AsyncGate()
+        var connectionIsCurrent = true
+        let (runner, mock) = try makeRunner(
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: {
+                await validationStarted.open()
+                await validationCanFinish.wait()
+                return true
+            }
+        )
+        runner.start()
+        let (replacementRunner, replacementMock) = try makeRunner(session: runner.session)
+        replacementRunner.start()
+        defer {
+            runner.stop()
+            replacementRunner.stop()
+        }
+
+        guard let terminalID = try await createLongRunningTerminal(
+            id: .number(103), using: replacementMock
+        ), let terminal = runner.session.terminalHost.terminal(id: terminalID) else { return }
+
+        let requestID = JSONRPCID.number(104)
+        mock.emitTerminal(.release(id: requestID, params: .init(
+            sessionId: "s", terminalId: terminalID
+        )))
+        await validationStarted.wait()
+
+        connectionIsCurrent = false
+        await validationCanFinish.open()
+
+        try await waitUntil { mock.terminalResponses[requestID] != nil }
+        guard case .failure(let error)? = mock.terminalResponses[requestID] else {
+            Issue.record("expected a superseded terminal/release request to be cancelled")
+            return
+        }
+        #expect(error.code == -32800)
+        #expect(!terminal.released)
     }
 
     // MARK: - Fix 2 (P2): cancel RPC gated on lease
