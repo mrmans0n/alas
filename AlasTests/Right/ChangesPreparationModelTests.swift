@@ -21,6 +21,40 @@ struct ChangesPreparationModelTests {
         #expect(animation.repeatCount == .infinity)
     }
 
+    @MainActor
+    @Test func spinnerKeepsCompactCircularGeometryInLargeOrRectangularContainers() throws {
+        let host = NSHostingView(rootView: Spinner().frame(maxWidth: .infinity, maxHeight: .infinity))
+        host.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+        host.layoutSubtreeIfNeeded()
+        let hostedSpinner = try #require(findSpinner(in: host))
+        #expect(hostedSpinner.bounds.width <= 32)
+        #expect(hostedSpinner.bounds.height <= 32)
+
+        for side in [CGFloat(12), 32] {
+            let sizedHost = NSHostingView(rootView: Spinner().frame(width: side, height: side))
+            sizedHost.frame = NSRect(x: 0, y: 0, width: side, height: side)
+            sizedHost.layoutSubtreeIfNeeded()
+            let sizedSpinner = try #require(findSpinner(in: sizedHost))
+            #expect(sizedSpinner.bounds.size == NSSize(width: side, height: side))
+        }
+
+        let view = SpinnerAnimationView(lineWidth: 2, duration: 0.8, color: .systemBlue)
+        #expect(view.intrinsicContentSize == NSSize(width: 16, height: 16))
+
+        view.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+        view.layoutSubtreeIfNeeded()
+        let path = try #require(view.spinnerLayer.path)
+        #expect(path.boundingBox.width == path.boundingBox.height)
+        #expect(path.boundingBox.midX == view.bounds.midX)
+        #expect(path.boundingBox.midY == view.bounds.midY)
+    }
+
+    @MainActor
+    private func findSpinner(in view: NSView) -> SpinnerAnimationView? {
+        if let spinner = view as? SpinnerAnimationView { return spinner }
+        return view.subviews.lazy.compactMap { findSpinner(in: $0) }.first
+    }
+
     @Test func syncStepAccessibilityStatesAreExplicit() {
         #expect(ChangesPreparationCardText.syncStepState(.pending) == "Pending")
         #expect(ChangesPreparationCardText.syncStepState(.current) == "In progress")
