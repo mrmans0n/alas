@@ -53,7 +53,7 @@ tree-sitter-julia = "0.23.1"
 # only that loop patched (`fix/annotation-eof-hang`; filed upstream as
 # tree-sitter-grammars/tree-sitter-kotlin#18); swap back to a plain version
 # pin once a released version upstream includes the fix.
-tree-sitter-kotlin-ng = { git = "https://github.com/mrmans0n/tree-sitter-kotlin", rev = "821f604ad6da6e41a871749fa53cde71031cef78" }
+tree-sitter-kotlin-ng = { git = "https://github.com/mrmans0n/tree-sitter-kotlin", rev = "3dea6dfa9c0129deb7c4315afbda806c85c41667" }
 tree-sitter-lua = "0.5.0"
 tree-sitter-make = "1.1.1"
 tree-sitter-md = "0.5.3"
