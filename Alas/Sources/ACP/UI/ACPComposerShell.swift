@@ -194,6 +194,7 @@ struct ACPComposer: View {
     @State private var hasText: Bool = false
     @State private var composerNotice: String?
     @State private var showingCompactOptions = false
+    private let compactControlWidth: CGFloat = 164
     @StateObject private var dictation = ACPDictationService(engine: ACPSpeechDictationEngine())
     /// Languages ready to use without a download, for the mic's menu.
     @State private var installedDictationLocales: [String] = []
@@ -395,7 +396,8 @@ struct ACPComposer: View {
             }
 
             ViewThatFits(in: .horizontal) {
-                expandedToolbar
+                expandedToolbar(showShortcuts: true)
+                expandedToolbar(showShortcuts: false)
                 compactToolbar
             }
             .padding(.horizontal, 2)
@@ -447,9 +449,9 @@ struct ACPComposer: View {
         .layoutPriority(1)
     }
 
-    private var expandedToolbar: some View {
+    private func expandedToolbar(showShortcuts: Bool) -> some View {
         HStack(spacing: 8) {
-            hint
+            if showShortcuts { shortcutHint }
             Spacer(minLength: 0)
             contextUsageButton
             if dictation.state != .unavailable { micButton }
@@ -493,7 +495,7 @@ struct ACPComposer: View {
             Spacer(minLength: 0)
             if let models = session.chipState.models {
                 modelChip(models)
-                    .frame(maxWidth: 160)
+                    .frame(maxWidth: 160, alignment: .trailing)
             }
             compactOptionsButton
             actionButton
@@ -574,21 +576,32 @@ struct ACPComposer: View {
         case .fastMode:
             compactFastModeRow
         case .autoRun:
-            HStack {
-                Text("Auto-run")
-                Spacer(minLength: 8)
-                Button(session.autoRunEnabled ? "On" : "Off", action: toggleAutoRun)
-                    .disabled(autoRunDisabled)
-                    .help(autoRunHelp)
-            }
+            compactToggleRow(
+                "Auto-run",
+                isEnabled: session.autoRunEnabled,
+                icon: ACPComposerControlPresentation.autoRunIconName(isEnabled: session.autoRunEnabled),
+                foreground: autoRunFg,
+                background: autoRunBg,
+                border: autoRunBorder,
+                isDisabled: autoRunDisabled,
+                help: autoRunHelp,
+                action: toggleAutoRun
+            )
         case .parameter(let id):
             if let parameter = parameterChips.first(where: { $0.id == id }) {
                 compactSelectRow(parameter.label, spec: parameter.spec, accent: theme.color("fg-muted"))
             }
         case .boolean(let id):
             if let option = booleanConfigOptions.first(where: { $0.id == id }) {
-                booleanConfigToggle(option)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                compactToggleRow(
+                    option.name.isEmpty ? option.id : option.name,
+                    isEnabled: option.currentBoolValue == true,
+                    icon: option.currentBoolValue == true ? "checkmark.circle.fill" : "circle",
+                    foreground: theme.color("fg-muted"),
+                    background: theme.color("bg-3").opacity(0.7),
+                    border: theme.color("line"),
+                    action: { apply(configOptionId: option.id, value: .boolean(option.currentBoolValue != true)) }
+                )
             }
         case .provider:
             if let name = session.currentProviderDisplayName {
@@ -610,33 +623,83 @@ struct ACPComposer: View {
             chip(spec: spec,
                  label: selectedName(spec: spec, fallback: title),
                  placeholder: title,
-                 accent: accent)
-                .frame(maxWidth: 170)
+                 accent: accent,
+                 fillsWidth: true)
+                .frame(width: compactControlWidth)
         }
+        .frame(height: 24)
         .font(.system(size: 11, weight: .medium))
     }
 
     @ViewBuilder
     private var compactFastModeRow: some View {
         if let parameter = fastModeParameter {
-            HStack {
-                Text("Fast mode")
-                Spacer(minLength: 8)
-                Button(isFastModeEnabled(parameter.spec) ? "On" : "Off") {
-                    guard let targetId = fastModeToggleTarget(for: parameter.spec) else { return }
-                    apply(spec: parameter.spec, selectedId: targetId)
-                }
-                .disabled(fastModeToggleTarget(for: parameter.spec) == nil)
+            compactToggleRow(
+                "Fast mode",
+                isEnabled: isFastModeEnabled(parameter.spec),
+                icon: ACPComposerControlPresentation.fastModeIconName(isEnabled: isFastModeEnabled(parameter.spec)),
+                foreground: fastModeFg(isEnabled: isFastModeEnabled(parameter.spec)),
+                background: fastModeBg(isEnabled: isFastModeEnabled(parameter.spec)),
+                border: fastModeBorder(isEnabled: isFastModeEnabled(parameter.spec)),
+                isDisabled: fastModeToggleTarget(for: parameter.spec) == nil,
+                help: fastModeHelp(isEnabled: isFastModeEnabled(parameter.spec),
+                                   canToggle: fastModeToggleTarget(for: parameter.spec) != nil)
+            ) {
+                guard let targetId = fastModeToggleTarget(for: parameter.spec) else { return }
+                apply(spec: parameter.spec, selectedId: targetId)
             }
         } else if let option = fastModeBooleanOption {
-            HStack {
-                Text("Fast mode")
-                Spacer(minLength: 8)
-                Button(option.currentBoolValue == true ? "On" : "Off") {
-                    apply(configOptionId: option.id, value: .boolean(option.currentBoolValue != true))
-                }
+            compactToggleRow(
+                "Fast mode",
+                isEnabled: option.currentBoolValue == true,
+                icon: ACPComposerControlPresentation.fastModeIconName(isEnabled: option.currentBoolValue == true),
+                foreground: fastModeFg(isEnabled: option.currentBoolValue == true),
+                background: fastModeBg(isEnabled: option.currentBoolValue == true),
+                border: fastModeBorder(isEnabled: option.currentBoolValue == true),
+                help: fastModeHelp(isEnabled: option.currentBoolValue == true, canToggle: true)
+            ) {
+                apply(configOptionId: option.id, value: .boolean(option.currentBoolValue != true))
             }
         }
+    }
+
+    private func compactToggleRow(
+        _ title: String,
+        isEnabled: Bool,
+        icon: String,
+        foreground: Color,
+        background: Color,
+        border: Color,
+        isDisabled: Bool = false,
+        help: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Button(action: action) {
+                HStack(spacing: 6) {
+                    Image(systemName: icon)
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 14)
+                    Text(isEnabled ? "On" : "Off")
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(foreground)
+                .padding(.horizontal, 8)
+                .frame(width: compactControlWidth, height: 24)
+                .background(RoundedRectangle(cornerRadius: 6).fill(background))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(border, lineWidth: 0.75))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(title), \(isEnabled ? "On" : "Off")")
+            .disabled(isDisabled)
+            .opacity(isDisabled ? 0.5 : 1)
+            .help(help ?? title)
+        }
+        .frame(height: 24)
+        .font(.system(size: 11, weight: .medium))
     }
 
     private func compactInfoRow(_ title: String, value: String) -> some View {
@@ -647,25 +710,18 @@ struct ACPComposer: View {
                 .foregroundStyle(theme.color("fg-muted"))
                 .lineLimit(1)
         }
+        .frame(height: 24)
         .font(.system(size: 11, weight: .medium))
     }
 
-    private var hint: some View {
-        ViewThatFits(in: .horizontal) {
-            hintContent(showShortcuts: true)
-            hintContent(showShortcuts: false)
-        }
-    }
-
-    private func hintContent(showShortcuts: Bool) -> some View {
+    private var shortcutHint: some View {
         HStack(spacing: 6) {
-            if showShortcuts {
-                kbdLabel("⏎")
-                Text("send").font(.system(size: 10.5, weight: .medium)).foregroundStyle(theme.color("fg-muted"))
-                kbdLabel("⇧⏎")
-                Text("newline").font(.system(size: 10.5, weight: .medium)).foregroundStyle(theme.color("fg-muted"))
-            }
+            kbdLabel("⏎")
+            Text("send").font(.system(size: 10.5, weight: .medium)).foregroundStyle(theme.color("fg-muted"))
+            kbdLabel("⇧⏎")
+            Text("newline").font(.system(size: 10.5, weight: .medium)).foregroundStyle(theme.color("fg-muted"))
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func kbdLabel(_ s: String) -> some View {
@@ -1063,7 +1119,8 @@ struct ACPComposer: View {
                       placeholder: String,
                       accent: Color,
                       searchDescriptions: Bool = true,
-                      searchIdentifiers: Bool = true) -> some View {
+                      searchIdentifiers: Bool = true,
+                      fillsWidth: Bool = false) -> some View {
         ACPSelectChip(
             label: label,
             placeholder: placeholder,
@@ -1076,6 +1133,7 @@ struct ACPComposer: View {
             selectedId: spec.currentId,
             searchDescriptions: searchDescriptions,
             searchIdentifiers: searchIdentifiers,
+            fillsWidth: fillsWidth,
             onSelect: { item in apply(spec: spec, selectedId: item.id) }
         )
     }

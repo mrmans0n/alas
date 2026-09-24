@@ -314,7 +314,11 @@ private struct ACPSessionView: View {
                 preferred: state.config.harness.acpShowMinimap,
                 availableWidth: chatProxy.size.width
             )
-            chatSurface(contentMaxWidth: chatContentMaxWidth, showMinimap: showMinimap)
+            chatSurface(
+                contentMaxWidth: chatContentMaxWidth,
+                composerMaxWidth: chatProxy.size.width,
+                showMinimap: showMinimap
+            )
                 .frame(width: chatProxy.size.width, height: chatProxy.size.height)
                 .animation(emptyStateAnimation, value: isNewEmptySession)
                 .animation(emptyStateAnimation, value: isFirstRunConnecting)
@@ -345,13 +349,17 @@ private struct ACPSessionView: View {
         return true
     }
 
-    private func chatSurface(contentMaxWidth: CGFloat, showMinimap: Bool) -> some View {
+    private func chatSurface(
+        contentMaxWidth: CGFloat,
+        composerMaxWidth: CGFloat,
+        showMinimap: Bool
+    ) -> some View {
         ZStack(alignment: .bottom) {
             if showsPreSessionUserInput {
                 messageList(contentMaxWidth: contentMaxWidth, showMinimap: showMinimap)
                     .transition(.opacity)
             } else if let phase = firstRunConnectingPhase {
-                introStateAndComposer(contentMaxWidth: contentMaxWidth) {
+                introStateAndComposer(composerMaxWidth: composerMaxWidth) {
                     ACPFirstRunConnectingView(
                         agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
                         phase: phase,
@@ -359,7 +367,7 @@ private struct ACPSessionView: View {
                     )
                 }
             } else if isNewEmptySession {
-                introStateAndComposer(contentMaxWidth: contentMaxWidth) {
+                introStateAndComposer(composerMaxWidth: composerMaxWidth) {
                     ACPNewChatEmptyStateView(
                         agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
                         bottomInset: 0,
@@ -381,7 +389,7 @@ private struct ACPSessionView: View {
 
                 composerView(
                     placement: composerPlacement,
-                    contentMaxWidth: contentMaxWidth,
+                    contentMaxWidth: composerMaxWidth,
                     typography: chatTypography
                 )
                 .padding(.trailing, showMinimap && !isConnecting ? MinimapView.width : 0)
@@ -579,7 +587,7 @@ private struct ACPSessionView: View {
     }
 
     private func introStateAndComposer<Intro: View>(
-        contentMaxWidth: CGFloat,
+        composerMaxWidth: CGFloat,
         @ViewBuilder intro: () -> Intro
     ) -> some View {
         VStack(spacing: 0) {
@@ -587,7 +595,7 @@ private struct ACPSessionView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             composerView(
                 placement: .inFlow,
-                contentMaxWidth: contentMaxWidth,
+                contentMaxWidth: composerMaxWidth,
                 typography: chatTypography
             )
         }
