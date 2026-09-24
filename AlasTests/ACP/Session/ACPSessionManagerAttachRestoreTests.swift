@@ -1033,6 +1033,7 @@ struct ACPSessionManagerAttachRestoreTests {
             await appliedSelections.append("mode:\(params.modeId)")
             return Data("{}".utf8)
         }
+        client.script(method: "session/prompt") { _ in Data("{}".utf8) }
         let manager = manager(store: store, client: client)
         let session = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: session.id)
@@ -1042,6 +1043,18 @@ struct ACPSessionManagerAttachRestoreTests {
         try await waitUntilAsync { await modelGate.hasEntered }
         manager.enqueueModeSelection(for: session.id, modeId: "act")
         let lastSelection = manager.enqueueModelSelection(for: session.id, modelId: "opus")
+        var promptCompleted: Bool?
+        let accepted = manager.submit(
+            sessionId: session.id,
+            text: "use the selected model",
+            attachments: [],
+            intent: .auto
+        ) { succeeded in
+            promptCompleted = succeeded
+        }
+        #expect(accepted)
+        await Task.yield()
+        #expect(!client.sent.contains { $0.method == "session/prompt" })
         await modelGate.release()
         await lastSelection.value
         await manager.flushAllPersistence()
@@ -1055,6 +1068,19 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.currentMode == "act")
         #expect(try store.loadSession(id: session.id)?.currentModel == "opus")
         #expect(try store.loadSession(id: session.id)?.currentMode == "act")
+        try await waitUntil { client.sent.contains { $0.method == "session/prompt" } }
+        try await waitUntil { promptCompleted != nil }
+        #expect(promptCompleted == true)
+        #expect(client.sent.filter {
+            $0.method == "session/set_model" ||
+                $0.method == "session/set_mode" ||
+                $0.method == "session/prompt"
+        }.map(\.method) == [
+            "session/set_model",
+            "session/set_mode",
+            "session/set_model",
+            "session/prompt",
+        ])
     }
 
     @Test("reopened session reapplies persisted mode and config options after load")

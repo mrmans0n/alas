@@ -586,6 +586,27 @@ final class ACPSessionManager: ObservableObject {
         return task
     }
 
+    /// Keeps a prompt dispatch ordered with same-session chip selections.
+    private func enqueueAfterModelModeSelections(
+        for id: ACPSession.ID,
+        operation: @escaping @MainActor () -> Void
+    ) {
+        let generation = modelModeSelectionGenerations[id] ?? UUID()
+        modelModeSelectionGenerations[id] = generation
+        let previousTask = modelModeSelectionTails[id]?.task
+        let token = UUID()
+        let task = Task { @MainActor [weak self] in
+            await previousTask?.value
+            operation()
+            guard let self,
+                  self.modelModeSelectionTails[id]?.token == token
+            else { return }
+            self.modelModeSelectionTails[id] = nil
+            self.modelModeSelectionGenerations[id] = nil
+        }
+        modelModeSelectionTails[id] = ModelModeSelectionQueueTail(token: token, task: task)
+    }
+
     /// Selects a model optimistically and waits for its ordered application.
     func setModel(for id: ACPSession.ID, modelId: String) async {
         await enqueueModelSelection(for: id, modelId: modelId).value
@@ -5800,7 +5821,7 @@ extension ACPSessionManager {
     /// composer uses it to decide whether to clear or re-persist the draft.
     ///
     /// Branches on `session.agentState`:
-    /// - `.ready`: dispatch via the runner as before.
+    /// - `.ready`: wait for queued model/mode selections, then dispatch via the runner.
     /// - `.spawning`: enqueue only — an `attach` is already in flight and
     ///   the post-attach `flushQueueIfIdle()` will drain the head.
     /// - `.idle` / `.disconnected` / `.failed`: enqueue AND kick `reattach`
@@ -5813,6 +5834,27 @@ extension ACPSessionManager {
         attachments: [ACPMessage.Attachment],
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft? = nil,
+        onCompleted: @escaping @MainActor (Bool) -> Void
+    ) -> Bool {
+        submit(
+            sessionId: sessionId,
+            text: text,
+            attachments: attachments,
+            intent: intent,
+            draft: draft,
+            waitForModelModeSelections: true,
+            onCompleted: onCompleted
+        )
+    }
+
+    @discardableResult
+    private func submit(
+        sessionId: ACPSession.ID,
+        text: String,
+        attachments: [ACPMessage.Attachment],
+        intent: ACPSubmitIntent,
+        draft: ACPComposerDraft?,
+        waitForModelModeSelections: Bool,
         onCompleted: @escaping @MainActor (Bool) -> Void
     ) -> Bool {
         guard let session = sessions[sessionId] else { return false }
@@ -5842,6 +5884,28 @@ extension ACPSessionManager {
 
         switch session.agentState {
         case .ready:
+            if waitForModelModeSelections,
+               modelModeSelectionTails[sessionId] != nil {
+                enqueueAfterModelModeSelections(for: sessionId) { [weak self] in
+                    guard let self,
+                          self.sessions[sessionId] === session
+                    else {
+                        onCompleted(false)
+                        return
+                    }
+                    let accepted = self.submit(
+                        sessionId: sessionId,
+                        text: text,
+                        attachments: attachments,
+                        intent: intent,
+                        draft: draft,
+                        waitForModelModeSelections: false,
+                        onCompleted: onCompleted
+                    )
+                    if !accepted { onCompleted(false) }
+                }
+                return true
+            }
             guard let runner = runners[sessionId] else {
                 // State and registry disagree — somehow we lost the runner
                 // without the stream-end branch flipping agentState. Reflect
