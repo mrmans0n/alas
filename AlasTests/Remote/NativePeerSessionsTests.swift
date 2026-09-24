@@ -55,8 +55,8 @@ struct NativePeerSessionsTests {
 
     @Test func permissionPresentationKeepsToolNameAlongsideTitle() {
         let request = RemotePermissionPayload(
-            requestId: 1, toolName: "bash", options: [], title: "Run command?", commandSummary: "swift build",
-            mcpServerName: "build-tools"
+            requestId: 1, toolName: "bash", options: [], title: "Run command?",
+            mcpServerName: "build-tools", commandSummary: "swift build"
         )
 
         let presentation = NativePeerPermissionPresentation(request: request)
