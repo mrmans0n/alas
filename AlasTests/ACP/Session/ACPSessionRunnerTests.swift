@@ -4690,6 +4690,120 @@ struct ACPSessionRunnerTests {
                 "userCancel must not send session/cancel when the lease is held by another instance")
     }
 
+    @Test("userCancel stops before sending cancellation when its runner is superseded during lease validation")
+    func userCancelStopsAfterRunnerSupersededDuringLeaseValidation() async throws {
+        let validationStarted = AsyncGate()
+        let validationCanFinish = AsyncGate()
+        var connectionIsCurrent = true
+        let (runner, mock) = try makeRunner(
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: {
+                await validationStarted.open()
+                await validationCanFinish.wait()
+                return true
+            }
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        runner.session.transcript.streamingState = .streaming
+        let userCancelTask = Task { @MainActor in await runner.userCancel() }
+        await validationStarted.wait()
+
+        connectionIsCurrent = false
+        runner.stop()
+        let created = try runner.session.terminalHost.create(.init(
+            sessionId: "s", command: "/bin/sleep", args: ["60"],
+            env: nil, cwd: nil, outputByteLimit: nil
+        ))
+        let terminal = try #require(runner.session.terminalHost.terminal(id: created.terminalId))
+        runner.session.transcript.streamingState = .sending
+
+        await validationCanFinish.open()
+        await userCancelTask.value
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(!mock.sent.contains { $0.method == "session/cancel" })
+        #expect(runner.session.transcript.streamingState == .sending)
+        #expect(terminal.exitStatus == nil)
+    }
+
+    @Test("userCancel ignores completion after its runner is superseded during the cancel RPC")
+    func userCancelIgnoresCompletionAfterRunnerSupersededDuringCancelRPC() async throws {
+        let cancelStarted = AsyncGate()
+        let cancelCanFinish = AsyncGate()
+        var connectionIsCurrent = true
+        let (runner, mock) = try makeRunner(
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: { true }
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        mock.scriptNotifyAsync(method: "session/cancel") { _ in
+            await cancelStarted.open()
+            await cancelCanFinish.wait()
+        }
+        runner.session.transcript.streamingState = .streaming
+        let userCancelTask = Task { @MainActor in await runner.userCancel() }
+        await cancelStarted.wait()
+
+        connectionIsCurrent = false
+        runner.stop()
+        let created = try runner.session.terminalHost.create(.init(
+            sessionId: "s", command: "/bin/sleep", args: ["60"],
+            env: nil, cwd: nil, outputByteLimit: nil
+        ))
+        let terminal = try #require(runner.session.terminalHost.terminal(id: created.terminalId))
+        runner.session.transcript.streamingState = .sending
+
+        await cancelCanFinish.open()
+        await userCancelTask.value
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(mock.sent.contains { $0.method == "session/cancel" })
+        #expect(runner.session.transcript.streamingState == .sending)
+        #expect(terminal.exitStatus == nil)
+    }
+
+    @Test("cancelSubagent stops before notifying when its runner is superseded during lease validation")
+    func cancelSubagentStopsAfterRunnerSupersededDuringLeaseValidation() async throws {
+        let validationStarted = AsyncGate()
+        let validationCanFinish = AsyncGate()
+        var connectionIsCurrent = true
+        let (runner, mock) = try makeRunner(
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: {
+                await validationStarted.open()
+                await validationCanFinish.wait()
+                return true
+            }
+        )
+        runner.start()
+        defer { runner.stop() }
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(
+                subagentSessionId: "child-1", capabilities: .cancellable
+            ))
+        ))
+
+        let cancelTask = Task { @MainActor in
+            await runner.cancelSubagent(subagentSessionId: "child-1")
+        }
+        await validationStarted.wait()
+
+        connectionIsCurrent = false
+        runner.stop()
+        await validationCanFinish.open()
+        await cancelTask.value
+
+        #expect(!mock.sent.contains { $0.method == "session/cancel" })
+    }
+
     @Test("persistSessionRow skipped when lease is held by another instance")
     func persistSessionRowSkippedWhenLeaseHeldByOther() throws {
         let url = FileManager.default.temporaryDirectory

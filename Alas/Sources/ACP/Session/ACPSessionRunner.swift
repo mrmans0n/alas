@@ -1874,6 +1874,7 @@ final class ACPSessionRunner {
     /// canceled, posts a system notice, and flips `streamingState` back
     /// to `.idle`. Persists all mutations so they survive a reload.
     func userCancel(confirmingLease: Bool = true) async {
+        guard isConnectionCurrent() else { return }
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
         session.clearRetryStatus()
         // Capture the prompt + queue head the user INTENDED to stop
@@ -1904,6 +1905,7 @@ final class ACPSessionRunner {
             }
             return snapshot
         }
+        guard isConnectionCurrent() else { return }
         if confirmingLease {
             // A former writer that lost the lease must not send a cancel RPC to
             // the agent for a session another instance now owns. The local
@@ -1912,10 +1914,13 @@ final class ACPSessionRunner {
             // cross-instance side effects.
             guard await hasConfirmedLeaseForSideEffect() else { return }
         }
+        guard isConnectionCurrent() else { return }
         onUserCancel?()
         let remoteId = session.remoteSessionId ?? sessionId
         try? await connection.cancel(sessionId: remoteId)
+        guard isConnectionCurrent() else { return }
         await MainActor.run {
+            guard self.isConnectionCurrent() else { return }
             flushStreamingPersist()
             if let promptID = intended.promptID {
                 // Only clear activePromptID if it's still ours — a
@@ -1970,11 +1975,13 @@ extension ACPSessionRunner {
     /// nothing is assumed locally, because an agent may finish the child
     /// normally in the window before the cancel lands.
     func cancelSubagent(subagentSessionId: String) async {
+        guard isConnectionCurrent() else { return }
         guard let run = session.subagentRun(subagentSessionId),
               run.capabilities.supportsCancel,
               run.isRunning
         else { return }
         guard await hasConfirmedLeaseForSideEffect() else { return }
+        guard isConnectionCurrent() else { return }
         try? await connection.cancel(sessionId: subagentSessionId)
     }
 
