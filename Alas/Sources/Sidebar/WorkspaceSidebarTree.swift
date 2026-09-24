@@ -510,18 +510,24 @@ struct WorkspaceCheckoutInspector: View {
             WorkspaceDeletionConfirmationSheet(model: pending.model) { action in
                 confirmDeletion(action, checkoutID: pending.checkoutID, memberID: pending.memberID)
             }
+            .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             .modifier(WorkspaceLifecycleErrorAlert(error: $lifecycleError))
         }
         .sheet(item: $repairPlan) { pending in
             WorkspaceRepairPlanSheet(model: pending.model) { candidate in
                 useRepairCandidate(candidate, checkoutID: pending.checkoutID, memberID: pending.memberID)
             }
+            .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             .modifier(WorkspaceLifecycleErrorAlert(error: $lifecycleError))
         }
         .modifier(WorkspaceLifecycleErrorAlert(
             error: $lifecycleError, enabled: deletionConfirmation == nil && repairPlan == nil
         ))
         .onDisappear { inspectorGeneration = UUID() }
+        .modifier(RepoHookApprovalPresentationHandler(
+            approvalQueue: state.repoHookApprovalQueue,
+            isActive: deletionConfirmation == nil && repairPlan == nil
+        ))
     }
 
     private func perform(_ action: WorkspaceCheckoutActionKind, checkoutID: UUID, memberID: UUID?) {

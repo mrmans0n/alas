@@ -113,6 +113,41 @@ struct WorkspacePresentationTests {
         #expect(await task.value == .approve)
     }
 
+    @Test func checkoutInspectorOwnsRuntimeHookApprovalPresentation() async throws {
+        let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
+        let inspector = WorkspaceCheckoutInspector(state: state, checkout: checkout(memberCount: 2))
+        let theme = try ThemeStore().current
+        let controller = NSHostingController(rootView: inspector.environment(\.theme, theme))
+        controller.view.frame = NSRect(x: 0, y: 0, width: 560, height: 480)
+        controller.view.layoutSubtreeIfNeeded()
+        await Task.yield()
+
+        let bytes = Data("echo session open".utf8)
+        let hook = RepoHook(
+            event: .sessionOpen,
+            source: .local,
+            bytes: bytes,
+            text: String(decoding: bytes, as: UTF8.self),
+            hash: RepoHookTrust.hash(event: .sessionOpen, bytes: bytes)
+        )
+        let task = Task {
+            await state.repoHookApprovalQueue.requestDecision(
+                hook: hook,
+                projectID: "project",
+                context: .sessionOpen
+            )
+        }
+
+        await Task.yield()
+        let nestedRequest = state.repoHookApprovalQueue.activeDialogRequest
+        let rootRequest = state.repoHookApprovalQueue.activeRuntimeRequest
+        state.repoHookApprovalQueue.decide(.approve)
+
+        #expect(nestedRequest?.context == .sessionOpen)
+        #expect(rootRequest == nil)
+        #expect(await task.value == .approve)
+    }
+
     @Test func definitionDialogOwnsRuntimeHookApprovalPresentation() async throws {
         let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
         let dialog = NewWorkspaceDialog(state: state, presented: .constant(true))

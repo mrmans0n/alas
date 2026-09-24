@@ -297,7 +297,7 @@ struct CreateWorkspaceCheckoutDialog: View {
             }
         }
         .onDisappear { isVisible = false }
-        .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
+        .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue, isActive: inspectedCheckout == nil))
     }
 
     private var creationDialog: some View {
