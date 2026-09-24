@@ -5299,6 +5299,10 @@ extension ACPSessionManager {
                         method: "session/new"
                     )
                 )
+                guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                    await connection.shutdown()
+                    return
+                }
                 createdFreshRemoteSession = true
             } else if let remoteId = session.remoteSessionId, !remoteId.isEmpty {
                 if !hasPendingForkContext, session.hasConversationTranscript {
@@ -5317,6 +5321,10 @@ extension ACPSessionManager {
                                 remoteSessionId: remoteId
                             )
                         )
+                        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                            await connection.shutdown()
+                            return
+                        }
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
@@ -5330,6 +5338,10 @@ extension ACPSessionManager {
                             )
                         }
                     } catch {
+                        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                            await connection.shutdown()
+                            return
+                        }
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
@@ -5344,6 +5356,10 @@ extension ACPSessionManager {
                                 method: "session/new"
                             )
                         )
+                        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                            await connection.shutdown()
+                            return
+                        }
                         createdFreshRemoteSession = true
                         if !hasPendingForkContext, session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
@@ -5373,7 +5389,7 @@ extension ACPSessionManager {
                         guard initialized.sessionCapabilities.supportsResume,
                               ACPAuthFailure.message(from: error) == nil
                         else { throw error }
-                        return try await connection.resumeSession(
+                        let resumed = try await connection.resumeSession(
                             cwd: worktreePath,
                             sessionId: remoteId,
                             mcpServers: wireMCPServers,
@@ -5383,6 +5399,10 @@ extension ACPSessionManager {
                                 remoteSessionId: remoteId
                             )
                         )
+                        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                            throw CancellationError()
+                        }
+                        return resumed
                     }
                     func suppressFailedLoadReplayIfNeeded() {
                         guard !shouldSuppressLoadReplay else { return }
@@ -5393,13 +5413,20 @@ extension ACPSessionManager {
                     }
                     func restoreStrictly() async throws -> (ACPSessionNewResult, resumed: Bool) {
                         do {
-                            return (try await connection.loadSession(
+                            let loaded = try await connection.loadSession(
                                 cwd: worktreePath,
                                 sessionId: remoteId,
                                 mcpServers: wireMCPServers,
                                 brokerOperationKey: loadOperationKey
-                            ), false)
+                            )
+                            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                                throw CancellationError()
+                            }
+                            return (loaded, false)
                         } catch {
+                            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                                throw CancellationError()
+                            }
                             suppressFailedLoadReplayIfNeeded()
                             guard error is ACPBrokerDurableCompletionReplayError else {
                                 return (try await resumeAfterLoadFailure(error), true)
@@ -5408,13 +5435,20 @@ extension ACPSessionManager {
                         do {
                             // Reusing the stable key recovers successful results and lets
                             // ACPBrokerClient consume terminal completion cursors.
-                            return (try await connection.loadSession(
+                            let loaded = try await connection.loadSession(
                                 cwd: worktreePath,
                                 sessionId: remoteId,
                                 mcpServers: wireMCPServers,
                                 brokerOperationKey: loadOperationKey
-                            ), false)
+                            )
+                            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                                throw CancellationError()
+                            }
+                            return (loaded, false)
                         } catch {
+                            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                                throw CancellationError()
+                            }
                             guard !(error is ACPBrokerDurableCompletionReplayError) else {
                                 throw error
                             }
@@ -5423,6 +5457,10 @@ extension ACPSessionManager {
                         }
                     }
                     let restored = try await restoreStrictly()
+                    guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                        await connection.shutdown()
+                        return
+                    }
                     result = restored.0
                     if restored.resumed {
                         restoreWarning = .init(
@@ -5450,6 +5488,10 @@ extension ACPSessionManager {
                                 remoteSessionId: remoteId
                             )
                         )
+                        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                            await connection.shutdown()
+                            return
+                        }
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
@@ -5457,6 +5499,10 @@ extension ACPSessionManager {
                             session.contextRecoveryStatus = nil
                         }
                     } catch {
+                        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                            await connection.shutdown()
+                            return
+                        }
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
@@ -5471,6 +5517,10 @@ extension ACPSessionManager {
                                 method: "session/new"
                             )
                         )
+                        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                            await connection.shutdown()
+                            return
+                        }
                         createdFreshRemoteSession = true
                         if !hasPendingForkContext, session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
@@ -5504,6 +5554,10 @@ extension ACPSessionManager {
                         method: "session/new"
                     )
                 )
+                guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                    await connection.shutdown()
+                    return
+                }
                 createdFreshRemoteSession = true
                 if !hasPendingForkContext, session.hasConversationTranscript {
                     shouldHoldQueueForRecovery = true

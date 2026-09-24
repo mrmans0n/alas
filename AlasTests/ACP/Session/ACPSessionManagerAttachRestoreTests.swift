@@ -4337,6 +4337,72 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.contextRecoveryPending == true)
     }
 
+    @Test("superseded load failure does not persist transcript recovery")
+    func supersededLoadFailureDoesNotPersistTranscriptRecovery() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        try appendMessage(
+            .user(id: UUID(), text: "Prior context", attachments: []),
+            to: store,
+            seq: 0
+        )
+        let originalClient = ACPMockClient()
+        let replacementClient = ACPMockClient()
+        let originalLoadGate = AttachPhaseGate()
+        let replacementLoadGate = AttachPhaseGate()
+        scriptInitialize(originalClient)
+        originalClient.scriptAsync(method: "session/load") { _ in
+            await originalLoadGate.enterAndWait()
+            throw NSError(domain: "ACPSessionManagerAttachRestoreTests", code: 2)
+        }
+        scriptSessionResult(originalClient, method: "session/new", sessionId: "remote-stale")
+        scriptInitialize(replacementClient)
+        replacementClient.scriptAsync(method: "session/load") { _ in
+            await replacementLoadGate.enterAndWait()
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-current",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        var connectionCount = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                connectionCount += 1
+                return ACPConnection(client: connectionCount == 1 ? originalClient : replacementClient)
+            }
+        )
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: session.id)
+        let originalAttach = Task { await manager.attach(to: session.id, freshlyCreated: false) }
+        try await waitUntilAsync { await originalLoadGate.hasEntered }
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync { await replacementLoadGate.hasEntered }
+        #expect(session.contextRecoveryStatus == .restoring)
+
+        await originalLoadGate.release()
+        await originalAttach.value
+
+        #expect(!originalClient.sent.contains { $0.method == "session/new" })
+        #expect(session.contextRecoveryStatus == .restoring)
+        #expect(try store.loadSession(id: session.id)?.contextRecoveryPending == false)
+
+        await replacementLoadGate.release()
+        await restart.value
+
+        #expect(session.agentState == .ready)
+        #expect(try store.loadSession(id: session.id)?.contextRecoveryPending == false)
+    }
+
     @Test("missing remote id falls back to session/new without warning for empty session")
     func missingRemoteIdFallsBackToNewWithoutWarningForEmptySession() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

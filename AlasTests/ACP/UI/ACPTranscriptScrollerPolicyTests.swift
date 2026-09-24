@@ -517,6 +517,19 @@ struct ACPTranscriptScrollerRowSpecsTests {
 
         #expect(ids == ["__connection_recovery__", "__composer_spacer__"])
     }
+
+    @Test("stalled reconnect action is rendered for an existing transcript without recovery state")
+    func stalledReconnectActionAppearsForExistingTranscript() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.transcript.messages = [message()]
+        session.agentState = .spawning
+        let host = makeHost(session: session)
+
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host).map(\.id)
+
+        #expect(ids.contains("__stalled_connection__"))
+        #expect(!ids.contains("__connection_recovery__"))
+    }
 }
 
 /// Regression coverage for the review's fix-round-2 finding: the queued-

@@ -1559,10 +1559,16 @@ struct ACPBrokerClientTests {
         )
         clientReference.store(client)
 
-        try await client.start()
+        do {
+            _ = try await client.start()
+            Issue.record("Startup unexpectedly succeeded after the snapshot callback detached its client")
+        } catch is CancellationError {
+            // Expected: startup stops before attaching after termination.
+        }
 
         #expect(terminationCompleted.value)
         #expect(turnStates.records().isEmpty)
+        #expect(await service.attached.isEmpty)
     }
 
     // Regression (code review on #853, P1): with the background poller now

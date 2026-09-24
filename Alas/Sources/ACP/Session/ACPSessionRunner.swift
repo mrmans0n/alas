@@ -2628,17 +2628,28 @@ extension ACPSessionRunner {
                 return
             }
             await self.userCancel()
+            guard !self.stopped, self.isConnectionCurrent() else {
+                await MainActor.run {
+                    self.steerInProgress = false
+                    self.pendingForceSendQueuedItemID = nil
+                    onDispatchRegistered?()
+                    onPromptFinished?(false)
+                }
+                return
+            }
+            // The redirect still owns prompt work while the cancelled RPC
+            // settles. Keep cleanup observers informed before waiting on it.
+            self.onPromptWorkChanged?()
             await interruptedPromptTask?.value
             await MainActor.run {
-                // If the session was detached while we were awaiting
-                // `userCancel` (tab closed, worktree torn down), the
-                // runner has been removed from `ACPSessionManager` and
-                // the connection shut down. Firing `sendNow` now would
-                // append the redirect to a detached session and persist
-                // a `lastError` against the dead connection. Bail out
-                // and tell the composer the submit didn't land so its
-                // draft stays put.
-                guard self.session.agentState == .ready else {
+                // Detach and restart both invalidate this runner, but a
+                // replacement may already have put the shared session back
+                // in `.ready`. Check runner identity as well as visible
+                // state before sending through the old connection.
+                guard !self.stopped,
+                      self.isConnectionCurrent(),
+                      self.session.agentState == .ready
+                else {
                     self.steerInProgress = false
                     self.pendingForceSendQueuedItemID = nil
                     onDispatchRegistered?()

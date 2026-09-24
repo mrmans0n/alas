@@ -459,6 +459,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let restartInProgress: Bool
         }
 
+        private struct StalledConnectionTokenInputs: Equatable {
+            let startedAt: Date?
+            let reconnectAvailable: Bool
+            let restartInProgress: Bool
+        }
+
         /// Message rows from the render window + synthetic tail rows, in the
         /// same order the legacy VStack rendered them.
         ///
@@ -1139,6 +1145,30 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                                 reconnectAvailable: host.reconnectAvailable,
                                 restartInProgress: session.connectionRestartInProgress,
                                 onReconnect: host.onReconnect
+                            )
+                        }
+                    }
+                ))
+            } else if session.agentState == .spawning, !session.transcript.messages.isEmpty {
+                let startedAt = session.connectionAttemptStartedAt
+                let restartInProgress = session.connectionRestartInProgress
+                specs.append(ACPTranscriptRowSpec(
+                    id: "__stalled_connection__",
+                    equalityToken: token(
+                        StalledConnectionTokenInputs(
+                            startedAt: startedAt,
+                            reconnectAvailable: host.reconnectAvailable,
+                            restartInProgress: restartInProgress
+                        ),
+                        host: host
+                    ),
+                    build: {
+                        wrapRow(host: host) {
+                            ACPStalledConnectionButton(
+                                startedAt: startedAt,
+                                reconnectAvailable: host.reconnectAvailable,
+                                restartInProgress: restartInProgress,
+                                onRestart: host.onReconnect
                             )
                         }
                     }

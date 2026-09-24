@@ -882,6 +882,113 @@ struct ACPSessionRunnerQueueTests {
         #expect(prompts.isEmpty)
     }
 
+    @Test("steer skips its redirect when the runner is replaced during cancellation")
+    func steerSkipsRedirectAfterRunnerReplacementDuringCancel() async throws {
+        let currentConnection = ConnectionCurrentFlag(true)
+        let (runner, mock, session, _) = try mkRunner(
+            isConnectionCurrent: { currentConnection.isCurrent }
+        )
+        let promptStarted = QueueTestGate()
+        let releasePrompt = QueueTestGate()
+        let cancelStarted = QueueTestGate()
+        let releaseCancel = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await promptStarted.open()
+            await releasePrompt.wait()
+            return Data("null".utf8)
+        }
+        mock.scriptNotifyAsync(method: "session/cancel") { _ in
+            await cancelStarted.open()
+            await releaseCancel.wait()
+        }
+        session.agentState = .ready
+        runner.send(blocks: [.text("running")], intent: .auto)
+        await promptStarted.wait()
+
+        var promptFinished: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { succeeded in
+            promptFinished = succeeded
+        }
+        await cancelStarted.wait()
+
+        currentConnection.set(false)
+        runner.stop()
+        session.agentState = .ready
+        await releaseCancel.open()
+        await releasePrompt.open()
+        for _ in 0 ..< 100 where promptFinished == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(promptFinished == false)
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+        let userMessages = session.transcript.messages.filter {
+            if case .user = $0 { return true }
+            return false
+        }
+        #expect(userMessages.count == 1)
+    }
+
+    @Test("steer skips its redirect when the runner is replaced while awaiting the prompt")
+    func steerSkipsRedirectAfterRunnerReplacementWhilePromptSettles() async throws {
+        let currentConnection = ConnectionCurrentFlag(true)
+        let steerPromptWaitStarted = DispatchRegistrationFlag()
+        let (runner, mock, session, _) = try mkRunner(
+            onPromptWorkChanged: { steerPromptWaitStarted.markRegistered() },
+            isConnectionCurrent: { currentConnection.isCurrent }
+        )
+        let promptStarted = QueueTestGate()
+        let releasePrompt = QueueTestGate()
+        let cancelFinished = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await promptStarted.open()
+            await releasePrompt.wait()
+            return Data("null".utf8)
+        }
+        mock.scriptNotifyAsync(method: "session/cancel") { _ in
+            await cancelFinished.open()
+        }
+        session.agentState = .ready
+        runner.send(blocks: [.text("running")], intent: .auto)
+        await promptStarted.wait()
+
+        var promptFinished: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { succeeded in
+            promptFinished = succeeded
+        }
+        await cancelFinished.wait()
+        for _ in 0 ..< 100 where !session.transcript.messages.contains(where: {
+            if case .systemNotice(_, let text) = $0 { return text == "Interrupted by user." }
+            return false
+        }) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(session.transcript.messages.contains {
+            if case .systemNotice(_, let text) = $0 { return text == "Interrupted by user." }
+            return false
+        })
+        for _ in 0 ..< 100 where !steerPromptWaitStarted.isRegistered {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(steerPromptWaitStarted.isRegistered)
+
+        currentConnection.set(false)
+        runner.stop()
+        session.agentState = .ready
+        await releasePrompt.open()
+        for _ in 0 ..< 100 where promptFinished == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(promptFinished == false)
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+        let userMessages = session.transcript.messages.filter {
+            if case .user = $0 { return true }
+            return false
+        }
+        #expect(userMessages.count == 1)
+    }
+
     @Test("forceSendQueuedItem while busy preserves and later drains the rest of the queue")
     func forceSendQueuedItemPreservesAndDrainsRest() async throws {
         let (runner, mock, session, store) = try mkRunner()

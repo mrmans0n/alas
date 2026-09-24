@@ -626,6 +626,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private func attachAndReplay() async throws -> ACPBrokerSnapshot {
         let generation = try currentGeneration()
         let cursor = currentAcknowledgedCursor()
+        guard !isConnectionTerminated() else { throw CancellationError() }
         let attached = try await service.attach(ACPBrokerAttachParams(
             brokerId: brokerId,
             generation: generation,
@@ -1256,7 +1257,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         if let changedTurnState, !isConnectionTerminated() {
             onTurnStateChanged?(changedTurnState)
         }
-        return true
+        return !isConnectionTerminated()
     }
 
     private func setTurnState(_ state: ACPBrokerTurnState) {
