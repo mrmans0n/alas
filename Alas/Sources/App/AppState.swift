@@ -11005,6 +11005,10 @@ final class AppState {
             )
             return .failed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
         }
+        if authorizedDirtyTabsAtConfirmation == nil,
+           !recheckWorkspaceOwnershipBeforeRemoval(worktree) {
+            return .skipped(reason: "Worktree changed since confirmation")
+        }
         if let authorizedDirtyTabsAtConfirmation,
            let authorizedSessionIDs {
             let volatileStateIsStillAuthorized = Self.hasOnlyAcknowledgedDirtiness(
