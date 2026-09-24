@@ -32,6 +32,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             lastActivity: Date(timeIntervalSince1970: 0)
         )
         var now = 100
+        var lookedUpProjects: [String] = []
         let coordinator = ACPSessionOrchestrationCoordinator(environment: .init(
             persistence: persistence,
             instanceId: "instance",
@@ -40,7 +41,10 @@ struct ACPSessionOrchestrationCoordinatorTests {
                 return Int64(now)
             },
             makeID: { "child" },
-            worktree: { $0 == worktree.id ? worktree : nil },
+            worktree: { projectId, id in
+                lookedUpProjects.append(projectId)
+                return projectId == worktree.projectId && id == worktree.id ? worktree : nil
+            },
             existingWorktree: { _, _ in nil },
             configuredAgents: {
                 [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
@@ -77,6 +81,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         )
         #expect(record.failureMessage == "Install Codex")
         #expect(record.pendingInitialPrompt == "Investigate the parser.")
+        #expect(lookedUpProjects == [worktree.projectId])
     }
 
     @Test("delegated creation failure is persisted without starting the child")
@@ -110,7 +115,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             instanceId: "instance",
             now: { 100 },
             makeID: { "child" },
-            worktree: { $0 == worktree.id ? worktree : nil },
+            worktree: { projectId, id in projectId == worktree.projectId && id == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
             configuredAgents: {
                 [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
@@ -181,7 +186,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             instanceId: "instance",
             now: { 100 },
             makeID: { "child" },
-            worktree: { $0 == worktree.id ? worktree : nil },
+            worktree: { projectId, id in projectId == worktree.projectId && id == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
             configuredAgents: {
                 [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
@@ -251,7 +256,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             instanceId: "instance",
             now: { 100 },
             makeID: { "child" },
-            worktree: { $0 == worktree.id ? worktree : nil },
+            worktree: { projectId, id in projectId == worktree.projectId && id == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
             configuredAgents: {
                 [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
@@ -326,7 +331,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             instanceId: "instance",
             now: { 100 },
             makeID: { "child" },
-            worktree: { $0 == origin.id ? origin : nil },
+            worktree: { projectId, id in projectId == origin.projectId && id == origin.id ? origin : nil },
             existingWorktree: { _, id in id == destination.id ? destination : nil },
             configuredAgents: {
                 [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]
@@ -396,7 +401,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             instanceId: "instance",
             now: { 100 },
             makeID: { "child" },
-            worktree: { $0 == worktree.id ? worktree : nil },
+            worktree: { projectId, id in projectId == worktree.projectId && id == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
             configuredAgents: {
                 [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)]

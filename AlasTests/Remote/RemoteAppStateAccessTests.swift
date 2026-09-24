@@ -465,6 +465,64 @@ struct RemoteAppStateAccessTests {
         #expect(result == .failure("An interrupted checkpoint restore needs recovery before an agent session can start."))
     }
 
+    @Test func localACPBootstrapChecksTheWorktreesProject() async throws {
+        let fixture = try makeSharedPathState()
+        defer { cleanupSharedPathFiles(fixture) }
+        var invalidSecond = fixture.second
+        invalidSecond.lineageID = UUID().uuidString.lowercased()
+        fixture.state.projectsManager.insertOptimisticWorktree(invalidSecond)
+        _ = fixture.state.rightPaneStore.state(
+            for: fixture.first,
+            baseBranch: fixture.state.config.worktrees.baseBranch,
+            comparisonMode: fixture.state.config.changes.comparisonMode
+        )
+
+        do {
+            _ = try await fixture.state.startACPSession(
+                worktree: invalidSecond, sessionID: "blocked-second-project", agentID: "claude",
+                promptID: UUID(), prompt: nil
+            )
+            Issue.record("Project B's interrupted restore must block ACP bootstrap")
+        } catch let error as ACPWorktreeSessionBootstrapError {
+            #expect(error.message == "An interrupted checkpoint restore needs recovery before an agent session can start.")
+        } catch {
+            Issue.record("Unexpected ACP bootstrap error: \(error)")
+        }
+        #expect(fixture.state.acpManager(for: invalidSecond)?.liveSession(for: "blocked-second-project") == nil)
+    }
+
+    @Test func freshSingleProjectACPUsesBoundedDatabasePath() throws {
+        let longName = String(repeating: "long-path-", count: 19) + UUID().uuidString
+        let path = "/tmp/" + longName
+        let project = ProjectConfig(
+            id: "single-\(UUID().uuidString)", name: "Single", path: "/repos/single",
+            color: "blue", addedAt: .distantPast
+        )
+        let owner = SessionOwnerID.projectWorktree(projectId: project.id, worktreeId: path)
+        let bounded = Paths.acpSessionsDB(for: owner)
+        let legacy = Paths.acpSessionsDB(forWorktreeId: path)
+        defer {
+            for db in [bounded, legacy] {
+                for suffix in ["", "-wal", "-shm", ".owner"] {
+                    try? FileManager.default.removeItem(atPath: db.path + suffix)
+                }
+            }
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let worktree = Worktree(
+            id: path, projectId: project.id, name: "long", branch: "long",
+            path: URL(fileURLWithPath: path), status: .clean, lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(worktree)
+
+        let manager = try #require(state.acpManager(for: worktree))
+        #expect(manager.persistence.path == bounded.path)
+        _ = try ACPSessionStore(path: manager.persistence.path).recentSessions()
+        #expect(FileManager.default.fileExists(atPath: bounded.path))
+    }
+
     @Test func duplicatePathKeepsLegacyACPHistoryWithOneProject() async throws {
         let fixture = try makeSharedPathState()
         defer { cleanupSharedPathFiles(fixture) }
@@ -2258,6 +2316,9 @@ struct RemoteAppStateAccessTests {
 
     private func makeRemoteRenameState() -> AppState {
         let worktreeID = UUID().uuidString
+        // These tests exercise existing path-keyed histories and mirrors.
+        // Materialize that legacy database before manager selection.
+        _ = try! ACPSessionStore(path: Paths.acpSessionsDB(forWorktreeId: worktreeID).path).recentSessions()
         let projectPath = "/tmp/project-\(worktreeID)"
         try! FileManager.default.createDirectory(
             at: URL(fileURLWithPath: projectPath).appendingPathComponent(".git"),
@@ -2485,5 +2546,6 @@ struct RemoteAppStateAccessTests {
         try? FileManager.default.removeItem(at: db)
         try? FileManager.default.removeItem(at: URL(fileURLWithPath: db.path + "-wal"))
         try? FileManager.default.removeItem(at: URL(fileURLWithPath: db.path + "-shm"))
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: db.path + ".owner"))
     }
 }

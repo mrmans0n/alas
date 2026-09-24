@@ -16,7 +16,7 @@ final class ACPSessionOrchestrationCoordinator {
         let instanceId: String
         let now: () -> Int64
         let makeID: () -> String
-        let worktree: (String) -> Worktree?
+        let worktree: (String, String) -> Worktree?
         let existingWorktree: (String, String) -> Worktree?
         let configuredAgents: () -> [ACPOrchestrationAgent]
         let availableAgents: (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPOrchestrationAgent]
@@ -52,6 +52,7 @@ final class ACPSessionOrchestrationCoordinator {
                         relationship: nil,
                         agentId: environment.sessionLocation(origin.sessionId)?.manager.liveSession(for: origin.sessionId)?.agentId ?? parent?.agentId ?? "unknown",
                         worktreeId: origin.worktreeId,
+                        projectId: origin.projectId,
                         phase: .ready,
                         failure: nil,
                         createdAt: 0
@@ -65,6 +66,7 @@ final class ACPSessionOrchestrationCoordinator {
                         relationship: "parent",
                         agentId: location?.manager.liveSession(for: visible.sessionId)?.agentId ?? "unknown",
                         worktreeId: location?.origin.worktreeId ?? parent?.parentWorktreeId ?? "",
+                        projectId: location?.origin.projectId ?? parent?.projectId ?? origin.projectId,
                         phase: .ready,
                         failure: nil,
                         createdAt: 0
@@ -77,6 +79,7 @@ final class ACPSessionOrchestrationCoordinator {
                     relationship: "child",
                     agentId: record.agentId,
                     worktreeId: record.childWorktreeId ?? record.worktreeRequest.worktreeId ?? "",
+                    projectId: record.projectId,
                     phase: record.phase,
                     failure: record.failureMessage,
                     createdAt: record.createdAt
@@ -120,7 +123,7 @@ final class ACPSessionOrchestrationCoordinator {
         let now = environment.now()
         switch request.worktree {
         case .current:
-            guard let worktree = environment.worktree(origin.worktreeId) else {
+            guard let worktree = environment.worktree(origin.projectId, origin.worktreeId) else {
                 return .error("The current worktree is no longer available.")
             }
             let agentID: String
@@ -495,7 +498,8 @@ final class ACPSessionOrchestrationCoordinator {
         }
         let worktreeID = targetParent?.childWorktreeId ?? callerParent?.parentWorktreeId
         guard let worktreeID,
-              let worktree = environment.worktree(worktreeID),
+              let projectID = targetParent?.projectId ?? callerParent?.projectId,
+              let worktree = environment.worktree(projectID, worktreeID),
               let manager = environment.manager(worktree),
               let row = await manager.persistedSessionRow(id: sessionID),
               !row.archived
@@ -547,6 +551,7 @@ final class ACPSessionOrchestrationCoordinator {
         relationship: String?,
         agentId: String,
         worktreeId: String,
+        projectId: String,
         phase: ACPDelegationPhase,
         failure: String?,
         createdAt: Int64
@@ -563,7 +568,7 @@ final class ACPSessionOrchestrationCoordinator {
         let archived: Bool
         if location != nil {
             archived = false
-        } else if let worktree = environment.worktree(worktreeId),
+        } else if let worktree = environment.worktree(projectId, worktreeId),
                   let manager = environment.manager(worktree),
                   let row = await manager.persistedSessionRow(id: sessionId) {
             archived = row.archived

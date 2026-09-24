@@ -6504,7 +6504,9 @@ final class AppState {
                 instanceId: instanceId,
                 now: { Int64(Date().timeIntervalSince1970) },
                 makeID: { UUID().uuidString },
-                worktree: { [weak self] id in self?.worktree(withId: id) },
+                worktree: { [weak self] projectId, id in
+                    self?.worktree(withId: id, inProjectId: projectId)
+                },
                 existingWorktree: { [weak self] projectId, worktreeId in
                     guard let self else { return nil }
                     let worktrees = self.projectsManager.visibleWorktrees(projectId: projectId)
@@ -11987,11 +11989,7 @@ final class AppState {
             return previousScopedURL
         }
         if FileManager.default.fileExists(atPath: ownerURL.path) { return scopedURL }
-        let hasDuplicateProjectPath = otherProjectsStillListWorktree(
-            id: worktree.id,
-            exceptProjectId: worktree.projectId
-        )
-        if hasDuplicateProjectPath && !FileManager.default.fileExists(atPath: legacyURL.path) {
+        if !FileManager.default.fileExists(atPath: legacyURL.path) {
             return scopedURL
         }
         // Older installations keyed history by path alone. Bind that file to
@@ -13169,7 +13167,9 @@ final class AppState {
         promptID: UUID,
         prompt: String?
     ) async throws -> ACPSession.ID {
-        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(
+            owner: Self.projectScopedACPOwner(for: worktree), fallbackWorktree: worktree
+        ) else {
             throw ACPWorktreeSessionBootstrapError(message: Self.checkpointRecoveryBlocksACPMessage)
         }
         guard let manager = acpManager(for: worktree) else {
@@ -13199,7 +13199,9 @@ final class AppState {
                 await manager.enqueuePrompt(id: promptID, text: text, into: id)
             },
             attach: { _, id, freshlyCreated in
-                guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
+                guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(
+                    owner: Self.projectScopedACPOwner(for: worktree), fallbackWorktree: worktree
+                ) else {
                     manager.liveSession(for: id)?.lastError = Self.checkpointRecoveryBlocksACPMessage
                     return
                 }
@@ -13223,7 +13225,9 @@ final class AppState {
         agentID: String,
         preparedPrompt: PreparedWorktreeACPPrompt
     ) async {
-        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else { return }
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(
+            owner: Self.projectScopedACPOwner(for: worktree), fallbackWorktree: worktree
+        ) else { return }
         guard !Self.blocksWorktreeSessionAdmission(
             projectsManager.operationState(for: worktree)
         ) else { return }
@@ -13307,7 +13311,9 @@ final class AppState {
         guard let manager = acpManager(for: worktree) else { return }
         Task { @MainActor in
             do {
-                guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
+                guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(
+                    owner: Self.projectScopedACPOwner(for: worktree), fallbackWorktree: worktree
+                ) else {
                     manager.liveSession(for: sourceSessionID)?.lastError = Self.checkpointRecoveryBlocksACPMessage
                     return
                 }
