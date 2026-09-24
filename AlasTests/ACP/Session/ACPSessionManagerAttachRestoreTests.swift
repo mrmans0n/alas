@@ -1001,6 +1001,7 @@ struct ACPSessionManagerAttachRestoreTests {
         ))
         let client = ACPMockClient()
         let modelGate = AttachPhaseGate()
+        let promptGate = PromptGate()
         let appliedSelections = ModelModeSelectionRecorder()
         scriptInitialize(client)
         client.script(method: "session/load") { _ in
@@ -1033,7 +1034,10 @@ struct ACPSessionManagerAttachRestoreTests {
             await appliedSelections.append("mode:\(params.modeId)")
             return Data("{}".utf8)
         }
-        client.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        client.scriptAsync(method: "session/prompt") { _ in
+            await promptGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
         let manager = manager(store: store, client: client)
         let session = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: session.id)
@@ -1043,16 +1047,26 @@ struct ACPSessionManagerAttachRestoreTests {
         try await waitUntilAsync { await modelGate.hasEntered }
         manager.enqueueModeSelection(for: session.id, modeId: "act")
         let lastSelection = manager.enqueueModelSelection(for: session.id, modelId: "opus")
-        var promptCompleted: Bool?
-        let accepted = manager.submit(
+        var firstPromptCompleted: Bool?
+        var secondPromptCompleted: Bool?
+        let firstAccepted = manager.submit(
             sessionId: session.id,
             text: "use the selected model",
             attachments: [],
             intent: .auto
         ) { succeeded in
-            promptCompleted = succeeded
+            firstPromptCompleted = succeeded
         }
-        #expect(accepted)
+        let secondAccepted = manager.submit(
+            sessionId: session.id,
+            text: "keep the following prompt ordered",
+            attachments: [],
+            intent: .auto
+        ) { succeeded in
+            secondPromptCompleted = succeeded
+        }
+        #expect(firstAccepted)
+        #expect(secondAccepted)
         await Task.yield()
         #expect(!client.sent.contains { $0.method == "session/prompt" })
         await modelGate.release()
@@ -1068,9 +1082,15 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.currentMode == "act")
         #expect(try store.loadSession(id: session.id)?.currentModel == "opus")
         #expect(try store.loadSession(id: session.id)?.currentMode == "act")
-        try await waitUntil { client.sent.contains { $0.method == "session/prompt" } }
-        try await waitUntil { promptCompleted != nil }
-        #expect(promptCompleted == true)
+        try await waitUntilAsync { await promptGate.hasEntered }
+        #expect(client.sent.filter { $0.method == "session/prompt" }.count == 1)
+        await promptGate.release()
+        try await waitUntil {
+            client.sent.filter { $0.method == "session/prompt" }.count == 2
+        }
+        try await waitUntil { firstPromptCompleted != nil && secondPromptCompleted != nil }
+        #expect(firstPromptCompleted == true)
+        #expect(secondPromptCompleted == true)
         #expect(client.sent.filter {
             $0.method == "session/set_model" ||
                 $0.method == "session/set_mode" ||
@@ -1080,7 +1100,136 @@ struct ACPSessionManagerAttachRestoreTests {
             "session/set_mode",
             "session/set_model",
             "session/prompt",
+            "session/prompt",
         ])
+    }
+
+    @Test("detaching cancels a prompt behind model selection")
+    func detachingCancelsPromptBehindModelSelection() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                ],
+                availableModes: [.init(id: "plan", name: "Plan")],
+                currentModel: "sonnet",
+                currentMode: "plan",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { request in
+            let params = try #require(request.params as? ACPSessionSetModelParams)
+            if params.modelId == "haiku" {
+                await modelGate.enterAndWait()
+            }
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        manager.retainSession(id: session.id)
+        defer { manager.releaseSession(id: session.id) }
+
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        let selection = manager.enqueueModelSelection(for: session.id, modelId: "haiku")
+        try await waitUntilAsync { await modelGate.hasEntered }
+
+        var promptCompleted: Bool?
+        let accepted = manager.submit(
+            sessionId: session.id,
+            text: "do not send after detach",
+            attachments: [],
+            intent: .auto
+        ) { succeeded in
+            promptCompleted = succeeded
+        }
+        #expect(accepted)
+
+        await manager.detach(sessionId: session.id)
+        await modelGate.release()
+        await selection.value
+        try await waitUntil { promptCompleted != nil }
+
+        #expect(promptCompleted == false)
+        #expect(!client.sent.contains { $0.method == "session/prompt" })
+        #expect(session.agentState == .idle)
+    }
+
+    @Test("losing writer lease cancels a prompt behind model selection")
+    func losingWriterLeaseCancelsPromptBehindModelSelection() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                ],
+                availableModes: [.init(id: "plan", name: "Plan")],
+                currentModel: "sonnet",
+                currentMode: "plan",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { request in
+            let params = try #require(request.params as? ACPSessionSetModelParams)
+            if params.modelId == "haiku" {
+                await modelGate.enterAndWait()
+            }
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        let selection = manager.enqueueModelSelection(for: session.id, modelId: "haiku")
+        try await waitUntilAsync { await modelGate.hasEntered }
+
+        var promptCompleted: Bool?
+        let accepted = manager.submit(
+            sessionId: session.id,
+            text: "do not send after losing the lease",
+            attachments: [],
+            intent: .auto
+        ) { succeeded in
+            promptCompleted = succeeded
+        }
+        #expect(accepted)
+
+        try store.seizeLease(
+            sessionId: session.id,
+            instanceId: "OTHER",
+            pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970)
+        )
+        await modelGate.release()
+        await selection.value
+        try await waitUntil { promptCompleted != nil }
+
+        #expect(promptCompleted == false)
+        #expect(!client.sent.contains { $0.method == "session/prompt" })
     }
 
     @Test("reopened session reapplies persisted mode and config options after load")

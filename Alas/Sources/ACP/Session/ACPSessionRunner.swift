@@ -1902,6 +1902,22 @@ extension ACPSessionRunner {
         let blocks = Self.blocks(text: text, attachments: attachments)
         send(blocks: blocks, intent: intent, draft: draft, onPromptFinished: onPromptFinished)
     }
+    func sendRegistered(
+        text: String,
+        attachments: [ACPMessage.Attachment],
+        intent: ACPSubmitIntent,
+        draft: ACPComposerDraft? = nil,
+        onDispatchRegistered: @escaping @MainActor () -> Void,
+        onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
+    ) {
+        sendRegistered(
+            blocks: Self.blocks(text: text, attachments: attachments),
+            intent: intent,
+            draft: draft,
+            onDispatchRegistered: onDispatchRegistered,
+            onPromptFinished: onPromptFinished
+        )
+    }
 
     /// Build the canonical `[ACPContentBlock]` array from a composer-shaped
     /// `(text, attachments)` pair: a leading text block followed by one block
@@ -2035,18 +2051,21 @@ extension ACPSessionRunner {
     /// every route also forwards it to `sendNow`, which reads its image
     /// segments' offsets to annotate the recorded attachments' `textOffset`
     /// (see `ACPSessionRunner.attachments(of:draft:)`).
-    func send(
+    private func sendRegistered(
         blocks: [ACPContentBlock],
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft? = nil,
+        onDispatchRegistered: (@MainActor () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         if case .schedule(let date) = intent {
             guard !blocks.isEmpty else {
+                onDispatchRegistered?()
                 Task { @MainActor in onPromptFinished?(false) }
                 return
             }
             let queuedId = session.enqueueScheduled(blocks: blocks, scheduledAt: date, draft: draft)
+            onDispatchRegistered?()
             persistQueue(completion: { [weak self] persisted in
                 if persisted {
                     self?.flushQueueIfIdle()
@@ -2061,11 +2080,13 @@ extension ACPSessionRunner {
         }
         if nativeForkBarrierActive {
             guard !blocks.isEmpty else {
+                onDispatchRegistered?()
                 Task { @MainActor in onPromptFinished?(false) }
                 return
             }
             session.enqueue(blocks: blocks, draft: draft)
             persistQueue()
+            onDispatchRegistered?()
             Task { @MainActor in onPromptFinished?(true) }
             return
         }
@@ -2075,19 +2096,29 @@ extension ACPSessionRunner {
             queueEmpty: session.queue.isEmpty,
             blocksEmpty: blocks.isEmpty,
             hasPendingInput: !session.transcript.pendingUserInputs.isEmpty,
-            inFlightSteer: steerInProgress)
+            inFlightSteer: steerInProgress,
+            hasActivePrompt: activePromptID != nil
+        )
         switch route {
         case .noOp:
             // Composer guards empty submits before invoking onSubmit, but
             // tell the caller the submit was rejected so its draft state
             // stays consistent.
+            onDispatchRegistered?()
             Task { @MainActor in onPromptFinished?(false) }
         case .sendNow:
-            sendNow(blocks: blocks, queuedItemId: nil, draft: draft, onPromptFinished: onPromptFinished)
+            sendNow(
+                blocks: blocks,
+                queuedItemId: nil,
+                draft: draft,
+                onDispatchRegistered: onDispatchRegistered,
+                onPromptFinished: onPromptFinished
+            )
         case .enqueue:
             let scheduledWasHead = session.queue.first?.scheduledAt != nil
             session.enqueue(blocks: blocks, draft: draft)
             persistQueue()
+            onDispatchRegistered?()
             if scheduledWasHead { flushQueueIfIdle() }
             // The user's prompt was accepted into the queue — from the
             // composer's perspective this is a successful submission so
@@ -2095,8 +2126,27 @@ extension ACPSessionRunner {
             // later when the flusher drains the head.
             Task { @MainActor in onPromptFinished?(true) }
         case .steer:
-            steer(blocks: blocks, draft: draft, onPromptFinished: onPromptFinished)
+            steer(
+                blocks: blocks,
+                draft: draft,
+                onDispatchRegistered: onDispatchRegistered,
+                onPromptFinished: onPromptFinished
+            )
         }
+    }
+    func send(
+        blocks: [ACPContentBlock],
+        intent: ACPSubmitIntent,
+        draft: ACPComposerDraft? = nil,
+        onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
+    ) {
+        sendRegistered(
+            blocks: blocks,
+            intent: intent,
+            draft: draft,
+            onDispatchRegistered: nil,
+            onPromptFinished: onPromptFinished
+        )
     }
 
     /// Persist the current queue snapshot. Called after every mutation:
@@ -2381,6 +2431,7 @@ extension ACPSessionRunner {
         delegatedSource: ACPDelegatedPromptSource? = nil,
         recordUserPrompt: Bool = true,
         draft: ACPComposerDraft? = nil,
+        onDispatchRegistered: (@MainActor () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
@@ -2404,8 +2455,14 @@ extension ACPSessionRunner {
         // pending head ahead of the steer's replacement prompt.
         steerInProgress = true
 
-        Task { [weak self] in
-            guard let self else { return }
+        Task { [weak self, onDispatchRegistered, onPromptFinished] in
+            guard let self else {
+                await MainActor.run {
+                    onDispatchRegistered?()
+                    onPromptFinished?(false)
+                }
+                return
+            }
             await self.userCancel()
             await interruptedPromptTask?.value
             await MainActor.run {
@@ -2420,6 +2477,7 @@ extension ACPSessionRunner {
                 guard self.session.agentState == .ready else {
                     self.steerInProgress = false
                     self.pendingForceSendQueuedItemID = nil
+                    onDispatchRegistered?()
                     onPromptFinished?(false)
                     return
                 }
@@ -2429,6 +2487,7 @@ extension ACPSessionRunner {
                     delegatedSource: delegatedSource,
                     recordUserPrompt: recordUserPrompt,
                     draft: draft,
+                    onDispatchRegistered: onDispatchRegistered,
                     onPromptFinished: onPromptFinished
                 )
                 self.steerInProgress = false
@@ -2469,6 +2528,7 @@ extension ACPSessionRunner {
         brokerOperationKey: String? = nil,
         recordUserPrompt: Bool = true,
         draft: ACPComposerDraft? = nil,
+        onDispatchRegistered: (@MainActor () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         flushPendingIncomingUpdates()
@@ -2483,9 +2543,12 @@ extension ACPSessionRunner {
         // and persist `lastError` on the queue head — defeating the
         // detach-clears-cleanly fix from the previous commit.
         activePromptID = promptID
-        latestPromptTask = Task { [weak self, onPromptFinished] in
+        latestPromptTask = Task { [weak self, onDispatchRegistered, onPromptFinished] in
             guard let self else {
-                await MainActor.run { onPromptFinished?(false) }
+                await MainActor.run {
+                    onDispatchRegistered?()
+                    onPromptFinished?(false)
+                }
                 return
             }
             guard await self.hasConfirmedLeaseForSideEffect() else {
@@ -2494,6 +2557,7 @@ extension ACPSessionRunner {
                         self.activePromptID = nil
                     }
                     self.cancelledPromptIDs.remove(promptID)
+                    onDispatchRegistered?()
                     onPromptFinished?(false)
                 }
                 return
@@ -2562,14 +2626,19 @@ extension ACPSessionRunner {
                     }
                     self.resetStreamingPersistBuffer()
                     self.session.transcript.streamingState = .sending
+                    onDispatchRegistered?()
                     return (true, messageID)
                 }
                 self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending
+                onDispatchRegistered?()
                 return (true, nil)
             }
             guard promptRecording.proceeded else {
-                await MainActor.run { onPromptFinished?(false) }
+                await MainActor.run {
+                    onDispatchRegistered?()
+                    onPromptFinished?(false)
+                }
                 return
             }
             if let messageID = promptRecording.messageID,

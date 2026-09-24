@@ -589,7 +589,8 @@ final class ACPSessionManager: ObservableObject {
     /// Keeps a prompt dispatch ordered with same-session chip selections.
     private func enqueueAfterModelModeSelections(
         for id: ACPSession.ID,
-        operation: @escaping @MainActor () -> Void
+        onInvalidated: @escaping @MainActor () -> Void,
+        operation: @escaping @MainActor () async -> Void
     ) {
         let generation = modelModeSelectionGenerations[id] ?? UUID()
         modelModeSelectionGenerations[id] = generation
@@ -597,9 +598,14 @@ final class ACPSessionManager: ObservableObject {
         let token = UUID()
         let task = Task { @MainActor [weak self] in
             await previousTask?.value
-            operation()
             guard let self,
-                  self.modelModeSelectionTails[id]?.token == token
+                  self.modelModeSelectionGenerations[id] == generation
+            else {
+                onInvalidated()
+                return
+            }
+            await operation()
+            guard self.modelModeSelectionTails[id]?.token == token
             else { return }
             self.modelModeSelectionTails[id] = nil
             self.modelModeSelectionGenerations[id] = nil
@@ -5855,7 +5861,8 @@ extension ACPSessionManager {
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft?,
         waitForModelModeSelections: Bool,
-        onCompleted: @escaping @MainActor (Bool) -> Void
+        onCompleted: @escaping @MainActor (Bool) -> Void,
+        onDispatchRegistered: (@MainActor () -> Void)? = nil
     ) -> Bool {
         guard let session = sessions[sessionId] else { return false }
         if case .needsAuth = session.setupState {
@@ -5886,23 +5893,32 @@ extension ACPSessionManager {
         case .ready:
             if waitForModelModeSelections,
                modelModeSelectionTails[sessionId] != nil {
-                enqueueAfterModelModeSelections(for: sessionId) { [weak self] in
+                enqueueAfterModelModeSelections(
+                    for: sessionId,
+                    onInvalidated: { onCompleted(false) }
+                ) { [weak self] in
                     guard let self,
                           self.sessions[sessionId] === session
                     else {
                         onCompleted(false)
                         return
                     }
-                    let accepted = self.submit(
-                        sessionId: sessionId,
-                        text: text,
-                        attachments: attachments,
-                        intent: intent,
-                        draft: draft,
-                        waitForModelModeSelections: false,
-                        onCompleted: onCompleted
-                    )
-                    if !accepted { onCompleted(false) }
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                        let accepted = self.submit(
+                            sessionId: sessionId,
+                            text: text,
+                            attachments: attachments,
+                            intent: intent,
+                            draft: draft,
+                            waitForModelModeSelections: false,
+                            onCompleted: onCompleted,
+                            onDispatchRegistered: { continuation.resume() }
+                        )
+                        if !accepted {
+                            onCompleted(false)
+                            continuation.resume()
+                        }
+                    }
                 }
                 return true
             }
@@ -5924,6 +5940,7 @@ extension ACPSessionManager {
                     into: sessionId,
                     onPersisted: onScheduledPersisted
                 )
+                onDispatchRegistered?()
                 if scheduledAt == nil {
                     Task { @MainActor in onCompleted(true) }
                 }
@@ -5932,9 +5949,14 @@ extension ACPSessionManager {
                 }
                 return true
             }
-            runner.send(text: text, attachments: attachments, intent: intent, draft: draft) { succeeded in
-                onCompleted(succeeded)
-            }
+            runner.sendRegistered(
+                text: text,
+                attachments: attachments,
+                intent: intent,
+                draft: draft,
+                onDispatchRegistered: { onDispatchRegistered?() },
+                onPromptFinished: { succeeded in onCompleted(succeeded) }
+            )
             return true
 
         case .spawning:
@@ -5948,6 +5970,7 @@ extension ACPSessionManager {
                 into: sessionId,
                 onPersisted: onScheduledPersisted
             )
+            onDispatchRegistered?()
             if scheduledAt == nil {
                 Task { @MainActor in onCompleted(true) }
             }
@@ -5967,6 +5990,7 @@ extension ACPSessionManager {
                 into: sessionId,
                 onPersisted: onScheduledPersisted
             )
+            onDispatchRegistered?()
             if scheduledAt == nil {
                 Task { @MainActor in onCompleted(true) }
             }
