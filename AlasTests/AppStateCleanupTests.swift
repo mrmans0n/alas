@@ -1187,6 +1187,7 @@ struct AppStateCleanupTests {
 
         let mainWorktreeID = try #require(state.projectsManager.worktrees(projectId: activeProject.id).first?.id)
         #expect(state.projectsManager.worktrees(projectId: otherSpaceProject.id).contains { $0.id == target.id })
+        try await waitForSelectedWorktree(state, equals: mainWorktreeID)
         #expect(state.selectedWorktreeId == mainWorktreeID)
     }
 
@@ -1758,7 +1759,7 @@ struct AppStateCleanupTests {
         #expect(state.tabs.tabs(forWorktree: mainWorktreeId).isEmpty)
     }
 
-    @Test func removingSharedPathProjectClosesOnlyItsACPTabAndManager() throws {
+    @Test func removingSharedPathProjectClosesOnlyItsOwnedTabsAndManager() throws {
         let sharedPath = "/tmp/alas-cleanup-shared-\(UUID().uuidString)"
         let projectA = ProjectConfig(
             id: "host-a-\(UUID().uuidString)",
@@ -1823,7 +1824,23 @@ struct AppStateCleanupTests {
             title: "Host B session",
             projectId: projectB.id
         ), to: sharedPath)
-        let terminal = state.tabs.appendTerminal(worktreeId: sharedPath, title: "Shared terminal", sessionId: "shared-terminal")
+        let terminalA = state.tabs.appendTerminal(
+            worktreeId: sharedPath,
+            projectId: projectA.id,
+            title: "Host A terminal",
+            sessionId: "host-a-terminal"
+        )
+        let terminalB = state.tabs.appendTerminal(
+            worktreeId: sharedPath,
+            projectId: projectB.id,
+            title: "Host B terminal",
+            sessionId: "host-b-terminal"
+        )
+        let sharedTerminal = state.tabs.appendTerminal(
+            worktreeId: sharedPath,
+            title: "Legacy shared terminal",
+            sessionId: "shared-terminal"
+        )
 
         state.removeProject(id: projectA.id)
 
@@ -1832,7 +1849,9 @@ struct AppStateCleanupTests {
         let remainingTabs = state.tabs.tabs(forWorktree: sharedPath)
         #expect(!remainingTabs.contains(where: { $0.id == tabA.id }))
         #expect(remainingTabs.contains(where: { $0.id == tabB.id }))
-        #expect(remainingTabs.contains(where: { $0.id == terminal.id }))
+        #expect(!remainingTabs.contains(where: { $0.id == terminalA.id }))
+        #expect(remainingTabs.contains(where: { $0.id == terminalB.id }))
+        #expect(remainingTabs.contains(where: { $0.id == sharedTerminal.id }))
     }
 
     @Test func removeProjectDeletesPersistedTabsFile() async throws {

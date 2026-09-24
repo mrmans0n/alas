@@ -40,9 +40,14 @@ struct RunScriptFailureQueue: Equatable {
     private(set) var byWorktree: [String: [RunScriptFailure]] = [:]
 
     mutating func append(_ failure: RunScriptFailure) {
-        byWorktree[failure.worktreeID, default: []].insert(failure, at: 0)
-        byWorktree[failure.worktreeID]!.sort { $0.completedAt > $1.completedAt }
-        byWorktree[failure.worktreeID] = Array(byWorktree[failure.worktreeID]!.prefix(3))
+        let existing = byWorktree[failure.worktreeID, default: []]
+        var projectFailures = existing.filter { $0.projectId == failure.projectId }
+        projectFailures.insert(failure, at: 0)
+        projectFailures.sort { $0.completedAt > $1.completedAt }
+
+        let otherProjectFailures = existing.filter { $0.projectId != failure.projectId }
+        byWorktree[failure.worktreeID] = (otherProjectFailures + Array(projectFailures.prefix(3)))
+            .sorted { $0.completedAt > $1.completedAt }
     }
 
     func failures(for worktreeID: String, projectId: String? = nil) -> [RunScriptFailure] {

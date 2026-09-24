@@ -5116,8 +5116,8 @@ final class AppState {
         return true
     }
 
-    /// Remove one project's ACP tabs and manager state while retaining the
-    /// path-shared terminal and non-ACP tabs used by another project.
+    /// Remove one project's ACP tabs, owned terminals, and manager state while
+    /// retaining the path-shared tabs owned by another project.
     private func cleanupProjectACPState(projectId: String, worktreeIDs: Set<String>) {
         let owners = acpManagers.keys.filter { $0.projectID == projectId }
         var scopedWorktreeIDs = worktreeIDs
@@ -5127,6 +5127,15 @@ final class AppState {
             let owner = SessionOwnerID.projectWorktree(projectId: projectId, worktreeId: worktreeID)
             let manager = acpManagers[owner]
             for tab in tabs.tabs(forWorktree: worktreeID) {
+                if case .terminal(let terminalState) = tab,
+                   terminalState.projectId == projectId {
+                    closeTab(
+                        worktreeId: worktreeID,
+                        projectId: projectId,
+                        tabId: tab.id
+                    )
+                    continue
+                }
                 guard case .acpSession(let state) = tab,
                       state.projectId == projectId
                         || (state.projectId == nil

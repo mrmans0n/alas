@@ -3,11 +3,16 @@ import Testing
 @testable import Alas
 
 struct RunScriptFailureTests {
-    private func failure(_ index: Int, worktreeID: String = "wt") -> RunScriptFailure {
+    private func failure(
+        _ index: Int,
+        worktreeID: String = "wt",
+        projectId: String? = nil
+    ) -> RunScriptFailure {
         RunScriptFailure(
             id: "failure-\(index)", runID: "run-\(index)",
             scriptKey: "repo:script-\(index).sh", scriptName: "Script \(index)",
             worktreeID: worktreeID,
+            projectId: projectId,
             branch: "main",
             exitCode: Int32(index),
             completedAt: Date(timeIntervalSince1970: TimeInterval(index))
@@ -25,6 +30,19 @@ struct RunScriptFailureTests {
         for index in 2...4 { queue.append(failure(index)) }
         queue.append(failure(1))
         #expect(queue.failures(for: "wt").map(\.id) == ["failure-4", "failure-3", "failure-2"])
+    }
+
+    @Test func queueRetentionIsScopedToProject() {
+        var queue = RunScriptFailureQueue()
+        queue.append(failure(1, projectId: "project-a"))
+        for index in 2...5 {
+            queue.append(failure(index, projectId: "project-b"))
+        }
+
+        #expect(queue.failures(for: "wt", projectId: "project-a").map(\.id) == ["failure-1"])
+        #expect(queue.failures(for: "wt", projectId: "project-b").map(\.id) == [
+            "failure-5", "failure-4", "failure-3"
+        ])
     }
 
     @Test func dismissAndPurgeAreWorktreeScoped() {
