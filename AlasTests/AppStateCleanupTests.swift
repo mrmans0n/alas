@@ -1907,10 +1907,10 @@ struct AppStateCleanupTests {
         state.projectsManager.insertOptimisticWorktree(second)
 
         let now = Date()
-        func record(id: String, project: ProjectConfig) -> RunRecord {
+        func record(id: String, scriptKey: String, project: ProjectConfig) -> RunRecord {
             RunRecord(
                 id: id,
-                scriptKey: "repo:dev.sh",
+                scriptKey: scriptKey,
                 scriptName: "Dev",
                 worktreeID: worktreeID,
                 projectId: project.id,
@@ -1937,8 +1937,8 @@ struct AppStateCleanupTests {
                 output: .unavailable
             )
         }
-        let runA = record(id: "run-project-a", project: projectA)
-        let runB = record(id: "run-project-b", project: projectB)
+        let runA = record(id: "run-project-a", scriptKey: "repo:host-a-dev.sh", project: projectA)
+        let runB = record(id: "run-project-b", scriptKey: "repo:host-b-dev.sh", project: projectB)
         state.runRecords.begin(runA)
         state.runRecords.begin(runB)
         let failureA = RunScriptFailure(
@@ -1972,6 +1972,9 @@ struct AppStateCleanupTests {
         let reportTabB = state.tabs.openOrFocusRunReport(
             worktreeId: worktreeID, projectId: projectB.id, runID: reportB.id
         )
+        let bFailureSignals = state.currentAttentionObservations.compactMap(\.activeSignal)
+            .filter { $0.fingerprint == failureB.id }
+        #expect(bFailureSignals.map(\.owner.projectID) == [projectB.id])
 
         let pendingID_A = UUID()
         let pendingID_B = UUID()

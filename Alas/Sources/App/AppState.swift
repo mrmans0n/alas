@@ -12333,7 +12333,9 @@ final class AppState {
     func agentSidebarRollup(for worktree: Worktree) -> AgentSidebarRollup {
         let manager = acpManager(for: worktree)
         let terminalTabs = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> TerminalTabState? in
-            guard case .terminal(let terminal) = tab else { return nil }
+            guard case .terminal(let terminal) = tab,
+                  agentSidebarTerminalIsVisible(terminal, in: worktree)
+            else { return nil }
             return terminal
         }
         let liveSessions = manager?.sessions.values.filter { session in
@@ -12353,6 +12355,18 @@ final class AppState {
         ))
     }
 
+    /// Project-owned terminals stay with their owner. Legacy unowned tabs remain
+    /// visible only when the path-derived ID has one known project owner.
+    private func agentSidebarTerminalIsVisible(_ terminal: TerminalTabState, in worktree: Worktree) -> Bool {
+        if terminal.projectId == worktree.projectId { return true }
+        guard terminal.projectId == nil else { return false }
+        let hasAnotherProjectOwner = projects.contains { project in
+            project.id != worktree.projectId
+                && projectsManager.worktrees(projectId: project.id).contains { $0.id == worktree.id }
+        }
+        return !hasAnotherProjectOwner
+    }
+
     func focusAgentSidebarRow(_ rowID: AgentSidebarRowID, in worktree: Worktree) async {
         switch rowID {
         case .acp(let sessionID):
@@ -12366,6 +12380,7 @@ final class AppState {
             let matchingLeafID = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> String? in
                 guard tab.id == tabID,
                       case .terminal(let terminal) = tab,
+                      agentSidebarTerminalIsVisible(terminal, in: worktree),
                       let leaf = terminal.root.leaves().first(where: { $0.sessionId == sessionID })
                 else { return nil }
                 return leaf.id

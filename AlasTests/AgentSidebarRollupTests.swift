@@ -288,6 +288,69 @@ struct AgentSidebarRollupTests {
     }
 
     @Test @MainActor
+    func sharedPathAgentSidebarShowsOnlyTerminalsOwnedByItsProject() async throws {
+        let state = AppState(store: MemoryStore())
+        let worktreeID = "/tmp/agent-sidebar-shared-\(UUID().uuidString)"
+        let projectA = ProjectConfig(
+            id: "sidebar-a-\(UUID().uuidString)", name: "Host A", path: "/repos/sidebar-a",
+            color: "blue", addedAt: .distantPast, host: "host-a"
+        )
+        let projectB = ProjectConfig(
+            id: "sidebar-b-\(UUID().uuidString)", name: "Host B", path: "/repos/sidebar-b",
+            color: "green", addedAt: .distantPast, host: "host-b"
+        )
+        let first = Worktree(
+            id: worktreeID, projectId: projectA.id, name: "shared", branch: "main",
+            path: URL(fileURLWithPath: worktreeID), status: .clean, lastActivity: .distantPast
+        )
+        let second = Worktree(
+            id: worktreeID, projectId: projectB.id, name: "shared", branch: "main",
+            path: URL(fileURLWithPath: worktreeID), status: .clean, lastActivity: .distantPast
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [projectA, projectB])
+        state.projectsManager.insertOptimisticWorktree(first)
+        state.projectsManager.insertOptimisticWorktree(second)
+        let terminalA = state.tabs.appendTerminal(
+            worktreeId: worktreeID, projectId: projectA.id, title: "Host A", sessionId: "shell-a"
+        )
+        let terminalB = state.tabs.appendTerminal(
+            worktreeId: worktreeID, projectId: projectB.id, title: "Host B", sessionId: "shell-b"
+        )
+        let ambiguousLegacyTerminal = state.tabs.appendTerminal(
+            worktreeId: worktreeID, title: "Legacy", sessionId: "legacy-shell"
+        )
+
+        let firstRows = state.agentSidebarRollup(for: first).rows.map(\.id)
+        let secondRows = state.agentSidebarRollup(for: second).rows.map(\.id)
+
+        #expect(firstRows.contains(.terminal(tabID: terminalA.id, sessionID: "shell-a")))
+        #expect(!firstRows.contains(.terminal(tabID: terminalB.id, sessionID: "shell-b")))
+        #expect(!firstRows.contains(.terminal(tabID: ambiguousLegacyTerminal.id, sessionID: "legacy-shell")))
+        #expect(secondRows.contains(.terminal(tabID: terminalB.id, sessionID: "shell-b")))
+        #expect(!secondRows.contains(.terminal(tabID: terminalA.id, sessionID: "shell-a")))
+        #expect(!secondRows.contains(.terminal(tabID: ambiguousLegacyTerminal.id, sessionID: "legacy-shell")))
+
+        let uniqueWorktree = Worktree(
+            id: "\(worktreeID)-unique", projectId: projectB.id, name: "unique", branch: "main",
+            path: URL(fileURLWithPath: "\(worktreeID)-unique"), status: .clean, lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(uniqueWorktree)
+        let legacyUniqueTerminal = state.tabs.appendTerminal(
+            worktreeId: uniqueWorktree.id, title: "Legacy unique", sessionId: "legacy-unique"
+        )
+        #expect(state.agentSidebarRollup(for: uniqueWorktree).rows.map(\.id) == [
+            .terminal(tabID: legacyUniqueTerminal.id, sessionID: "legacy-unique")
+        ])
+
+        let activeBeforeRejectedFocus = state.tabs.activeTabId(forWorktree: worktreeID)
+        await state.focusAgentSidebarRow(
+            .terminal(tabID: terminalA.id, sessionID: "shell-a"),
+            in: second
+        )
+        #expect(state.tabs.activeTabId(forWorktree: worktreeID) == activeBeforeRejectedFocus)
+    }
+
+    @Test @MainActor
     func focusReopensHistoryInItsWorktreeAndReusesTheNewTab() async throws {
         let (state, first, second) = makeAppFixture()
         let manager = try #require(state.acpManager(for: first))

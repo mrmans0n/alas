@@ -299,7 +299,10 @@ extension AppState {
                 }
             }
             var observedScripts = Set<String>()
-            for failure in runScriptFailureQueue.failures(for: entry.worktree.id) {
+            for failure in runScriptFailureQueue.failures(
+                for: entry.worktree.id,
+                projectId: entry.worktree.projectId
+            ) {
                 guard observedScripts.insert(failure.scriptKey).inserted else { continue }
                 let key = AttentionProducer.scriptSourceKey(scriptKey: failure.scriptKey, owner: owner)
                 if let stored = attentionStore.document.observations[key],
