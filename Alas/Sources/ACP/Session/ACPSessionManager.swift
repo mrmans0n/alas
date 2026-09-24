@@ -1225,12 +1225,10 @@ final class ACPSessionManager: ObservableObject {
     /// coroutine that resumes after dispose aborts at the pre-commit guard
     /// rather than registering a runner for a session whose manager is dead.
     private var isDisposed = false
-    /// Sessions for which an `attach` coroutine has acquired the writer
-    /// lease but has not yet registered a runner (the pre-runner window).
-    /// `releaseAllOwnedLeases` skips these so their own `defer` block can
-    /// release the lease after `connection.shutdown` — preserving the
-    /// correct shutdown order (connection down before lease freed).
-    private var attachingSessions: Set<ACPSession.ID> = []
+    /// Pre-runner attachments keyed by session, with the attempt that owns
+    /// each marker. This keeps a superseded attempt from clearing its
+    /// replacement's marker when it eventually unwinds.
+    private var attachingSessions: [ACPSession.ID: UUID] = [:]
     private var disposingAttachments: Set<ACPSession.ID> = []
     /// Latches a teardown cancellation until the coalesced attach waiters
     /// have observed it. `performAttach` clears `disposingAttachments` as
@@ -2010,7 +2008,7 @@ final class ACPSessionManager: ObservableObject {
             sessions[$0]?.agentId == agentId && sessions[$0]?.remoteSessionId == remoteSessionId
         }
         guard let localSessionId,
-              runners[localSessionId] != nil || attachingSessions.contains(localSessionId)
+              runners[localSessionId] != nil || attachingSessions[localSessionId] != nil
                 || disposalTasks[localSessionId] != nil
         else { return }
         try await disposeSession(id: localSessionId)
@@ -3926,7 +3924,7 @@ extension ACPSessionManager {
     /// but has not yet registered a runner. Used by tests to verify that
     /// `releaseAllOwnedLeases` skips attaching sessions.
     func isAttachingForTest(_ sessionId: ACPSession.ID) -> Bool {
-        attachingSessions.contains(sessionId)
+        attachingSessions[sessionId] != nil
     }
 
     func heartbeatTickForTest(sessionId: ACPSession.ID) async -> Bool {
@@ -4001,7 +3999,7 @@ extension ACPSessionManager {
     /// is never leaked — it is either released by the attach defer on abort, or
     /// goes stale in 15 s if the attach coroutine is permanently wedged.
     func releaseAllOwnedLeases() async {
-        for sid in Array(_ownedLeases) where !attachingSessions.contains(sid) {
+        for sid in Array(_ownedLeases) where attachingSessions[sid] == nil {
             await releaseWriterLease(sessionId: sid)
         }
     }
@@ -4518,14 +4516,16 @@ extension ACPSessionManager {
         startWriterWatch(sessionId: sessionId)
         // Mark this session as attaching so `releaseAllOwnedLeases` skips it.
         // The remove runs on every exit (success, abort, throw) via the defer below.
-        attachingSessions.insert(sessionId)
+        attachingSessions[sessionId] = attempt.id
         // Any failure path below must hand the session back: release the
         // lease and stop the heartbeat so another instance can claim it.
         // Only a fully-registered runner (the success path) keeps them.
         var attachSucceeded = false
         defer {
+            if attachingSessions[sessionId] == attempt.id {
+                attachingSessions.removeValue(forKey: sessionId)
+            }
             if isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) {
-                attachingSessions.remove(sessionId)
                 disposingAttachments.remove(sessionId)
                 if !cancelledInFlightAttachments.contains(sessionId),
                    !attachSucceeded || session.agentState != .ready
@@ -6767,7 +6767,7 @@ extension ACPSessionManager {
     }
 
     func disposeAllLiveSessions() async {
-        let ids = Set(runners.keys).union(attachingSessions)
+        let ids = Set(runners.keys).union(attachingSessions.keys)
         for id in ids {
             try? await disposeSession(id: id)
         }

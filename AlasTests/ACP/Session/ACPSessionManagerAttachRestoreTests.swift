@@ -61,6 +61,32 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadLease(sessionId: session.id)?.token == replacementLease?.token)
     }
 
+    @Test("closing a suspended setup attempt clears its attachment marker")
+    func closingSuspendedSetupAttemptClearsAttachmentMarker() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let setupGate = AttachPhaseGate()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in
+                await setupGate.enterAndWait()
+                return .ready
+            }
+        )
+        let session = manager.createSession(agentId: "claude")
+        let attach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync { await setupGate.hasEntered }
+        #expect(manager.isAttachingForTest(session.id))
+
+        try await manager.disposeSession(id: session.id)
+        await setupGate.release()
+        await attach.value
+
+        #expect(!manager.isAttachingForTest(session.id))
+        #expect(!manager.hasActiveCheckpointWriter)
+    }
+
     @Test("attaching an already-ready session preserves its live update callback")
     func attachingReadySessionPreservesLiveUpdateCallback() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
