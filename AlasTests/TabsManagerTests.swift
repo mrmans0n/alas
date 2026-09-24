@@ -347,6 +347,30 @@ struct TabsManagerTests {
         #expect(decoded.iconName == "globe")
     }
 
+    @Test func sharedWebPreviewPersistsTheProjectsFeedbackOwner() throws {
+        let manager = TabsManager(store: RestoreMemoryStore())
+        let owner = SessionOwnerID.projectWorktree(projectId: "project-b", worktreeId: "shared-path")
+        _ = manager.openWebPreview(owner: owner, url: URL(string: "http://localhost:5173"), remoteHost: "host-b")
+        let reopened = manager.openWebPreview(worktreeId: "shared-path")
+        guard case .webPreview(let preview) = reopened else {
+            Issue.record("Expected a shared web preview")
+            return
+        }
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(preview)) as? [String: Any])
+        #expect(object["projectId"] as? String == "project-b")
+        #expect(preview.remoteHost == "host-b")
+        #expect(preview.sessionOwnerKey(sharedOwner: .projectWorktree(
+            projectId: "project-a", worktreeId: "shared-path"
+        )) == owner.storageKey)
+
+        let legacy = Data(#"{"id":"web-preview:shared-path","ownerKey":"shared-path","remoteHost":"host-b"}"#.utf8)
+        let oldPreview = try JSONDecoder().decode(WebPreviewTabState.self, from: legacy)
+        #expect(oldPreview.projectId == nil)
+        #expect(oldPreview.sessionOwnerKey(sharedOwner: .projectWorktree(
+            projectId: "project-a", worktreeId: "shared-path"
+        )) == "shared-path")
+    }
+
     @Test func openWebPreviewReusesOneTabPerOwnerAndUpdatesURL() {
         let manager = TabsManager(store: RestoreMemoryStore())
         let firstURL = URL(string: "http://127.0.0.1:3000")!

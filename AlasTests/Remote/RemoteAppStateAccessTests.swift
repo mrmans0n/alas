@@ -419,6 +419,52 @@ struct RemoteAppStateAccessTests {
         })
     }
 
+    @Test func remoteSessionCheckpointAdmissionUsesTheSelectedProject() async throws {
+        let fixture = try makeSharedPathState()
+        defer { cleanupSharedPathFiles(fixture) }
+        var staleFirst = fixture.first
+        staleFirst.lineageID = UUID().uuidString.lowercased()
+        fixture.state.projectsManager.insertOptimisticWorktree(staleFirst)
+        _ = fixture.state.rightPaneStore.state(
+            for: staleFirst,
+            baseBranch: fixture.state.config.worktrees.baseBranch,
+            comparisonMode: fixture.state.config.changes.comparisonMode
+        )
+        fixture.state.agentRegistry = enabledClaudeRegistry()
+        fixture.state.remoteSessionAttachScheduler = { _, _ in }
+
+        let result = await fixture.state.createRemoteSession(
+            worktreeId: fixture.second.id, projectId: fixture.second.projectId, agentId: "claude"
+        )
+
+        guard case .success(let summary) = result else {
+            Issue.record("Project B should not inherit project A's checkpoint state: \(result)")
+            return
+        }
+        #expect(summary.projectId == fixture.second.projectId)
+    }
+
+    @Test func remoteSessionCheckpointAdmissionBlocksAnInvalidSelectedProject() async throws {
+        let fixture = try makeSharedPathState()
+        defer { cleanupSharedPathFiles(fixture) }
+        var invalidSecond = fixture.second
+        invalidSecond.lineageID = UUID().uuidString.lowercased()
+        fixture.state.projectsManager.insertOptimisticWorktree(invalidSecond)
+        _ = fixture.state.rightPaneStore.state(
+            for: fixture.first,
+            baseBranch: fixture.state.config.worktrees.baseBranch,
+            comparisonMode: fixture.state.config.changes.comparisonMode
+        )
+        fixture.state.agentRegistry = enabledClaudeRegistry()
+        fixture.state.remoteSessionAttachScheduler = { _, _ in }
+
+        let result = await fixture.state.createRemoteSession(
+            worktreeId: invalidSecond.id, projectId: invalidSecond.projectId, agentId: "claude"
+        )
+
+        #expect(result == .failure("An interrupted checkpoint restore needs recovery before an agent session can start."))
+    }
+
     @Test func duplicatePathKeepsLegacyACPHistoryWithOneProject() async throws {
         let fixture = try makeSharedPathState()
         defer { cleanupSharedPathFiles(fixture) }

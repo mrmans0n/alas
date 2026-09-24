@@ -55,7 +55,7 @@ struct WebPreviewAutomationService {
                 )
                 guard !browser.automationState.isBusy else { throw WebPreviewBrowserAutomationError.busy }
             }
-            let tab = tabs.openWebPreview(worktreeId: owner.tabStorageKey, url: target.url, remoteHost: target.remoteHost)
+            let tab = tabs.openWebPreview(owner: owner, url: target.url, remoteHost: target.remoteHost)
             guard case .webPreview(let state) = tab else { throw WebPreviewAutomationError.unavailable }
             let browser = tabs.webPreviewBrowser(
                 ownerKey: owner.tabStorageKey,

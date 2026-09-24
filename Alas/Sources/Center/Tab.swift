@@ -185,14 +185,31 @@ struct WebPreviewTabState: Codable, Equatable, Identifiable {
     let ownerKey: String
     var url: URL?
     var remoteHost: String?
+    /// The preview host and feedback recipient must describe one project.
+    /// Older path-keyed tab files omit this field.
+    var projectId: String?
 
     var title: String { "Web Preview" }
 
-    init(ownerKey: String, url: URL? = nil, remoteHost: String? = nil) {
+    init(ownerKey: String, url: URL? = nil, remoteHost: String? = nil, projectId: String? = nil) {
         self.ownerKey = ownerKey
         self.url = url
         self.remoteHost = remoteHost
+        self.projectId = projectId
         self.id = "web-preview:\(ownerKey)"
+    }
+
+    func sessionOwnerKey(sharedOwner: SessionOwnerID?) -> String {
+        if let sharedOwner, case .workspaceCheckout = sharedOwner,
+           sharedOwner.tabStorageKey == ownerKey {
+            return sharedOwner.storageKey
+        }
+        if let projectId {
+            return SessionOwnerID.projectWorktree(projectId: projectId, worktreeId: ownerKey).storageKey
+        }
+        // An unqualified legacy tab cannot safely claim the currently
+        // displayed project's ACP sessions when its host may belong elsewhere.
+        return ownerKey
     }
 }
 

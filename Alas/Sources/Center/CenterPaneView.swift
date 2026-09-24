@@ -687,11 +687,7 @@ struct CenterPaneView: View {
                         GGLandingTabView(state: state, tabState: s)
                             .id(s.id)
                     case .webPreview(let s):
-                        let previewSessionOwnerKey = activeSharedOwner?.storageKey
-                            ?? SessionOwnerID.projectWorktree(
-                                projectId: worktree.projectId,
-                                worktreeId: worktree.id
-                            ).storageKey
+                        let previewSessionOwnerKey = s.sessionOwnerKey(sharedOwner: activeSharedOwner)
                         WebPreviewTabView(state: state, tab: s, sessionOwnerKey: previewSessionOwnerKey)
                             .id(s.id + (s.remoteHost ?? "") + previewSessionOwnerKey)
                             .onAppear { completeStartupRecoveryIfActive(s.id) }

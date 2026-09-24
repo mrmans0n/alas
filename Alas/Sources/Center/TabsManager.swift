@@ -1081,16 +1081,19 @@ final class TabsManager {
             return state.ownerKey == worktreeId
         }
         let remoteHost: String?
+        let projectId: String?
         if case .webPreview(let state) = existing {
             remoteHost = state.remoteHost
+            projectId = state.projectId
         } else {
             remoteHost = nil
+            projectId = nil
         }
-        return openWebPreview(worktreeId: worktreeId, url: url, remoteHost: remoteHost)
+        return openWebPreview(worktreeId: worktreeId, url: url, remoteHost: remoteHost, projectId: projectId)
     }
 
     @discardableResult
-    func openWebPreview(worktreeId: String, url: URL? = nil, remoteHost: String?) -> Tab {
+    func openWebPreview(worktreeId: String, url: URL? = nil, remoteHost: String?, projectId: String? = nil) -> Tab {
         let ownerKey = worktreeId
         if var file = byWorktree[ownerKey],
            let idx = file.tabs.firstIndex(where: {
@@ -1105,8 +1108,10 @@ final class TabsManager {
                 }
                 if state.remoteHost != remoteHost {
                     clearWebPreviewBrowser(ownerKey: ownerKey)
+                    if projectId == nil { state.projectId = nil }
                 }
                 state.remoteHost = remoteHost
+                if let projectId { state.projectId = projectId }
                 let tab = Tab.webPreview(state)
                 file.tabs[idx] = tab
                 file.activeTabId = tab.id
@@ -1115,14 +1120,17 @@ final class TabsManager {
                 return tab
             }
         }
-        let tab = Tab.webPreview(WebPreviewTabState(ownerKey: ownerKey, url: url, remoteHost: remoteHost))
+        let tab = Tab.webPreview(WebPreviewTabState(ownerKey: ownerKey, url: url, remoteHost: remoteHost, projectId: projectId))
         append(tab, to: ownerKey)
         return tab
     }
 
     @discardableResult
     func openWebPreview(owner: SessionOwnerID, url: URL? = nil, remoteHost: String? = nil) -> Tab {
-        openWebPreview(worktreeId: owner.tabStorageKey, url: url, remoteHost: remoteHost ?? Self.remoteHost(for: owner))
+        openWebPreview(
+            worktreeId: owner.tabStorageKey, url: url,
+            remoteHost: remoteHost ?? Self.remoteHost(for: owner), projectId: owner.projectID
+        )
     }
 
     @discardableResult

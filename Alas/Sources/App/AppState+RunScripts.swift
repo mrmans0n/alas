@@ -357,7 +357,10 @@ extension AppState {
     }
 
     func openWebPreview(in worktree: Worktree, url: URL? = nil) {
-        let tab = tabs.openWebPreview(worktreeId: worktree.id, url: url, remoteHost: webPreviewRemoteHost(for: worktree))
+        let tab = tabs.openWebPreview(
+            worktreeId: worktree.id, url: url,
+            remoteHost: webPreviewRemoteHost(for: worktree), projectId: worktree.projectId
+        )
         activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
     }
 
@@ -375,7 +378,9 @@ extension AppState {
         }
         switch RunEndpointPolicy.action(for: endpoint, target: target) {
         case .open(let url):
-            let tab = tabs.openWebPreview(worktreeId: worktree.id, url: url, remoteHost: target.host)
+            let tab = tabs.openWebPreview(
+                worktreeId: worktree.id, url: url, remoteHost: target.host, projectId: worktree.projectId
+            )
             activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
         case let .blockedRemoteLoopback(host, url):
             showFileActionError(

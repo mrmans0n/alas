@@ -392,21 +392,25 @@ final class AppState {
     }
 
     private func checkpointMutationsDisabledAfterDiscovery(for worktree: Worktree) async -> Bool {
-        let pane = rightPaneStore.state(
-            for: worktree,
-            baseBranch: config.worktrees.baseBranch,
-            comparisonMode: config.changes.comparisonMode
-        )
+        let pane = checkpointPaneForAdmission(for: worktree)
         return await pane.checkpointMutationsDisabledAfterJournalRevalidation()
     }
 
     private func checkpointRestoreBlocksWritersAfterDiscovery(for worktree: Worktree) async -> Bool {
-        let pane = rightPaneStore.state(
-            for: worktree,
-            baseBranch: config.worktrees.baseBranch,
-            comparisonMode: config.changes.comparisonMode
-        )
+        let pane = checkpointPaneForAdmission(for: worktree)
         return await pane.checkpointRestoreBlocksWritersAfterJournalRevalidation()
+    }
+
+    private func checkpointPaneForAdmission(for worktree: Worktree) -> RightPaneState {
+        if let cached = rightPaneStore.activeState(worktreeId: worktree.id),
+           cached.worktree.projectId == worktree.projectId {
+            return cached
+        }
+        // The visible pane cache is path-keyed. Another project may have
+        // claimed this id; validate this project's journal in an isolated
+        // state rather than admitting (or blocking) its writers using that
+        // other project's checkpoint state.
+        return RightPaneState(worktree: worktree, baseBranch: config.worktrees.baseBranch)
     }
 
     typealias TerminalSessionOpener = (
@@ -14426,7 +14430,10 @@ extension AppState: RemoteSessionsProvider {
         else {
             return .failure("Worktree is no longer available.")
         }
-        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: resolved.worktree.id) else {
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(
+            owner: .projectWorktree(projectId: resolved.project.id, worktreeId: resolved.worktree.id),
+            fallbackWorktree: resolved.worktree
+        ) else {
             return .failure(Self.checkpointRecoveryBlocksACPMessage)
         }
         switch projectsManager.operationState(forWorktreeId: worktreeId, projectId: resolved.project.id) {
