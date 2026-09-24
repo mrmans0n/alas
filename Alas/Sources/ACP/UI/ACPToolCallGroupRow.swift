@@ -16,6 +16,10 @@ import SwiftUI
 struct ACPToolCallGroupHeaderRow: View {
     let summary: ACPToolCallGroupSummary
     let expanded: Bool
+    /// Live narration hidden inside this group. The nested preview observes
+    /// its buffer directly so streamed chunks update without replacing the
+    /// whole AppKit-hosted row through the reconciler.
+    let liveNarration: ACPToolCallGroupLiveNarration?
     /// The transcript slice this header was built from. Carried so the pulse
     /// can tell a tool call finishing apart from the render window revealing
     /// calls that finished long ago — see
@@ -45,11 +49,13 @@ struct ACPToolCallGroupHeaderRow: View {
     init(
         summary: ACPToolCallGroupSummary,
         expanded: Bool = false,
+        liveNarration: ACPToolCallGroupLiveNarration? = nil,
         window: ACPToolCallGroupHeaderAnimation.Window = .init(visibleTail: nil),
         onToggle: @escaping (Bool) -> Void = { _ in }
     ) {
         self.summary = summary
         self.expanded = expanded
+        self.liveNarration = liveNarration
         self.window = window
         self.onToggle = onToggle
     }
@@ -74,6 +80,7 @@ struct ACPToolCallGroupHeaderRow: View {
                             theme.color("fg-faint")
                                 .mix(with: theme.color("accent"), by: absorbHighlight)
                         )
+                        .accessibilityHidden(true)
                     Text(label)
                         .font(.system(size: 11))
                         .foregroundStyle(theme.color("fg-faint"))
@@ -82,11 +89,21 @@ struct ACPToolCallGroupHeaderRow: View {
                         // same label from "Ran" to "Hide" — stays instant.
                         .contentTransition(.numericText(value: Double(summary.count)))
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: summary.count)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if !expanded, let liveNarration {
+                        Text("·")
+                            .accessibilityHidden(true)
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.color("fg-faint"))
+                        ACPToolCallGroupLiveNarrationPreview(narration: liveNarration)
+                            .layoutPriority(1)
+                    }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(label)
+            .accessibilityElement(children: .combine)
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         }
         .onChange(of: snapshot) { previous, current in
@@ -119,6 +136,86 @@ struct ACPToolCallGroupHeaderRow: View {
         } completion: {
             withAnimation(.easeOut(duration: 0.5)) { absorbHighlight = 0 }
         }
+    }
+}
+
+struct ACPToolCallGroupLiveNarration: Equatable {
+    enum Kind: Equatable {
+        case thinking
+        case working
+
+        var label: String {
+            switch self {
+            case .thinking: "Thinking…"
+            case .working: "Working…"
+            }
+        }
+    }
+
+    static let previewCharacterLimit = 160
+
+    let kind: Kind
+    let buffer: StreamingText
+
+    /// The latest non-empty line, bounded from the tail for both rendering
+    /// and accessibility. The line search never walks beyond the displayed
+    /// suffix, and the only allocation is the short string shown.
+    static func previewText(in value: String) -> String {
+        let suffixStart = value.index(
+            value.endIndex,
+            offsetBy: -previewCharacterLimit,
+            limitedBy: value.startIndex
+        ) ?? value.startIndex
+        guard let lastContentIndex = value[suffixStart..<value.endIndex]
+            .lastIndex(where: { !$0.isWhitespace })
+        else { return "" }
+        let end = value.index(after: lastContentIndex)
+        let boundedStart = value.index(
+            end,
+            offsetBy: -previewCharacterLimit,
+            limitedBy: value.startIndex
+        ) ?? value.startIndex
+        let lineStart = value[boundedStart..<end].lastIndex(where: \.isNewline)
+            .map { value.index(after: $0) } ?? boundedStart
+        var trimmedStart = lineStart
+        while trimmedStart < end, value[trimmedStart].isWhitespace {
+            value.formIndex(after: &trimmedStart)
+        }
+        return String(value[trimmedStart..<end])
+    }
+}
+/// One-line live narration inside a collapsed activity disclosure. Observing
+/// the shared buffer here keeps streamed updates inside the preview instead
+/// of replacing the AppKit-hosted row through the reconciler.
+private struct ACPToolCallGroupLiveNarrationPreview: View {
+    let kind: ACPToolCallGroupLiveNarration.Kind
+    @ObservedObject var buffer: StreamingText
+    @Environment(\.theme) private var theme
+
+    init(narration: ACPToolCallGroupLiveNarration) {
+        kind = narration.kind
+        buffer = narration.buffer
+    }
+
+    var body: some View {
+        let previewText = ACPToolCallGroupLiveNarration.previewText(in: buffer.value)
+        HStack(spacing: 4) {
+            Text(kind.label)
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg-faint"))
+                .fixedSize(horizontal: true, vertical: false)
+            Text(verbatim: previewText)
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg-dim"))
+                .lineLimit(1)
+                .truncationMode(.head)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel(previewText: previewText))
+    }
+
+    private func accessibilityLabel(previewText: String) -> String {
+        previewText.isEmpty ? kind.label : "\(kind.label) \(previewText)"
     }
 }
 

@@ -82,8 +82,13 @@ struct ChatPane: View {
                             }
                         ), monospaced: true).frame(width: 80)
                     }
-                    SettingsRow(name: RowLabels.collapseFinishedToolCalls,
-                                desc: "Group consecutive thinking and finished tool calls into one expandable activity row. Progress messages and running tools stay visible.") {
+                    SettingsRow(
+                        name: RowLabels.collapseFinishedToolCalls,
+                        desc: """
+                        Group consecutive thinking and finished tool calls into one expandable activity row. \
+                        Current narration, progress messages, and running tools stay visible.
+                        """
+                    ) {
                         AlasToggle(on: state.bind(\.harness.acpCollapseFinishedToolCalls))
                     }
                 }

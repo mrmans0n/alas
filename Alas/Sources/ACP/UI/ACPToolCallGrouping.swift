@@ -13,10 +13,19 @@ struct ACPTranscriptToolCallGroup: Equatable {
     /// In transcript order; never empty.
     let members: [ACPTranscriptVisibleRow]
     let kind: Kind
+    /// The hidden narration row that is still receiving text, if this group
+    /// contains it. Its buffer is resolved by the scroller only for the
+    /// collapsed header; expanded groups already render the member itself.
+    let currentNarrationIndex: Int?
 
-    init(members: [ACPTranscriptVisibleRow], kind: Kind = .activity) {
+    init(
+        members: [ACPTranscriptVisibleRow],
+        kind: Kind = .activity,
+        currentNarrationIndex: Int? = nil
+    ) {
         self.members = members
         self.kind = kind
+        self.currentNarrationIndex = currentNarrationIndex
     }
 
     /// Derived from the first member so the id stays stable while the run
@@ -86,6 +95,9 @@ enum ACPToolCallGrouping {
         /// Commentary rows before the newest agent update in the current turn.
         /// Carried in the cache key so late phase adoption can regroup them.
         var priorCurrentTurnCommentaryIndices: Set<Int> = []
+        /// Narration row currently receiving streamed text. If folding hides
+        /// this row, its group header surfaces a one-line live preview.
+        var currentNarrationIndex: Int? = nil
     }
 
     /// An explicit allowlist, not a blocklist: an adapter-specific status
@@ -188,10 +200,15 @@ enum ACPToolCallGrouping {
         result.reserveCapacity(rows.count)
         var run: [ACPTranscriptVisibleRow] = []
         var runKind: ACPTranscriptToolCallGroup.Kind?
+        var runCurrentNarrationIndex: Int?
 
         func flushRun() {
             if !run.isEmpty {
-                let group = ACPTranscriptToolCallGroup(members: run, kind: runKind ?? .activity)
+                let group = ACPTranscriptToolCallGroup(
+                    members: run,
+                    kind: runKind ?? .activity,
+                    currentNarrationIndex: runCurrentNarrationIndex
+                )
                 if isExpanded(group) {
                     result.append(.toolCallGroupHeader(group))
                     for member in group.members {
@@ -203,6 +220,7 @@ enum ACPToolCallGrouping {
             }
             run.removeAll(keepingCapacity: true)
             runKind = nil
+            runCurrentNarrationIndex = nil
         }
 
         for row in rows {
@@ -227,6 +245,9 @@ enum ACPToolCallGrouping {
                 }
                 runKind = kind
                 run.append(row)
+                if row.index == options.currentNarrationIndex {
+                    runCurrentNarrationIndex = row.index
+                }
                 if row.index == options.breakAfterIndex { flushRun() }
             } else {
                 flushRun()

@@ -651,7 +651,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         messages: host.transcript.messages,
                         currentTurnUserIndex: host.transcript.latestUserMessageIndex,
                         visibleRange: host.transcript.visibleHead..<host.transcript.visibleTailBound
-                    )
+                    ),
+                currentNarrationIndex: ACPNarrationLiveness.liveIndex(
+                    messages: host.transcript.messages,
+                    isStreaming: host.transcript.streamingState == .streaming,
+                    lastContentTouchIndex: host.transcript.lastContentTouchIndex
+                )
             )
         }
 
@@ -716,19 +721,39 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             ) == row.index
         }
 
+        private static func groupLiveNarration(
+            host: ACPTranscriptScroller,
+            group: ACPTranscriptToolCallGroup
+        ) -> ACPToolCallGroupLiveNarration? {
+            guard let index = group.currentNarrationIndex,
+                  host.transcript.messages.indices.contains(index)
+            else { return nil }
+            switch host.transcript.messages[index] {
+            case .thought(_, _, let buffer):
+                return .init(kind: .thinking, buffer: buffer)
+            case .agent(_, _, let buffer) where buffer.phase == .commentary:
+                return .init(kind: .working, buffer: buffer)
+            default:
+                return nil
+            }
+        }
+
         /// The toggle row for an activity or completed-work run. Collapsed or
         /// expanded, it is the same row
         /// id, so toggling updates it in place while its member rows are
         /// inserted or removed around it.
         ///
-        /// The token includes the summary, expansion state, and member ids.
-        /// It deliberately does not include the members' own row keys: the
-        /// header renders none of their content, and when expanded each
-        /// member is its own row that re-renders itself. A late status or
-        /// output update on one bundled call therefore re-renders that one
-        /// card instead of the whole run. Anything about a member that the
-        /// header DOES show — how many there are, how many failed — is
-        /// already part of `summary`.
+        /// The token includes the summary, expansion state, live narration,
+        /// and member ids.
+        /// It deliberately does not include the members' own row keys. When
+        /// expanded, each member is its own row and re-renders itself. When
+        /// collapsed, the only member content the header renders is the
+        /// reference-stable live narration buffer, which publishes its text
+        /// updates directly to the nested preview. A late status or output
+        /// update on one bundled call therefore re-renders that one card
+        /// instead of the whole run. Everything else the header shows about
+        /// a member — how many there are, how many failed — is already part
+        /// of `summary`.
         private static func toolCallGroupHeaderSpec(
             host: ACPTranscriptScroller,
             group: ACPTranscriptToolCallGroup,
@@ -750,6 +775,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // `ACPToolCallGroupExpansionSeeds.syncLineage`.
             expansionSeeds.syncLineage(members: memberStableIds)
             let expanded = expansionSeeds.isExpanded(members: memberStableIds)
+            let liveNarration = expanded ? nil : groupLiveNarration(host: host, group: group)
             // The render window is an input to the header's absorb pulse, not
             // to its appearance: a bundle grows both when a call finishes and
             // when the window reveals calls that finished long ago, and only
@@ -771,7 +797,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 id: group.id,
                 equalityToken: token(
                     ToolCallGroupTokenInputs(
-                        summary: summary, expanded: expanded, window: window,
+                        summary: summary,
+                        expanded: expanded,
+                        liveNarration: liveNarration,
+                        window: window,
                         memberStableIds: memberStableIds
                     ),
                     host: host
@@ -781,6 +810,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         ACPToolCallGroupHeaderRow(
                             summary: summary,
                             expanded: expanded,
+                            liveNarration: liveNarration,
                             window: window,
                             onToggle: { expansionSeeds.setExpanded($0, members: memberStableIds) }
                         )
@@ -792,6 +822,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         private struct ToolCallGroupTokenInputs: Equatable {
             let summary: ACPToolCallGroupSummary
             let expanded: Bool
+            /// Buffer equality is reference identity, so streamed text updates
+            /// stay inside the observed preview while replacing its source
+            /// still refreshes the hosted header.
+            let liveNarration: ACPToolCallGroupLiveNarration?
             let window: ACPToolCallGroupHeaderAnimation.Window
             // Thinking can extend a group without changing its tool count.
             // Refresh the toggle closure so expansion includes those members.
