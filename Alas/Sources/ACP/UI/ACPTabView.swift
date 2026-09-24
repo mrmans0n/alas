@@ -443,17 +443,12 @@ private struct ACPSessionView: View {
             // `ACPTranscriptQueuePolicy.allowsQueueMutation`.
             onQueueEdit: { item in
                 guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
-                // Pull the queued prompt back into the composer for editing,
-                // appended after any text the user has already typed so
-                // nothing is clobbered. `takeForEditing` removes the item and
-                // returns its draft ONLY if it's still `.pending`; a `.sending`
-                // item returns nil and is left in flight, so it can't be
-                // duplicated.
-                guard let restored = session.takeForEditing(id: item.id) else { return }
-                manager.persistComposerDraft(
-                    session.composerDraft.appending(restored), for: session)
-                manager.persistQueue(for: session)
-                manager.runners[sessionId]?.flushQueueIfIdle()
+                // Return the pending item to the composer without losing its
+                // structured draft. The manager also releases any model/mode
+                // selection waiting for this queued item to dispatch.
+                Task { @MainActor in
+                    await manager.queueEditIntoComposer(for: sessionId, itemId: item.id)
+                }
             },
             onQueueForceSend: { id in
                 guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
@@ -471,9 +466,9 @@ private struct ACPSessionView: View {
             },
             onQueueRemove: { id in
                 guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
-                session.removeFromQueue(id: id)
-                manager.persistQueue(for: session)
-                manager.runners[sessionId]?.flushQueueIfIdle()
+                Task { @MainActor in
+                    await manager.queueRemove(for: sessionId, itemId: id)
+                }
             },
             onQueueRetry: { id in
                 guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
@@ -490,9 +485,9 @@ private struct ACPSessionView: View {
             },
             onQueueClearAll: {
                 guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
-                session.clearPendingQueue()
-                manager.persistQueue(for: session)
-                manager.runners[sessionId]?.flushQueueIfIdle()
+                Task { @MainActor in
+                    await manager.queueClear(for: sessionId)
+                }
             },
             onRetryContextRecovery: {
                 _ = manager.sendTranscriptAsContext(

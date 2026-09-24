@@ -634,6 +634,908 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.currentModel == "sonnet")
     }
 
+    @Test("user model and mode edits follow reconnect restoration")
+    func userModelAndModeEditsFollowReconnectRestoration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        let modeGate = AttachPhaseGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "opus", name: "Opus"),
+                    .init(id: "haiku", name: "Haiku"),
+                ],
+                availableModes: [
+                    .init(id: "default", name: "Default"),
+                    .init(id: "plan", name: "Plan"),
+                    .init(id: "ask", name: "Ask"),
+                ],
+                currentModel: "opus",
+                currentMode: "default",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { _ in
+            await modelGate.enterAndWait()
+            return Data("{}".utf8)
+        }
+        client.scriptAsync(method: "session/set_mode") { _ in
+            await modeGate.enterAndWait()
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+
+        await manager.hydrateIfNeeded(id: "local")
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+        try await waitUntilAsync { await modelGate.hasEntered }
+
+        await manager.setModel(for: session.id, modelId: "haiku")
+        #expect(client.sent.filter { $0.method == "session/set_model" }.count == 1)
+        await modelGate.release()
+        try await waitUntilAsync { await modeGate.hasEntered }
+
+        await manager.setMode(for: session.id, modeId: "ask")
+        #expect(client.sent.filter { $0.method == "session/set_mode" }.count == 1)
+        await modeGate.release()
+        await attachTask.value
+        await manager.flushAllPersistence()
+
+        let selectionRequests = client.sent.filter {
+            $0.method == "session/set_model" || $0.method == "session/set_mode"
+        }
+        #expect(selectionRequests.map(\.method) == [
+            "session/set_model",
+            "session/set_mode",
+            "session/set_model",
+            "session/set_mode",
+        ])
+        let modelParams = try selectionRequests
+            .filter { $0.method == "session/set_model" }
+            .map { try #require($0.params as? ACPSessionSetModelParams) }
+        let modeParams = try selectionRequests
+            .filter { $0.method == "session/set_mode" }
+            .map { try #require($0.params as? ACPSessionSetModeParams) }
+        #expect(modelParams.map(\.modelId) == ["sonnet", "haiku"])
+        #expect(modeParams.map(\.modeId) == ["plan", "ask"])
+        #expect(session.currentModel == "haiku")
+        #expect(session.currentMode == "ask")
+        #expect(try store.loadSession(id: "local")?.currentModel == "haiku")
+        #expect(try store.loadSession(id: "local")?.currentMode == "ask")
+    }
+
+    @Test("pre-attach model and mode picks apply after lease acquisition")
+    func preAttachModelAndModePicksApplyAfterLeaseAcquisition() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                ],
+                availableModes: [
+                    .init(id: "default", name: "Default"),
+                    .init(id: "plan", name: "Plan"),
+                    .init(id: "ask", name: "Ask"),
+                ],
+                currentModel: "sonnet",
+                currentMode: "default",
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/set_model") { _ in Data("{}".utf8) }
+        client.script(method: "session/set_mode") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.setModel(for: session.id, modelId: "haiku")
+        await manager.setMode(for: session.id, modeId: "ask")
+        manager.renameSession(id: session.id, title: "Renamed", source: .manual)
+        #expect(client.sent.isEmpty)
+
+        await manager.flushAllPersistence()
+        #expect(session.currentModel == "haiku")
+        #expect(session.currentMode == "ask")
+        #expect(try store.loadSession(id: "local")?.title == "Renamed")
+        #expect(try store.loadSession(id: "local")?.currentModel == "sonnet")
+        #expect(try store.loadSession(id: "local")?.currentMode == "plan")
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+        try await waitUntil {
+            client.sent.map(\.method) == [
+                "initialize",
+                "session/load",
+                "session/set_model",
+                "session/set_mode",
+            ]
+        }
+        await manager.flushAllPersistence()
+
+        let modelParams = try #require(
+            client.sent.first { $0.method == "session/set_model" }?.params as? ACPSessionSetModelParams
+        )
+        let modeParams = try #require(
+            client.sent.first { $0.method == "session/set_mode" }?.params as? ACPSessionSetModeParams
+        )
+        #expect(modelParams.modelId == "haiku")
+        #expect(modeParams.modeId == "ask")
+        #expect(session.currentModel == "haiku")
+        #expect(session.currentMode == "ask")
+        #expect(try store.loadSession(id: "local")?.currentModel == "haiku")
+        #expect(try store.loadSession(id: "local")?.currentMode == "ask")
+    }
+
+    @Test("manual detach clears deferred model and mode picks")
+    func manualDetachClearsDeferredModelModePicks() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let firstClient = ACPMockClient()
+        let secondClient = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        scriptInitialize(firstClient)
+        scriptInitialize(secondClient)
+        firstClient.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [
+                    .init(id: "plan", name: "Plan"),
+                    .init(id: "act", name: "Act"),
+                ],
+                currentModel: "opus",
+                currentMode: "plan",
+                promptSuggestions: []
+            ))
+        }
+        firstClient.scriptAsync(method: "session/set_model") { _ in
+            await modelGate.enterAndWait()
+            return Data("{}".utf8)
+        }
+        secondClient.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [
+                    .init(id: "plan", name: "Plan"),
+                    .init(id: "act", name: "Act"),
+                ],
+                currentModel: "haiku",
+                currentMode: "act",
+                promptSuggestions: []
+            ))
+        }
+        secondClient.script(method: "session/set_model") { _ in Data("{}".utf8) }
+        secondClient.script(method: "session/set_mode") { _ in Data("{}".utf8) }
+
+        let clients = [firstClient, secondClient]
+        var connectionIndex = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                let client = clients[connectionIndex]
+                connectionIndex += 1
+                return ACPConnection(client: client)
+            }
+        )
+        let session = try #require(manager.placeholderSession(id: "local"))
+        manager.retainSession(id: session.id)
+        defer { manager.releaseSession(id: session.id) }
+
+        await manager.hydrateIfNeeded(id: session.id)
+        let firstAttach = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+        try await waitUntilAsync { await modelGate.hasEntered }
+
+        await manager.setModel(for: session.id, modelId: "haiku")
+        await manager.setMode(for: session.id, modeId: "act")
+        await manager.detach(sessionId: session.id)
+        await manager.setModel(for: session.id, modelId: "sonnet")
+        await manager.setMode(for: session.id, modeId: "plan")
+        await modelGate.release()
+        await firstAttach.value
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+        await manager.flushAllPersistence()
+
+        let modelParams = try secondClient.sent
+            .filter { $0.method == "session/set_model" }
+            .map { try #require($0.params as? ACPSessionSetModelParams) }
+        let modeParams = try secondClient.sent
+            .filter { $0.method == "session/set_mode" }
+            .map { try #require($0.params as? ACPSessionSetModeParams) }
+        #expect(modelParams.map(\.modelId) == ["sonnet"])
+        #expect(modeParams.map(\.modeId) == ["plan"])
+        #expect(session.currentModel == "sonnet")
+        #expect(session.currentMode == "plan")
+        #expect(try store.loadSession(id: session.id)?.currentModel == "sonnet")
+        #expect(try store.loadSession(id: session.id)?.currentMode == "plan")
+    }
+
+    @Test("model and mode picks are rejected on a live mirror")
+    func modelAndModePicksAreRejectedOnLiveMirror() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let now = Int64(Date().timeIntervalSince1970)
+        #expect(try store.claimLease(
+            sessionId: "local",
+            instanceId: "other-instance",
+            pid: Int64(getpid()),
+            now: now,
+            staleAfter: 60
+        ))
+
+        let client = ACPMockClient()
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.refreshMirror(sessionId: "local")
+
+        await manager.setModel(for: session.id, modelId: "haiku")
+        await manager.setMode(for: session.id, modeId: "ask")
+
+        #expect(client.sent.isEmpty)
+        #expect(session.currentModel == "sonnet")
+        #expect(session.currentMode == "plan")
+        #expect(try store.loadSession(id: "local")?.currentModel == "sonnet")
+        #expect(try store.loadSession(id: "local")?.currentMode == "plan")
+    }
+
+    @Test("model and mode picks wait for the initial lease claim")
+    func modelAndModePicksWaitForInitialLeaseClaim() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                ],
+                availableModes: [
+                    .init(id: "default", name: "Default"),
+                    .init(id: "plan", name: "Plan"),
+                    .init(id: "ask", name: "Ask"),
+                ],
+                currentModel: "sonnet",
+                currentMode: "default",
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/set_model") { _ in Data("{}".utf8) }
+        client.script(method: "session/set_mode") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+
+        // Simulate a stale local ownership marker while the first lease
+        // observation is pending. A pick must not write without its token.
+        session.agentState = .spawning
+        manager._ownedLeases.insert(session.id)
+        await manager.setModel(for: session.id, modelId: "haiku")
+        await manager.setMode(for: session.id, modeId: "ask")
+        await manager.flushAllPersistence()
+
+        #expect(client.sent.isEmpty)
+        #expect(session.currentModel == "haiku")
+        #expect(session.currentMode == "ask")
+        #expect(try store.loadSession(id: "local")?.currentModel == "sonnet")
+        #expect(try store.loadSession(id: "local")?.currentMode == "plan")
+
+        session.agentState = .idle
+        await manager.attach(to: session.id, freshlyCreated: false)
+        try await waitUntil {
+            client.sent.map(\.method) == [
+                "initialize",
+                "session/load",
+                "session/set_model",
+                "session/set_mode",
+            ]
+        }
+        await manager.flushAllPersistence()
+
+        #expect(session.currentModel == "haiku")
+        #expect(session.currentMode == "ask")
+        #expect(try store.loadSession(id: "local")?.currentModel == "haiku")
+        #expect(try store.loadSession(id: "local")?.currentMode == "ask")
+    }
+
+    @Test("rapid model and mode picks reach the agent in selection order")
+    func rapidModelAndModePicksReachAgentInSelectionOrder() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        let promptGate = PromptGate()
+        let appliedSelections = ModelModeSelectionRecorder()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [
+                    .init(id: "plan", name: "Plan"),
+                    .init(id: "act", name: "Act"),
+                ],
+                currentModel: "sonnet",
+                currentMode: "plan",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { request in
+            let params = try #require(request.params as? ACPSessionSetModelParams)
+            if params.modelId == "haiku" {
+                await modelGate.enterAndWait()
+            }
+            await appliedSelections.append("model:\(params.modelId)")
+            return Data("{}".utf8)
+        }
+        client.scriptAsync(method: "session/set_mode") { request in
+            let params = try #require(request.params as? ACPSessionSetModeParams)
+            await appliedSelections.append("mode:\(params.modeId)")
+            return Data("{}".utf8)
+        }
+        client.scriptAsync(method: "session/prompt") { _ in
+            await promptGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        manager.enqueueModelSelection(for: session.id, modelId: "haiku")
+        try await waitUntilAsync { await modelGate.hasEntered }
+        manager.enqueueModeSelection(for: session.id, modeId: "act")
+        let lastSelection = manager.enqueueModelSelection(for: session.id, modelId: "opus")
+        var firstPromptCompleted: Bool?
+        var secondPromptCompleted: Bool?
+        let firstAccepted = manager.submit(
+            sessionId: session.id,
+            text: "use the selected model",
+            attachments: [],
+            intent: .auto
+        ) { succeeded in
+            firstPromptCompleted = succeeded
+        }
+        let secondAccepted = manager.submit(
+            sessionId: session.id,
+            text: "keep the following prompt ordered",
+            attachments: [],
+            intent: .auto
+        ) { succeeded in
+            secondPromptCompleted = succeeded
+        }
+        #expect(firstAccepted)
+        #expect(secondAccepted)
+        await Task.yield()
+        #expect(!client.sent.contains { $0.method == "session/prompt" })
+        await modelGate.release()
+        await lastSelection.value
+        await manager.flushAllPersistence()
+
+        #expect(await appliedSelections.values == [
+            "model:haiku",
+            "mode:act",
+            "model:opus",
+        ])
+        #expect(session.currentModel == "opus")
+        #expect(session.currentMode == "act")
+        #expect(try store.loadSession(id: session.id)?.currentModel == "opus")
+        #expect(try store.loadSession(id: session.id)?.currentMode == "act")
+        try await waitUntilAsync { await promptGate.hasEntered }
+        #expect(client.sent.filter { $0.method == "session/prompt" }.count == 1)
+        await promptGate.release()
+        try await waitUntil {
+            client.sent.filter { $0.method == "session/prompt" }.count == 2
+        }
+        try await waitUntil { firstPromptCompleted != nil && secondPromptCompleted != nil }
+        #expect(firstPromptCompleted == true)
+        #expect(secondPromptCompleted == true)
+        #expect(client.sent.filter {
+            $0.method == "session/set_model" ||
+                $0.method == "session/set_mode" ||
+                $0.method == "session/prompt"
+        }.map(\.method) == [
+            "session/set_model",
+            "session/set_mode",
+            "session/set_model",
+            "session/prompt",
+            "session/prompt",
+        ])
+    }
+
+    @Test("a later model pick waits for prompt RPC handoff")
+    func laterModelPickWaitsForPromptRPCHandoff() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        let checkpointGate = PromptGate()
+        let promptGate = PromptGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [.init(id: "plan", name: "Plan")],
+                currentModel: "sonnet",
+                currentMode: "plan",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { request in
+            let params = try #require(request.params as? ACPSessionSetModelParams)
+            if params.modelId == "haiku" {
+                await modelGate.enterAndWait()
+            }
+            return Data("{}".utf8)
+        }
+        client.scriptAsync(method: "session/prompt") { _ in
+            await promptGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
+        let manager = manager(
+            store: store,
+            client: client,
+            onCheckpointCapture: { _, _ in
+                await checkpointGate.waitInPrompt()
+                return nil
+            }
+        )
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        let initialRequestCount = client.sent.count
+
+        let firstSelection = manager.enqueueModelSelection(for: session.id, modelId: "haiku")
+        try await waitUntilAsync { await modelGate.hasEntered }
+        var promptCompleted: Bool?
+        let accepted = manager.submit(
+            sessionId: session.id,
+            text: "submit before changing the model again",
+            attachments: [],
+            intent: .auto
+        ) { succeeded in
+            promptCompleted = succeeded
+        }
+        #expect(accepted)
+        let laterSelection = manager.enqueueModelSelection(for: session.id, modelId: "opus")
+
+        await modelGate.release()
+        await firstSelection.value
+        try await waitUntilAsync { await checkpointGate.hasEntered }
+        await Task.yield()
+
+        let beforeHandoff = client.sent.dropFirst(initialRequestCount).filter {
+            $0.method == "session/set_model" || $0.method == "session/prompt"
+        }
+        #expect(beforeHandoff.map(\.method) == ["session/set_model"])
+        #expect((beforeHandoff.first?.params as? ACPSessionSetModelParams)?.modelId == "haiku")
+
+        await checkpointGate.release()
+        try await waitUntil {
+            client.sent.dropFirst(initialRequestCount).contains { $0.method == "session/prompt" }
+        }
+        try await waitUntil {
+            client.sent.dropFirst(initialRequestCount).contains {
+                guard $0.method == "session/set_model",
+                      let params = $0.params as? ACPSessionSetModelParams else { return false }
+                return params.modelId == "opus"
+            }
+        }
+        await laterSelection.value
+
+        let orderedRequests = client.sent.dropFirst(initialRequestCount).filter {
+            $0.method == "session/set_model" || $0.method == "session/prompt"
+        }
+        #expect(orderedRequests.map(\.method) == [
+            "session/set_model",
+            "session/prompt",
+            "session/set_model",
+        ])
+        #expect(orderedRequests.compactMap {
+            ($0.params as? ACPSessionSetModelParams)?.modelId
+        } == ["haiku", "opus"])
+
+        await promptGate.release()
+        try await waitUntil { promptCompleted != nil }
+        #expect(promptCompleted == true)
+    }
+
+    @Test("queued prompt holds a later model pick until RPC handoff")
+    func queuedPromptHoldsLaterModelPickUntilHandoff() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        let activePromptGate = PromptGate()
+        let queuedPromptGate = PromptGate()
+        let promptCounter = PromptCounter()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [.init(id: "plan", name: "Plan")],
+                currentModel: "sonnet",
+                currentMode: "plan",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { request in
+            let params = try #require(request.params as? ACPSessionSetModelParams)
+            if params.modelId == "haiku" {
+                await modelGate.enterAndWait()
+            }
+            return Data("{}".utf8)
+        }
+        client.scriptAsync(method: "session/prompt") { _ in
+            switch await promptCounter.next() {
+            case 1:
+                await activePromptGate.waitInPrompt()
+            case 2:
+                await queuedPromptGate.waitInPrompt()
+            default:
+                break
+            }
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        var activePromptCompleted: Bool?
+        #expect(manager.submit(
+            sessionId: session.id,
+            text: "active turn",
+            attachments: [],
+            intent: .auto
+        ) { activePromptCompleted = $0 })
+        try await waitUntilAsync { await activePromptGate.hasEntered }
+
+        let firstSelection = manager.enqueueModelSelection(for: session.id, modelId: "haiku")
+        try await waitUntilAsync { await modelGate.hasEntered }
+        var queuedPromptCompleted: Bool?
+        #expect(manager.submit(
+            sessionId: session.id,
+            text: "queue this prompt",
+            attachments: [],
+            intent: .auto
+        ) { queuedPromptCompleted = $0 })
+        let laterSelection = manager.enqueueModelSelection(for: session.id, modelId: "opus")
+
+        await modelGate.release()
+        await firstSelection.value
+        try await waitUntil {
+            session.queue.count == 1 && queuedPromptCompleted == true
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(client.sent.compactMap {
+            ($0.params as? ACPSessionSetModelParams)?.modelId
+        } == ["haiku"])
+
+        await activePromptGate.release()
+        try await waitUntilAsync { await queuedPromptGate.hasEntered }
+        await laterSelection.value
+
+        let orderedRequests = client.sent.filter {
+            $0.method == "session/prompt" || $0.method == "session/set_model"
+        }
+        #expect(orderedRequests.map(\.method) == [
+            "session/prompt",
+            "session/set_model",
+            "session/prompt",
+            "session/set_model",
+        ])
+        #expect(orderedRequests.compactMap {
+            ($0.params as? ACPSessionSetModelParams)?.modelId
+        } == ["haiku", "opus"])
+
+        await queuedPromptGate.release()
+        try await waitUntil {
+            activePromptCompleted == true
+                && queuedPromptCompleted == true
+                && session.queue.isEmpty
+                && session.transcript.streamingState == .idle
+        }
+    }
+
+    @Test("local queue mutations release later model picks", arguments: ["edit", "remove", "clear"])
+    func localQueueMutationsReleaseLaterModelPicks(_ mutation: String) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        let activePromptGate = PromptGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [.init(id: "plan", name: "Plan")],
+                currentModel: "sonnet",
+                currentMode: "plan",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { request in
+            let params = try #require(request.params as? ACPSessionSetModelParams)
+            if params.modelId == "haiku" {
+                await modelGate.enterAndWait()
+            }
+            return Data("{}".utf8)
+        }
+        client.scriptAsync(method: "session/prompt") { _ in
+            await activePromptGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        var activePromptCompleted: Bool?
+        #expect(manager.submit(
+            sessionId: session.id,
+            text: "active turn",
+            attachments: [],
+            intent: .auto
+        ) { activePromptCompleted = $0 })
+        try await waitUntilAsync { await activePromptGate.hasEntered }
+
+        let firstSelection = manager.enqueueModelSelection(for: session.id, modelId: "haiku")
+        try await waitUntilAsync { await modelGate.hasEntered }
+        var queuedPromptCompleted: Bool?
+        #expect(manager.submit(
+            sessionId: session.id,
+            text: "remove this queued prompt",
+            attachments: [],
+            intent: .auto
+        ) { queuedPromptCompleted = $0 })
+        let laterSelection = manager.enqueueModelSelection(for: session.id, modelId: "opus")
+
+        await modelGate.release()
+        await firstSelection.value
+        try await waitUntil { session.queue.count == 1 && queuedPromptCompleted == true }
+        let queuedItemId = try #require(session.queue.first?.id)
+        if mutation == "edit" {
+            await manager.queueEditIntoComposer(for: session.id, itemId: queuedItemId)
+        } else if mutation == "remove" {
+            await manager.queueRemove(for: session.id, itemId: queuedItemId)
+        } else {
+            await manager.queueClear(for: session.id)
+        }
+        await laterSelection.value
+
+        #expect(session.queue.isEmpty)
+        if mutation == "edit" {
+            #expect(session.composerDraft.segments == [.text("remove this queued prompt")])
+        }
+        #expect(client.sent.filter {
+            $0.method == "session/prompt"
+        }.count == 1)
+        #expect(client.sent.compactMap {
+            ($0.params as? ACPSessionSetModelParams)?.modelId
+        } == ["haiku", "opus"])
+
+        await activePromptGate.release()
+        try await waitUntil { activePromptCompleted == true && session.transcript.streamingState == .idle }
+    }
+
+    @Test("detaching cancels a prompt behind model selection")
+    func detachingCancelsPromptBehindModelSelection() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                ],
+                availableModes: [.init(id: "plan", name: "Plan")],
+                currentModel: "sonnet",
+                currentMode: "plan",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { request in
+            let params = try #require(request.params as? ACPSessionSetModelParams)
+            if params.modelId == "haiku" {
+                await modelGate.enterAndWait()
+            }
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        manager.retainSession(id: session.id)
+        defer { manager.releaseSession(id: session.id) }
+
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        let selection = manager.enqueueModelSelection(for: session.id, modelId: "haiku")
+        try await waitUntilAsync { await modelGate.hasEntered }
+
+        var promptCompleted: Bool?
+        let accepted = manager.submit(
+            sessionId: session.id,
+            text: "do not send after detach",
+            attachments: [],
+            intent: .auto
+        ) { succeeded in
+            promptCompleted = succeeded
+        }
+        #expect(accepted)
+
+        await manager.detach(sessionId: session.id)
+        await modelGate.release()
+        await selection.value
+        try await waitUntil { promptCompleted != nil }
+
+        #expect(promptCompleted == false)
+        #expect(!client.sent.contains { $0.method == "session/prompt" })
+        #expect(session.agentState == .idle)
+    }
+
+    @Test("losing writer lease cancels a prompt behind model selection")
+    func losingWriterLeaseCancelsPromptBehindModelSelection() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                ],
+                availableModes: [.init(id: "plan", name: "Plan")],
+                currentModel: "sonnet",
+                currentMode: "plan",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { request in
+            let params = try #require(request.params as? ACPSessionSetModelParams)
+            if params.modelId == "haiku" {
+                await modelGate.enterAndWait()
+            }
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        let selection = manager.enqueueModelSelection(for: session.id, modelId: "haiku")
+        try await waitUntilAsync { await modelGate.hasEntered }
+
+        var promptCompleted: Bool?
+        let accepted = manager.submit(
+            sessionId: session.id,
+            text: "do not send after losing the lease",
+            attachments: [],
+            intent: .auto
+        ) { succeeded in
+            promptCompleted = succeeded
+        }
+        #expect(accepted)
+
+        try store.seizeLease(
+            sessionId: session.id,
+            instanceId: "OTHER",
+            pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970)
+        )
+        await modelGate.release()
+        await selection.value
+        try await waitUntil { promptCompleted != nil }
+
+        #expect(promptCompleted == false)
+        #expect(!client.sent.contains { $0.method == "session/prompt" })
+    }
+
     @Test("reopened session reapplies persisted mode and config options after load")
     func reopenedSessionReappliesPersistedConfiguration() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -1918,6 +2820,80 @@ struct ACPSessionManagerAttachRestoreTests {
         try await waitUntil {
             client.sent.map(\.method) == ["initialize", "session/load", "session/set_model", "session/prompt"]
         }
+    }
+
+    @Test("fresh attach serializes model edits before flushing queued prompts")
+    func freshAttachSerializesModelEditsBeforeFlushingQueuedPrompts() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: nil,
+            agentId: "codex",
+            currentModel: nil
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        let modelRequestCounter = PromptCounter()
+        scriptInitialize(client)
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                ],
+                availableModes: [],
+                currentModel: "opus",
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { _ in
+            if await modelRequestCounter.next() == 1 {
+                await modelGate.enterAndWait()
+            }
+            return Data("{}".utf8)
+        }
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.setModel(for: session.id, modelId: "sonnet")
+        session.enqueue(blocks: [.text("queued prompt")])
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: true)
+        }
+
+        try await waitUntilAsync { await modelGate.hasEntered }
+        await manager.setModel(for: session.id, modelId: "haiku")
+        #expect(client.sent.filter { $0.method == "session/set_model" }.count == 1)
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+        await modelGate.release()
+        await attachTask.value
+        try await waitUntil {
+            client.sent.map(\.method) == [
+                "initialize",
+                "session/new",
+                "session/set_model",
+                "session/set_model",
+                "session/prompt",
+            ]
+        }
+        await manager.flushAllPersistence()
+
+        #expect(client.sent.map(\.method) == [
+            "initialize",
+            "session/new",
+            "session/set_model",
+            "session/set_model",
+            "session/prompt",
+        ])
+        let modelParams = try client.sent
+            .filter { $0.method == "session/set_model" }
+            .map { try #require($0.params as? ACPSessionSetModelParams) }
+        #expect(modelParams.map(\.modelId) == ["sonnet", "haiku"])
+        #expect(session.currentModel == "haiku")
+        #expect(try store.loadSession(id: "local")?.currentModel == "haiku")
     }
 
     @Test("reopened session stays detached when closed during model restoration")
@@ -3536,13 +4512,15 @@ struct ACPSessionManagerAttachRestoreTests {
         store: ACPSessionStore,
         client: ACPMockClient,
         mcpProjectContextProvider: ACPSessionManager.MCPProjectContextProvider? = nil,
-        onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil
+        onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
+        onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil
     ) -> ACPSessionManager {
         ACPSessionManager(
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
             onQueueChanged: onQueueChanged,
+            onCheckpointCapture: onCheckpointCapture,
             setupEvaluator: { _ in .ready },
             connectionFactory: { _, _, _ in ACPConnection(client: client) },
             mcpProjectContextProvider: mcpProjectContextProvider
@@ -3633,6 +4611,13 @@ struct ACPSessionManagerAttachRestoreTests {
         func next() -> Int {
             count += 1
             return count
+        }
+    }
+    private actor ModelModeSelectionRecorder {
+        private(set) var values: [String] = []
+
+        func append(_ value: String) {
+            values.append(value)
         }
     }
 

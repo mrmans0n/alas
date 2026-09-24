@@ -1089,48 +1089,21 @@ struct ACPComposer: View {
         return prefix
     }
 
-    /// Dispatch a chip selection to the right RPC based on where the spec
-    /// was sourced from. The composer doesn't need to know about agent
-    /// differences — `ChipSpec.source` carries the dispatch info.
+    /// Route chip selections through manager-owned optimistic persistence and
+    /// request ordering.
     private func apply(spec: ChipSpec, selectedId: String) {
-        if case .configOption(let id) = spec.source {
+        let sessionId = session.id
+        switch spec.source {
+        case .mode:
+            manager.enqueueModeSelection(for: sessionId, modeId: selectedId)
+        case .model:
+            manager.enqueueModelSelection(for: sessionId, modelId: selectedId)
+        case .configOption(let id):
             manager.setConfigOption(
-                for: session.id,
+                for: sessionId,
                 configId: id,
                 value: .string(selectedId)
             )
-            return
-        }
-
-        let sid = session.id
-        let remoteId = session.remoteSessionId ?? sid
-        switch spec.source {
-        case .mode:
-            session.currentMode = selectedId
-        case .model:
-            session.currentModel = selectedId
-        case .configOption:
-            return
-        }
-        manager.persist(session)
-
-        Task { @MainActor in
-            guard let runner = manager.runners[sid] else {
-                switch spec.source {
-                case .mode: manager.pendingMode[sid] = selectedId
-                case .model: manager.pendingModel[sid] = selectedId
-                case .configOption: break
-                }
-                return
-            }
-            switch spec.source {
-            case .mode:
-                try? await runner.connection.setMode(sessionId: remoteId, modeId: selectedId)
-            case .model:
-                try? await runner.connection.setModel(sessionId: remoteId, modelId: selectedId)
-            case .configOption:
-                break
-            }
         }
     }
 

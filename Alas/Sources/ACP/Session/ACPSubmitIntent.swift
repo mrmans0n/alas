@@ -3,7 +3,7 @@ import Foundation
 enum ACPSubmitIntent: Equatable { case auto, steer, schedule(Date) }
 
 enum ACPSubmitRoute: Equatable {
-    /// State is idle AND queue is empty — send the prompt directly.
+    /// Session is idle, queue-empty, and has no active prompt.
     case sendNow
     /// State is busy OR queue is already non-empty — append to the queue.
     /// Routing the second case through the queue (not directly) keeps the
@@ -18,12 +18,15 @@ enum ACPSubmitRoute: Equatable {
     /// Empty composer — nothing to send. Never cancels a turn.
     case noOp
 
-    static func resolve(intent: ACPSubmitIntent,
-                        state: ACPSession.StreamingState,
-                        queueEmpty: Bool,
-                        blocksEmpty: Bool,
-                        hasPendingInput: Bool = false,
-                        inFlightSteer: Bool = false) -> ACPSubmitRoute
+    static func resolve(
+        intent: ACPSubmitIntent,
+        state: ACPSession.StreamingState,
+        queueEmpty: Bool,
+        blocksEmpty: Bool,
+        hasPendingInput: Bool = false,
+        inFlightSteer: Bool = false,
+        hasActivePrompt: Bool = false
+    ) -> ACPSubmitRoute
     {
         if blocksEmpty { return .noOp }
         // While a steer is mid-flight, `userCancel` has already flipped
@@ -33,7 +36,7 @@ enum ACPSubmitRoute: Equatable {
         // whatever the user typed during it drains afterwards instead of
         // racing the redirect.
         if inFlightSteer { return .enqueue }
-        let canSendNow = state == .idle && queueEmpty && !hasPendingInput
+        let canSendNow = state == .idle && queueEmpty && !hasPendingInput && !hasActivePrompt
         switch intent {
         case .auto:
             return canSendNow ? .sendNow : .enqueue

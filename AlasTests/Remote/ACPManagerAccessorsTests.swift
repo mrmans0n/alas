@@ -88,17 +88,14 @@ struct ACPManagerAccessorsTests {
         #expect(s.autoRunEnabled == true)
     }
 
-    @Test func setModelOptimisticallyUpdatesAndRequiresWriter() async throws {
+    @Test func setModelAndModeRetainPreAttachPicks() async throws {
         let mgr = try makeManager()
-        let s = mgr.createSession(agentId: "claude")
-        await mgr.setModel(for: s.id, modelId: "opus")
-        #expect(s.currentModel == nil)              // not writer → ignored
-        await mgr.flushPersistence()
-        #expect(await mgr.acquireWriterLease(sessionId: s.id))
-        await mgr.setModel(for: s.id, modelId: "opus")
-        #expect(s.currentModel == "opus")           // optimistic update even with no runner
-        await mgr.setMode(for: s.id, modeId: "ask")
-        #expect(s.currentMode == "ask")
+        let session = mgr.createSession(agentId: "claude")
+
+        await mgr.setModel(for: session.id, modelId: "opus")
+        #expect(session.currentModel == "opus")
+        await mgr.setMode(for: session.id, modeId: "ask")
+        #expect(session.currentMode == "ask")
     }
 
     @Test func sendPromptRejectsFormerWriterAfterTakeover() async throws {

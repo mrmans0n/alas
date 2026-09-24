@@ -2,10 +2,28 @@ import Foundation
 import Testing
 @testable import Alas
 
+private final class DispatchRegistrationFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var isRegistered: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func markRegistered() {
+        lock.lock()
+        value = true
+        lock.unlock()
+    }
+}
+
 @MainActor
 @Suite("ACPSessionRunner queue routing")
 struct ACPSessionRunnerQueueTests {
     private func mkRunner(
+        validateLease: (() async -> Bool)? = nil,
         onPromptWorkChanged: (() -> Void)? = nil
     ) throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-q-\(UUID()).sqlite")
@@ -23,7 +41,8 @@ struct ACPSessionRunnerQueueTests {
             store: store,
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
-            onPromptWorkChanged: onPromptWorkChanged)
+            onPromptWorkChanged: onPromptWorkChanged,
+            validateLease: validateLease)
         return (runner, mock, session, store)
     }
 
@@ -48,6 +67,47 @@ struct ACPSessionRunnerQueueTests {
         try await Task.sleep(nanoseconds: 100_000_000)
         #expect(mock.sent.contains { $0.method == "session/prompt" })
         #expect(session.queue.isEmpty)
+    }
+
+    @Test("a prompt awaiting lease validation queues the next prompt")
+    func promptAwaitingLeaseValidationQueuesNextPrompt() async throws {
+        let leaseGate = LeaseValidationGate()
+        let (runner, mock, session, store) = try mkRunner(
+            validateLease: { await leaseGate.validate() }
+        )
+        let probe = StrictSingleFlightPromptProbe()
+        mock.scriptAsync(method: "session/prompt") { _ in try await probe.send() }
+
+        let dispatchFlag = DispatchRegistrationFlag()
+        runner.sendRegistered(
+            text: "first",
+            attachments: [],
+            intent: .auto,
+            onDispatchRegistered: { dispatchFlag.markRegistered() }
+        )
+        await leaseGate.waitUntilEntered()
+        #expect(session.transcript.streamingState == .idle)
+        #expect(!dispatchFlag.isRegistered)
+
+        runner.send(blocks: [.text("second")], intent: .auto)
+        #expect(session.queue.map(\.blocks) == [[.text("second")]])
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+
+        await leaseGate.release()
+        await probe.waitUntilFirstStarted()
+        #expect(dispatchFlag.isRegistered)
+        #expect(session.transcript.streamingState == .sending)
+        #expect(await probe.callCount == 1)
+        await probe.releaseFirst()
+        for _ in 0 ..< 100 {
+            if await probe.callCount == 2 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(await probe.callCount == 2)
+        #expect(session.queue.isEmpty)
+        await runner.flushPersistence()
+        #expect(try store.loadQueue(sessionId: "s").isEmpty)
     }
 
     @Test("scheduled intent persists without sending before its deadline")
@@ -336,9 +396,9 @@ struct ACPSessionRunnerQueueTests {
     @Test("queued prompt completion notifies prompt work changed")
     func queuedPromptCompletionNotifiesPromptWorkChanged() async throws {
         var changeCount = 0
-        let (runner, mock, session, _) = try mkRunner {
+        let (runner, mock, session, _) = try mkRunner(onPromptWorkChanged: {
             changeCount += 1
-        }
+        })
         mock.script(method: "session/prompt") { _ in Data("null".utf8) }
         session.enqueue(blocks: [.text("queued")])
 
@@ -1004,6 +1064,28 @@ private actor QueueTestGate {
         isOpen = true
         waiters.forEach { $0.resume() }
         waiters.removeAll()
+    }
+}
+
+private actor LeaseValidationGate {
+    private let entered = QueueTestGate()
+    private let releaseGate = QueueTestGate()
+    private var blocksFirstValidation = true
+
+    func validate() async -> Bool {
+        guard blocksFirstValidation else { return true }
+        blocksFirstValidation = false
+        await entered.open()
+        await releaseGate.wait()
+        return true
+    }
+
+    func waitUntilEntered() async {
+        await entered.wait()
+    }
+
+    func release() async {
+        await releaseGate.open()
     }
 }
 

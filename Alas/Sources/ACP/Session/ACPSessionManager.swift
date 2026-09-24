@@ -422,6 +422,7 @@ final class ACPSessionManager: ObservableObject {
     func queueRemove(for id: ACPSession.ID, itemId: UUID) async {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         guard session.removeFromQueue(id: itemId) else { return }
+        resolveQueuedPromptDispatchWaiter(sessionId: id, itemId: itemId)
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
         onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
@@ -463,15 +464,32 @@ final class ACPSessionManager: ObservableObject {
         }
         guard !hasUnrepresentableSegment else { return nil }
         guard let draft = session.takeForEditing(id: itemId) else { return nil }
+        resolveQueuedPromptDispatchWaiter(sessionId: id, itemId: itemId)
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
         onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
         return RemoteQueueProjection.plainText(from: draft)
     }
 
+    /// Return a pending queued prompt to the local composer without losing
+    /// its structured draft. The waiter is released so later model/mode
+    /// selections cannot remain blocked by an item that will not dispatch.
+    func queueEditIntoComposer(for id: ACPSession.ID, itemId: UUID) async {
+        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
+        guard let draft = session.takeForEditing(id: itemId) else { return }
+        persistComposerDraft(session.composerDraft.appending(draft), for: session)
+        resolveQueuedPromptDispatchWaiter(sessionId: id, itemId: itemId)
+        persistQueue(for: session)
+        runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
+    }
+
     func queueClear(for id: ACPSession.ID) async {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
-        session.clearPendingQueue()
+        let removedItems = session.clearPendingQueue()
+        for item in removedItems {
+            resolveQueuedPromptDispatchWaiter(sessionId: id, itemId: item.id)
+        }
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
         onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
@@ -509,6 +527,29 @@ final class ACPSessionManager: ObservableObject {
     }
     private var deferredConfigOptionUpdates: [ACPSession.ID: [DeferredConfigOptionUpdate]] = [:]
     private var activeDeferredConfigOptionUpdates: [ACPSession.ID: [String: DeferredConfigOptionUpdate]] = [:]
+    private enum DeferredModelModeUpdate {
+        case model(String)
+        case mode(String)
+    }
+    private var deferredModelModeUpdates: [ACPSession.ID: [DeferredModelModeUpdate]] = [:]
+
+    private struct ModelModeRestorationGate {
+        let token: UUID
+        var inFlightEdits = 0
+        var waiters: [CheckedContinuation<Void, Never>] = []
+    }
+    private var modelModeRestorationGates: [ACPSession.ID: ModelModeRestorationGate] = [:]
+    private enum ModelModeSelection {
+        case model(String)
+        case mode(String)
+    }
+    private struct ModelModeSelectionQueueTail {
+        let token: UUID
+        let task: Task<Void, Never>
+    }
+    private var modelModeSelectionTails: [ACPSession.ID: ModelModeSelectionQueueTail] = [:]
+    private var modelModeSelectionGenerations: [ACPSession.ID: UUID] = [:]
+    private var queuedPromptDispatchWaiters: [ACPSession.ID: [UUID: @Sendable () -> Void]] = [:]
 
     /// Toggle auto-run for a remotely-driven session. Writer-gated; persists.
     func setAutoRun(for id: ACPSession.ID, enabled: Bool) async {
@@ -517,28 +558,178 @@ final class ACPSessionManager: ObservableObject {
         persist(session)
     }
 
-    /// Select the agent model. Optimistically updates + persists, then issues the
-    /// agent RPC on the live runner — or records it pending until `attach`
-    /// registers one (post-takeover window). Writer-gated.
+    /// Records a model chip pick synchronously, then applies it in per-session order.
+    @discardableResult
+    func enqueueModelSelection(for id: ACPSession.ID, modelId: String) -> Task<Void, Never> {
+        enqueueModelModeSelection(for: id, selection: .model(modelId))
+    }
+
+    /// Records a mode chip pick synchronously, then applies it in per-session order.
+    @discardableResult
+    func enqueueModeSelection(for id: ACPSession.ID, modeId: String) -> Task<Void, Never> {
+        enqueueModelModeSelection(for: id, selection: .mode(modeId))
+    }
+
+    private func enqueueModelModeSelection(
+        for id: ACPSession.ID,
+        selection: ModelModeSelection
+    ) -> Task<Void, Never> {
+        let generation = modelModeSelectionGenerations[id] ?? UUID()
+        modelModeSelectionGenerations[id] = generation
+        let previousTask = modelModeSelectionTails[id]?.task
+        let token = UUID()
+        let task = Task { @MainActor [weak self] in
+            await previousTask?.value
+            guard let self,
+                  self.modelModeSelectionGenerations[id] == generation
+            else { return }
+            switch selection {
+            case .model(let modelId):
+                await self.applyModelSelection(
+                    for: id,
+                    modelId: modelId,
+                    queueGeneration: generation
+                )
+            case .mode(let modeId):
+                await self.applyModeSelection(
+                    for: id,
+                    modeId: modeId,
+                    queueGeneration: generation
+                )
+            }
+            guard self.modelModeSelectionTails[id]?.token == token else { return }
+            self.modelModeSelectionTails[id] = nil
+            self.modelModeSelectionGenerations[id] = nil
+        }
+        modelModeSelectionTails[id] = ModelModeSelectionQueueTail(token: token, task: task)
+        return task
+    }
+
+    /// Keeps a prompt dispatch ordered with same-session chip selections.
+    private func enqueueAfterModelModeSelections(
+        for id: ACPSession.ID,
+        onInvalidated: @escaping @MainActor () -> Void,
+        operation: @escaping @MainActor () async -> Void
+    ) {
+        let generation = modelModeSelectionGenerations[id] ?? UUID()
+        modelModeSelectionGenerations[id] = generation
+        let previousTask = modelModeSelectionTails[id]?.task
+        let token = UUID()
+        let task = Task { @MainActor [weak self] in
+            await previousTask?.value
+            guard let self,
+                  self.modelModeSelectionGenerations[id] == generation
+            else {
+                onInvalidated()
+                return
+            }
+            await operation()
+            guard self.modelModeSelectionTails[id]?.token == token
+            else { return }
+            self.modelModeSelectionTails[id] = nil
+            self.modelModeSelectionGenerations[id] = nil
+        }
+        modelModeSelectionTails[id] = ModelModeSelectionQueueTail(token: token, task: task)
+    }
+
+    /// Selects a model optimistically and waits for its ordered application.
     func setModel(for id: ACPSession.ID, modelId: String) async {
-        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
+        await enqueueModelSelection(for: id, modelId: modelId).value
+    }
+
+    private func applyModelSelection(
+        for id: ACPSession.ID,
+        modelId: String,
+        queueGeneration: UUID
+    ) async {
+        guard let session = sessions[id] else { return }
+        if runners[id] == nil {
+            let awaitingLeaseClaim = observedLeases[id] == nil
+                && isAwaitingInitialLeaseObservation(sessionId: id)
+            guard !isMirror(sessionId: id) || awaitingLeaseClaim else { return }
+            session.currentModel = modelId
+            pendingModel[id] = modelId
+            return
+        }
+        var restorationGateToken = beginModelModeRestorationEdit(for: id)
+        defer {
+            if let restorationGateToken {
+                finishModelModeRestorationEdit(for: id, gateToken: restorationGateToken)
+            }
+        }
+        guard await confirmedWriterLease(for: id),
+              sessions[id] === session,
+              modelModeSelectionGenerations[id] == queueGeneration
+        else { return }
+        let activeRestoreGateToken = modelModeRestorationGates[id]?.token
+        if activeRestoreGateToken != restorationGateToken {
+            if let restorationGateToken {
+                finishModelModeRestorationEdit(for: id, gateToken: restorationGateToken)
+            }
+            restorationGateToken = beginModelModeRestorationEdit(for: id)
+        }
         session.currentModel = modelId
         persist(session)
         guard let runner = runners[id] else {
             pendingModel[id] = modelId
             return
         }
+        guard !session.isRestoringPersistedConfigOptions,
+              modelModeRestorationGates[id] == nil
+        else {
+            deferredModelModeUpdates[id, default: []].append(.model(modelId))
+            return
+        }
         let remoteId = session.remoteSessionId ?? id
         try? await runner.connection.setModel(sessionId: remoteId, modelId: modelId)
     }
 
-    /// Select the agent mode. Same semantics as `setModel`.
+    /// Selects a mode optimistically and waits for its ordered application.
     func setMode(for id: ACPSession.ID, modeId: String) async {
-        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
+        await enqueueModeSelection(for: id, modeId: modeId).value
+    }
+
+    private func applyModeSelection(
+        for id: ACPSession.ID,
+        modeId: String,
+        queueGeneration: UUID
+    ) async {
+        guard let session = sessions[id] else { return }
+        if runners[id] == nil {
+            let awaitingLeaseClaim = observedLeases[id] == nil
+                && isAwaitingInitialLeaseObservation(sessionId: id)
+            guard !isMirror(sessionId: id) || awaitingLeaseClaim else { return }
+            session.currentMode = modeId
+            pendingMode[id] = modeId
+            return
+        }
+        var restorationGateToken = beginModelModeRestorationEdit(for: id)
+        defer {
+            if let restorationGateToken {
+                finishModelModeRestorationEdit(for: id, gateToken: restorationGateToken)
+            }
+        }
+        guard await confirmedWriterLease(for: id),
+              sessions[id] === session,
+              modelModeSelectionGenerations[id] == queueGeneration
+        else { return }
+        let activeRestoreGateToken = modelModeRestorationGates[id]?.token
+        if activeRestoreGateToken != restorationGateToken {
+            if let restorationGateToken {
+                finishModelModeRestorationEdit(for: id, gateToken: restorationGateToken)
+            }
+            restorationGateToken = beginModelModeRestorationEdit(for: id)
+        }
         session.currentMode = modeId
         persist(session)
         guard let runner = runners[id] else {
             pendingMode[id] = modeId
+            return
+        }
+        guard !session.isRestoringPersistedConfigOptions,
+              modelModeRestorationGates[id] == nil
+        else {
+            deferredModelModeUpdates[id, default: []].append(.mode(modeId))
             return
         }
         let remoteId = session.remoteSessionId ?? id
@@ -819,6 +1010,72 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
+    private func flushDeferredModelModeUpdates(
+        for session: ACPSession,
+        using runner: ACPSessionRunner
+    ) async {
+        let sessionId = session.id
+        while var queuedUpdates = deferredModelModeUpdates[sessionId],
+              !queuedUpdates.isEmpty {
+            let update = queuedUpdates.removeFirst()
+            deferredModelModeUpdates[sessionId] = queuedUpdates.isEmpty ? nil : queuedUpdates
+            let remoteId = session.remoteSessionId ?? sessionId
+            switch update {
+            case .model(let modelId):
+                try? await runner.connection.setModel(sessionId: remoteId, modelId: modelId)
+            case .mode(let modeId):
+                try? await runner.connection.setMode(sessionId: remoteId, modeId: modeId)
+            }
+            guard sessions[sessionId] === session, runners[sessionId] === runner else {
+                deferredModelModeUpdates[sessionId] = nil
+                return
+            }
+        }
+    }
+
+    private func beginModelModeRestorationEdit(for sessionId: ACPSession.ID) -> UUID? {
+        guard var gate = modelModeRestorationGates[sessionId] else { return nil }
+        gate.inFlightEdits += 1
+        modelModeRestorationGates[sessionId] = gate
+        return gate.token
+    }
+
+    private func finishModelModeRestorationEdit(
+        for sessionId: ACPSession.ID,
+        gateToken: UUID
+    ) {
+        guard var gate = modelModeRestorationGates[sessionId],
+              gate.token == gateToken
+        else { return }
+        gate.inFlightEdits -= 1
+        guard gate.inFlightEdits == 0 else {
+            modelModeRestorationGates[sessionId] = gate
+            return
+        }
+        let waiters = gate.waiters
+        gate.waiters = []
+        modelModeRestorationGates[sessionId] = gate
+        waiters.forEach { $0.resume() }
+    }
+
+    private func waitForModelModeRestorationEdits(for sessionId: ACPSession.ID) async {
+        guard let gate = modelModeRestorationGates[sessionId],
+              gate.inFlightEdits > 0
+        else { return }
+        let gateToken = gate.token
+        await withCheckedContinuation { continuation in
+            guard var currentGate = modelModeRestorationGates[sessionId],
+                  currentGate.token == gateToken,
+                  currentGate.inFlightEdits > 0
+            else {
+                continuation.resume()
+                return
+            }
+            currentGate.waiters.append(continuation)
+            modelModeRestorationGates[sessionId] = currentGate
+        }
+    }
+
     private func rollbackConfigOptionSelection(
         session: ACPSession,
         configId: String,
@@ -860,6 +1117,34 @@ final class ACPSessionManager: ObservableObject {
     private func discardDeferredConfigOptionUpdates(for sessionId: ACPSession.ID) {
         deferredConfigOptionUpdates[sessionId] = nil
         activeDeferredConfigOptionUpdates[sessionId] = nil
+    }
+
+    private func registerQueuedPromptDispatchWaiter(
+        sessionId: ACPSession.ID,
+        itemId: UUID,
+        waiter: @escaping @Sendable () -> Void
+    ) {
+        queuedPromptDispatchWaiters[sessionId, default: [:]][itemId] = waiter
+    }
+
+    private func resolveQueuedPromptDispatchWaiter(sessionId: ACPSession.ID, itemId: UUID) {
+        guard var waiters = queuedPromptDispatchWaiters[sessionId],
+              let waiter = waiters.removeValue(forKey: itemId)
+        else { return }
+        queuedPromptDispatchWaiters[sessionId] = waiters.isEmpty ? nil : waiters
+        waiter()
+    }
+
+    private func resolveQueuedPromptDispatchWaiters(for sessionId: ACPSession.ID) {
+        let waiters = queuedPromptDispatchWaiters.removeValue(forKey: sessionId)
+        waiters?.values.forEach { $0() }
+    }
+
+    private func discardDeferredModelModeUpdates(for sessionId: ACPSession.ID) {
+        deferredModelModeUpdates[sessionId] = nil
+        modelModeSelectionTails[sessionId] = nil
+        modelModeSelectionGenerations[sessionId] = nil
+        resolveQueuedPromptDispatchWaiters(for: sessionId)
     }
 
     /// Sessions for which THIS instance holds the writer lease (backing store).
@@ -1653,6 +1938,7 @@ final class ACPSessionManager: ObservableObject {
         pendingMode.removeValue(forKey: id)
         pendingConfigOptionValues.removeValue(forKey: id)
         discardDeferredConfigOptionUpdates(for: id)
+        discardDeferredModelModeUpdates(for: id)
     }
 
     func deleteSession(id: ACPSession.ID) async throws {
@@ -1714,6 +2000,7 @@ final class ACPSessionManager: ObservableObject {
         pendingMode.removeValue(forKey: id)
         pendingConfigOptionValues.removeValue(forKey: id)
         discardDeferredConfigOptionUpdates(for: id)
+        discardDeferredModelModeUpdates(for: id)
 
         pendingQueueForceSends.removeValue(forKey: id)
         persistedRows.removeValue(forKey: id)
@@ -1881,9 +2168,9 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
-    /// Persist a session-level change (model/mode/title/autoRun/config options) and bump updated_at.
-    /// No-ops only when another live instance owns the writer lease (this pane
-    /// is a mirror); the writer and not-yet-leased cases persist normally.
+    /// Persist session-level changes and bump updated_at.
+    /// Pending model/mode picks remain memory-only until attach acquires
+    /// the writer lease.
     func persist(_ s: ACPSession, preserveTitle: Bool = true) {
         guard !isMirror(sessionId: s.id) else { return }
         guard var row = persistedRows[s.id] else { return }
@@ -1892,8 +2179,12 @@ final class ACPSessionManager: ObservableObject {
             row.title = s.title
             row.titleSource = s.titleSource
         }
-        row.currentModel = s.currentModel
-        row.currentMode = s.currentMode
+        if pendingModel[s.id] == nil {
+            row.currentModel = s.currentModel
+        }
+        if pendingMode[s.id] == nil {
+            row.currentMode = s.currentMode
+        }
         if s.hasReceivedConfigOptions {
             if s.isRestoringPersistedConfigOptions {
                 for (configId, value) in pendingConfigOptionValues[s.id] ?? [:] {
@@ -3319,6 +3610,7 @@ extension ACPSessionManager {
         pendingMode.removeValue(forKey: sessionId)
         pendingConfigOptionValues.removeValue(forKey: sessionId)
         discardDeferredConfigOptionUpdates(for: sessionId)
+        discardDeferredModelModeUpdates(for: sessionId)
 
         if let runner = runners.removeValue(forKey: sessionId) {
             runner.invalidateActivePrompt()
@@ -3837,6 +4129,7 @@ extension ACPSessionManager {
         }
         defer {
             session.isRestoringPersistedConfigOptions = false
+            modelModeRestorationGates[sessionId] = nil
             if session.firstRunConnectingPhase != nil {
                 session.firstRunConnectingPhase = nil
             }
@@ -3850,6 +4143,14 @@ extension ACPSessionManager {
         // Only the lease holder runs a live agent + writes. If another
         // live instance owns this session, stay a read-only mirror.
         guard await acquireWriterLease(sessionId: sessionId) else {
+            let discardedModelSelection = pendingModel.removeValue(forKey: sessionId) != nil
+            let discardedModeSelection = pendingMode.removeValue(forKey: sessionId) != nil
+            if discardedModelSelection {
+                session.currentModel = persistedRows[sessionId]?.currentModel
+            }
+            if discardedModeSelection {
+                session.currentMode = persistedRows[sessionId]?.currentMode
+            }
             disposingAttachments.remove(sessionId)
             session.agentState = .idle
             session.clearConnectionRecovery()
@@ -3880,6 +4181,9 @@ extension ACPSessionManager {
         defer {
             attachingSessions.remove(sessionId)
             disposingAttachments.remove(sessionId)
+            if !attachSucceeded || session.agentState != .ready {
+                discardDeferredModelModeUpdates(for: sessionId)
+            }
             if !attachSucceeded {
                 stopHeartbeat(sessionId: sessionId)
                 stopWriterWatch(sessionId: sessionId)
@@ -4376,6 +4680,19 @@ extension ACPSessionManager {
                                           },
                                           onPromptWorkChanged: { [weak self] in
                                               self?.onQueueChanged?(sessionId, self?.retainedCleanupHasActivePromptWork(for: sessionId) == true)
+                                          },
+                                          onQueuedPromptDispatchRegistration: { [weak self] itemId in
+                                              guard let self,
+                                                    self.queuedPromptDispatchWaiters[sessionId]?[itemId] != nil
+                                              else { return nil }
+                                              return {
+                                                  Task { @MainActor [weak self] in
+                                                      self?.resolveQueuedPromptDispatchWaiter(
+                                                        sessionId: sessionId,
+                                                        itemId: itemId
+                                                      )
+                                                  }
+                                              }
                                           },
                                           onSessionTitleUpdated: { [weak self] title in
                                               self?.refreshRecent()
@@ -4876,6 +5193,7 @@ extension ACPSessionManager {
             if attachingConnections[sessionId]?.connection === connection {
                 attachingConnections[sessionId] = nil
             }
+            modelModeRestorationGates[sessionId] = ModelModeRestorationGate(token: UUID())
             runners[sessionId] = runner
             keepElicitationCoordinator = true
             attachSucceeded = true
@@ -4997,33 +5315,44 @@ extension ACPSessionManager {
             session.isRestoringPersistedConfigOptions = false
             persist(session)
             guard session.agentState == .spawning else { return }
-            let attachmentStillCurrent: Bool
-            if isDisposed || sessions[sessionId] !== session || runners[sessionId] !== runner {
-                attachmentStillCurrent = false
-            } else {
-                attachmentStillCurrent = await confirmedWriterLease(for: sessionId)
-                    && sessions[sessionId] === session
-                    && runners[sessionId] === runner
-                    && !isDisposed
-            }
-            guard attachmentStillCurrent else {
-                attachSucceeded = false
-                if runners[sessionId] === runner {
-                    runners[sessionId] = nil
-                    runner.stop()
-                    await runner.flushPersistence()
-                    if isDisposed {
-                        await runner.connection.shutdown()
-                    } else {
-                        await runner.connection.detach()
-                        session.agentState = .idle
-                        session.clearConnectionRecovery()
-                        beginMirroring(sessionId: sessionId)
-                    }
-                    await releaseWriterLease(sessionId: sessionId)
+            while true {
+                await waitForModelModeRestorationEdits(for: sessionId)
+                guard session.agentState == .spawning else { return }
+                await flushDeferredModelModeUpdates(for: session, using: runner)
+                guard session.agentState == .spawning else { return }
+                let attachmentStillCurrent: Bool
+                if isDisposed || sessions[sessionId] !== session || runners[sessionId] !== runner {
+                    attachmentStillCurrent = false
+                } else {
+                    attachmentStillCurrent = await confirmedWriterLease(for: sessionId)
+                        && sessions[sessionId] === session
+                        && runners[sessionId] === runner
+                        && !isDisposed
                 }
-                return
+                guard attachmentStillCurrent else {
+                    attachSucceeded = false
+                    if runners[sessionId] === runner {
+                        runners[sessionId] = nil
+                        runner.stop()
+                        await runner.flushPersistence()
+                        if isDisposed {
+                            await runner.connection.shutdown()
+                        } else {
+                            await runner.connection.detach()
+                            session.agentState = .idle
+                            session.clearConnectionRecovery()
+                            beginMirroring(sessionId: sessionId)
+                        }
+                        await releaseWriterLease(sessionId: sessionId)
+                    }
+                    return
+                }
+                guard modelModeRestorationGates[sessionId]?.inFlightEdits == 0,
+                      deferredModelModeUpdates[sessionId]?.isEmpty ?? true
+                else { continue }
+                break
             }
+            modelModeRestorationGates[sessionId] = nil
             session.agentState = .ready
             let completedRecovery = session.completeConnectionRecovery()
             scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
@@ -5391,6 +5720,7 @@ extension ACPSessionManager {
         draft: ACPComposerDraft? = nil,
         scheduledAt: Date? = nil,
         into sessionId: ACPSession.ID,
+        onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
         onPersisted: (@MainActor (_ persisted: Bool) -> Void)? = nil
     ) {
         guard let session = sessions[sessionId] else {
@@ -5402,7 +5732,9 @@ extension ACPSessionManager {
         if let scheduledAt {
             scheduledId = session.enqueueScheduled(blocks: blocks, scheduledAt: scheduledAt, draft: draft)
         } else {
-            session.enqueue(blocks: blocks, draft: draft)
+            let queuedPromptId = UUID()
+            session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft)
+            onQueuedPromptEnqueued?(queuedPromptId)
             scheduledId = nil
         }
         let items = session.queue
@@ -5552,7 +5884,7 @@ extension ACPSessionManager {
     /// composer uses it to decide whether to clear or re-persist the draft.
     ///
     /// Branches on `session.agentState`:
-    /// - `.ready`: dispatch via the runner as before.
+    /// - `.ready`: wait for queued model/mode selections, then dispatch via the runner.
     /// - `.spawning`: enqueue only — an `attach` is already in flight and
     ///   the post-attach `flushQueueIfIdle()` will drain the head.
     /// - `.idle` / `.disconnected` / `.failed`: enqueue AND kick `reattach`
@@ -5566,6 +5898,28 @@ extension ACPSessionManager {
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft? = nil,
         onCompleted: @escaping @MainActor (Bool) -> Void
+    ) -> Bool {
+        submit(
+            sessionId: sessionId,
+            text: text,
+            attachments: attachments,
+            intent: intent,
+            draft: draft,
+            waitForModelModeSelections: true,
+            onCompleted: onCompleted
+        )
+    }
+
+    @discardableResult
+    private func submit(
+        sessionId: ACPSession.ID,
+        text: String,
+        attachments: [ACPMessage.Attachment],
+        intent: ACPSubmitIntent,
+        draft: ACPComposerDraft?,
+        waitForModelModeSelections: Bool,
+        onCompleted: @escaping @MainActor (Bool) -> Void,
+        onDispatchRegistered: (@Sendable () -> Void)? = nil
     ) -> Bool {
         guard let session = sessions[sessionId] else { return false }
         if case .needsAuth = session.setupState {
@@ -5592,8 +5946,55 @@ extension ACPSessionManager {
             }
         }
 
+        let onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)?
+        if let waiter = onDispatchRegistered, scheduledAt == nil {
+            onQueuedPromptEnqueued = { [weak self] itemId in
+                guard let self else {
+                    waiter()
+                    return
+                }
+                self.registerQueuedPromptDispatchWaiter(
+                    sessionId: sessionId,
+                    itemId: itemId,
+                    waiter: waiter
+                )
+            }
+        } else {
+            onQueuedPromptEnqueued = nil
+        }
         switch session.agentState {
         case .ready:
+            if waitForModelModeSelections,
+               modelModeSelectionTails[sessionId] != nil {
+                enqueueAfterModelModeSelections(
+                    for: sessionId,
+                    onInvalidated: { onCompleted(false) }
+                ) { [weak self] in
+                    guard let self,
+                          self.sessions[sessionId] === session
+                    else {
+                        onCompleted(false)
+                        return
+                    }
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                        let accepted = self.submit(
+                            sessionId: sessionId,
+                            text: text,
+                            attachments: attachments,
+                            intent: intent,
+                            draft: draft,
+                            waitForModelModeSelections: false,
+                            onCompleted: onCompleted,
+                            onDispatchRegistered: { continuation.resume() }
+                        )
+                        if !accepted {
+                            onCompleted(false)
+                            continuation.resume()
+                        }
+                    }
+                }
+                return true
+            }
             guard let runner = runners[sessionId] else {
                 // State and registry disagree — somehow we lost the runner
                 // without the stream-end branch flipping agentState. Reflect
@@ -5610,8 +6011,10 @@ extension ACPSessionManager {
                     draft: draft,
                     scheduledAt: scheduledAt,
                     into: sessionId,
+                    onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                     onPersisted: onScheduledPersisted
                 )
+                if onQueuedPromptEnqueued == nil { onDispatchRegistered?() }
                 if scheduledAt == nil {
                     Task { @MainActor in onCompleted(true) }
                 }
@@ -5620,9 +6023,15 @@ extension ACPSessionManager {
                 }
                 return true
             }
-            runner.send(text: text, attachments: attachments, intent: intent, draft: draft) { succeeded in
-                onCompleted(succeeded)
-            }
+            runner.sendRegistered(
+                text: text,
+                attachments: attachments,
+                intent: intent,
+                draft: draft,
+                onQueuedPromptEnqueued: onQueuedPromptEnqueued,
+                onDispatchRegistered: { onDispatchRegistered?() },
+                onPromptFinished: { succeeded in onCompleted(succeeded) }
+            )
             return true
 
         case .spawning:
@@ -5634,8 +6043,10 @@ extension ACPSessionManager {
                 draft: draft,
                 scheduledAt: scheduledAt,
                 into: sessionId,
+                onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onPersisted: onScheduledPersisted
             )
+            if onQueuedPromptEnqueued == nil { onDispatchRegistered?() }
             if scheduledAt == nil {
                 Task { @MainActor in onCompleted(true) }
             }
@@ -5653,8 +6064,10 @@ extension ACPSessionManager {
                 draft: draft,
                 scheduledAt: scheduledAt,
                 into: sessionId,
+                onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onPersisted: onScheduledPersisted
             )
+            if onQueuedPromptEnqueued == nil { onDispatchRegistered?() }
             if scheduledAt == nil {
                 Task { @MainActor in onCompleted(true) }
             }
@@ -5847,6 +6260,7 @@ extension ACPSessionManager {
             }
         }
         cancelAutoReconnect(sessionId: sessionId)
+        discardDeferredModelModeUpdates(for: sessionId)
         let session = sessions[sessionId]
         let shouldCloseRemote = closeRemote && session?.agentState != .disconnected
         let remoteSessionId = session?.remoteSessionId
