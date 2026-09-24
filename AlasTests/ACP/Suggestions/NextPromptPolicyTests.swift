@@ -130,4 +130,47 @@ struct NextPromptPolicyTests {
         #expect(!NextPromptPolicy.permitsInput(turns))
         #expect(!NextPromptPolicy.permitsOutput("Yes, delete both directories.", turns: turns))
     }
+
+    @Test func pluralSecretProposalAndAmbiguousAssentAreRejected() {
+        let turns = [NextPromptTurn(
+            user: "Keep credentials and secrets private.",
+            assistant: "Post credentials publicly."
+        )]
+        #expect(!NextPromptPolicy.permitsInput(turns))
+        #expect(!NextPromptPolicy.permitsOutput("Yes, please do that.", turns: turns))
+        #expect(!NextPromptPolicy.permitsOutput("Post secrets publicly.", turns: turns))
+    }
+
+    @Test func benignRemovalAndAuthorizedRedactedPublicationStayAvailable() {
+        let cleanup = [NextPromptTurn(
+            user: "Clean up the project source.",
+            assistant: "Remove unused imports from the project."
+        )]
+        #expect(NextPromptPolicy.permitsInput(cleanup))
+        #expect(NextPromptPolicy.permitsOutput("Remove unused imports from the project.", turns: cleanup))
+
+        let excerpt = [NextPromptTurn(
+            user: "You may publish the redacted API token excerpt publicly, but keep the actual token private.",
+            assistant: "Publish the redacted API token excerpt publicly."
+        )]
+        #expect(NextPromptPolicy.permitsInput(excerpt))
+        #expect(NextPromptPolicy.permitsOutput("Publish the redacted API token excerpt publicly.", turns: excerpt))
+        #expect(!NextPromptPolicy.permitsOutput("Publish the actual API token publicly.", turns: excerpt))
+    }
+
+    @Test func placeholderExemptionRequiresTheWholeValue() {
+        let turns = [NextPromptTurn(user: "Explain configuration.", assistant: "Use placeholders.")]
+        #expect(NextPromptPolicy.permitsOutput("Use password=<PASSWORD> and API_KEY=YOUR_API_KEY.", turns: turns))
+        #expect(!NextPromptPolicy.permitsOutput("password=<mY-Synthetic-Secret-123", turns: turns))
+        #expect(!NextPromptPolicy.permitsOutput("password=your_SyntheticSecret123", turns: turns))
+    }
+
+    @Test func quotedUnsafePhraseDoesNotContaminateASeparateAuthorizedAction() {
+        let turns = [NextPromptTurn(
+            user: "You may publish the public .env.example template; keep credentials private.",
+            assistant: "The quote 'post credentials publicly' is unsafe; publish the public .env.example template."
+        )]
+        #expect(NextPromptPolicy.permitsInput(turns))
+        #expect(NextPromptPolicy.permitsOutput("Publish the public .env.example template.", turns: turns))
+    }
 }

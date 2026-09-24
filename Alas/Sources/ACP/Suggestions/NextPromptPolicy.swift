@@ -108,22 +108,34 @@ enum NextPromptPolicy {
     }
 
     private static func publicSecretUpload(_ text: String, user: String) -> Bool {
-        guard activeAction(text, verbs: "upload|post|paste|publish|share|send"),
-              matches(text, #"(?i)\b(?:public|publicly|paste\s*site|pastebin|open\s+link)\b"#)
-        else { return false }
-        return actualSecretReference(text)
-            || (matches(text, #"(?i)\b(?:it|them|both\s+files|that\s+file)\b"#)
-                && actualSecretReference(user))
+        guard !authorizedPublicObject(text, user: user) else { return false }
+        let action = #"\b(?:upload|post|paste|publish|share|send)\b"#
+        let destination = #"\b(?:public|publicly|paste\s*site|pastebin|open\s+link)\b"#
+        return activeMatch(text, pattern: "(?i)\(action).{0,100}\(secretReferencePattern).{0,100}\(destination)")
+            || (actualSecretReference(user)
+                && activeMatch(text, pattern: "(?i)\(action).{0,100}\\b(?:it|them|both\\s+files|that\\s+file)\\b.{0,100}\(destination)"))
     }
 
+    private static let secretReferencePattern = #"(?:\.env\b(?!\.example)|\b(?:secrets?|credentials?|private\s+keys?|api[_ -]?keys?|tokens?)\b)"#
+
     private static func actualSecretReference(_ text: String) -> Bool {
-        matches(text, #"(?i)(?:\.env\b(?!\.example)|\b(?:secret|credential|private\s+key|api[_ -]?key|token)\b)"#)
+        matches(text, "(?i)\(secretReferencePattern)")
+    }
+
+    private static func authorizedPublicObject(_ text: String, user: String) -> Bool {
+        let redacted = #"(?i)^\s*(?:please\s+)?(?:publish|post|upload|share)\s+(?:the\s+)?redacted\s+(?:api\s+token\s+)?excerpt\s+publicly\.?\s*$"#
+        if matches(text, redacted),
+           matches(user, #"(?i)\b(?:may|can|authorized\s+to)\s+publish\s+(?:the\s+)?redacted\s+(?:api\s+token\s+)?excerpt\b"#) {
+            return true
+        }
+        let template = #"(?i)^\s*(?:please\s+)?(?:publish|post|upload|share)\s+(?:the\s+)?public\s+\.env\.example(?:\s+template)?(?:\s+publicly)?\.?\s*$"#
+        return matches(text, template)
+            && matches(user, #"(?i)\b(?:may|can|authorized\s+to)\s+publish\s+(?:the\s+)?public\s+\.env\.example\b"#)
     }
 
     private static func protectedDeletion(_ text: String, user: String) -> Bool {
-        guard activeAction(text, verbs: "delete|remove|wipe|erase|rm") else { return false }
-        return matches(text, #"(?i)\b(?:project|backup|database)(?:s|\s+(?:data|directory|directories))?\b"#)
-            || (matches(text, #"(?i)\bboth\s+directories\b"#)
+        return activeMatch(text, pattern: #"(?i)\b(?:delete|remove|wipe|erase|rm)\b\s+(?:(?:the|a|my|our|all|entire|whole|old|local|protected)\s+){0,3}(?:projects?|backups?|databases?)\b"#)
+            || (activeMatch(text, pattern: #"(?i)\b(?:delete|remove|wipe|erase|rm)\b\s+(?:the\s+)?both\s+directories\b"#)
                 && matches(user, #"(?i)\bproject\b"#)
                 && matches(user, #"(?i)\bbackup\b"#))
     }
@@ -147,19 +159,23 @@ enum NextPromptPolicy {
         let ns = text as NSString
         for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
             let raw = ns.substring(with: match.range(at: 1))
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'`"))
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'`."))
             let normalized = raw.lowercased()
-            if normalized == "[redacted]" || normalized == "redacted"
-                || normalized == "placeholder" || normalized == "example"
-                || normalized == "changeme" || normalized.hasPrefix("<")
-                || normalized.hasPrefix("your_") { continue }
+            if ["[redacted]", "redacted", "placeholder", "example", "changeme",
+                "<api_key>", "<access_key>", "<password>", "<secret>", "<token>",
+                "your_api_key", "your_access_key", "your_password", "your_secret", "your_token"
+            ].contains(normalized) { continue }
             return true
         }
         return false
     }
 
     private static func activeAction(_ text: String, verbs: String) -> Bool {
-        guard let regex = try? NSRegularExpression(pattern: "(?i)\\b(?:\(verbs))\\b") else { return false }
+        activeMatch(text, pattern: "(?i)\\b(?:\(verbs))\\b")
+    }
+
+    private static func activeMatch(_ text: String, pattern: String) -> Bool {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
         let ns = text as NSString
         for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
             let prefix = ns.substring(to: match.range.location)
