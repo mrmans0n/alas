@@ -76,24 +76,28 @@ actor NextPromptModelStore {
 
     func inspect() async {
         guard worker == nil else { return }
+        publish(Self.inspectionState(root: root, manifest: manifest))
+    }
+
+    private static func inspectionState(root: URL, manifest: NextPromptModelManifest?) -> NextPromptModelState {
         do {
-            let lease = try verifiedLease()
+            let lease = try verifiedLease(root: root, manifest: manifest)
             lease.close()
-            publish(.ready)
+            return .ready
         } catch let error as POSIXError where error.code == .ENOENT {
-            publish(.notInstalled)
+            return .notInstalled
         } catch {
-            publish(manifest == nil ? .unavailable : .failed(.safe(error)))
+            return manifest == nil ? .unavailable : .failed(.safe(error))
         }
     }
 
     func acquireVerifiedLease() async throws -> NextPromptModelLease {
-        do { return try verifiedLease() }
+        do { return try Self.verifiedLease(root: root, manifest: manifest) }
         catch let error as POSIXError where error.code == .ENOENT { throw NextPromptModelFailure.integrity }
         catch { throw NextPromptModelFailure.safe(error) }
     }
 
-    private func verifiedLease() throws -> NextPromptModelLease {
+    private static func verifiedLease(root: URL, manifest: NextPromptModelManifest?) throws -> NextPromptModelLease {
         guard let manifest else { throw NextPromptModelFailure.invalidManifest }
         try manifest.validate()
         let directory = try NextPromptModelFiles.openRoot(root)
@@ -194,10 +198,13 @@ actor NextPromptModelStore {
             }
             try NextPromptModelFiles.synchronize(fd)
             return .ready
-        } catch is CancellationError {
-            return .notInstalled
         } catch {
-            return Task.isCancelled ? .notInstalled : .failed(.safe(error))
+            guard error is CancellationError || Task.isCancelled else { return .failed(.safe(error)) }
+            // Cleanup and transport drain have finished. Recheck retained files in a task
+            // that cannot inherit the installation's cancellation and abort verification.
+            return await Task.detached {
+                inspectionState(root: root, manifest: manifest)
+            }.value
         }
     }
 

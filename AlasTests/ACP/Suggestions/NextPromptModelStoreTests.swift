@@ -103,6 +103,47 @@ struct NextPromptModelStoreTests {
         #expect(await fixture.store.state == .ready)
     }
 
+    @Test func cancelledReuseReportsRetainedVerifiedRevision() async throws {
+        let fixture = try ModelStoreFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        var states = await fixture.store.states().makeAsyncIterator()
+        _ = await states.next()
+        let installation = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            await fixture.store.install()
+        }
+        await installation.value
+        #expect(await fixture.store.state == .ready)
+        #expect(await states.next() == .ready)
+        #expect(fixture.transport.requestCount == 0)
+        let lease = try await fixture.store.acquireVerifiedLease()
+        defer { lease.close() }
+        #expect(try Data(contentsOf: lease.directory.appendingPathComponent("weights")) == fixture.originalWeights)
+    }
+
+    @Test func cancelledReplacementReportsRetainedCorruptRevision() async throws {
+        let fixture = try ModelStoreFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let retained = Data("corrupt".utf8)
+        let file = fixture.directory.appendingPathComponent("weights")
+        try retained.write(to: file)
+        fixture.transport.mode.withLock { $0 = .waitForCancellation }
+        var states = await fixture.store.states().makeAsyncIterator()
+        _ = await states.next()
+        let installation = Task { await fixture.store.install() }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !fixture.transport.started.withLock({ $0 }), ContinuousClock.now < deadline { await Task.yield() }
+        try #require(fixture.transport.started.withLock { $0 })
+        await fixture.store.cancelDownload()
+        await installation.value
+        #expect(fixture.transport.drained.withLock { $0 })
+        #expect(await fixture.store.state == .failed(.integrity))
+        #expect(await states.next() == .failed(.integrity))
+        #expect(try Data(contentsOf: file) == retained)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path).allSatisfy { !$0.hasPrefix(".staging-") })
+        await #expect(throws: NextPromptModelFailure.integrity) { try await fixture.store.acquireVerifiedLease() }
+    }
+
     @Test func capacityPreflightAvoidsTransfer() async throws {
         let fixture = try ModelStoreFixture(capacity: { _ in 0 })
         defer { fixture.removeTemporaryRoot() }
@@ -293,7 +334,7 @@ final class FixtureTransport: NextPromptModelTransport, Sendable {
     }
 }
 
-private final class ModelURLProtocol: URLProtocol, @unchecked Sendable {
+private final class ModelURLProtocol: URLProtocol {
     enum Mode { case valid, partial, oversized, interrupted, redirect, cancel }
     struct Control {
         let mode: Mode
