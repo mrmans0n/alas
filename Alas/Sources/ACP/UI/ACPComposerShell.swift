@@ -496,7 +496,6 @@ struct ACPComposer: View {
             if let models = session.chipState.models {
                 modelChip(models)
                     .frame(maxWidth: 160, alignment: .trailing)
-                    .fixedSize(horizontal: true, vertical: false)
             }
             compactOptionsButton
             actionButton
