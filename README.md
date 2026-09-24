@@ -138,8 +138,10 @@ commits, other safety refusals, and removal errors retain the worktree and
 session. Task outcome and cleanup outcome are shown separately; cleanup never
 force-removes a worktree.
 
-Completion text is limited to 64 KiB in total, with at most 100 checks and 100
-output links; the serialized completion payload is limited to 256 KiB.
+Completion text is limited to 64,000 bytes in total, with at most 100 checks
+and 100 output links. The serialized `schedule_complete` JSON request,
+including its envelope and escaping, must fit within the 65,536-byte socket
+transport limit.
 
 ## Repo-local configuration (`.alas/`)
 
