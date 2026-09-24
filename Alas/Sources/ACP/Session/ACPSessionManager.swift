@@ -521,6 +521,16 @@ final class ACPSessionManager: ObservableObject {
         var waiters: [CheckedContinuation<Void, Never>] = []
     }
     private var modelModeRestorationGates: [ACPSession.ID: ModelModeRestorationGate] = [:]
+    private enum ModelModeSelection {
+        case model(String)
+        case mode(String)
+    }
+    private struct ModelModeSelectionQueueTail {
+        let token: UUID
+        let task: Task<Void, Never>
+    }
+    private var modelModeSelectionTails: [ACPSession.ID: ModelModeSelectionQueueTail] = [:]
+    private var modelModeSelectionGenerations: [ACPSession.ID: UUID] = [:]
 
     /// Toggle auto-run for a remotely-driven session. Writer-gated; persists.
     func setAutoRun(for id: ACPSession.ID, enabled: Bool) async {
@@ -529,9 +539,63 @@ final class ACPSessionManager: ObservableObject {
         persist(session)
     }
 
-    /// Selects a model optimistically. Without a runner, preserves it for
-    /// attach; with a runner, confirms writer ownership before the RPC.
+    /// Records a model chip pick synchronously, then applies it in per-session order.
+    @discardableResult
+    func enqueueModelSelection(for id: ACPSession.ID, modelId: String) -> Task<Void, Never> {
+        enqueueModelModeSelection(for: id, selection: .model(modelId))
+    }
+
+    /// Records a mode chip pick synchronously, then applies it in per-session order.
+    @discardableResult
+    func enqueueModeSelection(for id: ACPSession.ID, modeId: String) -> Task<Void, Never> {
+        enqueueModelModeSelection(for: id, selection: .mode(modeId))
+    }
+
+    private func enqueueModelModeSelection(
+        for id: ACPSession.ID,
+        selection: ModelModeSelection
+    ) -> Task<Void, Never> {
+        let generation = modelModeSelectionGenerations[id] ?? UUID()
+        modelModeSelectionGenerations[id] = generation
+        let previousTask = modelModeSelectionTails[id]?.task
+        let token = UUID()
+        let task = Task { @MainActor [weak self] in
+            await previousTask?.value
+            guard let self,
+                  self.modelModeSelectionGenerations[id] == generation
+            else { return }
+            switch selection {
+            case .model(let modelId):
+                await self.applyModelSelection(
+                    for: id,
+                    modelId: modelId,
+                    queueGeneration: generation
+                )
+            case .mode(let modeId):
+                await self.applyModeSelection(
+                    for: id,
+                    modeId: modeId,
+                    queueGeneration: generation
+                )
+            }
+            guard self.modelModeSelectionTails[id]?.token == token else { return }
+            self.modelModeSelectionTails[id] = nil
+            self.modelModeSelectionGenerations[id] = nil
+        }
+        modelModeSelectionTails[id] = ModelModeSelectionQueueTail(token: token, task: task)
+        return task
+    }
+
+    /// Selects a model optimistically and waits for its ordered application.
     func setModel(for id: ACPSession.ID, modelId: String) async {
+        await enqueueModelSelection(for: id, modelId: modelId).value
+    }
+
+    private func applyModelSelection(
+        for id: ACPSession.ID,
+        modelId: String,
+        queueGeneration: UUID
+    ) async {
         guard let session = sessions[id] else { return }
         if runners[id] == nil {
             let awaitingLeaseClaim = observedLeases[id] == nil
@@ -547,7 +611,10 @@ final class ACPSessionManager: ObservableObject {
                 finishModelModeRestorationEdit(for: id, gateToken: restorationGateToken)
             }
         }
-        guard await confirmedWriterLease(for: id), sessions[id] === session else { return }
+        guard await confirmedWriterLease(for: id),
+              sessions[id] === session,
+              modelModeSelectionGenerations[id] == queueGeneration
+        else { return }
         let activeRestoreGateToken = modelModeRestorationGates[id]?.token
         if activeRestoreGateToken != restorationGateToken {
             if let restorationGateToken {
@@ -571,8 +638,16 @@ final class ACPSessionManager: ObservableObject {
         try? await runner.connection.setModel(sessionId: remoteId, modelId: modelId)
     }
 
-    /// Selects a mode optimistically. Same lease and attach semantics as `setModel`.
+    /// Selects a mode optimistically and waits for its ordered application.
     func setMode(for id: ACPSession.ID, modeId: String) async {
+        await enqueueModeSelection(for: id, modeId: modeId).value
+    }
+
+    private func applyModeSelection(
+        for id: ACPSession.ID,
+        modeId: String,
+        queueGeneration: UUID
+    ) async {
         guard let session = sessions[id] else { return }
         if runners[id] == nil {
             let awaitingLeaseClaim = observedLeases[id] == nil
@@ -588,7 +663,10 @@ final class ACPSessionManager: ObservableObject {
                 finishModelModeRestorationEdit(for: id, gateToken: restorationGateToken)
             }
         }
-        guard await confirmedWriterLease(for: id), sessions[id] === session else { return }
+        guard await confirmedWriterLease(for: id),
+              sessions[id] === session,
+              modelModeSelectionGenerations[id] == queueGeneration
+        else { return }
         let activeRestoreGateToken = modelModeRestorationGates[id]?.token
         if activeRestoreGateToken != restorationGateToken {
             if let restorationGateToken {
@@ -997,6 +1075,8 @@ final class ACPSessionManager: ObservableObject {
 
     private func discardDeferredModelModeUpdates(for sessionId: ACPSession.ID) {
         deferredModelModeUpdates[sessionId] = nil
+        modelModeSelectionTails[sessionId] = nil
+        modelModeSelectionGenerations[sessionId] = nil
     }
 
     /// Sessions for which THIS instance holds the writer lease (backing store).

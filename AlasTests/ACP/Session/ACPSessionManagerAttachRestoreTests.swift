@@ -990,6 +990,73 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.currentMode == "ask")
     }
 
+    @Test("rapid model and mode picks reach the agent in selection order")
+    func rapidModelAndModePicksReachAgentInSelectionOrder() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        let appliedSelections = ModelModeSelectionRecorder()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [
+                    .init(id: "plan", name: "Plan"),
+                    .init(id: "act", name: "Act"),
+                ],
+                currentModel: "sonnet",
+                currentMode: "plan",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { request in
+            let params = try #require(request.params as? ACPSessionSetModelParams)
+            if params.modelId == "haiku" {
+                await modelGate.enterAndWait()
+            }
+            await appliedSelections.append("model:\(params.modelId)")
+            return Data("{}".utf8)
+        }
+        client.scriptAsync(method: "session/set_mode") { request in
+            let params = try #require(request.params as? ACPSessionSetModeParams)
+            await appliedSelections.append("mode:\(params.modeId)")
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        manager.enqueueModelSelection(for: session.id, modelId: "haiku")
+        try await waitUntilAsync { await modelGate.hasEntered }
+        manager.enqueueModeSelection(for: session.id, modeId: "act")
+        let lastSelection = manager.enqueueModelSelection(for: session.id, modelId: "opus")
+        await modelGate.release()
+        await lastSelection.value
+        await manager.flushAllPersistence()
+
+        #expect(await appliedSelections.values == [
+            "model:haiku",
+            "mode:act",
+            "model:opus",
+        ])
+        #expect(session.currentModel == "opus")
+        #expect(session.currentMode == "act")
+        #expect(try store.loadSession(id: session.id)?.currentModel == "opus")
+        #expect(try store.loadSession(id: session.id)?.currentMode == "act")
+    }
+
     @Test("reopened session reapplies persisted mode and config options after load")
     func reopenedSessionReappliesPersistedConfiguration() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -4063,6 +4130,13 @@ struct ACPSessionManagerAttachRestoreTests {
         func next() -> Int {
             count += 1
             return count
+        }
+    }
+    private actor ModelModeSelectionRecorder {
+        private(set) var values: [String] = []
+
+        func append(_ value: String) {
+            values.append(value)
         }
     }
 

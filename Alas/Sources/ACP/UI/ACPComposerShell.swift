@@ -1095,13 +1095,9 @@ struct ACPComposer: View {
         let sessionId = session.id
         switch spec.source {
         case .mode:
-            Task { @MainActor in
-                await manager.setMode(for: sessionId, modeId: selectedId)
-            }
+            manager.enqueueModeSelection(for: sessionId, modeId: selectedId)
         case .model:
-            Task { @MainActor in
-                await manager.setModel(for: sessionId, modelId: selectedId)
-            }
+            manager.enqueueModelSelection(for: sessionId, modelId: selectedId)
         case .configOption(let id):
             manager.setConfigOption(
                 for: sessionId,
