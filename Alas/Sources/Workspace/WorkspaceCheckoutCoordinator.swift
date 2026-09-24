@@ -173,6 +173,35 @@ actor ProjectMutationGate {
         }
     }
 
+    func withMainActorMutations<Value: Sendable>(
+        projectIDs: [String],
+        operation: @MainActor @Sendable () async throws -> Value
+    ) async rethrows -> Value {
+        let orderedProjectIDs = Array(Set(projectIDs)).sorted()
+        return try await withMainActorMutations(
+            orderedProjectIDs,
+            index: 0,
+            operation: operation
+        )
+    }
+
+    private func withMainActorMutations<Value: Sendable>(
+        _ projectIDs: [String],
+        index: Int,
+        operation: @MainActor @Sendable () async throws -> Value
+    ) async rethrows -> Value {
+        guard index < projectIDs.count else {
+            return try await operation()
+        }
+        return try await withMutation(projectID: projectIDs[index]) {
+            try await self.withMainActorMutations(
+                projectIDs,
+                index: index + 1,
+                operation: operation
+            )
+        }
+    }
+
     private func acquire(projectID: String) async {
         guard lockedProjects.contains(projectID) else {
             lockedProjects.insert(projectID)
