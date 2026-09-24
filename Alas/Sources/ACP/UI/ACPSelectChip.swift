@@ -24,6 +24,7 @@ struct ACPSelectChip: View {
     let selectedId: String?
     let searchDescriptions: Bool
     let searchIdentifiers: Bool
+    let fillsWidth: Bool
     let onSelect: (Item) -> Void
 
     @Environment(\.theme) private var theme
@@ -47,6 +48,7 @@ struct ACPSelectChip: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Self.labelForeground(accent: accent, theme: theme))
                     .lineLimit(1)
+                if fillsWidth { Spacer(minLength: 0) }
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(accent)
