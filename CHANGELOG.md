@@ -6,9 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixes
+## [0.19.8] - 2026-09-24
+
+### 🐛 Fixes
 
 - Preserve ACP tail scrolling when activity folds during scroll settling, retaining any bottom elastic overscroll without jumping back to the activity header. Layout corrections no longer count as user scrolling or resume paused tail-follow; downward scrollbar-track clicks continue paging into hidden newer messages.
+- Keep workspaces checked out after deleting their originating workspace and recheck worktree ownership after checkpoint discovery (#1452, #1453).
+- Refresh installed-language status immediately after installation (#1454).
+- Adapt the ACP composer to narrow and wide windows without crowding its controls (#1456).
+- Keep indeterminate loading indicators at their intended size (#1459).
+
+### 🏗️ Internal
+
+- Fix LSP hook approval test compilation and replace timing-based inlay-hint assertions with deterministic request synchronization (#1451, #1460).
+- Add a repository worktree-create hook and update the Lassie review workflow.
 
 ## [0.19.7] - 2026-09-24
 
