@@ -8,8 +8,11 @@ struct ACPToolbar: View {
     let worktree: Worktree
     var owner: SessionOwnerID? = nil
     var onOpenPreview: (() -> Void)? = nil
+    var onSummarizeSession: (() -> Void)? = nil
+    var isSummarizingSession = false
     @Environment(\.theme) private var theme
     @State private var previewHovered = false
+    @State private var summaryHovered = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -61,6 +64,34 @@ struct ACPToolbar: View {
             ACPPlanPill(transcript: session.transcript)
                 .layoutPriority(1)
             Spacer(minLength: 0)
+            if let onSummarizeSession {
+                Button(action: onSummarizeSession) {
+                    HStack(spacing: 5) {
+                        if isSummarizingSession {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 10.5, weight: .medium))
+                        }
+                        Text(isSummarizingSession ? "Summarizing" : "Summarize")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(theme.color(summaryHovered ? "fg" : "fg-muted"))
+                    .padding(.horizontal, 6)
+                    .frame(height: 22)
+                    .background(
+                        summaryHovered ? theme.color("bg-3") : .clear,
+                        in: RoundedRectangle(cornerRadius: 5)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.toolbarControl)
+                .onHover { summaryHovered = $0 }
+                .disabled(isSummarizingSession)
+                .help("Generate an on-device session catch-up")
+                .accessibilityLabel("Summarize session")
+                .accessibilityIdentifier("acp-summarize-session")
+            }
             if let onOpenPreview {
                 Button(action: onOpenPreview) {
                     HStack(spacing: 5) {

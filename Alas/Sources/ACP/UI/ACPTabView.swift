@@ -159,6 +159,8 @@ private struct ACPSessionView: View {
     @State private var composerFocusRequest: Int = 0
     @StateObject private var composerDropRouter = ACPComposerDropRouter()
     @StateObject private var composerActions = ACPComposerActions()
+    @State private var catchUpState: ACPCatchUpPresentationState = .hidden
+    @State private var catchUpTask: Task<Void, Never>?
 
     private var adapterTarget: ACPAdapterTarget {
         guard let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) else {
@@ -186,7 +188,9 @@ private struct ACPSessionView: View {
                     state: state,
                     worktree: worktree,
                     owner: owner,
-                    onOpenPreview: onOpenPreview
+                    onOpenPreview: onOpenPreview,
+                    onSummarizeSession: catchUpSummariesEnabled ? { generateCatchUpSummary() } : nil,
+                    isSummarizingSession: isGeneratingCatchUpSummary
                 )
                 adapterBanner()
                 repoMCPTrustBanner()
@@ -204,6 +208,7 @@ private struct ACPSessionView: View {
                     hydrationFailureBanner(message: msg)
                 }
             }
+            catchUpSummaryCard
             transcriptAndComposer
         }
         .onChange(of: isFirstRunConnecting) { oldValue, newValue in
@@ -218,9 +223,114 @@ private struct ACPSessionView: View {
             await hydrateAndAttach()
             onStartupRecoveryReady()
         }
+        .onChange(of: transcript.messagesGeneration) {
+            invalidateCatchUpGenerationIfNeeded()
+        }
+        .onChange(of: transcript.streamingState) {
+            invalidateCatchUpGenerationIfNeeded()
+        }
+        .onChange(of: catchUpSummariesEnabled) { _, enabled in
+            if !enabled { dismissCatchUpSummary() }
+        }
+        .onDisappear {
+            catchUpTask?.cancel()
+            catchUpTask = nil
+        }
         .onExitCommand {
             handleEscape()
         }
+    }
+
+    private var catchUpSummariesEnabled: Bool {
+        state.config.harness.acpCatchUpSummariesEnabled
+    }
+
+    @ViewBuilder
+    private var catchUpSummaryCard: some View {
+        if catchUpSummariesEnabled, !catchUpState.isHidden {
+            ACPCatchUpSummaryCard(
+                state: catchUpState,
+                currentFingerprint: currentCatchUpSnapshot?.fingerprint,
+                sessionStatus: catchUpSessionStatus,
+                onRefresh: { generateCatchUpSummary() },
+                onDismiss: { dismissCatchUpSummary() },
+                onOpenSource: { stableID in
+                    session.followsTranscriptTail = false
+                    _ = transcript.requestNavigation(toStableID: stableID)
+                }
+            )
+        }
+    }
+
+    private var isGeneratingCatchUpSummary: Bool {
+        if case .generating = catchUpState { return true }
+        return false
+    }
+
+    private var currentCatchUpSnapshot: ACPCatchUpSourceSnapshot? {
+        let hasActiveTurn = transcript.streamingState != .idle
+        let activeIndex = hasActiveTurn ? transcript.lastContentTouchIndex : nil
+        return ACPCatchUpSourceBuilder.make(
+            sessionID: sessionId,
+            messages: transcript.messages,
+            activeMessageIndex: activeIndex,
+            activeTurnUserIndex: hasActiveTurn ? (transcript.latestUserMessageIndex ?? -1) : nil,
+            knownEarlierMessageCount: transcript.messageIndexOffset
+        )
+    }
+
+    private var catchUpSessionStatus: String {
+        switch transcript.streamingState {
+        case .idle: "Session idle"
+        case .sending, .streaming: "Session running"
+        case .awaitingPermission, .awaitingInput: "Session blocked"
+        }
+    }
+
+    private func generateCatchUpSummary() {
+        catchUpTask?.cancel()
+        guard let snapshot = currentCatchUpSnapshot else {
+            catchUpState = .failed("There are no completed messages to summarize yet.")
+            return
+        }
+        let generationID = UUID()
+        let key = ACPCatchUpGenerationKey(snapshot: snapshot)
+        catchUpState = .generating(snapshot: snapshot, generationID: generationID)
+        catchUpTask = Task { @MainActor in
+            let result = await ACPLocalCatchUpGenerator.generate(snapshot: snapshot)
+            guard !Task.isCancelled,
+                  case .generating(_, let activeID) = catchUpState,
+                  activeID == generationID else { return }
+            guard let current = currentCatchUpSnapshot,
+                  key.accepts(sessionID: sessionId, fingerprint: current.fingerprint) else {
+                catchUpState = .sourceChanged
+                catchUpTask = nil
+                return
+            }
+            switch result {
+            case .success(let summary):
+                catchUpState = .ready(snapshot: snapshot, summary: summary)
+            case .failure(.unavailable(let message)):
+                catchUpState = .unavailable(message)
+            case .failure(.generationFailed(let message)):
+                catchUpState = .failed(message)
+            }
+            catchUpTask = nil
+        }
+    }
+
+    private func dismissCatchUpSummary() {
+        catchUpTask?.cancel()
+        catchUpTask = nil
+        catchUpState = .hidden
+    }
+
+    private func invalidateCatchUpGenerationIfNeeded() {
+        guard case .generating(let snapshot, _) = catchUpState,
+              currentCatchUpSnapshot?.fingerprint != snapshot.fingerprint else { return }
+        catchUpTask?.cancel()
+        catchUpTask = nil
+        catchUpState = .sourceChanged
     }
 
     /// Esc cancels the in-flight request. Idempotent — safe to press

@@ -1277,6 +1277,34 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         #expect(try #require(coordinator.rowFrameForTesting(id: groupId)).height == collapsedHeaderHeight)
     }
 
+    @Test("source navigation expands a collapsed tool-call group")
+    func sourceNavigationExpandsCollapsedToolGroup() throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let toolCalls: [ACPMessage] = (0..<5).map { index in
+            .toolCall(.init(
+                toolCallId: "tc-\(index)", title: "Read file \(index)", kind: "read", status: "completed"
+            ))
+        }
+        session.replaceTranscriptMessages(toolCalls)
+        var host = makeHost(session: session)
+        host.collapsesFinishedToolCalls = true
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+        let target = toolCalls[3].stableId
+        #expect(coordinator.rowFrameForTesting(id: target) == nil)
+
+        _ = session.transcript.requestNavigation(toStableID: target)
+        coordinator.update(host: host)
+        scroller.layoutSubtreeIfNeeded()
+
+        let targetFrame = try #require(coordinator.rowFrameForTesting(id: target))
+        let viewport = scroller.contentView.bounds
+        #expect(targetFrame.minY < viewport.maxY)
+        #expect(targetFrame.minY + targetFrame.height > viewport.minY)
+    }
+
     private func attach(
         session: ACPSession,
         size: NSSize = NSSize(width: 600, height: 400)

@@ -58,6 +58,20 @@ struct AdvancedPane: View {
                             }
                         ))
                     }
+                    SettingsRow(
+                        name: "Session catch-up summaries",
+                        desc: "Adds an on-demand, source-linked summary to ACP chats. Uses the on-device model on eligible Macs running macOS 26 or later."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { state.config.harness.acpCatchUpSummariesEnabled },
+                            set: { enabled in
+                                state.config.harness.acpCatchUpSummariesEnabled = enabled
+                                state.saveConfig()
+                            }
+                        ))
+                        .accessibilityLabel("Session catch-up summaries")
+                        .accessibilityValue(state.config.harness.acpCatchUpSummariesEnabled ? "On" : "Off")
+                    }
                     if let recovery = state.workspaceRecoveryError {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Workspace recovery required: \(recovery.message)")

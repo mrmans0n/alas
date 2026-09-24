@@ -90,6 +90,16 @@ final class ACPTranscript: ObservableObject {
     /// async load is still running.
     @Published var isBackfillingOlderMessages: Bool = false
 
+    struct NavigationRequest: Equatable, Sendable {
+        let id: UUID
+        let stableID: String
+    }
+
+    /// A one-shot request for the AppKit transcript scroller to align a
+    /// source row. The UUID makes repeat taps on the same source observable.
+    @Published private(set) var navigationRequest: NavigationRequest?
+    private var consumedNavigationRequestID: UUID?
+
     /// Number of known persisted messages that precede `messages[0]` while
     /// tail-first hydration is still materialising the older prefix. This is
     /// deliberately non-published: mutation entry points update it before
@@ -158,6 +168,24 @@ final class ACPTranscript: ObservableObject {
         let stableId = ACPMessage.stableId(for: key)
         stableIdCache[key] = stableId
         return stableId
+    }
+
+    @discardableResult
+    func requestNavigation(toStableID stableID: String) -> NavigationRequest? {
+        guard let index = messages.lastIndex(where: { stableId(for: $0) == stableID }) else {
+            return nil
+        }
+        setVisibleWindow(around: index)
+        let request = NavigationRequest(id: UUID(), stableID: stableID)
+        navigationRequest = request
+        return request
+    }
+
+    func takePendingNavigationRequest() -> NavigationRequest? {
+        guard let request = navigationRequest,
+              request.id != consumedNavigationRequestID else { return nil }
+        consumedNavigationRequestID = request.id
+        return request
     }
 
     func markdownCache(forMessage id: String) -> ACPMarkdownBlockCache {
