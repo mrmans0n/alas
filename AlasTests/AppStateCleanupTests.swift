@@ -1191,6 +1191,80 @@ struct AppStateCleanupTests {
         #expect(state.selectedWorktreeId == mainWorktreeID)
     }
 
+    @Test func singleDeleteRetargetsSelectionToActiveSharedPathProject() async throws {
+        let repo = try await makeRepo(name: "delete-selection-shared-owner")
+        let linked = repo.deletingLastPathComponent()
+            .appendingPathComponent("delete-selection-shared-owner-linked-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: linked)
+            try? FileManager.default.removeItem(at: repo)
+        }
+
+        let projectA = ProjectConfig(
+            id: "selection-owner-a-\(UUID().uuidString)",
+            name: "Project A",
+            path: repo.path,
+            color: "blue",
+            addedAt: .distantPast
+        )
+        let projectB = ProjectConfig(
+            id: "selection-owner-b-\(UUID().uuidString)",
+            name: "Project B",
+            path: "/repos/selection-owner-b",
+            color: "green",
+            addedAt: .distantPast,
+            host: "other-host"
+        )
+        let spaces = SpacesFile(
+            activeSpaceId: "shared-active-space",
+            spaces: [SpaceConfig(
+                id: "shared-active-space",
+                name: "Shared",
+                emoji: "🏠",
+                projectIds: [projectA.id, projectB.id],
+                lastSelectedWorktreeId: nil,
+                createdAt: .distantPast
+            )]
+        )
+        let state = AppState(
+            store: MemoryStore(
+                projectsFile: ProjectsFile(projects: [projectA, projectB]),
+                spacesFile: spaces
+            ),
+            runHistoryStore: try RunHistoryStore(
+                path: repo.appendingPathComponent("run-history.sqlite").path
+            )
+        )
+        let created = try await WorktreeService().add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/shared-selection-owner",
+            destination: linked,
+            projectId: projectA.id
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: projectA.id)
+        let target = try #require(state.projectsManager.worktrees(projectId: projectA.id)
+            .first(where: { $0.id == created.id }))
+        let duplicate = Worktree(
+            id: target.id,
+            projectId: projectB.id,
+            name: target.name,
+            branch: target.branch,
+            path: target.path,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(duplicate)
+        #expect(state.activeSpaceProjects.map(\.id) == [projectA.id, projectB.id])
+        state.selectWorktree(id: target.id, projectId: projectA.id)
+
+        #expect(await state.cliDeleteWorktree(target, force: true, keepBranch: true) == .ok)
+        try await waitForOperationState(state.projectsManager, id: target.id, projectId: projectA.id, equals: nil)
+
+        #expect(state.projectsManager.worktrees(projectId: projectB.id).contains { $0.id == target.id })
+        try await waitForSelectedWorktree(state, equals: target.id, projectId: projectB.id)
+    }
+
     /// A checkout recreated at the deleted path before the post-delete refresh
     /// keeps the same path-derived id, so the refresh cannot tell the new row
     /// apart from the removed one and leaves the `.deleting` claim in place —
@@ -2259,14 +2333,16 @@ struct AppStateCleanupTests {
 
     private func waitForSelectedWorktree(
         _ state: AppState,
-        equals expected: String
+        equals expected: String,
+        projectId: String? = nil
     ) async throws {
         for _ in 0..<80 {
-            if state.selectedWorktreeId == expected {
+            if state.selectedWorktreeId == expected,
+               projectId == nil || state.selectedWorktreeProjectId == projectId {
                 return
             }
             try await Task.sleep(nanoseconds: 100_000_000)
         }
-        Issue.record("Timed out waiting for selected worktree")
+        Issue.record("Timed out waiting for selected worktree and project owner")
     }
 }

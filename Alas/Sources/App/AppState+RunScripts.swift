@@ -1266,6 +1266,7 @@ extension AppState {
         case .global:
             _ = tabs.openExternalEditor(
                 worktreeId: worktree.id,
+                projectId: worktree.projectId,
                 absoluteURL: script.fileURL,
                 revealLine: nil,
                 revealCharacter: nil,
@@ -1338,6 +1339,7 @@ extension AppState {
         case .global:
             _ = tabs.openExternalEditor(
                 worktreeId: worktree.id,
+                projectId: worktree.projectId,
                 absoluteURL: url,
                 revealLine: nil,
                 revealCharacter: nil,

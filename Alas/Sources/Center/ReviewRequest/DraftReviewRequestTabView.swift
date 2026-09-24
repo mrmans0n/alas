@@ -715,6 +715,7 @@ struct DraftReviewRequestTabView: View {
             let relativeTarget = String(url.path.dropFirst(prefix.count))
             appState.tabs.openEditor(
                 worktreeId: worktreeId,
+                projectId: appState.selectedWorktreeId == worktreeId ? appState.selectedWorktreeProjectId : nil,
                 relativePath: relativeTarget,
                 revealLine: line,
                 revealCharacter: character
@@ -722,6 +723,7 @@ struct DraftReviewRequestTabView: View {
         } else {
             appState.tabs.openExternalEditor(
                 worktreeId: worktreeId,
+                projectId: appState.selectedWorktreeId == worktreeId ? appState.selectedWorktreeProjectId : nil,
                 absoluteURL: url,
                 revealLine: line,
                 revealCharacter: character,

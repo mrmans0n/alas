@@ -536,9 +536,23 @@ extension AppState {
     }
 
     func acknowledgeFocusedSessionAttention(worktreeID: String, tabID: TabID) {
-        guard selectedWorktreeId == worktreeID, tabs.activeTabId(forWorktree: worktreeID) == tabID,
+        let activeTabID = selectedWorktreeProjectId.map {
+            tabs.activeTabId(forWorktree: worktreeID, projectId: $0)
+        } ?? tabs.activeTabId(forWorktree: worktreeID)
+        guard selectedWorktreeId == worktreeID, activeTabID == tabID,
               let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) else { return }
-        acknowledgeSessionAttention(worktreeID: worktreeID, owner: .worktree(worktreeID), tab: tab)
+        let owner: SessionOwnerID
+        switch tab {
+        case .acpSession(let state):
+            owner = state.projectId.map { .projectWorktree(projectId: $0, worktreeId: worktreeID) }
+                ?? .worktree(worktreeID)
+        case .terminal(let state):
+            owner = state.projectId.map { .projectWorktree(projectId: $0, worktreeId: worktreeID) }
+                ?? .worktree(worktreeID)
+        default:
+            owner = .worktree(worktreeID)
+        }
+        acknowledgeSessionAttention(worktreeID: worktreeID, owner: owner, tab: tab)
     }
 
     func acknowledgeFocusedSessionAttention(worktreeID: String, owner: SessionOwnerID, tabID: TabID) {
@@ -635,6 +649,10 @@ extension AppState {
         }
         if let session = terminal.registry.session(for: sessionID),
            let resolved = attentionWorktree(forSessionOwner: session.owner, preferredWorktreeID: preferredWorktreeID) {
+            return resolved
+        }
+        if let owner = acpOwner(forSessionID: sessionID),
+           let resolved = attentionWorktree(forSessionOwner: owner, preferredWorktreeID: preferredWorktreeID) {
             return resolved
         }
         if let entry = worktrees.first(where: { entry in

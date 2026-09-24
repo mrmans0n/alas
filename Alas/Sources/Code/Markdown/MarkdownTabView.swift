@@ -178,6 +178,7 @@ struct MarkdownTabView: View {
     private var codeEditor: some View {
         CodeEditorView(
             worktreeId: worktreeId,
+            projectId: projectId,
             worktreeRoot: worktreePath,
             relativePath: relativePath,
             tabId: tabId,

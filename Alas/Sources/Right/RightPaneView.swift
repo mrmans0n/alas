@@ -153,12 +153,12 @@ struct RightPaneView: View {
                         state.openFileHistory(relativePath: node.path, worktreeId: worktree.id, projectId: worktree.projectId)
                     },
                     onCreateFile: { path in
-                        state.newFile(in: worktree.id, directoryPath: path) {
+                        state.newFile(in: worktree, directoryPath: path) {
                             Task { await rps.refresh() }
                         }
                     },
                     onCreateFolder: { path in
-                        state.newFolder(in: worktree.id, directoryPath: path) {
+                        state.newFolder(in: worktree, directoryPath: path) {
                             Task { await rps.refresh() }
                         }
                     },

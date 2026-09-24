@@ -1253,6 +1253,62 @@ struct AppStateRunRecordTests {
         #expect(runRecord(fixture, worktree: second)?.status == .finished(.stopped))
     }
 
+    @Test func samePathProjectsOpenSeparateEditorTabsAndBuffers() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let firstProject = try #require(fixture.state.projects.first)
+        let secondProject = ProjectConfig(
+            id: "editor-project-b-\(UUID().uuidString)", name: "Project B", path: "/repos/b",
+            color: "green", addedAt: .distantPast, host: "host-b"
+        )
+        fixture.state.projectsManager = ProjectsManager(persistedProjects: [firstProject, secondProject])
+        fixture.state.projectsManager.insertOptimisticWorktree(fixture.worktree)
+        let second = Worktree(
+            id: fixture.worktree.id, projectId: secondProject.id, name: "shared", branch: "shared",
+            path: fixture.worktree.path, status: .clean, lastActivity: .distantPast
+        )
+        fixture.state.projectsManager.insertOptimisticWorktree(second)
+        let relativePath = "src/shared.swift"
+        let fileURL = fixture.worktree.path.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "shared contents\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        fixture.state.openFile(relativePath: relativePath, worktree: fixture.worktree)
+        fixture.state.openFile(relativePath: relativePath, worktree: second)
+
+        let editors = fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).compactMap { tab -> EditorTabState? in
+            guard case .editor(let editor) = tab else { return nil }
+            return editor
+        }
+        #expect(editors.count == 2)
+        guard editors.count == 2 else { return }
+
+        fixture.state.selectWorktree(id: fixture.worktree.id, projectId: firstProject.id)
+        let firstComposition = fixture.state.centerTabComposition(focusedWorktreeID: fixture.worktree.id)
+        #expect(firstComposition.activeId == editors[0].id)
+        fixture.state.selectWorktree(id: fixture.worktree.id, projectId: secondProject.id)
+        let secondComposition = fixture.state.centerTabComposition(focusedWorktreeID: fixture.worktree.id)
+        #expect(secondComposition.activeId == editors[1].id)
+        #expect(firstComposition.tabs.map(\.id) == [editors[0].id])
+        #expect(secondComposition.tabs.map(\.id) == [editors[1].id])
+
+        let firstBuffer = fixture.state.tabs.buffer(
+            worktreeId: fixture.worktree.id,
+            tabId: editors[0].id,
+            worktreeRoot: fixture.worktree.path,
+            relativePath: relativePath
+        )
+        let secondBuffer = fixture.state.tabs.buffer(
+            worktreeId: second.id,
+            tabId: editors[1].id,
+            worktreeRoot: second.path,
+            relativePath: relativePath
+        )
+        await firstBuffer.awaitLoadForTesting()
+        await secondBuffer.awaitLoadForTesting()
+        #expect(firstBuffer !== secondBuffer)
+    }
+
     // MARK: - Panel independence
 
     /// The Run panel is a view onto `runRecords`; hiding it or switching the

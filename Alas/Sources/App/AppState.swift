@@ -2753,20 +2753,47 @@ final class AppState {
     /// center exactly.
     func centerTabComposition(
         focusedWorktreeID: String,
+        focusedProjectID: String? = nil,
         sharedSessionOwner: SessionOwnerID? = nil
     ) -> CenterTabComposition {
+        let projectID = focusedProjectID
+            ?? (selectedWorktreeId == focusedWorktreeID ? selectedWorktreeProjectId : nil)
+        let includesLegacyUnownedEditors = projectID != nil
+            && legacyEditorOwnerProjectId(forWorktreeId: focusedWorktreeID) == projectID
+        let focusedTabs = projectID.map {
+            tabs.tabs(
+                forWorktree: focusedWorktreeID,
+                projectId: $0,
+                includesLegacyUnownedEditors: includesLegacyUnownedEditors
+            )
+        } ?? tabs.tabs(forWorktree: focusedWorktreeID)
+        let activeFocusedTabID = projectID.map {
+            tabs.activeTabId(
+                forWorktree: focusedWorktreeID,
+                projectId: $0,
+                includesLegacyUnownedEditors: includesLegacyUnownedEditors
+            )
+        } ?? tabs.activeTabId(forWorktree: focusedWorktreeID)
         guard let sharedSessionOwner else {
             return CenterTabComposition(
-                worktreeTabs: tabs.tabs(forWorktree: focusedWorktreeID),
-                activeWorktreeTabId: tabs.activeTabId(forWorktree: focusedWorktreeID)
+                worktreeTabs: focusedTabs,
+                activeWorktreeTabId: activeFocusedTabID
             )
         }
         return CenterTabComposition(
             sharedTabs: tabs.tabs(for: sharedSessionOwner),
-            focusedMemberTabs: tabs.tabs(forWorktree: focusedWorktreeID),
+            focusedMemberTabs: focusedTabs,
             activeSharedTabId: tabs.activeTabId(for: sharedSessionOwner),
-            activeFocusedMemberTabId: tabs.activeTabId(forWorktree: focusedWorktreeID)
+            activeFocusedMemberTabId: activeFocusedTabID
         )
+    }
+
+    /// Legacy editor tabs written before project ownership was persisted are
+    /// assigned to the same first project that the old id-only lookup chose.
+    func legacyEditorOwnerProjectId(forWorktreeId worktreeId: String) -> String? {
+        projectsManager.projects.first(where: { project in
+            projectsManager.worktrees(projectId: project.id).contains { $0.id == worktreeId }
+        })?.id
     }
 
     func loadSessionTabs(owner: SessionOwnerID, restoringActiveTabs: Bool = true) {
@@ -6790,24 +6817,23 @@ final class AppState {
                 self?.openFile(relativePath: relativePath, worktreeId: worktreeId)
             },
             openExternalFile: { [weak self] url, worktreeId in
-                guard let self else { return }
+                guard let self, let worktree = self.worktreeForFileOpen(worktreeId, projectId: nil) else { return }
                 if BinaryFileType.isKnownBinary(relativePath: url.path) {
                     _ = self.tabs.openBinaryPreview(worktreeId: worktreeId, relativePath: url.path)
-                    if self.selectedWorktreeId != worktreeId,
-                       let worktree = self.worktree(withId: worktreeId) {
+                    if self.selectedWorktreeId != worktreeId || self.selectedWorktreeProjectId != worktree.projectId {
                         self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
                     }
                     return
                 }
                 _ = self.tabs.openExternalEditor(
                     worktreeId: worktreeId,
+                    projectId: worktree.projectId,
                     absoluteURL: url,
                     revealLine: nil,
                     revealCharacter: nil,
                     originatingRelativePath: nil
                 )
-                if self.selectedWorktreeId != worktreeId,
-                   let worktree = self.worktree(withId: worktreeId) {
+                if self.selectedWorktreeId != worktreeId || self.selectedWorktreeProjectId != worktree.projectId {
                     self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
                 }
             },
@@ -6821,16 +6847,16 @@ final class AppState {
                 )
             },
             openExternalFileAtLines: { [weak self] url, worktreeId, lines in
-                guard let self else { return }
+                guard let self, let worktree = self.worktreeForFileOpen(worktreeId, projectId: nil) else { return }
                 _ = self.tabs.openExternalEditor(
                     worktreeId: worktreeId,
+                    projectId: worktree.projectId,
                     absoluteURL: url,
                     revealLine: lines.lowerBound,
                     revealCharacter: 0,
                     revealEndLine: lines.upperBound
                 )
-                if self.selectedWorktreeId != worktreeId,
-                   let worktree = self.worktree(withId: worktreeId) {
+                if self.selectedWorktreeId != worktreeId || self.selectedWorktreeProjectId != worktree.projectId {
                     self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
                 }
             },
@@ -6846,6 +6872,7 @@ final class AppState {
                 }
                 _ = self.tabs.openExternalEditor(
                     worktreeId: worktree.id,
+                    projectId: worktree.projectId,
                     absoluteURL: url,
                     revealLine: nil,
                     revealCharacter: nil,
@@ -6866,6 +6893,7 @@ final class AppState {
                 self.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
                 _ = self.tabs.openExternalEditor(
                     worktreeId: worktree.id,
+                    projectId: worktree.projectId,
                     absoluteURL: url,
                     revealLine: lines.lowerBound,
                     revealCharacter: 0,
@@ -8212,7 +8240,16 @@ final class AppState {
     }
 
     func newFile(in worktreeId: String) {
-        guard let (project, worktree) = projectAndWorktree(withWorktreeId: worktreeId) else { return }
+        guard let (_, worktree) = projectAndWorktree(withWorktreeId: worktreeId) else { return }
+        newFile(in: worktree)
+    }
+
+    func newFile(in requestedWorktree: Worktree) {
+        guard let (project, worktree) = projectAndWorktree(
+            withWorktreeId: requestedWorktree.id,
+            inProjectId: requestedWorktree.projectId
+        ) else { return }
+        let worktreeId = worktree.id
         if let host = project.host {
             guard let relativePath = promptForRemoteRelativePath(
                 title: "New File",
@@ -8221,13 +8258,13 @@ final class AppState {
                 confirmTitle: "Create",
                 errorTitle: "New File Failed"
             ) else { return }
-            guard !tabs.hasEditor(worktreeId: worktreeId, relativePath: relativePath) else {
+            guard !tabs.hasEditor(worktreeId: worktreeId, projectId: worktree.projectId, relativePath: relativePath) else {
                 showFileActionError(title: "New File Failed", message: "That file is already open in another editor tab.")
                 return
             }
             Task { @MainActor [weak self] in
                 guard let self,
-                      await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                      await !self.checkpointMutationsDisabledAfterDiscovery(for: worktree)
                 else { return }
                 do {
                     try await Self.createRemoteEmptyFile(host: host, worktreeRoot: worktree.path, relativePath: relativePath)
@@ -8248,7 +8285,7 @@ final class AppState {
 
         Task { @MainActor [weak self] in
             guard let self,
-                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                  await !self.checkpointMutationsDisabledAfterDiscovery(for: worktree)
             else { return }
             do {
                 let relativePath = try self.relativePath(for: url, in: worktree.path)
@@ -8269,7 +8306,19 @@ final class AppState {
         directoryPath: String,
         onCreated: @escaping @MainActor () -> Void
     ) {
-        guard let (project, worktree) = projectAndWorktree(withWorktreeId: worktreeId),
+        guard let (_, worktree) = projectAndWorktree(withWorktreeId: worktreeId) else { return }
+        newFile(in: worktree, directoryPath: directoryPath, onCreated: onCreated)
+    }
+
+    func newFile(
+        in requestedWorktree: Worktree,
+        directoryPath: String,
+        onCreated: @escaping @MainActor () -> Void
+    ) {
+        guard let (project, worktree) = projectAndWorktree(
+            withWorktreeId: requestedWorktree.id,
+            inProjectId: requestedWorktree.projectId
+        ),
               let name = promptForChildName(title: "New File", defaultValue: "untitled.txt")
         else { return }
         let relativePath = Self.childPath(name: name, directoryPath: directoryPath)
@@ -8277,7 +8326,7 @@ final class AppState {
         if let host = project.host {
             Task { @MainActor [weak self] in
                 guard let self,
-                      await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                      await !self.checkpointMutationsDisabledAfterDiscovery(for: worktree)
                 else { return }
                 do {
                     try await Self.createRemoteEmptyFile(
@@ -8297,7 +8346,7 @@ final class AppState {
         let url = worktree.path.appendingPathComponent(relativePath)
         Task { @MainActor [weak self] in
             guard let self,
-                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                  await !self.checkpointMutationsDisabledAfterDiscovery(for: worktree)
             else { return }
             do {
                 try Data().write(to: url, options: .withoutOverwriting)
@@ -8314,7 +8363,19 @@ final class AppState {
         directoryPath: String,
         onCreated: @escaping @MainActor () -> Void
     ) {
-        guard let (project, worktree) = projectAndWorktree(withWorktreeId: worktreeId),
+        guard let (_, worktree) = projectAndWorktree(withWorktreeId: worktreeId) else { return }
+        newFolder(in: worktree, directoryPath: directoryPath, onCreated: onCreated)
+    }
+
+    func newFolder(
+        in requestedWorktree: Worktree,
+        directoryPath: String,
+        onCreated: @escaping @MainActor () -> Void
+    ) {
+        guard let (project, worktree) = projectAndWorktree(
+            withWorktreeId: requestedWorktree.id,
+            inProjectId: requestedWorktree.projectId
+        ),
               let name = promptForChildName(title: "New Folder", defaultValue: "New Folder")
         else { return }
         let relativePath = Self.childPath(name: name, directoryPath: directoryPath)
@@ -8322,7 +8383,7 @@ final class AppState {
         if let host = project.host {
             Task { @MainActor [weak self] in
                 guard let self,
-                      await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                      await !self.checkpointMutationsDisabledAfterDiscovery(for: worktree)
                 else { return }
                 do {
                     try await Self.createRemoteDirectory(
@@ -8340,7 +8401,7 @@ final class AppState {
 
         Task { @MainActor [weak self] in
             guard let self,
-                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                  await !self.checkpointMutationsDisabledAfterDiscovery(for: worktree)
             else { return }
             do {
                 try FileManager.default.createDirectory(
@@ -8424,8 +8485,9 @@ final class AppState {
 
     func saveActiveTabAs(worktreeId: String) {
         guard !checkpointFileWritesDisabled(worktreeId: worktreeId) else { return }
-        guard let worktree = worktree(withId: worktreeId),
-              let context = tabs.activeEditorContext(worktreeId: worktreeId) else { return }
+        let projectId = selectedWorktreeId == worktreeId ? selectedWorktreeProjectId : nil
+        guard let worktree = worktree(withId: worktreeId, inProjectId: projectId),
+              let context = tabs.activeEditorContext(worktreeId: worktreeId, projectId: projectId) else { return }
         let currentURL = worktree.path.appendingPathComponent(context.tab.relativePath)
         if context.buffer.isRemote {
             guard let relativePath = promptForRemoteRelativePath(
@@ -8435,7 +8497,12 @@ final class AppState {
                 confirmTitle: "Save",
                 errorTitle: "Save As Failed"
             ) else { return }
-            guard !tabs.hasEditor(worktreeId: worktreeId, relativePath: relativePath, excluding: context.tab.id) else {
+            guard !tabs.hasEditor(
+                worktreeId: worktreeId,
+                projectId: context.tab.projectId,
+                relativePath: relativePath,
+                excluding: context.tab.id
+            ) else {
                 showFileActionError(title: "Save As Failed", message: "That file is already open in another editor tab.")
                 return
             }
@@ -8466,7 +8533,12 @@ final class AppState {
             else { return }
             do {
                 let relativePath = try self.relativePath(for: url, in: worktree.path)
-                guard !self.tabs.hasEditor(worktreeId: worktreeId, relativePath: relativePath, excluding: context.tab.id) else {
+                guard !self.tabs.hasEditor(
+                    worktreeId: worktreeId,
+                    projectId: context.tab.projectId,
+                    relativePath: relativePath,
+                    excluding: context.tab.id
+                ) else {
                     self.showFileActionError(title: "Save As Failed", message: "That file is already open in another editor tab.")
                     return
                 }
@@ -8521,8 +8593,9 @@ final class AppState {
     }
 
     func renameActiveFile(worktreeId: String) {
-        guard let worktree = worktree(withId: worktreeId),
-              let context = tabs.activeEditorContext(worktreeId: worktreeId) else { return }
+        let projectId = selectedWorktreeId == worktreeId ? selectedWorktreeProjectId : nil
+        guard let worktree = worktree(withId: worktreeId, inProjectId: projectId),
+              let context = tabs.activeEditorContext(worktreeId: worktreeId, projectId: projectId) else { return }
         let currentURL = worktree.path.appendingPathComponent(context.tab.relativePath)
         if context.buffer.isRemote {
             guard let relativePath = promptForRemoteRelativePath(
@@ -9495,10 +9568,10 @@ final class AppState {
     /// navigation surface. A worktree in a different Space keeps its own
     /// runtime state alive, but cannot keep the active Space's selection
     /// pinned after this Space's selected row is deleted.
-    private func otherNavigationProjectsStillListWorktree(id: String, exceptProjectId projectId: String) -> Bool {
+    private func otherNavigationProjectWorktree(id: String, exceptProjectId projectId: String) -> Worktree? {
         let selectableProjects: [ProjectConfig]
         if let checkout = selectedWorkspaceCheckout {
-            guard checkoutScopedWorktreeIDs?.contains(id) == true else { return false }
+            guard checkoutScopedWorktreeIDs?.contains(id) == true else { return nil }
             let memberProjectIDs = Set(checkout.members
                 .filter { $0.availability == .available }
                 .map(\.projectID))
@@ -9506,10 +9579,12 @@ final class AppState {
         } else {
             selectableProjects = activeSpaceProjects
         }
-        return selectableProjects.contains { project in
-            project.id != projectId
-                && projectsManager.visibleWorktrees(projectId: project.id).contains { $0.id == id }
+        for project in selectableProjects where project.id != projectId {
+            if let worktree = projectsManager.visibleWorktrees(projectId: project.id).first(where: { $0.id == id }) {
+                return worktree
+            }
         }
+        return nil
     }
 
     private func projectAndWorktree(withWorktreeId id: String) -> (project: ProjectConfig, worktree: Worktree)? {
@@ -9651,7 +9726,17 @@ final class AppState {
 
     var activeTab: Tab? {
         guard let worktreeId = selectedWorktreeId else { return nil }
-        return tabs.activeTab(forWorktree: worktreeId)
+        let projectId = selectedWorktreeProjectId
+        let includesLegacyUnownedEditors = projectId != nil
+            && legacyEditorOwnerProjectId(forWorktreeId: worktreeId) == projectId
+        guard let activeId = projectId.map({
+            tabs.activeTabId(
+                forWorktree: worktreeId,
+                projectId: $0,
+                includesLegacyUnownedEditors: includesLegacyUnownedEditors
+            )
+        }) ?? tabs.activeTabId(forWorktree: worktreeId) else { return nil }
+        return tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId })
     }
 
     var hasActiveEditorTab: Bool {
@@ -9895,6 +9980,8 @@ final class AppState {
 
         _ = tabs.openEditor(
             worktreeId: worktree.id,
+            projectId: worktree.projectId,
+            adoptUnownedEditor: legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId,
             relativePath: relativePath,
             revealLine: revealLine,
             revealCharacter: revealCharacter,
@@ -11826,12 +11913,18 @@ final class AppState {
             // navigation surface; a duplicate confined to a different Space
             // is still a valid owner of shared runtime state, but cannot
             // resolve this Space's selection.
-            if selectedWorktreeId == worktree.id,
-               !otherNavigationProjectsStillListWorktree(id: worktree.id, exceptProjectId: worktree.projectId) {
-                selectWorktree(id: selectionAfterRemoval(
-                    removedFromProjectId: worktree.projectId,
-                    removedAtIndex: removedIndex
-                ))
+            if selectedWorktreeId == worktree.id {
+                if let survivingWorktree = otherNavigationProjectWorktree(
+                    id: worktree.id,
+                    exceptProjectId: worktree.projectId
+                ) {
+                    selectWorktree(id: survivingWorktree.id, projectId: survivingWorktree.projectId)
+                } else {
+                    selectWorktree(id: selectionAfterRemoval(
+                        removedFromProjectId: worktree.projectId,
+                        removedAtIndex: removedIndex
+                    ))
+                }
             }
         }
         return .deleted
@@ -12197,16 +12290,18 @@ final class AppState {
     /// Returns `true` when the editor has a live, dirty (unsaved) buffer for
     /// the given absolute path within the given worktree.
     func editorHasDirtyBuffer(for absolutePath: String, worktreeId: String) -> Bool {
-        guard let relativePath = relativePath(for: absolutePath, in: worktreeId) else { return false }
-        return tabs.hasDirtyBuffer(worktreeId: worktreeId, relativePath: relativePath)
+        let projectId = selectedWorktreeId == worktreeId ? selectedWorktreeProjectId : nil
+        guard let relativePath = relativePath(for: absolutePath, in: worktreeId, projectId: projectId) else { return false }
+        return tabs.hasDirtyBuffer(worktreeId: worktreeId, projectId: projectId, relativePath: relativePath)
     }
 
     /// In-memory editor contents for `absolutePath` when a dirty buffer
     /// is open, otherwise `nil`. Used by the ACP read handler so agent
     /// reads include unsaved edits.
     func editorLiveBufferText(for absolutePath: String, worktreeId: String) -> String? {
-        guard let relativePath = relativePath(for: absolutePath, in: worktreeId) else { return nil }
-        return tabs.dirtyBufferText(worktreeId: worktreeId, relativePath: relativePath)
+        let projectId = selectedWorktreeId == worktreeId ? selectedWorktreeProjectId : nil
+        guard let relativePath = relativePath(for: absolutePath, in: worktreeId, projectId: projectId) else { return nil }
+        return tabs.dirtyBufferText(worktreeId: worktreeId, projectId: projectId, relativePath: relativePath)
     }
 
     /// Read-only facts used by checkpoint preview and restore preflight. A
@@ -12248,7 +12343,7 @@ final class AppState {
 
         let pane = rightPaneStore.activeState(for: worktree)
         let dirtyEditorPaths = CheckpointCoordinationSnapshot.overlappingPaths(
-            dirtyPaths: tabs.unsavedRelativePaths(forWorktree: worktree.id),
+            dirtyPaths: tabs.unsavedRelativePaths(forWorktree: worktree.id, projectId: worktree.projectId),
             selectedPaths: selectedPaths
         )
         return .init(
@@ -12409,8 +12504,8 @@ final class AppState {
         )
     }
 
-    private func relativePath(for absolutePath: String, in worktreeId: String) -> String? {
-        guard let worktree = worktree(withId: worktreeId) else { return nil }
+    private func relativePath(for absolutePath: String, in worktreeId: String, projectId: String? = nil) -> String? {
+        guard let worktree = worktree(withId: worktreeId, inProjectId: projectId) else { return nil }
         let root = worktree.path.standardizedFileURL.path
         let prefix = root.hasSuffix("/") ? root : root + "/"
         let target = URL(fileURLWithPath: absolutePath).standardizedFileURL.path
@@ -12560,6 +12655,16 @@ final class AppState {
         return acpManager(for: owner)
     }
 
+    func acpOwner(forSessionID sessionID: ACPSession.ID) -> SessionOwnerID? {
+        let owners = acpManagers.compactMap { owner, manager -> SessionOwnerID? in
+            guard manager.liveSession(for: sessionID) != nil
+                || manager.sessionRows.contains(where: { $0.id == sessionID })
+            else { return nil }
+            return owner
+        }
+        return owners.count == 1 ? owners[0] : nil
+    }
+
     /// Returns (or lazily creates) the ACP session manager for the given worktree.
     /// Store opening and migration happen lazily on the persistence actor.
     func acpManager(for worktree: Worktree) -> ACPSessionManager? {
@@ -12578,10 +12683,24 @@ final class AppState {
             hydratorPath: dbURL.path,
             remoteHost: project?.host,
             onDirtyCheck: { [weak self] path in
-                self?.editorHasDirtyBuffer(for: path, worktreeId: worktree.id) ?? false
+                guard let self,
+                      let relativePath = self.relativePath(for: path, in: worktree.id, projectId: worktree.projectId)
+                else { return false }
+                return self.tabs.hasDirtyBuffer(
+                    worktreeId: worktree.id,
+                    projectId: worktree.projectId,
+                    relativePath: relativePath
+                )
             },
             onLiveBufferRead: { [weak self] path in
-                self?.editorLiveBufferText(for: path, worktreeId: worktree.id)
+                guard let self,
+                      let relativePath = self.relativePath(for: path, in: worktree.id, projectId: worktree.projectId)
+                else { return nil }
+                return self.tabs.dirtyBufferText(
+                    worktreeId: worktree.id,
+                    projectId: worktree.projectId,
+                    relativePath: relativePath
+                )
             },
             onSessionTitleUpdated: { [weak self] sessionId, title in
                 _ = self?.tabs.renameACPSessionTabs(
@@ -12978,7 +13097,7 @@ final class AppState {
         if let existing = acpManagers[owner] { return .ready(existing) }
 
         let dbURL = Paths.acpSessionsDB(for: owner)
-        let checkoutMemberWorktreeID: (String) -> String? = { [weak self] absolutePath in
+        let checkoutMemberWorktree: (String) -> Worktree? = { [weak self] absolutePath in
             guard let self else { return nil }
             let target = Self.canonicalWorktreePath(absolutePath)
             let current = self.workspacesManager.checkout(id: checkout.id) ?? checkout
@@ -12989,7 +13108,7 @@ final class AppState {
                 guard let worktree = self.projectsManager.worktrees(projectId: member.projectID).first(where: {
                     Self.canonicalWorktreePath($0.path.path) == Self.canonicalWorktreePath(member.worktreePath)
                 }) else { return nil }
-                return worktree.id
+                return worktree
             }
             return nil
         }
@@ -13004,12 +13123,24 @@ final class AppState {
             remoteHost: pinnedRemoteHost,
             usesRemoteHostRegistry: checkout.executionLocation.normalized != .local,
             onDirtyCheck: { [weak self] path in
-                guard let worktreeID = checkoutMemberWorktreeID(path) else { return false }
-                return self?.editorHasDirtyBuffer(for: path, worktreeId: worktreeID) ?? false
+                guard let self, let worktree = checkoutMemberWorktree(path),
+                      let relativePath = self.relativePath(for: path, in: worktree.id, projectId: worktree.projectId)
+                else { return false }
+                return self.tabs.hasDirtyBuffer(
+                    worktreeId: worktree.id,
+                    projectId: worktree.projectId,
+                    relativePath: relativePath
+                )
             },
             onLiveBufferRead: { [weak self] path in
-                guard let worktreeID = checkoutMemberWorktreeID(path) else { return nil }
-                return self?.editorLiveBufferText(for: path, worktreeId: worktreeID)
+                guard let self, let worktree = checkoutMemberWorktree(path),
+                      let relativePath = self.relativePath(for: path, in: worktree.id, projectId: worktree.projectId)
+                else { return nil }
+                return self.tabs.dirtyBufferText(
+                    worktreeId: worktree.id,
+                    projectId: worktree.projectId,
+                    relativePath: relativePath
+                )
             },
             onSessionTitleUpdated: { [weak self] sessionId, title in
                 _ = self?.tabs.renameACPSessionTabs(

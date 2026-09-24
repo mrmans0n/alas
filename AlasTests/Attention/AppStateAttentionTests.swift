@@ -205,6 +205,45 @@ struct AppStateAttentionTests {
         #expect(state.harness.activityBySession[session.id] == nil)
     }
 
+    @Test func acpAttentionResolutionUsesTheManagersProjectOwnerForSharedPaths() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree()
+        let projectA = try #require(state.projects.first)
+        let worktreeA = try #require(state.projectsManager.worktrees(projectId: projectA.id).first)
+        let projectB = ProjectConfig(
+            id: "project-b-\(UUID().uuidString)",
+            name: "Project B",
+            path: "/remote/project-b",
+            color: "green",
+            addedAt: .distantPast,
+            host: "host-b"
+        )
+        let worktreeB = Worktree(
+            id: worktreeA.id,
+            projectId: projectB.id,
+            name: worktreeA.name,
+            branch: worktreeA.branch,
+            path: worktreeA.path,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [projectA, projectB])
+        state.projectsManager.insertOptimisticWorktree(worktreeA)
+        state.projectsManager.insertOptimisticWorktree(worktreeB)
+        let managerB = try #require(state.acpManager(for: worktreeB))
+        let session = managerB.createSession(id: "project-b-session", agentId: "test-agent")
+        _ = state.tabs.append(acpSession: .init(
+            sessionId: session.id,
+            title: "Project B session",
+            projectId: projectB.id
+        ), to: worktreeB.id)
+
+        let resolved = state.attentionWorktree(forSessionID: session.id)
+
+        #expect(resolved?.projectId == projectB.id)
+    }
+
     @Test func dismissAttentionItemAcknowledgesAndClearsNavigationError() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

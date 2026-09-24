@@ -558,6 +558,7 @@ struct ReviewSessionTabView: View {
             let relativeTarget = String(url.path.dropFirst(prefix.count))
             appState.tabs.openEditor(
                 worktreeId: worktree.id,
+                projectId: worktree.projectId,
                 relativePath: relativeTarget,
                 revealLine: line,
                 revealCharacter: character
@@ -565,6 +566,7 @@ struct ReviewSessionTabView: View {
         } else {
             appState.tabs.openExternalEditor(
                 worktreeId: worktree.id,
+                projectId: worktree.projectId,
                 absoluteURL: url,
                 revealLine: line,
                 revealCharacter: character,

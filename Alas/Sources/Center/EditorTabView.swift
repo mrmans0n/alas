@@ -178,6 +178,7 @@ struct EditorTabView: View {
                 }
                 CodeEditorView(
                     worktreeId: worktreeId,
+                    projectId: worktree.projectId,
                     worktreeRoot: worktreePath,
                     relativePath: relativePath,
                     tabId: tabId,
@@ -220,6 +221,9 @@ struct EditorTabView: View {
                         )
                         if appState.tabs.openNavigationTarget(
                             target,
+                            projectId: worktree.projectId,
+                            adoptUnownedEditor: appState.legacyEditorOwnerProjectId(forWorktreeId: worktree.id)
+                                == worktree.projectId,
                             worktreeRoot: worktreePath,
                             originatingRelativePath: externalAbsolutePath == nil ? relativePath : originatingRelativePath,
                             language: appState.lsp.language(
@@ -288,7 +292,7 @@ struct EditorTabView: View {
     }
 
     private func handleFindRequest(_ notification: Notification) {
-        guard appState.tabs.activeTabId(forWorktree: worktreeId) == tabId else { return }
+        guard appState.tabs.activeTabId(forWorktree: worktreeId, projectId: worktree.projectId) == tabId else { return }
 
         let request = notification.object as? EditorFindRequest ?? .showReplace
         switch request {

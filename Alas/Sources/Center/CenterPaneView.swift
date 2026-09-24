@@ -142,6 +142,7 @@ struct CenterPaneView: View {
             let availableAgents = centerAgentAvailability.agents
             let composition = state.centerTabComposition(
                 focusedWorktreeID: worktree.id,
+                focusedProjectID: worktree.projectId,
                 sharedSessionOwner: sharedSessionOwner
             )
             let tabs = composition.tabs
@@ -810,7 +811,7 @@ struct CenterPaneView: View {
         .onChange(of: state.tabs.hasLoaded) { _, _ in
             completeStartupRecoveryIfPaneIsStable()
         }
-        .onChange(of: state.tabs.activeTabId(forWorktree: worktree.id)) { _, _ in
+        .onChange(of: state.tabs.activeTabId(forWorktree: worktree.id, projectId: worktree.projectId)) { _, _ in
             startupRecoveryReadyKey = nil
             completeStartupRecoveryIfPaneIsStable()
         }
@@ -843,6 +844,7 @@ struct CenterPaneView: View {
         guard state.tabs.hasLoaded else { return }
         let composition = state.centerTabComposition(
             focusedWorktreeID: worktree.id,
+            focusedProjectID: worktree.projectId,
             sharedSessionOwner: sharedSessionOwner
         )
         guard Self.shouldCompleteStartupRecoveryForCenterPane(
@@ -895,6 +897,7 @@ struct CenterPaneView: View {
         guard state.selectedWorktreeId == worktree.id else { return }
         let composition = state.centerTabComposition(
             focusedWorktreeID: worktree.id,
+            focusedProjectID: worktree.projectId,
             sharedSessionOwner: sharedSessionOwner
         )
         guard composition.activeId == tabID else { return }
@@ -906,6 +909,7 @@ struct CenterPaneView: View {
     private var startupRecoveryActiveKey: String? {
         let composition = state.centerTabComposition(
             focusedWorktreeID: worktree.id,
+            focusedProjectID: worktree.projectId,
             sharedSessionOwner: sharedSessionOwner
         )
         return Self.startupRecoveryActiveKey(

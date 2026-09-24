@@ -835,6 +835,9 @@ struct EditorTabState: Codable, Equatable, Identifiable {
     let id: TabID
     var title: String
     var relativePath: String   // relative to worktree root; empty when external
+    /// Project owner for shared path-derived worktree IDs. Nil for older tabs
+    /// that were persisted before editor tabs carried project identity.
+    var projectId: String? = nil
     var revealLine: Int? = nil       // 0-based, optional reveal hint set by go-to-definition
     var revealEndLine: Int? = nil    // 0-based, optional inclusive range end
     var revealCharacter: Int? = nil  // 0-based UTF-16

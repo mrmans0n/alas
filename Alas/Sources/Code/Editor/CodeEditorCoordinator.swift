@@ -21,9 +21,14 @@ final class CodeEditorCoordinator {
 
     private var currentTabId: TabID?
     private var currentWorktreeId: String?
+    private var currentProjectId: String?
 
     var tabId: TabID? { currentTabId }
     var currentBufferReadOnly: Bool { buffer?.readOnly ?? true }
+    private var adoptsLegacyUnownedEditor: Bool {
+        guard let currentWorktreeId, let currentProjectId else { return false }
+        return appState.legacyEditorOwnerProjectId(forWorktreeId: currentWorktreeId) == currentProjectId
+    }
     private var currentRoot: URL?
     private var currentRelativePath: String?
     private var currentLanguage: String?
@@ -108,10 +113,11 @@ final class CodeEditorCoordinator {
         self.appState = appState
     }
 
-    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil, externalEditable: Bool = false) {
+    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil, externalEditable: Bool = false, projectId: String? = nil) {
         self.textView = textView
         self.layoutManager = layoutManager
         self.currentWorktreeId = worktreeId
+        self.currentProjectId = projectId
         textView.notificationStore = appState.inAppNotifications
         textView.notificationWorktreeID = worktreeId
         self.currentTabId = tabId
@@ -193,6 +199,8 @@ final class CodeEditorCoordinator {
                 )
                 if self.appState.tabs.openNavigationTarget(
                     target,
+                    projectId: self.currentProjectId,
+                    adoptUnownedEditor: self.adoptsLegacyUnownedEditor,
                     worktreeRoot: root,
                     originatingRelativePath: self.currentExternalAbsolutePath == nil
                         ? self.currentRelativePath
@@ -336,7 +344,7 @@ final class CodeEditorCoordinator {
         onTextViewAttached?(textView, tabId)
     }
 
-    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil, externalEditable: Bool = false) {
+    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil, externalEditable: Bool = false, projectId: String? = nil) {
         // Re-query the registry every time so a registry change (e.g. a
         // server gets installed) still flips this comparison and triggers a
         // rebind. When the same tab is being re-evaluated and has an
@@ -366,6 +374,7 @@ final class CodeEditorCoordinator {
             // The || currentExternalAbsolutePath != nil clause catches the
             // in-worktree-to-external and external-to-in-worktree transitions.
             pathChanged = currentWorktreeId != worktreeId
+                || currentProjectId != projectId
                 || currentTabId != tabId
                 || currentExternalAbsolutePath != externalAbsolutePath
                 || currentOriginatingRelativePath != originatingRelativePath
@@ -373,6 +382,7 @@ final class CodeEditorCoordinator {
                 || currentExternalEditable != externalEditable
         } else {
             pathChanged = currentWorktreeId != worktreeId
+                || currentProjectId != projectId
                 || currentTabId != tabId
                 || currentRoot != worktreeRoot
                 || currentRelativePath != relativePath
@@ -394,6 +404,7 @@ final class CodeEditorCoordinator {
             Task { await session.reset() }
 
             currentWorktreeId = worktreeId
+            currentProjectId = projectId
             currentTabId = tabId
             currentExternalAbsolutePath = externalAbsolutePath
             currentExternalEditable = externalEditable
@@ -1025,6 +1036,8 @@ final class CodeEditorCoordinator {
         guard let target else { return }
         if appState.tabs.openNavigationTarget(
             target,
+            projectId: currentProjectId,
+            adoptUnownedEditor: adoptsLegacyUnownedEditor,
             worktreeRoot: root,
             originatingRelativePath: currentExternalAbsolutePath == nil
                 ? currentRelativePath
@@ -1079,6 +1092,8 @@ final class CodeEditorCoordinator {
         )
         if appState.tabs.openNavigationTarget(
             target,
+            projectId: currentProjectId,
+            adoptUnownedEditor: adoptsLegacyUnownedEditor,
             worktreeRoot: root,
             originatingRelativePath: currentExternalAbsolutePath == nil
                 ? currentRelativePath

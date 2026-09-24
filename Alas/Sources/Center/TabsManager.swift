@@ -5,6 +5,7 @@ struct TabsFile: Codable {
     var version: Int = 1
     var tabs: [Tab]
     var activeTabId: TabID?
+    var activeEditorTabIds: [String: TabID] = [:]
     /// Draft commit state preserved across tab close/reopen.
     /// Nil when no draft has been started in this worktree, or when the
     /// draft has been committed/discarded. Survives close so the user's
@@ -19,6 +20,7 @@ extension TabsFile {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = (try? c.decode(Int.self, forKey: .version)) ?? 1
         activeTabId = try? c.decode(TabID.self, forKey: .activeTabId)
+        activeEditorTabIds = (try? c.decode([String: TabID].self, forKey: .activeEditorTabIds)) ?? [:]
         stashedDraft = try? c.decode(DraftCommitTabState.self, forKey: .stashedDraft)
         tabs = ((try? c.decode([FailableTab].self, forKey: .tabs)) ?? []).compactMap(\.value)
     }
@@ -34,6 +36,7 @@ extension TabsFile {
 final class TabsManager {
     private struct BufferKey: Hashable {
         var worktreeId: String
+        var projectId: String? = nil
         var relativePath: String
     }
 
@@ -106,6 +109,17 @@ final class TabsManager {
         byWorktree[id]?.tabs ?? []
     }
 
+    func tabs(
+        forWorktree id: String,
+        projectId: String,
+        includesLegacyUnownedEditors: Bool = false
+    ) -> [Tab] {
+        (byWorktree[id]?.tabs ?? []).filter { tab in
+            guard case .editor(let editor) = tab else { return true }
+            return editor.projectId == projectId || (includesLegacyUnownedEditors && editor.projectId == nil)
+        }
+    }
+
     func navigationStore(forWorktreeId worktreeId: String) -> EditorNavigationStore {
         if let store = navigationStores[worktreeId] { return store }
         let store = EditorNavigationStore(openBuffer: { [weak self] document in self?.workspaceEditBuffer(for: document) })
@@ -135,6 +149,8 @@ final class TabsManager {
     @discardableResult
     func openNavigationTarget(
         _ target: EditorNavigationTarget,
+        projectId: String? = nil,
+        adoptUnownedEditor: Bool = false,
         worktreeRoot: URL,
         originatingRelativePath: String?,
         language: String?
@@ -163,6 +179,8 @@ final class TabsManager {
         if isContained {
             _ = openEditor(
                 worktreeId: target.document.worktreeID,
+                projectId: projectId,
+                adoptUnownedEditor: adoptUnownedEditor,
                 relativePath: targetComponents.dropFirst(rootComponents.count).joined(separator: "/"),
                 revealLine: target.position.line,
                 revealCharacter: target.position.character,
@@ -171,6 +189,8 @@ final class TabsManager {
         } else {
             _ = openExternalEditor(
                 worktreeId: target.document.worktreeID,
+                projectId: projectId,
+                adoptUnownedEditor: adoptUnownedEditor,
                 absoluteURL: normalizedURL,
                 revealLine: target.position.line,
                 revealCharacter: target.position.character,
@@ -199,6 +219,38 @@ final class TabsManager {
 
     func activeTabId(forWorktree id: String) -> TabID? {
         byWorktree[id]?.activeTabId
+    }
+
+    func activeTabId(
+        forWorktree id: String,
+        projectId: String,
+        includesLegacyUnownedEditors: Bool = false
+    ) -> TabID? {
+        guard let file = byWorktree[id] else { return nil }
+        if let activeTabId = file.activeTabId,
+           let activeTab = file.tabs.first(where: { $0.id == activeTabId }) {
+            if case .editor(let editor) = activeTab {
+                if editor.projectId == projectId || (includesLegacyUnownedEditors && editor.projectId == nil) {
+                    return activeTabId
+                }
+            } else {
+                return activeTabId
+            }
+        }
+        if let remembered = file.activeEditorTabIds[projectId],
+           file.tabs.contains(where: { tab in
+               guard tab.id == remembered, case .editor(let editor) = tab else { return false }
+               return editor.projectId == projectId
+            }) {
+            return remembered
+        }
+        if let mostRecentEditor = file.tabs.reversed().first(where: { tab in
+            guard case .editor(let editor) = tab else { return false }
+            return editor.projectId == projectId || (includesLegacyUnownedEditors && editor.projectId == nil)
+        }) {
+            return mostRecentEditor.id
+        }
+        return nil
     }
 
     func activeTabId(for owner: SessionOwnerID) -> TabID? {
@@ -699,8 +751,8 @@ final class TabsManager {
     }
 
     @discardableResult
-    func appendEditor(worktreeId: String, title: String, relativePath: String) -> Tab {
-        let state = EditorTabState(id: UUID().uuidString, title: title, relativePath: relativePath)
+    func appendEditor(worktreeId: String, projectId: String? = nil, title: String, relativePath: String) -> Tab {
+        let state = EditorTabState(id: UUID().uuidString, title: title, relativePath: relativePath, projectId: projectId)
         let tab = Tab.editor(state)
         append(tab, to: worktreeId)
         return tab
@@ -712,6 +764,8 @@ final class TabsManager {
     @discardableResult
     func openEditor(
         worktreeId: String,
+        projectId: String? = nil,
+        adoptUnownedEditor: Bool = false,
         relativePath: String,
         revealLine: Int?,
         revealCharacter: Int?,
@@ -722,10 +776,14 @@ final class TabsManager {
             && MarkdownFileType.supportsRichPreview(relativePath: relativePath)
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: {
-               if case .editor(let s) = $0 { return s.relativePath == relativePath }
+               if case .editor(let s) = $0 {
+                   return s.relativePath == relativePath
+                       && (s.projectId == projectId || (adoptUnownedEditor && s.projectId == nil))
+               }
                return false
            }) {
             if case .editor(var s) = file.tabs[idx] {
+                s.projectId = projectId
                 s.navigationResolvedRoot = s.navigationResolvedRoot ?? navigationResolvedRoot
                 s.revealLine = revealLine
                 s.revealEndLine = revealEndLine
@@ -738,6 +796,7 @@ final class TabsManager {
                 }
                 file.tabs[idx] = .editor(s)
                 file.activeTabId = s.id
+                if let projectId { file.activeEditorTabIds[projectId] = s.id }
                 byWorktree[worktreeId] = file
                 persist(worktreeId)
                 return .editor(s)
@@ -748,6 +807,7 @@ final class TabsManager {
             id: UUID().uuidString,
             title: title,
             relativePath: relativePath,
+            projectId: projectId,
             revealLine: revealLine,
             revealEndLine: revealEndLine,
             revealCharacter: revealCharacter,
@@ -777,6 +837,8 @@ final class TabsManager {
     @discardableResult
     func openExternalEditor(
         worktreeId: String,
+        projectId: String? = nil,
+        adoptUnownedEditor: Bool = false,
         absoluteURL: URL,
         revealLine: Int?,
         revealCharacter: Int?,
@@ -791,10 +853,14 @@ final class TabsManager {
             && MarkdownFileType.supportsRichPreview(relativePath: absPath)
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: {
-               if case .editor(let s) = $0 { return s.externalAbsolutePath == absPath }
+               if case .editor(let s) = $0 {
+                   return s.externalAbsolutePath == absPath
+                       && (s.projectId == projectId || (adoptUnownedEditor && s.projectId == nil))
+               }
                return false
            }) {
             if case .editor(var s) = file.tabs[idx] {
+                s.projectId = projectId
                 let originChanged = (s.originatingRelativePath != originatingRelativePath)
                 s.revealLine = revealLine
                 s.revealEndLine = revealEndLine
@@ -811,6 +877,7 @@ final class TabsManager {
                 if editable { s.externalEditable = true }
                 file.tabs[idx] = .editor(s)
                 file.activeTabId = s.id
+                if let projectId { file.activeEditorTabIds[projectId] = s.id }
                 byWorktree[worktreeId] = file
                 persist(worktreeId)
                 if originChanged, let originatingWorktreeRoot {
@@ -841,6 +908,7 @@ final class TabsManager {
             id: UUID().uuidString,
             title: title,
             relativePath: "",
+            projectId: projectId,
             revealLine: revealLine,
             revealEndLine: revealEndLine,
             revealCharacter: revealCharacter,
@@ -1798,6 +1866,11 @@ final class TabsManager {
     func activate(worktreeId: String, tabId: TabID) {
         var file = byWorktree[worktreeId] ?? TabsFile(tabs: [], activeTabId: nil)
         file.activeTabId = tabId
+        if let tab = file.tabs.first(where: { $0.id == tabId }),
+           case .editor(let editor) = tab,
+           let projectId = editor.projectId {
+            file.activeEditorTabIds[projectId] = tabId
+        }
         byWorktree[worktreeId] = file
         persist(worktreeId)
     }
@@ -1828,6 +1901,9 @@ final class TabsManager {
             let index = placement.insertionIndex(in: file.tabs.map(\.id))
             file.tabs.insert(tab, at: index)
             file.activeTabId = tab.id
+        }
+        if case .editor(let editor) = tab, let projectId = editor.projectId {
+            file.activeEditorTabIds[projectId] = tab.id
         }
         byWorktree[worktreeID] = file
         persist(worktreeID)
@@ -1987,6 +2063,9 @@ final class TabsManager {
         var file = byWorktree[worktreeId] ?? TabsFile(tabs: [], activeTabId: nil)
         file.tabs.append(tab)
         file.activeTabId = tab.id
+        if case .editor(let editor) = tab, let projectId = editor.projectId {
+            file.activeEditorTabIds[projectId] = editor.id
+        }
         byWorktree[worktreeId] = file
         persist(worktreeId)
     }
@@ -2024,22 +2103,27 @@ final class TabsManager {
     /// hot-restore from snapshot) on first access.
     func buffer(worktreeId: String, tabId: TabID, worktreeRoot: URL, relativePath: String) -> EditorBuffer {
         if let existing = tabBuffers[tabId] { return existing }
-        let navigationResolvedRoot: URL?
-        if case .editor(let state)? = tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }) {
-            navigationResolvedRoot = state.navigationResolvedRoot
-        } else {
-            navigationResolvedRoot = nil
+        let editorState = tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }).flatMap { tab -> EditorTabState? in
+            guard case .editor(let state) = tab else { return nil }
+            return state
         }
+        let projectId = editorState?.projectId
+        let navigationResolvedRoot = editorState?.navigationResolvedRoot
         let snapshot = (try? bufferStore.read(worktreeId: worktreeId, tabId: tabId)) ?? nil
         var restoresToDifferentPath = snapshot.map { $0.relativePath != relativePath } ?? false
         if restoresToDifferentPath {
             if let snapshot,
-               !canFollowBufferPathChange(worktreeId: worktreeId, oldPath: relativePath, newPath: snapshot.relativePath) {
+               !canFollowBufferPathChange(
+                   worktreeId: worktreeId,
+                   projectId: projectId,
+                   oldPath: relativePath,
+                   newPath: snapshot.relativePath
+               ) {
                 bufferStore.discard(worktreeId: worktreeId, tabId: tabId)
                 restoresToDifferentPath = false
             }
         }
-        let key = BufferKey(worktreeId: worktreeId, relativePath: relativePath)
+        let key = BufferKey(worktreeId: worktreeId, projectId: projectId, relativePath: relativePath)
         if !restoresToDifferentPath, let existing = buffers[key] {
             bufferKeys[tabId] = key
             tabBuffers[tabId] = existing
@@ -2070,12 +2154,18 @@ final class TabsManager {
         }
         buffer.startWatching()
         buffer.shouldFollowPathChange = { [weak self] oldPath, newPath in
-            self?.canFollowBufferPathChange(worktreeId: worktreeId, oldPath: oldPath, newPath: newPath) ?? false
+            self?.canFollowBufferPathChange(
+                worktreeId: worktreeId,
+                projectId: projectId,
+                oldPath: oldPath,
+                newPath: newPath
+            ) ?? false
         }
         buffer.onPathChanged = { [weak self, weak buffer] oldPath, newPath in
             guard let buffer else { return }
             self?.handleBufferPathChanged(
                 worktreeId: worktreeId,
+                projectId: projectId,
                 buffer: buffer,
                 oldPath: oldPath,
                 newPath: newPath
@@ -2085,6 +2175,7 @@ final class TabsManager {
             guard let self, let buffer else { return }
             self.resolvePendingRestoredPathChange(
                 worktreeId: worktreeId,
+                projectId: projectId,
                 tabId: tabId,
                 buffer: buffer,
                 oldPath: oldPath,
@@ -2093,7 +2184,12 @@ final class TabsManager {
         }
         buffer.onInitialLoadFinished = { [weak self, weak buffer] in
             guard let self, let buffer else { return }
-            self.indexRestoredPathBufferIfAvailable(worktreeId: worktreeId, tabId: tabId, buffer: buffer)
+            self.indexRestoredPathBufferIfAvailable(
+                worktreeId: worktreeId,
+                projectId: projectId,
+                tabId: tabId,
+                buffer: buffer
+            )
             self.reattachWorkspaceUndo(buffer, worktreeId: worktreeId)
         }
         buffer.onSnapshotRequested = { [weak self, weak buffer] in
@@ -2108,10 +2204,19 @@ final class TabsManager {
         if restoresToDifferentPath {
             bufferKeys[tabId] = key
             if buffer.initialLoadFinished {
-                indexRestoredPathBufferIfAvailable(worktreeId: worktreeId, tabId: tabId, buffer: buffer)
+                indexRestoredPathBufferIfAvailable(
+                    worktreeId: worktreeId,
+                    projectId: projectId,
+                    tabId: tabId,
+                    buffer: buffer
+                )
             }
         } else if let restoredPathChange = buffer.consumeRestoredPathChange() {
-            let restoredKey = BufferKey(worktreeId: worktreeId, relativePath: restoredPathChange.newPath)
+            let restoredKey = BufferKey(
+                worktreeId: worktreeId,
+                projectId: projectId,
+                relativePath: restoredPathChange.newPath
+            )
             buffers[restoredKey] = buffer
             bufferKeys[tabId] = restoredKey
             _ = updateEditorPath(worktreeId: worktreeId, tabId: tabId, relativePath: restoredPathChange.newPath)
@@ -2305,9 +2410,14 @@ final class TabsManager {
         return bufferStore.peekExternalBuffer(worktreeId: entry.worktreeId, absoluteURL: entry.url)
     }
 
-    private func indexRestoredPathBufferIfAvailable(worktreeId: String, tabId: TabID, buffer: EditorBuffer) {
+    private func indexRestoredPathBufferIfAvailable(
+        worktreeId: String,
+        projectId: String?,
+        tabId: TabID,
+        buffer: EditorBuffer
+    ) {
         guard tabBuffers[tabId] === buffer else { return }
-        let key = BufferKey(worktreeId: worktreeId, relativePath: buffer.relativePath)
+        let key = BufferKey(worktreeId: worktreeId, projectId: projectId, relativePath: buffer.relativePath)
         if let existing = buffers[key], existing !== buffer { return }
         buffers[key] = buffer
         bufferKeys[tabId] = key
@@ -2315,13 +2425,14 @@ final class TabsManager {
 
     private func resolvePendingRestoredPathChange(
         worktreeId: String,
+        projectId: String?,
         tabId: TabID,
         buffer: EditorBuffer,
         oldPath: String,
         newPath: String
     ) {
-        let oldKey = BufferKey(worktreeId: worktreeId, relativePath: oldPath)
-        let restoredKey = BufferKey(worktreeId: worktreeId, relativePath: newPath)
+        let oldKey = BufferKey(worktreeId: worktreeId, projectId: projectId, relativePath: oldPath)
+        let restoredKey = BufferKey(worktreeId: worktreeId, projectId: projectId, relativePath: newPath)
         if buffers[oldKey] === buffer {
             buffers.removeValue(forKey: oldKey)
         }
@@ -2347,10 +2458,13 @@ final class TabsManager {
     /// directory for an external buffer, not the worktree. Cmd+S and revert
     /// don't go through this path (they use `peekBuffer` directly, which is
     /// exactly where the external fallback is meant to apply).
-    func activeEditorContext(worktreeId: String) -> (tab: EditorTabState, buffer: EditorBuffer)? {
-        guard let activeId = activeTabId(forWorktree: worktreeId),
+    func activeEditorContext(worktreeId: String, projectId: String? = nil) -> (tab: EditorTabState, buffer: EditorBuffer)? {
+        let activeId = projectId.map { activeTabId(forWorktree: worktreeId, projectId: $0) }
+            ?? activeTabId(forWorktree: worktreeId)
+        guard let activeId,
               let tab = tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
               case .editor(let state) = tab,
+              projectId == nil || state.projectId == projectId,
               !state.isExternal,
               let buffer = peekBuffer(tabId: activeId) else { return nil }
         return (state, buffer)
@@ -2428,18 +2542,27 @@ final class TabsManager {
     /// buffers with only a hot-exit snapshot on disk are not considered dirty
     /// here because the agent write replaces on-disk bytes — the snapshot
     /// already diverges from disk, so no additional notice is needed.
-    func hasDirtyBuffer(worktreeId: String, relativePath: String) -> Bool {
-        let key = BufferKey(worktreeId: worktreeId, relativePath: relativePath)
-        return buffers[key]?.dirty == true
+    func hasDirtyBuffer(worktreeId: String, projectId: String? = nil, relativePath: String) -> Bool {
+        if let projectId {
+            let key = BufferKey(worktreeId: worktreeId, projectId: projectId, relativePath: relativePath)
+            return buffers[key]?.dirty == true
+        }
+        return buffers.contains { entry in
+            entry.key.worktreeId == worktreeId
+                && entry.key.relativePath == relativePath
+                && entry.value.dirty
+        }
     }
 
     /// Relative paths with unsaved editor state for one worktree. Includes
     /// unloaded hot-exit snapshots because a restore would otherwise replace
     /// the on-disk file behind an unsaved editor draft.
-    func unsavedRelativePaths(forWorktree worktreeId: String) -> Set<String> {
+    func unsavedRelativePaths(forWorktree worktreeId: String, projectId: String? = nil) -> Set<String> {
         guard let file = byWorktree[worktreeId] else { return [] }
         return Set(file.tabs.compactMap { tab in
-            guard case let .editor(state) = tab, !state.isExternal else { return nil }
+            guard case let .editor(state) = tab,
+                  projectId == nil || state.projectId == projectId,
+                  !state.isExternal else { return nil }
             if let buffer = peekBuffer(tabId: state.id) {
                 return buffer.saveDisposition == .clean ? nil : buffer.relativePath
             }
@@ -2454,21 +2577,31 @@ final class TabsManager {
     /// in which case the caller should fall back to disk. Used by the
     /// ACP `fs/read_text_file` handler so agents see what the user
     /// sees, not the last saved bytes.
-    func dirtyBufferText(worktreeId: String, relativePath: String) -> String? {
-        let key = BufferKey(worktreeId: worktreeId, relativePath: relativePath)
-        guard let buffer = buffers[key], buffer.dirty else { return nil }
-        return buffer.storage.string
+    func dirtyBufferText(worktreeId: String, projectId: String? = nil, relativePath: String) -> String? {
+        if let projectId {
+            let key = BufferKey(worktreeId: worktreeId, projectId: projectId, relativePath: relativePath)
+            guard let buffer = buffers[key], buffer.dirty else { return nil }
+            return buffer.storage.string
+        }
+        let matches = buffers.compactMap { entry -> String? in
+            guard entry.key.worktreeId == worktreeId,
+                  entry.key.relativePath == relativePath,
+                  entry.value.dirty else { return nil }
+            return entry.value.storage.string
+        }
+        return matches.count == 1 ? matches[0] : nil
     }
 
     /// Tab IDs in `worktreeId` that have unsaved changes — either a live dirty
     /// buffer or a persisted hot-exit snapshot for a buffer that hasn't been
     /// instantiated yet. Returns IDs in tab order (declaration order within the
     /// worktree's tab list).
-    func tabIdsWithUnsavedChanges(forWorktree worktreeId: String) -> [TabID] {
+    func tabIdsWithUnsavedChanges(forWorktree worktreeId: String, projectId: String? = nil) -> [TabID] {
         guard let file = byWorktree[worktreeId] else { return [] }
         var result: [TabID] = []
         for tab in file.tabs {
-            guard case .editor(let state) = tab else { continue }
+            guard case .editor(let state) = tab,
+                  projectId == nil || state.projectId == projectId else { continue }
             let tabId = state.id
             if let buffer = peekBuffer(tabId: tabId) {
                 if buffer.saveDisposition != .clean { result.append(tabId) }
@@ -2493,7 +2626,7 @@ final class TabsManager {
         byWorktree[worktreeId] = file
         persist(worktreeId)
         if let oldKey = bufferKeys[tabId] {
-            let newKey = BufferKey(worktreeId: worktreeId, relativePath: relativePath)
+            let newKey = BufferKey(worktreeId: worktreeId, projectId: oldKey.projectId, relativePath: relativePath)
             bufferKeys[tabId] = newKey
             if oldKey != newKey, let buffer = buffers.removeValue(forKey: oldKey) {
                 buffers[newKey] = buffer
@@ -2502,10 +2635,12 @@ final class TabsManager {
         return true
     }
 
-    func hasEditor(worktreeId: String, relativePath: String, excluding tabId: TabID? = nil) -> Bool {
+    func hasEditor(worktreeId: String, projectId: String? = nil, relativePath: String, excluding tabId: TabID? = nil) -> Bool {
         tabs(forWorktree: worktreeId).contains { tab in
             guard case .editor(let state) = tab else { return false }
-            return state.id != tabId && state.relativePath == relativePath
+            return state.id != tabId
+                && state.relativePath == relativePath
+                && (projectId == nil || state.projectId == projectId)
         }
     }
 
@@ -2749,7 +2884,12 @@ final class TabsManager {
         guard let worktreeRoot else { return nil }
         let relativePath = state.relativePath
         if snapshot.relativePath != relativePath,
-           !canFollowBufferPathChange(worktreeId: worktreeId, oldPath: relativePath, newPath: snapshot.relativePath) {
+           !canFollowBufferPathChange(
+               worktreeId: worktreeId,
+               projectId: state.projectId,
+               oldPath: relativePath,
+               newPath: snapshot.relativePath
+           ) {
             bufferStore.discard(worktreeId: worktreeId, tabId: tabId)
             return nil
         }
@@ -2819,12 +2959,13 @@ final class TabsManager {
 
     private func handleBufferPathChanged(
         worktreeId: String,
+        projectId: String?,
         buffer: EditorBuffer,
         oldPath: String,
         newPath: String
     ) {
-        let oldKey = BufferKey(worktreeId: worktreeId, relativePath: oldPath)
-        let newKey = BufferKey(worktreeId: worktreeId, relativePath: newPath)
+        let oldKey = BufferKey(worktreeId: worktreeId, projectId: projectId, relativePath: oldPath)
+        let newKey = BufferKey(worktreeId: worktreeId, projectId: projectId, relativePath: newPath)
         let affectedTabIds = tabBuffers.compactMap { tabId, liveBuffer in
             liveBuffer === buffer ? tabId : nil
         }
@@ -2840,14 +2981,20 @@ final class TabsManager {
         }
     }
 
-    private func canFollowBufferPathChange(worktreeId: String, oldPath: String, newPath: String) -> Bool {
-        let oldKey = BufferKey(worktreeId: worktreeId, relativePath: oldPath)
-        let newKey = BufferKey(worktreeId: worktreeId, relativePath: newPath)
+    private func canFollowBufferPathChange(
+        worktreeId: String,
+        projectId: String? = nil,
+        oldPath: String,
+        newPath: String
+    ) -> Bool {
+        let oldKey = BufferKey(worktreeId: worktreeId, projectId: projectId, relativePath: oldPath)
+        let newKey = BufferKey(worktreeId: worktreeId, projectId: projectId, relativePath: newPath)
         guard oldKey != newKey else { return true }
         guard buffers[newKey] == nil else { return false }
         guard let file = byWorktree[worktreeId] else { return true }
         for tab in file.tabs {
             guard case .editor(let state) = tab,
+                  state.projectId == projectId,
                   state.relativePath == newPath,
                   bufferKeys[state.id] == nil else { continue }
             if let snapshot = (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) ?? nil,
