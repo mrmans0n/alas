@@ -113,6 +113,34 @@ respond when it needs you.
 Install and authenticate the agents you want to use. GitHub and GitLab features
 use the `gh` and `glab` CLIs respectively, with their existing authentication.
 
+## Scheduled agent reports
+
+Schedules that create a worktree and launch an agent can opt into a durable
+task report. This requires an explicitly selected native ACP agent with Alas's
+built-in MCP tools enabled, a nonblank prompt, and automatic prompt submission.
+Terminal agents, project or repository defaults, and agents using external MCP
+injection are not eligible.
+
+The agent must call `schedule_complete` to report success, failure, or a need for
+attention. A successful launch or accepted prompt is not task success; Alas
+waits for that prompt's ACP turn to finish before considering cleanup. Reports
+appear under **Schedules → Scheduled reports** and remain after the schedule,
+worktree, and session are removed, until you delete the report. A report keeps
+the request, agent and model, completion summary, checks, output links, and
+timing; it does not store the conversation transcript. Failure and retention
+notifications open the corresponding report.
+
+**Keep worktree** is the default. **Report and clean up** requests removal only
+after an explicit successful completion and a settled ACP turn. Cleanup also
+requires a safe Git state and no conflicting sessions, terminals, checkpoints,
+or workspace ownership. Uncommitted changes, local-only or unverifiable
+commits, other safety refusals, and removal errors retain the worktree and
+session. Task outcome and cleanup outcome are shown separately; cleanup never
+force-removes a worktree.
+
+Completion text is limited to 64 KiB in total, with at most 100 checks and 100
+output links; the serialized completion payload is limited to 256 KiB.
+
 ## Repo-local configuration (`.alas/`)
 
 A repository can ship shared Alas configuration in `.alas/`. Only **local**

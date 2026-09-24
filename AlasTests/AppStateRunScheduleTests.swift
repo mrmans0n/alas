@@ -129,6 +129,113 @@ struct AppStateRunScheduleTests {
         )
     }
 
+    @Test func scheduledCleanupClaimDoesNotOverwriteAnExistingOperation() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        #expect(fixture.state.claimScheduledAgentWorktreeForCleanup(fixture.worktree))
+        #expect(fixture.state.projectsManager.operationState(for: fixture.worktree)
+            == .deleting(projectId: fixture.project.id))
+
+        fixture.state.projectsManager.setOperationState(for: fixture.worktree, state: .creating)
+        #expect(!fixture.state.claimScheduledAgentWorktreeForCleanup(fixture.worktree))
+        #expect(fixture.state.projectsManager.operationState(for: fixture.worktree) == .creating)
+    }
+
+    @Test func scheduledCleanupIdentityMustMatchItsCapturedTarget() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let registration = ScheduledAgentRunRegistration(
+            reportID: "report",
+            occurrenceID: "occurrence",
+            scheduleID: "schedule",
+            projectID: fixture.project.id,
+            worktreeID: fixture.worktree.id,
+            sessionID: "scheduled-session",
+            promptID: UUID()
+        )
+        let report = ScheduledAgentReport(
+            id: "report",
+            occurrenceID: "occurrence",
+            scheduleID: "schedule",
+            scheduleName: "Nightly",
+            projectID: fixture.project.id,
+            projectName: fixture.project.name,
+            branch: fixture.worktree.branch,
+            baseCommit: "base",
+            worktreeID: fixture.worktree.id,
+            sessionID: "scheduled-session",
+            agentID: "codex",
+            request: "Review the repository.",
+            startedAt: Date(),
+            finishedAt: Date(),
+            taskState: .succeeded,
+            completion: ScheduledAgentCompletion(
+                outcome: .succeeded,
+                summary: "Complete.",
+                checks: [],
+                links: []
+            ),
+            cleanupRequested: true,
+            cleanupState: .pending
+        )
+
+        #expect(AppState.scheduledAgentCleanupIdentityIsValid(
+            report: report,
+            registration: registration,
+            project: fixture.project,
+            worktree: fixture.worktree
+        ))
+        let unrelatedRegistration = ScheduledAgentRunRegistration(
+            reportID: "another-report",
+            occurrenceID: "occurrence",
+            scheduleID: "schedule",
+            projectID: fixture.project.id,
+            worktreeID: fixture.worktree.id,
+            sessionID: "scheduled-session",
+            promptID: registration.promptID
+        )
+        #expect(!AppState.scheduledAgentCleanupIdentityIsValid(
+            report: report,
+            registration: unrelatedRegistration,
+            project: fixture.project,
+            worktree: fixture.worktree
+        ))
+        let differentWorktreeRegistration = ScheduledAgentRunRegistration(
+            reportID: "report",
+            occurrenceID: "occurrence",
+            scheduleID: "schedule",
+            projectID: fixture.project.id,
+            worktreeID: "another-worktree",
+            sessionID: "scheduled-session",
+            promptID: registration.promptID
+        )
+        #expect(!AppState.scheduledAgentCleanupIdentityIsValid(
+            report: report,
+            registration: differentWorktreeRegistration,
+            project: fixture.project,
+            worktree: fixture.worktree
+        ))
+    }
+
+    @Test func scheduledCleanupRefusesEveryOtherOpenSession() {
+        #expect(AppState.scheduledCleanupHasNoOtherSessions(
+            worktreeSessionIDs: ["scheduled"],
+            managerSessionIDs: ["scheduled"],
+            scheduledSessionID: "scheduled"
+        ))
+        #expect(!AppState.scheduledCleanupHasNoOtherSessions(
+            worktreeSessionIDs: ["scheduled", "terminal"],
+            managerSessionIDs: ["scheduled"],
+            scheduledSessionID: "scheduled"
+        ))
+        #expect(!AppState.scheduledCleanupHasNoOtherSessions(
+            worktreeSessionIDs: ["scheduled"],
+            managerSessionIDs: ["scheduled", "other-acp"],
+            scheduledSessionID: "scheduled"
+        ))
+    }
+
     /// Lives here because this is the suite the problem was found in, but the
     /// invariant is repo-wide: most `AlasTests` fixtures do not inject
     /// `fileActionErrorHandler`, and its default ends in `NSAlert.runModal`.

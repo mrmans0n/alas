@@ -167,6 +167,49 @@ struct AlasCLIRequestTests {
         ))
     }
 
+    @Test func decodesScheduledTaskCompletion() throws {
+        let json = #"{"v":1,"kind":"cli","command":"schedule_complete","session_id":"scheduled-1","cwd":"/schedule/worktree","params":{"status":"needs_attention","summary":" Approval needed. ","checks":[{"name":"build","result":"passed"}],"links":[{"label":"Run log","url":"file:///tmp/run.log"}]}}"#
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+
+        #expect(request.sessionId == "scheduled-1")
+        #expect(request.cwd == "/schedule/worktree")
+        #expect(request.command == .scheduleComplete(ScheduledAgentCompletion(
+            outcome: .needsAttention,
+            summary: "Approval needed.",
+            checks: [ScheduledAgentReportCheck(name: "build", result: "passed")],
+            links: [ScheduledAgentReportLink(label: "Run log", url: "file:///tmp/run.log")]
+        )))
+    }
+
+    @Test func scheduledCompletionEnforcesTextSizeBoundary() throws {
+        let prefix = #"{"v":1,"kind":"cli","command":"schedule_complete","session_id":"s1","params":{"status":"succeeded","summary":""#
+        let suffix = #""}}"#
+        let maximum = String(repeating: "x", count: ScheduledAgentReportLimits.maximumTextBytes)
+        let accepted = try AlasCLIRequest.decode(from: Data((prefix + maximum + suffix).utf8))
+        guard case .scheduleComplete(let completion) = accepted.command else {
+            Issue.record("expected scheduled completion")
+            return
+        }
+        #expect(completion.summary.utf8.count == ScheduledAgentReportLimits.maximumTextBytes)
+
+        let oversized = maximum + "x"
+        #expect(throws: AlasCLIRequestError.malformed) {
+            try AlasCLIRequest.decode(from: Data((prefix + oversized + suffix).utf8))
+        }
+    }
+
+    @Test func rejectsMalformedScheduledTaskCompletions() throws {
+        for invalid in [
+            #"{"v":1,"kind":"cli","command":"schedule_complete","session_id":"s1","params":{"status":"unknown","summary":"Done"}}"#,
+            #"{"v":1,"kind":"cli","command":"schedule_complete","session_id":"s1","params":{"status":"succeeded","summary":" "}}"#,
+            #"{"v":1,"kind":"cli","command":"schedule_complete","session_id":"s1","params":{"status":"succeeded","summary":"Done","checks":[{"name":"build"}]}}"#,
+        ] {
+            #expect(throws: AlasCLIRequestError.malformed) {
+                try AlasCLIRequest.decode(from: Data(invalid.utf8))
+            }
+        }
+    }
+
     @Test func decodesWorkspaceAutomationRequests() throws {
         let checkoutID = UUID()
         let memberID = UUID()

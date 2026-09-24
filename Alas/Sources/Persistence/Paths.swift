@@ -80,6 +80,12 @@ extension Paths {
 }
 
 extension Paths {
+    static var scheduledAgentReportsDB: URL {
+        appSupportRoot.appendingPathComponent("scheduled-agent-reports.sqlite")
+    }
+}
+
+extension Paths {
     static var acpAdapterUpdatesFile: URL {
         appSupportRoot.appendingPathComponent("acp-adapter-updates.json")
     }

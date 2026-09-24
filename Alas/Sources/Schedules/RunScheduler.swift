@@ -15,7 +15,7 @@ private let schedulerLogger = Logger(subsystem: "io.nlopez.alas", category: "Run
 @MainActor
 @Observable
 final class RunScheduler {
-    typealias Runner = @MainActor (RunSchedule, RunScheduleInvocation) async -> RunScheduleRunReport
+    typealias Runner = @MainActor (RunSchedule, RunScheduleInvocation, String) async -> RunScheduleRunReport
 
     private(set) var schedules: [RunSchedule] = []
     private(set) var states: [String: RunScheduleState] = [:]
@@ -371,12 +371,14 @@ final class RunScheduler {
     }
 
     private func dispatch(_ schedule: RunSchedule, at current: Date, invocation: RunScheduleInvocation) {
+        let firingID = UUID().uuidString
         guard runTasks[schedule.id] == nil else {
             let outcome = RunScheduleOutcome.skipped(reason: "The previous run is still in progress.")
             var state = self.state(for: schedule.id)
             state.lastOutcome = outcome
             state.lastOutcomeAt = current
             state.record(RunScheduleFiring(
+                id: firingID,
                 firedAt: current,
                 finishedAt: current,
                 wasManual: invocation == .manual,
@@ -392,18 +394,20 @@ final class RunScheduler {
         }
         runningScheduleIDs.insert(schedule.id)
         runTasks[schedule.id] = Task { @MainActor [weak self] in
-            let report = await runner(schedule, invocation)
+            let report = await runner(schedule, invocation, firingID)
             guard let self else { return }
             var state = self.state(for: schedule.id)
             let settledAt = self.now()
             state.lastOutcome = report.outcome
             state.lastOutcomeAt = settledAt
             state.record(RunScheduleFiring(
+                id: firingID,
                 firedAt: current,
                 finishedAt: settledAt,
                 wasManual: invocation == .manual,
                 outcome: report.outcome,
-                runs: report.runs
+                runs: report.runs,
+                reportIDs: report.reportIDs
             ))
             if self.schedules.contains(where: { $0.id == schedule.id }) {
                 self.states[schedule.id] = state

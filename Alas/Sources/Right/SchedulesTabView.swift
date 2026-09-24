@@ -10,7 +10,7 @@ struct SchedulesTabView: View {
     let worktree: Worktree
 
     @Environment(\.theme) private var theme
-    @State private var editing: EditTarget?
+    @State private var presentation: Presentation?
     @State private var now = Date()
     @State private var ticker = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
@@ -21,6 +21,20 @@ struct SchedulesTabView: View {
             switch self {
             case .existing(let id): return id
             case .new: return "__new__"
+            }
+        }
+    }
+
+    enum Presentation: Identifiable {
+        case edit(EditTarget)
+        case reports(projectID: String)
+        case report(projectID: String, reportID: String)
+
+        var id: String {
+            switch self {
+            case .edit(let target): "edit:\(target.id)"
+            case .reports(let projectID): "reports:\(projectID)"
+            case .report(_, let reportID): "report:\(reportID)"
             }
         }
     }
@@ -41,7 +55,8 @@ struct SchedulesTabView: View {
                             state: state,
                             schedule: schedule,
                             now: now,
-                            onEdit: { editing = .existing(schedule.id) }
+                            onEdit: { presentation = .edit(.existing(schedule.id)) },
+                            onOpenReport: { openScheduledReport($0) }
                         )
                     }
                 }
@@ -55,18 +70,31 @@ struct SchedulesTabView: View {
         .task(id: historyPrimingToken) {
             await state.primeScheduleRunReportIDs(historyWorktreeIDs)
         }
-        .sheet(item: $editing) { target in
+        .task(id: "\(worktree.projectId)|\(state.scheduledAgentReportRoute?.reportID ?? "")") {
+            guard let route = state.scheduledAgentReportRoute,
+                  route.projectID == worktree.projectId
+            else {
+                return
+            }
+            presentation = .report(projectID: route.projectID, reportID: route.reportID)
+            state.scheduledAgentReportRoute = nil
+        }
+        .sheet(item: $presentation) { target in
             switch target {
-            case .new:
-                RunScheduleEditorView(state: state, originWorktree: worktree, schedule: nil) { editing = nil }
-                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
-            case .existing(let id):
+            case .edit(.new):
+                RunScheduleEditorView(state: state, originWorktree: worktree, schedule: nil) { presentation = nil }
+                    .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
+            case .edit(.existing(let id)):
                 RunScheduleEditorView(
                     state: state,
                     originWorktree: worktree,
                     schedule: state.runScheduler.schedule(id: id)
-                ) { editing = nil }
+                ) { presentation = nil }
                     .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
+            case .reports(let projectID):
+                ScheduledAgentReportsSheet(state: state, projectID: projectID)
+            case .report(let projectID, let reportID):
+                ScheduledAgentReportsSheet(state: state, projectID: projectID, initialReportID: reportID)
             }
         }
     }
@@ -113,6 +141,18 @@ struct SchedulesTabView: View {
         return ordered
     }
 
+    private func openScheduledReport(_ reportID: String) {
+        Task { @MainActor in
+            let reportProjectID: String
+            do {
+                reportProjectID = try await state.scheduledAgentReport(id: reportID)?.projectID ?? worktree.projectId
+            } catch {
+                reportProjectID = worktree.projectId
+            }
+            presentation = .report(projectID: reportProjectID, reportID: reportID)
+        }
+    }
+
     private var header: some View {
         HStack(spacing: 6) {
             Text(isMainWorktree ? "PROJECT SCHEDULES" : "SCHEDULES")
@@ -127,7 +167,17 @@ struct SchedulesTabView: View {
                 .foregroundColor(theme.color("fg-muted"))
             Spacer(minLength: 8)
             pauseMenu
-            Button { editing = .new } label: {
+            Button {
+                presentation = .reports(projectID: worktree.projectId)
+            } label: {
+                Icon(name: "doc.text", size: 12, color: theme.color("fg-muted"))
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.plain)
+            .help("Scheduled reports")
+            .accessibilityLabel("Scheduled reports")
+            .accessibilityIdentifier("scheduled-agent-reports")
+            Button { presentation = .edit(.new) } label: {
                 Icon(name: "plus", size: 12, color: theme.color("fg-muted"))
                     .frame(width: 20, height: 20)
                     .contentShape(Rectangle())
@@ -191,7 +241,7 @@ struct SchedulesTabView: View {
                 .font(.system(size: 11))
                 .foregroundColor(theme.color("fg-faint"))
                 .multilineTextAlignment(.center)
-            Button("New Schedule") { editing = .new }
+            Button("New Schedule") { presentation = .edit(.new) }
                 .controlSize(.small)
         }
         .frame(maxWidth: .infinity)
@@ -206,8 +256,10 @@ private struct ScheduleCard: View {
     let schedule: RunSchedule
     let now: Date
     let onEdit: () -> Void
+    let onOpenReport: (String) -> Void
 
     @Environment(\.theme) private var theme
+    @State private var reportSummaries: [String: ScheduledAgentReport] = [:]
     @State private var hovering = false
     @State private var menuHovered = false
     @State private var isConfirmingDelete = false
@@ -297,6 +349,9 @@ private struct ScheduleCard: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
         .onHover { hovering = $0 }
+        .task(id: reportHistoryToken) {
+            await loadReportSummaries()
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("schedule-card-\(schedule.id)")
         .confirmationDialog(
@@ -379,6 +434,25 @@ private struct ScheduleCard: View {
             ForEach(firing.runs, id: \.runID) { run in
                 runLink(run)
             }
+            ForEach(firing.reportIDs, id: \.self) { reportID in
+                Button {
+                    onOpenReport(reportID)
+                } label: {
+                    HStack(spacing: 3) {
+                        Icon(name: "doc.text", size: 8, color: theme.color("accent"))
+                        Text(reportSummaries[reportID].map(RunSchedulePresentation.scheduledAgentReportHistoryLabel) ?? "Scheduled agent report")
+                            .font(.system(size: 9.5))
+                            .foregroundColor(theme.color("accent"))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Open the scheduled agent report")
+                .accessibilityLabel(reportSummaries[reportID].map(RunSchedulePresentation.scheduledAgentReportHistoryLabel) ?? "Open scheduled agent report")
+                .accessibilityIdentifier("schedule-firing-report-\(reportID)")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, 8)
@@ -417,6 +491,30 @@ private struct ScheduleCard: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
+    }
+
+    private var reportHistoryToken: String {
+        guard isShowingHistory else { return "" }
+        return Array(Set(state.runScheduler.firings(for: schedule.id).flatMap(\.reportIDs)))
+            .sorted()
+            .joined(separator: "|")
+    }
+
+    private func loadReportSummaries() async {
+        guard isShowingHistory else {
+            reportSummaries = [:]
+            return
+        }
+        let ids = Array(Set(state.runScheduler.firings(for: schedule.id).flatMap(\.reportIDs))).sorted()
+        var loaded: [String: ScheduledAgentReport] = [:]
+        for id in ids {
+            guard !Task.isCancelled else { return }
+            if let report = try? await state.scheduledAgentReport(id: id) {
+                loaded[id] = report
+            }
+        }
+        guard !Task.isCancelled else { return }
+        reportSummaries = loaded
     }
 
     private var actionLabel: String {

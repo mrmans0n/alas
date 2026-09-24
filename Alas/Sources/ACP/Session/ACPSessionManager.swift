@@ -1,5 +1,34 @@
+import Combine
 import Foundation
 
+enum ScheduledPromptSettlement: Equatable, Sendable {
+    case settled(dispatchedAt: Date)
+    case failed(String)
+    case timedOut
+    case cancelled
+}
+
+private struct ScheduledPromptSnapshot: Sendable {
+    let targetSending: Bool
+    let targetPresent: Bool
+    let targetError: String?
+    let queueEmpty: Bool
+    let streamIdle: Bool
+    let hasPendingPermission: Bool
+    let hasPendingQuestion: Bool
+    let hasPendingUserInput: Bool
+    let agentFailure: String?
+    let setupFailure: String?
+    let hasRequestedBuiltInMCP: Bool?
+    let builtInMCPRegistered: Bool
+    let builtInMCPUnavailable: Bool
+}
+
+private enum ScheduledPromptSignal: Sendable {
+    case snapshot(ScheduledPromptSnapshot)
+    case timedOut
+    case cancelled
+}
 private struct ACPTranscriptScrollMemory: Equatable {
     var anchorMessageId: String?
     /// ACP view ids for persisted text rows are regenerated during hydration;
@@ -348,6 +377,143 @@ final class ACPSessionManager: ObservableObject {
         let accepted = submit(sessionId: id, text: text, attachments: attachments, intent: .auto,
                               onCompleted: { ok in onResult(ok) })
         if !accepted { onResult(false) }   // submit refused synchronously; onCompleted won't fire
+    }
+
+    /// Observes the exact queued prompt, not merely `session/prompt`'s
+    /// dispatch acknowledgement. The deadline starts when that queue item
+    /// enters `.sending`; success requires its removal and a fully idle session.
+    func waitForScheduledPrompt(
+        for id: ACPSession.ID,
+        promptID: UUID,
+        timeout: Duration = .seconds(4 * 60 * 60),
+        deadlineWaiter: @escaping @Sendable (Duration) async -> Void = {
+            try? await Task.sleep(for: $0)
+        }
+    ) async -> ScheduledPromptSettlement {
+        guard let session = sessions[id] else {
+            return .failed("The scheduled ACP session is no longer available.")
+        }
+
+        let (signals, continuation) = AsyncStream<ScheduledPromptSignal>.makeStream()
+        let publishers: [AnyPublisher<Void, Never>] = [
+            session.$queue.map { _ in () }.eraseToAnyPublisher(),
+            session.transcript.$streamingState.map { _ in () }.eraseToAnyPublisher(),
+            session.transcript.$pendingPermission.map { _ in () }.eraseToAnyPublisher(),
+            session.transcript.$pendingQuestion.map { _ in () }.eraseToAnyPublisher(),
+            session.transcript.$pendingUserInputs.map { _ in () }.eraseToAnyPublisher(),
+            session.$agentState.map { _ in () }.eraseToAnyPublisher(),
+            session.$setupState.map { _ in () }.eraseToAnyPublisher(),
+            session.$lastError.map { _ in () }.eraseToAnyPublisher(),
+            session.$mcpAttachmentSummary.map { _ in () }.eraseToAnyPublisher(),
+            session.$builtInMCPRegistration.map { _ in () }.eraseToAnyPublisher()
+        ]
+        func currentSnapshot() -> ScheduledPromptSnapshot {
+            let target = session.queue.first { $0.id == promptID }
+            let requestedBuiltInMCP = session.mcpAttachmentSummary.map { summary in
+                summary.statuses.contains { status in
+                    guard status.id == BuiltInAlasMCP.statusId else { return false }
+                    if case .requested = status.disposition { return true }
+                    return false
+                }
+            }
+            let agentFailure: String? = switch session.agentState {
+            case .disconnected:
+                "The ACP session disconnected before the scheduled prompt finished."
+            case .failed(let reason):
+                reason
+            case .idle, .spawning, .ready:
+                nil
+            }
+            let setupFailure: String? = switch session.setupState {
+            case .needsSetup(let reason), .setupError(let reason):
+                reason
+            case .needsAuth(_, let reason):
+                reason ?? "The ACP session requires authentication."
+            case .checking, .ready:
+                nil
+            }
+            return ScheduledPromptSnapshot(
+                targetSending: target?.status == .sending,
+                targetPresent: target != nil,
+                targetError: target?.lastError,
+                queueEmpty: session.queue.isEmpty,
+                streamIdle: session.transcript.streamingState == .idle,
+                hasPendingPermission: session.transcript.pendingPermission != nil,
+                hasPendingQuestion: session.transcript.pendingQuestion != nil,
+                hasPendingUserInput: !session.transcript.pendingUserInputs.isEmpty,
+                agentFailure: agentFailure,
+                setupFailure: setupFailure ?? session.lastError,
+                hasRequestedBuiltInMCP: requestedBuiltInMCP,
+                builtInMCPRegistered: session.builtInMCPRegistration == .registered,
+                builtInMCPUnavailable: session.builtInMCPRegistration == .notRegistered
+            )
+        }
+        let stateChanges = Publishers.MergeMany(publishers).prepend(())
+        let observation = stateChanges.sink { _ in
+            Task { @MainActor in
+                continuation.yield(.snapshot(currentSnapshot()))
+            }
+        }
+        var timeoutTask: Task<Void, Never>?
+        defer {
+            observation.cancel()
+            timeoutTask?.cancel()
+            continuation.finish()
+        }
+
+        return await withTaskCancellationHandler {
+            var dispatchedAt: Date?
+            for await signal in signals {
+                switch signal {
+                case .cancelled:
+                    return .cancelled
+                case .timedOut:
+                    return .timedOut
+                case .snapshot(let snapshot):
+                    if let error = snapshot.targetError, !error.isEmpty {
+                        return .failed(error)
+                    }
+                    if let error = snapshot.setupFailure, !error.isEmpty {
+                        return .failed(error)
+                    }
+                    if let error = snapshot.agentFailure {
+                        return .failed(error)
+                    }
+                    if snapshot.hasRequestedBuiltInMCP == false {
+                        return .failed("The built-in Alas MCP tool is disabled, overridden, or unavailable for this ACP session.")
+                    }
+                    if snapshot.builtInMCPUnavailable {
+                        return .failed("The ACP agent did not register the built-in Alas MCP server.")
+                    }
+                    if snapshot.targetSending, dispatchedAt == nil {
+                        let dispatchDate = Date()
+                        dispatchedAt = dispatchDate
+                        timeoutTask = Task { @MainActor in
+                            await deadlineWaiter(timeout)
+                            guard !Task.isCancelled else { return }
+                            continuation.yield(.timedOut)
+                        }
+                    }
+                    if let dispatchedAt,
+                       !snapshot.targetPresent,
+                       snapshot.queueEmpty,
+                       snapshot.streamIdle,
+                       !snapshot.hasPendingPermission,
+                       !snapshot.hasPendingQuestion,
+                       !snapshot.hasPendingUserInput {
+                        guard snapshot.hasRequestedBuiltInMCP == true,
+                              snapshot.builtInMCPRegistered
+                        else {
+                            return .failed("The built-in Alas MCP tool was not active for this ACP session.")
+                        }
+                        return .settled(dispatchedAt: dispatchedAt)
+                    }
+                }
+            }
+            return .cancelled
+        } onCancel: {
+            continuation.yield(.cancelled)
+        }
     }
 
     /// Interrupt the in-flight turn (same as the composer Stop / Esc). Guarded

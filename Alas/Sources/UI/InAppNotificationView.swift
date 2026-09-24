@@ -10,12 +10,24 @@ struct InAppNotificationStack: View {
         let nextExpiry = entries.filter { $0.pausedAt == nil }.compactMap(\.expiresAt).min()
         VStack(alignment: .trailing, spacing: 8) {
             ForEach(entries) { entry in
-                InAppNotificationBanner(message: entry.message, severity: entry.severity,
-                                        actionTitle: entry.cancel == nil ? nil : "Cancel",
-                                        action: { store.cancel(entry.id) }, dismiss: { store.dismiss(entry.id) })
-                    .onHover { store.setPaused($0, id: entry.id) }
-                    .onDisappear { store.setPaused(false, id: entry.id) }
-                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                let actionTitle = entry.actionTitle ?? (entry.cancel == nil ? nil : "Cancel")
+                InAppNotificationBanner(
+                    message: entry.message,
+                    severity: entry.severity,
+                    actionTitle: actionTitle,
+                    action: {
+                        if let notificationAction = entry.action {
+                            store.dismiss(entry.id)
+                            notificationAction()
+                        } else {
+                            store.cancel(entry.id)
+                        }
+                    },
+                    dismiss: { store.dismiss(entry.id) }
+                )
+                .onHover { store.setPaused($0, id: entry.id) }
+                .onDisappear { store.setPaused(false, id: entry.id) }
+                .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
         }
         .animation(.easeOut(duration: 0.2), value: entries.map(\.id))

@@ -2019,6 +2019,80 @@ struct AlasCLICommandRouterTests {
         #expect(directory == .error("session commands require an originating ACP session"))
     }
 
+    @Test func scheduledCompletionUsesLiveACPOriginInsteadOfCallerCwd() async throws {
+        let authorizedOrigin = ACPOrchestrationSessionOrigin(
+            sessionId: "scheduled-acp",
+            projectId: "p1",
+            worktreeId: "scheduled-worktree"
+        )
+        let completion = ScheduledAgentCompletion(
+            outcome: .succeeded,
+            summary: "Checks passed.",
+            checks: [],
+            links: []
+        )
+        var accepted = false
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in "cwd-worktree" },
+            resolveACPSessionOrigin: { $0 == authorizedOrigin.sessionId ? authorizedOrigin : nil },
+            originatingWorktree: { _ in nil },
+            visibleWorktrees: { [] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            completeScheduledTask: { origin, report in
+                guard origin == authorizedOrigin, report == completion else {
+                    return .error("No active scheduled ACP run accepts this completion.")
+                }
+                accepted = true
+                return .text(["Report saved."])
+            },
+            activateApp: {}
+        )
+
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: authorizedOrigin.sessionId,
+            cwd: "/unrelated/worktree",
+            command: .scheduleComplete(completion)
+        ))
+
+        #expect(response == .text(["Report saved."]))
+        #expect(accepted)
+    }
+
+    @Test func scheduledCompletionRejectsCallersWithoutLiveACPOrigin() async throws {
+        let worktree = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        var handlerCalled = false
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { $0 == "terminal-1" ? worktree.id : nil },
+            resolveACPSessionOrigin: { _ in nil },
+            originatingWorktree: { _ in worktree },
+            visibleWorktrees: { [worktree] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            completeScheduledTask: { _, _ in
+                handlerCalled = true
+                return .ok
+            },
+            activateApp: {}
+        )
+
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: "terminal-1",
+            cwd: worktree.path.path,
+            command: .scheduleComplete(ScheduledAgentCompletion(
+                outcome: .succeeded,
+                summary: "Done.",
+                checks: [],
+                links: []
+            ))
+        ))
+
+        #expect(response == .error("schedule_complete requires a live ACP session."))
+        #expect(!handlerCalled)
+    }
+
     @Test func workspaceCommandsRouteWithoutImplicitRepositoryFocus() async throws {
         let checkoutID = UUID()
         let memberID = UUID()

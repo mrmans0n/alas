@@ -108,6 +108,85 @@ struct ACPSessionManagerTests {
         #expect(session.queue.map(\.scheduledAt) == [nil, .distantFuture])
     }
 
+    @Test("scheduled prompt settlement waits for the matching prompt and idle turn")
+    func scheduledPromptSettlementTracksItsQueueIDAndTurnEnd() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-scheduled-settlement-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
+        let promptID = UUID()
+        session.queue = [QueuedPrompt(id: promptID, blocks: [.text("scheduled task")])]
+        session.mcpAttachmentSummary = MCPAttachmentSummary(
+            statuses: [.init(
+                id: BuiltInAlasMCP.statusId,
+                name: "Alas",
+                transport: .stdio,
+                disposition: .requested
+            )],
+            configurationFingerprint: "test"
+        )
+        session.builtInMCPRegistration = .registered
+        let deadline = AsyncGate()
+        let waiter = Task {
+            await manager.waitForScheduledPrompt(
+                for: session.id,
+                promptID: promptID,
+                timeout: .seconds(4),
+                deadlineWaiter: { _ in await deadline.enterAndWait() }
+            )
+        }
+
+        session.queue[0].status = .sending
+        await deadline.waitUntilEntered()
+        session.queue.removeAll()
+        session.transcript.streamingState = .sending
+        await Task.yield()
+        session.transcript.streamingState = .idle
+        let result = await waiter.value
+        guard case .settled = result else {
+            Issue.record("Expected the exact scheduled prompt and idle turn to settle, got \(result).")
+            await deadline.release()
+            return
+        }
+        await deadline.release()
+    }
+
+    @Test("scheduled prompt timeout begins at dispatch and is cancellable")
+    func scheduledPromptTimeoutUsesAnInjectedDeadline() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-scheduled-timeout-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
+        let promptID = UUID()
+        session.queue = [QueuedPrompt(id: promptID, blocks: [.text("scheduled task")])]
+        session.mcpAttachmentSummary = MCPAttachmentSummary(
+            statuses: [.init(
+                id: BuiltInAlasMCP.statusId,
+                name: "Alas",
+                transport: .stdio,
+                disposition: .requested
+            )],
+            configurationFingerprint: "test"
+        )
+        session.builtInMCPRegistration = .registered
+        let deadline = AsyncGate()
+        let waiter = Task {
+            await manager.waitForScheduledPrompt(
+                for: session.id,
+                promptID: promptID,
+                timeout: .seconds(4),
+                deadlineWaiter: { _ in await deadline.enterAndWait() }
+            )
+        }
+
+        session.queue[0].status = .sending
+        await deadline.waitUntilEntered()
+        await deadline.release()
+        #expect(await waiter.value == .timedOut)
+    }
+
     @Test("remote queue clear notifies queue change")
     func remoteQueueClearNotifiesQueueChange() async throws {
         let url = FileManager.default.temporaryDirectory

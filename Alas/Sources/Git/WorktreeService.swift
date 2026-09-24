@@ -1338,6 +1338,47 @@ struct WorktreeService {
         return WorktreeDeletePreflight(reasons: reasons)
     }
 
+    /// A scheduled run may discard its checkout only when its original base
+    /// still contains the current tip and a remote-tracking ref contains that
+    /// tip. Local-only commits remain available for review in the worktree.
+    static func scheduledCleanupHistoryIsSafe(
+        baseCommit: String,
+        expectedBranch: String,
+        worktreePath: URL
+    ) async throws -> Bool {
+        guard (baseCommit.count == 40 || baseCommit.count == 64),
+              baseCommit.allSatisfy(\.isHexDigit),
+              localBranchName(forWorktreeAt: worktreePath) == expectedBranch
+        else {
+            return false
+        }
+        let headResult = try await Process.git(
+            ["rev-parse", "HEAD"],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        guard headResult.exitCode == 0 else { throw WorktreeError.gitFailed(headResult.stderr) }
+        let head = headResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (head.count == 40 || head.count == 64), head.allSatisfy(\.isHexDigit) else {
+            return false
+        }
+
+        let ancestry = try await Process.git(
+            ["merge-base", "--is-ancestor", baseCommit, head],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        guard ancestry.exitCode == 0 else { return false }
+
+        let remoteRefs = try await Process.git(
+            ["for-each-ref", "--contains=\(head)", "--format=%(refname)", "refs/remotes/"],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        guard remoteRefs.exitCode == 0 else { throw WorktreeError.gitFailed(remoteRefs.stderr) }
+        return !remoteRefs.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     static func porcelainMarksWorktreeLocked(_ porcelain: String, worktreePath: URL) -> Bool {
         let target = worktreePath.standardizedFileURL.path
         var currentPath: String?

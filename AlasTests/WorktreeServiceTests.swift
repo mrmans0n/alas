@@ -558,6 +558,52 @@ extension WorktreeServiceTests {
         #expect(preflight.reasons.contains(.locked))
     }
 
+    @Test func scheduledCleanupRequiresRemoteReachabilityAndPreservesBranchHistory() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let baseResult = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+        try #require(baseResult.exitCode == 0)
+        let base = baseResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let remoteBase = try await Process.git(
+            ["update-ref", "refs/remotes/origin/main", base],
+            cwd: repo
+        )
+        try #require(remoteBase.exitCode == 0)
+
+        #expect(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: "main",
+            worktreePath: repo
+        ))
+
+        let localCommit = try await Process.git(
+            ["commit", "--allow-empty", "-m", "local-only"],
+            cwd: repo
+        )
+        try #require(localCommit.exitCode == 0)
+        #expect(!(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: "main",
+            worktreePath: repo
+        )))
+
+        let pushed = try await Process.git(
+            ["update-ref", "refs/remotes/origin/main", "HEAD"],
+            cwd: repo
+        )
+        try #require(pushed.exitCode == 0)
+        #expect(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: "main",
+            worktreePath: repo
+        ))
+        #expect(!(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: "another-branch",
+            worktreePath: repo
+        )))
+    }
+
     @Test func lockedDeletePreflightReasonIsParsedFromPorcelain() {
         let path = URL(fileURLWithPath: "/repos/app-worktree")
         let porcelain = """

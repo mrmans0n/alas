@@ -73,6 +73,7 @@ struct RunScheduleDraft: Equatable {
     var modelID: String?
     var prompt = ""
     var sendsPromptAutomatically = true
+    var afterExecution: RunScheduleAfterExecution = .keep
 
     init() {}
 
@@ -117,6 +118,7 @@ struct RunScheduleDraft: Equatable {
             modelID = composition.modelId
             prompt = composition.prompt ?? ""
             sendsPromptAutomatically = composition.sendsPromptAutomatically
+            afterExecution = composition.afterExecution
         }
     }
 
@@ -193,7 +195,8 @@ struct RunScheduleDraft: Equatable {
             // would be sent to whichever agent that turns out to be.
             modelId: agentID == nil ? nil : modelID,
             prompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
-            sendsPromptAutomatically: sendsPromptAutomatically
+            sendsPromptAutomatically: sendsPromptAutomatically,
+            afterExecution: afterExecution
         )
     }
 
@@ -211,6 +214,19 @@ struct RunScheduleDraft: Equatable {
         case .timeOfDay:
             if !(0...23).contains(hour) || !(0...59).contains(minute) { return "Enter a valid time." }
             if weekdays.isEmpty { return "Pick at least one weekday." }
+        }
+        if afterExecution == .reportAndCleanupOnSuccess {
+            guard let agentID else { return "Choose an ACP-capable agent for automatic cleanup." }
+            guard let spec = ACPLaunchCatalog.spec(for: agentID) else {
+                return "Automatic cleanup requires an ACP-capable agent."
+            }
+            guard case .sessionNew = spec.mcpInjection else {
+                return "Automatic cleanup requires an agent that accepts the built-in ACP completion tool."
+            }
+            guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return "Automatic cleanup requires a prompt."
+            }
+            guard sendsPromptAutomatically else { return "Automatic cleanup requires automatic prompt submission." }
         }
         return nil
     }

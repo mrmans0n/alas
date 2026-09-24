@@ -24,17 +24,35 @@ final class InAppNotificationStore {
         var expiresAt: Date?
         var pausedAt: Date?
         let cancel: (() -> Void)?
+        let actionTitle: String?
+        let action: (() -> Void)?
     }
 
     private(set) var entries: [Entry] = []
 
     @discardableResult
-    func post(_ message: String, severity: InAppNotificationSeverity, worktreeID: String,
-              now: Date = Date(), cancel: (() -> Void)? = nil) -> UUID {
+    func post(
+        _ message: String,
+        severity: InAppNotificationSeverity,
+        worktreeID: String,
+        now: Date = Date(),
+        cancel: (() -> Void)? = nil,
+        actionTitle: String? = nil,
+        action: (() -> Void)? = nil
+    ) -> UUID {
         expire(now: now)
         let id = UUID()
-        entries.append(Entry(id: id, worktreeID: worktreeID, message: message, severity: severity,
-                             expiresAt: severity.duration.map { now.addingTimeInterval($0) }, cancel: cancel))
+        entries.append(Entry(
+            id: id,
+            worktreeID: worktreeID,
+            message: message,
+            severity: severity,
+            expiresAt: severity.duration.map { now.addingTimeInterval($0) },
+            pausedAt: nil,
+            cancel: cancel,
+            actionTitle: actionTitle,
+            action: action
+        ))
         // Bound bursts without evicting active operations or persistent run failures.
         let completed = entries.filter { $0.worktreeID == worktreeID && $0.severity != .progress }
         for entry in completed.dropLast(5) { dismiss(entry.id) }

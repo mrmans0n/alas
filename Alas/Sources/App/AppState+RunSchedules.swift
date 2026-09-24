@@ -3,6 +3,17 @@ import os
 
 private let runScheduleLogger = Logger(subsystem: "io.nlopez.alas", category: "RunSchedules")
 
+private enum ScheduledWorktreeCleanupCheck {
+    case allowed(contentFingerprint: String)
+    case refused(String)
+}
+
+private enum ScheduledWorktreeCleanupResult {
+    case removed
+    case retained(String)
+    case failed(reason: String, worktreeRemoved: Bool)
+}
+
 /// How a launched script settled. Delivered exactly once per run ID to
 /// whoever asked to be told, which today is only the scheduler.
 enum RunScriptSettlement: Equatable, Sendable {
@@ -15,11 +26,11 @@ extension AppState {
     // MARK: - Wiring
 
     func installRunScheduleRunner() {
-        runScheduler.runner = { [weak self] schedule, invocation in
+        runScheduler.runner = { [weak self] schedule, invocation, firingID in
             guard let self else {
                 return RunScheduleRunReport(outcome: .launchFailed("Alas is shutting down."))
             }
-            return await self.runSchedule(schedule, invocation: invocation)
+            return await self.runSchedule(schedule, invocation: invocation, firingID: firingID)
         }
     }
 
@@ -37,8 +48,10 @@ extension AppState {
     /// launch surface. The returned outcome is what the schedule row shows.
     func runSchedule(
         _ schedule: RunSchedule,
-        invocation: RunScheduleInvocation = .scheduled
+        invocation: RunScheduleInvocation = .scheduled,
+        firingID: String = UUID().uuidString
     ) async -> RunScheduleRunReport {
+        await scheduledAgentReportsRecoveryTask?.value
         let targets: [(project: ProjectConfig, worktree: Worktree)]
         switch resolveScheduleTargets(schedule.target, invocation: invocation) {
         case .targets(let resolved):
@@ -53,7 +66,13 @@ extension AppState {
         // its own run's settlement, which lets the next one start.
         let runs = targets.map { target in
             Task { @MainActor in
-                await self.runSchedule(schedule, project: target.project, worktree: target.worktree)
+                await self.runSchedule(
+                    schedule,
+                    project: target.project,
+                    worktree: target.worktree,
+                    firingID: firingID,
+                    targetRunID: UUID().uuidString
+                )
             }
         }
         // Cancellation is forwarded by hand because these children are
@@ -73,14 +92,20 @@ extension AppState {
         }
         var outcomes: [RunScheduleOutcome] = []
         var references: [RunScheduleFiring.RunReference] = []
+        var reportIDs: [String] = []
         for report in reports {
             outcomes.append(report.outcome)
             references.append(contentsOf: report.runs)
+            reportIDs.append(contentsOf: report.reportIDs)
         }
         // Every target's run is linked, not just the one whose outcome won:
         // a fan-out that failed in one project should still let the user open
         // the reports of the projects that did run.
-        return RunScheduleRunReport(outcome: .combined(outcomes), runs: references)
+        return RunScheduleRunReport(
+            outcome: .combined(outcomes),
+            runs: references,
+            reportIDs: reportIDs
+        )
     }
 
     /// Whether a firing's run can actually be opened.
@@ -202,64 +227,491 @@ extension AppState {
     private func runSchedule(
         _ schedule: RunSchedule,
         project: ProjectConfig,
-        worktree originWorktree: Worktree
+        worktree originWorktree: Worktree,
+        firingID: String,
+        targetRunID: String
     ) async -> RunScheduleRunReport {
+        var reportStore: ScheduledAgentReportStore?
+        var reportID: String?
         var worktree = originWorktree
+
+        if let composition = schedule.composition,
+           composition.afterExecution == .reportAndCleanupOnSuccess {
+            do {
+                let store = try scheduledAgentReportsStore()
+                let report = ScheduledAgentReport(
+                    id: targetRunID,
+                    occurrenceID: firingID,
+                    scheduleID: schedule.id,
+                    scheduleName: schedule.name,
+                    projectID: project.id,
+                    projectName: project.name,
+                    agentID: composition.agentId ?? "unconfigured",
+                    modelID: composition.modelId,
+                    request: composition.prompt ?? "",
+                    startedAt: Date(),
+                    cleanupRequested: true
+                )
+                try await store.create(report)
+                reportStore = store
+                reportID = report.id
+            } catch {
+                let message = "Could not create the scheduled-agent report: \(error.localizedDescription)"
+                reportScheduleFailure(schedule, reason: message, project: project, worktree: originWorktree)
+                return RunScheduleRunReport(outcome: .launchFailed(message))
+            }
+            if let reason = scheduledAgentEligibilityFailure(composition) {
+                await finishScheduledReport(
+                    reportID!,
+                    state: .needsAttention,
+                    reason: reason,
+                    store: reportStore!
+                )
+                return RunScheduleRunReport(
+                    outcome: .launchFailed(reason),
+                    reportIDs: [reportID!]
+                )
+            }
+        }
+
         if let composition = schedule.composition {
             switch await createScheduledWorktree(for: schedule, composition: composition, project: project) {
             case .success(let created):
                 worktree = created
+                if let reportID, let reportStore {
+                    do {
+                        let baseCommit = try await GitService().headSHA(at: created.path)
+                        try await reportStore.associateWorktree(
+                            reportID: reportID,
+                            worktreeID: created.id,
+                            branch: created.branch,
+                            baseCommit: baseCommit
+                        )
+                    } catch {
+                        let reason = "Could not record the scheduled worktree identity: \(error.localizedDescription)"
+                        await finishScheduledReport(
+                            reportID,
+                            state: .failed,
+                            reason: reason,
+                            store: reportStore
+                        )
+                        return RunScheduleRunReport(
+                            outcome: .launchFailed(reason),
+                            reportIDs: [reportID]
+                        )
+                    }
+                }
             case .failure(let failure):
-                // Deleting a schedule cancels its targets, which makes
-                // creation report that it was interrupted. That is the
-                // deletion working, not a failure to announce.
                 if Task.isCancelled {
+                    if let reportID, let reportStore {
+                        await finishScheduledReport(
+                            reportID,
+                            state: .interrupted,
+                            reason: "The schedule was removed while its worktree was being created.",
+                            store: reportStore
+                        )
+                    }
                     return RunScheduleRunReport(
-                        outcome: .skipped(reason: "The schedule was removed while its worktree was being created.")
+                        outcome: .skipped(reason: "The schedule was removed while its worktree was being created."),
+                        reportIDs: reportID.map { [$0] } ?? []
+                    )
+                }
+                if let reportID, let reportStore {
+                    await finishScheduledReport(
+                        reportID,
+                        state: .failed,
+                        reason: failure.message,
+                        store: reportStore
                     )
                 }
                 reportScheduleFailure(
-                    schedule, reason: failure.message, project: project, worktree: originWorktree
+                    schedule,
+                    reason: failure.message,
+                    project: project,
+                    worktree: originWorktree,
+                    reportID: reportID
                 )
-                return RunScheduleRunReport(outcome: .launchFailed(failure.message))
+                return RunScheduleRunReport(
+                    outcome: .launchFailed(failure.message),
+                    reportIDs: reportID.map { [$0] } ?? []
+                )
             }
         }
 
         var references: [RunScheduleFiring.RunReference] = []
         if let scriptKey = schedule.scriptKey {
             let script = await runScheduledScript(key: scriptKey, in: worktree, project: project)
-            // Kept even when the script failed: a failed run is exactly the
-            // one whose report the user wants to open from the history.
             references = script.runs
+            if let run = script.runs.first, let reportID, let reportStore {
+                do {
+                    try await reportStore.associateScriptRun(reportID: reportID, scriptRun: run)
+                } catch {
+                    let reason = "Could not record the scheduled script run: \(error.localizedDescription)"
+                    await finishScheduledReport(
+                        reportID,
+                        state: .failed,
+                        reason: reason,
+                        store: reportStore
+                    )
+                    reportScheduleFailure(
+                        schedule,
+                        reason: reason,
+                        project: project,
+                        worktree: worktree,
+                        reportID: reportID
+                    )
+                    return RunScheduleRunReport(
+                        outcome: .launchFailed(reason),
+                        runs: references,
+                        reportIDs: [reportID]
+                    )
+                }
+            }
             guard case .succeeded = script.outcome else {
+                let reason = runScheduleOutcomeDescription(script.outcome)
+                if let reportID, let reportStore {
+                    await finishScheduledReport(
+                        reportID,
+                        state: Task.isCancelled ? .interrupted : (isSkipped(script.outcome) ? .needsAttention : .failed),
+                        reason: reason,
+                        store: reportStore
+                    )
+                }
                 switch script.outcome {
                 case .skipped:
-                    // Nothing was launched, so there is nothing to compose on.
                     break
                 case .launchFailed(let message):
-                    // The command never started, so no run-script completion
-                    // notification will ever mention it.
-                    reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
+                    reportScheduleFailure(
+                        schedule,
+                        reason: message,
+                        project: project,
+                        worktree: worktree,
+                        reportID: reportID
+                    )
                 default:
                     if schedule.composition != nil {
                         inAppNotifications.post(
-                            "\(schedule.name): script did not succeed, agent not launched.",
+                            "\(schedule.name): script did not succeed, agent not launched.\(reportID.map { " Report: \($0)." } ?? "")",
                             severity: .error,
-                            worktreeID: worktree.id
+                            worktreeID: worktree.id,
+                            actionTitle: reportID == nil ? nil : "Open report",
+                            action: scheduledAgentReportOpenAction(reportID)
                         )
                     }
                 }
-                return RunScheduleRunReport(outcome: script.outcome, runs: references)
+                return RunScheduleRunReport(
+                    outcome: script.outcome,
+                    runs: references,
+                    reportIDs: reportID.map { [$0] } ?? []
+                )
             }
         }
 
         guard let composition = schedule.composition else {
             return RunScheduleRunReport(outcome: .succeeded, runs: references)
         }
+        if let reportID, let reportStore,
+           let reason = scheduledAgentMCPUnavailableReason(project: project, worktree: worktree) {
+            await finishScheduledReport(
+                reportID,
+                state: .needsAttention,
+                reason: reason,
+                store: reportStore
+            )
+            inAppNotifications.post(
+                "\(schedule.name): \(reason) The worktree was retained. Report: \(reportID).",
+                severity: .error,
+                worktreeID: worktree.id,
+                actionTitle: "Open report",
+                action: scheduledAgentReportOpenAction(reportID)
+            )
+            return RunScheduleRunReport(
+                outcome: .launchFailed(reason),
+                runs: references,
+                reportIDs: [reportID]
+            )
+        }
         let agent = await launchScheduledAgent(
-            for: schedule, composition: composition, worktree: worktree, project: project
+            for: schedule,
+            composition: composition,
+            worktree: worktree,
+            project: project,
+            reportID: reportID,
+            occurrenceID: firingID
         )
-        return RunScheduleRunReport(outcome: agent, runs: references)
+        return RunScheduleRunReport(
+            outcome: agent,
+            runs: references,
+            reportIDs: reportID.map { [$0] } ?? []
+        )
+    }
+
+    private func scheduledAgentReportsStore() throws -> ScheduledAgentReportStore {
+        if let scheduledAgentReportStore { return scheduledAgentReportStore }
+        let store = try ScheduledAgentReportStore()
+        scheduledAgentReportStore = store
+        return store
+    }
+
+    func scheduledAgentReportPage(
+        projectID: String,
+        offset: Int,
+        limit: Int = 40
+    ) async throws -> [ScheduledAgentReport] {
+        await scheduledAgentReportsRecoveryTask?.value
+        return try await scheduledAgentReportsStore().page(
+            projectID: projectID,
+            offset: max(0, offset),
+            limit: min(max(1, limit), 100)
+        )
+    }
+
+
+    func scheduledAgentReport(id: String) async throws -> ScheduledAgentReport? {
+        await scheduledAgentReportsRecoveryTask?.value
+        return try await scheduledAgentReportsStore().report(id: id)
+    }
+    func scheduledAgentReport(id: String, projectID: String) async throws -> ScheduledAgentReport? {
+        guard let report = try await scheduledAgentReport(id: id),
+              report.projectID == projectID
+        else {
+            return nil
+        }
+        return report
+    }
+
+    func deleteScheduledAgentReport(id: String, projectID: String) async throws -> Bool {
+        await scheduledAgentReportsRecoveryTask?.value
+        let store = try scheduledAgentReportsStore()
+        guard let report = try await store.report(id: id),
+              report.projectID == projectID
+        else {
+            return false
+        }
+        return try await store.delete(id: id)
+    }
+
+    func worktreeForScheduledAgentReport(_ report: ScheduledAgentReport) -> Worktree? {
+        guard let worktreeID = report.worktreeID,
+              let project = visibleProjectForWorktree(worktreeID)
+        else {
+            return nil
+        }
+        return projectsManager.visibleWorktrees(projectId: project.id).first { $0.id == worktreeID }
+    }
+
+    func scheduledAgentReportSessionIsAvailable(_ report: ScheduledAgentReport) async -> Bool {
+        guard let sessionID = report.sessionID,
+              let worktree = worktreeForScheduledAgentReport(report)
+        else {
+            return false
+        }
+        let persistence = ACPSessionPersistence(
+            path: Paths.acpSessionsDB(forWorktreeId: worktree.id).path
+        )
+        guard let row = try? await persistence.loadSession(id: sessionID) else { return false }
+        return !row.archived
+    }
+
+    func openScheduledAgentReportWorktree(_ report: ScheduledAgentReport) {
+        guard let worktree = worktreeForScheduledAgentReport(report) else { return }
+        focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+    }
+
+    func openScheduledAgentReportSession(_ report: ScheduledAgentReport) async {
+        guard let sessionID = report.sessionID,
+              let worktree = worktreeForScheduledAgentReport(report)
+        else {
+            return
+        }
+        let persistence = ACPSessionPersistence(
+            path: Paths.acpSessionsDB(forWorktreeId: worktree.id).path
+        )
+        guard let row = try? await persistence.loadSession(id: sessionID), !row.archived else { return }
+        focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+        await openExistingACPSession(sessionId: sessionID, worktree: worktree)
+    }
+
+    func requestOpenScheduledAgentReport(id: String) async {
+        guard let report = try? await scheduledAgentReport(id: id),
+              let worktree = projectsManager.visibleMainWorktree(projectId: report.projectID)
+                ?? projectsManager.visibleWorktrees(projectId: report.projectID).first
+        else {
+            return
+        }
+        focusGlobalWorktree(id: worktree.id, projectId: report.projectID)
+        scheduledAgentReportRoute = ScheduledAgentReportRoute(projectID: report.projectID, reportID: report.id)
+        NotificationCenter.default.post(
+            name: .alasSelectRightPaneTab,
+            object: RightPaneTab.schedules.rawValue
+        )
+    }
+
+    private func scheduledAgentEligibilityFailure(_ composition: RunScheduleComposition) -> String? {
+        guard let agentID = composition.agentId,
+              !agentID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return "Scheduled report and cleanup require an explicitly selected ACP agent."
+        }
+        guard let spec = ACPLaunchCatalog.spec(for: agentID) else {
+            return "Scheduled report and cleanup are available only for ACP agents; \(agentID) launches in a terminal."
+        }
+        if case .external = spec.mcpInjection {
+            return "\(agentID) does not accept ACP MCP servers; scheduled report and cleanup require native MCP."
+        }
+        guard composition.sendsPromptAutomatically,
+              let prompt = composition.prompt,
+              !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return "Scheduled report and cleanup require a nonblank automatically submitted prompt."
+        }
+        return nil
+    }
+
+    private func scheduledAgentMCPUnavailableReason(project: ProjectConfig, worktree: Worktree) -> String? {
+        guard project.host == nil else {
+            return "The built-in Alas MCP server is unavailable for remote worktrees."
+        }
+        guard config.harness.exposeAlasMCP else {
+            return "Built-in Alas MCP is disabled."
+        }
+        let binaryPath = (try? TerminalCLIInjection.installExecutables())?
+            .appendingPathComponent(TerminalCLIInjection.executableName).path
+        guard let binaryPath else {
+            return "The Alas CLI executable is unavailable, so scheduled completion cannot be reported."
+        }
+        guard let socketPath = harness.socketServer.socketPath else {
+            return "The Alas MCP socket is unavailable, so scheduled completion cannot be reported."
+        }
+        let repo = repoConfig(worktreeRoot: worktree.path)
+        let configuredServers = RepoMCPResolver.merge(
+            appServers: project.mcpServers,
+            repoServers: repo?.mcpServers ?? [],
+            disabledNames: Set(project.disabledRepoMCPServers),
+            trust: project.repoMCPTrust
+        ).active
+        guard BuiltInAlasMCP.shouldInject(
+            enabled: true,
+            configuredServers: configuredServers,
+            binaryPath: binaryPath,
+            socketPath: socketPath
+        ) else {
+            return "A project MCP server named 'alas' overrides the built-in Alas server."
+        }
+        return nil
+    }
+
+    private func finishScheduledReport(
+        _ reportID: String,
+        state: ScheduledAgentTaskState,
+        reason: String,
+        store: ScheduledAgentReportStore
+    ) async {
+        do {
+            _ = try await store.finishWithoutCompletion(
+                reportID: reportID,
+                state: state,
+                reason: reason
+            )
+        } catch {
+            runScheduleLogger.error(
+                "Could not finalize scheduled report \(reportID, privacy: .public): \(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    private func runScheduleOutcomeDescription(_ outcome: RunScheduleOutcome) -> String {
+        switch outcome {
+        case .succeeded:
+            return "The scheduled script completed."
+        case .failed(let exitCode):
+            return "The scheduled script exited with code \(exitCode)."
+        case .stopped:
+            return "The scheduled script was stopped."
+        case .unknown:
+            return "The scheduled script ended without a known result."
+        case .skipped(let reason), .launchFailed(let reason):
+            return reason
+        }
+    }
+
+    private func isSkipped(_ outcome: RunScheduleOutcome) -> Bool {
+        if case .skipped = outcome { return true }
+        return false
+    }
+
+
+    func recordScheduledAgentCompletion(
+        origin: ACPOrchestrationSessionOrigin,
+        completion: ScheduledAgentCompletion
+    ) async -> AlasCLIResponse {
+        let sessionID = origin.sessionId
+        guard let registration = activeScheduledAgentRunsBySession[sessionID],
+              registration.acceptsCompletion,
+              registration.sessionID == sessionID,
+              registration.worktreeID == origin.worktreeId,
+              registration.projectID == origin.projectId
+        else {
+            return .error("No active scheduled ACP run accepts this completion.")
+        }
+        guard isWriter(for: sessionID),
+              let manager = acpManager(forWorktreeId: registration.worktreeID),
+              let session = manager.liveSession(for: sessionID),
+              session.worktreeId == registration.worktreeID
+        else {
+            return .error("The authenticated ACP session does not own the active scheduled report.")
+        }
+        let builtInMCPIsRequested = session.mcpAttachmentSummary?.statuses.contains { status in
+            guard status.id == BuiltInAlasMCP.statusId else { return false }
+            if case .requested = status.disposition { return true }
+            return false
+        } == true
+        guard builtInMCPIsRequested, session.builtInMCPRegistration == .registered else {
+            return .error("The built-in Alas MCP server is not active for this scheduled ACP session.")
+        }
+        guard registration.reserveCompletion() else {
+            return .error("A completion is already being recorded or this scheduled run is closed.")
+        }
+        do {
+            let store = try scheduledAgentReportsStore()
+            guard let report = try await store.report(id: registration.reportID),
+                  report.taskState == .running,
+                  report.cleanupRequested,
+                  report.sessionID == sessionID,
+                  report.worktreeID == registration.worktreeID,
+                  report.projectID == origin.projectId,
+                  report.agentID == session.agentId
+            else {
+                registration.retryAfterPersistenceFailure()
+                return .error("The persisted report does not belong to this active scheduled ACP session.")
+            }
+            try await store.recordCompletion(
+                reportID: registration.reportID,
+                authenticatedSessionID: sessionID,
+                completion: completion
+            )
+            guard activeScheduledAgentRunsBySession[sessionID] === registration,
+                  registration.recordPersistedCompletion(completion)
+            else {
+                return .error("The scheduled run ended before this completion was accepted.")
+            }
+            return .text(["Completion recorded. The task turn must finish before cleanup can begin."])
+        } catch {
+            registration.retryAfterPersistenceFailure()
+            if let storeError = error as? ScheduledAgentReportStoreError,
+               case .completionAlreadyRecorded(_) = storeError {
+                return .error("A completion has already been recorded for this scheduled run.")
+            }
+            return .error("Could not save the scheduled completion.")
+        }
+    }
+    private func scheduledAgentReportOpenAction(_ reportID: String?) -> (() -> Void)? {
+        guard let reportID else { return nil }
+        return { [weak self] in
+            Task { @MainActor [weak self] in
+                await self?.requestOpenScheduledAgentReport(id: reportID)
+            }
+        }
     }
 
     /// Announces a failure that no other channel will report. A scheduled
@@ -271,17 +723,21 @@ extension AppState {
         _ schedule: RunSchedule,
         reason: String,
         project: ProjectConfig,
-        worktree: Worktree
+        worktree: Worktree,
+        reportID: String? = nil
     ) {
-        // Nothing is announced for a cancelled run. Cancellation here means
-        // the schedule was deleted, and every step it interrupts on the way
-        // out reports itself as having failed. Guarded centrally so no
-        // future call site has to remember.
         guard !Task.isCancelled else { return }
-        inAppNotifications.post("\(schedule.name): \(reason)", severity: .error, worktreeID: worktree.id)
+        let notificationReason = reportID.map { reason.contains($0) ? reason : "\(reason) Report: \($0)." } ?? reason
+        inAppNotifications.post(
+            "\(schedule.name): \(notificationReason)",
+            severity: .error,
+            worktreeID: worktree.id,
+            actionTitle: reportID == nil ? nil : "Open report",
+            action: scheduledAgentReportOpenAction(reportID)
+        )
         harness.notifications.notifyScheduleFailed(
             scheduleName: schedule.name,
-            reason: reason,
+            reason: notificationReason,
             projectId: project.id,
             worktreeId: worktree.id,
             scheduleID: schedule.id
@@ -427,7 +883,8 @@ extension AppState {
         agentId: String,
         composition: RunScheduleComposition,
         sessionID: ACPSession.ID = UUID().uuidString,
-        promptID: UUID = UUID()
+        promptID: UUID = UUID(),
+        promptOverride: String? = nil
     ) -> WorktreeLaunchSurface {
         guard ACPLaunchCatalog.spec(for: agentId) != nil else {
             return .terminal(agentId: agentId)
@@ -435,7 +892,7 @@ extension AppState {
         return .acp(agentId: agentId, preparedPrompt: PreparedWorktreeACPPrompt(
             sessionID: sessionID,
             promptID: promptID,
-            text: composition.prompt ?? "",
+            text: promptOverride ?? composition.prompt ?? "",
             sendsAutomatically: composition.sendsPromptAutomatically,
             modelID: composition.modelId
         ))
@@ -445,24 +902,102 @@ extension AppState {
         for schedule: RunSchedule,
         composition: RunScheduleComposition,
         worktree: Worktree,
-        project: ProjectConfig
+        project: ProjectConfig,
+        reportID: String?,
+        occurrenceID: String
     ) async -> RunScheduleOutcome {
         let agentId = composition.agentId ?? defaultAgentID(projectId: project.id, worktreeRoot: worktree.path)
         guard let agentId else {
             let message = "No agent is configured to launch for \(project.name)."
-            reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
+            if let reportID, let store = try? scheduledAgentReportsStore() {
+                await finishScheduledReport(reportID, state: .failed, reason: message, store: store)
+            }
+            reportScheduleFailure(
+                schedule,
+                reason: message,
+                project: project,
+                worktree: worktree,
+                reportID: reportID
+            )
             return .launchFailed(message)
         }
-        let launchSurface = Self.scheduledLaunchSurface(agentId: agentId, composition: composition)
+        let sessionID = UUID().uuidString
+        let promptID = UUID()
+        let promptOverride: String? = reportID.map { _ in
+            """
+            \(composition.prompt ?? "")
+
+            ---
+            This is a scheduled task. After the work is complete, call the `schedule_complete` MCP tool exactly once with `succeeded`, `failed`, or `needs_attention`, a concise summary, completed checks, and any output links. Do not use a CLI command as a completion fallback. Reporting success does not authorize or trigger worktree deletion.
+            """
+        }
+        let launchSurface = Self.scheduledLaunchSurface(
+            agentId: agentId,
+            composition: composition,
+            sessionID: sessionID,
+            promptID: promptID,
+            promptOverride: promptOverride
+        )
+        if let reportID {
+            guard case .acp(_, let prepared?) = launchSurface else {
+                let reason = "Scheduled report and cleanup require a native ACP session."
+                if let store = try? scheduledAgentReportsStore() {
+                    await finishScheduledReport(reportID, state: .needsAttention, reason: reason, store: store)
+                }
+                return .launchFailed(reason)
+            }
+            do {
+                let store = try scheduledAgentReportsStore()
+                try await store.associateSession(reportID: reportID, sessionID: prepared.sessionID)
+                activeScheduledAgentRunsBySession[prepared.sessionID] = ScheduledAgentRunRegistration(
+                    reportID: reportID,
+                    occurrenceID: occurrenceID,
+                    scheduleID: schedule.id,
+                    projectID: project.id,
+                    worktreeID: worktree.id,
+                    sessionID: prepared.sessionID,
+                    promptID: prepared.promptID
+                )
+            } catch {
+                let reason = "Could not bind the scheduled report to its ACP session: \(error.localizedDescription)"
+                if let store = try? scheduledAgentReportsStore() {
+                    await finishScheduledReport(reportID, state: .failed, reason: reason, store: store)
+                }
+                return .launchFailed(reason)
+            }
+        }
+        defer {
+            if let registration = activeScheduledAgentRunsBySession[sessionID],
+               registration.reportID == reportID {
+                registration.invalidate()
+                activeScheduledAgentRunsBySession[sessionID] = nil
+            }
+            scheduledPromptSettlementTasks.removeValue(forKey: sessionID)?.cancel()
+        }
+        guard !Task.isCancelled else {
+            if let reportID, let store = try? scheduledAgentReportsStore() {
+                await finishScheduledReport(
+                    reportID,
+                    state: .interrupted,
+                    reason: "The schedule was removed while its agent was launching.",
+                    store: store
+                )
+            }
+            return .skipped(reason: "The schedule was removed while its agent was launching.")
+        }
         let tab: Tab?
         do {
             tab = try await launchWorktreeSurface(launchSurface, worktree: worktree, project: project)
         } catch {
-            // Deleting a schedule cancels its targets, and that cancellation
-            // arrives here as a thrown error. Recording it as a launch
-            // failure would leave the worktree in a retryable failed state
-            // and raise failure notifications for work deliberately stopped.
             if Task.isCancelled || error is CancellationError {
+                if let reportID, let store = try? scheduledAgentReportsStore() {
+                    await finishScheduledReport(
+                        reportID,
+                        state: .interrupted,
+                        reason: "The schedule was removed while its agent was launching.",
+                        store: store
+                    )
+                }
                 return .skipped(reason: "The schedule was removed while its agent was launching.")
             }
             markWorktreeLaunchFailed(
@@ -472,8 +1007,20 @@ extension AppState {
                 launchSurface: launchSurface
             )
             reportScheduleFailure(
-                schedule, reason: error.localizedDescription, project: project, worktree: worktree
+                schedule,
+                reason: error.localizedDescription,
+                project: project,
+                worktree: worktree,
+                reportID: reportID
             )
+            if let reportID, let store = try? scheduledAgentReportsStore() {
+                await finishScheduledReport(
+                    reportID,
+                    state: .failed,
+                    reason: error.localizedDescription,
+                    store: store
+                )
+            }
             runScheduleLogger.error(
                 "Scheduled agent launch failed for \(schedule.id, privacy: .public): \(String(describing: error), privacy: .public)"
             )
@@ -481,8 +1028,13 @@ extension AppState {
         }
         let agentName = agentRegistry.agents.first { $0.id == agentId }?.displayName ?? agentId
         if case .acp(_, let prepared?) = launchSurface {
-            return scheduledChatSessionOutcome(
-                prepared, schedule: schedule, worktree: worktree, project: project, agentName: agentName
+            return await scheduledChatSessionOutcome(
+                prepared,
+                schedule: schedule,
+                worktree: worktree,
+                project: project,
+                agentName: agentName,
+                reportID: reportID
             )
         }
         inAppNotifications.post(
@@ -504,47 +1056,58 @@ extension AppState {
         return .succeeded
     }
 
-    /// What became of a scheduled chat session once its launch returned.
-    ///
-    /// The launch opens the tab and attaches; an agent that could not start
-    /// (missing adapter, no login) leaves its reason on the session, and the
-    /// prompt stays queued or in the composer for when the user sorts it out.
-    /// That is a launch failure: unlike a terminal, a chat session knows
-    /// whether its agent came up.
-    ///
-    /// A model the agent refused is not: the agent is running, on its own
-    /// default, and only the choice was lost. Said in the app so the user
-    /// learns why the transcript names a different model.
+    /// Launch-only ACP schedules settle when the agent is ready. Report-enabled
+    /// runs instead settle on their exact queued prompt, a durable completion,
+    /// and an idle session with no queued work or outstanding user input.
     private func scheduledChatSessionOutcome(
         _ prepared: PreparedWorktreeACPPrompt,
         schedule: RunSchedule,
         worktree: Worktree,
         project: ProjectConfig,
-        agentName: String
-    ) -> RunScheduleOutcome {
-        // Mirrors the terminal path's cancellation handling: the schedule
-        // was removed while the agent was launching, so nothing is wrong —
-        // `openPreparedWorktreeACPSession` bailed before enqueueing the
-        // prompt or attaching, and the session sitting idle is not a
-        // failure worth reporting.
+        agentName: String,
+        reportID: String?
+    ) async -> RunScheduleOutcome {
         guard !Task.isCancelled else {
+            if let reportID, let store = try? scheduledAgentReportsStore() {
+                await finishScheduledReport(
+                    reportID,
+                    state: .interrupted,
+                    reason: "The schedule was removed while its agent was launching.",
+                    store: store
+                )
+            }
             return .skipped(reason: "The schedule was removed while its agent was launching.")
         }
-        guard let session = acpManager(forWorktreeId: worktree.id)?.liveSession(for: prepared.sessionID) else {
+        guard let manager = acpManager(forWorktreeId: worktree.id),
+              let session = manager.liveSession(for: prepared.sessionID)
+        else {
             let message = "Could not open a chat session for \(agentName) in \(worktree.branch)."
-            reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
+            reportScheduleFailure(
+                schedule,
+                reason: message,
+                project: project,
+                worktree: worktree,
+                reportID: reportID
+            )
+            if let reportID, let store = try? scheduledAgentReportsStore() {
+                await finishScheduledReport(reportID, state: .failed, reason: message, store: store)
+            }
             return .launchFailed(message)
         }
         if let reason = session.lastError {
             let message = "\(agentName) could not start in \(worktree.branch): \(reason)"
-            reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
+            reportScheduleFailure(
+                schedule,
+                reason: message,
+                project: project,
+                worktree: worktree,
+                reportID: reportID
+            )
+            if let reportID, let store = try? scheduledAgentReportsStore() {
+                await finishScheduledReport(reportID, state: .failed, reason: message, store: store)
+            }
             return .launchFailed(message)
         }
-        inAppNotifications.post(
-            "\(schedule.name): launched \(agentName) in \(worktree.branch)",
-            severity: .success,
-            worktreeID: worktree.id
-        )
         if let modelID = prepared.modelID, session.currentModel != modelID {
             let modelName = acpModelCatalog.models(for: session.agentId).first { $0.id == modelID }?.name ?? modelID
             inAppNotifications.post(
@@ -553,7 +1116,549 @@ extension AppState {
                 worktreeID: worktree.id
             )
         }
-        return .succeeded
+        guard let reportID else {
+            inAppNotifications.post(
+                "\(schedule.name): launched \(agentName) in \(worktree.branch)",
+                severity: .success,
+                worktreeID: worktree.id
+            )
+            return .succeeded
+        }
+        guard let settlementTask = scheduledPromptSettlementTasks[prepared.sessionID] else {
+            let reason = "The scheduled ACP prompt could not be observed; the worktree was retained."
+            if let store = try? scheduledAgentReportsStore() {
+                await finishScheduledReport(reportID, state: .needsAttention, reason: reason, store: store)
+            }
+            reportScheduleFailure(
+                schedule,
+                reason: "\(reason) Report: \(reportID).",
+                project: project,
+                worktree: worktree,
+                reportID: reportID
+            )
+            return .launchFailed(reason)
+        }
+        let settlement = await withTaskCancellationHandler {
+            await settlementTask.value
+        } onCancel: {
+            settlementTask.cancel()
+        }
+        let store: ScheduledAgentReportStore
+        do {
+            store = try scheduledAgentReportsStore()
+        } catch {
+            let reason = "Could not reopen the scheduled-agent report store."
+            reportScheduleFailure(
+                schedule,
+                reason: "\(reason) Report: \(reportID).",
+                project: project,
+                worktree: worktree,
+                reportID: reportID
+            )
+            return .launchFailed(reason)
+        }
+        switch settlement {
+        case .cancelled:
+            await finishScheduledReport(
+                reportID,
+                state: .interrupted,
+                reason: "The schedule was removed while the ACP task was running.",
+                store: store
+            )
+            return .skipped(reason: "The schedule was removed while the ACP task was running.")
+        case .timedOut:
+            let reason = "The ACP task did not finish within four hours; its worktree was retained."
+            await finishScheduledReport(reportID, state: .needsAttention, reason: reason, store: store)
+            reportScheduleFailure(
+                schedule,
+                reason: "\(reason) Report: \(reportID).",
+                project: project,
+                worktree: worktree,
+                reportID: reportID
+            )
+            return .launchFailed(reason)
+        case .failed(let message):
+            await finishScheduledReport(reportID, state: .failed, reason: message, store: store)
+            reportScheduleFailure(
+                schedule,
+                reason: "\(message) Worktree retained. Report: \(reportID).",
+                project: project,
+                worktree: worktree,
+                reportID: reportID
+            )
+            return .launchFailed(message)
+        case .settled:
+            guard let completion = activeScheduledAgentRunsBySession[prepared.sessionID]?.completion else {
+                let reason = "The ACP task ended without calling schedule_complete; its worktree was retained."
+                await finishScheduledReport(reportID, state: .needsAttention, reason: reason, store: store)
+                reportScheduleFailure(
+                    schedule,
+                    reason: "\(reason) Report: \(reportID).",
+                    project: project,
+                    worktree: worktree,
+                    reportID: reportID
+                )
+                return .launchFailed(reason)
+            }
+            do {
+                let report = try await store.finishRecordedCompletion(
+                    reportID: reportID,
+                    authenticatedSessionID: prepared.sessionID
+                )
+                guard report.taskState == .succeeded else {
+                    let reason = "The ACP agent reported \(completion.outcome.rawValue); the worktree was retained."
+                    reportScheduleFailure(
+                        schedule,
+                        reason: "\(reason) Report: \(reportID).",
+                        project: project,
+                        worktree: worktree,
+                        reportID: reportID
+                    )
+                    return .launchFailed(reason)
+                }
+                var notificationText = "\(schedule.name): agent task completed. Report: \(reportID)."
+                var notificationSeverity = InAppNotificationSeverity.success
+                if report.cleanupRequested {
+                    let cleanupResult: ScheduledWorktreeCleanupResult
+                    if let registration = activeScheduledAgentRunsBySession[prepared.sessionID],
+                       registration.reportID == reportID {
+                        cleanupResult = await cleanupScheduledAgentWorktree(
+                            report: report,
+                            registration: registration,
+                            project: project,
+                            worktree: worktree,
+                            store: store
+                        )
+                    } else {
+                        let reason = "The scheduled ACP session is no longer active."
+                        cleanupResult = await persistScheduledCleanupState(
+                            reportID: reportID,
+                            state: .retained,
+                            reason: reason,
+                            store: store
+                        ) ? .retained(reason) : .failed(
+                            reason: "The worktree was retained, but its cleanup status could not be saved.",
+                            worktreeRemoved: false
+                        )
+                    }
+                    switch cleanupResult {
+                    case .removed:
+                        notificationText = "\(schedule.name): agent task completed and its worktree was removed. Report: \(reportID)."
+                    case .retained(let reason):
+                        notificationText = "\(schedule.name): agent task completed; worktree retained. \(reason) Report: \(reportID)."
+                        notificationSeverity = .information
+                    case .failed(let reason, _):
+                        notificationText = "\(schedule.name): agent task completed, but worktree cleanup failed. \(reason) Report: \(reportID)."
+                        notificationSeverity = .information
+                    }
+                }
+                let notificationWorktreeID = selectedWorktreeId
+                    ?? projectsManager.visibleMainWorktree(projectId: project.id)?.id
+                    ?? worktree.id
+                inAppNotifications.post(
+                    notificationText,
+                    severity: notificationSeverity,
+                    worktreeID: notificationWorktreeID,
+                    actionTitle: "Open report",
+                    action: scheduledAgentReportOpenAction(reportID)
+                )
+                return .succeeded
+            } catch {
+                let reason = "Could not finalize the scheduled-agent report; the worktree was retained."
+                reportScheduleFailure(
+                    schedule,
+                    reason: "\(reason) Report: \(reportID).",
+                    project: project,
+                    worktree: worktree,
+                    reportID: reportID
+                )
+                return .launchFailed(reason)
+            }
+        }
+    }
+
+    /// Atomically checks and claims on the main actor; callers must not await
+    /// between observing an idle worktree and installing the delete claim.
+    func claimScheduledAgentWorktreeForCleanup(_ worktree: Worktree) -> Bool {
+        guard projectsManager.operationState(for: worktree) == nil else { return false }
+        projectsManager.setOperationState(
+            for: worktree,
+            state: .deleting(projectId: worktree.projectId)
+        )
+        return true
+    }
+
+    private func cleanupScheduledAgentWorktree(
+        report: ScheduledAgentReport,
+        registration: ScheduledAgentRunRegistration,
+        project: ProjectConfig,
+        worktree: Worktree,
+        store: ScheduledAgentReportStore
+    ) async -> ScheduledWorktreeCleanupResult {
+        guard report.cleanupRequested,
+              report.cleanupState == .pending,
+              report.taskState == .succeeded
+        else {
+            return .failed(reason: "The report is not in a cleanable state.", worktreeRemoved: false)
+        }
+        guard claimScheduledAgentWorktreeForCleanup(worktree) else {
+            return await retainScheduledWorktree(
+                reportID: report.id,
+                reason: "The worktree is already being changed.",
+                store: store
+            )
+        }
+        let initialCheck = await scheduledWorktreeCleanupCheck(
+            report: report,
+            registration: registration,
+            project: project,
+            worktree: worktree,
+            expectedFingerprint: nil,
+            deletionClaimed: true,
+            sessionDisposed: false
+        )
+        guard case .allowed(let initialFingerprint) = initialCheck else {
+            let reason: String
+            if case .refused(let refusal) = initialCheck {
+                reason = refusal
+            } else {
+                reason = "The worktree changed while cleanup was being checked."
+            }
+            projectsManager.setOperationState(for: worktree, state: nil)
+            return await retainScheduledWorktree(reportID: report.id, reason: reason, store: store)
+        }
+
+        let claimedCheck = await scheduledWorktreeCleanupCheck(
+            report: report,
+            registration: registration,
+            project: project,
+            worktree: worktree,
+            expectedFingerprint: initialFingerprint,
+            deletionClaimed: true,
+            sessionDisposed: false
+        )
+        guard case .allowed(let claimedFingerprint) = claimedCheck else {
+            let reason: String
+            if case .refused(let refusal) = claimedCheck {
+                reason = refusal
+            } else {
+                reason = "The worktree changed while cleanup was being checked."
+            }
+            projectsManager.setOperationState(for: worktree, state: nil)
+            return await retainScheduledWorktree(reportID: report.id, reason: reason, store: store)
+        }
+
+        guard acpManager(forWorktreeId: worktree.id) != nil else {
+            projectsManager.setOperationState(for: worktree, state: nil)
+            return await retainScheduledWorktree(
+                reportID: report.id,
+                reason: "The scheduled ACP session manager is no longer available.",
+                store: store
+            )
+        }
+        let sessionTabIDs = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> TabID? in
+            guard case .acpSession(let state) = tab,
+                  state.sessionId == registration.sessionID
+            else { return nil }
+            return tab.id
+        }
+        closeCenterTabs(
+            worktreeId: worktree.id,
+            projectId: project.id,
+            tabIds: sessionTabIDs
+        )
+        await disposeACPManagerAndWait(owner: .worktree(worktree.id))
+        let sessionPersistence = ACPSessionPersistence(
+            path: Paths.acpSessionsDB(forWorktreeId: worktree.id).path
+        )
+        do {
+            guard try await sessionPersistence.loadQueue(sessionId: registration.sessionID).isEmpty else {
+                projectsManager.setOperationState(for: worktree, state: nil)
+                return await retainScheduledWorktree(
+                    reportID: report.id,
+                    reason: "The scheduled ACP session still has queued work.",
+                    store: store
+                )
+            }
+        } catch {
+            projectsManager.setOperationState(for: worktree, state: nil)
+            return await retainScheduledWorktree(
+                reportID: report.id,
+                reason: "Could not verify the scheduled ACP session queue.",
+                store: store
+            )
+        }
+
+        let finalCheck = await scheduledWorktreeCleanupCheck(
+            report: report,
+            registration: registration,
+            project: project,
+            worktree: worktree,
+            expectedFingerprint: claimedFingerprint,
+            deletionClaimed: true,
+            sessionDisposed: true
+        )
+        guard case .allowed(let finalFingerprint) = finalCheck,
+              finalFingerprint == claimedFingerprint
+        else {
+            let reason: String
+            if case .refused(let refusal) = finalCheck {
+                reason = refusal
+            } else {
+                reason = "Git content changed while cleanup was being prepared."
+            }
+            projectsManager.setOperationState(for: worktree, state: nil)
+            return await retainScheduledWorktree(reportID: report.id, reason: reason, store: store)
+        }
+
+        let siblings = projectsManager.visibleWorktrees(projectId: project.id)
+        let removedIndex = siblings.firstIndex(where: { $0.id == worktree.id }) ?? 0
+        let outcome = await performDeleteWorktree(
+            worktree: worktree,
+            repoPath: URL(fileURLWithPath: project.path),
+            deleteBranchIfMerged: false,
+            force: false,
+            removedIndex: removedIndex,
+            promptsForForce: false,
+            authorizedDeleteContentFingerprint: finalFingerprint,
+            authorizedDirtyTabsAtConfirmation: [:],
+            authorizedSessionIDs: [registration.sessionID]
+        )
+        switch outcome {
+        case .deleted:
+            await disposeACPManagerAndWait(owner: .worktree(worktree.id))
+            do {
+                try await sessionPersistence.deleteSession(id: registration.sessionID)
+            } catch {
+                let reason = "The worktree was removed, but the scheduled ACP session row could not be deleted."
+                _ = await persistScheduledCleanupState(
+                    reportID: report.id,
+                    state: .failed,
+                    reason: reason,
+                    store: store
+                )
+                return .failed(reason: reason, worktreeRemoved: true)
+            }
+            do {
+                _ = try await store.updateCleanup(reportID: report.id, state: .removed)
+                return .removed
+            } catch {
+                return .failed(
+                    reason: "The worktree and ACP session were removed, but the report could not record cleanup.",
+                    worktreeRemoved: true
+                )
+            }
+        case .needsForce:
+            return await retainScheduledWorktree(
+                reportID: report.id,
+                reason: "Git refused non-force removal; automatic cleanup never retries with force.",
+                store: store
+            )
+        case .skipped(let reason):
+            return await retainScheduledWorktree(
+                reportID: report.id,
+                reason: "The worktree changed before removal: \(reason)",
+                store: store
+            )
+        case .failed(let message):
+            let reason = "Git could not remove the worktree safely: \(message)"
+            guard await persistScheduledCleanupState(
+                reportID: report.id,
+                state: .failed,
+                reason: reason,
+                store: store
+            ) else {
+                return .failed(
+                    reason: "Git could not remove the worktree and the report could not record cleanup.",
+                    worktreeRemoved: false
+                )
+            }
+            return .failed(reason: reason, worktreeRemoved: false)
+        case .archived:
+            return await retainScheduledWorktree(
+                reportID: report.id,
+                reason: "The worktree was not removed.",
+                store: store
+            )
+        }
+    }
+
+    static func scheduledAgentCleanupIdentityIsValid(
+        report: ScheduledAgentReport,
+        registration: ScheduledAgentRunRegistration,
+        project: ProjectConfig,
+        worktree: Worktree
+    ) -> Bool {
+        report.id == registration.reportID
+            && report.occurrenceID == registration.occurrenceID
+            && report.scheduleID == registration.scheduleID
+            && report.projectID == project.id
+            && report.projectID == registration.projectID
+            && report.worktreeID == worktree.id
+            && report.worktreeID == registration.worktreeID
+            && report.branch == worktree.branch
+            && report.sessionID == registration.sessionID
+            && report.baseCommit != nil
+            && report.cleanupRequested
+            && report.taskState == .succeeded
+            && report.cleanupState == .pending
+    }
+
+    static func scheduledCleanupHasNoOtherSessions(
+        worktreeSessionIDs: Set<String>,
+        managerSessionIDs: Set<String>,
+        scheduledSessionID: String
+    ) -> Bool {
+        var otherSessionIDs = worktreeSessionIDs
+        otherSessionIDs.formUnion(managerSessionIDs)
+        otherSessionIDs.remove(scheduledSessionID)
+        return otherSessionIDs.isEmpty
+    }
+
+    private func scheduledWorktreeCleanupCheck(
+        report: ScheduledAgentReport,
+        registration: ScheduledAgentRunRegistration,
+        project: ProjectConfig,
+        worktree: Worktree,
+        expectedFingerprint: String?,
+        deletionClaimed: Bool,
+        sessionDisposed: Bool
+    ) async -> ScheduledWorktreeCleanupCheck {
+        let expectedOperationState: WorktreeOperationState? = deletionClaimed
+            ? .deleting(projectId: worktree.projectId)
+            : nil
+        func volatileStateIsSafe() -> Bool {
+            guard !Task.isCancelled,
+                  activeScheduledAgentRunsBySession[registration.sessionID] === registration,
+                  Self.scheduledAgentCleanupIdentityIsValid(
+                      report: report,
+                      registration: registration,
+                      project: project,
+                      worktree: worktree
+                  ),
+                  projectsManager.operationState(for: worktree) == expectedOperationState,
+                  projectsManager.visibleMainWorktree(projectId: project.id)?.id != worktree.id,
+                  projectsManager.visibleWorktrees(projectId: project.id).contains(where: {
+                      $0.id == worktree.id
+                          && $0.path.standardizedFileURL == worktree.path.standardizedFileURL
+                          && $0.branch == worktree.branch
+                  }),
+                  let currentProject = projects.first(where: { $0.id == project.id }),
+                  currentProject.path == project.path,
+                  currentProject.host == nil,
+                  project.host == nil,
+                  Self.workspaceCleanupOwnershipAvailable(
+                      workspacesEnabled: config.workspacesEnabled,
+                      workspacesCanMutate: workspacesManager.canMutate
+                  ),
+                  worktreeCleanupWorkspaceOwners(for: worktree).isEmpty,
+                  dirtyTabGenerations(worktreeId: worktree.id).isEmpty
+            else {
+                return false
+            }
+
+            let tabSessionIDs = worktreeCleanupSessionIDs(worktreeId: worktree.id)
+            if sessionDisposed {
+                return acpManager(forWorktreeId: worktree.id) == nil && tabSessionIDs.isEmpty
+            }
+            guard let manager = acpManager(forWorktreeId: worktree.id),
+                  let session = manager.liveSession(for: registration.sessionID),
+                  isWriter(for: registration.sessionID)
+            else {
+                return false
+            }
+            let builtInMCPIsRequested = session.mcpAttachmentSummary?.statuses.contains { status in
+                guard status.id == BuiltInAlasMCP.statusId else { return false }
+                if case .requested = status.disposition { return true }
+                return false
+            } == true
+            return Self.scheduledCleanupHasNoOtherSessions(
+                worktreeSessionIDs: tabSessionIDs,
+                managerSessionIDs: Set(manager.sessions.keys),
+                scheduledSessionID: registration.sessionID
+            )
+                && session.agentState == .ready
+                && session.setupState == .ready
+                && session.queue.isEmpty
+                && session.transcript.streamingState == .idle
+                && session.transcript.pendingPermission == nil
+                && session.transcript.pendingQuestion == nil
+                && session.transcript.pendingUserInputs.isEmpty
+                && builtInMCPIsRequested
+                && session.builtInMCPRegistration == .registered
+                && registration.completion?.outcome == .succeeded
+        }
+
+        guard volatileStateIsSafe() else {
+            return .refused("Worktree, session, or application state changed before cleanup.")
+        }
+        guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
+            return .refused(Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
+        }
+        do {
+            let preflight = try await WorktreeService().deletePreflight(
+                worktreePath: worktree.path,
+                usesRemoteHostRegistry: false
+            )
+            guard !preflight.requiresForce else {
+                return .refused("The worktree has local changes or is Git-locked.")
+            }
+            let fingerprint = try await WorktreeService.worktreeDeleteContentFingerprint(
+                worktreePath: worktree.path
+            )
+            if let expectedFingerprint, expectedFingerprint != fingerprint {
+                return .refused("Git content changed while cleanup was being prepared.")
+            }
+            guard let baseCommit = report.baseCommit,
+                  try await WorktreeService.scheduledCleanupHistoryIsSafe(
+                      baseCommit: baseCommit,
+                      expectedBranch: worktree.branch,
+                      worktreePath: worktree.path
+                  )
+            else {
+                return .refused("The current branch has commits not reachable from a remote-tracking branch.")
+            }
+            guard volatileStateIsSafe() else {
+                return .refused("Worktree, session, or application state changed during cleanup checks.")
+            }
+            return .allowed(contentFingerprint: fingerprint)
+        } catch {
+            return .refused("Git could not verify the worktree safety checks.")
+        }
+    }
+
+
+    private func retainScheduledWorktree(
+        reportID: String,
+        reason: String,
+        store: ScheduledAgentReportStore
+    ) async -> ScheduledWorktreeCleanupResult {
+        guard await persistScheduledCleanupState(
+            reportID: reportID,
+            state: .retained,
+            reason: reason,
+            store: store
+        ) else {
+            return .failed(
+                reason: "The worktree was retained, but the report could not save the cleanup state.",
+                worktreeRemoved: false
+            )
+        }
+        return .retained(reason)
+    }
+
+    private func persistScheduledCleanupState(
+        reportID: String,
+        state: ScheduledAgentCleanupState,
+        reason: String,
+        store: ScheduledAgentReportStore
+    ) async -> Bool {
+        do {
+            _ = try await store.updateCleanup(reportID: reportID, state: state, reason: reason)
+            return true
+        } catch {
+            return false
+        }
     }
 
     // MARK: - Prompt delivery

@@ -47,6 +47,7 @@ struct AlasCLIRequest: Equatable {
         case sessionList
         case sessionNew(prompt: String, agentID: String?, worktree: SessionWorktreeSelector)
         case sessionSend(sessionID: String, prompt: String)
+        case scheduleComplete(ScheduledAgentCompletion)
         case resolve
     }
 
@@ -180,6 +181,13 @@ struct AlasCLIRequest: Equatable {
     private struct SessionSendParams: Decodable {
         var session_id: String
         var prompt: String
+    }
+
+    private struct ScheduleCompleteParams: Decodable {
+        var status: String
+        var summary: String
+        var checks: [ScheduledAgentReportCheck]?
+        var links: [ScheduledAgentReportLink]?
     }
 
     private struct WorkspaceParams: Decodable {
@@ -424,6 +432,52 @@ struct AlasCLIRequest: Equatable {
                 sessionID: try requiredNonEmpty(params.session_id),
                 prompt: try requiredNonEmpty(params.prompt)
             )
+        case "schedule_complete":
+            let params = try Self.decodeParams(ScheduleCompleteParams.self, from: data)
+            guard let outcome = ScheduledAgentCompletion.Outcome(rawValue: params.status) else {
+                throw AlasCLIRequestError.malformed
+            }
+            func reportText(_ text: String) throws -> String {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty,
+                      trimmed.utf8.count <= ScheduledAgentReportLimits.maximumTextBytes else {
+                    throw AlasCLIRequestError.malformed
+                }
+                return trimmed
+            }
+            let summary = try reportText(params.summary)
+            let rawChecks = params.checks ?? []
+            let rawLinks = params.links ?? []
+            guard rawChecks.count <= ScheduledAgentReportLimits.maximumItems,
+                  rawLinks.count <= ScheduledAgentReportLimits.maximumItems else {
+                throw AlasCLIRequestError.malformed
+            }
+            let checks = try rawChecks.map {
+                ScheduledAgentReportCheck(
+                    name: try reportText($0.name),
+                    result: try reportText($0.result)
+                )
+            }
+            let links = try rawLinks.map {
+                ScheduledAgentReportLink(
+                    label: try reportText($0.label),
+                    url: try reportText($0.url)
+                )
+            }
+            let textBytes = checks.reduce(summary.utf8.count) {
+                $0 + $1.name.utf8.count + $1.result.utf8.count
+            } + links.reduce(0) {
+                $0 + $1.label.utf8.count + $1.url.utf8.count
+            }
+            guard textBytes <= ScheduledAgentReportLimits.maximumTextBytes else {
+                throw AlasCLIRequestError.malformed
+            }
+            command = .scheduleComplete(ScheduledAgentCompletion(
+                outcome: outcome,
+                summary: summary,
+                checks: checks,
+                links: links
+            ))
         case let name? where name.hasPrefix("preview_"):
             guard let action = WebPreviewCommand.Action(rawValue: String(name.dropFirst("preview_".count))) else {
                 throw AlasCLIRequestError.unsupportedCommand

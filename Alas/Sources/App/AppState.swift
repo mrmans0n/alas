@@ -231,6 +231,11 @@ final class AppState {
     /// The worktree is carried so a worktree teardown can settle every run it
     /// owns, including ones that never produced an archivable record.
     @ObservationIgnored var runScriptSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
+    @ObservationIgnored var scheduledAgentReportStore: ScheduledAgentReportStore?
+    @ObservationIgnored var activeScheduledAgentRunsBySession: [String: ScheduledAgentRunRegistration] = [:]
+    @ObservationIgnored var scheduledPromptSettlementTasks: [String: Task<ScheduledPromptSettlement, Never>] = [:]
+    @ObservationIgnored var scheduledAgentReportsRecoveryTask: Task<Void, Never>?
+    var scheduledAgentReportRoute: ScheduledAgentReportRoute?
     /// Decides when scheduled runs start. Execution is delegated back here so
     /// a scheduled run is a manual run with a different trigger.
     let runScheduler: RunScheduler
@@ -1213,7 +1218,7 @@ final class AppState {
     static let forceDeleteAlertTitleSuffix = "requires force delete."
     static let forceDeleteAlertMessage = "Git refused to remove this worktree — it may have uncommitted changes or be locked. Force delete will remove it and discard any uncommitted work."
 
-    private static let checkpointRecoveryBlocksWorktreeRemovalMessage = "An interrupted checkpoint restore needs recovery before this worktree can be deleted."
+    static let checkpointRecoveryBlocksWorktreeRemovalMessage = "An interrupted checkpoint restore needs recovery before this worktree can be deleted."
     static let checkpointRecoveryBlocksACPMessage = "An interrupted checkpoint restore needs recovery before an agent session can start."
 
     /// Set when a worktree deletion stops because the tree is dirty and Git
@@ -1312,7 +1317,8 @@ final class AppState {
         },
         attentionStore: AttentionStore? = nil,
         attentionNavigationEnvironment: AttentionNavigationEnvironment? = nil,
-        harnessAttentionSettleInterval: TimeInterval = 1.5
+        harnessAttentionSettleInterval: TimeInterval = 1.5,
+        scheduledAgentReportStore: ScheduledAgentReportStore? = nil
     ) {
         self.store = store
         self.workspaceStore = workspaceStore
@@ -1330,6 +1336,20 @@ final class AppState {
         self.fileActionErrorHandler = fileActionErrorHandler ?? { title, message in
             AppState.showWarningAlert(title: title, message: message)
         }
+        let existingAgentReportsStore: ScheduledAgentReportStore?
+        if let scheduledAgentReportStore {
+            existingAgentReportsStore = scheduledAgentReportStore
+        } else if FileManager.default.fileExists(atPath: Paths.scheduledAgentReportsDB.path) {
+            do {
+                existingAgentReportsStore = try ScheduledAgentReportStore()
+            } catch {
+                existingAgentReportsStore = nil
+                self.persistenceErrorHandler("Scheduled Reports Load Failed", error.localizedDescription)
+            }
+        } else {
+            existingAgentReportsStore = nil
+        }
+        self.scheduledAgentReportStore = existingAgentReportsStore
         self.terminalSessionOpener = terminalSessionOpener
         self.closeTabConfirmer = closeTabConfirmer
         self.acpDetachRunner = acpDetachRunner
@@ -1432,6 +1452,18 @@ final class AppState {
             self?.persistenceErrorHandler("Schedules Save Failed", message)
         }
         installRunScheduleRunner()
+        if let reportStore = scheduledAgentReportStore {
+            scheduledAgentReportsRecoveryTask = Task { [weak self] in
+                do {
+                    _ = try await reportStore.reconcileAfterRestart()
+                } catch {
+                    self?.persistenceErrorHandler(
+                        "Scheduled Reports Recovery Failed",
+                        error.localizedDescription
+                    )
+                }
+            }
+        }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             self?.runScheduler.stop()
             await GGLandingStore.shared.cancelAllAndWait()
@@ -6099,7 +6131,7 @@ final class AppState {
     /// gets a fixed sentinel generation, since there is no live edit counter
     /// to read until the tab is opened; a snapshot's content can't change on
     /// its own, so this stays stable as long as the tab remains unopened.
-    private func dirtyTabGenerations(worktreeId: String) -> [TabID: Int] {
+    func dirtyTabGenerations(worktreeId: String) -> [TabID: Int] {
         Dictionary(uniqueKeysWithValues: dirtyEditorTabIds(worktreeId: worktreeId).map {
             ($0, tabs.peekBuffer(tabId: $0)?.editGeneration ?? -1)
         })
@@ -6671,6 +6703,13 @@ final class AppState {
             },
             sendDelegatedSessionMessage: { origin, request in
                 await orchestration.send(origin: origin, request: request)
+            },
+            completeScheduledTask: { [weak self] origin, completion in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.recordScheduledAgentCompletion(
+                    origin: origin,
+                    completion: completion
+                )
             },
             workspaceCommand: { [weak self] command in
                 guard let self else { return .error("Alas is not available.") }
@@ -10290,7 +10329,7 @@ final class AppState {
         guard let state else { return false }
         return state != .idle
     }
-    private func worktreeCleanupWorkspaceOwners(
+    func worktreeCleanupWorkspaceOwners(
         for worktree: Worktree
     ) -> [WorktreeCleanupWorkspaceOwner] {
         let path = worktree.path.standardizedFileURL.path
@@ -10321,7 +10360,7 @@ final class AppState {
         }
     }
 
-    private func worktreeCleanupSessionIDs(worktreeId: String) -> Set<String> {
+    func worktreeCleanupSessionIDs(worktreeId: String) -> Set<String> {
         Set(tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
             switch tab {
             case .terminal(let state):
@@ -11013,7 +11052,7 @@ final class AppState {
     /// suppressed and the outcome is reported back instead (see
     /// `batchDeleteWorktrees`, which must never pop a modal mid-run).
     @discardableResult
-    private func performDeleteWorktree(
+    func performDeleteWorktree(
         worktree: Worktree,
         repoPath: URL,
         deleteBranchIfMerged: Bool,
@@ -11516,6 +11555,9 @@ final class AppState {
     /// pairs cannot collide with them or with each other.
     @ObservationIgnored
     private var acpManagers: [SessionOwnerID: ACPSessionManager] = [:]
+
+    @ObservationIgnored
+    private var acpManagerDisposalTasksByOwner: [SessionOwnerID: Task<Void, Never>] = [:]
 
     @ObservationIgnored
     private let acpOrchestrationPersistence = ACPOrchestrationPersistence()
@@ -12577,15 +12619,30 @@ final class AppState {
     private func disposeACPManager(owner: SessionOwnerID) {
         guard let manager = acpManagers.removeValue(forKey: owner) else { return }
         prepareACPManagerForDisposal(manager, owner: owner)
-        Task { @MainActor in
-            await self.finishDisposingACPManager(manager)
-        }
+        startACPManagerDisposal(manager, owner: owner)
     }
 
-    private func disposeACPManagerAndWait(owner: SessionOwnerID) async {
+    func disposeACPManagerAndWait(owner: SessionOwnerID) async {
+        if let task = acpManagerDisposalTasksByOwner[owner] {
+            await task.value
+            return
+        }
         guard let manager = acpManagers.removeValue(forKey: owner) else { return }
         prepareACPManagerForDisposal(manager, owner: owner)
-        await finishDisposingACPManager(manager)
+        let task = startACPManagerDisposal(manager, owner: owner)
+        await task.value
+    }
+
+    private func startACPManagerDisposal(
+        _ manager: ACPSessionManager,
+        owner: SessionOwnerID
+    ) -> Task<Void, Never> {
+        let task = Task { @MainActor in
+            await self.finishDisposingACPManager(manager)
+            self.acpManagerDisposalTasksByOwner[owner] = nil
+        }
+        acpManagerDisposalTasksByOwner[owner] = task
+        return task
     }
 
     private func prepareACPManagerForDisposal(_ manager: ACPSessionManager, owner: SessionOwnerID) {
@@ -12616,6 +12673,9 @@ final class AppState {
     private func finishDisposingACPManager(_ manager: ACPSessionManager) async {
         await manager.flushAllPersistence()
         await manager.disposeAllLiveSessions()
+        // Teardown can normalize in-flight queue items and persist the last
+        // session snapshot; flush those writes before a caller removes rows.
+        await manager.flushAllPersistence()
         // Release any leases this manager still owns AFTER all runner
         // connections are shut down (detach above). A freed lease must
         // not be claimable while an old agent process is still alive.
@@ -12815,6 +12875,16 @@ final class AppState {
             agentId: agentID,
             autoRunDefault: config.harness.acpAutoRunByDefault
         )
+        if let registration = activeScheduledAgentRunsBySession[session.id],
+           registration.promptID == preparedPrompt.promptID,
+           registration.worktreeID == worktree.id {
+            scheduledPromptSettlementTasks[session.id] = Task { @MainActor in
+                await manager.waitForScheduledPrompt(
+                    for: session.id,
+                    promptID: preparedPrompt.promptID
+                )
+            }
+        }
         // Picked up by `attach` before the queued prompt goes out, so the
         // first message already runs on the requested model.
         if let modelID = preparedPrompt.modelID {
@@ -12847,6 +12917,7 @@ final class AppState {
             )
         } catch {
             manager.liveSession(for: preparedPrompt.sessionID)?.lastError = error.localizedDescription
+            scheduledPromptSettlementTasks.removeValue(forKey: preparedPrompt.sessionID)?.cancel()
         }
         await manager.flushPersistence()
     }
