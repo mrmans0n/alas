@@ -384,7 +384,8 @@ struct RemoteProtocolTests {
                 title: "Run command?",
                 reason: "Reason: needs shell access",
                 defaultToNo: true,
-                mcpServerName: "github"))
+                mcpServerName: "github",
+                commandSummary: "swift build"))
         #expect(try roundTrip(req) == req)
     }
 

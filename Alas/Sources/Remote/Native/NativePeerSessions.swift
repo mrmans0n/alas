@@ -7,8 +7,8 @@ final class NativePeerSessions {
     private let federation: FederatedSessionsProvider
     private let peers: @MainActor () -> [RemoteHelloPeer]
     @ObservationIgnored private var downstream: FederatedDownstream?
+    @ObservationIgnored private var pendingPromptExpectedIndex: Int?
     private(set) var pendingPrompt: String?
-    @ObservationIgnored private var knownUserMessageIDs: Set<String> = []
 
     private(set) var snapshot = NativePeerSidebarSnapshot(groups: [], attentionRows: [])
     private(set) var selectedSessionId: String?
@@ -59,7 +59,7 @@ final class NativePeerSessions {
         snapshot = .init(groups: [], attentionRows: [])
         draft = ""
         pendingPrompt = nil
-        knownUserMessageIDs = []
+        pendingPromptExpectedIndex = nil
         deliveryError = nil
     }
 
@@ -78,7 +78,7 @@ final class NativePeerSessions {
             // Its new transcript may also have a lower epoch after a restart.
             transcript = NativePeerTranscript(sessionId: selectedSessionId)
             pendingPrompt = nil
-            knownUserMessageIDs = []
+            pendingPromptExpectedIndex = nil
             _ = federation.route(.subscribe(sessionId: selectedSessionId), from: downstream)
         }
     }
@@ -106,7 +106,7 @@ final class NativePeerSessions {
         transcript = nil
         draft = ""
         pendingPrompt = nil
-        knownUserMessageIDs = []
+        pendingPromptExpectedIndex = nil
         deliveryError = nil
     }
 
@@ -116,12 +116,14 @@ final class NativePeerSessions {
               transcript?.canDrive == true else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        knownUserMessageIDs = Set(transcript?.messages.filter { $0.kind == "user" }.map(\.stableId) ?? [])
+        pendingPrompt = text
+        pendingPromptExpectedIndex = transcript?.totalCount ?? 0
         if federation.route(.sendPrompt(sessionId: selectedSessionId, text: text,
                                         attachments: [], intent: "auto"), from: downstream) {
-            pendingPrompt = text
             deliveryError = nil
         } else {
+            pendingPrompt = nil
+            pendingPromptExpectedIndex = nil
             deliveryError = "Peer is unavailable. Your draft was kept."
         }
     }
@@ -218,6 +220,7 @@ final class NativePeerSessions {
         guard let selectedSessionId, message.sessionId == selectedSessionId else { return }
         if case .promptRejected = message {
             pendingPrompt = nil
+            pendingPromptExpectedIndex = nil
             deliveryError = "Prompt was not delivered. Your draft was kept."
             return
         }
@@ -226,13 +229,24 @@ final class NativePeerSessions {
            !federation.route(.subscribe(sessionId: selectedSessionId), from: downstream) {
             transcript?.resetResubscribeRequest()
         }
-        if let pendingPrompt,
-           let confirmed = transcript?.messages.first(where: {
-               $0.kind == "user" && $0.text == pendingPrompt && !knownUserMessageIDs.contains($0.stableId)
-           }), confirmed.text != nil {
+        let promptConfirmationRows: [RemoteWireMessage]
+        switch message {
+        case .transcriptSnapshot(_, _, _, let rows, _, _, let epoch, let revision)
+            where transcript?.epoch == epoch && transcript?.revision == revision:
+            promptConfirmationRows = rows
+        case .transcriptDelta(_, _, _, let upserts, let epoch, let revision)
+            where transcript?.epoch == epoch && transcript?.revision == revision:
+            promptConfirmationRows = upserts
+        default:
+            promptConfirmationRows = []
+        }
+        if let pendingPrompt, let expectedIndex = pendingPromptExpectedIndex,
+           promptConfirmationRows.contains(where: {
+               $0.kind == "user" && $0.text == pendingPrompt && $0.index >= expectedIndex
+           }) {
             if draft.trimmingCharacters(in: .whitespacesAndNewlines) == pendingPrompt { draft = "" }
             self.pendingPrompt = nil
-            knownUserMessageIDs = []
+            pendingPromptExpectedIndex = nil
         }
     }
 }

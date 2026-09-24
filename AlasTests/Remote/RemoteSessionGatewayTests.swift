@@ -380,6 +380,7 @@ extension ACPPermissionRequestParams {
     /// ACPPermissionOption initializers.
     static func stub(
         sessionId: String = "remote", toolTitle: String = "Bash",
+        toolCallContent: [ACPToolCallContent]? = nil,
         metadata: AnyCodable? = nil, toolCallMetadata: AnyCodable? = nil,
         allowOptionMetadata: AnyCodable? = nil
     ) -> ACPPermissionRequestParams {
@@ -390,7 +391,7 @@ extension ACPPermissionRequestParams {
                 title: toolTitle,
                 kind: "execute",
                 status: nil,
-                content: nil,
+                content: toolCallContent,
                 locations: nil,
                 rawInput: nil,
                 rawOutput: nil,
@@ -1027,6 +1028,7 @@ struct RemoteSessionGatewayTests {
         provider.sessions["s1"] = s
         s.transcript.streamingState = .awaitingPermission
         s.transcript.pendingPermission = .init(id: .number(0), params: .stub(
+            toolCallContent: [.content(.text("swift build"))],
             metadata: AnyCodable([
                 "permission": AnyCodable([
                     "version": AnyCodable(1),
@@ -1062,6 +1064,7 @@ struct RemoteSessionGatewayTests {
         #expect(payload.reason == "Reason: needs shell access")
         #expect(payload.defaultToNo == true)
         #expect(payload.mcpServerName == "github")
+        #expect(payload.commandSummary == "swift build")
         #expect(payload.options.first { $0.optionId == "allow_once" }?.description == "Run this command one time")
         #expect(payload.options.first { $0.optionId == "reject_once" }?.description == nil)
     }

@@ -55,7 +55,7 @@ struct NativePeerSessionsTests {
 
     @Test func permissionPresentationKeepsToolNameAlongsideTitle() {
         let request = RemotePermissionPayload(
-            requestId: 1, toolName: "bash", options: [], title: "Run command?",
+            requestId: 1, toolName: "bash", options: [], title: "Run command?", commandSummary: "swift build",
             mcpServerName: "build-tools"
         )
 
@@ -63,6 +63,7 @@ struct NativePeerSessionsTests {
 
         #expect(presentation.title == "Run command?")
         #expect(presentation.toolName == "bash")
+        #expect(presentation.commandSummary == "swift build")
         #expect(presentation.mcpServerName == "build-tools")
     }
 
@@ -391,6 +392,40 @@ struct NativePeerSessionsTests {
             return false
         }.count == 1)
         #expect(client.isPromptPending)
+    }
+
+    @Test func olderTranscriptPageCannotConfirmPendingPrompt() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        let tail = RemoteWireMessage(stableId: "agent-1", kind: "agent", text: "Earlier response", json: nil, index: 1)
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
+                                          messages: [tail], firstIndex: 1, totalCount: 2, epoch: 1, revision: 0), from: "B")
+        client.draft = "run the checks"
+
+        client.sendPrompt()
+        let historicalDuplicate = RemoteWireMessage(
+            stableId: "old-user", kind: "user", text: "run the checks", json: nil, index: 0
+        )
+        links.receive(.transcriptPage(sessionId: "s", epoch: 1, firstIndex: 0,
+                                      messages: [historicalDuplicate]), from: "B")
+
+        #expect(client.isPromptPending)
+        #expect(client.draft == "run the checks")
+
+        let deliveredPrompt = RemoteWireMessage(
+            stableId: "new-user", kind: "user", text: "run the checks", json: nil, index: 2
+        )
+        links.receive(.transcriptDelta(sessionId: "s", streamingState: "streaming", canDrive: true,
+                                       upserts: [deliveredPrompt], epoch: 1, revision: 1), from: "B")
+        #expect(!client.isPromptPending)
+        #expect(client.draft.isEmpty)
     }
 
     @Test func scalarElicitationRejectsValuesOutsideTheForwardedSchema() {

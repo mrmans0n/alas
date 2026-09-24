@@ -194,11 +194,14 @@ struct RemotePermissionPayload: Codable, Equatable, Sendable {
     let defaultToNo: Bool
     /// `_meta.claudeCode.mcpServer.name` for `mcp__*` calls.
     let mcpServerName: String?
+    /// First text block from the permission's `toolCall.content`, commonly
+    /// the command that is awaiting approval.
+    let commandSummary: String?
 
     init(
         requestId: Int, toolName: String, options: [RemotePermissionOption],
         title: String? = nil, reason: String? = nil, defaultToNo: Bool = false,
-        mcpServerName: String? = nil
+        mcpServerName: String? = nil, commandSummary: String? = nil
     ) {
         self.requestId = requestId
         self.toolName = toolName
@@ -207,10 +210,11 @@ struct RemotePermissionPayload: Codable, Equatable, Sendable {
         self.reason = reason
         self.defaultToNo = defaultToNo
         self.mcpServerName = mcpServerName
+        self.commandSummary = commandSummary
     }
 
     private enum CodingKeys: String, CodingKey {
-        case requestId, toolName, options, title, reason, defaultToNo, mcpServerName
+        case requestId, toolName, options, title, reason, defaultToNo, mcpServerName, commandSummary
     }
 
     // `RemotePeerConnection` decodes this from other Alas instances, which
@@ -228,6 +232,7 @@ struct RemotePermissionPayload: Codable, Equatable, Sendable {
         reason = try c.decodeIfPresent(String.self, forKey: .reason)
         defaultToNo = try c.decodeIfPresent(Bool.self, forKey: .defaultToNo) ?? false
         mcpServerName = try c.decodeIfPresent(String.self, forKey: .mcpServerName)
+        commandSummary = try c.decodeIfPresent(String.self, forKey: .commandSummary)
     }
 }
 

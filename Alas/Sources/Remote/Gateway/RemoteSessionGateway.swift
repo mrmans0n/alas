@@ -769,7 +769,11 @@ final class RemoteSessionGateway {
                 title: presentation?.title,
                 reason: presentation?.description,
                 defaultToNo: presentation?.defaultToNo ?? false,
-                mcpServerName: tc.mcpServerName)
+                mcpServerName: tc.mcpServerName,
+                commandSummary: tc.content?.compactMap { block -> String? in
+                    guard case .content(.text(let text)) = block else { return nil }
+                    return text
+                }.first)
             send(.permissionRequest(sessionId: id, payload: payload))
         } else if let rid = lastPermissionReq.removeValue(forKey: id) {
             // A prompt we surfaced was resolved elsewhere (the Mac or another

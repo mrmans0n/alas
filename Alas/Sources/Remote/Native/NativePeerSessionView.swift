@@ -59,12 +59,16 @@ struct NativePeerPermissionPresentation {
     let title: String
     let toolName: String
     let mcpServerName: String?
+    let commandSummary: String?
     let defaultToNo: Bool
 
     init(request: RemotePermissionPayload) {
         title = request.title ?? "Permission request"
         toolName = request.toolName
         mcpServerName = request.mcpServerName
+        commandSummary = request.commandSummary.flatMap {
+            $0.isEmpty || $0 == request.toolName ? nil : $0
+        }
         defaultToNo = request.defaultToNo
     }
 
@@ -174,6 +178,15 @@ struct NativePeerSessionView: View {
                 Text(presentation.toolName)
                     .font(.callout.monospaced())
                     .textSelection(.enabled)
+                if let commandSummary = presentation.commandSummary {
+                    Text(commandSummary)
+                        .font(.callout.monospaced())
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                }
                 if let server = presentation.mcpServerName, !server.isEmpty {
                     Text("via \(server)")
                         .font(.caption)
