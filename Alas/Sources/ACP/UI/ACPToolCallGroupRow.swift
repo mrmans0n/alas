@@ -73,33 +73,31 @@ struct ACPToolCallGroupHeaderRow: View {
             Button {
                 onToggle(!expanded)
             } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10))
-                        .foregroundStyle(
-                            theme.color("fg-faint")
-                                .mix(with: theme.color("accent"), by: absorbHighlight)
-                        )
-                        .accessibilityHidden(true)
-                    Text(label)
-                        .font(.system(size: 11))
-                        .foregroundStyle(theme.color("fg-faint"))
-                        // Rolls the digits instead of snapping them. Scoped to
-                        // the count so toggling expanded — which rewrites the
-                        // same label from "Ran" to "Hide" — stays instant.
-                        .contentTransition(.numericText(value: Double(summary.count)))
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: summary.count)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    if !expanded, let liveNarration {
-                        Text("·")
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 7) {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 10))
+                            .foregroundStyle(
+                                theme.color("fg-faint")
+                                    .mix(with: theme.color("accent"), by: absorbHighlight)
+                            )
                             .accessibilityHidden(true)
+                        Text(label)
                             .font(.system(size: 11))
                             .foregroundStyle(theme.color("fg-faint"))
+                            // Rolls the digits instead of snapping them. Scoped to
+                            // the count so toggling expanded — which rewrites the
+                            // same label from "Ran" to "Hide" — stays instant.
+                            .contentTransition(.numericText(value: Double(summary.count)))
+                            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: summary.count)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    if !expanded, let liveNarration {
                         ACPToolCallGroupLiveNarrationPreview(narration: liveNarration)
-                            .layoutPriority(1)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -152,39 +150,22 @@ struct ACPToolCallGroupLiveNarration: Equatable {
         }
     }
 
-    static let previewCharacterLimit = 160
+    static let previewCharacterLimit = 480
 
     let kind: Kind
     let buffer: StreamingText
 
-    /// The latest non-empty line, bounded from the tail for both rendering
-    /// and accessibility. The line search never walks beyond the displayed
-    /// suffix, and the only allocation is the short string shown.
+    /// Bound work per chunk while retaining context across streamed line breaks.
     static func previewText(in value: String) -> String {
-        let suffixStart = value.index(
-            value.endIndex,
-            offsetBy: -previewCharacterLimit,
-            limitedBy: value.startIndex
-        ) ?? value.startIndex
-        guard let lastContentIndex = value[suffixStart..<value.endIndex]
-            .lastIndex(where: { !$0.isWhitespace })
-        else { return "" }
-        let end = value.index(after: lastContentIndex)
-        let boundedStart = value.index(
-            end,
-            offsetBy: -previewCharacterLimit,
-            limitedBy: value.startIndex
-        ) ?? value.startIndex
-        let lineStart = value[boundedStart..<end].lastIndex(where: \.isNewline)
-            .map { value.index(after: $0) } ?? boundedStart
-        var trimmedStart = lineStart
-        while trimmedStart < end, value[trimmedStart].isWhitespace {
-            value.formIndex(after: &trimmedStart)
-        }
-        return String(value[trimmedStart..<end])
+        let suffix = value.suffix(previewCharacterLimit)
+        guard let lastContent = suffix.lastIndex(where: { !$0.isWhitespace }) else { return "" }
+        let end = value.index(after: lastContent)
+        let start = value.index(end, offsetBy: -previewCharacterLimit, limitedBy: value.startIndex)
+            ?? value.startIndex
+        return String(value[start..<end])
     }
 }
-/// One-line live narration inside a collapsed activity disclosure. Observing
+/// Bounded live narration below a collapsed activity disclosure. Observing
 /// the shared buffer here keeps streamed updates inside the preview instead
 /// of replacing the AppKit-hosted row through the reconciler.
 private struct ACPToolCallGroupLiveNarrationPreview: View {
@@ -199,16 +180,17 @@ private struct ACPToolCallGroupLiveNarrationPreview: View {
 
     var body: some View {
         let previewText = ACPToolCallGroupLiveNarration.previewText(in: buffer.value)
-        HStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(kind.label)
                 .font(.system(size: 11))
                 .foregroundStyle(theme.color("fg-faint"))
-                .fixedSize(horizontal: true, vertical: false)
+                .acpNarrationShimmer(isActive: true)
             Text(verbatim: previewText)
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundStyle(theme.color("fg-dim"))
-                .lineLimit(1)
+                .lineLimit(3, reservesSpace: true)
                 .truncationMode(.head)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel(previewText: previewText))

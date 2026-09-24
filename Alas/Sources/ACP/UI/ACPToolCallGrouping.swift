@@ -96,7 +96,7 @@ enum ACPToolCallGrouping {
         /// Carried in the cache key so late phase adoption can regroup them.
         var priorCurrentTurnCommentaryIndices: Set<Int> = []
         /// Narration row currently receiving streamed text. If folding hides
-        /// this row, its group header surfaces a one-line live preview.
+        /// this row, its group header surfaces a bounded live preview.
         var currentNarrationIndex: Int? = nil
     }
 
@@ -194,6 +194,7 @@ enum ACPToolCallGrouping {
             for: rows,
             in: messages,
             currentTurnAnswerIndex: options.currentTurnAnswerIndex,
+            breakAfterIndex: options.breakAfterIndex,
             messageCreatedAt: messageCreatedAt
         )
         var result: [ACPTranscriptRenderRow] = []
@@ -266,6 +267,7 @@ enum ACPToolCallGrouping {
         for rows: [ACPTranscriptVisibleRow],
         in messages: [ACPMessage],
         currentTurnAnswerIndex: Int?,
+        breakAfterIndex: Int?,
         messageCreatedAt: (Int) -> Date?
     ) -> [Int: ACPTranscriptToolCallGroup.Kind] {
         guard let firstVisible = rows.first?.index,
@@ -302,6 +304,22 @@ enum ACPToolCallGrouping {
                 index > user && index < answer && isCompletedTurnWork(messages[index])
             }
             guard !memberIndices.isEmpty else { return }
+            // A turn can contain several runs separated by readable prose or
+            // the fork divider. Show its total duration on the last run only.
+            guard var lastRunStart = (user + 1..<answer).last(where: {
+                isCompletedTurnWork(messages[$0])
+            }) else { return }
+            while lastRunStart > user + 1 {
+                let previous = lastRunStart - 1
+                if previous == breakAfterIndex { break }
+                if case .plan = messages[previous] {
+                    lastRunStart = previous
+                } else if isCompletedTurnWork(messages[previous]) {
+                    lastRunStart = previous
+                } else {
+                    break
+                }
+            }
             let start = messageCreatedAt(user)
             let end = messageCreatedAt(answer)
             let duration: TimeInterval? = if let start, let end {
@@ -310,7 +328,9 @@ enum ACPToolCallGrouping {
                 nil
             }
             let kind = ACPTranscriptToolCallGroup.Kind.completedTurn(duration: duration)
-            for index in memberIndices { result[index] = kind }
+            for index in memberIndices {
+                result[index] = index >= lastRunStart ? kind : .activity
+            }
         }
 
         for pair in zip(userIndices, userIndices.dropFirst()) {
@@ -346,6 +366,7 @@ struct ACPToolCallGroupSummary: Equatable {
     let count: Int
     let failedCount: Int
     let kind: ACPTranscriptToolCallGroup.Kind
+    let latestToolTitle: String?
 
     init(
         toolCalls: [ACPMessage.ToolCall],
@@ -354,6 +375,7 @@ struct ACPToolCallGroupSummary: Equatable {
         count = toolCalls.count
         failedCount = toolCalls.filter { Self.isFailed(status: $0.status) }.count
         self.kind = kind
+        latestToolTitle = toolCalls.last?.title.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Only "failed" can reach a bundle: "error" is not a terminal status
@@ -366,7 +388,7 @@ struct ACPToolCallGroupSummary: Equatable {
     var collapsedLabel: String {
         switch kind {
         case .activity:
-            "Activity" + toolSuffix + failureSuffix
+            (latestToolTitle.flatMap { $0.isEmpty ? nil : $0 } ?? "Activity") + toolSuffix + failureSuffix
         case .completedTurn(let duration):
             completedLabel(duration: duration) + toolSuffix + failureSuffix
         }

@@ -747,13 +747,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// and member ids.
         /// It deliberately does not include the members' own row keys. When
         /// expanded, each member is its own row and re-renders itself. When
-        /// collapsed, the only member content the header renders is the
-        /// reference-stable live narration buffer, which publishes its text
-        /// updates directly to the nested preview. A late status or output
-        /// update on one bundled call therefore re-renders that one card
-        /// instead of the whole run. Everything else the header shows about
-        /// a member — how many there are, how many failed — is already part
-        /// of `summary`.
+        /// collapsed, the live narration buffer publishes directly to the
+        /// nested preview. Counts, failures, and the latest tool title are
+        /// part of `summary`; hidden tool output does not refresh the header.
         private static func toolCallGroupHeaderSpec(
             host: ACPTranscriptScroller,
             group: ACPTranscriptToolCallGroup,
@@ -1497,20 +1493,6 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             scroller.minimap.value = host.session.followsTranscriptTail ? 1 : Double(min(1, topFraction / max(0.000_001, 1 - proportion)))
         }
 
-        /// A whole-number global index representing whichever message
-        /// currently sits at the viewport's top edge. Delegates to the
-        /// span-aware `globalMessagePosition(at:)` and floors it, so
-        /// scrolling deep into an expanded tool-call group (whose row
-        /// stands for many messages) resolves to the member actually under
-        /// the viewport instead of always the group's first member —
-        /// `settleUserScroll`'s window recenter would otherwise trim away
-        /// the later members currently on screen and jump the reader back
-        /// to the group's start.
-        private func currentTopGlobalMessageIndex() -> Int? {
-            guard let scroller else { return nil }
-            return globalMessagePosition(at: scroller.scrollY).map { Int($0) }
-        }
-
         /// Memoized id → transcript-index mapping for the rows currently
         /// tiled — the same `renderRows` the spec list is built from, so
         /// group ids resolve exactly as `rowSpecs` emitted them.
@@ -1721,12 +1703,22 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // ponytail: keep the grow-only window while an input form is open;
             // restore anchor-based compaction if the retained window becomes a memory issue.
             guard host.transcript.pendingUserInputs.isEmpty else { return }
-            guard host.transcript.visibleTailBound - host.transcript.visibleHead
-                    > ACPTranscript.maxVisibleRows,
-                  let globalIndex = currentTopGlobalMessageIndex(),
-                  let localIndex = host.transcript.localIndex(forGlobalIndex: globalIndex)
+            // Compact rendered rows, not raw messages: hundreds of messages
+            // may occupy one disclosure with readable text immediately after it.
+            let rows = currentRenderRows(host: host)
+            guard rows.count > ACPTranscript.maxVisibleRows,
+                  let topId = tiling.nearestNonSyntheticRowId(
+                    to: scroller.scrollY,
+                    syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix
+                  ),
+                  let topIndex = rows.firstIndex(where: { $0.id == topId })
             else { return }
-            host.transcript.setVisibleWindow(around: localIndex)
+            let head = min(max(0, topIndex - ACPTranscript.tailWindow), rows.count - ACPTranscript.maxVisibleRows)
+            let tail = head + ACPTranscript.maxVisibleRows
+            host.transcript.setVisibleWindow(
+                head: Self.firstIndex(of: rows[head]),
+                tail: tail < rows.count ? Self.firstIndex(of: rows[tail]) : host.transcript.visibleTailBound
+            )
             update(host: host)
         }
 

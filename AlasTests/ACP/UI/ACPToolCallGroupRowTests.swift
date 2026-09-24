@@ -16,7 +16,7 @@ struct ACPToolCallGroupRowTests {
         #expect(headerHeight(expanded: true, theme: theme) == headerHeight(expanded: false, theme: theme))
     }
 
-    @Test("a live reasoning preview does not make the collapsed header taller")
+    @Test("live reasoning has readable space below the disclosure")
     func livePreviewPreservesHeaderHeight() throws {
         let theme = try ThemeStore().current
         let narration = ACPToolCallGroupLiveNarration(
@@ -26,11 +26,11 @@ struct ACPToolCallGroupRowTests {
 
         #expect(
             headerHeight(expanded: false, theme: theme, liveNarration: narration)
-                == headerHeight(expanded: false, theme: theme)
+                > headerHeight(expanded: false, theme: theme)
         )
     }
 
-    @Test("a live preview does not wrap a completed-work label in a narrow header")
+    @Test("a narrow live preview has its own space below the label")
     func narrowLivePreviewPreservesHeaderHeight() throws {
         let theme = try ThemeStore().current
         let toolCalls = (0..<40).map { index in
@@ -54,13 +54,13 @@ struct ACPToolCallGroupRowTests {
                 expanded: false, theme: theme, summary: summary,
                 liveNarration: narration, width: 180
             )
-                == headerHeight(expanded: false, theme: theme, summary: summary, width: 180)
+                > headerHeight(expanded: false, theme: theme, summary: summary, width: 180)
         )
     }
 
-    @Test("live reasoning preview uses and bounds the latest non-empty line")
+    @Test("live reasoning preview preserves a bounded tail across line breaks")
     func livePreviewUsesBoundedLatestLine() {
-        let longTail = Array(repeating: "latest", count: 40).joined(separator: " ")
+        let longTail = Array(repeating: "latest", count: 100).joined(separator: " ") + "\nNext step"
         let preview = ACPToolCallGroupLiveNarration.previewText(
             in: "old reasoning\n   \n  \(longTail)  \n"
         )
@@ -68,6 +68,19 @@ struct ACPToolCallGroupRowTests {
         #expect(!preview.contains("old reasoning"))
         #expect(preview.count == ACPToolCallGroupLiveNarration.previewCharacterLimit)
         #expect(longTail.hasSuffix(preview))
+    }
+
+    @Test("streaming a long thought does not keep growing the preview")
+    func livePreviewHeightIsBounded() throws {
+        let theme = try ThemeStore().current
+        let short = ACPToolCallGroupLiveNarration(kind: .thinking, buffer: StreamingText("Checking"))
+        let long = ACPToolCallGroupLiveNarration(
+            kind: .thinking, buffer: StreamingText(String(repeating: "More reasoning\n", count: 1000))
+        )
+        #expect(
+            headerHeight(expanded: false, theme: theme, liveNarration: short)
+                == headerHeight(expanded: false, theme: theme, liveNarration: long)
+        )
     }
 
     @Test("a member row renders the card handed to it")
