@@ -66,6 +66,52 @@ struct ACPTranscriptScrollerLiveScrollTests {
         )
     }
 
+    @Test("settling folded activity retains visible explanations", arguments: [false, true], [0, 100])
+    func settlingFoldedTranscriptKeepsVisibleText(fork: Bool, leadingCount: Int) throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.followsTranscriptTail = false
+        var host = makeLiveScrollHost(session: session)
+        host.collapsesFinishedToolCalls = true
+        host.transcript.messages = (0..<leadingCount).map { index in
+            .systemNotice(id: UUID(), text: "Older message \(index)")
+        }
+        let prompt = ACPMessage.user(id: UUID(), text: "Investigate", attachments: [])
+        host.transcript.messages.append(prompt)
+        for block in 0..<3 {
+            for index in 0..<100 {
+                host.transcript.messages.append(.toolCall(.init(
+                    toolCallId: "\(block)-\(index)", title: "Read source", status: "completed"
+                )))
+            }
+            host.transcript.messages.append(.agent(
+                id: UUID(), messageId: "explanation-\(block)", StreamingText("Visible explanation \(block)")
+            ))
+        }
+        if fork {
+            session.forkRecord = ACPSessionForkRecord(
+                targetSessionID: "s", sourceSessionID: "source", sourceAgentID: "claude",
+                sourceBoundarySequence: Int64(leadingCount + 101), inheritedMessageCount: leadingCount + 101,
+                phase: .ready, mechanism: .transcriptTransfer, contextDeliveryPending: false
+            )
+        }
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 900))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+        let promptFrame = try #require(coordinator.rowFrameForTesting(id: prompt.stableId))
+        scroller.setScrollY(promptFrame.minY)
+        #expect(scroller.contentHeight - promptFrame.minY < scroller.viewportHeight)
+
+        coordinator.settleUserScrollForTesting()
+
+        for block in 0..<3 {
+            #expect(coordinator.rowFrameForTesting(id: "acp-agent:explanation-\(block)") != nil)
+        }
+        if leadingCount == 0 { #expect(host.transcript.visibleHead == 0) }
+        else { #expect(host.transcript.visibleHead > 0) }
+        #expect(host.transcript.visibleTailBound == host.transcript.messages.count)
+    }
+
     @Test("folding completed activity keeps a windowed transcript pinned through layout", arguments: [false, true])
     func completedActivityKeepsTailPinned(whileSettling: Bool) async throws {
         let (originalHost, scroller, coordinator) = tailFollowingHost()

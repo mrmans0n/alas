@@ -386,8 +386,8 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(expanded.filter { $0 != "tcg-tc-a" } == ungrouped)
     }
 
-    @Test("a member's content change does not re-render the bundle header")
-    func memberContentChangeLeavesHeaderTokenAlone() throws {
+    @Test("retitling the latest tool refreshes the collapsed activity description")
+    func latestToolTitleChangesHeaderToken() throws {
         let host = makeHost(collapsesFinishedToolCalls: true)
         host.transcript.messages = [tool("a"), tool("b")]
         host.transcript.visibleHead = 0
@@ -395,8 +395,7 @@ struct ACPTranscriptScrollerRowSpecsTests {
         let before = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
             .first { $0.id == "tcg-tc-a" }?.equalityToken)
 
-        // Same count, same failure count — only this member's own title
-        // changed, which the header does not display.
+        // The displayed activity changes even when the counts stay the same.
         host.transcript.messages = [
             tool("a"),
             .toolCall(.init(toolCallId: "b", title: "Read something else", kind: "read", status: "completed")),
@@ -404,7 +403,7 @@ struct ACPTranscriptScrollerRowSpecsTests {
         let after = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
             .first { $0.id == "tcg-tc-a" }?.equalityToken)
 
-        #expect(before.isEqual(to: after))
+        #expect(!before.isEqual(to: after))
     }
 
     @Test("the fork divider follows an expanded bundle's last member, not its header")

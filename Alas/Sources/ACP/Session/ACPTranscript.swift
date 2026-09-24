@@ -587,44 +587,24 @@ final class ACPTranscript: ObservableObject {
 
     // MARK: - Render window helpers
 
-    /// The head index that keeps the last `tailWindow` messages visible,
-    /// except that up to `maxVisibleRows` consecutive tool-call messages at
-    /// a time count as a SINGLE unit rather than one per call.
-    ///
-    /// A run of tool calls collapses to at most one row in the UI when
-    /// `collapsesFinishedToolCalls` is on (see `ACPToolCallGrouping`), so
-    /// weighting every call in it as its own unit — the plain
-    /// `messages.count - tailWindow` this replaces — lets a turn dominated
-    /// by many tool calls consume the entire budget by itself. For a turn
-    /// that runs dozens of tools, that pushed the head far enough forward
-    /// to silently drop the user's own prompt (and any other short,
-    /// still-relevant context before the run) out of the render window,
-    /// even though the rendered result — the collapsed run plus a couple of
-    /// short rows — would easily fit on screen. Live tail-following then
-    /// re-applies this on every appended message, so the drop recurred on
-    /// every completed call in the run, not just once.
-    ///
-    /// The `maxVisibleRows` cap on how much of one run a single unit may
-    /// absorb matters because collapsing is a UI-only, per-user setting
-    /// this model-layer type cannot see: with `collapsesFinishedToolCalls`
-    /// off (the default), every call in a run is its OWN row, and an
-    /// uncapped run could otherwise leave arbitrarily many raw messages
-    /// inside the window regardless of `tailWindow` — reopening the exact
-    /// unbounded-window problem this fixes, and keeping `trimHiddenMessages`
-    /// from ever truncating those calls' content since they'd never fall
-    /// below `visibleHead`. Capped, one run can absorb at most
-    /// `tailWindow * maxVisibleRows` raw messages for free; beyond that it
-    /// is walked the same as ordinary messages, one unit per
-    /// `maxVisibleRows` consumed.
+    /// Budget mixed activity together so folded work does not evict visible context.
+    /// Keep the existing raw-message cap because grouping can be disabled.
     static func tailWindowHead(messages: [ACPMessage], tailWindow: Int = ACPTranscript.tailWindow) -> Int {
         guard tailWindow > 0, !messages.isEmpty else { return 0 }
+        func isActivity(_ message: ACPMessage) -> Bool {
+            switch message {
+            case .toolCall, .thought, .plan: true
+            case .agent(_, _, let buffer): buffer.phase == .commentary
+            default: false
+            }
+        }
         var index = messages.count
         var unitsRemaining = tailWindow
         while index > 0, unitsRemaining > 0 {
-            if case .toolCall = messages[index - 1] {
+            if isActivity(messages[index - 1]) {
                 var scanned = 0
                 var cursor = index
-                while cursor > 0, scanned < Self.maxVisibleRows, case .toolCall = messages[cursor - 1] {
+                while cursor > 0, scanned < Self.maxVisibleRows, isActivity(messages[cursor - 1]) {
                     cursor -= 1
                     scanned += 1
                 }
@@ -749,7 +729,7 @@ final class ACPTranscript: ObservableObject {
         max(visibleHead, min(visibleTail ?? messages.count, messages.count))
     }
 
-    private func setVisibleWindow(head newHead: Int, tail newTail: Int?) {
+    func setVisibleWindow(head newHead: Int, tail newTail: Int?) {
         let clampedHead = max(0, min(newHead, messages.count))
         let clampedTail = newTail.map { max(clampedHead, min($0, messages.count)) }
         let normalizedTail = clampedTail
