@@ -89,12 +89,15 @@ struct ACPToolCallGroupHeaderRow: View {
                         // same label from "Ran" to "Hide" — stays instant.
                         .contentTransition(.numericText(value: Double(summary.count)))
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: summary.count)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     if !expanded, let liveNarration {
                         Text("·")
                             .accessibilityHidden(true)
                             .font(.system(size: 11))
                             .foregroundStyle(theme.color("fg-faint"))
                         ACPToolCallGroupLiveNarrationPreview(narration: liveNarration)
+                            .layoutPriority(1)
                     }
                 }
                 .contentShape(Rectangle())
@@ -158,9 +161,14 @@ struct ACPToolCallGroupLiveNarration: Equatable {
     /// and accessibility. The line search never walks beyond the displayed
     /// suffix, and the only allocation is the short string shown.
     static func previewText(in value: String) -> String {
-        guard let lastContentIndex = value.lastIndex(where: { !$0.isWhitespace }) else {
-            return ""
-        }
+        let suffixStart = value.index(
+            value.endIndex,
+            offsetBy: -previewCharacterLimit,
+            limitedBy: value.startIndex
+        ) ?? value.startIndex
+        guard let lastContentIndex = value[suffixStart..<value.endIndex]
+            .lastIndex(where: { !$0.isWhitespace })
+        else { return "" }
         let end = value.index(after: lastContentIndex)
         let boundedStart = value.index(
             end,
