@@ -572,9 +572,12 @@ final class AppState {
         // refreshed `hello` (its `peers` list, Task 8).
         federation.onPeerAvailabilityChanged = { [weak self] in
             self?.remoteServer?.broadcastHello()
+            self?.nativePeerSessions?.refresh()
         }
         return federation
     }()
+    /// Native sidebar consumer, present only while Remote and federation run.
+    private(set) var nativePeerSessions: NativePeerSessions?
     /// The live server, or nil when remote control is disabled. Mutated only
     /// by `syncRemoteServer()`.
     @ObservationIgnored
@@ -784,6 +787,8 @@ final class AppState {
             // `remote-devices.json` on every launch with both flags off.
             // Links only exist while the server is up, so there is nothing to
             // tear down otherwise. Safe here because the nil-out is below.
+            nativePeerSessions?.stop()
+            nativePeerSessions = nil
             if remoteServer != nil { remotePeers.disconnectAll() }
             remoteServer?.stop()
             remoteServer = nil
@@ -801,7 +806,17 @@ final class AppState {
         syncPairingApprovalState()
         if config.remote.enabled, config.remote.federationEnabled, remoteServer != nil {
             remotePeers.connectAll()
+            if nativePeerSessions == nil {
+                let client = NativePeerSessions(federation: remoteFederation,
+                                                peers: { [weak self] in self?.remotePeers.helloPeers ?? [] })
+                nativePeerSessions = client
+                client.start()
+            } else {
+                nativePeerSessions?.refresh()
+            }
         } else if remoteServer != nil {
+            nativePeerSessions?.stop()
+            nativePeerSessions = nil
             // Same reason as `syncRemoteServer`'s disabled branch: without a
             // server no link was ever opened, and reaching for `remotePeers`
             // would force the lazy manager and its stores into existence.
