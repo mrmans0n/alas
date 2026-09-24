@@ -11073,6 +11073,7 @@ final class AppState {
         refreshAfter: Bool = true,
         promptsForForce: Bool = true,
         authorizedDeleteContentFingerprint: String? = nil,
+        authorizedWorktreeLineageID: String? = nil,
         authorizedDirtyTabsAtConfirmation: [TabID: Int]? = nil,
         authorizedSessionIDs: Set<String>? = nil,
         verifiedMergedBranchSHA: String? = nil
@@ -11096,6 +11097,8 @@ final class AppState {
             )
                 && worktreeCleanupSessionIDs(worktreeId: worktree.id).isSubset(of: authorizedSessionIDs)
                 && WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch
+                && (authorizedWorktreeLineageID == nil
+                    || WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path) == authorizedWorktreeLineageID)
                 && Self.workspaceCleanupOwnershipAvailable(
                     workspacesEnabled: config.workspacesEnabled,
                     workspacesCanMutate: workspacesManager.canMutate
@@ -11134,7 +11137,8 @@ final class AppState {
                     deleteBranchIfMerged: deleteBranchIfMerged,
                     force: force,
                     verifiedMergedBranchSHA: verifiedMergedBranchSHA,
-                    authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
+                    authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint,
+                    authorizedWorktreeLineageID: authorizedWorktreeLineageID
                 )
             }
         } catch is WorktreeRemovalOwnershipChanged {
@@ -11302,7 +11306,8 @@ final class AppState {
         deleteBranchIfMerged: Bool,
         force: Bool,
         verifiedMergedBranchSHA: String? = nil,
-        authorizedDeleteContentFingerprint: String? = nil
+        authorizedDeleteContentFingerprint: String? = nil,
+        authorizedWorktreeLineageID: String? = nil
     ) async throws -> WorktreeRemovalOutcome {
         try await Task.detached {
             if let authorizedDeleteContentFingerprint {
@@ -11312,6 +11317,10 @@ final class AppState {
                 guard currentFingerprint == authorizedDeleteContentFingerprint else {
                     throw WorktreeDeleteContentFingerprintMismatch()
                 }
+            }
+            if let authorizedWorktreeLineageID,
+               WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path) != authorizedWorktreeLineageID {
+                throw WorktreeDeleteContentFingerprintMismatch()
             }
 
             if worktree.path.isRemoteAlasPath {
@@ -11330,7 +11339,8 @@ final class AppState {
                 deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force,
                 verifiedMergedBranchSHA: verifiedMergedBranchSHA,
-                authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
+                authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint,
+                expectedWorktreeLineageID: authorizedWorktreeLineageID
             )
         }.value
     }

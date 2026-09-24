@@ -1149,6 +1149,7 @@ extension AppState {
                     scheduleID: schedule.id,
                     projectID: project.id,
                     worktreeID: worktree.id,
+                    worktreeLineageID: worktree.lineageID,
                     sessionID: prepared.sessionID,
                     promptID: prepared.promptID
                 )
@@ -1754,7 +1755,7 @@ extension AppState {
             force: false,
             removedIndex: removedIndex,
             promptsForForce: false,
-            authorizedDeleteContentFingerprint: finalFingerprint,
+            authorizedWorktreeLineageID: registration.worktreeLineageID,
             authorizedDirtyTabsAtConfirmation: [:],
             authorizedSessionIDs: authorizedSessionIDs
         )
@@ -1832,9 +1833,8 @@ extension AppState {
             && report.worktreeID == registration.worktreeID
             && report.branch == worktree.branch
             && report.sessionID == registration.sessionID
-            && report.baseCommit != nil
-            && report.cleanupRequested
-            && report.taskState == .succeeded
+            && registration.worktreeLineageID != nil
+            && registration.worktreeLineageID == worktree.lineageID
             && report.cleanupState == .pending
     }
 
@@ -1901,7 +1901,9 @@ extension AppState {
             ? .deleting(projectId: worktree.projectId)
             : nil
         func volatileStateIsSafe() -> Bool {
-            guard !Task.isCancelled,
+            guard let capturedLineageID = registration.worktreeLineageID,
+                  WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path) == capturedLineageID,
+                  !Task.isCancelled,
                   activeScheduledAgentRunsBySession[registration.sessionID] === registration,
                   Self.scheduledAgentCleanupIdentityIsValid(
                       report: report,

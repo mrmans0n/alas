@@ -148,12 +148,15 @@ struct AppStateRunScheduleTests {
     @Test func scheduledCleanupIdentityMustMatchItsCapturedTarget() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        var capturedWorktree = fixture.worktree
+        capturedWorktree.lineageID = "created-lineage"
         let registration = ScheduledAgentRunRegistration(
             reportID: "report",
             occurrenceID: "occurrence",
             scheduleID: "schedule",
             projectID: fixture.project.id,
-            worktreeID: fixture.worktree.id,
+            worktreeID: capturedWorktree.id,
+            worktreeLineageID: "created-lineage",
             sessionID: "scheduled-session",
             promptID: UUID()
         )
@@ -164,9 +167,9 @@ struct AppStateRunScheduleTests {
             scheduleName: "Nightly",
             projectID: fixture.project.id,
             projectName: fixture.project.name,
-            branch: fixture.worktree.branch,
+            branch: capturedWorktree.branch,
             baseCommit: "base",
-            worktreeID: fixture.worktree.id,
+            worktreeID: capturedWorktree.id,
             sessionID: "scheduled-session",
             agentID: "codex",
             request: "Review the repository.",
@@ -187,14 +190,23 @@ struct AppStateRunScheduleTests {
             report: report,
             registration: registration,
             project: fixture.project,
-            worktree: fixture.worktree
+            worktree: capturedWorktree
+        ))
+        var replacementWorktree = capturedWorktree
+        replacementWorktree.lineageID = "replacement-lineage"
+        #expect(!AppState.scheduledAgentCleanupIdentityIsValid(
+            report: report,
+            registration: registration,
+            project: fixture.project,
+            worktree: replacementWorktree
         ))
         let unrelatedRegistration = ScheduledAgentRunRegistration(
             reportID: "another-report",
             occurrenceID: "occurrence",
             scheduleID: "schedule",
             projectID: fixture.project.id,
-            worktreeID: fixture.worktree.id,
+            worktreeID: capturedWorktree.id,
+            worktreeLineageID: "created-lineage",
             sessionID: "scheduled-session",
             promptID: registration.promptID
         )
@@ -202,7 +214,7 @@ struct AppStateRunScheduleTests {
             report: report,
             registration: unrelatedRegistration,
             project: fixture.project,
-            worktree: fixture.worktree
+            worktree: capturedWorktree
         ))
         let differentWorktreeRegistration = ScheduledAgentRunRegistration(
             reportID: "report",
@@ -210,6 +222,7 @@ struct AppStateRunScheduleTests {
             scheduleID: "schedule",
             projectID: fixture.project.id,
             worktreeID: "another-worktree",
+            worktreeLineageID: "created-lineage",
             sessionID: "scheduled-session",
             promptID: registration.promptID
         )
@@ -217,7 +230,7 @@ struct AppStateRunScheduleTests {
             report: report,
             registration: differentWorktreeRegistration,
             project: fixture.project,
-            worktree: fixture.worktree
+            worktree: capturedWorktree
         ))
     }
 

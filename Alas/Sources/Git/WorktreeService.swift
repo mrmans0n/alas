@@ -440,7 +440,11 @@ struct WorktreeService {
 
         let result = try await Process.git(args, cwd: repoPath)
         if result.exitCode == 0 {
-            return makeWorktree(destination: destination, branch: branch, projectId: projectId)
+            var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
+            if !repoPath.isRemoteAlasPath {
+                worktree.lineageID = Self.localLineageID(forWorktreeAt: destination)
+            }
+            return worktree
         }
 
         guard Self.looksLikeMissingLFS(result.stderr) else {
@@ -879,10 +883,20 @@ struct WorktreeService {
         usesRemoteHostRegistry: Bool = true,
         verifiedMergedBranchSHA: String? = nil,
         authorizedDeleteContentFingerprint: String? = nil,
+        expectedWorktreeLineageID: String? = nil,
         moveItem: @Sendable (URL, URL) throws -> Void = {
             try WorktreeService.renameAtomically(from: $0, to: $1)
         }
     ) async throws -> WorktreeRemovalOutcome {
+        func requireExpectedLineage(at path: URL) throws {
+            guard let expectedWorktreeLineageID else { return }
+            guard !path.isRemoteAlasPath,
+                  Self.existingLocalLineageID(forWorktreeAt: path) == expectedWorktreeLineageID
+            else {
+                throw WorktreeError.gitFailed("Git deletion risks changed since confirmation")
+            }
+        }
+        try requireExpectedLineage(at: worktree.path)
         if repoPath.isRemoteAlasPath || worktree.path.isRemoteAlasPath {
             try await remove(
                 repoPath: repoPath,
@@ -999,6 +1013,7 @@ struct WorktreeService {
                     throw WorktreeError.gitFailed("Git deletion risks changed since confirmation")
                 }
             }
+            try requireExpectedLineage(at: worktree.path)
             try await remove(
                 repoPath: repoPath,
                 worktree: worktree,
@@ -1033,6 +1048,7 @@ struct WorktreeService {
                 linkedGitDirectory: expectedRegistration.gitDirectory
             )
             hasActivePendingRemoval = true
+            try requireExpectedLineage(at: worktree.path)
             try moveItem(worktree.path, ticket.stagedPath)
         } catch {
             if hasActivePendingRemoval {
@@ -1046,6 +1062,7 @@ struct WorktreeService {
                     throw WorktreeError.gitFailed("Git deletion risks changed since confirmation")
                 }
             }
+            try requireExpectedLineage(at: worktree.path)
             try await remove(
                 repoPath: repoPath,
                 worktree: worktree,
@@ -1232,6 +1249,12 @@ struct WorktreeService {
         guard status.exitCode == 0 else { throw WorktreeError.gitFailed(status.stderr) }
         let head = try await Process.gitData(["rev-parse", "HEAD"], cwd: worktreePath)
         guard head.exitCode == 0 else { throw WorktreeError.gitFailed(head.stderr) }
+        let remoteRefs = try await Process.gitData(
+            ["for-each-ref", "--format=ref=%(refname)=%(objectname)", "refs/remotes"],
+            cwd: worktreePath
+        )
+        guard remoteRefs.exitCode == 0 else { throw WorktreeError.gitFailed(remoteRefs.stderr) }
+        let lineageID = Self.existingLocalLineageID(forWorktreeAt: worktreePath) ?? ""
 
         let diff = try await Process.gitData(
             ["diff", "--no-ext-diff", "--binary", "--full-index", "--submodule=diff", "HEAD", "--"],
@@ -1282,6 +1305,8 @@ struct WorktreeService {
             payload.append(0)
         }
         append("head", head.stdout)
+        append("lineageID", Data(lineageID.utf8))
+        append("remoteRefs", remoteRefs.stdout)
         append("status", status.stdout)
         append("diff", diff.stdout)
         append("cachedDiff", cachedDiff.stdout)

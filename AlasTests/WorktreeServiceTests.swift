@@ -90,6 +90,8 @@ struct WorktreeServiceTests {
             destination: dest, projectId: "p"
         )
         #expect(wt.branch == "feat/x")
+        #expect(wt.lineageID != nil)
+        #expect(wt.lineageID == WorktreeService.existingLocalLineageID(forWorktreeAt: dest))
         #expect(FileManager.default.fileExists(atPath: dest.path))
 
         let listed = try await svc.list(repoPath: repo, projectId: "p")
@@ -681,6 +683,78 @@ extension WorktreeServiceTests {
 
         #expect(after != before)
     }
+    @Test func worktreeDeleteContentFingerprintTracksSuperprojectRemoteRefChanges() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        for ref in ["refs/remotes/origin/main", "refs/remotes/origin/backup"] {
+            let result = try await Process.git(["update-ref", ref, "HEAD"], cwd: repo)
+            try #require(result.exitCode == 0)
+        }
+
+        let before = try await WorktreeService.worktreeDeleteContentFingerprint(worktreePath: repo)
+        let removeExtraRef = try await Process.git(
+            ["update-ref", "-d", "refs/remotes/origin/backup"],
+            cwd: repo
+        )
+        try #require(removeExtraRef.exitCode == 0)
+        let after = try await WorktreeService.worktreeDeleteContentFingerprint(worktreePath: repo)
+
+        #expect(after != before)
+    }
+
+    @Test func worktreeDeleteContentFingerprintTracksWorktreeLineageChanges() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "worktree-lineage-fingerprint")
+        defer { fixture.removeFiles() }
+        let gitDirectoryResult = try await Process.git(
+            ["rev-parse", "--absolute-git-dir"],
+            cwd: fixture.worktree.path
+        )
+        try #require(gitDirectoryResult.exitCode == 0)
+        let gitDirectory = URL(
+            fileURLWithPath: gitDirectoryResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        let lineageMarker = gitDirectory.appendingPathComponent("alas-worktree-lineage")
+        let initialLineageID = try #require(
+            WorktreeService.localLineageID(forWorktreeAt: fixture.worktree.path)
+        )
+        let before = try await WorktreeService.worktreeDeleteContentFingerprint(
+            worktreePath: fixture.worktree.path
+        )
+
+        try "\(UUID().uuidString.lowercased())\n".write(
+            to: lineageMarker,
+            atomically: true,
+            encoding: .utf8
+        )
+        let after = try await WorktreeService.worktreeDeleteContentFingerprint(
+            worktreePath: fixture.worktree.path
+        )
+
+        #expect(WorktreeService.existingLocalLineageID(forWorktreeAt: fixture.worktree.path) != initialLineageID)
+        #expect(try String(contentsOf: lineageMarker, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) != initialLineageID)
+        #expect(after != before)
+    }
+    @Test func fastLocalRemoveRejectsDifferentAuthorizedWorktreeLineage() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "wrong-lineage-remove")
+        defer { fixture.removeFiles() }
+        let currentLineageID = try #require(
+            WorktreeService.localLineageID(forWorktreeAt: fixture.worktree.path)
+        )
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                expectedWorktreeLineageID: "replacement-lineage"
+            )
+        }
+
+        #expect(FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+        #expect(WorktreeService.existingLocalLineageID(forWorktreeAt: fixture.worktree.path) == currentLineageID)
+    }
+
+
 
     @Test func lockedDeletePreflightReasonIsParsedFromPorcelain() {
         let path = URL(fileURLWithPath: "/repos/app-worktree")

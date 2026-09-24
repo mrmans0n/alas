@@ -64,6 +64,7 @@ final class ScheduledAgentRunRegistration {
     let scheduleID: String
     let projectID: String
     let worktreeID: String
+    let worktreeLineageID: String?
     let sessionID: String
     let promptID: UUID
     private(set) var completion: ScheduledAgentCompletion?
@@ -77,6 +78,7 @@ final class ScheduledAgentRunRegistration {
         scheduleID: String,
         projectID: String,
         worktreeID: String,
+        worktreeLineageID: String? = nil,
         sessionID: String,
         promptID: UUID
     ) {
@@ -85,6 +87,7 @@ final class ScheduledAgentRunRegistration {
         self.scheduleID = scheduleID
         self.projectID = projectID
         self.worktreeID = worktreeID
+        self.worktreeLineageID = worktreeLineageID
         self.sessionID = sessionID
         self.promptID = promptID
     }
