@@ -434,6 +434,36 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(abs(scroller.distanceFromBottom - distance) < 1)
     }
 
+    @Test("folding a tail anchor preserves bottom elastic overscroll")
+    func foldingTailAnchorPreservesBottomElasticOverscroll() {
+        let (reconciler, scroller, _) = makeStack()
+        scroller.contentView = ElasticClipView(frame: scroller.contentView.frame)
+        scroller.documentView = scroller.flippedDocumentView
+
+        let history = (0..<20).map { spec("history\($0)") }
+        let spacer = spec("__composer_spacer__", height: 220)
+        reconciler.apply(
+            specs: history + [spec("activity", height: 600), spacer],
+            contentWidth: 600, followsTail: true
+        )
+
+        let overrun: CGFloat = 36
+        let bottom = scroller.contentHeight - scroller.viewportHeight
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: bottom + overrun))
+        reconciler.noteUserScroll()
+        reconciler.resolveStaleRowId = {
+            $0 == "activity" ? (rowId: "group", assumeHeadGrowth: false) : nil
+        }
+
+        reconciler.apply(
+            specs: history + [spec("group", height: 28), spec("answer", height: 900), spacer],
+            contentWidth: 600, followsTail: true
+        )
+
+        let restoredOverrun = scroller.scrollY - (scroller.contentHeight - scroller.viewportHeight)
+        #expect(abs(restoredOverrun - overrun) < 1)
+    }
+
     @Test("incremental folding during gesture settling preserves the tail rather than the group header")
     func incrementalFoldDuringScrollSettlePreservesTail() {
         let (reconciler, scroller, _) = makeStack()

@@ -281,8 +281,12 @@ final class ACPTranscriptScrollerView: MinimapScrollView {
     var scrollY: CGFloat { contentView.bounds.origin.y }
     var viewportHeight: CGFloat { contentView.bounds.height }
     var contentHeight: CGFloat { flippedDocumentView.frame.height }
+    /// Signed distance from the bottom; negative values retain an elastic overrun.
+    var distanceFromBottomIncludingOverscroll: CGFloat {
+        max(0, contentHeight - viewportHeight) - scrollY
+    }
     var distanceFromBottom: CGFloat {
-        max(0, contentHeight - viewportHeight - scrollY)
+        max(0, distanceFromBottomIncludingOverscroll)
     }
 
     func setDocumentHeight(_ height: CGFloat) {
@@ -316,11 +320,20 @@ final class ACPTranscriptScrollerView: MinimapScrollView {
     }
 
     func setScrollY(_ y: CGFloat) {
-        let clamped = clampedScrollY(y)
-        if abs(clamped - scrollY) > 0.01 {
-        }
+        setScrollY(y, allowingBottomOverscroll: false)
+    }
+
+    /// Restores a captured elastic overrun without making ordinary programmatic
+    /// scrolls escape the document's legal range.
+    func setScrollYPreservingBottomOverscroll(_ y: CGFloat) {
+        setScrollY(y, allowingBottomOverscroll: true)
+    }
+
+    private func setScrollY(_ y: CGFloat, allowingBottomOverscroll: Bool) {
+        let maxScrollY = max(0, contentHeight - viewportHeight)
+        let targetY = allowingBottomOverscroll && y > maxScrollY ? y : clampedScrollY(y)
         performProgrammatic {
-            contentView.setBoundsOrigin(NSPoint(x: contentView.bounds.origin.x, y: clamped))
+            contentView.setBoundsOrigin(NSPoint(x: contentView.bounds.origin.x, y: targetY))
             reflectScrolledClipView(contentView)
         }
         applyLogicalScrollerMetrics()

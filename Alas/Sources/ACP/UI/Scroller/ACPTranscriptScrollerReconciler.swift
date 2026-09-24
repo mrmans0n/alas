@@ -247,10 +247,10 @@ final class ACPTranscriptScrollerReconciler {
         var anchorBeforeUpdate = repins ? nil : captureScrollAnchor()
         // Gesture settling suppresses a forced tail pin, not tail-follow intent.
         // If folding removes the visible activity row, anchoring to its group
-        // header would jump backward. Retain the reader's distance from the
-        // bottom instead, including a small deliberate gap during the gesture.
+        // header would jump backward. Retain the signed bottom-relative position:
+        // a gap during settling stays a gap, and elastic overrun stays elastic.
         if followsTail, case .row(let id, _, _) = anchorBeforeUpdate, newSpecs[id] == nil {
-            anchorBeforeUpdate = .bottomRelative(distance: scroller.distanceFromBottom)
+            anchorBeforeUpdate = .bottomRelative(distance: scroller.distanceFromBottomIncludingOverscroll)
         }
 
         contentWidth = width
@@ -543,7 +543,7 @@ final class ACPTranscriptScrollerReconciler {
             index += 1
         }
         guard index < tiling.rowCount else {
-            return .bottomRelative(distance: scroller.distanceFromBottom)
+            return .bottomRelative(distance: scroller.distanceFromBottomIncludingOverscroll)
         }
         let row = tiling.rowLayout(at: index)
         return .row(id: row.id, offsetWithinRow: viewportMinY - row.minY, rowHeight: row.height)
@@ -575,10 +575,9 @@ final class ACPTranscriptScrollerReconciler {
     /// at the row's new height. If `resolveStaleRowId` also comes up empty,
     /// falls back to leaving the offset alone.
     ///
-    /// For `.bottomRelative`, `setScrollY` re-derives the offset from the
-    /// NEW `documentHeight` (already installed by the caller before this
-    /// runs) and the captured distance, reproducing the same visual gap
-    /// from the bottom edge.
+    /// For `.bottomRelative`, restoration re-derives the offset from the NEW
+    /// document height. Negative distances represent bottom elastic overscroll,
+    /// so they use a setter that preserves the overrun instead of clamping it.
     private func restoreScrollAnchor(_ anchor: ScrollAnchor?) {
         guard let anchor else { return }
         switch anchor {
@@ -589,7 +588,12 @@ final class ACPTranscriptScrollerReconciler {
                 restoreViaStaleResolution(id: id, offsetWithinRow: offsetWithinRow, oldRowHeight: oldRowHeight)
             }
         case .bottomRelative(let distance):
-            scroller.setScrollY(tiling.documentHeight - scroller.viewportHeight - distance)
+            let y = tiling.documentHeight - scroller.viewportHeight - distance
+            if distance < 0 {
+                scroller.setScrollYPreservingBottomOverscroll(y)
+            } else {
+                scroller.setScrollY(y)
+            }
         }
     }
 
