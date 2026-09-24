@@ -3345,10 +3345,39 @@ final class AppState {
 
     func unarchiveWorkspaceCheckout(id: UUID) async throws -> WorkspaceCheckout {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
-        let checkout = try await workspaceCoordinator().unarchive(checkoutID: id)
-        await workspacesManager.refreshCheckoutSnapshots()
+        let checkout = try await unarchiveWorkspaceCheckoutUnderProjectMutationGate(id: id)
         _ = await restoreWorkspaceCheckoutACPSessions(checkout)
         return checkout
+    }
+
+    private func unarchiveWorkspaceCheckoutUnderProjectMutationGate(id: UUID) async throws -> WorkspaceCheckout {
+        guard let checkout = workspacesManager.checkout(id: id) else {
+            throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+        }
+        let coordinator = workspaceCoordinator()
+        return try await ProjectMutationGate.shared.withMainActorMutations(
+            projectIDs: checkout.members.map(\.projectID)
+        ) {
+            guard let current = self.workspacesManager.checkout(id: id) else {
+                throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+            }
+            let memberOperationIsInFlight = current.members.contains { member in
+                let worktreeID = Worktree.makeId(path: URL(fileURLWithPath: member.worktreePath))
+                return Self.blocksWorktreeSessionAdmission(
+                    self.projectsManager.operationState(
+                        forWorktreeId: worktreeID,
+                        projectId: member.projectID
+                    )
+                )
+            }
+            guard !memberOperationIsInFlight else {
+                throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
+
+            let unarchived = try await coordinator.unarchive(checkoutID: id)
+            await self.workspacesManager.refreshCheckoutSnapshots()
+            return unarchived
+        }
     }
 
     func stopWorkspaceCheckoutAfterCurrentOperations(id: UUID) async throws {
@@ -3582,8 +3611,7 @@ final class AppState {
             throw WorkspaceCheckoutCoordinatorError.checkoutMissing
         }
         if checkout.archivedAt != nil {
-            checkout = try await workspaceCoordinator().unarchive(checkoutID: checkoutID)
-            await workspacesManager.refreshCheckoutSnapshots()
+            checkout = try await unarchiveWorkspaceCheckoutUnderProjectMutationGate(id: checkoutID)
         }
         let resolvedWorktreeIDs = workspaceMemberWorktreeIDs(checkout)
         var risks: [String] = []
@@ -3670,7 +3698,7 @@ final class AppState {
         // supersedes it. The coordinator itself refuses to touch an
         // archived checkout, so unarchive first rather than dead-ending.
         if before.archivedAt != nil {
-            _ = try await workspaceCoordinator().unarchive(checkoutID: id)
+            _ = try await unarchiveWorkspaceCheckoutUnderProjectMutationGate(id: id)
         }
         let activeMembers = spacesManager.activeSpace?.members
             ?? spacesManager.activeSpace?.projectIds.map(SpaceMemberReference.project)
@@ -3776,7 +3804,7 @@ final class AppState {
         // forgetting that record is still a stronger, terminal action than
         // archiving — it must not be blocked by the archived guard.
         if workspacesManager.checkout(id: id)?.archivedAt != nil {
-            _ = try await workspaceCoordinator().unarchive(checkoutID: id)
+            _ = try await unarchiveWorkspaceCheckoutUnderProjectMutationGate(id: id)
         }
         let activeMembers = spacesManager.activeSpace?.members
             ?? spacesManager.activeSpace?.projectIds.map(SpaceMemberReference.project)
@@ -11005,6 +11033,10 @@ final class AppState {
             )
             return .failed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
         }
+        if authorizedDirtyTabsAtConfirmation == nil,
+           !recheckWorkspaceOwnershipBeforeRemoval(worktree) {
+            return .skipped(reason: "Worktree changed since confirmation")
+        }
         if let authorizedDirtyTabsAtConfirmation,
            let authorizedSessionIDs {
             let volatileStateIsStillAuthorized = Self.hasOnlyAcknowledgedDirtiness(
@@ -11026,14 +11058,36 @@ final class AppState {
 
         let outcome: WorktreeRemovalOutcome
         do {
-            outcome = try await Self.performRemoveWorktree(
-                repoPath: repoPath,
-                worktree: worktree,
-                deleteBranchIfMerged: deleteBranchIfMerged,
-                force: force,
-                verifiedMergedBranchSHA: verifiedMergedBranchSHA,
-                authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
-            )
+            let isAuthorizedBatchDeletion =
+                authorizedDirtyTabsAtConfirmation != nil && authorizedSessionIDs != nil
+            outcome = try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) {
+                let workspaceOwnershipIsValid = await MainActor.run {
+                    if isAuthorizedBatchDeletion {
+                        let isValid = Self.workspaceCleanupOwnershipAvailable(
+                            workspacesEnabled: self.config.workspacesEnabled,
+                            workspacesCanMutate: self.workspacesManager.canMutate
+                        ) && self.worktreeCleanupWorkspaceOwners(for: worktree).isEmpty
+                        if !isValid {
+                            self.projectsManager.setOperationState(for: worktree, state: nil)
+                        }
+                        return isValid
+                    }
+                    return self.recheckWorkspaceOwnershipBeforeRemoval(worktree)
+                }
+                guard workspaceOwnershipIsValid else {
+                    throw WorktreeRemovalOwnershipChanged()
+                }
+                return try await Self.performRemoveWorktree(
+                    repoPath: repoPath,
+                    worktree: worktree,
+                    deleteBranchIfMerged: deleteBranchIfMerged,
+                    force: force,
+                    verifiedMergedBranchSHA: verifiedMergedBranchSHA,
+                    authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
+                )
+            }
+        } catch is WorktreeRemovalOwnershipChanged {
+            return .skipped(reason: "Worktree changed since confirmation")
         } catch is WorktreeDeleteContentFingerprintMismatch {
             projectsManager.setOperationState(for: worktree, state: nil)
             return .skipped(reason: Self.changedDeleteRisksMessage)
@@ -11199,37 +11253,35 @@ final class AppState {
         verifiedMergedBranchSHA: String? = nil,
         authorizedDeleteContentFingerprint: String? = nil
     ) async throws -> WorktreeRemovalOutcome {
-        try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) {
-            try await Task.detached {
-                if let authorizedDeleteContentFingerprint {
-                    let currentFingerprint = try await WorktreeService.worktreeDeleteContentFingerprint(
-                        worktreePath: worktree.path
-                    )
-                    guard currentFingerprint == authorizedDeleteContentFingerprint else {
-                        throw WorktreeDeleteContentFingerprintMismatch()
-                    }
+        try await Task.detached {
+            if let authorizedDeleteContentFingerprint {
+                let currentFingerprint = try await WorktreeService.worktreeDeleteContentFingerprint(
+                    worktreePath: worktree.path
+                )
+                guard currentFingerprint == authorizedDeleteContentFingerprint else {
+                    throw WorktreeDeleteContentFingerprintMismatch()
                 }
+            }
 
-                if worktree.path.isRemoteAlasPath {
-                    try await WorktreeService().remove(
-                        repoPath: repoPath,
-                        worktree: worktree,
-                        deleteBranchIfMerged: deleteBranchIfMerged,
-                        force: force,
-                        verifiedMergedBranchSHA: verifiedMergedBranchSHA
-                    )
-                    return .synchronous
-                }
-                return try await WorktreeService().removeFastLocal(
+            if worktree.path.isRemoteAlasPath {
+                try await WorktreeService().remove(
                     repoPath: repoPath,
                     worktree: worktree,
                     deleteBranchIfMerged: deleteBranchIfMerged,
                     force: force,
-                    verifiedMergedBranchSHA: verifiedMergedBranchSHA,
-                    authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
+                    verifiedMergedBranchSHA: verifiedMergedBranchSHA
                 )
-            }.value
-        }
+                return .synchronous
+            }
+            return try await WorktreeService().removeFastLocal(
+                repoPath: repoPath,
+                worktree: worktree,
+                deleteBranchIfMerged: deleteBranchIfMerged,
+                force: force,
+                verifiedMergedBranchSHA: verifiedMergedBranchSHA,
+                authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
+            )
+        }.value
     }
 
     nonisolated private static func performDeletePreflight(worktreePath: URL) async -> WorktreeDeletePreflight {
@@ -11267,6 +11319,7 @@ final class AppState {
     private static let changedDeleteRisksMessage = "Git deletion risks changed since confirmation"
 
     private struct WorktreeDeleteContentFingerprintMismatch: Error {}
+    private struct WorktreeRemovalOwnershipChanged: Error {}
 
     nonisolated static func worktreeDeleteContentFingerprint(worktreePath: URL) async throws -> String {
         try await WorktreeService.worktreeDeleteContentFingerprint(worktreePath: worktreePath)

@@ -48,6 +48,22 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
         #expect(response == .ok)
     }
 
+    @Test func unarchiveRefusesWhileAMemberWorktreeIsBeingDeleted() async throws {
+        let fixture = try await Fixture.make(suffix: "unarchive-during-delete", checkoutArchived: true)
+        defer { fixture.removeFiles() }
+        let checkoutID = try #require(fixture.checkoutID)
+        fixture.state.projectsManager.setOperationState(
+            for: fixture.worktree,
+            state: .deleting(projectId: fixture.project.id)
+        )
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await fixture.state.unarchiveWorkspaceCheckout(id: checkoutID)
+        }
+
+        #expect(fixture.state.workspacesManager.checkout(id: checkoutID)?.archivedAt != nil)
+    }
+
     @Test func deleteAndForgetUnarchivesAnArchivedCheckoutInsteadOfRefusingIt() async throws {
         let fixture = try await Fixture.make(suffix: "delete-archived", checkoutArchived: true)
         defer { fixture.removeFiles() }
