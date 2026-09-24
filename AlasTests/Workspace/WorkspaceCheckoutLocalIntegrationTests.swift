@@ -28,6 +28,7 @@ struct WorkspaceCheckoutLocalIntegrationTests {
             return
         }
         let store = WorkspaceStore(url: temporary.appendingPathComponent("workspaces.json"))
+        try await store.checkpoint(.init(workspaces: [workspace]))
         let coordinator = WorkspaceCheckoutCoordinator(store: store, scripts: EmptyWorkspaceSetup())
         let checkout = try await coordinator.create(workspace: workspace, plan: plan)
         await coordinator.awaitCreationCompletion(checkoutID: checkout.id)

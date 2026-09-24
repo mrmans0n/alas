@@ -1423,6 +1423,9 @@ actor WorkspaceCheckoutCoordinator {
         )
         do {
             try await store.mutate { state in
+                guard state.workspaces.contains(where: { $0.id == plan.workspaceID }) else {
+                    throw WorkspaceCheckoutCoordinatorError.workspaceIDMismatch
+                }
                 guard state.checkouts.contains(where: { $0.id == plan.checkoutID }) == false else {
                     throw WorkspaceCheckoutCoordinatorError.checkoutAlreadyExists
                 }

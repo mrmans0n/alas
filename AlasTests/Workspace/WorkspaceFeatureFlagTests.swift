@@ -476,6 +476,7 @@ struct WorkspaceFeatureFlagTests {
             members: []
         )
 
+        try await state.saveWorkspaceDefinition(workspace)
         let checkout = try await state.createWorkspaceCheckout(workspace: workspace, plan: plan)
         await state.workspaceCoordinator().awaitCreationCompletion(checkoutID: checkout.id)
 
@@ -540,6 +541,7 @@ struct WorkspaceFeatureFlagTests {
             members: []
         )
 
+        try await state.saveWorkspaceDefinition(workspace)
         let checkout = try await state.createWorkspaceCheckout(workspace: workspace, plan: plan)
         await state.workspaceCoordinator().awaitCreationCompletion(checkoutID: checkout.id)
         try await waitForCheckoutOwnedACPTab(state: state, checkout: checkout)
@@ -606,6 +608,7 @@ struct WorkspaceFeatureFlagTests {
             members: []
         )
 
+        try await state.saveWorkspaceDefinition(workspace)
         let checkout = try await state.createWorkspaceCheckout(workspace: workspace, plan: plan)
         await state.workspaceCoordinator().awaitCreationCompletion(checkoutID: checkout.id)
         try await Task.sleep(for: .milliseconds(200))

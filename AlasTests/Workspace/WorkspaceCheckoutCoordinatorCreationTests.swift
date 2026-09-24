@@ -4,6 +4,35 @@ import Testing
 
 @Suite("Workspace checkout coordinator creation")
 struct WorkspaceCheckoutCoordinatorCreationTests {
+    @Test func rejectsCheckoutWhenWorkspaceWasRemovedAfterPlanning() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WorkspaceStore(url: url)
+        let fixture = makeFixture(count: 1)
+        try await store.checkpoint(.init(workspaces: [fixture.workspace]))
+        try await store.mutate { state in
+            state.workspaces.removeAll { $0.id == fixture.workspace.id }
+        }
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: store,
+            git: CountingWorkspaceGit(),
+            scripts: NoopWorkspaceScriptRunner(),
+            projectMutationGate: ProjectMutationGate()
+        )
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.workspaceIDMismatch) {
+            try await coordinator.createPersisted(workspace: fixture.workspace, plan: fixture.plan)
+        }
+
+        guard case .loaded(let state) = await store.load() else {
+            Issue.record("Expected Workspace state after the definition was removed")
+            return
+        }
+        #expect(state.workspaces.isEmpty)
+        #expect(state.checkouts.isEmpty)
+    }
+
     @Test func persistsEveryFrozenMemberPlanBeforeTheFirstGitMutation() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
@@ -36,6 +65,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         )
         let git = PersistedPlanInspectingGit(store: store, checkoutID: checkoutID)
         let coordinator = WorkspaceCheckoutCoordinator(store: store, git: git, scripts: NoopWorkspaceScriptRunner())
+        try await persistWorkspaceDefinition(workspace, in: store)
 
         _ = try await coordinator.create(workspace: workspace, plan: plan)
         await coordinator.awaitCreationCompletion(checkoutID: checkoutID)
@@ -50,6 +80,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         let fixture = makeFixture(count: 5)
         let git = ConcurrentWorkspaceGit(failingProjectID: "project-0")
         let coordinator = WorkspaceCheckoutCoordinator(store: store, git: git, scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
+        try await persistWorkspaceDefinition(fixture.workspace, in: store)
 
         let checkout = try await coordinator.create(workspace: fixture.workspace, plan: fixture.plan)
         await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
@@ -74,8 +105,10 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
             .init(checkoutMemberID: UUID(), workspaceMemberID: first.id, projectID: "shared", sourceRepositoryPath: "/repos/one", destinationPath: "/checkouts/release/one", baseReference: "main", baseCommit: "one", branchIntent: .create(atCommit: "one")),
             .init(checkoutMemberID: UUID(), workspaceMemberID: second.id, projectID: "shared", sourceRepositoryPath: "/repos/two", destinationPath: "/checkouts/release/two", baseReference: "main", baseCommit: "two", branchIntent: .reuse)
         ])
+        let store = WorkspaceStore(url: url)
         let git = SerialIntentWorkspaceGit()
-        let coordinator = WorkspaceCheckoutCoordinator(store: WorkspaceStore(url: url), git: git, scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
+        let coordinator = WorkspaceCheckoutCoordinator(store: store, git: git, scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
+        try await persistWorkspaceDefinition(workspace, in: store)
 
         _ = try await coordinator.create(workspace: workspace, plan: plan)
         await coordinator.awaitCreationCompletion(checkoutID: plan.checkoutID)
@@ -91,6 +124,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         let fixture = makeFixture(count: 5)
         let git = ConcurrentWorkspaceGit(failingProjectID: "never")
         let coordinator = WorkspaceCheckoutCoordinator(store: store, git: git, scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
+        try await persistWorkspaceDefinition(fixture.workspace, in: store)
 
         let checkout = try await coordinator.createPersisted(workspace: fixture.workspace, plan: fixture.plan)
         await coordinator.beginCreation(checkoutID: checkout.id)
@@ -115,6 +149,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
             scripts: NoopWorkspaceScriptRunner(),
             projectMutationGate: ProjectMutationGate()
         )
+        try await persistWorkspaceDefinition(fixture.workspace, in: store)
 
         let checkout = try await coordinator.createPersisted(workspace: fixture.workspace, plan: fixture.plan)
         try await coordinator.stopAfterCurrentOperations(checkoutID: checkout.id)
@@ -140,6 +175,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
             scripts: NoopWorkspaceScriptRunner(),
             projectMutationGate: ProjectMutationGate()
         )
+        try await persistWorkspaceDefinition(fixture.workspace, in: store)
 
         let checkout = try await coordinator.createPersisted(workspace: fixture.workspace, plan: fixture.plan)
         let stopped = try await coordinator.stopPendingCreationBeforeStart(checkoutID: checkout.id)
@@ -165,6 +201,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         let fixture = makeFixture(count: 1)
         let git = BlockingWorkspaceGit()
         let coordinator = WorkspaceCheckoutCoordinator(store: store, git: git, scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
+        try await persistWorkspaceDefinition(fixture.workspace, in: store)
 
         let checkout = try await coordinator.createPersisted(workspace: fixture.workspace, plan: fixture.plan)
         await coordinator.beginCreation(checkoutID: checkout.id)
@@ -226,6 +263,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
             scripts: NoopWorkspaceScriptRunner(),
             projectMutationGate: ProjectMutationGate()
         )
+        try await persistWorkspaceDefinition(fixture.workspace, in: store)
 
         let checkout = try await coordinator.create(workspace: fixture.workspace, plan: fixture.plan)
         await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
@@ -342,13 +380,14 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         let git = CountingWorkspaceGit()
         let store = WorkspaceStore(url: url)
         let coordinator = WorkspaceCheckoutCoordinator(store: store, git: git, scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
+        try await persistWorkspaceDefinition(fixture.workspace, in: store)
 
         await #expect(throws: WorkspaceCheckoutCoordinatorError.incompletePlan) {
             try await coordinator.create(workspace: fixture.workspace, plan: invalidPlan)
         }
 
         #expect(await git.callCount == 0)
-        #expect(await store.load() == .missing)
+        #expect(await store.checkout(id: fixture.plan.checkoutID) == nil)
     }
 
     @Test func rejectsDuplicateWorkspaceMemberIDsBeforePersistingOrCallingGit() async throws {
@@ -409,6 +448,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         plan.warnings = [.init(severity: .warning, message: "Workspace member 1 is using cached ref 'main' for 'origin/main'.")]
         let store = WorkspaceStore(url: url)
         let coordinator = WorkspaceCheckoutCoordinator(store: store, git: CountingWorkspaceGit(), scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
+        try await persistWorkspaceDefinition(fixture.workspace, in: store)
 
         let checkout = try await coordinator.create(workspace: fixture.workspace, plan: plan)
         #expect(checkout.diagnostics.map(\.message) == plan.warnings.map(\.message))
@@ -441,12 +481,14 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
                     )
                 ]
         )
+        let store = WorkspaceStore(url: url)
         let coordinator = WorkspaceCheckoutCoordinator(
-            store: WorkspaceStore(url: url),
+            store: store,
             git: CountingWorkspaceGit(),
             scripts: scripts,
             projectMutationGate: ProjectMutationGate()
         )
+        try await persistWorkspaceDefinition(fixture.workspace, in: store)
 
         let checkout = try await coordinator.create(
             workspace: fixture.workspace,
@@ -479,12 +521,14 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
                 )
             ]
         )
+        let store = WorkspaceStore(url: url)
         let coordinator = WorkspaceCheckoutCoordinator(
-            store: WorkspaceStore(url: url),
+            store: store,
             git: CountingWorkspaceGit(),
             scripts: scripts,
             projectMutationGate: ProjectMutationGate()
         )
+        try await persistWorkspaceDefinition(fixture.workspace, in: store)
 
         let checkout = try await coordinator.create(
             workspace: fixture.workspace,
@@ -518,12 +562,14 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
                 )
             ]
         )
+        let store = WorkspaceStore(url: url)
         let coordinator = WorkspaceCheckoutCoordinator(
-            store: WorkspaceStore(url: url),
+            store: store,
             git: CountingWorkspaceGit(),
             scripts: scripts,
             projectMutationGate: ProjectMutationGate()
         )
+        try await persistWorkspaceDefinition(fixture.workspace, in: store)
 
         let checkout = try await coordinator.create(
             workspace: fixture.workspace,
@@ -556,12 +602,14 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
                 )
             ]
         )
+        let store = WorkspaceStore(url: url)
         let coordinator = WorkspaceCheckoutCoordinator(
-            store: WorkspaceStore(url: url),
+            store: store,
             git: CountingWorkspaceGit(),
             scripts: scripts,
             projectMutationGate: ProjectMutationGate()
         )
+        try await persistWorkspaceDefinition(fixture.workspace, in: store)
 
         let checkout = try await coordinator.create(
             workspace: fixture.workspace,
@@ -667,6 +715,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         let fixture = makeFixture(count: 1)
         let git = LineageFailureThenRecoveryGit(store: store, checkoutID: fixture.plan.checkoutID)
         let coordinator = WorkspaceCheckoutCoordinator(store: store, git: git, scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
+        try await persistWorkspaceDefinition(fixture.workspace, in: store)
 
         let checkout = try await coordinator.create(workspace: fixture.workspace, plan: fixture.plan)
         await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
@@ -701,11 +750,16 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
             projectMutationGate: ProjectMutationGate(),
             manifests: manifests
         )
+        try await persistWorkspaceDefinition(fixture.workspace, in: store)
 
         let checkout = try await coordinator.create(workspace: fixture.workspace, plan: fixture.plan)
         await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
 
         #expect(await manifests.memberAvailabilities.contains([.available]))
+    }
+
+    private func persistWorkspaceDefinition(_ workspace: Workspace, in store: WorkspaceStore) async throws {
+        try await store.checkpoint(.init(workspaces: [workspace]))
     }
 
     private func makeFixture(count: Int) -> (workspace: Workspace, plan: FrozenWorkspaceCheckoutPlan) {
