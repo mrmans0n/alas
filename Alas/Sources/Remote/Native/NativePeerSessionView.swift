@@ -332,7 +332,6 @@ struct NativePeerQuestionSelectionState: Equatable {
     }
 
     mutating func reset(requestId: Int) {
-        guard self.requestId != requestId else { return }
         self = Self(requestId: requestId)
     }
 
@@ -504,7 +503,8 @@ enum NativePeerElicitationForm {
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.isLenient = false
-        return formatter.date(from: value) != nil
+        guard let date = formatter.date(from: value) else { return false }
+        return formatter.string(from: date) == value
     }
 
     static func submittedContent(
@@ -608,10 +608,10 @@ private struct NativePeerQuestionRequestCard: View {
                                          selectedOptionIds: Array(state.selectedOptions[$0.id] ?? []).sorted())
                 })
             }
-            .disabled(!canDrive || request.questions.contains { (state.selectedOptions[$0.id] ?? []).isEmpty })
+        .disabled(!canDrive || request.questions.contains { (state.selectedOptions[$0.id] ?? []).isEmpty })
         }
         .requestCard()
-        .onChange(of: request.requestId) { _, requestId in state.reset(requestId: requestId) }
+        .onChange(of: request) { _, request in state.reset(requestId: request.requestId) }
     }
 }
 

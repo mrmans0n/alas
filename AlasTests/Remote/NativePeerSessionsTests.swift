@@ -509,6 +509,9 @@ struct NativePeerSessionsTests {
         #expect(!NativePeerElicitationForm.canSubmit(
             fields: [date], values: ["date": "2026-02-31"], selectedOptions: [:]
         ))
+        #expect(!NativePeerElicitationForm.canSubmit(
+            fields: [date], values: ["date": "2026-2-8"], selectedOptions: [:]
+        ))
         #expect(NativePeerElicitationForm.canSubmit(
             fields: [date], values: ["date": "2026-02-28"], selectedOptions: [:]
         ))
@@ -599,11 +602,11 @@ struct NativePeerSessionsTests {
         #expect(state.reason.isEmpty)
     }
 
-    @Test func questionSelectionsResetForANewRequest() {
+    @Test func questionSelectionsResetWhenARequestReusesItsWireID() {
         var state = NativePeerQuestionSelectionState(requestId: 1)
         state.selectedOptions["branch"] = ["main"]
 
-        state.reset(requestId: 2)
+        state.reset(requestId: 1)
 
         #expect(state.selectedOptions.isEmpty)
     }
