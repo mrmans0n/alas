@@ -14,6 +14,49 @@ struct TabsManagerTests {
         #expect(oldTab.projectId == nil)
     }
 
+    @Test func projectOwnedSessionTabsAreHiddenFromSiblingWorktrees() {
+        let worktreeID = "/shared/session-tabs"
+        let projectA = "project-a"
+        let projectB = "project-b"
+        let ownerKeyA = SessionOwnerID.projectWorktree(projectId: projectA, worktreeId: worktreeID).tabStorageKey
+        let projectATabs: [Tab] = [
+            .terminal(.init(id: "terminal-a", title: "A terminal", sessionId: "terminal-session-a", projectId: projectA)),
+            .acpSession(.init(sessionId: "acp-a", title: "A agent", projectId: projectA)),
+            .webPreview(.init(ownerKey: ownerKeyA, projectId: projectA)),
+            .runReport(.init(worktreeId: worktreeID, projectId: projectA, runID: "run-a")),
+        ]
+        let projectBTabs: [Tab] = [
+            .terminal(.init(id: "terminal-b", title: "B terminal", sessionId: "terminal-session-b", projectId: projectB)),
+            .acpSession(.init(sessionId: "acp-b", title: "B agent", projectId: projectB)),
+            .runReport(.init(worktreeId: worktreeID, projectId: projectB, runID: "run-b")),
+        ]
+        let legacyTabs: [Tab] = [
+            .terminal(.init(id: "terminal-legacy", title: "Legacy terminal", sessionId: "terminal-session-legacy")),
+            .acpSession(.init(sessionId: "acp-legacy", title: "Legacy agent")),
+            .webPreview(.init(ownerKey: "legacy-preview")),
+            .runReport(.init(worktreeId: worktreeID, runID: "run-legacy")),
+        ]
+        let manager = TabsManager(store: RestoreMemoryStore())
+        for (index, tab) in (projectATabs + projectBTabs + legacyTabs).enumerated() {
+            manager.restore(
+                tab: tab,
+                worktreeID: worktreeID,
+                placement: .init(previousID: nil, nextID: nil, ordinal: index)
+            )
+        }
+
+        let visibleA = manager.tabs(
+            forWorktree: worktreeID,
+            projectId: projectA,
+            includesLegacyUnownedProjectTabs: true
+        )
+        let visibleB = manager.tabs(forWorktree: worktreeID, projectId: projectB)
+
+        #expect(Set(visibleA.map(\.id)) == Set((projectATabs + legacyTabs).map(\.id)))
+        #expect(Set(visibleB.map(\.id)) == Set(projectBTabs.map(\.id)))
+        #expect(manager.activeTabId(forWorktree: worktreeID, projectId: projectB) == projectBTabs.last?.id)
+    }
+
     @Test func tabsFileSkipsRemovedMissionCaseWithoutDroppingSupportedTabs() throws {
         let terminal = Tab.terminal(.init(id: "terminal-1", title: "Terminal", sessionId: "session-1"))
         let encodedTerminal = try #require(

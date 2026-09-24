@@ -558,6 +558,37 @@ struct AppStateCLIRoutingTests {
         #expect(state.projectsManager.worktrees(projectId: projectB.id).contains(worktreeB))
     }
 
+    @Test func defaultACPSessionLaunchUsesSelectedSamePathProject() async throws {
+        let sharedID = "/tmp/alas-default-acp-selected-\(UUID().uuidString)"
+        let orchestrationPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-default-acp-orchestration-\(UUID().uuidString).sqlite")
+        let persistence = ACPOrchestrationPersistence(path: orchestrationPath.path)
+        let (state, projectA, projectB, worktreeA, worktreeB) = makeStateWithSharedPathWorktrees(
+            id: sharedID,
+            orchestrationPersistence: persistence
+        )
+        defer {
+            removeACPDatabaseFiles(projects: [projectA, projectB], worktreeID: sharedID)
+            for suffix in ["", "-wal", "-shm"] {
+                try? FileManager.default.removeItem(atPath: orchestrationPath.path + suffix)
+            }
+        }
+
+        state.focusGlobalWorktree(id: sharedID, projectId: projectB.id)
+        state.openNewACPSession(agentID: "pi")
+
+        let tab = try #require(state.tabs.tabs(forWorktree: sharedID).compactMap { tab -> ACPSessionTabState? in
+            guard case .acpSession(let state) = tab else { return nil }
+            return state
+        }.first)
+        let managerB = try #require(state.acpManager(for: worktreeB))
+
+        #expect(state.selectedWorktreeProjectId == projectB.id)
+        #expect(tab.projectId == projectB.id)
+        #expect(managerB.placeholderSession(id: tab.sessionId) != nil)
+        #expect(state.acpManager(for: worktreeA)?.placeholderSession(id: tab.sessionId) == nil)
+    }
+
     @Test func persistedDelegatedSessionLookupEnumeratesSamePathProjects() async throws {
         let sharedID = "/tmp/alas-recovery-lookup-shared-\(UUID().uuidString)"
         let orchestrationPath = FileManager.default.temporaryDirectory

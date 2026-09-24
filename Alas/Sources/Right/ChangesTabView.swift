@@ -1043,7 +1043,7 @@ struct ChangesTabView: View {
         }
     }
 
-    private var includesLegacyUnownedDraftCommit: Bool {
+    private var includesLegacyUnownedProjectTabs: Bool {
         appState.legacyEditorOwnerProjectId(forWorktreeId: rps.worktree.id) == rps.worktree.projectId
     }
 
@@ -1051,14 +1051,14 @@ struct ChangesTabView: View {
         for tab in appState.tabs.tabs(
             forWorktree: rps.worktree.id,
             projectId: rps.worktree.projectId,
-            includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommit
+            includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
         ) {
             if case .draftCommit(let state) = tab { return state }
         }
         return appState.tabs.stashedDraft(
             worktreeId: rps.worktree.id,
             projectId: rps.worktree.projectId,
-            includesLegacyUnownedDraftCommit: includesLegacyUnownedDraftCommit
+            includesLegacyUnownedDraftCommit: includesLegacyUnownedProjectTabs
         )
     }
 
@@ -1066,7 +1066,7 @@ struct ChangesTabView: View {
         let live = appState.tabs.tabs(
             forWorktree: rps.worktree.id,
             projectId: rps.worktree.projectId,
-            includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommit
+            includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
         ).contains { tab in
             if case .draftCommit = tab { return true } else { return false }
         }
@@ -1074,7 +1074,7 @@ struct ChangesTabView: View {
         return appState.tabs.stashedDraft(
             worktreeId: rps.worktree.id,
             projectId: rps.worktree.projectId,
-            includesLegacyUnownedDraftCommit: includesLegacyUnownedDraftCommit
+            includesLegacyUnownedDraftCommit: includesLegacyUnownedProjectTabs
         ) != nil
     }
 
@@ -1082,7 +1082,7 @@ struct ChangesTabView: View {
         let live = appState.tabs.tabs(
             forWorktree: rps.worktree.id,
             projectId: rps.worktree.projectId,
-            includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommit
+            includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
         ).first { tab in
             if case .draftCommit = tab { return true } else { return false }
         }
@@ -1092,7 +1092,7 @@ struct ChangesTabView: View {
         if let stashed = appState.tabs.stashedDraft(
             worktreeId: rps.worktree.id,
             projectId: rps.worktree.projectId,
-            includesLegacyUnownedDraftCommit: includesLegacyUnownedDraftCommit
+            includesLegacyUnownedDraftCommit: includesLegacyUnownedProjectTabs
         ) {
             return !stashed.subject.isEmpty || !stashed.bodyText.isEmpty
         }
@@ -1103,7 +1103,7 @@ struct ChangesTabView: View {
         _ = appState.tabs.openOrFocusDraftCommit(
             worktreeId: rps.worktree.id,
             projectId: rps.worktree.projectId,
-            includesLegacyUnownedDraftCommit: includesLegacyUnownedDraftCommit,
+            includesLegacyUnownedDraftCommit: includesLegacyUnownedProjectTabs,
             preferredAction: .commit
         )
     }
@@ -1112,7 +1112,7 @@ struct ChangesTabView: View {
         _ = appState.tabs.openOrFocusDraftCommit(
             worktreeId: rps.worktree.id,
             projectId: rps.worktree.projectId,
-            includesLegacyUnownedDraftCommit: includesLegacyUnownedDraftCommit,
+            includesLegacyUnownedDraftCommit: includesLegacyUnownedProjectTabs,
             preferredAction: .publish
         )
     }
@@ -1122,7 +1122,7 @@ struct ChangesTabView: View {
             _ = appState.tabs.openOrFocusDraftCommit(
                 worktreeId: rps.worktree.id,
                 projectId: rps.worktree.projectId,
-                includesLegacyUnownedDraftCommit: includesLegacyUnownedDraftCommit,
+                includesLegacyUnownedDraftCommit: includesLegacyUnownedProjectTabs,
                 resetAmend: true,
                 preferredAction: preferredAction
             )

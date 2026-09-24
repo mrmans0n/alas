@@ -2758,23 +2758,20 @@ final class AppState {
     ) -> CenterTabComposition {
         let projectID = focusedProjectID
             ?? (selectedWorktreeId == focusedWorktreeID ? selectedWorktreeProjectId : nil)
-        let includesLegacyUnownedEditors = projectID != nil
+        let includesLegacyUnownedProjectTabs = projectID != nil
             && legacyEditorOwnerProjectId(forWorktreeId: focusedWorktreeID) == projectID
-        let includesLegacyUnownedDraftCommits = includesLegacyUnownedEditors
         let focusedTabs = projectID.map {
             tabs.tabs(
                 forWorktree: focusedWorktreeID,
                 projectId: $0,
-                includesLegacyUnownedEditors: includesLegacyUnownedEditors,
-                includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
+                includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
             )
         } ?? tabs.tabs(forWorktree: focusedWorktreeID)
         let activeFocusedTabID = projectID.map {
             tabs.activeTabId(
                 forWorktree: focusedWorktreeID,
                 projectId: $0,
-                includesLegacyUnownedEditors: includesLegacyUnownedEditors,
-                includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
+                includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
             )
         } ?? tabs.activeTabId(forWorktree: focusedWorktreeID)
         guard let sharedSessionOwner else {
@@ -3423,7 +3420,7 @@ final class AppState {
             if let agentID = preference.agentID,
                agent(id: agentID) != nil,
                let worktreeID = selectedWorktreeId,
-               let worktree = worktree(withId: worktreeID) {
+               let worktree = worktree(withId: worktreeID, inProjectId: selectedWorktreeProjectId) {
                 do {
                     _ = try await openWorkspaceCheckoutAgentTerminalTab(
                         checkout,
@@ -9730,23 +9727,20 @@ final class AppState {
     var activeTab: Tab? {
         guard let worktreeId = selectedWorktreeId else { return nil }
         let projectId = selectedWorktreeProjectId
-        let includesLegacyUnownedEditors = projectId != nil
+        let includesLegacyUnownedProjectTabs = projectId != nil
             && legacyEditorOwnerProjectId(forWorktreeId: worktreeId) == projectId
-        let includesLegacyUnownedDraftCommits = includesLegacyUnownedEditors
         guard let activeId = projectId.map({
             tabs.activeTabId(
                 forWorktree: worktreeId,
                 projectId: $0,
-                includesLegacyUnownedEditors: includesLegacyUnownedEditors,
-                includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
+                includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
             )
         }) ?? tabs.activeTabId(forWorktree: worktreeId) else { return nil }
         let visibleTabs = projectId.map {
             tabs.tabs(
                 forWorktree: worktreeId,
                 projectId: $0,
-                includesLegacyUnownedEditors: includesLegacyUnownedEditors,
-                includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
+                includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
             )
         } ?? tabs.tabs(forWorktree: worktreeId)
         return visibleTabs.first(where: { $0.id == activeId })
@@ -13535,7 +13529,7 @@ final class AppState {
     /// Open a new ACP session tab for the given agent in the currently-selected worktree.
     func openNewACPSession(agentID: String, initialPrompt: String? = nil) {
         guard let worktreeId = selectedWorktreeId,
-              let worktree = worktree(withId: worktreeId) else { return }
+              let worktree = worktree(withId: worktreeId, inProjectId: selectedWorktreeProjectId) else { return }
         guard let mgr = acpManager(for: worktree) else { return }
         openNewACPSession(
             agentID: agentID,
@@ -13896,7 +13890,7 @@ final class AppState {
             return
         }
         guard let worktreeId = selectedWorktreeId,
-              let worktree = worktree(withId: worktreeId),
+              let worktree = worktree(withId: worktreeId, inProjectId: selectedWorktreeProjectId),
               let manager = acpManager(for: worktree)
         else { return }
 
@@ -13924,7 +13918,7 @@ final class AppState {
         guard actionKind == .openAgentHandoff else { return }
         let agentID = config.changes.aiToolId
         guard let worktreeId = selectedWorktreeId,
-              let worktree = worktree(withId: worktreeId),
+              let worktree = worktree(withId: worktreeId, inProjectId: selectedWorktreeProjectId),
               availableAgentForHandoff(id: agentID, worktree: worktree) != nil
         else { return }
         let prompt = ReviewLoopHandoffBuilder.build(
@@ -13941,7 +13935,7 @@ final class AppState {
     func openReviewEvidenceHandoff(snapshot: ReviewLoopSnapshot, detail: ReviewEvidenceDetail) {
         let agentID = config.changes.aiToolId
         guard let worktreeId = selectedWorktreeId,
-              let worktree = worktree(withId: worktreeId),
+              let worktree = worktree(withId: worktreeId, inProjectId: selectedWorktreeProjectId),
               availableAgentForHandoff(id: agentID, worktree: worktree) != nil
         else { return }
         let prompt = ReviewLoopHandoffBuilder.buildSelectedEvidencePrompt(
@@ -13972,7 +13966,7 @@ final class AppState {
     /// rehydrate the transcript from disk.
     func openExistingACPSession(sessionId: ACPSession.ID) async {
         guard let worktreeId = selectedWorktreeId,
-              let worktree = worktree(withId: worktreeId) else { return }
+              let worktree = worktree(withId: worktreeId, inProjectId: selectedWorktreeProjectId) else { return }
         await openExistingACPSession(sessionId: sessionId, worktree: worktree)
     }
 

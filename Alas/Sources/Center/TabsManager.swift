@@ -116,15 +116,13 @@ final class TabsManager {
     func tabs(
         forWorktree id: String,
         projectId: String,
-        includesLegacyUnownedEditors: Bool = false,
-        includesLegacyUnownedDraftCommits: Bool = false
+        includesLegacyUnownedProjectTabs: Bool = false
     ) -> [Tab] {
         (byWorktree[id]?.tabs ?? []).filter { tab in
             guard let belongsToProject = projectLocalTabBelongs(
                 tab,
                 projectId: projectId,
-                includesLegacyUnownedEditors: includesLegacyUnownedEditors,
-                includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
+                includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
             ) else { return true }
             return belongsToProject
         }
@@ -133,14 +131,21 @@ final class TabsManager {
     private func projectLocalTabBelongs(
         _ tab: Tab,
         projectId: String,
-        includesLegacyUnownedEditors: Bool,
-        includesLegacyUnownedDraftCommits: Bool
+        includesLegacyUnownedProjectTabs: Bool
     ) -> Bool? {
         return switch tab {
         case .editor(let editor):
-            editor.projectId == projectId || (includesLegacyUnownedEditors && editor.projectId == nil)
+            editor.projectId == projectId || (includesLegacyUnownedProjectTabs && editor.projectId == nil)
         case .draftCommit(let draft):
-            draft.projectId == projectId || (includesLegacyUnownedDraftCommits && draft.projectId == nil)
+            draft.projectId == projectId || (includesLegacyUnownedProjectTabs && draft.projectId == nil)
+        case .terminal(let terminal):
+            terminal.projectId == projectId || (includesLegacyUnownedProjectTabs && terminal.projectId == nil)
+        case .acpSession(let session):
+            session.projectId == projectId || (includesLegacyUnownedProjectTabs && session.projectId == nil)
+        case .webPreview(let preview):
+            preview.projectId == projectId || (includesLegacyUnownedProjectTabs && preview.projectId == nil)
+        case .runReport(let report):
+            report.projectId == projectId || (includesLegacyUnownedProjectTabs && report.projectId == nil)
         default:
             nil
         }
@@ -250,8 +255,7 @@ final class TabsManager {
     func activeTabId(
         forWorktree id: String,
         projectId: String,
-        includesLegacyUnownedEditors: Bool = false,
-        includesLegacyUnownedDraftCommits: Bool = false
+        includesLegacyUnownedProjectTabs: Bool = false
     ) -> TabID? {
         guard let file = byWorktree[id] else { return nil }
         if let activeTabId = file.activeTabId,
@@ -259,8 +263,7 @@ final class TabsManager {
             if projectLocalTabBelongs(
                 activeTab,
                 projectId: projectId,
-                includesLegacyUnownedEditors: includesLegacyUnownedEditors,
-                includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
+                includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
             ) != false {
                 return activeTabId
             }
@@ -270,8 +273,7 @@ final class TabsManager {
            projectLocalTabBelongs(
                rememberedTab,
                projectId: projectId,
-               includesLegacyUnownedEditors: includesLegacyUnownedEditors,
-               includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
+               includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
            ) == true {
             return remembered
         }
@@ -279,8 +281,7 @@ final class TabsManager {
             projectLocalTabBelongs(
                 tab,
                 projectId: projectId,
-                includesLegacyUnownedEditors: includesLegacyUnownedEditors,
-                includesLegacyUnownedDraftCommits: includesLegacyUnownedDraftCommits
+                includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
             ) == true
         }) {
             return mostRecentProjectTab.id
