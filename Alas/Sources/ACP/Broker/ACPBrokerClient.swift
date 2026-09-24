@@ -306,6 +306,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             env: env
         )
         var opened = try await service.open(openParams)
+        guard !isConnectionTerminated() else { throw CancellationError() }
         if opened.adopted, opened.snapshot.cursorTodosByToolCallId == nil {
             // Best-effort, like the close in shutdown() below: closing a
             // legacy broker so it can be replaced is inherently racy against
@@ -324,8 +325,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 brokerId: brokerId,
                 generation: opened.snapshot.metadata.generation
             ))
+            guard !isConnectionTerminated() else { throw CancellationError() }
             resetAcknowledgedCursor()
             opened = try await service.open(openParams)
+            guard !isConnectionTerminated() else { throw CancellationError() }
             if opened.adopted, opened.snapshot.cursorTodosByToolCallId == nil {
                 // The close above may never have reached the broker at all,
                 // leaving it alive and unchanged — the reopen just adopted
@@ -342,7 +345,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
            initialBrokerGeneration != opened.snapshot.metadata.generation {
             resetAcknowledgedCursor()
         }
-        setSnapshot(opened.snapshot)
+        guard setSnapshot(opened.snapshot) else { throw CancellationError() }
         _ = try await attachAndReplay()
         startBackgroundPolling()
         return opened
@@ -561,6 +564,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private func markTerminated() {
         stateLock.lock()
         isTerminated = true
+        pendingDurableStates.removeAll()
         stateLock.unlock()
     }
 
@@ -604,7 +608,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         guard !isConnectionTerminated() else {
             return attached.snapshot
         }
-        setSnapshot(attached.snapshot)
+        guard setSnapshot(attached.snapshot) else { return attached.snapshot }
         let pendingRequestIds = Set(attached.snapshot.pendingRequests.map(\.requestId))
         for event in attached.events {
             dispatch(event, pendingRequestIds: pendingRequestIds)
@@ -717,6 +721,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     /// have nothing to deliver.
     private func dispatch(_ event: ACPBrokerEvent, pendingRequestIds: Set<String>? = nil) {
         stateLock.lock()
+        guard !isTerminated else {
+            stateLock.unlock()
+            return
+        }
         if dispatchedEventCursors.contains(event.cursor) {
             stateLock.unlock()
             return
@@ -871,6 +879,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private func dispatchPendingRequest(_ request: ACPBrokerPendingRequest, cursor: ACPBrokerEventCursor) {
         guard let id = request.adapterRequestId.jsonRPCID else { return }
         stateLock.lock()
+        guard !isTerminated else {
+            stateLock.unlock()
+            return
+        }
         if pendingInboundCursors[id] != nil {
             stateLock.unlock()
             return
@@ -1164,9 +1176,14 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         }
     }
 
-    private func setSnapshot(_ snapshot: ACPBrokerSnapshot) {
+    @discardableResult
+    private func setSnapshot(_ snapshot: ACPBrokerSnapshot) -> Bool {
         let changedTurnState: ACPBrokerTurnState?
         stateLock.lock()
+        guard !isTerminated else {
+            stateLock.unlock()
+            return false
+        }
         generation = snapshot.metadata.generation
         acknowledgedCursor = max(acknowledgedCursor, snapshot.acknowledgedCursor)
         initializeResult = snapshot.initializeResult ?? initializeResult
@@ -1199,10 +1216,15 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         if let changedTurnState {
             onTurnStateChanged?(changedTurnState)
         }
+        return true
     }
 
     private func setTurnState(_ state: ACPBrokerTurnState) {
         stateLock.lock()
+        guard !isTerminated else {
+            stateLock.unlock()
+            return
+        }
         guard turnState != state else {
             stateLock.unlock()
             return
@@ -1248,6 +1270,12 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private func drainDurableStateCallbacks() {
         while true {
             stateLock.lock()
+            guard !isTerminated else {
+                pendingDurableStates.removeAll()
+                isDrainingDurableStates = false
+                stateLock.unlock()
+                return
+            }
             guard !pendingDurableStates.isEmpty else {
                 isDrainingDurableStates = false
                 stateLock.unlock()

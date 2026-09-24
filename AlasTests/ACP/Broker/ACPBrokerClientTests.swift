@@ -50,6 +50,32 @@ struct ACPBrokerClientTests {
         #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 4))
     }
 
+    @Test func detachDuringOpenSuppressesLateStartupCallbacks() async throws {
+        let service = GatedOpenBrokerService()
+        await service.base.setOpenSnapshotTurnState(.sending)
+        let durableStates = DurableStateRecorder()
+        let turnStates = SyncTurnStateRecorder()
+        let client = makeClient(
+            service: service,
+            onTurnStateChanged: { turnStates.append($0) },
+            onDurableStateChanged: { durableStates.append($0) }
+        )
+        let startup = Task { try await client.start() }
+
+        try await waitUntil { await service.openGate.hasEntered }
+        await client.detach()
+        await service.openGate.release()
+        do {
+            _ = try await startup.value
+            Issue.record("Detached startup unexpectedly succeeded")
+        } catch is CancellationError {
+            // Expected: no late snapshot or callback may revive a detached client.
+        }
+
+        #expect(durableStates.records().isEmpty)
+        #expect(turnStates.records().isEmpty)
+    }
+
     @Test func identicalStartupSnapshotsPublishDurableStateOnce() async throws {
         let service = MockBrokerService()
         let recorder = DurableStateRecorder()
@@ -1956,7 +1982,7 @@ struct ACPBrokerClientTests {
     }
 
     private func makeClient(
-        service: MockBrokerService,
+        service: any ACPBrokerServicing,
         initialBrokerGeneration: ACPBrokerGeneration? = nil,
         initialAcknowledgedCursor: ACPBrokerEventCursor = ACPBrokerEventCursor(rawValue: 0),
         backgroundPollIdleIntervalNanoseconds: UInt64 = ACPBrokerClient.defaultBackgroundPollIdleIntervalNanoseconds,
@@ -2111,6 +2137,64 @@ private enum MockBrokerFailure: Error {
     case rejected
 }
 
+private actor BrokerTestGate {
+    private var entered = false
+    private var released = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    var hasEntered: Bool { entered }
+
+    func wait() async {
+        entered = true
+        guard !released else { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private actor GatedOpenBrokerService: ACPBrokerServicing {
+    let openGate = BrokerTestGate()
+    let base = MockBrokerService()
+
+    func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
+        await openGate.wait()
+        return try await base.open(params)
+    }
+
+    func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
+        try await base.attach(params)
+    }
+
+    func send(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult {
+        try await base.send(params)
+    }
+
+    func notify(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK {
+        try await base.notify(params)
+    }
+
+    func respond(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {
+        try await base.respond(params)
+    }
+
+    func ack(_ params: ACPBrokerAckParams) async throws -> ACPBrokerSimpleOK {
+        try await base.ack(params)
+    }
+
+    func detach(_ params: ACPBrokerDetachParams) async throws -> ACPBrokerSimpleOK {
+        try await base.detach(params)
+    }
+
+    func close(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
+        try await base.close(params)
+    }
+}
+
 private actor MockBrokerService: ACPBrokerServicing {
     var opened: [ACPBrokerOpenParams] = []
     var attached: [ACPBrokerAttachParams] = []
@@ -2124,6 +2208,7 @@ private actor MockBrokerService: ACPBrokerServicing {
     var sendResults: [ACPBrokerSendResult] = []
     var snapshotInitializeResult: ACPBrokerJSONValue?
     var snapshotRemoteSessionResult: ACPBrokerJSONValue?
+    var openSnapshotTurnState: ACPBrokerTurnState = .idle
     var openAdopted = false
     var openSnapshotCursorTodosByToolCallId: [String: [ACPCursorTodo]]? = [:]
     private var respondFailuresRemaining = 0
@@ -2189,13 +2274,21 @@ private actor MockBrokerService: ACPBrokerServicing {
         snapshotRemoteSessionResult = remoteSessionResult
     }
 
+    func setOpenSnapshotTurnState(_ turnState: ACPBrokerTurnState) {
+        openSnapshotTurnState = turnState
+    }
+
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
         opened.append(params)
         if let openShouldThrowAfter, opened.count > openShouldThrowAfter.callCount {
             throw openShouldThrowAfter.error
         }
         return ACPBrokerOpenResult(
-            snapshot: snapshot(journalTail: 0, cursorTodosByToolCallId: openSnapshotCursorTodosByToolCallId),
+            snapshot: snapshot(
+                journalTail: 0,
+                turnState: openSnapshotTurnState,
+                cursorTodosByToolCallId: openSnapshotCursorTodosByToolCallId
+            ),
             adopted: openAdopted
         )
     }

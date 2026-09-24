@@ -61,6 +61,85 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadLease(sessionId: session.id)?.token == replacementLease?.token)
     }
 
+    @Test("a stalled broker startup falls back to an isolated service")
+    func stalledBrokerStartupFallsBackToIsolatedService() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerServiceProxy(stallOpen: true)
+        let isolatedService = ManagerBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .milliseconds(50),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "stalled-broker-session", agentId: "claude")
+        session.enqueue(blocks: [.text("keep this queued")])
+
+        let originalAttach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync { await sharedService.openGate.hasEntered }
+        let restart = Task { await manager.restartConnection(to: session.id) }
+
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            let opened = await isolatedService.opened
+            return session.agentState == .ready && !opened.isEmpty
+        }
+        #expect(await sharedService.openGate.hasWaiters)
+        #expect(session.agentState == .ready)
+        #expect(session.queue.count == 1)
+        let replacementRunner = manager.runners[session.id]
+        let replacementLease = try store.loadLease(sessionId: session.id)
+
+        await sharedService.openGate.release()
+        await originalAttach.value
+        await restart.value
+
+        #expect(session.agentState == .ready)
+        #expect(manager.runners[session.id] === replacementRunner)
+        #expect(session.remoteSessionId == "remote-broker")
+        #expect(session.queue.count == 1)
+        #expect(try store.loadLease(sessionId: session.id)?.token == replacementLease?.token)
+    }
+
+    @Test("a blocked old detach does not hold the replacement connection")
+    func blockedOldDetachDoesNotHoldReplacement() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let service = ManagerBrokerServiceProxy(stallDetach: true)
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { service },
+            isolatedBrokerServiceFactory: { ManagerBrokerService() },
+            attachmentStartupTimeout: .milliseconds(50),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "stalled-detach-session", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        let oldRunner = try #require(manager.runners[session.id])
+        let restart = Task { await manager.restartConnection(to: session.id) }
+
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await service.detachGate.hasEntered
+                && session.agentState == .ready
+                && manager.runners[session.id] !== oldRunner
+        }
+        #expect(await service.detachGate.hasWaiters)
+        let replacementRunner = manager.runners[session.id]
+        let replacementLease = try store.loadLease(sessionId: session.id)
+        await service.detachGate.release()
+        await restart.value
+
+        #expect(session.agentState == .ready)
+        #expect(manager.runners[session.id] === replacementRunner)
+        #expect(session.remoteSessionId == "remote-broker")
+        #expect(try store.loadLease(sessionId: session.id)?.token == replacementLease?.token)
+    }
+
     @Test("new session attaches the current project MCP plan")
     func newSessionAttachesCurrentProjectMCPPlan() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -4617,7 +4696,7 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
-    private actor AttachPhaseGate {
+private actor AttachPhaseGate {
         private var entered = false
         private var released = false
         private var continuation: CheckedContinuation<Void, Never>?
@@ -4704,6 +4783,28 @@ struct ACPSessionManagerAttachRestoreTests {
             continuation?.resume()
             continuation = nil
         }
+    }
+}
+
+private actor ManagerBrokerGate {
+    private var entered = false
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    var hasEntered: Bool { entered }
+    var hasWaiters: Bool { !waiters.isEmpty }
+
+    func wait() async {
+        entered = true
+        guard !released else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
     }
 }
 
@@ -4838,5 +4939,52 @@ private actor ManagerBrokerService: ACPBrokerServicing {
             pendingRequests: [],
             operations: []
         )
+    }
+}
+
+private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
+    let openGate = ManagerBrokerGate()
+    let detachGate = ManagerBrokerGate()
+    private let base = ManagerBrokerService()
+    private let stallOpen: Bool
+    private let stallDetach: Bool
+
+    init(stallOpen: Bool = false, stallDetach: Bool = false) {
+        self.stallOpen = stallOpen
+        self.stallDetach = stallDetach
+    }
+
+    func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
+        if stallOpen { await openGate.wait() }
+        return try await base.open(params)
+    }
+
+    func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
+        try await base.attach(params)
+    }
+
+    func send(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult {
+        try await base.send(params)
+    }
+
+    func notify(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK {
+        try await base.notify(params)
+    }
+
+    func respond(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {
+        try await base.respond(params)
+    }
+
+    func ack(_ params: ACPBrokerAckParams) async throws -> ACPBrokerSimpleOK {
+        try await base.ack(params)
+    }
+
+    func detach(_ params: ACPBrokerDetachParams) async throws -> ACPBrokerSimpleOK {
+        if stallDetach { await detachGate.wait() }
+        return try await base.detach(params)
+    }
+
+    func close(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
+        try await base.close(params)
     }
 }

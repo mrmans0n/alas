@@ -72,6 +72,7 @@ final class ACPSessionRunner {
     private let onModelsObserved: ((_ agentId: String, _ models: [ChipSpec.Item]) -> Void)?
     private let onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
+    private let isConnectionCurrent: () -> Bool
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
     private var cancelRequestsTask: Task<Void, Never>?
@@ -211,6 +212,7 @@ final class ACPSessionRunner {
          onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
+         isConnectionCurrent: @escaping () -> Bool = { true },
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
          incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
          ownerInstanceId: String? = nil,
@@ -252,6 +254,7 @@ final class ACPSessionRunner {
         self.onUserCancel = onUserCancel
         self.onResumeTranscriptTail = onResumeTranscriptTail
         self.onCheckpointCapture = onCheckpointCapture
+        self.isConnectionCurrent = isConnectionCurrent
         let initialPersistedMessageCount = persistedMessageCount
             ?? store.flatMap { try? $0.messageCount(sessionId: sessionId) }
             ?? 0
@@ -330,6 +333,7 @@ final class ACPSessionRunner {
         updatesTask = Task { [weak self] in
             guard let self else { return }
             for await u in self.connection.client.incomingUpdates {
+                guard self.isConnectionCurrent() else { continue }
                 self.enqueueIncomingUpdate(u)
             }
             // The for-await also exits when the task gets cancelled —
@@ -337,7 +341,7 @@ final class ACPSessionRunner {
             // teardown). Don't pollute the persisted transcript with
             // an "Agent disconnected" notice in that case; only flag
             // the unexpected stream-end.
-            if Task.isCancelled { return }
+            if Task.isCancelled || !self.isConnectionCurrent() { return }
             self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
             await MainActor.run {
                 self.session.clearRetryStatus()
@@ -360,6 +364,7 @@ final class ACPSessionRunner {
         permissionsTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await (id, params) in self.connection.client.permissionRequests {
+                guard self.isConnectionCurrent() else { continue }
                 self.flushPendingIncomingUpdates()
                 if self.pendingCancelledRequestIDs.remove(id) != nil {
                     let response = ACPPermissionResponse(outcome: .cancelled)
@@ -374,6 +379,7 @@ final class ACPSessionRunner {
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
                 let response = await self.policy.evaluate(
                     scopeKey: scopeKey, options: params.options, params: params, requestID: id)
+                guard self.isConnectionCurrent() else { continue }
                 self.connection.client.respondToPermission(id: id, response: response)
                 await self.persistPermissionDecision(params: params, response: response)
             }
@@ -382,6 +388,7 @@ final class ACPSessionRunner {
         cancelRequestsTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await id in self.connection.client.cancelRequests {
+                guard self.isConnectionCurrent() else { continue }
                 if self.policy.cancelRequest(id: id) { continue }
                 self.pendingCancelledRequestIDs.insert(id)
             }
@@ -407,6 +414,7 @@ final class ACPSessionRunner {
                 ACPRemoteFileServer(host: $0, worktreeRoot: self.worktreePath)
             }
             for await req in self.connection.client.fileRequests {
+                guard self.isConnectionCurrent() else { continue }
                 self.flushPendingIncomingUpdates()
                 switch req {
                 case .read(let id, let params):
@@ -585,6 +593,7 @@ final class ACPSessionRunner {
         terminalsTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await req in self.connection.client.terminalRequests {
+                guard self.isConnectionCurrent() else { continue }
                 await self.handleTerminalRequest(req)
             }
         }
@@ -609,6 +618,7 @@ final class ACPSessionRunner {
         authStatusTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await event in self.connection.client.authStatusUpdates {
+                guard self.isConnectionCurrent() else { continue }
                 self.applyAuthStatus(
                     event.status,
                     acknowledging: event.durableConsumptionAcknowledgement
@@ -649,6 +659,7 @@ final class ACPSessionRunner {
         _ status: ACPAuthStatus,
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil
     ) {
+        guard isConnectionCurrent() else { return }
         session.authStatus = status
         if status.kind == .none {
             session.setupState = .needsAuth(methods: session.authMethods, reason: nil)
@@ -766,6 +777,7 @@ final class ACPSessionRunner {
     }
 
     private func enqueueIncomingUpdate(_ update: ACPSessionUpdateParams) {
+        guard isConnectionCurrent() else { return }
         let receivedWhileHoldingLease = holdsLeaseForWrite()
         // A child session's update never touches a parent row, so it must
         // not capture a compare-and-swap base for one (its tool-call ids
@@ -782,6 +794,7 @@ final class ACPSessionRunner {
             guard let self else { return }
             try? await Task.sleep(nanoseconds: self.incomingUpdateCoalesceNanos)
             guard !Task.isCancelled else { return }
+            guard self.isConnectionCurrent() else { return }
             self.flushPendingIncomingUpdates()
         }
     }
@@ -838,6 +851,10 @@ final class ACPSessionRunner {
     ) {
         incomingUpdateFlushTask?.cancel()
         incomingUpdateFlushTask = nil
+        guard isConnectionCurrent() else {
+            pendingIncomingUpdates.removeAll()
+            return
+        }
         guard !pendingIncomingUpdates.isEmpty else { return }
         let updates = pendingIncomingUpdates
         pendingIncomingUpdates.removeAll(keepingCapacity: true)
@@ -857,6 +874,7 @@ final class ACPSessionRunner {
         flushQueueWhenBoundaryReady: Bool = true,
         treatBufferedUpdatesAsPromptOwned: Bool = false
     ) {
+        guard isConnectionCurrent() else { return }
         let durableConsumptionAcknowledgement = params.durableConsumptionAcknowledgement
         observedUpdateCount += 1
         appliedUpdateCount += 1
@@ -2295,6 +2313,7 @@ extension ACPSessionRunner {
     /// Chained drain is implicit: sendNow's completion sets state to
     /// `.idle` and calls back here.
     func flushQueueIfIdle() {
+        guard isConnectionCurrent() else { return }
         guard !stopped else { return }
         guard holdsLeaseForWrite() else { return }
         guard !nativeForkBarrierActive,

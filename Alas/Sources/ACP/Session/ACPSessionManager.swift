@@ -1185,6 +1185,9 @@ final class ACPSessionManager: ObservableObject {
     private let connectionFactory: ACPConnectionFactory
     private let injectedConnectionFactory: ACPConnectionFactory?
     private let brokerServiceFactory: ACPBrokerServiceFactory?
+    private let isolatedBrokerServiceFactory: ACPBrokerServiceFactory?
+    private let attachmentStartupTimeout: Duration
+    private let restartTeardownTimeout: Duration
     private var resolvedRemoteAdapters: [String: ACPResolvedRemoteAdapter] = [:]
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Per-session task that prepends pre-tail messages after the initial
@@ -1249,7 +1252,8 @@ final class ACPSessionManager: ObservableObject {
     private final class AttachmentAttempt {
         let id = UUID()
         var waiters: [AttachmentWaiter] = []
-        var leaseToken: String? = UUID().uuidString
+        var leaseToken: String?
+        var brokerClient: ACPBrokerClient?
         var connection: ACPConnection?
     }
     private var attachmentAttempts: [ACPSession.ID: AttachmentAttempt] = [:]
@@ -1257,6 +1261,7 @@ final class ACPSessionManager: ObservableObject {
     /// returned. Long-lived callbacks use this in addition to session ID so
     /// an obsolete broker/runner cannot publish into its replacement.
     private var connectionOwnerIDs: [ACPSession.ID: UUID] = [:]
+    private var brokerCallbackOwnerIDs: [ACPSession.ID: UUID] = [:]
     private var pendingQueueForceSends: [ACPSession.ID: [UUID]] = [:]
     private var delegatedMessageWatchTokens: [ACPSession.ID: Int32] = [:]
 
@@ -1301,6 +1306,9 @@ final class ACPSessionManager: ObservableObject {
          connectionFactory: ACPConnectionFactory? = nil,
          launchSpecTransformer: ACPLaunchSpecTransformer? = nil,
          brokerServiceFactory: ACPBrokerServiceFactory? = nil,
+         isolatedBrokerServiceFactory: ACPBrokerServiceFactory? = nil,
+         attachmentStartupTimeout: Duration = .seconds(2),
+         restartTeardownTimeout: Duration = .seconds(2),
          mcpProjectContextProvider: MCPProjectContextProvider? = nil,
          builtInMCPProvider: BuiltInMCPProvider? = nil,
          frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider? = nil,
@@ -1361,6 +1369,9 @@ final class ACPSessionManager: ObservableObject {
         self.injectedConnectionFactory = connectionFactory
         self.connectionFactory = connectionFactory ?? Self.makeStdioConnection
         self.brokerServiceFactory = brokerServiceFactory
+        self.isolatedBrokerServiceFactory = isolatedBrokerServiceFactory
+        self.attachmentStartupTimeout = attachmentStartupTimeout
+        self.restartTeardownTimeout = restartTeardownTimeout
         let initialRecent = store.flatMap { try? $0.recentSessions() } ?? []
         self.recent = initialRecent
         self.persistedRows = Dictionary(uniqueKeysWithValues: initialRecent.map { ($0.id, $0) })
@@ -2783,8 +2794,15 @@ final class ACPSessionManager: ObservableObject {
         launchSpec: ACPLaunchSpec,
         sessionId: ACPSession.ID,
         session: ACPSession,
-        environment: [String: String]
+        environment: [String: String],
+        attempt: AttachmentAttempt
     ) async throws -> ACPConnection {
+        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+            throw CancellationError()
+        }
+        let callbackOwnerID = UUID()
+        brokerCallbackOwnerIDs[sessionId] = callbackOwnerID
+        let connectionOwnerID = attempt.id
         let brokerId = ACPBrokerID(rawValue: persistedRows[sessionId]?.acpBrokerId ?? Self.defaultBrokerId(
             for: sessionId
         ))
@@ -2801,12 +2819,20 @@ final class ACPSessionManager: ObservableObject {
             initialAcknowledgedCursor: Self.brokerCursor(from: persistedRows[sessionId]),
             onDurableStateChanged: { [weak self] state in
                 Task { @MainActor [weak self] in
-                    self?.persistACPBrokerState(sessionId: sessionId, state: state)
+                    guard let self,
+                          self.connectionOwnerIDs[sessionId] == connectionOwnerID,
+                          self.brokerCallbackOwnerIDs[sessionId] == callbackOwnerID
+                    else { return }
+                    self.persistACPBrokerState(sessionId: sessionId, state: state)
                 }
             },
             onTurnStateChanged: { [weak self] turnState in
                 Task { @MainActor [weak self] in
-                    guard let self, let session = self.sessions[sessionId] else { return }
+                    guard let self,
+                          self.connectionOwnerIDs[sessionId] == connectionOwnerID,
+                          self.brokerCallbackOwnerIDs[sessionId] == callbackOwnerID,
+                          let session = self.sessions[sessionId]
+                    else { return }
                     Self.applyBrokerTurnState(turnState, to: session)
                     if Self.brokerTurnStateAllowsQueueFlush(turnState) {
                         self.runners[sessionId]?.flushQueueIfIdle()
@@ -2814,6 +2840,9 @@ final class ACPSessionManager: ObservableObject {
                 }
             }
         )
+        let connection = ACPConnection(client: client)
+        attempt.brokerClient = client
+        attempt.connection = connection
         // The restored queue may still hold a `.pending` item that was
         // `.sending` when the app last quit (see `QueuedPrompt.
         // normalizedAfterRestore()`) — its `brokerOperationKey` didn't
@@ -2831,6 +2860,9 @@ final class ACPSessionManager: ObservableObject {
            let source = try await persistence.loadSession(id: fork.sourceSessionID),
            let sourceRemoteSessionID = source.remoteSessionId,
            !sourceRemoteSessionID.isEmpty {
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                throw CancellationError()
+            }
             let operationKey = Self.brokerStartupOperationKey(
                 sessionId: sessionId,
                 method: "session/fork",
@@ -2851,7 +2883,7 @@ final class ACPSessionManager: ObservableObject {
             let terminalOutcome = negotiatingForkOperationKey.flatMap {
                 client.terminalOutcome(forPreRegisteredOperationKey: $0)
             }
-            await client.detach()
+            Task { await client.detach() }
             if let terminalOutcome {
                 throw ACPBrokerDurableCompletionReplayError(
                     outcome: terminalOutcome,
@@ -2860,8 +2892,120 @@ final class ACPSessionManager: ObservableObject {
             }
             throw error
         }
+        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
+              connectionOwnerIDs[sessionId] == connectionOwnerID,
+              brokerCallbackOwnerIDs[sessionId] == callbackOwnerID
+        else {
+            Task { await client.detach() }
+            throw CancellationError()
+        }
         Self.applyBrokerTurnState(client.currentTurnState, to: session)
-        return ACPConnection(client: client)
+        return connection
+    }
+
+    private func makeBrokerConnectionWithRecovery(
+        launchSpec: ACPLaunchSpec,
+        sessionId: ACPSession.ID,
+        session: ACPSession,
+        environment: [String: String],
+        attempt: AttachmentAttempt
+    ) async throws -> ACPConnection {
+        guard let brokerServiceFactory else { throw ACPBrokerStartupTimedOutError() }
+        let serviceOutcome = await runBoundedValue(timeout: attachmentStartupTimeout) {
+            try await brokerServiceFactory()
+        }
+        let service: ACPBrokerServicing
+        switch serviceOutcome {
+        case .succeeded(let serviceValue):
+            service = serviceValue
+        case .failed(let error):
+            throw error
+        case .timedOut:
+            return try await makeIsolatedBrokerConnection(
+                launchSpec: launchSpec,
+                sessionId: sessionId,
+                session: session,
+                environment: environment,
+                attempt: attempt
+            )
+        }
+
+        let connectionOutcome = await runBoundedValue(timeout: attachmentStartupTimeout) {
+            try await self.makeBrokerConnection(
+                service: service,
+                launchSpec: launchSpec,
+                sessionId: sessionId,
+                session: session,
+                environment: environment,
+                attempt: attempt
+            )
+        }
+        switch connectionOutcome {
+        case .succeeded(let connection):
+            return connection
+        case .failed(let error):
+            throw error
+        case .timedOut:
+            await detachBrokerClient(for: attempt)
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                throw CancellationError()
+            }
+            return try await makeIsolatedBrokerConnection(
+                launchSpec: launchSpec,
+                sessionId: sessionId,
+                session: session,
+                environment: environment,
+                attempt: attempt
+            )
+        }
+    }
+
+    private func makeIsolatedBrokerConnection(
+        launchSpec: ACPLaunchSpec,
+        sessionId: ACPSession.ID,
+        session: ACPSession,
+        environment: [String: String],
+        attempt: AttachmentAttempt
+    ) async throws -> ACPConnection {
+        guard let isolatedBrokerServiceFactory else { throw ACPBrokerStartupTimedOutError() }
+        let serviceOutcome = await runBoundedValue(timeout: attachmentStartupTimeout) {
+            try await isolatedBrokerServiceFactory()
+        }
+        let service: ACPBrokerServicing
+        switch serviceOutcome {
+        case .succeeded(let serviceValue):
+            service = serviceValue
+        case .failed(let error):
+            throw error
+        case .timedOut:
+            throw ACPBrokerStartupTimedOutError()
+        }
+        let connectionOutcome = await runBoundedValue(timeout: attachmentStartupTimeout) {
+            try await self.makeBrokerConnection(
+                service: service,
+                launchSpec: launchSpec,
+                sessionId: sessionId,
+                session: session,
+                environment: environment,
+                attempt: attempt
+            )
+        }
+        switch connectionOutcome {
+        case .succeeded(let connection):
+            return connection
+        case .failed(let error):
+            throw error
+        case .timedOut:
+            await detachBrokerClient(for: attempt)
+            throw ACPBrokerStartupTimedOutError()
+        }
+    }
+
+    private func detachBrokerClient(for attempt: AttachmentAttempt) async {
+        guard let client = attempt.brokerClient else { return }
+        _ = await runBounded(timeout: restartTeardownTimeout) {
+            await client.detach()
+        }
     }
 
     private static func defaultBrokerId(for sessionId: ACPSession.ID) -> String {
@@ -3324,6 +3468,18 @@ extension ACPSessionManager {
         case timedOut
     }
 
+    private enum BoundedValueOutcome<Value: Sendable>: Sendable {
+        case succeeded(Value)
+        case failed(any Error)
+        case timedOut
+    }
+
+    private struct ACPBrokerStartupTimedOutError: LocalizedError {
+        var errorDescription: String? {
+            "The local ACP broker did not respond in time. Try again to start a fresh connection."
+        }
+    }
+
     private enum SessionDisposalError: LocalizedError {
         case timedOut
 
@@ -3381,6 +3537,7 @@ extension ACPSessionManager {
         }
         let now = Int64(Date().timeIntervalSince1970)
         let requestedToken = attempt.leaseToken ?? UUID().uuidString
+        attempt.leaseToken = requestedToken
         do {
             guard let lease = try await persistence.claimLease(
                 sessionId: sessionId,
@@ -4096,6 +4253,7 @@ extension ACPSessionManager {
         let attempt = AttachmentAttempt()
         attachmentAttempts[sessionId] = attempt
         connectionOwnerIDs[sessionId] = attempt.id
+        brokerCallbackOwnerIDs[sessionId] = nil
         await runAttachmentAttempt(
             attempt,
             to: sessionId,
@@ -4481,14 +4639,12 @@ extension ACPSessionManager {
             if let injectedConnectionFactory {
                 connection = try injectedConnectionFactory(launchSpec, host, worktreePath)
             } else if host == nil, let brokerServiceFactory {
-                let service = try await brokerServiceFactory()
-                guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
-                connection = try await makeBrokerConnection(
-                    service: service,
+                connection = try await makeBrokerConnectionWithRecovery(
                     launchSpec: launchSpec,
                     sessionId: sessionId,
                     session: session,
-                    environment: agentEnvironment
+                    environment: agentEnvironment,
+                    attempt: attempt
                 )
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                     await connection.shutdown()
@@ -4881,6 +5037,7 @@ extension ACPSessionManager {
                 && session.hydrationState == .ready
                 && !session.transcript.messages.isEmpty
                 && !(session.remoteSessionId ?? "").isEmpty
+            let runnerConnectionOwnerID = attempt.id
             let runner = ACPSessionRunner(session: session, connection: connection,
                                           sessionId: sessionId,
                                           worktreePath: worktreePath,
@@ -4901,18 +5058,28 @@ extension ACPSessionManager {
                                           },
                                           onPersist: { [weak self] in self?.changeNotifier.post() },
                                           onMessageActivity: { [weak self] in
-                                              self?.noteMessageActivity(sessionId: sessionId)
+                                              guard let self,
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                              else { return }
+                                              self.noteMessageActivity(sessionId: sessionId)
                                           },
                                           onPromptWorkChanged: { [weak self] in
-                                              self?.onQueueChanged?(sessionId, self?.retainedCleanupHasActivePromptWork(for: sessionId) == true)
+                                              guard let self,
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                              else { return }
+                                              self.onQueueChanged?(sessionId, self.retainedCleanupHasActivePromptWork(for: sessionId))
                                           },
                                           onQueuedPromptDispatchRegistration: { [weak self] itemId in
                                               guard let self,
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID,
                                                     self.queuedPromptDispatchWaiters[sessionId]?[itemId] != nil
                                               else { return nil }
                                               return {
                                                   Task { @MainActor [weak self] in
-                                                      self?.resolveQueuedPromptDispatchWaiter(
+                                                      guard let self,
+                                                            self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                                      else { return }
+                                                      self.resolveQueuedPromptDispatchWaiter(
                                                         sessionId: sessionId,
                                                         itemId: itemId
                                                       )
@@ -4920,16 +5087,25 @@ extension ACPSessionManager {
                                               }
                                           },
                                           onSessionTitleUpdated: { [weak self] title in
-                                              self?.refreshRecent()
-                                              self?.onSessionTitleUpdated?(sessionId, title)
-                                              self?.changeNotifier.post()
+                                              guard let self,
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                              else { return }
+                                              self.refreshRecent()
+                                              self.onSessionTitleUpdated?(sessionId, title)
+                                              self.changeNotifier.post()
                                           },
                                           localTitlesEnabled: localTitlesEnabled,
                                           onModelsObserved: { [weak self] agentId, models in
-                                              self?.onModelsObserved?(agentId, models)
+                                              guard let self,
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                              else { return }
+                                              self.onModelsObserved?(agentId, models)
                                           },
                                           onPersistedConfigOptionValues: { [weak self] values in
-                                              guard let self, let session = self.sessions[sessionId] else {
+                                              guard let self,
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID,
+                                                    let session = self.sessions[sessionId]
+                                              else {
                                                   return
                                               }
                                               guard ACPConfigOption.currentValues(in: session.availableConfigOptions) == values else {
@@ -4942,7 +5118,10 @@ extension ACPSessionManager {
                                               self.replaceRecentRow(row)
                                           },
                                           onResumeTranscriptTail: { [weak self] in
-                                              self?.rememberTranscriptScrollAnchor(
+                                              guard let self,
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                              else { return }
+                                              self.rememberTranscriptScrollAnchor(
                                                 sessionId: sessionId,
                                                 anchorMessageId: nil,
                                                 anchorMessageIndex: nil,
@@ -4950,6 +5129,9 @@ extension ACPSessionManager {
                                               )
                                           },
                                           onCheckpointCapture: onCheckpointCapture,
+                                          isConnectionCurrent: { [weak self] in
+                                              self?.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                          },
                                           ownerInstanceId: instanceId,
                                           persistence: persistence,
                                           persistedMessageCount: session.transcript.messages.count,
@@ -4960,12 +5142,18 @@ extension ACPSessionManager {
                                               await self?.confirmedWriterLease(for: sessionId) == true
                                           },
                                           leaseFenceProvider: { [weak self] in
-                                              self?.leaseFence(sessionId: sessionId)
+                                              guard let self,
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                              else { return nil }
+                                              return self.leaseFence(sessionId: sessionId)
                                           })
             runner.onUnexpectedDisconnect = { [weak self] in
                 Task { @MainActor in
-                    self?.scheduleAutoReconnect(sessionId: sessionId)
-                    self?.onQueueChanged?(sessionId, self?.retainedCleanupHasAutoReconnectWork(for: sessionId) == true)
+                    guard let self,
+                          self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                    else { return }
+                    self.scheduleAutoReconnect(sessionId: sessionId)
+                    self.onQueueChanged?(sessionId, self.retainedCleanupHasAutoReconnectWork(for: sessionId))
                 }
             }
             var runnerStarted = false
@@ -5780,9 +5968,13 @@ extension ACPSessionManager {
         let replacementAttempt = AttachmentAttempt()
         attachmentAttempts[sessionId] = replacementAttempt
         connectionOwnerIDs[sessionId] = replacementAttempt.id
+        brokerCallbackOwnerIDs[sessionId] = nil
 
         let oldLeaseToken = oldAttempt?.leaseToken ?? ownedLeaseTokens[sessionId]
+        let oldAttachingConnection = attachingConnections.removeValue(forKey: sessionId)?.connection
         let oldRunner = runners.removeValue(forKey: sessionId)
+        let oldConnection = oldAttempt?.connection ?? oldAttachingConnection ?? oldRunner?.connection
+        let oldBrokerClient = oldAttempt?.brokerClient
         oldRunner?.invalidateActivePrompt()
         oldRunner?.stop()
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
@@ -5796,11 +5988,25 @@ extension ACPSessionManager {
         session.lastError = nil
         session.setupState = .checking
         if let oldRunner {
-            await oldRunner.flushPersistence()
+            _ = await runBounded(timeout: restartTeardownTimeout) {
+                await oldRunner.flushPersistence()
+            }
             guard sessions[sessionId] === session,
                   isCurrentAttachment(sessionId: sessionId, attempt: replacementAttempt, session: session)
             else { return }
         }
+        if let oldConnection {
+            _ = await runBounded(timeout: restartTeardownTimeout) {
+                await oldConnection.detach()
+            }
+        } else if let oldBrokerClient {
+            _ = await runBounded(timeout: restartTeardownTimeout) {
+                await oldBrokerClient.detach()
+            }
+        }
+        guard sessions[sessionId] === session,
+              isCurrentAttachment(sessionId: sessionId, attempt: replacementAttempt, session: session)
+        else { return }
         await releaseWriterLease(sessionId: sessionId, leaseToken: oldLeaseToken)
         guard sessions[sessionId] === session,
               isCurrentAttachment(sessionId: sessionId, attempt: replacementAttempt, session: session)
@@ -6593,6 +6799,32 @@ extension ACPSessionManager {
         return outcome
     }
 
+    private func runBoundedValue<Value: Sendable>(
+        timeout: Duration,
+        operation: @escaping () async throws -> Value
+    ) async -> BoundedValueOutcome<Value> {
+        let (stream, continuation) = AsyncStream<BoundedValueOutcome<Value>>.makeStream()
+        let operationTask = Task {
+            do {
+                continuation.yield(.succeeded(try await operation()))
+            } catch {
+                continuation.yield(.failed(error))
+            }
+        }
+        let timeoutTask = Task {
+            do {
+                try await Task.sleep(for: timeout)
+                continuation.yield(.timedOut)
+            } catch {}
+        }
+        var iterator = stream.makeAsyncIterator()
+        let outcome = await iterator.next() ?? .timedOut
+        continuation.finish()
+        operationTask.cancel()
+        timeoutTask.cancel()
+        return outcome
+    }
+
     private func tearDownSession(sessionId: ACPSession.ID, closeRemote: Bool) async throws {
         teardownCounts[sessionId, default: 0] += 1
         defer {
@@ -6618,6 +6850,8 @@ extension ACPSessionManager {
                 cancelledInFlightAttachments.insert(sessionId)
             }
         }
+        connectionOwnerIDs[sessionId] = nil
+        brokerCallbackOwnerIDs[sessionId] = nil
         let attaching = attachingConnections.removeValue(forKey: sessionId)
         // Reset transient session state SYNCHRONOUSLY before any await.
         // The steer task is unstructured and can resume during the
