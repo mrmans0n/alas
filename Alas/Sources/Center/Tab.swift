@@ -216,13 +216,15 @@ struct WebPreviewTabState: Codable, Equatable, Identifiable {
 struct RunReportTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeId: String
+    let projectId: String?
     let runID: String
     let isTransient: Bool
 
     var title: String { "Run Report" }
 
-    init(worktreeId: String, runID: String, isTransient: Bool = false) {
+    init(worktreeId: String, projectId: String? = nil, runID: String, isTransient: Bool = false) {
         self.worktreeId = worktreeId
+        self.projectId = projectId
         self.runID = runID
         self.isTransient = isTransient
         id = "run-report:\(runID)"
@@ -231,6 +233,7 @@ struct RunReportTabState: Codable, Equatable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case id
         case worktreeId
+        case projectId
         case runID
         case isTransient
     }
@@ -239,6 +242,7 @@ struct RunReportTabState: Codable, Equatable, Identifiable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(TabID.self, forKey: .id)
         worktreeId = try container.decode(String.self, forKey: .worktreeId)
+        projectId = try container.decodeIfPresent(String.self, forKey: .projectId)
         runID = try container.decode(String.self, forKey: .runID)
         isTransient = try container.decodeIfPresent(Bool.self, forKey: .isTransient) ?? false
     }

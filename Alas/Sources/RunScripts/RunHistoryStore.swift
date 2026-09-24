@@ -8,12 +8,24 @@ enum RunHistoryOutput: Equatable, Sendable {
     case unavailable
 }
 
+struct RunHistoryOwner: Hashable, Sendable {
+    let worktreeID: String
+    let projectId: String?
+}
+
+struct RunHistoryReportKey: Hashable, Sendable {
+    let owner: RunHistoryOwner
+    let runID: String
+}
+
 /// Immutable durable snapshot of one completed command.
 struct RunHistoryEntry: Identifiable, Equatable, Sendable {
     let id: String
     let scriptKey: String
     let scriptName: String
     let worktreeID: String
+    /// The owning project; nil only for legacy or otherwise unqualified runs.
+    let projectId: String?
     let branch: String
     let target: RunExecutionTarget
     let endpoint: URL?
@@ -31,6 +43,7 @@ struct RunHistoryEntry: Identifiable, Equatable, Sendable {
             scriptKey: scriptKey,
             scriptName: scriptName,
             worktreeID: worktreeID,
+            projectId: projectId,
             branch: branch,
             target: target,
             endpoint: endpoint,
@@ -49,6 +62,7 @@ struct RunHistorySummary: Identifiable, Equatable, Sendable {
     let scriptKey: String
     let scriptName: String
     let worktreeID: String
+    let projectId: String?
     let branch: String
     let target: RunExecutionTarget
     let endpoint: URL?
@@ -93,14 +107,17 @@ actor RunHistoryStore {
     @discardableResult
     func append(_ entry: RunHistoryEntry) throws -> Bool {
         try database.transaction {
+            if let projectId = entry.projectId {
+                try adoptLegacyRows(worktreeID: entry.worktreeID, projectID: projectId)
+            }
             let changes = try database.execChanges("""
             INSERT OR IGNORE INTO run_history (
-                run_id, script_key, script_name, worktree_id, branch,
+                run_id, script_key, script_name, worktree_id, project_id, branch,
                 target_host, target_working_directory, endpoint,
                 outcome, exit_code, started_at, finished_at,
                 conflict_kind, conflict_worktree_id, conflict_branch, conflict_script_name,
                 output_kind, output_text, output_truncated
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, bindings: entry.bindings)
             guard changes == 1 else { return false }
 
@@ -108,75 +125,125 @@ actor RunHistoryStore {
             DELETE FROM run_history
             WHERE run_id IN (
                 SELECT run_id FROM run_history
-                WHERE worktree_id = ?
+                WHERE worktree_id = ? AND project_id IS ?
                 ORDER BY finished_at DESC, run_id DESC
                 LIMIT -1 OFFSET ?
             )
-            """, bindings: [entry.worktreeID, maximumEntriesPerWorktree])
+            """, bindings: [entry.worktreeID, entry.projectId, maximumEntriesPerWorktree])
             return true
         }
     }
 
-    func page(worktreeID: String, offset: Int, limit: Int) throws -> RunHistoryPage {
+    func page(worktreeID: String, projectID: String? = nil, offset: Int, limit: Int) throws -> RunHistoryPage {
         precondition(offset >= 0)
         precondition(limit > 0)
-        let total = try totalCount(worktreeID: worktreeID)
-        let rows = try database.query("""
-        SELECT run_id, script_key, script_name, worktree_id, branch,
+        if let projectID { try adoptLegacyRows(worktreeID: worktreeID, projectID: projectID) }
+        let total = try totalCount(worktreeID: worktreeID, projectID: projectID)
+        let rows: [[String: Any?]]
+        if let projectID {
+            rows = try database.query("""
+            SELECT run_id, script_key, script_name, worktree_id, project_id, branch,
+                   target_host, target_working_directory, endpoint,
+                   outcome, exit_code, started_at, finished_at,
+                   conflict_kind, conflict_worktree_id, conflict_branch, conflict_script_name
+            FROM run_history
+            WHERE worktree_id = ? AND project_id = ?
+            ORDER BY finished_at DESC, run_id DESC
+            LIMIT ? OFFSET ?
+            """, bindings: [worktreeID, projectID, limit, offset])
+        } else {
+            rows = try database.query("""
+            SELECT run_id, script_key, script_name, worktree_id, project_id, branch,
                target_host, target_working_directory, endpoint,
                outcome, exit_code, started_at, finished_at,
                conflict_kind, conflict_worktree_id, conflict_branch, conflict_script_name
-        FROM run_history
-        WHERE worktree_id = ?
-        ORDER BY finished_at DESC, run_id DESC
-        LIMIT ? OFFSET ?
-        """, bindings: [worktreeID, limit, offset])
+            FROM run_history
+            WHERE worktree_id = ?
+            ORDER BY finished_at DESC, run_id DESC
+            LIMIT ? OFFSET ?
+            """, bindings: [worktreeID, limit, offset])
+        }
         return RunHistoryPage(entries: try rows.map(decodeSummary), totalCount: total)
     }
 
-    func entry(id: String) throws -> RunHistoryEntry? {
-        let rows = try database.query("""
-        SELECT run_id, script_key, script_name, worktree_id, branch,
+    func entry(id: String, worktreeID: String? = nil, projectID: String? = nil) throws -> RunHistoryEntry? {
+        if let worktreeID, let projectID { try adoptLegacyRows(worktreeID: worktreeID, projectID: projectID) }
+        let rows: [[String: Any?]]
+        if let worktreeID, let projectID {
+            rows = try database.query("""
+            SELECT run_id, script_key, script_name, worktree_id, project_id, branch,
+                   target_host, target_working_directory, endpoint,
+                   outcome, exit_code, started_at, finished_at,
+                   conflict_kind, conflict_worktree_id, conflict_branch, conflict_script_name,
+                   output_kind, output_text, output_truncated
+            FROM run_history
+            WHERE run_id = ? AND worktree_id = ? AND project_id = ?
+            LIMIT 1
+            """, bindings: [id, worktreeID, projectID])
+        } else {
+            let worktreeClause = worktreeID == nil ? "" : " AND worktree_id = ?"
+            var bindings: [Any?] = [id]
+            if let worktreeID { bindings.append(worktreeID) }
+            rows = try database.query("""
+            SELECT run_id, script_key, script_name, worktree_id, project_id, branch,
                target_host, target_working_directory, endpoint,
                outcome, exit_code, started_at, finished_at,
                conflict_kind, conflict_worktree_id, conflict_branch, conflict_script_name,
                output_kind, output_text, output_truncated
-        FROM run_history
-        WHERE run_id = ?
-        LIMIT 1
-        """, bindings: [id])
+            FROM run_history
+            WHERE run_id = ?\(worktreeClause)
+            LIMIT 1
+            """, bindings: bindings)
+        }
         return try rows.first.map(decodeEntry)
     }
 
-    func clear(worktreeID: String) throws {
-        try database.exec("DELETE FROM run_history WHERE worktree_id = ?", bindings: [worktreeID])
+    func clear(worktreeID: String, projectID: String? = nil) throws {
+        if let projectID {
+            try adoptLegacyRows(worktreeID: worktreeID, projectID: projectID)
+            try database.exec("DELETE FROM run_history WHERE worktree_id = ? AND project_id = ?", bindings: [worktreeID, projectID])
+        } else {
+            try database.exec("DELETE FROM run_history WHERE worktree_id = ?", bindings: [worktreeID])
+        }
     }
 
-    func clear(worktreeID: String, finishedOnOrBefore cutoff: Date) throws {
-        try database.exec(
-            "DELETE FROM run_history WHERE worktree_id = ? AND finished_at <= ?",
-            bindings: [worktreeID, cutoff.timeIntervalSince1970]
-        )
+    func clear(worktreeID: String, finishedOnOrBefore cutoff: Date, projectID: String? = nil) throws {
+        if let projectID { try adoptLegacyRows(worktreeID: worktreeID, projectID: projectID) }
+        let projectClause = projectID == nil ? "" : " AND project_id = ?"
+        var bindings: [Any?] = [worktreeID, cutoff.timeIntervalSince1970]
+        if let projectID { bindings.append(projectID) }
+        try database.exec("DELETE FROM run_history WHERE worktree_id = ? AND finished_at <= ?\(projectClause)", bindings: bindings)
     }
 
-    func purge(worktreeID: String) throws {
-        try clear(worktreeID: worktreeID)
+    func purge(worktreeID: String, projectID: String? = nil) throws {
+        try clear(worktreeID: worktreeID, projectID: projectID)
     }
 
-    func ids(worktreeID: String) throws -> Set<String> {
-        let rows = try database.query(
-            "SELECT run_id FROM run_history WHERE worktree_id = ?",
-            bindings: [worktreeID]
-        )
+    func ids(worktreeID: String, projectID: String? = nil) throws -> Set<String> {
+        if let projectID { try adoptLegacyRows(worktreeID: worktreeID, projectID: projectID) }
+        let projectClause = projectID == nil ? "" : " AND project_id = ?"
+        var bindings: [Any?] = [worktreeID]
+        if let projectID { bindings.append(projectID) }
+        let rows = try database.query("SELECT run_id FROM run_history WHERE worktree_id = ?\(projectClause)", bindings: bindings)
         return Set(try rows.map { try string("run_id", in: $0) })
     }
 
-    private func totalCount(worktreeID: String) throws -> Int {
-        let rows = try database.query(
-            "SELECT COUNT(*) AS count FROM run_history WHERE worktree_id = ?",
-            bindings: [worktreeID]
-        )
+    private func totalCount(worktreeID: String, projectID: String?) throws -> Int {
+        let projectClause = projectID == nil ? "" : " AND project_id = ?"
+        var bindings: [Any?] = [worktreeID]
+        if let projectID { bindings.append(projectID) }
+        let rows = try database.query("SELECT COUNT(*) AS count FROM run_history WHERE worktree_id = ?\(projectClause)", bindings: bindings)
         return Int((rows.first?["count"] as? Int64) ?? 0)
+    }
+
+    /// Old history rows predate project identity. The first project to query a
+    /// shared worktree adopts those ambiguous rows exactly once, rather than
+    /// exposing them in every project's history.
+    private func adoptLegacyRows(worktreeID: String, projectID: String) throws {
+        try database.exec(
+            "UPDATE run_history SET project_id = ? WHERE worktree_id = ? AND project_id IS NULL",
+            bindings: [projectID, worktreeID]
+        )
     }
 
     private static func migrate(_ database: SQLiteDatabase) throws {
@@ -186,6 +253,7 @@ actor RunHistoryStore {
             script_key TEXT NOT NULL,
             script_name TEXT NOT NULL,
             worktree_id TEXT NOT NULL,
+            project_id TEXT,
             branch TEXT NOT NULL,
             target_host TEXT,
             target_working_directory TEXT NOT NULL,
@@ -203,9 +271,17 @@ actor RunHistoryStore {
             output_truncated INTEGER NOT NULL DEFAULT 0
         )
         """)
+        let columns = try database.query("PRAGMA table_info(run_history)")
+        if !columns.contains(where: { $0["name"] as? String == "project_id" }) {
+            try database.exec("ALTER TABLE run_history ADD COLUMN project_id TEXT")
+        }
         try database.exec("""
         CREATE INDEX IF NOT EXISTS run_history_worktree_finished_idx
         ON run_history(worktree_id, finished_at DESC, run_id DESC)
+        """)
+        try database.exec("""
+        CREATE INDEX IF NOT EXISTS run_history_owner_finished_idx
+        ON run_history(worktree_id, project_id, finished_at DESC, run_id DESC)
         """)
     }
 
@@ -215,6 +291,7 @@ actor RunHistoryStore {
             scriptKey: try string("script_key", in: row),
             scriptName: try string("script_name", in: row),
             worktreeID: try string("worktree_id", in: row),
+            projectId: row["project_id"] as? String,
             branch: try string("branch", in: row),
             target: .init(
                 host: row["target_host"] as? String,
@@ -235,6 +312,7 @@ actor RunHistoryStore {
             scriptKey: summary.scriptKey,
             scriptName: summary.scriptName,
             worktreeID: summary.worktreeID,
+            projectId: summary.projectId,
             branch: summary.branch,
             target: summary.target,
             endpoint: summary.endpoint,
@@ -349,7 +427,7 @@ private extension RunHistoryEntry {
             outputTruncated = 0
         }
         return [
-            id, scriptKey, scriptName, worktreeID, branch,
+            id, scriptKey, scriptName, worktreeID, projectId, branch,
             target.host, target.workingDirectory, endpoint?.absoluteString,
             outcomeKind, exitCode, startedAt.timeIntervalSince1970, finishedAt.timeIntervalSince1970,
             conflictKind, conflictWorktreeID, conflictBranch, conflictScriptName,

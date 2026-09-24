@@ -1202,8 +1202,8 @@ final class TabsManager {
     }
 
     @discardableResult
-    func openOrFocusRunReport(worktreeId: String, runID: String, isTransient: Bool = false) -> Tab {
-        let state = RunReportTabState(worktreeId: worktreeId, runID: runID, isTransient: isTransient)
+    func openOrFocusRunReport(worktreeId: String, projectId: String? = nil, runID: String, isTransient: Bool = false) -> Tab {
+        let state = RunReportTabState(worktreeId: worktreeId, projectId: projectId, runID: runID, isTransient: isTransient)
         if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {
             activate(worktreeId: worktreeId, tabId: state.id)
             return tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) ?? .runReport(state)
@@ -1213,9 +1213,10 @@ final class TabsManager {
         return tab
     }
 
-    func closeRunReports(worktreeId: String) {
+    func closeRunReports(worktreeId: String, projectId: String? = nil) {
         let reportIDs = tabs(forWorktree: worktreeId).compactMap { tab -> TabID? in
-            guard case .runReport = tab else { return nil }
+            guard case .runReport(let report) = tab,
+                  projectId == nil || report.projectId == projectId else { return nil }
             return tab.id
         }
         for tabID in reportIDs {

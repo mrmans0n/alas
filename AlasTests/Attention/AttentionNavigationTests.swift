@@ -312,6 +312,7 @@ struct AttentionNavigationTests {
             scriptKey: "repo:build",
             scriptName: "Build",
             worktreeID: "worktree",
+            projectId: "project",
             branch: "main",
             target: .init(host: nil, workingDirectory: "/repo"),
             endpoint: nil,

@@ -1065,6 +1065,7 @@ struct AppStateCleanupTests {
             scriptKey: "repo:dev.sh",
             scriptName: "Dev",
             worktreeID: worktree.id,
+            projectId: project.id,
             branch: worktree.branch,
             target: .init(host: nil, workingDirectory: worktree.path.path),
             endpoint: nil,
@@ -1074,7 +1075,7 @@ struct AppStateCleanupTests {
             portConflict: nil,
             output: .available(text: "late\n", truncated: false)
         )
-        state.runHistoryPersistenceTaskWorktreeIDs[entry.id] = worktree.id
+        state.runHistoryPersistenceTaskOwners[entry.id] = RunHistoryOwner(worktreeID: worktree.id, projectId: project.id)
         state.runHistoryPersistenceTasks[entry.id] = Task { @MainActor [history] in
             try? await Task.sleep(for: .seconds(1))
             _ = try? await history.append(entry)

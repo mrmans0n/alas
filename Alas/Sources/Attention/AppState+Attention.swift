@@ -56,11 +56,11 @@ struct AttentionNavigationEnvironment {
                     output = body.hasSuffix(marker)
                         ? .available(text: String(body.dropLast(marker.count)), truncated: true)
                         : .available(text: body, truncated: false)
-                } else if appState.hasRunReport(worktreeID: worktree.id, runID: runID) {
-                    appState.openRunReport(worktreeID: worktree.id, runID: runID)
+                } else if appState.hasRunReport(worktreeID: worktree.id, projectId: worktree.projectID, runID: runID) {
+                    appState.openRunReport(worktreeID: worktree.id, projectId: worktree.projectID, runID: runID)
                     return true
-                } else if await appState.hasPersistedRunReport(worktreeID: worktree.id, runID: runID) {
-                    appState.openRunReport(worktreeID: worktree.id, runID: runID)
+                } else if await appState.hasPersistedRunReport(worktreeID: worktree.id, projectId: worktree.projectID, runID: runID) {
+                    appState.openRunReport(worktreeID: worktree.id, projectId: worktree.projectID, runID: runID)
                     return true
                 } else {
                     output = .unavailable
@@ -68,7 +68,7 @@ struct AttentionNavigationEnvironment {
                 let entry = RunHistoryEntry(
                     id: runID, scriptKey: "attention-history",
                     scriptName: item.title.replacingOccurrences(of: " failed with exit code [0-9]+$", with: "", options: .regularExpression),
-                    worktreeID: worktree.id, branch: item.display.branch,
+                    worktreeID: worktree.id, projectId: worktree.projectID, branch: item.display.branch,
                     target: .init(host: item.display.host, workingDirectory: worktree.display.path), endpoint: nil,
                     outcome: .failed(exitCode: Int32(item.title.split(separator: " ").last ?? "-1") ?? -1),
                     startedAt: item.occurredAt, finishedAt: item.occurredAt, portConflict: nil, output: output

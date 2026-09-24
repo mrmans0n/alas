@@ -26,7 +26,7 @@ struct RunReportTabView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: "\(tabState.id):\(state.runHistoryRevision(worktreeID: tabState.worktreeId))") {
+        .task(id: "\(tabState.id):\(state.runHistoryRevision(worktreeID: tabState.worktreeId, projectId: tabState.projectId))") {
             await load()
         }
     }
@@ -167,7 +167,11 @@ struct RunReportTabView: View {
 
     @MainActor
     private func load() async {
-        if let entry = state.transientRunReport(worktreeID: tabState.worktreeId, runID: tabState.runID) {
+        if let entry = state.transientRunReport(
+            worktreeID: tabState.worktreeId,
+            projectId: tabState.projectId,
+            runID: tabState.runID
+        ) {
             content = .report(entry)
             return
         }
@@ -176,7 +180,11 @@ struct RunReportTabView: View {
             return
         }
         do {
-            content = try await history.entry(id: tabState.runID).map(RunReportContent.report) ?? .missing
+            content = try await history.entry(
+                id: tabState.runID,
+                worktreeID: tabState.worktreeId,
+                projectID: tabState.projectId
+            ).map(RunReportContent.report) ?? .missing
         } catch {
             content = .error(error.localizedDescription)
         }

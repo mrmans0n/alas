@@ -39,6 +39,16 @@ struct ClosedTabAppStateTests {
         }
     }
 
+    private actor RepoHookLoadRecorder {
+        private(set) var roots: [String] = []
+        private(set) var hosts: [String?] = []
+
+        func record(root: String, host: String?) {
+            roots.append(root)
+            hosts.append(host)
+        }
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
@@ -228,8 +238,10 @@ struct ClosedTabAppStateTests {
             terminalSessionOpener: { _, project, _, _, _, _, _, _, _ in
                 openedProjectIDs.append(project.id)
                 return .init(id: "reopened-terminal-session", foregroundPid: { nil })
-            }
+            },
+            remoteAccelerationPreparer: { _ in }
         )
+        state.repoHookLoader = RepoHookLoader { _, _, _ in .missing }
         state.projectsManager = ProjectsManager(persistedProjects: [projectA, projectB])
         let spaceA = state.spacesManager.activeSpaceId
         state.spacesManager.addProject(projectA.id, toSpace: spaceA)
@@ -253,7 +265,9 @@ struct ClosedTabAppStateTests {
             title: "Project B shell",
             sessionId: "closed-project-b-session"
         )
-        state.requestCloseTab(worktreeId: sharedID, projectId: projectB.id, tabId: tab.id)
+        // The shared path bucket is displayed through A, but the tab itself
+        // was opened by B and must keep B's ownership when it is closed.
+        state.requestCloseTab(worktreeId: sharedID, projectId: projectA.id, tabId: tab.id)
 
         await state.reopenLastClosedTab()
 
@@ -1027,6 +1041,71 @@ struct ClosedTabAppStateTests {
         #expect(approvalRequest?.hook?.event == .sessionOpen)
         #expect(leafIDs == ["focused-session"])
         if approvalRequest != nil {
+            state.repoHookApprovalQueue.decide(.cancel)
+        }
+    }
+
+    @Test func splittingSharedPathTerminalUsesTheTabsProject() async {
+        let sharedID = "closed-tabs-split-shared-id"
+        let projectA = ProjectConfig(
+            id: "closed-tabs-split-project-a",
+            name: "Project A",
+            path: "/repos/project-a",
+            color: "blue",
+            addedAt: .distantPast
+        )
+        let projectB = ProjectConfig(
+            id: "closed-tabs-split-project-b",
+            name: "Project B",
+            path: "/repos/project-b",
+            color: "green",
+            addedAt: .distantPast,
+            host: "project-b-host"
+        )
+        let loadedHooks = RepoHookLoadRecorder()
+        let state = AppState(
+            store: MemoryStore(),
+            remoteAccelerationPreparer: { _ in }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [projectA, projectB])
+        let worktreeA = Worktree(
+            id: sharedID, projectId: projectA.id, name: "shared", branch: "shared",
+            path: URL(fileURLWithPath: "/repos/project-a/shared"), status: .clean, lastActivity: .distantPast
+        )
+        let worktreeB = Worktree(
+            id: sharedID, projectId: projectB.id, name: "shared", branch: "shared",
+            path: URL(fileURLWithPath: "/repos/project-b/shared"), status: .clean, lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(worktreeA)
+        state.projectsManager.insertOptimisticWorktree(worktreeB)
+        state.repoHookLoader = RepoHookLoader { _, worktreeRoot, host in
+            await loadedHooks.record(root: worktreeRoot.path, host: host)
+            return .data(Data("echo repo hook".utf8))
+        }
+        _ = state.tabs.appendTerminal(
+            worktreeId: sharedID,
+            projectId: projectB.id,
+            title: "Project B shell",
+            sessionId: "project-b-focused-session"
+        )
+        state.terminal.registry.register(TerminalSession(
+            id: "project-b-focused-session",
+            worktreeId: sharedID,
+            projectId: projectB.id,
+            surface: AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO()),
+            executable: "/bin/zsh",
+            args: []
+        ))
+
+        state.splitFocusedPane(worktreeId: sharedID, axis: .vertical)
+        let deadline = Date().addingTimeInterval(2)
+        while state.repoHookApprovalQueue.activeRequest == nil, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(await loadedHooks.roots == [worktreeB.path.path])
+        #expect(await loadedHooks.hosts == [projectB.host])
+        if state.repoHookApprovalQueue.activeRequest != nil {
             state.repoHookApprovalQueue.decide(.cancel)
         }
     }

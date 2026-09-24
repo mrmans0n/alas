@@ -657,57 +657,78 @@ extension AppState {
         }
     }
 
-    func openRunReport(worktreeID: String, runID: String) {
-        let tab = tabs.openOrFocusRunReport(worktreeId: worktreeID, runID: runID)
+    func openRunReport(worktreeID: String, projectId: String? = nil, runID: String) {
+        let tab = tabs.openOrFocusRunReport(worktreeId: worktreeID, projectId: projectId, runID: runID)
         activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
         acknowledgeAttentionSurface(worktreeID: worktreeID, target: .runScriptFailure(failureID: runID))
     }
 
     func openTransientRunReport(_ entry: RunHistoryEntry) {
-        transientRunReports[runReportKey(worktreeID: entry.worktreeID, runID: entry.id)] = entry
-        noteRunHistoryChanged(worktreeID: entry.worktreeID)
-        let tab = tabs.openOrFocusRunReport(worktreeId: entry.worktreeID, runID: entry.id, isTransient: true)
+        transientRunReports[runReportKey(worktreeID: entry.worktreeID, projectId: entry.projectId, runID: entry.id)] = entry
+        noteRunHistoryChanged(worktreeID: entry.worktreeID, projectId: entry.projectId)
+        let tab = tabs.openOrFocusRunReport(
+            worktreeId: entry.worktreeID,
+            projectId: entry.projectId,
+            runID: entry.id,
+            isTransient: true
+        )
         activateWorktreeCenterTab(worktreeId: entry.worktreeID, tabId: tab.id)
         acknowledgeAttentionSurface(worktreeID: entry.worktreeID, target: .runScriptFailure(failureID: entry.id))
     }
 
-    func transientRunReport(worktreeID: String, runID: String) -> RunHistoryEntry? {
-        transientRunReports[runReportKey(worktreeID: worktreeID, runID: runID)]
+    func transientRunReport(worktreeID: String, projectId: String? = nil, runID: String) -> RunHistoryEntry? {
+        if let projectId {
+            return transientRunReports[runReportKey(worktreeID: worktreeID, projectId: projectId, runID: runID)]
+        }
+        return transientRunReports.first { $0.key.owner.worktreeID == worktreeID && $0.key.runID == runID }?.value
     }
 
-    func hasRunReport(worktreeID: String, runID: String) -> Bool {
-        transientRunReport(worktreeID: worktreeID, runID: runID) != nil
-            || durableRunReportIDsByWorktreeID[worktreeID, default: []].contains(runID)
+    func hasRunReport(worktreeID: String, projectId: String? = nil, runID: String) -> Bool {
+        transientRunReport(worktreeID: worktreeID, projectId: projectId, runID: runID) != nil
+            || durableRunReportIDsByOwner[RunHistoryOwner(worktreeID: worktreeID, projectId: projectId), default: []].contains(runID)
     }
 
-    func hasPersistedRunReport(worktreeID: String, runID: String) async -> Bool {
-        await flushRunHistoryPersistence(worktreeID: worktreeID)
+    func hasPersistedRunReport(worktreeID: String, projectId: String? = nil, runID: String) async -> Bool {
+        await flushRunHistoryPersistence(worktreeID: worktreeID, projectId: projectId)
         guard let runHistoryStore,
-              (try? await runHistoryStore.entry(id: runID))?.worktreeID == worktreeID
+              (try? await runHistoryStore.entry(id: runID, worktreeID: worktreeID, projectID: projectId)) != nil
         else { return false }
-        durableRunReportIDsByWorktreeID[worktreeID, default: []].insert(runID)
+        durableRunReportIDsByOwner[RunHistoryOwner(worktreeID: worktreeID, projectId: projectId), default: []].insert(runID)
         return true
     }
 
-    func clearRunHistory(worktreeID: String) {
+    func clearRunHistory(worktreeID: String, projectId: String? = nil) {
         let cutoff = Date()
+        let owner = RunHistoryOwner(worktreeID: worktreeID, projectId: projectId)
         guard let runHistoryStore else {
-            transientRunReports = transientRunReports.filter { $0.value.worktreeID != worktreeID }
-            tabs.closeRunReports(worktreeId: worktreeID)
+            transientRunReports = transientRunReports.filter { projectId == nil
+                ? $0.key.owner.worktreeID != worktreeID
+                : $0.key.owner != owner }
+            tabs.closeRunReports(worktreeId: worktreeID, projectId: projectId)
             return
         }
         Task { @MainActor [weak self, runHistoryStore] in
             guard let self else { return }
-            await self.flushRunHistoryPersistence(worktreeID: worktreeID)
+            await self.flushRunHistoryPersistence(worktreeID: worktreeID, projectId: projectId)
             do {
                 try await RunHistoryPersistenceRetry.attempt {
-                    try await runHistoryStore.clear(worktreeID: worktreeID, finishedOnOrBefore: cutoff)
+                    try await runHistoryStore.clear(
+                        worktreeID: worktreeID,
+                        finishedOnOrBefore: cutoff,
+                        projectID: projectId
+                    )
                 }
-                self.runRecords.purgeFinished(worktreeID: worktreeID, finishedOnOrBefore: cutoff)
-                self.durableRunReportIDsByWorktreeID[worktreeID] = try await runHistoryStore.ids(worktreeID: worktreeID)
-                self.transientRunReports = self.transientRunReports.filter { $0.value.worktreeID != worktreeID }
-                self.tabs.closeRunReports(worktreeId: worktreeID)
-                self.noteRunHistoryChanged(worktreeID: worktreeID)
+                if let projectId {
+                    self.runRecords.purgeFinished(worktreeID: worktreeID, projectId: projectId, finishedOnOrBefore: cutoff)
+                } else {
+                    self.runRecords.purgeFinished(worktreeID: worktreeID, finishedOnOrBefore: cutoff)
+                }
+                self.durableRunReportIDsByOwner[owner] = try await runHistoryStore.ids(worktreeID: worktreeID, projectID: projectId)
+                self.transientRunReports = self.transientRunReports.filter { projectId == nil
+                    ? $0.key.owner.worktreeID != worktreeID
+                    : $0.key.owner != owner }
+                self.tabs.closeRunReports(worktreeId: worktreeID, projectId: projectId)
+                self.noteRunHistoryChanged(worktreeID: worktreeID, projectId: projectId)
             } catch {
                 self.runHistoryError = "Could not clear run history: \(error.localizedDescription)"
                 self.showFileActionError(title: "Run History Failed", message: "Could not clear run history: \(error.localizedDescription)")
@@ -715,29 +736,31 @@ extension AppState {
         }
     }
 
-    private func runReportKey(worktreeID: String, runID: String) -> String {
-        "\(worktreeID)\u{0}\(runID)"
+    private func runReportKey(worktreeID: String, projectId: String?, runID: String) -> RunHistoryReportKey {
+        RunHistoryReportKey(owner: RunHistoryOwner(worktreeID: worktreeID, projectId: projectId), runID: runID)
     }
 
-    func noteRunHistoryChanged(worktreeID: String) {
-        runHistoryRevisionsByWorktreeID[worktreeID, default: 0] += 1
+    func noteRunHistoryChanged(worktreeID: String, projectId: String? = nil) {
+        let owner = RunHistoryOwner(worktreeID: worktreeID, projectId: projectId)
+        runHistoryRevisionsByOwner[owner, default: 0] += 1
         runHistoryRevision += 1
     }
 
-    func runHistoryRevision(worktreeID: String) -> Int {
-        runHistoryRevisionsByWorktreeID[worktreeID, default: 0]
+    func runHistoryRevision(worktreeID: String, projectId: String? = nil) -> Int {
+        runHistoryRevisionsByOwner[RunHistoryOwner(worktreeID: worktreeID, projectId: projectId), default: 0]
     }
 
     @MainActor
-    func reloadDurableRunReportIDs(worktreeID: String) async {
+    func reloadDurableRunReportIDs(worktreeID: String, projectId: String? = nil) async {
+        let owner = RunHistoryOwner(worktreeID: worktreeID, projectId: projectId)
         guard let runHistoryStore else {
-            durableRunReportIDsByWorktreeID[worktreeID] = []
+            durableRunReportIDsByOwner[owner] = []
             return
         }
         do {
-            durableRunReportIDsByWorktreeID[worktreeID] = try await runHistoryStore.ids(worktreeID: worktreeID)
+            durableRunReportIDsByOwner[owner] = try await runHistoryStore.ids(worktreeID: worktreeID, projectID: projectId)
         } catch {
-            durableRunReportIDsByWorktreeID[worktreeID] = []
+            durableRunReportIDsByOwner[owner] = []
         }
     }
 
@@ -798,15 +821,19 @@ extension AppState {
             releaseRunHistoryCaptureInBackground(capture)
             return
         }
-        runHistoryPersistenceTaskWorktreeIDs[record.id] = record.worktreeID
+        let historyOwner = RunHistoryOwner(worktreeID: record.worktreeID, projectId: record.projectId)
+        runHistoryPersistenceTaskOwners[record.id] = historyOwner
         runHistoryPersistenceTasks[record.id] = Task { @MainActor [weak self, runHistoryStore] in
             let output = await Self.runHistoryOutput(for: capture)
             let entry = Self.runHistoryEntry(for: record, output: output) ?? entry
             do {
                 let inserted = try await RunHistoryPersistenceRetry.attempt { try await runHistoryStore.append(entry) }
                 if inserted {
-                    self?.durableRunReportIDsByWorktreeID[record.worktreeID] = try await runHistoryStore.ids(worktreeID: record.worktreeID)
-                    self?.noteRunHistoryChanged(worktreeID: record.worktreeID)
+                    self?.durableRunReportIDsByOwner[historyOwner] = try await runHistoryStore.ids(
+                        worktreeID: record.worktreeID,
+                        projectID: record.projectId
+                    )
+                    self?.noteRunHistoryChanged(worktreeID: record.worktreeID, projectId: record.projectId)
                 }
             } catch {
                 self?.runHistoryError = "Could not save run history: \(error.localizedDescription)"
@@ -817,7 +844,7 @@ extension AppState {
             }
             await self?.releaseRunHistoryCapture(capture)
             self?.runHistoryPersistenceTasks.removeValue(forKey: record.id)
-            self?.runHistoryPersistenceTaskWorktreeIDs.removeValue(forKey: record.id)
+            self?.runHistoryPersistenceTaskOwners.removeValue(forKey: record.id)
         }
     }
 
@@ -830,6 +857,7 @@ extension AppState {
             scriptKey: record.scriptKey,
             scriptName: record.scriptName,
             worktreeID: record.worktreeID,
+            projectId: record.projectId,
             branch: record.branch,
             target: record.target,
             endpoint: record.endpoint,
@@ -887,10 +915,12 @@ extension AppState {
         return location
     }
 
-    func flushRunHistoryPersistence(worktreeID: String? = nil) async {
+    func flushRunHistoryPersistence(worktreeID: String? = nil, projectId: String? = nil) async {
         let tasks: [Task<Void, Never>] = runHistoryPersistenceTasks.compactMap { entry in
             let (runID, task) = entry
-            guard worktreeID == nil || runHistoryPersistenceTaskWorktreeIDs[runID] == worktreeID else { return nil }
+            let owner = runHistoryPersistenceTaskOwners[runID]
+            guard worktreeID == nil || owner?.worktreeID == worktreeID,
+                  projectId == nil || owner?.projectId == projectId else { return nil }
             return task
         }
         for task in tasks {
@@ -1116,8 +1146,8 @@ extension AppState {
             }
             runRecords.purge(worktreeID: worktreeID)
             runScriptFailureQueue.purge(worktreeID: worktreeID)
-            transientRunReports = transientRunReports.filter { $0.value.worktreeID != worktreeID }
-            durableRunReportIDsByWorktreeID[worktreeID] = []
+            transientRunReports = transientRunReports.filter { $0.key.owner.worktreeID != worktreeID }
+            durableRunReportIDsByOwner = durableRunReportIDsByOwner.filter { $0.key.worktreeID != worktreeID }
             tabs.closeRunReports(worktreeId: worktreeID)
             if purgeHistory, let runHistoryStore {
                 historyPurgeTask = Task { @MainActor [weak self, runHistoryStore] in

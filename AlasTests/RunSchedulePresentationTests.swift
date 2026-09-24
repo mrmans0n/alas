@@ -456,6 +456,7 @@ struct RunSchedulePresentationTests {
     @Test func aLinkedRunIsNamedByScriptAndBranch() {
         let run = RunScheduleFiring.RunReference(
             worktreeID: "wt-1",
+            projectID: nil,
             branch: "sched/nightly",
             runID: "run-1",
             scriptName: "build.sh (repo)"

@@ -212,12 +212,12 @@ final class AppState {
     /// tab functional when Application Support cannot be opened.
     @ObservationIgnored let runHistoryStore: RunHistoryStore?
     var runHistoryRevision = 0
-    var runHistoryRevisionsByWorktreeID: [String: Int] = [:]
+    var runHistoryRevisionsByOwner: [RunHistoryOwner: Int] = [:]
     var runHistoryError: String?
-    @ObservationIgnored var transientRunReports: [String: RunHistoryEntry] = [:]
-    var durableRunReportIDsByWorktreeID: [String: Set<String>] = [:]
+    @ObservationIgnored var transientRunReports: [RunHistoryReportKey: RunHistoryEntry] = [:]
+    var durableRunReportIDsByOwner: [RunHistoryOwner: Set<String>] = [:]
     @ObservationIgnored var runHistoryPersistenceTasks: [String: Task<Void, Never>] = [:]
-    @ObservationIgnored var runHistoryPersistenceTaskWorktreeIDs: [String: String] = [:]
+    @ObservationIgnored var runHistoryPersistenceTaskOwners: [String: RunHistoryOwner] = [:]
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     let attentionStore: AttentionStore
@@ -7304,7 +7304,7 @@ final class AppState {
               let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
               case .terminal(let state) = tab,
               let focused = state.root.find(leafId: state.focusedLeafId)?.leaf,
-              let worktree = worktree(withId: worktreeId),
+              let worktree = worktree(withId: worktreeId, inProjectId: state.projectId),
               let project = projects.first(where: { $0.id == worktree.projectId }),
               let focusedSession = terminal.registry.session(for: focused.id) else { return }
 
@@ -7322,8 +7322,9 @@ final class AppState {
             guard tabs.activeTabId(forWorktree: worktreeId) == activeId,
                   let currentTab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
                   case .terminal(let currentState) = currentTab,
+                  currentState.projectId == state.projectId,
                   currentState.focusedLeafId == focused.id,
-                  self.worktree(withId: worktreeId)?.path == worktree.path,
+                  self.worktree(withId: worktreeId, inProjectId: state.projectId)?.path == worktree.path,
                   projects.first(where: { $0.id == project.id })?.path == project.path,
                   terminal.registry.session(for: focused.id) != nil,
                   !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(for: worktree)) else {
@@ -7434,7 +7435,7 @@ final class AppState {
     func closeFocusedPane(worktreeId: String, projectId: String? = nil) {
         guard let activeId = tabs.activeTabId(forWorktree: worktreeId),
               let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
-              case .terminal = tab else { return }
+              case .terminal(let terminalState) = tab else { return }
         guard let outcome = tabs.removeFocusedLeaf(worktreeId: worktreeId, tabId: activeId) else { return }
         if case .tabRemoved = outcome {
             requestCloseTab(worktreeId: worktreeId, projectId: projectId, tabId: activeId)
@@ -7444,7 +7445,7 @@ final class AppState {
             closeTerminalSession(
                 id: closedLeafId,
                 worktreeId: worktreeId,
-                projectPath: projectPath(forWorktreeId: worktreeId)
+                projectPath: projectPath(forWorktreeId: worktreeId, projectId: terminalState.projectId ?? projectId)
             )
         }
     }
@@ -8650,10 +8651,9 @@ final class AppState {
         cancelRunScriptMonitors: Bool = true
     ) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
-        let projectPath = projectId.flatMap { id in projects.first(where: { $0.id == id })?.path }
-            ?? projectPath(forWorktreeId: worktreeId)
         if let tab = allTabs.first(where: { $0.id == tabId }) {
             if case .terminal(let s) = tab {
+                let projectPath = projectPath(forWorktreeId: worktreeId, projectId: s.projectId ?? projectId)
                 for leaf in s.root.leaves() {
                     if cancelRunScriptMonitors {
                         scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
@@ -8678,15 +8678,21 @@ final class AppState {
            !confirmCloseTab(prompt) {
             return
         }
+        let owningProjectID: String? = {
+            if case .terminal(let terminalState) = tab, let projectID = terminalState.projectId {
+                return projectID
+            }
+            return projectId ?? worktree(withId: worktreeId)?.projectId
+        }()
         closedTabHistory.record(ClosedTabEntry(
             snapshot: .worktree(
                 worktreeID: worktreeId,
-                projectID: projectId ?? worktree(withId: worktreeId)?.projectId,
+                projectID: owningProjectID,
                 tab: tab
             ),
             placement: .init(tabID: tabId, orderedIDs: tabs.tabs(forWorktree: worktreeId).map(\.id))
         ))
-        closeTab(worktreeId: worktreeId, tabId: tabId)
+        closeTab(worktreeId: worktreeId, projectId: owningProjectID, tabId: tabId)
     }
 
     private func confirmCloseTab(_ prompt: CloseTabConfirmationPolicy.Prompt) -> Bool {
@@ -9116,10 +9122,11 @@ final class AppState {
         guard case .terminal(let oldState) = tab else {
             return
         }
+        let owningProjectID = oldState.projectId ?? projectID ?? worktree(withId: worktreeID)?.projectId
 
         if tabs.tabs(forWorktree: worktreeID).contains(where: { $0.id == tab.id }) {
-            if let projectID = projectID ?? oldState.projectId ?? worktree(withId: worktreeID)?.projectId {
-                focusGlobalWorktree(id: worktreeID, projectId: projectID)
+            if let owningProjectID {
+                focusGlobalWorktree(id: worktreeID, projectId: owningProjectID)
             } else {
                 selectWorktree(id: worktreeID)
             }
@@ -9132,7 +9139,7 @@ final class AppState {
         // exist under two projects, and the first match for the id may be the
         // other project's checkout — which would hand this terminal B's session
         // to A, or bypass B's deletion claim.
-        guard let initialWorktree = worktree(withId: worktreeID, inProjectId: projectID),
+        guard let initialWorktree = worktree(withId: worktreeID, inProjectId: owningProjectID),
               let initialProject = projects.first(where: { $0.id == initialWorktree.projectId }) else {
             showFileActionError(
                 title: "Reopen Tab Failed",
@@ -9144,7 +9151,7 @@ final class AppState {
         await prepareRemoteAccelerationIfNeeded(for: initialProject)
 
         guard closedTabHistory.last?.id == entry.id else { return }
-        guard let worktree = worktree(withId: worktreeID, inProjectId: projectID),
+        guard let worktree = worktree(withId: worktreeID, inProjectId: owningProjectID),
               let project = projects.first(where: { $0.id == worktree.projectId }) else {
             closedTabHistory.remove(id: entry.id)
             return
@@ -9159,7 +9166,7 @@ final class AppState {
                 context: .sessionOpen
             )
             guard closedTabHistory.last?.id == entry.id else { return }
-            guard self.worktree(withId: worktreeID)?.path == worktree.path,
+            guard self.worktree(withId: worktreeID, inProjectId: owningProjectID)?.path == worktree.path,
                   projects.first(where: { $0.id == project.id })?.path == project.path else {
                 closedTabHistory.remove(id: entry.id)
                 return
@@ -9185,7 +9192,7 @@ final class AppState {
                 }
             }
 
-            let restoredProjectID = projectID ?? oldState.projectId ?? worktree.projectId
+            let restoredProjectID = owningProjectID ?? worktree.projectId
             let reopened = TerminalTabState(
                 id: oldState.id,
                 title: oldState.title,
@@ -9468,8 +9475,8 @@ final class AppState {
         }
     }
 
-    private func projectPath(forWorktreeId id: String) -> String? {
-        guard let worktree = worktree(withId: id) else { return nil }
+    private func projectPath(forWorktreeId id: String, projectId: String? = nil) -> String? {
+        guard let worktree = worktree(withId: id, inProjectId: projectId) else { return nil }
         return projects.first(where: { $0.id == worktree.projectId })?.path
     }
 

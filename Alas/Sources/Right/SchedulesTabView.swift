@@ -53,7 +53,7 @@ struct SchedulesTabView: View {
         .onReceive(ticker) { now = $0 }
         .onChange(of: state.runScheduler.evaluationGeneration) { now = Date() }
         .task(id: historyPrimingToken) {
-            await state.primeScheduleRunReportIDs(historyWorktreeIDs)
+            await state.primeScheduleRunReportIDs(historyWorktreeOwners)
         }
         .sheet(item: $editing) { target in
             switch target {
@@ -93,20 +93,21 @@ struct SchedulesTabView: View {
     /// leave the task unfired and the restored links dead until this pane was
     /// remounted.
     private var historyPrimingToken: [String] {
-        historyWorktreeIDs.map { id in
-            "\(id):\(state.visibleProjectForWorktree(id) != nil ? 1 : 0)"
+        historyWorktreeOwners.map { owner in
+            "\(owner.worktreeID):\(owner.projectId ?? "legacy"):\(state.visibleProjectForWorktree(owner.worktreeID, projectId: owner.projectId) != nil ? 1 : 0)"
         }
     }
 
     /// Worktrees the visible histories link runs in, deduplicated and stable.
-    private var historyWorktreeIDs: [String] {
-        var seen: Set<String> = []
-        var ordered: [String] = []
+    private var historyWorktreeOwners: [RunHistoryOwner] {
+        var seen: Set<RunHistoryOwner> = []
+        var ordered: [RunHistoryOwner] = []
         for schedule in schedules {
             for firing in state.runScheduler.firings(for: schedule.id) {
-                for run in firing.runs where !seen.contains(run.worktreeID) {
-                    seen.insert(run.worktreeID)
-                    ordered.append(run.worktreeID)
+                for run in firing.runs {
+                    let owner = RunHistoryOwner(worktreeID: run.worktreeID, projectId: run.projectID)
+                    guard seen.insert(owner).inserted else { continue }
+                    ordered.append(owner)
                 }
             }
         }

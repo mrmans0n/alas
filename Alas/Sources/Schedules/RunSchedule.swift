@@ -244,6 +244,7 @@ struct RunScheduleFiring: Codable, Identifiable, Equatable, Hashable, Sendable {
     /// the script file is gone, even though the report itself is then absent.
     struct RunReference: Codable, Equatable, Hashable, Sendable {
         let worktreeID: String
+        let projectID: String?
         let branch: String
         let runID: String
         let scriptName: String

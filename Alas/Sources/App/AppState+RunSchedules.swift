@@ -93,8 +93,8 @@ extension AppState {
     /// selecting an archived id would empty the centre pane and strand the tab.
     /// The entry is still named in that case; it is just not a link.
     func canOpenScheduleFiringRun(_ run: RunScheduleFiring.RunReference) -> Bool {
-        hasRunReport(worktreeID: run.worktreeID, runID: run.runID)
-            && visibleProjectForWorktree(run.worktreeID) != nil
+        hasRunReport(worktreeID: run.worktreeID, projectId: run.projectID, runID: run.runID)
+            && visibleProjectForWorktree(run.worktreeID, projectId: run.projectID) != nil
     }
 
     /// The project owning `worktreeID`, and only while that worktree is one
@@ -104,8 +104,10 @@ extension AppState {
     /// Also the Schedules pane's signal that visibility changed, because
     /// archiving and unarchiving alters what priming should do without
     /// altering which worktrees a history references.
-    func visibleProjectForWorktree(_ worktreeID: String) -> ProjectConfig? {
+    func visibleProjectForWorktree(_ worktreeID: String, projectId: String? = nil) -> ProjectConfig? {
         projects.first { project in
+            (projectId == nil || project.id == projectId)
+                &&
             projectsManager.visibleWorktrees(projectId: project.id).contains { $0.id == worktreeID }
         }
     }
@@ -124,9 +126,9 @@ extension AppState {
     /// Firing in the background still never steals the selection; only
     /// following a link does, because that is an explicit request to go there.
     func openScheduleFiringRun(_ run: RunScheduleFiring.RunReference) {
-        guard let project = visibleProjectForWorktree(run.worktreeID) else { return }
+        guard let project = visibleProjectForWorktree(run.worktreeID, projectId: run.projectID) else { return }
         focusGlobalWorktree(id: run.worktreeID, projectId: project.id)
-        openRunReport(worktreeID: run.worktreeID, runID: run.runID)
+        openRunReport(worktreeID: run.worktreeID, projectId: run.projectID ?? project.id, runID: run.runID)
     }
 
     /// Loads the durable report ids for worktrees a schedule's history points
@@ -141,10 +143,10 @@ extension AppState {
     /// as already primed and leave its links dead for the rest of the session.
     /// Every worktree reaching here has at least one firing run, so an empty
     /// entry is always worth one query.
-    func primeScheduleRunReportIDs(_ worktreeIDs: [String]) async {
-        for worktreeID in worktreeIDs
-            where durableRunReportIDsByWorktreeID[worktreeID]?.isEmpty != false {
-            await reloadDurableRunReportIDs(worktreeID: worktreeID)
+    func primeScheduleRunReportIDs(_ owners: [RunHistoryOwner]) async {
+        for owner in owners
+            where durableRunReportIDsByOwner[owner]?.isEmpty != false {
+            await reloadDurableRunReportIDs(worktreeID: owner.worktreeID, projectId: owner.projectId)
         }
     }
 
@@ -387,6 +389,7 @@ extension AppState {
             case .started(let runID):
                 reference = RunScheduleFiring.RunReference(
                     worktreeID: worktree.id,
+                    projectID: worktree.projectId,
                     branch: worktree.branch,
                     runID: runID,
                     scriptName: script.displayName

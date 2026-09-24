@@ -47,6 +47,7 @@ struct RunTabView: View {
     @State private var scripts: [RunScript] = []
     @State private var scriptCatalogError: String?
     @State private var activeWorktreeID: String?
+    @State private var activeHistoryOwner: RunHistoryOwner?
     /// Keeps the "no scripts yet" copy from flashing before the first scan.
     @State private var scannedWorktreeID: String?
     /// Drives the relative timestamps ("3m ago") without re-scanning anything.
@@ -93,13 +94,15 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .task(id: worktree.id) {
+        .task(id: "\(worktree.id):\(worktree.projectId)") {
             let startedWorktreeID = worktree.id
+            let historyOwner = RunHistoryOwner(worktreeID: worktree.id, projectId: worktree.projectId)
             activeWorktreeID = startedWorktreeID
+            activeHistoryOwner = historyOwner
             historyPageIndex = 0
             historyPage = .init(entries: [], totalCount: 0)
             historyError = nil
-            observedRunHistoryRevision = state.runHistoryRevision(worktreeID: startedWorktreeID)
+            observedRunHistoryRevision = state.runHistoryRevision(worktreeID: startedWorktreeID, projectId: worktree.projectId)
             scripts = []
             scriptCatalogError = nil
             scannedWorktreeID = RunTabLoadingPresentation.scanMarkerAfterStartingRefresh(
@@ -124,7 +127,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             refreshScriptsFromControl()
         }
         .onChange(of: state.runHistoryRevision) {
-            let revision = state.runHistoryRevision(worktreeID: worktree.id)
+            let revision = state.runHistoryRevision(worktreeID: worktree.id, projectId: worktree.projectId)
             guard revision != observedRunHistoryRevision else { return }
             observedRunHistoryRevision = revision
             historyPageIndex = 0
@@ -136,7 +139,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             titleVisibility: .visible
         ) {
             Button("Clear History", role: .destructive) {
-                state.clearRunHistory(worktreeID: worktree.id)
+                state.clearRunHistory(worktreeID: worktree.id, projectId: worktree.projectId)
             }
         } message: {
             Text("This clears completed runs for this worktree across all branches. Active runs keep running.")
@@ -190,7 +193,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
                 script: script,
                 record: record,
                 hasTerminal: state.runningScriptTab(for: script, in: worktree) != nil,
-                hasReport: record.map { state.hasRunReport(worktreeID: worktree.id, runID: $0.id) } ?? false,
+                hasReport: record.map { state.hasRunReport(worktreeID: worktree.id, projectId: worktree.projectId, runID: $0.id) } ?? false,
                 target: record?.target ?? state.runExecutionTarget(for: script, in: worktree)
             ),
             now: now
@@ -235,7 +238,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             guard let script = await freshScript(matching: staleScript) else { return }
             state.openRunEndpoint(script, in: worktree)
         case .showReport(let runID):
-            state.openRunReport(worktreeID: worktree.id, runID: runID)
+            state.openRunReport(worktreeID: worktree.id, projectId: worktree.projectId, runID: runID)
         case .edit:
             state.editScript(staleScript, in: worktree)
         }
@@ -376,7 +379,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             } else {
                 ForEach(historyPage.entries) { entry in
                     Button {
-                        state.openRunReport(worktreeID: worktree.id, runID: entry.id)
+                        state.openRunReport(worktreeID: worktree.id, projectId: worktree.projectId, runID: entry.id)
                     } label: {
                         HStack(spacing: 8) {
                             RunStatusDot(tone: historyTone(entry.outcome), isActive: false)
@@ -436,35 +439,43 @@ RightPaneLoadingSkeletonView(activeTab: .run)
 
     private func loadHistory() async {
         let requestedWorktreeID = worktree.id
+        let requestedOwner = RunHistoryOwner(worktreeID: worktree.id, projectId: worktree.projectId)
         let requestedPageIndex = historyPageIndex
-        let requestedRevision = state.runHistoryRevision(worktreeID: requestedWorktreeID)
+        let requestedRevision = state.runHistoryRevision(worktreeID: requestedWorktreeID, projectId: worktree.projectId)
         guard let history = state.runHistoryStore else {
             historyError = "Run history storage is unavailable."
             historyPage = .init(entries: [], totalCount: 0)
             return
         }
         do {
-            let page = try await history.page(worktreeID: requestedWorktreeID, offset: requestedPageIndex * 20, limit: 20)
-            await state.reloadDurableRunReportIDs(worktreeID: requestedWorktreeID)
-            guard RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
+            let page = try await history.page(
+                worktreeID: requestedWorktreeID,
+                projectID: requestedOwner.projectId,
+                offset: requestedPageIndex * 20,
+                limit: 20
+            )
+            await state.reloadDurableRunReportIDs(worktreeID: requestedWorktreeID, projectId: requestedOwner.projectId)
+            guard activeHistoryOwner == requestedOwner,
+                  RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
                 requestedWorktreeID: requestedWorktreeID,
                 requestedPageIndex: requestedPageIndex,
                 requestedRevision: requestedRevision,
                 activeWorktreeID: activeWorktreeID,
                 currentPageIndex: historyPageIndex,
-                currentRevision: state.runHistoryRevision(worktreeID: requestedWorktreeID),
+                currentRevision: state.runHistoryRevision(worktreeID: requestedWorktreeID, projectId: requestedOwner.projectId),
                 isCancelled: Task.isCancelled
             ) else { return }
             historyError = nil
             historyPage = page
         } catch {
-            guard RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
+            guard activeHistoryOwner == requestedOwner,
+                  RunTabLoadingPresentation.acceptsHistoryLoadCompletion(
                 requestedWorktreeID: requestedWorktreeID,
                 requestedPageIndex: requestedPageIndex,
                 requestedRevision: requestedRevision,
                 activeWorktreeID: activeWorktreeID,
                 currentPageIndex: historyPageIndex,
-                currentRevision: state.runHistoryRevision(worktreeID: requestedWorktreeID),
+                currentRevision: state.runHistoryRevision(worktreeID: requestedWorktreeID, projectId: requestedOwner.projectId),
                 isCancelled: Task.isCancelled
             ) else { return }
             historyError = error.localizedDescription

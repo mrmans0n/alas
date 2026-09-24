@@ -23,7 +23,7 @@ struct RunReportTabTests {
     }
 
     @Test func tabStateRoundTripsWithStableRunIdentity() throws {
-        let state = RunReportTabState(worktreeId: "wt-1", runID: "run-1")
+        let state = RunReportTabState(worktreeId: "wt-1", projectId: "project-b", runID: "run-1")
         let tab = Tab.runReport(state)
 
         let restored = try JSONDecoder().decode(Tab.self, from: JSONEncoder().encode(tab))
@@ -91,5 +91,23 @@ struct RunReportTabTests {
 
         #expect(manager.tabs(forWorktree: firstWorktreeID).isEmpty)
         #expect(manager.tabs(forWorktree: secondWorktreeID).map(\.id) == [second.id])
+    }
+
+    @Test func closingReportsIsScopedToProjectWhenPathsAreShared() {
+        let worktreeID = "run-report-shared-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeID)) }
+        let manager = TabsManager()
+        let projectA = manager.openOrFocusRunReport(worktreeId: worktreeID, projectId: "project-a", runID: "run-a")
+        let projectB = manager.openOrFocusRunReport(worktreeId: worktreeID, projectId: "project-b", runID: "run-b")
+
+        manager.closeRunReports(worktreeId: worktreeID, projectId: "project-a")
+
+        #expect(manager.tabs(forWorktree: worktreeID).map(\.id) == [projectB.id])
+        guard case .runReport(let report) = projectB else {
+            Issue.record("Expected project B's report tab")
+            return
+        }
+        #expect(report.projectId == "project-b")
+        #expect(manager.tabs(forWorktree: worktreeID).contains(where: { $0.id == projectA.id }) == false)
     }
 }

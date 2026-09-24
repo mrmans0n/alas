@@ -151,6 +151,7 @@ struct RunTabPresentationTests {
             scriptKey: "repo:dev.sh",
             scriptName: "Dev Server",
             worktreeID: "wt-1",
+            projectId: "project-a",
             branch: "feature/run-history",
             target: RunExecutionTarget(host: nil, workingDirectory: "/wt"),
             endpoint: nil,

@@ -757,6 +757,7 @@ struct AppStateRunRecordTests {
             scriptKey: fixture.script.key,
             scriptName: fixture.script.displayName,
             worktreeID: fixture.worktree.id,
+            projectId: fixture.worktree.projectId,
             branch: fixture.worktree.branch,
             target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
             endpoint: nil,
@@ -803,6 +804,7 @@ struct AppStateRunRecordTests {
             scriptKey: fixture.script.key,
             scriptName: fixture.script.displayName,
             worktreeID: fixture.worktree.id,
+            projectId: fixture.worktree.projectId,
             branch: fixture.worktree.branch,
             target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
             endpoint: nil,
@@ -813,7 +815,7 @@ struct AppStateRunRecordTests {
             output: .available(text: "late\n", truncated: false)
         )
         var appendFinished = false
-        fixture.state.runHistoryPersistenceTaskWorktreeIDs[entry.id] = fixture.worktree.id
+        fixture.state.runHistoryPersistenceTaskOwners[entry.id] = RunHistoryOwner(worktreeID: fixture.worktree.id, projectId: fixture.worktree.projectId)
         fixture.state.runHistoryPersistenceTasks[entry.id] = Task { @MainActor [history = fixture.history] in
             try? await Task.sleep(for: .milliseconds(50))
             _ = try? await history.append(entry)

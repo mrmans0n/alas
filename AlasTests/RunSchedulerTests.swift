@@ -482,14 +482,14 @@ struct RunSchedulerTests {
         let store = MemoryStore()
         let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
         let (scheduler, log) = makeScheduler(store: store, clock: clock)
-        log.runs = [.init(worktreeID: "wt-1", branch: "main", runID: "run-1", scriptName: "test.sh")]
+        log.runs = [.init(worktreeID: "wt-1", projectID: nil, branch: "main", runID: "run-1", scriptName: "test.sh")]
         scheduler.add(interval("a", seconds: 600, at: clock.now))
 
         clock.advance(605)
         scheduler.evaluate()
         await scheduler.waitForRunsForTesting()
         log.outcome = .failed(exitCode: 2)
-        log.runs = [.init(worktreeID: "wt-1", branch: "main", runID: "run-2", scriptName: "test.sh")]
+        log.runs = [.init(worktreeID: "wt-1", projectID: nil, branch: "main", runID: "run-2", scriptName: "test.sh")]
         clock.advance(600)
         scheduler.evaluate()
         await scheduler.waitForRunsForTesting()
@@ -564,7 +564,7 @@ struct RunSchedulerTests {
         let store = MemoryStore()
         let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
         let (first, log) = makeScheduler(store: store, clock: clock)
-        log.runs = [.init(worktreeID: "wt-1", branch: "main", runID: "run-1", scriptName: "test.sh")]
+        log.runs = [.init(worktreeID: "wt-1", projectID: nil, branch: "main", runID: "run-1", scriptName: "test.sh")]
         first.add(interval("a", seconds: 600, at: clock.now))
         clock.advance(605)
         first.evaluate()
