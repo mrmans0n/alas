@@ -5,6 +5,62 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager attach restore", .serialized)
 struct ACPSessionManagerAttachRestoreTests {
+    @Test("restart supersedes a suspended setup attempt and preserves the queued prompt")
+    func restartSupersedesSuspendedSetupAttempt() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let setupGate = AttachPhaseGate()
+        let setupCount = PromptCounter()
+        let replacementClient = ACPMockClient()
+        scriptInitialize(replacementClient)
+        scriptSessionResult(replacementClient, method: "session/new", sessionId: "remote-replacement")
+        var launchCount = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            setupEvaluator: { _ in
+                if await setupCount.next() == 1 {
+                    await setupGate.enterAndWait()
+                }
+                return .ready
+            },
+            connectionFactory: { _, _, _ in
+                launchCount += 1
+                return ACPConnection(client: replacementClient)
+            }
+        )
+        let session = manager.createSession(agentId: "claude")
+        session.enqueue(blocks: [.text("queued prompt")])
+        let originalAttach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync { await setupGate.hasEntered }
+
+        let coalescedAttach = Task { await manager.attach(to: session.id, freshlyCreated: false) }
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        let duplicateRestart = Task { await manager.restartConnection(to: session.id) }
+
+        try await waitUntilAsync(timeoutNanos: 1_000_000_000) {
+            session.agentState == .ready && launchCount == 1
+        }
+        #expect(await setupGate.hasEntered)
+        #expect(session.agentState == .ready)
+        #expect(launchCount == 1)
+        #expect(session.remoteSessionId == "remote-replacement")
+        #expect(session.queue.count == 1)
+
+        let replacementRunner = manager.runners[session.id]
+        let replacementLease = try store.loadLease(sessionId: session.id)
+        await setupGate.release()
+        await originalAttach.value
+        await coalescedAttach.value
+        await restart.value
+        await duplicateRestart.value
+
+        #expect(session.agentState == .ready)
+        #expect(manager.runners[session.id] === replacementRunner)
+        #expect(session.remoteSessionId == "remote-replacement")
+        #expect(session.queue.count == 1)
+        #expect(replacementLease != nil)
+        #expect(try store.loadLease(sessionId: session.id)?.token == replacementLease?.token)
+    }
+
     @Test("new session attaches the current project MCP plan")
     func newSessionAttachesCurrentProjectMCPPlan() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
