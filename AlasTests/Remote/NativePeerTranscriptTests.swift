@@ -24,7 +24,8 @@ struct NativePeerTranscriptTests {
         transcript.apply(.transcriptDelta(sessionId: "B:s", streamingState: "idle", canDrive: false,
                                            upserts: [row("c", index: 3, text: "skipped")], epoch: 2, revision: 3))
         #expect(transcript.messages.count == 2)
-        #expect(transcript.canDrive)
+        #expect(transcript.needsResubscribe)
+        #expect(!transcript.canDrive)
     }
 
     @Test func epochAndSessionIsolation() {
@@ -63,5 +64,50 @@ struct NativePeerTranscriptTests {
         transcript.apply(.sessionClosed(sessionId: "B:s"))
         #expect(transcript.isClosed)
         #expect(!transcript.canDrive)
+    }
+
+    @Test func pendingPlanSurvivesTranscriptEpochResnapshot() {
+        var transcript = NativePeerTranscript(sessionId: "B:s")
+        transcript.apply(.transcriptSnapshot(sessionId: "B:s", streamingState: "idle", canDrive: true,
+                                              messages: [], firstIndex: 0, totalCount: 0, epoch: 1, revision: 0))
+        let request = RemotePlanPayload(
+            requestId: .string("plan-1"), toolCallId: "tool-1", name: "Plan", overview: "",
+            plan: "", todos: [], isProject: false, phases: []
+        )
+        transcript.apply(.planRequest(sessionId: "B:s", payload: request))
+
+        transcript.apply(.transcriptSnapshot(sessionId: "B:s", streamingState: "idle", canDrive: true,
+                                              messages: [], firstIndex: 0, totalCount: 0, epoch: 2, revision: 0))
+
+        #expect(transcript.pendingPlan == request)
+    }
+
+    @Test func pendingElicitationSurvivesTranscriptEpochResnapshot() {
+        var transcript = NativePeerTranscript(sessionId: "B:s")
+        transcript.apply(.transcriptSnapshot(sessionId: "B:s", streamingState: "idle", canDrive: true,
+                                              messages: [], firstIndex: 0, totalCount: 0, epoch: 1, revision: 0))
+        let request = RemoteElicitationPayload(
+            requestId: "elicitation-1", title: "Credentials", message: "Enter credentials.",
+            mode: "form", fields: [], elicitationId: nil, url: nil
+        )
+        transcript.apply(.elicitationRequest(sessionId: "B:s", payload: request))
+
+        transcript.apply(.transcriptSnapshot(sessionId: "B:s", streamingState: "idle", canDrive: true,
+                                              messages: [], firstIndex: 0, totalCount: 0, epoch: 2, revision: 0))
+
+        #expect(transcript.pendingElicitation == request)
+    }
+
+    @Test func transcriptValueChangesWhenAPendingRequestArrives() {
+        var transcript = NativePeerTranscript(sessionId: "B:s")
+        let beforeRequest = transcript
+        let request = RemotePlanPayload(
+            requestId: .string("plan-1"), toolCallId: "tool-1", name: "Plan", overview: "",
+            plan: "", todos: [], isProject: false, phases: []
+        )
+
+        transcript.apply(.planRequest(sessionId: "B:s", payload: request))
+
+        #expect(beforeRequest != transcript)
     }
 }

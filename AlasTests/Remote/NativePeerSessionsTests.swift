@@ -610,4 +610,10 @@ struct NativePeerSessionsTests {
 
         #expect(state.selectedOptions.isEmpty)
     }
+
+    @Test func peerTranscriptTailFollowPausesWhenScrolledAway() {
+        #expect(NativePeerTranscriptScrollPolicy.shouldFollow(distanceFromBottom: 0))
+        #expect(NativePeerTranscriptScrollPolicy.shouldFollow(distanceFromBottom: 48))
+        #expect(!NativePeerTranscriptScrollPolicy.shouldFollow(distanceFromBottom: 120))
+    }
 }

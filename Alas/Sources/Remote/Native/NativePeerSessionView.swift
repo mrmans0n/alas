@@ -89,6 +89,7 @@ struct NativePeerPermissionPresentation {
 /// Read and drive the selected peer through forwarded gateway frames only.
 struct NativePeerSessionView: View {
     @Bindable var client: NativePeerSessions
+    @State private var followsTranscriptTail = true
 
     private var online: Bool { client.selectedPeer?.state.carriesSessions == true }
     private var canDrive: Bool { online && client.transcript?.canDrive == true }
@@ -98,24 +99,46 @@ struct NativePeerSessionView: View {
             header
             Divider()
             if let transcript = client.transcript {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        if !online || transcript.isClosed {
-                            unavailableBanner
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            if !online || transcript.isClosed {
+                                unavailableBanner
+                            }
+                            if transcript.olderPageBeforeIndex != nil && online {
+                                Button("Load older messages") { client.fetchOlder() }
+                                    .buttonStyle(.borderless)
+                            }
+                            ForEach(transcript.messages, id: \.stableId) { message in
+                                messageCard(message)
+                            }
+                            pendingRequests(transcript)
+                            Color.clear
+                                .frame(height: 1)
+                                .id(NativePeerTranscriptScrollPolicy.tailAnchorID)
                         }
-                        if transcript.olderPageBeforeIndex != nil && online {
-                            Button("Load older messages") { client.fetchOlder() }
-                                .buttonStyle(.borderless)
-                        }
-                        ForEach(transcript.messages, id: \.stableId) { message in
-                            messageCard(message)
-                        }
-                        pendingRequests(transcript)
+                        .frame(maxWidth: 760)
+                        .frame(maxWidth: .infinity)
+                        .padding(20)
                     }
-                    .frame(maxWidth: 760)
-                    .frame(maxWidth: .infinity)
-                    .padding(20)
+                    .onAppear {
+                        proxy.scrollTo(NativePeerTranscriptScrollPolicy.tailAnchorID, anchor: .bottom)
+                    }
+                    .onChange(of: transcript) { _, _ in
+                        guard followsTranscriptTail else { return }
+                        proxy.scrollTo(NativePeerTranscriptScrollPolicy.tailAnchorID, anchor: .bottom)
+                    }
+                    .onScrollGeometryChange(for: Bool.self) { geometry in
+                        let distanceFromBottom = geometry.contentSize.height - geometry.contentOffset.y
+                            - geometry.containerSize.height
+                        return NativePeerTranscriptScrollPolicy.shouldFollow(
+                            distanceFromBottom: distanceFromBottom
+                        )
+                    } action: { _, shouldFollow in
+                        followsTranscriptTail = shouldFollow
+                    }
                 }
+                .id(client.selectedSessionId ?? "peer-transcript")
                 Divider()
                 composer(transcript)
             } else {
@@ -320,6 +343,15 @@ enum NativePeerPlanPresentation {
 enum NativePeerSessionControls {
     static func showsStop(for streamingState: String) -> Bool {
         streamingState != "idle"
+    }
+}
+
+enum NativePeerTranscriptScrollPolicy {
+    static let tailAnchorID = "native-peer-transcript-tail"
+    private static let bottomTolerance: CGFloat = 72
+
+    static func shouldFollow(distanceFromBottom: CGFloat) -> Bool {
+        distanceFromBottom <= bottomTolerance
     }
 }
 

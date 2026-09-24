@@ -2,7 +2,7 @@ import Foundation
 
 /// The currently selected peer transcript. Frames are already namespaced by
 /// federation, but this model still rejects frames for any other selection.
-struct NativePeerTranscript {
+struct NativePeerTranscript: Equatable {
     let sessionId: String
 
     private(set) var epoch: Int?
@@ -44,7 +44,6 @@ struct NativePeerTranscript {
         case .transcriptSnapshot(_, let state, let drive, let rows,
                                  let first, let total, let incomingEpoch, let incomingRevision):
             guard epoch == nil || incomingEpoch >= epoch! else { return false }
-            if epoch != incomingEpoch { clearPendingRequests() }
             epoch = incomingEpoch
             revision = incomingRevision
             streamingState = state
