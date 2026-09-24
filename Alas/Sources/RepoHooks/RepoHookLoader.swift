@@ -65,6 +65,9 @@ struct RepoHookLoader: Sendable {
             values = try resolved.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
         } catch {
             if isMissingPathError(error) {
+                if containsDanglingSymlink(in: target, relativeTo: root) {
+                    return .failed("Hook symlink could not be resolved safely")
+                }
                 return .missing
             }
             return .failed("Could not read hook: \(error.localizedDescription)")
@@ -135,6 +138,20 @@ struct RepoHookLoader: Sendable {
         guard error.domain == NSPOSIXErrorDomain else { return false }
         return error.code == POSIXErrorCode.ENOENT.rawValue
             || error.code == POSIXErrorCode.ENOTDIR.rawValue
+    }
+
+    private static func containsDanglingSymlink(in target: URL, relativeTo root: URL) -> Bool {
+        var current = root
+        for component in target.pathComponents.dropFirst(root.pathComponents.count) {
+            current.appendPathComponent(component)
+            guard (try? current.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true else {
+                continue
+            }
+            if !FileManager.default.fileExists(atPath: current.path) {
+                return true
+            }
+        }
+        return false
     }
 
     private static func isContained(_ url: URL, by root: URL) -> Bool {

@@ -62,6 +62,22 @@ struct RepoHookLoaderTests {
         #expect(loaded.text == "echo linked")
     }
 
+    @Test func reportsDanglingIntermediateSymlinkAsReadFailure() async throws {
+        let root = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let hooksDirectory = root.appendingPathComponent(".alas/hooks")
+        try FileManager.default.removeItem(at: hooksDirectory)
+        let missingDirectory = root.appendingPathComponent("missing-hooks")
+        try FileManager.default.createSymbolicLink(
+            atPath: hooksDirectory.path,
+            withDestinationPath: missingDirectory.path
+        )
+
+        let result = await RepoHookLoader().load(event: .sessionOpen, worktreeRoot: root, host: nil)
+
+        #expect(result == .failed(source: .local, message: "Hook symlink could not be resolved safely"))
+    }
+
     @Test func rejectsSymlinkThatEscapesWorktree() async throws {
         let root = try makeRepository()
         let outside = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
