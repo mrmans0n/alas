@@ -182,6 +182,8 @@ struct AppStateRunScheduleTests {
 
     @Test func remoteProjectRunsOnItsHost() async throws {
         let fixture = try makeFixture(host: "devbox")
+        // This test covers remote launch routing, not repository-hook I/O.
+        fixture.state.repoHookLoader = RepoHookLoader { _, _, _ in .missing }
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
         let outcome = await fixture.state.runSchedule(schedule(target: .allProjects)).outcome

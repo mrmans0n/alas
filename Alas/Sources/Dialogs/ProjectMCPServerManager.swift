@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ProjectMCPServerManager: View {
     @Binding var servers: [ProjectMCPServer]
+    let approvalQueue: RepoHookApprovalQueue
 
     @State private var draft: [ProjectMCPServer]
     @State private var editor: ProjectMCPServerEditorTarget?
@@ -10,8 +11,9 @@ struct ProjectMCPServerManager: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.theme) private var theme
 
-    init(servers: Binding<[ProjectMCPServer]>) {
+    init(servers: Binding<[ProjectMCPServer]>, approvalQueue: RepoHookApprovalQueue) {
         _servers = servers
+        self.approvalQueue = approvalQueue
         _draft = State(initialValue: servers.wrappedValue)
     }
 
@@ -66,6 +68,7 @@ struct ProjectMCPServerManager: View {
             ProjectMCPServerEditor(server: target.server) { saved in
                 save(saved, replacing: target.existingID)
             }
+            .modifier(RepoHookApprovalPresentationHandler(approvalQueue: approvalQueue))
         }
         .confirmationDialog(
             deleteConfirmationTitle,
@@ -85,6 +88,10 @@ struct ProjectMCPServerManager: View {
         } message: {
             Text("The server will not be attached to future sessions after you save the project.")
         }
+        .modifier(RepoHookApprovalPresentationHandler(
+            approvalQueue: approvalQueue,
+            isActive: editor.map { _ in false } ?? true
+        ))
     }
 
     private func serverRow(_ server: ProjectMCPServer) -> some View {

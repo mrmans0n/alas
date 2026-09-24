@@ -113,6 +113,11 @@ private struct ProjectDialog: View {
     @State private var sessionOpenScript: String = ""
     @State private var worktreeCreateMode: ProjectStartupScriptMode = .useGlobal
     @State private var worktreeCreateScript: String = ""
+    @State private var repoHookPresentations: [RepoHookEvent: RepoHookPresentation] = [:]
+    @State private var pendingRepoHookApprovals = PendingRepoHookApprovals()
+    @State private var repoHookInspectionID = UUID()
+    @State private var repoHookInspectionTask: Task<Void, Never>?
+    @State private var repoHookReviewTask: Task<Void, Never>?
     @State private var mcpServers: [ProjectMCPServer] = []
     @State private var mcpManagerPresented = false
     @State private var isValidating = false
@@ -140,9 +145,9 @@ private struct ProjectDialog: View {
     ]
 
     private let startupOptions: [(ProjectStartupScriptMode, String)] = [
-        (.useGlobal, "Use global"),
-        (.appendToGlobal, "Append to global"),
-        (.overrideGlobal, "Override global"),
+        (.useGlobal, "Use inherited"),
+        (.appendToGlobal, "Append to inherited"),
+        (.overrideGlobal, "Override inherited"),
         (.disabled, "Disabled"),
     ]
 
@@ -205,6 +210,11 @@ private struct ProjectDialog: View {
         .onAppear {
             populateInitialValues()
             Task { await loadAvatarPresetIfAvailable() }
+            refreshRepoHookPresentations()
+        }
+        .onDisappear {
+            repoHookInspectionTask?.cancel()
+            repoHookReviewTask?.cancel()
         }
         .fileImporter(
             isPresented: $imagePickerPresented,
@@ -220,6 +230,7 @@ private struct ProjectDialog: View {
                     await loadAvatarPresetIfAvailable()
                 }
             }
+            refreshRepoHookPresentations()
         }
         .onChange(of: showHostPicker) { _, isOpen in
             if isOpen && sshHosts.isEmpty && !sshHostsLoading {
@@ -229,6 +240,7 @@ private struct ProjectDialog: View {
         .onChange(of: sshHost) { _, _ in
             sshConnectionIssue = nil
             errorMessage = nil
+            refreshRepoHookPresentations()
         }
         .onChange(of: location) { _, _ in
             sshConnectionIssue = nil
@@ -238,6 +250,7 @@ private struct ProjectDialog: View {
             repositorySearch = ""
             displayedRepositories = []
             loadRepositoryCatalogIfNeeded()
+            refreshRepoHookPresentations()
         }
         .onChange(of: repositorySearch) { _, _ in
             refreshDisplayedRepositories()
@@ -248,7 +261,10 @@ private struct ProjectDialog: View {
             }
         }
         .sheet(isPresented: $mcpManagerPresented) {
-            ProjectMCPServerManager(servers: $mcpServers)
+            ProjectMCPServerManager(
+                servers: $mcpServers,
+                approvalQueue: state.repoHookApprovalQueue
+            )
         }
         .sheet(isPresented: $sshSetupPresented, onDismiss: dismissSSHSetup) {
             SSHConnectionAssistant(
@@ -259,7 +275,13 @@ private struct ProjectDialog: View {
                 onRetry: startSSHSetup
             )
             .environment(\.theme, theme)
+            .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
         }
+        .modifier(RepoHookApprovalPresentationHandler(
+            approvalQueue: state.repoHookApprovalQueue,
+            isActive: !mcpManagerPresented && !sshSetupPresented && !imagePickerPresented,
+            registersPresenter: !imagePickerPresented
+        ))
     }
 
     @ViewBuilder
@@ -746,6 +768,9 @@ private struct ProjectDialog: View {
             Text("Startup scripts")
                 .font(.system(size: 12.5, weight: .semibold))
                 .foregroundColor(theme.color("fg"))
+            Text("Approved repository hooks run between global and project scripts when this project inherits or appends.")
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-muted"))
             VStack(alignment: .leading, spacing: 8) {
                 Text("Session open script")
                     .font(.system(size: 11.5, weight: .medium))
@@ -757,11 +782,9 @@ private struct ProjectDialog: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
+                repoHookStatusRow(for: .sessionOpen)
                 if sessionOpenMode == .appendToGlobal || sessionOpenMode == .overrideGlobal {
-                    ProjectStartupScriptEditor(
-                        text: $sessionOpenScript,
-                        minHeight: 60
-                    )
+                    ProjectStartupScriptEditor(text: $sessionOpenScript, minHeight: 60)
                 }
             }
             VStack(alignment: .leading, spacing: 8) {
@@ -775,14 +798,174 @@ private struct ProjectDialog: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
+                repoHookStatusRow(for: .worktreeCreate)
                 if worktreeCreateMode == .appendToGlobal || worktreeCreateMode == .overrideGlobal {
-                    ProjectStartupScriptEditor(
-                        text: $worktreeCreateScript,
-                        minHeight: 60
-                    )
+                    ProjectStartupScriptEditor(text: $worktreeCreateScript, minHeight: 60)
                 }
             }
         }
+    }
+
+    private func repoHookScriptMode(for event: RepoHookEvent) -> ProjectStartupScriptMode {
+        switch event {
+        case .sessionOpen: sessionOpenMode
+        case .worktreeCreate: worktreeCreateMode
+        }
+    }
+
+    @ViewBuilder
+    private func repoHookStatusRow(for event: RepoHookEvent) -> some View {
+        let presentation = repoHookPresentations[event] ?? .checkAfterRepositoryAvailable
+        HStack(alignment: .firstTextBaseline) {
+            Text("\(event.relativePath): \(presentation.summary)")
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg-muted"))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            switch presentation.action(for: repoHookScriptMode(for: event)) {
+            case .some(.review):
+                Button("Review") { reviewRepoHook(event) }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 11, weight: .medium))
+            case .some(.retry):
+                Button("Retry") { reviewRepoHook(event) }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 11, weight: .medium))
+            case nil:
+                EmptyView()
+            }
+        }
+    }
+
+    private func refreshRepoHookPresentations() {
+        repoHookInspectionTask?.cancel()
+        repoHookReviewTask?.cancel()
+        pendingRepoHookApprovals.select(repoHookApprovalTarget)
+        let requestID = UUID()
+        repoHookInspectionID = requestID
+        repoHookInspectionTask = Task {
+            await loadRepoHookPresentations(requestID: requestID)
+        }
+    }
+
+    private func reviewRepoHook(_ event: RepoHookEvent) {
+        guard let inspection = hookInspection, let approvalTarget = repoHookApprovalTarget else { return }
+        repoHookReviewTask?.cancel()
+        let requestID = repoHookInspectionID
+        repoHookReviewTask = Task {
+            while !Task.isCancelled, requestID == repoHookInspectionID {
+                switch await state.repoHookLoader.load(
+                    event: event,
+                    worktreeRoot: inspection.path,
+                    host: inspection.host
+                ) {
+                case .missing, .empty:
+                    guard requestID == repoHookInspectionID else { return }
+                    repoHookPresentations[event] = .notFound
+                    return
+                case let .failed(source, message):
+                    guard requestID == repoHookInspectionID else { return }
+                    let decision = await state.repoHookApprovalQueue.requestFailureDecision(
+                        failure: .init(event: event, source: source, message: message),
+                        context: .projectSettings
+                    )
+                    guard requestID == repoHookInspectionID else { return }
+                    switch decision {
+                    case .retry, .approve:
+                        continue
+                    case .skip, .cancel:
+                        repoHookPresentations[event] = .unreadable(message)
+                        return
+                    }
+                case let .loaded(hook):
+                    guard requestID == repoHookInspectionID else { return }
+                    if state.projectsManager.isRepoHookApproved(projectId: inspection.projectID, hash: hook.hash)
+                        || pendingRepoHookApprovals.contains(hook.hash, for: approvalTarget) {
+                        repoHookPresentations[event] = .approved(hook)
+                        await state.repoHookApprovalQueue.requestReview(hook: hook)
+                        guard requestID == repoHookInspectionID else { return }
+                        return
+                    }
+                    guard repoHookScriptMode(for: event).usesInheritedScripts else {
+                        repoHookPresentations[event] = .approvalRequired(hook)
+                        return
+                    }
+                    let decision = await state.repoHookApprovalQueue.requestDecision(
+                        hook: hook,
+                        projectID: inspection.projectID,
+                        context: .projectSettings
+                    )
+                    guard requestID == repoHookInspectionID else { return }
+                    switch decision {
+                    case .approve:
+                        guard repoHookScriptMode(for: event).usesInheritedScripts else {
+                            repoHookPresentations[event] = .approvalRequired(hook)
+                            return
+                        }
+                        do {
+                            if case .edit = mode {
+                                try state.persistRepoHookApproval(projectId: inspection.projectID, hash: hook.hash)
+                            } else {
+                                pendingRepoHookApprovals.approve(hook.hash, for: approvalTarget)
+                            }
+                            repoHookPresentations[event] = .approved(hook)
+                        } catch {
+                            errorMessage = error.localizedDescription
+                        }
+                        return
+                    case .retry:
+                        continue
+                    case .skip, .cancel:
+                        return
+                    }
+                }
+            }
+        }
+    }
+
+    private func loadRepoHookPresentations(requestID: UUID) async {
+        guard let inspection = hookInspection else {
+            guard requestID == repoHookInspectionID else { return }
+            repoHookPresentations = Dictionary(uniqueKeysWithValues: RepoHookEvent.allCases.map {
+                ($0, RepoHookPresentation.checkAfterRepositoryAvailable)
+            })
+            return
+        }
+        let approvalTarget = RepoHookApprovalTarget(
+            projectID: inspection.projectID,
+            path: inspection.path,
+            host: inspection.host
+        )
+        var loaded: [RepoHookEvent: RepoHookPresentation] = [:]
+        for event in RepoHookEvent.allCases {
+            let result = await state.repoHookLoader.load(event: event, worktreeRoot: inspection.path, host: inspection.host)
+            guard requestID == repoHookInspectionID, !Task.isCancelled else { return }
+            loaded[event] = RepoHookPresentation.make(result: result) {
+                state.projectsManager.isRepoHookApproved(projectId: inspection.projectID, hash: $0)
+                    || pendingRepoHookApprovals.contains($0, for: approvalTarget)
+            }
+        }
+        guard requestID == repoHookInspectionID else { return }
+        repoHookPresentations = loaded
+    }
+
+    private var hookInspection: (path: URL, host: String?, projectID: String)? {
+        switch mode {
+        case let .edit(project):
+            return (URL(fileURLWithPath: project.path), project.host, project.id)
+        case .add:
+            guard (location == .local || location == .remoteSSH), !path.isEmpty else { return nil }
+            return (URL(fileURLWithPath: path), location == .remoteSSH ? sshHost : nil, pendingProjectId)
+        }
+    }
+
+    private var repoHookApprovalTarget: RepoHookApprovalTarget? {
+        guard let inspection = hookInspection else { return nil }
+        return RepoHookApprovalTarget(
+            projectID: inspection.projectID,
+            path: inspection.path,
+            host: inspection.host
+        )
     }
 
     private var integrationsSection: some View {
@@ -1081,7 +1264,8 @@ private struct ProjectDialog: View {
                     icon: draftIcon,
                     id: pendingProjectId,
                     startupScripts: draftStartupScripts,
-                    mcpServers: mcpServers
+                    mcpServers: mcpServers,
+                    approvedRepoHookHashes: pendingRepoHookApprovals.approvedHashes(for: repoHookApprovalTarget)
                 )
                 presented = false
             } catch {
@@ -1112,7 +1296,8 @@ private struct ProjectDialog: View {
                     : nil,
                 id: pendingProjectId,
                 startupScripts: draftStartupScripts,
-                mcpServers: mcpServers
+                mcpServers: mcpServers,
+                approvedRepoHookHashes: pendingRepoHookApprovals.approvedHashes(for: repoHookApprovalTarget)
             )
             sshSetupPresented = false
             presented = false

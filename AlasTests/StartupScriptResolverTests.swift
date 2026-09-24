@@ -33,13 +33,13 @@ struct StartupScriptResolverTests {
     @Test func useGlobalReturnsGlobalScript() {
         let t = makeTerminal(startupScript: "echo global")
         let p = makeProject(mode: .useGlobal, script: "echo local")
-        #expect(StartupScriptResolver.sessionOpenScript(global: t, project: p) == "echo global")
+        #expect(StartupScriptResolver.sessionOpenScript(global: t, repoScript: nil, project: p) == "echo global")
     }
 
     @Test func useGlobalReturnsEmptyWhenGlobalEmpty() {
         let t = makeTerminal(startupScript: "")
         let p = makeProject(mode: .useGlobal, script: "echo local")
-        #expect(StartupScriptResolver.sessionOpenScript(global: t, project: p) == "")
+        #expect(StartupScriptResolver.sessionOpenScript(global: t, repoScript: nil, project: p) == "")
     }
 
     // MARK: - appendToGlobal
@@ -47,25 +47,25 @@ struct StartupScriptResolverTests {
     @Test func appendToGlobalConcatenatesBoth() {
         let t = makeTerminal(startupScript: "echo global")
         let p = makeProject(mode: .appendToGlobal, script: "echo local")
-        #expect(StartupScriptResolver.sessionOpenScript(global: t, project: p) == "echo global\necho local")
+        #expect(StartupScriptResolver.sessionOpenScript(global: t, repoScript: nil, project: p) == "echo global\necho local")
     }
 
     @Test func appendToGlobalReturnsGlobalOnlyWhenLocalEmpty() {
         let t = makeTerminal(startupScript: "echo global")
         let p = makeProject(mode: .appendToGlobal, script: "")
-        #expect(StartupScriptResolver.sessionOpenScript(global: t, project: p) == "echo global")
+        #expect(StartupScriptResolver.sessionOpenScript(global: t, repoScript: nil, project: p) == "echo global")
     }
 
     @Test func appendToGlobalReturnsLocalOnlyWhenGlobalEmpty() {
         let t = makeTerminal(startupScript: "")
         let p = makeProject(mode: .appendToGlobal, script: "echo local")
-        #expect(StartupScriptResolver.sessionOpenScript(global: t, project: p) == "echo local")
+        #expect(StartupScriptResolver.sessionOpenScript(global: t, repoScript: nil, project: p) == "echo local")
     }
 
     @Test func appendToGlobalReturnsEmptyWhenBothEmpty() {
         let t = makeTerminal(startupScript: "")
         let p = makeProject(mode: .appendToGlobal, script: "")
-        #expect(StartupScriptResolver.sessionOpenScript(global: t, project: p) == "")
+        #expect(StartupScriptResolver.sessionOpenScript(global: t, repoScript: nil, project: p) == "")
     }
 
     // MARK: - overrideGlobal
@@ -73,13 +73,13 @@ struct StartupScriptResolverTests {
     @Test func overrideGlobalReturnsLocalScript() {
         let t = makeTerminal(startupScript: "echo global")
         let p = makeProject(mode: .overrideGlobal, script: "echo local")
-        #expect(StartupScriptResolver.sessionOpenScript(global: t, project: p) == "echo local")
+        #expect(StartupScriptResolver.sessionOpenScript(global: t, repoScript: nil, project: p) == "echo local")
     }
 
     @Test func overrideGlobalReturnsEmptyWhenLocalEmpty() {
         let t = makeTerminal(startupScript: "echo global")
         let p = makeProject(mode: .overrideGlobal, script: "")
-        #expect(StartupScriptResolver.sessionOpenScript(global: t, project: p) == "")
+        #expect(StartupScriptResolver.sessionOpenScript(global: t, repoScript: nil, project: p) == "")
     }
 
     // MARK: - disabled
@@ -87,7 +87,7 @@ struct StartupScriptResolverTests {
     @Test func disabledReturnsEmptyRegardlessOfScripts() {
         let t = makeTerminal(startupScript: "echo global")
         let p = makeProject(mode: .disabled, script: "echo local")
-        #expect(StartupScriptResolver.sessionOpenScript(global: t, project: p) == "")
+        #expect(StartupScriptResolver.sessionOpenScript(global: t, repoScript: nil, project: p) == "")
     }
 
     // MARK: - Whitespace trimming
@@ -95,7 +95,40 @@ struct StartupScriptResolverTests {
     @Test func trimsLeadingAndTrailingWhitespace() {
         let t = makeTerminal(startupScript: "  echo global  ")
         let p = makeProject(mode: .useGlobal, script: "  echo local  ")
-        #expect(StartupScriptResolver.sessionOpenScript(global: t, project: p) == "echo global")
+        #expect(StartupScriptResolver.sessionOpenScript(global: t, repoScript: nil, project: p) == "echo global")
+    }
+
+    // MARK: - Repo scripts
+
+    @Test func useGlobalIncludesRepoScriptAfterGlobalScript() {
+        let t = makeTerminal(startupScript: "echo global")
+        let p = makeProject(mode: .useGlobal, script: "echo project")
+
+        #expect(StartupScriptResolver.sessionOpenScript(global: t, repoScript: "echo repo", project: p)
+            == "echo global\necho repo")
+    }
+
+    @Test func appendToGlobalIncludesRepoScriptBeforeProjectScript() {
+        let t = makeTerminal(startupScript: "echo global")
+        let p = makeProject(mode: .appendToGlobal, script: "echo project")
+
+        #expect(StartupScriptResolver.sessionOpenScript(global: t, repoScript: "echo repo", project: p)
+            == "echo global\necho repo\necho project")
+    }
+
+    @Test func overrideGlobalExcludesRepoScript() {
+        let t = makeTerminal(startupScript: "echo global")
+        let p = makeProject(mode: .overrideGlobal, script: "echo project")
+
+        #expect(StartupScriptResolver.sessionOpenScript(global: t, repoScript: "echo repo", project: p)
+            == "echo project")
+    }
+
+    @Test func disabledExcludesRepoScript() {
+        let t = makeTerminal(startupScript: "echo global")
+        let p = makeProject(mode: .disabled, script: "echo project")
+
+        #expect(StartupScriptResolver.sessionOpenScript(global: t, repoScript: "echo repo", project: p).isEmpty)
     }
 
     // MARK: - Worktree create scripts
@@ -103,24 +136,24 @@ struct StartupScriptResolverTests {
     @Test func worktreeCreateUseGlobal() {
         let t = makeTerminal(startupScript: "", worktreeCreateScript: "echo wt-global")
         let p = makeProject(mode: .useGlobal, script: "", worktreeMode: .useGlobal, worktreeScript: "echo wt-local")
-        #expect(StartupScriptResolver.worktreeCreateScript(global: t, project: p) == "echo wt-global")
+        #expect(StartupScriptResolver.worktreeCreateScript(global: t, repoScript: nil, project: p) == "echo wt-global")
     }
 
     @Test func worktreeCreateAppendToGlobal() {
         let t = makeTerminal(startupScript: "", worktreeCreateScript: "echo wt-global")
         let p = makeProject(mode: .useGlobal, script: "", worktreeMode: .appendToGlobal, worktreeScript: "echo wt-local")
-        #expect(StartupScriptResolver.worktreeCreateScript(global: t, project: p) == "echo wt-global\necho wt-local")
+        #expect(StartupScriptResolver.worktreeCreateScript(global: t, repoScript: nil, project: p) == "echo wt-global\necho wt-local")
     }
 
     @Test func worktreeCreateOverrideGlobal() {
         let t = makeTerminal(startupScript: "", worktreeCreateScript: "echo wt-global")
         let p = makeProject(mode: .useGlobal, script: "", worktreeMode: .overrideGlobal, worktreeScript: "echo wt-local")
-        #expect(StartupScriptResolver.worktreeCreateScript(global: t, project: p) == "echo wt-local")
+        #expect(StartupScriptResolver.worktreeCreateScript(global: t, repoScript: nil, project: p) == "echo wt-local")
     }
 
     @Test func worktreeCreateDisabled() {
         let t = makeTerminal(startupScript: "", worktreeCreateScript: "echo wt-global")
         let p = makeProject(mode: .useGlobal, script: "", worktreeMode: .disabled, worktreeScript: "echo wt-local")
-        #expect(StartupScriptResolver.worktreeCreateScript(global: t, project: p) == "")
+        #expect(StartupScriptResolver.worktreeCreateScript(global: t, repoScript: nil, project: p) == "")
     }
 }

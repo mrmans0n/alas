@@ -8,18 +8,26 @@ enum ProjectAgentSelection: Hashable {
 
 // MARK: - ProjectStartupScriptMode
 /// How a project's per-repository startup script combines with the global default.
-enum ProjectStartupScriptMode: String, Codable, Equatable, CaseIterable {
+enum ProjectStartupScriptMode: String, Codable, Equatable, CaseIterable, Sendable {
     case useGlobal
     case appendToGlobal
     case overrideGlobal
     case disabled
+    var usesInheritedScripts: Bool {
+        switch self {
+        case .useGlobal, .appendToGlobal:
+            true
+        case .overrideGlobal, .disabled:
+            false
+        }
+    }
 }
 
 // MARK: - ProjectStartupScripts
 /// Per-repository startup-script configuration for terminal session open,
 /// worktree creation, and worktree agent override.
 /// Global settings in `AppConfig.Terminal` act as defaults.
-struct ProjectStartupScripts: Codable, Equatable {
+struct ProjectStartupScripts: Codable, Equatable, Sendable {
     var sessionOpenMode: ProjectStartupScriptMode
     var sessionOpenScript: String
     var worktreeCreateMode: ProjectStartupScriptMode
@@ -162,13 +170,15 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     /// Names of repo-defined MCP servers the user disabled without replacing
     /// them with an app-level server of the same name.
     var disabledRepoMCPServers: [String] = []
+    /// SHA-256 hashes of exact repository hook bytes approved for this project.
+    var approvedRepoHookHashes: [String] = []
 
     enum CodingKeys: String, CodingKey {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              cachedWorktrees, worktreeOrderIsManual, startupScripts,
              mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, host, ggMode,
              ggWorktreeModes, issueAttachments, fileBookmarks,
-             repoMCPTrust, disabledRepoMCPServers
+             repoMCPTrust, disabledRepoMCPServers, approvedRepoHookHashes
     }
 
     init(
@@ -193,7 +203,8 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         issueAttachments: [String: IssueAttachment] = [:],
         fileBookmarks: [String] = [],
         repoMCPTrust: [String: RepoMCPTrustState] = [:],
-        disabledRepoMCPServers: [String] = []
+        disabledRepoMCPServers: [String] = [],
+        approvedRepoHookHashes: [String] = []
     ) {
         self.id = id
         self.name = name
@@ -216,6 +227,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.fileBookmarks = fileBookmarks
         self.repoMCPTrust = repoMCPTrust
         self.disabledRepoMCPServers = disabledRepoMCPServers
+        self.approvedRepoHookHashes = approvedRepoHookHashes
     }
 
     // Tolerant decode: older projects.json files predate hiddenWorktreePaths
@@ -257,6 +269,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         fileBookmarks = (try? c.decode([String].self, forKey: .fileBookmarks)) ?? []
         repoMCPTrust = (try? c.decode([String: RepoMCPTrustState].self, forKey: .repoMCPTrust)) ?? [:]
         disabledRepoMCPServers = (try? c.decode([String].self, forKey: .disabledRepoMCPServers)) ?? []
+        approvedRepoHookHashes = (try? c.decode([String].self, forKey: .approvedRepoHookHashes)) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -293,6 +306,10 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         }
         if !disabledRepoMCPServers.isEmpty {
             try c.encode(disabledRepoMCPServers, forKey: .disabledRepoMCPServers)
+        }
+        let approvedRepoHookHashes = Array(Set(approvedRepoHookHashes)).sorted()
+        if !approvedRepoHookHashes.isEmpty {
+            try c.encode(approvedRepoHookHashes, forKey: .approvedRepoHookHashes)
         }
     }
 

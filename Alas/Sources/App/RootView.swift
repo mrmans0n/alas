@@ -569,6 +569,18 @@ private struct RootPresentationHandlers: ViewModifier {
             .modifier(RootReviewMergePresentationHandlers(state: state))
             .modifier(RootGGPresentationHandlers(state: state))
             .modifier(RootUpdatePresentationHandlers(state: state))
+            .modifier(RootRepoHookApprovalPresentationHandler(state: state))
+    }
+}
+
+private struct RootRepoHookApprovalPresentationHandler: ViewModifier {
+    @Bindable var state: AppState
+
+    func body(content: Content) -> some View {
+        @Bindable var queue = state.repoHookApprovalQueue
+        content.sheet(item: $queue.activeRuntimeRequest) { request in
+            RepoHookApprovalSheet(request: request, queue: queue)
+        }
     }
 }
 
@@ -639,6 +651,7 @@ private struct RootWorktreePresentationHandlers: ViewModifier {
                     projectId: presentation.projectId,
                     onClose: { worktreeCleanupPresentation = nil }
                 )
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
     }
 }
@@ -653,6 +666,7 @@ private struct RootRunScriptPresentationHandlers: ViewModifier {
                     state: state,
                     presentation: presentation
                 )
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
             .alert(
                 "'\(state.pendingForceDeleteWorktree?.branch ?? "")' \(AppState.forceDeleteAlertTitleSuffix)",
@@ -758,12 +772,14 @@ private struct RootUpdatePresentationHandlers: ViewModifier {
                     }
                 )
                 .environment(\.theme, state.themeStore.current)
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
             .sheet(isPresented: $state.presentUpdateProgress) {
                 UpdateProgressSheet(updater: state.selfUpdater) {
                     state.presentUpdateProgress = false
                 }
                 .environment(\.theme, state.themeStore.current)
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
     }
 }
@@ -856,6 +872,7 @@ private struct RootGGSheetHandlers: ViewModifier {
                     return try await owner.submitGGUnstack(editedModel)
                 }
                 .environment(\.theme, state.themeStore.current)
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
             .sheet(
                 item: Binding(
@@ -876,6 +893,7 @@ private struct RootGGSheetHandlers: ViewModifier {
                     }
                 )
                 .environment(\.theme, state.themeStore.current)
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
             .sheet(
                 item: Binding(
@@ -896,6 +914,7 @@ private struct RootGGSheetHandlers: ViewModifier {
                     }
                 )
                 .environment(\.theme, state.themeStore.current)
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
             .sheet(
                 item: Binding(
@@ -909,6 +928,7 @@ private struct RootGGSheetHandlers: ViewModifier {
                     onCancel: { state.cancelFollowStackEntry() }
                 )
                 .environment(\.theme, state.themeStore.current)
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
     }
 }

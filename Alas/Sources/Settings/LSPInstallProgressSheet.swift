@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LSPInstallProgressSheet: View {
     @Bindable var installer: LSPInstaller
+    let approvalQueue: RepoHookApprovalQueue
     /// Called when the user dismisses the sheet via Close/Done. The argument
     /// carries the language whose install just succeeded, so callers can
     /// re-open any editor buffers using that language. Nil on cancel,
@@ -103,6 +104,7 @@ struct LSPInstallProgressSheet: View {
         // the reopen-LSP-documents path. Forcing button-only dismissal
         // keeps the success → reopen handoff guaranteed.
         .interactiveDismissDisabled(true)
+        .modifier(RepoHookApprovalPresentationHandler(approvalQueue: approvalQueue))
     }
 
     /// Snapshot the completed language (if any) BEFORE `reset()` flips state

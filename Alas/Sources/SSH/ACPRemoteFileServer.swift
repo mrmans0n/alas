@@ -95,11 +95,11 @@ enum RemotePathContainment {
 
     /// Exit codes for `containedReadScript`, layered on top of
     /// `containmentExcludingGitProbeCommand`'s own 3/4/5/6/7 (see that
-    /// function's doc comment): 8 = resolves to a symlink; 9 = resolves to a
-    /// directory; 10 = resolves to something that no longer exists by the
-    /// time the read runs; 11 = `stat` on the resolved path failed; 12 =
-    /// resolves to something other than a regular file (a FIFO, socket, or
-    /// device — reading one of these would otherwise block indefinitely).
+    /// function's doc comment): 8 = symlink resolution failed; 9 = resolves to a
+    /// directory; 10 = missing target without following a final symlink; 11 =
+    /// symlink resolution or `stat` failed; 12 = resolves to something other
+    /// than a regular file (a FIFO, socket, or device — reading one of these
+    /// would otherwise block indefinitely).
     enum ContainedReadOutcome: Equatable {
         case ok(byteSize: Int, prefix: Data)
         case outsideWorktree
@@ -190,6 +190,63 @@ enum RemotePathContainment {
         let result = try await RemoteExec.runData(
             host: host, cwd: nil,
             command: containedReadScript(path: target, worktreeRoot: worktreeRoot, maxBytes: maxBytes))
+        if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
+            throw RemoteFileAccessError.connectionFailed(result.stderr)
+        }
+        return parseContainedReadResult(exitCode: result.exitCode, stdout: result.stdout, maxBytes: maxBytes)
+    }
+
+    /// Bounded contained read for the repository hook allowlist. Unlike
+    /// `containedReadScript`, it follows the final symlink only after each
+    /// resolved target is checked to remain inside the worktree and outside
+    /// `.git`. Intermediate path components have already been physically
+    /// resolved by `containmentExcludingGitProbeCommand`.
+    static func containedResolvedReadScript(path: String, worktreeRoot: String, maxBytes: Int) -> String {
+        let probe = containmentExcludingGitProbeCommand(path: path, worktreeRoot: worktreeRoot)
+        let probeWithoutFinalExit = probe.hasSuffix("exit 0")
+            ? String(probe.dropLast("exit 0".count))
+            : probe
+        return probeWithoutFinalExit + """
+        current="$full_phys"; depth=0; followed_symlink=0; \
+        while [ -L "$current" ]; do \
+        [ "$depth" -lt 40 ] || exit 8; \
+        followed_symlink=1; \
+        link=$(readlink "$current") || exit 11; \
+        case "$link" in /*) candidate="$link" ;; *) candidate="$(dirname "$current")/$link" ;; esac; \
+        if [ -d "$candidate" ]; then current=$(cd "$candidate" && pwd -P) || exit 11; else \
+        parent=$(dirname "$candidate"); base=$(basename "$candidate"); current="$(cd "$parent" && pwd -P)/$base" || exit 11; \
+        fi; \
+        depth=$((depth + 1)); \
+        done; \
+        case "$current" in \
+        "$root_phys") rel="" ;; \
+        "$root_phys"/*) rel=${current#"$root_phys"/} ;; \
+        *) exit 6 ;; \
+        esac; \
+        rest="$rel"; \
+        while [ -n "$rest" ]; do \
+        case "$rest" in \
+        */*) comp=${rest%%/*}; rest=${rest#*/} ;; \
+        *) comp="$rest"; rest="" ;; \
+        esac; \
+        case "$comp" in .[Gg][Ii][Tt]) exit 7 ;; esac; \
+        done; \
+        [ -d "$current" ] && exit 9; \
+        if [ ! -e "$current" ]; then [ "$followed_symlink" -eq 1 ] && exit 11; exit 10; fi; \
+        [ -f "$current" ] || exit 12; \
+        size=$(stat -c %s -- "$current" 2>/dev/null || stat -f %z "$current") || exit 11; \
+        echo "$size"; \
+        head -c \(maxBytes + 1) "$current"
+        """
+    }
+
+    static func containedResolvedRead(host: String, path: String, worktreeRoot: String, maxBytes: Int) async throws -> ContainedReadOutcome {
+        let target = try lexicallyResolveInsideWorktree(path: path, worktreeRoot: worktreeRoot)
+        let result = try await RemoteExec.runData(
+            host: host,
+            cwd: nil,
+            command: containedResolvedReadScript(path: target, worktreeRoot: worktreeRoot, maxBytes: maxBytes)
+        )
         if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
             throw RemoteFileAccessError.connectionFailed(result.stderr)
         }

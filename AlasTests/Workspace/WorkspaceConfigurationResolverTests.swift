@@ -111,6 +111,35 @@ struct WorkspaceConfigurationResolverTests {
         #expect(snapshot.warnings.contains(where: { $0.message.contains("remote-only") }) == false)
     }
 
+    @Test("snapshot freezes project and member hook policy")
+    func freezesHookPolicy() {
+        let memberID = UUID()
+        let projectScripts = ProjectStartupScripts(
+            sessionOpenMode: .useGlobal,
+            sessionOpenScript: "",
+            worktreeCreateMode: .appendToGlobal,
+            worktreeCreateScript: "project"
+        )
+        let snapshot = WorkspaceConfigurationResolver.resolve(.init(
+            globalTerminal: terminal(startup: "", create: "global"),
+            globalLaunchPreference: .inherit,
+            workspaceConfiguration: .init(memberConfigurations: [memberID: .init(setupScript: .append("member"))]),
+            members: [.init(id: memberID, project: project(startupScripts: projectScripts), checkoutRoot: "/checkout", worktreePath: "/checkout/repo")],
+            availableLauncherModes: [.terminal],
+            enabledAgentIDs: []
+        ))
+        let member = try! #require(snapshot.members[memberID])
+        #expect(member.projectWorktreeCreateMode == .appendToGlobal)
+        #expect(member.projectWorktreeCreateScript == "project")
+        #expect(member.memberSetupScript == .append("member"))
+        #expect(WorkspaceConfigurationResolver.memberSetupScript(
+            sharedWorktreeCreateScript: "",
+            globalWorktreeCreateScript: "global",
+            member: member,
+            repoScript: "repo"
+        ) == "global\nrepo\nproject\nmember")
+    }
+
     private func project(
         startupScripts: ProjectStartupScripts = .defaults,
         ggMode: GGProjectMode = .auto,

@@ -707,6 +707,7 @@ private struct ACPSessionView: View {
             if decision.isVisible {
                 RepoMCPTrustBanner(
                     pendingServers: decision.pendingServers,
+                    approvalQueue: state.repoHookApprovalQueue,
                     onApproveAll: {
                         state.approveRepoMCPServers(projectId: project.id, servers: decision.pendingServers)
                     },

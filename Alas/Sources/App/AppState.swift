@@ -56,6 +56,20 @@ enum WorkspaceDefinitionSaveError: LocalizedError {
     }
 }
 
+enum ProjectCreationError: LocalizedError, Equatable {
+    case projectPersistenceFailed
+    case projectAlreadyExists
+
+    var errorDescription: String? {
+        switch self {
+        case .projectPersistenceFailed:
+            "Could not save the new project."
+        case .projectAlreadyExists:
+            "A project with this ID already exists."
+        }
+    }
+}
+
 struct PendingRunScriptLaunch: Equatable {
     let id: UUID
     let worktreeID: String
@@ -164,6 +178,8 @@ final class AppState {
     let worktreeUpstreamStatusStore = WorktreeUpstreamStatusStore()
     /// Repo-local `.alas/` config, read per worktree with its own change cache.
     let repoConfigStore = RepoConfigStore()
+    let repoHookApprovalQueue = RepoHookApprovalQueue()
+    @ObservationIgnored var repoHookLoader = RepoHookLoader()
     /// Project icons already resolved from repo files, keyed by the identity of
     /// the file that supplied them.
     let repoIconDisplayCache = RepoIconDisplayCache()
@@ -2997,7 +3013,11 @@ final class AppState {
             sessions: WorkspaceCheckoutSessionStopper(
                 store: workspaceStore,
                 stop: { [weak self] checkout in try await self?.stopWorkspaceCheckoutSessions(checkout) }
-            )
+            ),
+            resolveRepoHook: { [weak self] request in
+                guard let self else { return nil }
+                return try await self.preparedWorkspaceRepoHook(request)
+            }
         )
         workspaceCheckoutCoordinator = coordinator
         return coordinator
@@ -4067,12 +4087,6 @@ final class AppState {
             selectWorktree(id: optimistic.id)
         }
 
-        let startupScript = StartupScriptResolver.worktreeCreateScript(
-            global: config.terminal,
-            project: project
-        )
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
         Task { @MainActor in
             do {
                 if self.config.worktrees.fetchRemoteBeforeCreate {
@@ -4093,6 +4107,19 @@ final class AppState {
                     base: base, branch: branch, destination: canonicalDestination, projectId: projectId
                 )
                 guard projects.contains(where: { $0.id == projectId }) else { return }
+                let repoStartupScript = try await self.preparedRepoHook(
+                    event: .worktreeCreate,
+                    project: project,
+                    worktree: newWorktree,
+                    context: .worktreeCreate,
+                    includeUserStartupScript: runStartup
+                )
+                let startupScript = StartupScriptResolver.worktreeCreateScript(
+                    global: self.config.terminal,
+                    repoScript: repoStartupScript,
+                    project: project
+                )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
                 if runStartup && !startupScript.isEmpty {
                     if let host = project.host ?? RemoteHostRegistry.shared.host(forPath: newWorktree.path.path) {
                         _ = try? await RemoteExec.run(host: host, cwd: newWorktree.path.path, command: startupScript)
@@ -4833,8 +4860,13 @@ final class AppState {
         host: String? = nil,
         id: String = UUID().uuidString,
         startupScripts: ProjectStartupScripts = .defaults,
-        mcpServers: [ProjectMCPServer] = []
+        mcpServers: [ProjectMCPServer] = [],
+        approvedRepoHookHashes: [String] = []
     ) async throws {
+        guard !projectsManager.projects.contains(where: { $0.id == id }) else {
+            throw ProjectCreationError.projectAlreadyExists
+        }
+
         let project = try await projectsManager.addProject(
             path: path,
             displayName: displayName,
@@ -4842,10 +4874,15 @@ final class AppState {
             host: host,
             id: id,
             startupScripts: startupScripts,
-            mcpServers: mcpServers
+            mcpServers: mcpServers,
+            approvedRepoHookHashes: approvedRepoHookHashes
         )
         spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
-        saveProjects()
+        guard saveProjects() else {
+            spacesManager.removeProjectEverywhere(project.id)
+            projectsManager.removeProject(id: project.id)
+            throw ProjectCreationError.projectPersistenceFailed
+        }
         saveSpaces()
         _ = await refreshAllProjectTopologies()
         if let worktreeId = projectsManager.visibleWorktrees(projectId: project.id).first?.id {
@@ -6851,9 +6888,17 @@ final class AppState {
         ) else {
             throw TerminalLaunchError.worktreeOperationInProgress
         }
+        let repoStartupScript = try await preparedRepoHook(
+            event: .sessionOpen,
+            project: project,
+            worktree: worktree,
+            context: .sessionOpen,
+            includeUserStartupScript: includeUserStartupScript
+        )
         return try openTerminalTab(
             for: worktree,
             startupScriptSuffix: startupScriptSuffix,
+            repoStartupScript: repoStartupScript,
             includeUserStartupScript: includeUserStartupScript,
             forceInheritParentEnv: forceInheritParentEnv,
             environmentOverrides: environmentOverrides,
@@ -6866,7 +6911,8 @@ final class AppState {
     private func openTerminalSessionForReopen(
         worktree: Worktree,
         project: ProjectConfig,
-        forcedCwd: URL?
+        forcedCwd: URL?,
+        repoStartupScript: String?
     ) throws -> OpenedTerminalSession {
         guard !Self.blocksWorktreeSessionAdmission(
             projectsManager.operationState(for: worktree)
@@ -6894,6 +6940,7 @@ final class AppState {
                 cfg: config.terminal,
                 theme: themeStore.current,
                 forcedCwd: forcedCwd,
+                repoStartupScript: repoStartupScript,
                 leafId: leafID
             )
             opened = .init(id: session.id, foregroundPid: { [weak session] in
@@ -6908,6 +6955,7 @@ final class AppState {
     func openTerminalTab(
         for worktree: Worktree,
         startupScriptSuffix: String? = nil,
+        repoStartupScript: String? = nil,
         includeUserStartupScript: Bool = true,
         forceInheritParentEnv: Bool = false,
         environmentOverrides: [String: String] = [:],
@@ -6953,6 +7001,7 @@ final class AppState {
                 worktree: worktree, project: project,
                 cfg: terminalConfig, theme: themeStore.current,
                 startupScriptSuffix: startupScriptSuffix,
+                repoStartupScript: repoStartupScript,
                 includeUserStartupScript: includeUserStartupScript,
                 environmentOverrides: environmentOverrides,
                 environmentRemovals: environmentRemovals,
@@ -7102,6 +7151,12 @@ final class AppState {
     /// (falling back to its lastCwd, then the worktree root) and runs a plain
     /// shell — harness state is not inherited.
     func splitFocusedPane(worktreeId: String, axis: SplitAxis) {
+        Task { @MainActor in
+            await splitFocusedPanePreparingRepoHook(worktreeId: worktreeId, axis: axis)
+        }
+    }
+
+    private func splitFocusedPanePreparingRepoHook(worktreeId: String, axis: SplitAxis) async {
         guard let activeId = tabs.activeTabId(forWorktree: worktreeId),
               let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
               case .terminal(let state) = tab,
@@ -7115,16 +7170,34 @@ final class AppState {
             ?? worktree.path
 
         do {
+            let repoStartupScript = try await preparedRepoHook(
+                event: .sessionOpen,
+                project: project,
+                worktree: worktree,
+                context: .sessionOpen
+            )
+            guard tabs.activeTabId(forWorktree: worktreeId) == activeId,
+                  let currentTab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == activeId }),
+                  case .terminal(let currentState) = currentTab,
+                  currentState.focusedLeafId == focused.id,
+                  self.worktree(withId: worktreeId)?.path == worktree.path,
+                  projects.first(where: { $0.id == project.id })?.path == project.path,
+                  terminal.registry.session(for: focused.id) != nil,
+                  !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(for: worktree)) else {
+                return
+            }
+
             // Single identity for the new pane: used with the worktree id to
             // derive the zmx session name, plus the SessionRegistry key, leaf
             // id, persisted sessionId, and ALAS_SESSION_ID.
-            // Generated here so the registry key `terminal.openSession`
-            // registers under matches the `newLeafId` the split tree stores.
+            // Generated here so the registry key matches the leaf ID stored
+            // in the split tree.
             let newLeafId = UUID().uuidString
             let session = try terminal.openSession(
                 worktree: worktree, project: project,
                 cfg: config.terminal, theme: themeStore.current,
                 forcedCwd: cwd,
+                repoStartupScript: repoStartupScript,
                 leafId: newLeafId
             )
             harness.detector.register(sessionId: session.id) { [weak session] in
@@ -7134,6 +7207,8 @@ final class AppState {
                 worktreeId: worktreeId, tabId: activeId, axis: axis,
                 newLeafId: newLeafId, newSessionId: newLeafId
             )
+        } catch RepoHookPreflightError.cancelled {
+            return
         } catch {
             AlasGhostty.logger.error("splitFocusedPane failed: \(String(describing: error), privacy: .public)")
         }
@@ -7589,14 +7664,6 @@ final class AppState {
     /// walk, leaves processed up to that point have already been persisted with
     /// their new sessionIds. Re-calling this method is safe — already-restored
     /// leaves are skipped, and the failing leaf is retried.
-    @discardableResult
-    func restoreTerminalTabIfNeeded(worktreeId: String, tabId: TabID) throws -> Tab? {
-        try restoreTerminalTabIfNeeded(
-            worktreeId: worktreeId,
-            tabId: tabId,
-            legacySessionInfos: nil
-        )
-    }
 
     @discardableResult
     func restoreTerminalTabIfNeededAsync(worktreeId: String, tabId: TabID) async throws -> Tab? {
@@ -7607,7 +7674,7 @@ final class AppState {
             worktreeId: worktreeId,
             tabId: tabId
         )
-        return try restoreTerminalTabIfNeeded(
+        return try await restoreTerminalTabIfNeeded(
             worktreeId: worktreeId,
             tabId: tabId,
             legacySessionInfos: legacySessionInfos
@@ -7696,7 +7763,7 @@ final class AppState {
         worktreeId: String,
         tabId: TabID,
         legacySessionInfos: [ZmxSessionInfo]?
-    ) throws -> Tab? {
+    ) async throws -> Tab? {
         guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
               case .terminal(let state) = tab,
               let worktree = worktree(withId: worktreeId),
@@ -7724,7 +7791,25 @@ final class AppState {
             }
         }
 
-        for leaf in state.root.leaves() {
+        guard state.root.leaves().contains(where: { terminal.registry.session(for: $0.id) == nil }) else {
+            return tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId })
+        }
+        let repoStartupScript = try await preparedRepoHook(
+            event: .sessionOpen,
+            project: project,
+            worktree: worktree,
+            context: .sessionOpen
+        )
+        guard let currentTab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
+              case .terminal(let currentState) = currentTab,
+              self.worktree(withId: worktreeId)?.path == worktree.path,
+              projects.first(where: { $0.id == project.id })?.path == project.path else { return nil }
+        guard !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(for: worktree)) else {
+            throw TerminalLaunchError.worktreeOperationInProgress
+        }
+        let leavesToRestore = currentState.root.leaves().filter { terminal.registry.session(for: $0.id) == nil }
+        guard !leavesToRestore.isEmpty else { return currentTab }
+        for leaf in leavesToRestore {
             // Idempotent: skip leaves whose session is already alive in the
             // registry. The leaf's id is the stable identity used as both
             // the registry key and the zmx session name suffix; we no longer
@@ -7742,7 +7827,7 @@ final class AppState {
                     legacySessionInfos: $0
                 )
             }
-            if state.runScriptLeafId == leaf.id {
+            if currentState.runScriptLeafId == leaf.id {
                 let reattachingPersistedSession = preResolvedZmxSessionName.map { sessionName in
                     legacySessionInfos?.contains { $0.name == sessionName } ?? false
                 } ?? false
@@ -7754,6 +7839,7 @@ final class AppState {
                 worktree: worktree, project: project,
                 cfg: config.terminal, theme: themeStore.current,
                 forcedCwd: forcedCwd,
+                repoStartupScript: repoStartupScript,
                 leafId: leaf.id,
                 allowLegacyAttach: allowLegacyAttach,
                 preResolvedZmxSessionName: preResolvedZmxSessionName
@@ -8810,13 +8896,27 @@ final class AppState {
 
         var openedIDs: [String] = []
         do {
+            let repoStartupScript = try await preparedRepoHook(
+                event: .sessionOpen,
+                project: project,
+                worktree: worktree,
+                context: .sessionOpen
+            )
+            guard closedTabHistory.last?.id == entry.id else { return }
+            guard self.worktree(withId: worktreeID)?.path == worktree.path,
+                  projects.first(where: { $0.id == project.id })?.path == project.path else {
+                closedTabHistory.remove(id: entry.id)
+                return
+            }
+            guard !Self.blocksWorktreeSessionAdmission(projectsManager.operationState(for: worktree)) else { return }
             var replacements: [String: PaneLeaf] = [:]
             var focusedLeafID = oldState.focusedLeafId
             for oldLeaf in oldState.root.leaves() {
                 let opened = try openTerminalSessionForReopen(
                     worktree: worktree,
                     project: project,
-                    forcedCwd: oldLeaf.lastCwd.map(URL.init(fileURLWithPath:))
+                    forcedCwd: oldLeaf.lastCwd.map(URL.init(fileURLWithPath:)),
+                    repoStartupScript: repoStartupScript
                 )
                 openedIDs.append(opened.id)
                 replacements[oldLeaf.id] = PaneLeaf(
@@ -8839,6 +8939,10 @@ final class AppState {
             selectWorktree(id: worktreeID)
             activateWorktreeCenterTab(worktreeId: worktreeID, tabId: reopened.id)
             closedTabHistory.remove(id: entry.id)
+        } catch RepoHookPreflightError.cancelled {
+            for id in openedIDs {
+                closeTerminalSession(id: id, worktreeId: worktreeID, projectPath: project.path)
+            }
         } catch {
             for id in openedIDs {
                 closeTerminalSession(id: id, worktreeId: worktreeID, projectPath: project.path)

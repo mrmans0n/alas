@@ -38,7 +38,7 @@ struct AppStateKeepSessionsAliveTests {
             worktreeId: trees[0].id, title: "main", sessionId: "leaf-orphan"
         )
 
-        let restored = try state.restoreTerminalTabIfNeeded(
+        let restored = try await state.restoreTerminalTabIfNeededAsync(
             worktreeId: trees[0].id, tabId: tab.id
         )
 
@@ -70,11 +70,55 @@ struct AppStateKeepSessionsAliveTests {
         // openSession can throw in this test env (no bundled Ghostty.App).
         // The contract under test is "tab is not pruned", which happens
         // before any openSession call — assert that regardless of throw.
-        _ = try? state.restoreTerminalTabIfNeeded(
+        _ = try? await state.restoreTerminalTabIfNeededAsync(
             worktreeId: trees[0].id, tabId: tab.id
         )
 
         #expect(state.tabs.tabs(forWorktree: trees[0].id).map(\.id) == [tab.id])
+    }
+
+    @Test func restoreWaitsForRepoHookApprovalBeforeOpeningSessions() async throws {
+        let repo = try await makeRepo(name: "hook-restore")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let worktree = try #require(state.projectsManager.worktrees(projectId: project.id).first)
+        state.selectedWorktreeId = worktree.id
+        state.config.terminal.keepSessionsAlive = true
+        state.repoHookLoader = RepoHookLoader { _, _, _ in
+            .data(Data("echo repo hook".utf8))
+        }
+        let tab = state.tabs.appendTerminal(
+            worktreeId: worktree.id, title: "main", sessionId: "leaf-hook"
+        )
+
+        let restoreTask = Task {
+            try await state.restoreTerminalTabIfNeededAsync(worktreeId: worktree.id, tabId: tab.id)
+        }
+        let deadline = Date().addingTimeInterval(10)
+        while state.repoHookApprovalQueue.activeRequest == nil, Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let approvalRequest = state.repoHookApprovalQueue.activeRequest
+        #expect(approvalRequest?.hook?.event == .sessionOpen)
+        #expect(state.terminal.registry.session(for: "leaf-hook") == nil)
+        if approvalRequest != nil {
+            state.repoHookApprovalQueue.decide(.cancel)
+        } else {
+            restoreTask.cancel()
+        }
+        var wasCancelled = false
+        do {
+            _ = try await restoreTask.value
+        } catch RepoHookPreflightError.cancelled {
+            wasCancelled = true
+        }
+        #expect(wasCancelled)
+        #expect(state.terminal.registry.session(for: "leaf-hook") == nil)
     }
 
     /// `reloadTabs` runs once on launch and is the only path that touches

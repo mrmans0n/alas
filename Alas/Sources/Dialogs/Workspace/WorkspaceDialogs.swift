@@ -115,6 +115,7 @@ private struct WorkspaceDefinitionEditor: View {
                 Text("Delete \(workspace?.name ?? "this workspace")?")
             }
         }
+        .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
     }
 
     private var checkoutCount: Int {
@@ -296,6 +297,7 @@ struct CreateWorkspaceCheckoutDialog: View {
             }
         }
         .onDisappear { isVisible = false }
+        .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue, isActive: inspectedCheckout == nil))
     }
 
     private var creationDialog: some View {

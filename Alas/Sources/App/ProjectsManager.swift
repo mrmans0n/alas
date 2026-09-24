@@ -123,7 +123,8 @@ final class ProjectsManager {
         host: String? = nil,
         id: String = UUID().uuidString,
         startupScripts: ProjectStartupScripts = .defaults,
-        mcpServers: [ProjectMCPServer] = []
+        mcpServers: [ProjectMCPServer] = [],
+        approvedRepoHookHashes: [String] = []
     ) async throws -> ProjectConfig {
         let worktreeRootsByProject = worktreesByProject.mapValues { $0.map(\.path.path) }
         try Self.ensureNoPathCollision(
@@ -150,7 +151,8 @@ final class ProjectsManager {
             icon: icon,
             startupScripts: startupScripts,
             mcpServers: mcpServers,
-            host: host
+            host: host,
+            approvedRepoHookHashes: approvedRepoHookHashes
         )
         if let host {
             RemoteHostRegistry.shared.register(root: path.path, host: host)
@@ -268,6 +270,34 @@ final class ProjectsManager {
     func repoMCPTrustState(projectId: String, for server: ProjectMCPServer) -> RepoMCPTrustState? {
         projects.first(where: { $0.id == projectId })?
             .repoMCPTrust[RepoMCPTrust.hash(for: server)]
+    }
+
+    func isRepoHookApproved(projectId: String, hash: String) -> Bool {
+        projects.first(where: { $0.id == projectId })?.approvedRepoHookHashes.contains(hash) == true
+    }
+
+    /// Records an approval for the exact repository hook contents. Returns
+    /// whether persistent project configuration changed.
+    @discardableResult
+    func approveRepoHook(projectId: String, hash: String) -> Bool {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }),
+              !projects[idx].approvedRepoHookHashes.contains(hash)
+        else {
+            return false
+        }
+        projects[idx].approvedRepoHookHashes.append(hash)
+        return true
+    }
+
+    @discardableResult
+    func revokeRepoHookApproval(projectId: String, hash: String) -> Bool {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }),
+              projects[idx].approvedRepoHookHashes.contains(hash)
+        else {
+            return false
+        }
+        projects[idx].approvedRepoHookHashes.removeAll { $0 == hash }
+        return true
     }
 
     /// Enables/disables a repo-defined MCP server for this project by name.

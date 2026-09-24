@@ -819,6 +819,104 @@ struct ClosedTabAppStateTests {
         #expect(split.children.map { $0.firstLeaf().id } == ["fresh-1", "fresh-2"])
     }
 
+    @Test func reopeningTerminalWaitsForRepoHookApproval() async {
+        var openCount = 0
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                openCount += 1
+                return .init(id: "fresh-session-\(openCount)", foregroundPid: { nil })
+            }
+        )
+        let fixture = makeFixture(state: state)
+        fixture.state.repoHookLoader = RepoHookLoader { _, _, _ in
+            .data(Data("echo repo hook".utf8))
+        }
+        let original = TerminalTabState(
+            id: "reopen-hook-terminal",
+            title: "Terminal",
+            root: .split(PaneSplit(
+                id: "split-id",
+                axis: .vertical,
+                fraction: 0.5,
+                children: [
+                    .leaf(PaneLeaf(id: "old-session-1", sessionId: "old-session-1")),
+                    .leaf(PaneLeaf(id: "old-session-2", sessionId: "old-session-2"))
+                ]
+            )),
+            focusedLeafId: "old-session-2"
+        )
+        _ = fixture.state.tabs.restore(
+            tab: .terminal(original),
+            worktreeID: fixture.first.id,
+            placement: .init(previousID: nil, nextID: nil, ordinal: 0)
+        )
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: original.id)
+
+        let reopenTask = Task { await fixture.state.reopenLastClosedTab() }
+        for _ in 0..<20 where fixture.state.repoHookApprovalQueue.activeRequest == nil {
+            await Task.yield()
+        }
+
+        #expect(fixture.state.repoHookApprovalQueue.activeRequest?.hook?.event == .sessionOpen)
+        #expect(openCount == 0)
+        if fixture.state.repoHookApprovalQueue.activeRequest != nil {
+            fixture.state.repoHookApprovalQueue.decide(.skip)
+        }
+        for _ in 0..<20 where fixture.state.repoHookApprovalQueue.activeRequest == nil {
+            await Task.yield()
+        }
+        let askedAgainForSameTab = fixture.state.repoHookApprovalQueue.activeRequest != nil
+        #expect(!askedAgainForSameTab)
+        if askedAgainForSameTab {
+            fixture.state.repoHookApprovalQueue.decide(.skip)
+        }
+        await reopenTask.value
+        #expect(openCount == 2)
+        #expect(fixture.state.repoHookApprovalQueue.activeRequest == nil)
+    }
+
+    @Test func splittingTerminalWaitsForRepoHookApprovalBeforeOpeningSessions() async {
+        let fixture = makeFixture()
+        let state = fixture.state
+        state.repoHookLoader = RepoHookLoader { _, _, _ in
+            .data(Data("echo repo hook".utf8))
+        }
+        let tab = state.tabs.appendTerminal(
+            worktreeId: fixture.first.id,
+            title: "main",
+            sessionId: "focused-session"
+        )
+        state.terminal.registry.register(TerminalSession(
+            id: "focused-session",
+            worktreeId: fixture.first.id,
+            projectId: "closed-tabs-project",
+            surface: AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO()),
+            executable: "/bin/zsh",
+            args: []
+        ))
+
+        state.splitFocusedPane(worktreeId: fixture.first.id, axis: .vertical)
+        let deadline = Date().addingTimeInterval(2)
+        while state.repoHookApprovalQueue.activeRequest == nil, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let approvalRequest = state.repoHookApprovalQueue.activeRequest
+        let currentTab = state.tabs.tabs(forWorktree: fixture.first.id).first { $0.id == tab.id }
+        let leafIDs: [String]?
+        if let currentTab, case .terminal(let terminal) = currentTab {
+            leafIDs = terminal.root.leaves().map(\.id)
+        } else {
+            leafIDs = nil
+        }
+
+        #expect(approvalRequest?.hook?.event == .sessionOpen)
+        #expect(leafIDs == ["focused-session"])
+        if approvalRequest != nil {
+            state.repoHookApprovalQueue.decide(.cancel)
+        }
+    }
+
     @Test func reopeningManuallyRestoredTerminalDoesNotOpenDuplicateSessions() async {
         var openAttempts = 0
         let state = AppState(

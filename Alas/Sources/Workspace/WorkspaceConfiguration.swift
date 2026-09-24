@@ -175,21 +175,33 @@ struct WorkspaceMemberConfigurationSnapshot: Codable, Equatable, Sendable {
     var setupScriptIncludesInheritedGlobalPrefix: Bool
     var ggMode: GGProjectMode
     var mcpServers: [WorkspaceMCPServerDescriptor]
+    /// Frozen project and member policies retain hook eligibility on resume.
+    /// `nil` means a snapshot predates repository hooks and must use `setupScript`.
+    var projectWorktreeCreateMode: ProjectStartupScriptMode?
+    var projectWorktreeCreateScript: String?
+    var memberSetupScript: WorkspaceScriptConfiguration?
 
     init(
         setupScript: String,
         setupScriptIncludesInheritedGlobalPrefix: Bool = false,
         ggMode: GGProjectMode,
-        mcpServers: [WorkspaceMCPServerDescriptor]
+        mcpServers: [WorkspaceMCPServerDescriptor],
+        projectWorktreeCreateMode: ProjectStartupScriptMode? = nil,
+        projectWorktreeCreateScript: String? = nil,
+        memberSetupScript: WorkspaceScriptConfiguration? = nil
     ) {
         self.setupScript = setupScript
         self.setupScriptIncludesInheritedGlobalPrefix = setupScriptIncludesInheritedGlobalPrefix
         self.ggMode = ggMode
         self.mcpServers = mcpServers
+        self.projectWorktreeCreateMode = projectWorktreeCreateMode
+        self.projectWorktreeCreateScript = projectWorktreeCreateScript
+        self.memberSetupScript = memberSetupScript
     }
 
     private enum CodingKeys: String, CodingKey {
         case setupScript, setupScriptIncludesInheritedGlobalPrefix, ggMode, mcpServers
+        case projectWorktreeCreateMode, projectWorktreeCreateScript, memberSetupScript
     }
 
     init(from decoder: Decoder) throws {
@@ -198,6 +210,9 @@ struct WorkspaceMemberConfigurationSnapshot: Codable, Equatable, Sendable {
         setupScriptIncludesInheritedGlobalPrefix = try container.decodeIfPresent(Bool.self, forKey: .setupScriptIncludesInheritedGlobalPrefix) ?? false
         ggMode = try container.decodeIfPresent(GGProjectMode.self, forKey: .ggMode) ?? .off
         mcpServers = try container.decodeIfPresent([WorkspaceMCPServerDescriptor].self, forKey: .mcpServers) ?? []
+        projectWorktreeCreateMode = try container.decodeIfPresent(ProjectStartupScriptMode.self, forKey: .projectWorktreeCreateMode)
+        projectWorktreeCreateScript = try container.decodeIfPresent(String.self, forKey: .projectWorktreeCreateScript)
+        memberSetupScript = try container.decodeIfPresent(WorkspaceScriptConfiguration.self, forKey: .memberSetupScript)
     }
 }
 
@@ -252,7 +267,10 @@ enum WorkspaceConfigurationResolver {
                 ggMode: ggMode,
                 mcpServers: servers.enumerated().map { index, server in
                     .init(id: "\(member.id.uuidString):\(index):\(server.id)", server: server, projectDirectory: member.checkoutRoot, worktreeDirectory: member.worktreePath, checkoutRoot: member.checkoutRoot)
-                }
+                },
+                projectWorktreeCreateMode: member.project.startupScripts.worktreeCreateMode,
+                projectWorktreeCreateScript: member.project.startupScripts.worktreeCreateScript,
+                memberSetupScript: configuration.setupScript
             )
         }
         return .init(
@@ -302,6 +320,50 @@ enum WorkspaceConfigurationResolver {
         case .disabled:
             return ""
         }
+    }
+
+    static func memberSetupScript(
+        sharedWorktreeCreateScript: String,
+        globalWorktreeCreateScript: String,
+        member: WorkspaceMemberConfigurationSnapshot,
+        repoScript: String?
+    ) -> String {
+        guard let projectMode = member.projectWorktreeCreateMode,
+              let projectScript = member.projectWorktreeCreateScript,
+              let memberConfiguration = member.memberSetupScript
+        else {
+            let legacyMemberScript = member.setupScript
+            let legacyMemberOnlyScript = sharedWorktreeCreateScript
+                .inheritsGlobalSetupPrefix(globalWorktreeCreateScript)
+                && member.setupScriptIncludesInheritedGlobalPrefix
+                ? legacyMemberScript.removingInheritedGlobalSetupPrefix(globalWorktreeCreateScript)
+                : legacyMemberScript.trimmingCharacters(in: .whitespacesAndNewlines)
+            return [sharedWorktreeCreateScript, legacyMemberOnlyScript]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+        }
+
+        let inheritedProjectScript = [globalWorktreeCreateScript, repoScript ?? ""]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        let projectSetup = resolveScript(
+            global: inheritedProjectScript,
+            mode: projectMode,
+            local: projectScript
+        )
+        let memberSetup = resolveScript(
+            global: projectSetup,
+            mode: memberConfiguration.mode.asProjectMode,
+            local: memberConfiguration.script
+        )
+        let memberOnlyScript = sharedWorktreeCreateScript
+            .inheritsGlobalSetupPrefix(globalWorktreeCreateScript)
+            ? memberSetup.removingInheritedGlobalSetupPrefix(globalWorktreeCreateScript)
+            : memberSetup.trimmingCharacters(in: .whitespacesAndNewlines)
+        return [sharedWorktreeCreateScript, memberOnlyScript]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
     }
 }
 

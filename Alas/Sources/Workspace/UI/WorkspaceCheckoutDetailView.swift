@@ -267,6 +267,7 @@ struct WorkspaceRepairPlanSheet: View {
 
 struct WorkspaceDeletionConfirmationSheet: View {
     let model: WorkspaceLifecycleConfirmationModel
+    let approvalQueue: RepoHookApprovalQueue
     var confirm: (WorkspaceLifecycleAction) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
 
@@ -285,6 +286,7 @@ struct WorkspaceDeletionConfirmationSheet: View {
             onCancel: { dismiss() }, onConfirm: { confirm(model.confirmAction) }, confirmEnabled: true
         )
         .onExitCommand { dismiss() }
+        .modifier(RepoHookApprovalPresentationHandler(approvalQueue: approvalQueue))
     }
 
     private var confirmTitle: String {

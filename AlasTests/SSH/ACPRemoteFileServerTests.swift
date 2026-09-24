@@ -160,6 +160,94 @@ struct ACPRemoteFileServerTests {
         #expect(result.exitCode == 8)
     }
 
+    @Test func containedResolvedReadScriptFollowsAFinalSymlinkInsideTheWorktree() async throws {
+        let root = try makeContainedReadRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("scripts/hook.sh")
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "echo linked\n".write(to: target, atomically: true, encoding: .utf8)
+        let alias = root.appendingPathComponent(".alas/hooks/session-open.sh")
+        try FileManager.default.createDirectory(at: alias.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: alias.path, withDestinationPath: "../../scripts/hook.sh")
+
+        let command = RemotePathContainment.containedResolvedReadScript(
+            path: alias.path,
+            worktreeRoot: root.path,
+            maxBytes: 1_000_000
+        )
+        let result = try await Process.runData("/bin/sh", args: ["-c", command])
+
+        #expect(result.exitCode == 0)
+        #expect(String(data: result.stdout, encoding: .utf8) == "12\necho linked\n")
+    }
+
+    @Test func containedResolvedReadScriptDistinguishesDanglingSymlinkFromMissingFile() async throws {
+        let root = try makeContainedReadRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let scripts = root.appendingPathComponent("scripts")
+        try FileManager.default.createDirectory(at: scripts, withIntermediateDirectories: true)
+
+        let missingPath = scripts.appendingPathComponent("missing.sh")
+        let missingCommand = RemotePathContainment.containedResolvedReadScript(
+            path: missingPath.path,
+            worktreeRoot: root.path,
+            maxBytes: 1_000_000
+        )
+        let missingResult = try await Process.runData("/bin/sh", args: ["-c", missingCommand])
+        let missingOutcome = RemotePathContainment.parseContainedReadResult(
+            exitCode: missingResult.exitCode,
+            stdout: missingResult.stdout,
+            maxBytes: 1_000_000
+        )
+
+        let danglingAlias = root.appendingPathComponent(".alas/hooks/session-open.sh")
+        try FileManager.default.createDirectory(
+            at: danglingAlias.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            atPath: danglingAlias.path,
+            withDestinationPath: "../../scripts/missing.sh"
+        )
+        let danglingCommand = RemotePathContainment.containedResolvedReadScript(
+            path: danglingAlias.path,
+            worktreeRoot: root.path,
+            maxBytes: 1_000_000
+        )
+        let danglingResult = try await Process.runData("/bin/sh", args: ["-c", danglingCommand])
+        let danglingOutcome = RemotePathContainment.parseContainedReadResult(
+            exitCode: danglingResult.exitCode,
+            stdout: danglingResult.stdout,
+            maxBytes: 1_000_000
+        )
+
+        #expect(missingOutcome == .missing)
+        #expect(danglingOutcome == .unreadable)
+    }
+
+    @Test func containedResolvedReadScriptRejectsAFinalSymlinkOutsideTheWorktree() async throws {
+        let root = try makeContainedReadRoot()
+        let outside = try makeContainedReadRoot()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let secret = outside.appendingPathComponent("secret.sh")
+        try "echo secret\n".write(to: secret, atomically: true, encoding: .utf8)
+        let alias = root.appendingPathComponent(".alas/hooks/session-open.sh")
+        try FileManager.default.createDirectory(at: alias.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: secret)
+
+        let command = RemotePathContainment.containedResolvedReadScript(
+            path: alias.path,
+            worktreeRoot: root.path,
+            maxBytes: 1_000_000
+        )
+        let result = try await Process.runData("/bin/sh", args: ["-c", command])
+
+        #expect(result.exitCode == 6)
+    }
+
     @Test func containedReadScriptRejectsADirectory() async throws {
         let root = try makeContainedReadRoot()
         defer { try? FileManager.default.removeItem(at: root) }

@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -78,6 +79,63 @@ struct WebPreviewFeedbackTests {
         #expect(WebPreviewFeedbackDelivery.Error.sessionOwnerMismatch.localizedDescription == "That chat belongs to a different preview owner.")
         #expect(WebPreviewFeedbackDelivery.Error.sessionNotWritable.localizedDescription == "The selected chat is not open or cannot receive prompts right now.")
         #expect(WebPreviewFeedbackDelivery.Error.deliveryRejected.localizedDescription == "The chat rejected the preview feedback.")
+    }
+
+    @MainActor
+    @Test func feedbackSheetOwnsRuntimeHookApprovalPresentation() async throws {
+        let fixture = try await Self.makeFixture()
+        defer { fixture.cleanup() }
+
+        let tab = fixture.state.tabs.openWebPreview(worktreeId: fixture.matchingOwnerKey)
+        guard case .webPreview(let preview) = tab else {
+            Issue.record("Expected Web Preview tab")
+            return
+        }
+        let browser = fixture.state.tabs.webPreviewBrowser(ownerKey: preview.ownerKey, remoteHost: preview.remoteHost)
+        browser.capture = WebPreviewCapture(
+            ownerKey: preview.ownerKey,
+            url: try #require(URL(string: "http://localhost:3000")),
+            viewport: CGSize(width: 800, height: 600),
+            region: CGRect(x: 0, y: 0, width: 800, height: 600),
+            png: Self.pngBytes
+        )
+
+        let theme = try ThemeStore().current
+        let controller = NSHostingController(
+            rootView: WebPreviewTabView(state: fixture.state, tab: preview).environment(\.theme, theme)
+        )
+        controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+        let window = NSWindow(contentRect: controller.view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentViewController = controller
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        controller.view.layoutSubtreeIfNeeded()
+        await Task.yield()
+
+        let bytes = Data("echo session open".utf8)
+        let hook = RepoHook(
+            event: .sessionOpen,
+            source: .local,
+            bytes: bytes,
+            text: String(decoding: bytes, as: UTF8.self),
+            hash: RepoHookTrust.hash(event: .sessionOpen, bytes: bytes)
+        )
+        let task = Task {
+            await fixture.state.repoHookApprovalQueue.requestDecision(
+                hook: hook,
+                projectID: "project",
+                context: .sessionOpen
+            )
+        }
+
+        await Task.yield()
+        let nestedRequest = fixture.state.repoHookApprovalQueue.activeDialogRequest
+        let rootRequest = fixture.state.repoHookApprovalQueue.activeRuntimeRequest
+        fixture.state.repoHookApprovalQueue.decide(.approve)
+
+        #expect(nestedRequest?.context == .sessionOpen)
+        #expect(rootRequest == nil)
+        #expect(await task.value == .approve)
     }
 
     @MainActor

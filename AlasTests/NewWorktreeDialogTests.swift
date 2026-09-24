@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -778,5 +780,136 @@ struct NewWorktreeDialogTests {
             branch: "nacho/other-branch",
             stackName: "nacho/auth-flow"
         ) == "nacho/auth-flow")
+    }
+}
+
+@Suite(.serialized)
+@MainActor
+struct NewWorktreeDialogPresentationTests {
+    private struct MemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
+    @Test func worktreeDialogOwnsRuntimeHookApprovalPresentation() async throws {
+        let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
+        let dialog = NewWorktreeDialog(state: state, presented: .constant(true), presetProjectId: "project")
+        let theme = try ThemeStore().current
+        let controller = NSHostingController(rootView: dialog.environment(\.theme, theme))
+        controller.view.frame = NSRect(x: 0, y: 0, width: 560, height: 480)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let bytes = Data("echo session open".utf8)
+        let hook = RepoHook(
+            event: .sessionOpen,
+            source: .local,
+            bytes: bytes,
+            text: String(decoding: bytes, as: UTF8.self),
+            hash: RepoHookTrust.hash(event: .sessionOpen, bytes: bytes)
+        )
+        let task = Task {
+            await state.repoHookApprovalQueue.requestDecision(
+                hook: hook,
+                projectID: "project",
+                context: .sessionOpen
+            )
+        }
+
+        await Task.yield()
+        let nestedRequest = state.repoHookApprovalQueue.activeDialogRequest
+        let rootRequest = state.repoHookApprovalQueue.activeRuntimeRequest
+        state.repoHookApprovalQueue.decide(.approve)
+
+        #expect(nestedRequest?.context == .sessionOpen)
+        #expect(rootRequest == nil)
+        #expect(await task.value == .approve)
+    }
+
+    @Test func inactiveParentBindingHandsRuntimeApprovalToActiveChild() async {
+        let queue = RepoHookApprovalQueue()
+        let childPresenterID = UUID()
+        queue.registerDialogPresenter(id: childPresenterID)
+        defer {
+            queue.decide(.approve)
+            queue.unregisterDialogPresenter(id: childPresenterID)
+        }
+
+        let bytes = Data("echo session open".utf8)
+        let hook = RepoHook(
+            event: .sessionOpen,
+            source: .local,
+            bytes: bytes,
+            text: String(decoding: bytes, as: UTF8.self),
+            hash: RepoHookTrust.hash(event: .sessionOpen, bytes: bytes)
+        )
+        let task = Task {
+            await queue.requestDecision(
+                hook: hook,
+                projectID: "project",
+                context: .sessionOpen
+            )
+        }
+        await Task.yield()
+
+        let activeRequestID = queue.activeRequest?.id
+        let queueBinding = Binding<RepoHookApprovalRequest?>(
+            get: { queue.activeDialogRequest },
+            set: { queue.activeDialogRequest = $0 }
+        )
+        let parentBinding = RepoHookApprovalPresentationHandler(
+            approvalQueue: queue,
+            isActive: false
+        ).presentationBinding(for: queueBinding)
+        let childBinding = RepoHookApprovalPresentationHandler(approvalQueue: queue)
+            .presentationBinding(for: queueBinding)
+
+        #expect(activeRequestID != nil)
+        #expect(parentBinding.wrappedValue == nil)
+        #expect(childBinding.wrappedValue?.id == activeRequestID)
+
+        parentBinding.wrappedValue = nil
+        #expect(queue.activeRequest?.id == activeRequestID)
+
+        queue.decide(.approve)
+        #expect(await task.value == .approve)
+    }
+
+    @Test func inactivePresenterLeavesRuntimeApprovalForRoot() async {
+        let queue = RepoHookApprovalQueue()
+        let controller = NSHostingController(
+            rootView: Text("Project").modifier(
+                RepoHookApprovalPresentationHandler(
+                    approvalQueue: queue,
+                    isActive: false,
+                    registersPresenter: false
+                )
+            )
+        )
+        controller.view.frame = NSRect(x: 0, y: 0, width: 320, height: 200)
+        controller.view.layoutSubtreeIfNeeded()
+        await Task.yield()
+
+        let bytes = Data("echo session open".utf8)
+        let hook = RepoHook(
+            event: .sessionOpen,
+            source: .local,
+            bytes: bytes,
+            text: String(decoding: bytes, as: UTF8.self),
+            hash: RepoHookTrust.hash(event: .sessionOpen, bytes: bytes)
+        )
+        let task = Task {
+            await queue.requestDecision(
+                hook: hook,
+                projectID: "project",
+                context: .sessionOpen
+            )
+        }
+        await Task.yield()
+
+        #expect(queue.activeRuntimeRequest?.context == .sessionOpen)
+        #expect(queue.activeDialogRequest == nil)
+
+        queue.decide(.approve)
+        #expect(await task.value == .approve)
     }
 }

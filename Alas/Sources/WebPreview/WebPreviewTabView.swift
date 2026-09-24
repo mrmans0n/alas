@@ -156,6 +156,7 @@ struct WebPreviewTabView: View {
         }
         .sheet(item: $browser.capture) { capture in
             WebPreviewFeedbackSheet(state: state, capture: capture)
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
         }
     }
 
@@ -243,7 +244,9 @@ private struct WebPreviewFeedbackSheet: View {
         .interactiveDismissDisabled(sending)
         .sheet(isPresented: $showsImage) {
             WebPreviewCaptureImage(png: capture.png)
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
         }
+        .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue, isActive: !showsImage))
     }
 }
 
