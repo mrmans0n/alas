@@ -736,7 +736,8 @@ struct AppStateRunScheduleTests {
     private func makeComposedState(
         repo: URL,
         installedAgentIDs: Set<String>,
-        completionGate: Gate? = nil
+        completionGate: Gate? = nil,
+        scheduledAgentReportFinalizer: ScheduledAgentReportFinalizer? = nil
     ) async throws -> (AppState, ProjectConfig, LocationBox) {
         let locations = LocationBox()
         var openCount = 0
@@ -760,7 +761,9 @@ struct AppStateRunScheduleTests {
             },
             runHistoryStore: try RunHistoryStore(path: repo.appendingPathComponent("history.sqlite").path),
             runScheduler: RunScheduler(store: MemoryStore(), fileURL: repo.appendingPathComponent("schedules.json")),
-            attentionStore: AttentionStore(url: repo.appendingPathComponent("attention-events.json"))
+            attentionStore: AttentionStore(url: repo.appendingPathComponent("attention-events.json")),
+            scheduledAgentReportDatabasePath: repo.appendingPathComponent("scheduled-agent-reports.sqlite").path,
+            scheduledAgentReportFinalizer: scheduledAgentReportFinalizer
         )
         state.config.worktrees.rootPath = repo.deletingLastPathComponent().appendingPathComponent("wts-\(UUID().uuidString)").path
         state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}/{branch}"
@@ -844,6 +847,51 @@ struct AppStateRunScheduleTests {
         let stillInterrupted = try #require(try await state.scheduledAgentReport(id: reportID))
         #expect(stillInterrupted.taskState == .interrupted)
         #expect(state.runScriptSettlementHandlers.isEmpty)
+    }
+
+    @Test func scriptLaunchFailureWithReportFinalizationFailureReturnsUncommittedOutcome() async throws {
+        struct FinalizationFailure: LocalizedError {
+            var errorDescription: String? { "Injected report write failure" }
+        }
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(
+            repo: repo,
+            installedAgentIDs: ["omp"],
+            scheduledAgentReportFinalizer: { _, _, _, _ in
+                throw FinalizationFailure()
+            }
+        )
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        state.config.terminal.shell = "/bin/fish"
+
+        let composed = schedule(
+            target: .project(id: project.id),
+            scriptKey: "repo:setup.sh",
+            composition: RunScheduleComposition(
+                branchTemplate: "sched/{name}-{date}",
+                agentId: "omp",
+                prompt: "Run this scheduled task.",
+                afterExecution: .reportAndCleanupOnSuccess
+            )
+        )
+        let result = await state.runSchedule(composed, firingID: "script-finalization-failure")
+
+        guard case .launchFailed(let message) = result.outcome else {
+            Issue.record("Expected report finalization failure, got \(result.outcome)")
+            return
+        }
+        #expect(message.contains("The report was not committed"))
+        #expect(message.contains("worktree was retained"))
+
+        let reportID = try #require(result.reportIDs.first)
+        let report = try #require(try await state.scheduledAgentReport(id: reportID))
+        #expect(report.taskState == .running)
+        let worktree = try #require(state.projectsManager.worktrees(projectId: project.id)
+            .first { $0.id == report.worktreeID })
+        #expect(state.inAppNotifications.notifications(in: worktree.id).contains {
+            $0.severity == .error && $0.message.contains("The report was not committed")
+        })
     }
 
 
