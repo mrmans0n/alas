@@ -85,6 +85,47 @@ struct RepoHookApprovalQueueTests {
         #expect(queue.activeRequest == nil)
     }
 
+    @Test func nonApprovalDecisionsResolveOneCoalescedWaiterAtATime() async {
+        let queue = RepoHookApprovalQueue()
+        let worktreeHook = hook("shared worktree hook", event: .worktreeCreate)
+        let createTask = Task {
+            await queue.requestDecision(hook: worktreeHook, projectID: "project", context: .worktreeCreate)
+        }
+        await Task.yield()
+        let memberTask = Task {
+            await queue.requestDecision(hook: worktreeHook, projectID: "project", context: .workspaceMember)
+        }
+        await Task.yield()
+
+        let createRequestID = queue.activeRequest?.id
+        queue.decide(.skip)
+        #expect(await createTask.value == .skip)
+        #expect(queue.activeRequest?.id != createRequestID)
+        #expect(queue.activeRequest?.context == .workspaceMember)
+
+        queue.decide(.skip)
+        #expect(await memberTask.value == .skip)
+        #expect(queue.activeRequest == nil)
+
+        let firstSessionTask = Task {
+            await queue.requestDecision(hook: hook("same session hook"), projectID: "project", context: .sessionOpen)
+        }
+        await Task.yield()
+        let duplicateSessionTask = Task {
+            await queue.requestDecision(hook: hook("same session hook"), projectID: "project", context: .sessionOpen)
+        }
+        await Task.yield()
+
+        let sessionRequestID = queue.activeRequest?.id
+        queue.decide(.cancel)
+        #expect(await firstSessionTask.value == .cancel)
+        #expect(queue.activeRequest?.id != sessionRequestID)
+
+        queue.decide(.cancel)
+        #expect(await duplicateSessionTask.value == .cancel)
+        #expect(queue.activeRequest == nil)
+    }
+
     @Test func scopesCoalescingByProjectAndContext() async {
         let queue = RepoHookApprovalQueue()
         let sameHook = hook("same content")

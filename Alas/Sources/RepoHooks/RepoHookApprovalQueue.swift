@@ -96,10 +96,22 @@ final class RepoHookApprovalQueue {
         let context: RepoHookApprovalContext.Kind
     }
 
-    private struct Entry {
+    private struct Waiter {
+        let id: UUID
         let request: RepoHookApprovalRequest
+        let continuation: CheckedContinuation<RepoHookApprovalDecision, Never>
+    }
+
+    private struct Entry {
         let coalescingKey: CoalescingKey?
-        var waiters: [UUID: CheckedContinuation<RepoHookApprovalDecision, Never>]
+        var waiters: [Waiter]
+    }
+    var activeRequest: RepoHookApprovalRequest? {
+        get { entries.first?.waiters.first?.request }
+        set {
+            guard newValue == nil, entries.first?.waiters.first?.request.context.allowsCancel == true else { return }
+            decide(.cancel)
+        }
     }
 
     private var entries: [Entry] = []
@@ -115,14 +127,6 @@ final class RepoHookApprovalQueue {
 
     func unregisterDialogPresenter(id: UUID) {
         _ = dialogPresenterIDs.remove(id)
-    }
-
-    var activeRequest: RepoHookApprovalRequest? {
-        get { entries.first?.request }
-        set {
-            guard newValue == nil, entries.first?.request.context.allowsCancel == true else { return }
-            decide(.cancel)
-        }
     }
 
     var activeRuntimeRequest: RepoHookApprovalRequest? {
@@ -197,15 +201,12 @@ final class RepoHookApprovalQueue {
         let waiterID = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
+                let waiter = Waiter(id: waiterID, request: request, continuation: continuation)
                 if let coalescingKey,
                    let index = entries.firstIndex(where: { $0.coalescingKey == coalescingKey }) {
-                    entries[index].waiters[waiterID] = continuation
+                    entries[index].waiters.append(waiter)
                 } else {
-                    entries.append(.init(
-                        request: request,
-                        coalescingKey: coalescingKey,
-                        waiters: [waiterID: continuation]
-                    ))
+                    entries.append(.init(coalescingKey: coalescingKey, waiters: [waiter]))
                 }
                 if Task.isCancelled {
                     resolve(waiterID: waiterID, decision: .cancel)
@@ -220,21 +221,35 @@ final class RepoHookApprovalQueue {
 
     func decide(_ decision: RepoHookApprovalDecision) {
         guard !entries.isEmpty else { return }
-        let active = entries.removeFirst()
-        for continuation in active.waiters.values {
-            continuation.resume(returning: decision)
+        // Approval trusts matching contents across actions; skip and cancel affect only one waiter.
+        if decision == .approve {
+            let active = entries.removeFirst()
+            for waiter in active.waiters {
+                waiter.continuation.resume(returning: decision)
+            }
+            return
         }
+
+        let waiter = entries[0].waiters.removeFirst()
+        if entries[0].waiters.isEmpty {
+            entries.removeFirst()
+        }
+        waiter.continuation.resume(returning: decision)
     }
 
     private func resolve(waiterID: UUID, decision: RepoHookApprovalDecision) {
-        guard let index = entries.firstIndex(where: { $0.waiters.keys.contains(waiterID) }),
-              let continuation = entries[index].waiters.removeValue(forKey: waiterID)
+        guard let entryIndex = entries.firstIndex(where: { entry in
+            entry.waiters.contains(where: { $0.id == waiterID })
+        }),
+            let waiterIndex = entries[entryIndex].waiters.firstIndex(where: { $0.id == waiterID })
         else {
             return
         }
-        if entries[index].waiters.isEmpty {
-            entries.remove(at: index)
+
+        let waiter = entries[entryIndex].waiters.remove(at: waiterIndex)
+        if entries[entryIndex].waiters.isEmpty {
+            entries.remove(at: entryIndex)
         }
-        continuation.resume(returning: decision)
+        waiter.continuation.resume(returning: decision)
     }
 }

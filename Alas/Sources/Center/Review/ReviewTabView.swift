@@ -115,6 +115,7 @@ struct ReviewTabView: View {
                     showVerdictSheet = false
                 }
             )
+            .modifier(RepoHookApprovalPresentationHandler(approvalQueue: appState.repoHookApprovalQueue))
         }
         .task(id: loadKey) {
             let completesStartupRecovery = ReviewTabStartupRecoveryReadiness.shouldComplete(

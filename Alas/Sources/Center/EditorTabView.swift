@@ -145,6 +145,7 @@ struct EditorTabView: View {
                         scope: scope, scriptURL: absoluteFileURL, in: worktree, request: request
                     )
                 }
+                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: appState.repoHookApprovalQueue))
             }
             if isBinary {
                 binaryPlaceholder
