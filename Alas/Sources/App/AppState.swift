@@ -1089,21 +1089,27 @@ final class AppState {
     func agentAvailability(for worktree: Worktree) -> AgentAvailabilityState {
         agentAvailability(
             worktreePath: worktree.path,
-            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+            remoteHost: projectAndWorktree(
+                withWorktreeId: worktree.id,
+                inProjectId: worktree.projectId
+            )?.project.host
         )
     }
 
     func agentExecutionTarget(for worktree: Worktree) -> AgentExecutionTarget {
         AgentExecutionTarget.resolve(
             worktreePath: worktree.path,
-            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+            remoteHost: projectAndWorktree(
+                withWorktreeId: worktree.id,
+                inProjectId: worktree.projectId
+            )?.project.host
         )
     }
 
     func loadAgentAvailability(for worktree: Worktree, force: Bool = false, retryFailed: Bool = false) async {
         await loadAgentAvailability(
             worktreePath: worktree.path,
-            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host,
+            executionTarget: agentExecutionTarget(for: worktree),
             force: force,
             retryFailed: retryFailed
         )
@@ -1128,7 +1134,7 @@ final class AppState {
     func agentAvailabilityGeneration(for worktree: Worktree) -> Int {
         agentAvailabilityGeneration(
             worktreePath: worktree.path,
-            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+            executionTarget: agentExecutionTarget(for: worktree)
         )
     }
 
@@ -11499,6 +11505,15 @@ final class AppState {
             let manager = acpManagers[owner] ?? (hasLegacyACPTabs ? acpManager(for: worktree) : nil)
             if hasLegacyACPTabs { await manager?.refreshRecentNow() }
             for tab in sharedTabs {
+                if case .terminal(let terminalState) = tab,
+                   terminalState.projectId == worktree.projectId {
+                    closeTab(
+                        worktreeId: worktree.id,
+                        projectId: worktree.projectId,
+                        tabId: tab.id
+                    )
+                    continue
+                }
                 guard case .acpSession(let state) = tab,
                       state.projectId == worktree.projectId
                         || (state.projectId == nil

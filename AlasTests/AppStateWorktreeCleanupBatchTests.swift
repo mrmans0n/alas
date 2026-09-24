@@ -314,14 +314,24 @@ struct AppStateWorktreeCleanupBatchTests {
         fixture.state.tabs.append(acpSession: secondTab, to: target.id)
         let legacyTab = ACPSessionTabState(sessionId: legacySession.id, title: "Legacy")
         fixture.state.tabs.append(acpSession: legacyTab, to: target.id)
-        fixture.state.tabs.appendTerminal(
+        let firstTerminal = fixture.state.tabs.appendTerminal(
             worktreeId: target.id,
-            title: "shared",
-            sessionId: "shared-session"
+            projectId: fixture.project.id,
+            title: "first project",
+            sessionId: "first-project-session"
+        )
+        let secondTerminal = fixture.state.tabs.appendTerminal(
+            worktreeId: target.id,
+            projectId: secondProject.id,
+            title: "second project",
+            sessionId: "second-project-session"
         )
         let preflight = try await WorktreeService().deletePreflight(worktreePath: target.path)
         let authorization = WorktreeCleanupDeleteAuthorization(
-            sessionIDsByWorktree: [target.id: ["shared-session", firstTab.sessionId, secondTab.sessionId, legacyTab.sessionId]],
+            sessionIDsByWorktree: [target.id: [
+                "first-project-session", "second-project-session",
+                firstTab.sessionId, secondTab.sessionId, legacyTab.sessionId
+            ]],
             preflightByWorktree: [target.id: preflight]
         )
 
@@ -336,10 +346,8 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(!remaining.contains { $0.id == firstTab.id })
         #expect(!remaining.contains { $0.id == legacyTab.id })
         #expect(remaining.contains { $0.id == secondTab.id })
-        #expect(remaining.contains {
-            if case .terminal = $0 { return true }
-            return false
-        })
+        #expect(!remaining.contains { $0.id == firstTerminal.id })
+        #expect(remaining.contains { $0.id == secondTerminal.id })
     }
 
     @Test func singleDeleteCleansSharedRuntimeWhenTheOtherOwnerDisappearsBeforeRefresh() async throws {

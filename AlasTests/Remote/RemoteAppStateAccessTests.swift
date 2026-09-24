@@ -616,6 +616,14 @@ struct RemoteAppStateAccessTests {
         #expect(fixture.state.acpManager(for: fixture.first)?.liveSession(for: session.id) == nil)
     }
 
+    @Test func delegatedAgentAvailabilityUsesTargetProjectHostForSharedPaths() throws {
+        let fixture = try makeSharedPathState()
+        defer { cleanupSharedPathFiles(fixture) }
+
+        #expect(fixture.state.agentExecutionTarget(for: fixture.first) == .ssh(host: "host-a"))
+        #expect(fixture.state.agentExecutionTarget(for: fixture.second) == .ssh(host: "host-b"))
+    }
+
     @Test func reloadTabsBootstrapsEachProjectScopedACPOwner() async throws {
         let fixture = try makeSharedPathState()
         defer { cleanupSharedPathFiles(fixture) }
