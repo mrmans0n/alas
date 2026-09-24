@@ -57,6 +57,34 @@ struct RepoHookApprovalQueueTests {
         #expect(queue.activeRequest == nil)
     }
 
+    @Test func coalescesWorktreeApprovalAcrossRuntimeContexts() async {
+        let queue = RepoHookApprovalQueue()
+        let sharedHook = hook("shared worktree hook", event: .worktreeCreate)
+        let createTask = Task {
+            await queue.requestDecision(hook: sharedHook, projectID: "project", context: .worktreeCreate)
+        }
+
+        await Task.yield()
+        let activeRequestID = queue.activeRequest?.id
+        #expect(queue.activeRequest?.context == .worktreeCreate)
+
+        let memberTask = Task {
+            await queue.requestDecision(hook: sharedHook, projectID: "project", context: .workspaceMember)
+        }
+        await Task.yield()
+        #expect(queue.activeRequest?.id == activeRequestID)
+
+        queue.decide(.approve)
+        #expect(await createTask.value == .approve)
+        let duplicatePromptWasQueued = queue.activeRequest != nil
+        #expect(!duplicatePromptWasQueued)
+        if duplicatePromptWasQueued {
+            queue.decide(.skip)
+        }
+        #expect(await memberTask.value == .approve)
+        #expect(queue.activeRequest == nil)
+    }
+
     @Test func scopesCoalescingByProjectAndContext() async {
         let queue = RepoHookApprovalQueue()
         let sameHook = hook("same content")
@@ -66,8 +94,8 @@ struct RepoHookApprovalQueueTests {
         let otherProjectTask = Task {
             await queue.requestDecision(hook: sameHook, projectID: "project-b", context: .sessionOpen)
         }
-        let otherContextTask = Task {
-            await queue.requestDecision(hook: sameHook, projectID: "project-a", context: .workspaceMember)
+        let settingsTask = Task {
+            await queue.requestDecision(hook: sameHook, projectID: "project-a", context: .projectSettings)
         }
 
         await Task.yield()
@@ -81,9 +109,9 @@ struct RepoHookApprovalQueueTests {
         queue.decide(.skip)
         #expect(await otherProjectTask.value == .skip)
 
-        #expect(queue.activeRequest?.context == .workspaceMember)
+        #expect(queue.activeRequest?.context == .projectSettings)
         queue.decide(.approve)
-        #expect(await otherContextTask.value == .approve)
+        #expect(await settingsTask.value == .approve)
         #expect(queue.activeRequest == nil)
     }
 
@@ -256,14 +284,14 @@ struct RepoHookApprovalQueueTests {
         queue.unregisterDialogPresenter(id: presenterID)
     }
 
-    private func hook(_ text: String) -> RepoHook {
+    private func hook(_ text: String, event: RepoHookEvent = .sessionOpen) -> RepoHook {
         let bytes = Data(text.utf8)
         return .init(
-            event: .sessionOpen,
+            event: event,
             source: .local,
             bytes: bytes,
             text: text,
-            hash: RepoHookTrust.hash(event: .sessionOpen, bytes: bytes)
+            hash: RepoHookTrust.hash(event: event, bytes: bytes)
         )
     }
 }
