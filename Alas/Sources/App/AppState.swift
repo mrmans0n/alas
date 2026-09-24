@@ -13587,7 +13587,7 @@ final class AppState {
         var summaries: [ACPOrchestrationSessionSummary] = []
         for record in children {
             let manager = record.childWorktreeId
-                .flatMap { worktree(withId: $0) }
+                .flatMap { worktree(withId: $0, inProjectId: record.projectId) }
                 .flatMap { acpManager(for: $0) }
             let runtime = manager?.liveSession(for: record.childSessionId)
                 .map { session -> ACPOrchestrationRuntimeState in
@@ -13610,6 +13610,7 @@ final class AppState {
                 relationship: "child",
                 agentId: record.agentId,
                 worktreeId: record.childWorktreeId ?? "",
+                projectId: record.projectId,
                 state: ACPSessionOrchestrationPolicy.publicState(
                     phase: record.phase,
                     runtime: runtime,
@@ -13625,6 +13626,7 @@ final class AppState {
                 relationship: "parent",
                 agentId: "",
                 worktreeId: parent.parentWorktreeId,
+                projectId: parent.projectId,
                 state: "idle",
                 failure: nil,
                 createdAt: parent.createdAt
@@ -13634,9 +13636,14 @@ final class AppState {
     }
 
     func openDelegatedACPSession(_ summary: ACPOrchestrationSessionSummary) async {
-        guard let worktree = worktree(withId: summary.worktreeId) else { return }
+        guard let projectId = summary.projectId,
+              let worktree = worktree(withId: summary.worktreeId, inProjectId: projectId)
+        else { return }
         focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
-        await openExistingACPSession(sessionId: summary.sessionId)
+        await openExistingACPSession(
+            sessionId: summary.sessionId,
+            owner: .projectWorktree(projectId: worktree.projectId, worktreeId: worktree.id)
+        )
     }
 
     @discardableResult

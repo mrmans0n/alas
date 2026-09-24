@@ -82,6 +82,14 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(record.failureMessage == "Install Codex")
         #expect(record.pendingInitialPrompt == "Investigate the parser.")
         #expect(lookedUpProjects == [worktree.projectId])
+        guard case .text(let lines) = await coordinator.list(origin: .init(
+            sessionId: "parent", projectId: worktree.projectId, worktreeId: worktree.id
+        )), let line = lines.first else {
+            Issue.record("Expected delegated session list")
+            return
+        }
+        let listed = try JSONDecoder().decode(ACPOrchestrationListResponse.self, from: Data(line.utf8))
+        #expect(listed.sessions.first { $0.sessionId == "child" }?.projectId == worktree.projectId)
     }
 
     @Test("delegated creation failure is persisted without starting the child")

@@ -138,6 +138,7 @@ struct ACPOrchestrationSessionSummary: Codable, Equatable, Sendable {
     let relationship: String?
     let agentId: String
     let worktreeId: String
+    let projectId: String?
     let state: String
     let failure: String?
     let createdAt: Int64
@@ -147,6 +148,7 @@ struct ACPOrchestrationSessionSummary: Codable, Equatable, Sendable {
         case relationship
         case agentId = "agent_id"
         case worktreeId = "worktree_id"
+        case projectId = "project_id"
         case state
         case failure
         case createdAt = "created_at"

@@ -581,6 +581,7 @@ final class ACPSessionOrchestrationCoordinator {
             relationship: relationship,
             agentId: agentId,
             worktreeId: worktreeId,
+            projectId: projectId,
             state: state.rawValue,
             failure: failure,
             createdAt: createdAt

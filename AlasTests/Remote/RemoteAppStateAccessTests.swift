@@ -595,6 +595,27 @@ struct RemoteAppStateAccessTests {
         #expect(manager.sessionRows.contains { $0.id == "previous-scoped-session" })
     }
 
+    @Test func openingDelegatedSessionUsesItsProjectForSharedPaths() async throws {
+        let fixture = try makeSharedPathState()
+        defer { cleanupSharedPathFiles(fixture) }
+        let manager = try #require(fixture.state.acpManager(for: fixture.second))
+        let session = manager.createSession(id: "delegated-project-b-\(UUID())", agentId: "test-agent")
+        let summary = ACPOrchestrationSessionSummary(
+            sessionId: session.id, relationship: "child", agentId: "test-agent",
+            worktreeId: fixture.second.id, projectId: fixture.second.projectId,
+            state: "idle", failure: nil, createdAt: 0
+        )
+
+        await fixture.state.openDelegatedACPSession(summary)
+
+        let tab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.second.id).compactMap { tab -> ACPSessionTabState? in
+            guard case .acpSession(let state) = tab, state.sessionId == session.id else { return nil }
+            return state
+        }.first)
+        #expect(tab.projectId == fixture.second.projectId)
+        #expect(fixture.state.acpManager(for: fixture.first)?.liveSession(for: session.id) == nil)
+    }
+
     @Test func reloadTabsBootstrapsEachProjectScopedACPOwner() async throws {
         let fixture = try makeSharedPathState()
         defer { cleanupSharedPathFiles(fixture) }
