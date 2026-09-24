@@ -1189,6 +1189,10 @@ final class ACPSessionManager: ObservableObject {
     private let isolatedBrokerServiceFactory: ACPBrokerServiceFactory?
     private let attachmentStartupTimeout: Duration
     private let restartTeardownTimeout: Duration
+#if DEBUG
+    var beforeBrokerClientRegistrationForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
+    var afterBrokerClientShutdownRequestedForTesting: (@MainActor () async -> Void)?
+#endif
     private var resolvedRemoteAdapters: [String: ACPResolvedRemoteAdapter] = [:]
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Per-session task that prepends pre-tail messages after the initial
@@ -1254,6 +1258,7 @@ final class ACPSessionManager: ObservableObject {
         var leaseToken: String?
         var brokerClient: ACPBrokerClient?
         var connection: ACPConnection?
+        var brokerClientShutdownRequested = false
     }
     private var attachmentAttempts: [ACPSession.ID: AttachmentAttempt] = [:]
     /// Identifies the latest connection generation after its attach task has
@@ -2797,7 +2802,13 @@ final class ACPSessionManager: ObservableObject {
         attempt: AttachmentAttempt,
         brokerIdOverride: ACPBrokerID? = nil
     ) async throws -> ACPConnection {
-        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+#if DEBUG
+        await beforeBrokerClientRegistrationForTesting?(brokerIdOverride != nil)
+#endif
+        guard !attempt.brokerClientShutdownRequested,
+              !Task.isCancelled,
+              isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
+        else {
             throw CancellationError()
         }
         let callbackOwnerID = UUID()
@@ -2865,7 +2876,10 @@ final class ACPSessionManager: ObservableObject {
            let source = try await persistence.loadSession(id: fork.sourceSessionID),
            let sourceRemoteSessionID = source.remoteSessionId,
            !sourceRemoteSessionID.isEmpty {
-            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+            guard !attempt.brokerClientShutdownRequested,
+                  !Task.isCancelled,
+                  isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
+            else {
                 throw CancellationError()
             }
             let operationKey = Self.brokerStartupOperationKey(
@@ -2877,9 +2891,19 @@ final class ACPSessionManager: ObservableObject {
             negotiatingForkOperationKey = operationKey
         }
         client.preRegisterAwaitedOperationKeys(awaitedOperationKeys)
+        guard !attempt.brokerClientShutdownRequested,
+              !Task.isCancelled,
+              isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
+        else {
+            await client.shutdown()
+            throw CancellationError()
+        }
         do {
             let opened = try await client.start()
-            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+            guard !attempt.brokerClientShutdownRequested,
+                  !Task.isCancelled,
+                  isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
+            else {
                 throw CancellationError()
             }
             if session.markQueuedPromptsUncertain(
@@ -2896,7 +2920,11 @@ final class ACPSessionManager: ObservableObject {
             let terminalOutcome = negotiatingForkOperationKey.flatMap {
                 client.terminalOutcome(forPreRegisteredOperationKey: $0)
             }
-            Task { await client.detach() }
+            if attempt.brokerClientShutdownRequested || Task.isCancelled {
+                await client.shutdown()
+            } else {
+                Task { await client.detach() }
+            }
             if let terminalOutcome {
                 throw ACPBrokerDurableCompletionReplayError(
                     outcome: terminalOutcome,
@@ -2905,11 +2933,17 @@ final class ACPSessionManager: ObservableObject {
             }
             throw error
         }
-        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
+        guard !attempt.brokerClientShutdownRequested,
+              !Task.isCancelled,
+              isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
               connectionOwnerIDs[sessionId] == connectionOwnerID,
               brokerCallbackOwnerIDs[sessionId] == callbackOwnerID
         else {
-            Task { await client.detach() }
+            if attempt.brokerClientShutdownRequested || Task.isCancelled {
+                await client.shutdown()
+            } else {
+                Task { await client.detach() }
+            }
             throw CancellationError()
         }
         Self.applyBrokerTurnState(client.currentTurnState, to: session)
@@ -3010,8 +3044,19 @@ final class ACPSessionManager: ObservableObject {
         case .failed(let error):
             throw error
         case .timedOut:
-            await detachBrokerClient(for: attempt)
+            await shutdownBrokerClient(for: attempt)
             throw ACPBrokerStartupTimedOutError()
+        }
+    }
+
+    private func shutdownBrokerClient(for attempt: AttachmentAttempt) async {
+        attempt.brokerClientShutdownRequested = true
+#if DEBUG
+        await afterBrokerClientShutdownRequestedForTesting?()
+#endif
+        guard let client = attempt.brokerClient else { return }
+        _ = await runBounded(timeout: restartTeardownTimeout) {
+            await client.shutdown()
         }
     }
 
@@ -6838,6 +6883,7 @@ extension ACPSessionManager {
         let (stream, continuation) = AsyncStream<BoundedValueOutcome<Value>>.makeStream()
         let operationTask = Task {
             do {
+                try Task.checkCancellation()
                 continuation.yield(.succeeded(try await operation()))
             } catch {
                 continuation.yield(.failed(error))

@@ -233,6 +233,82 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadLease(sessionId: session.id)?.token == replacementLease?.token)
     }
 
+    @Test("a timed-out isolated broker is closed if its open completes late")
+    func lateIsolatedBrokerOpenIsClosedAfterTimeout() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerServiceProxy(stallOpen: true)
+        let isolatedService = ManagerBrokerServiceProxy(stallOpen: true)
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .milliseconds(50),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(agentId: "claude")
+        let originalAttach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync { await sharedService.openGate.hasEntered }
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync { await isolatedService.openGate.hasEntered }
+        await restart.value
+
+        await isolatedService.openGate.release()
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await isolatedService.closed.count == 1
+        }
+        #expect(await isolatedService.detached.isEmpty)
+
+        await sharedService.openGate.release()
+        await originalAttach.value
+    }
+
+    @Test("a timed-out isolated broker cannot register after startup resumes")
+    func isolatedBrokerResumingAfterTimeoutDoesNotRegister() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerServiceProxy(stallOpen: true)
+        let isolatedService = ManagerBrokerServiceProxy(stallOpen: true)
+        let registrationGate = AttachPhaseGate()
+        let shutdownGate = AttachPhaseGate()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .milliseconds(50),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        manager.beforeBrokerClientRegistrationForTesting = { isolated in
+            if isolated { await registrationGate.enterAndWait() }
+        }
+        manager.afterBrokerClientShutdownRequestedForTesting = {
+            await shutdownGate.enterAndWait()
+        }
+        let session = manager.createSession(agentId: "claude")
+        let originalAttach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync { await sharedService.openGate.hasEntered }
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync { await registrationGate.hasEntered }
+        try await waitUntilAsync { await shutdownGate.hasEntered }
+        await registrationGate.release()
+        try await Task.sleep(for: .milliseconds(50))
+        let openedBeforeShutdownContinued = await isolatedService.opened
+
+        await shutdownGate.release()
+        await isolatedService.openGate.release()
+        await restart.value
+
+        #expect(openedBeforeShutdownContinued.isEmpty)
+        #expect(await isolatedService.detached.isEmpty)
+
+        await sharedService.openGate.release()
+        await originalAttach.value
+    }
+
     @Test("a blocked old detach does not hold the replacement connection")
     func blockedOldDetachDoesNotHoldReplacement() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -5331,6 +5407,7 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
     private var hasStalledSend = false
     private(set) var opened: [ACPBrokerOpenParams] = []
     private(set) var closed: [ACPBrokerCloseParams] = []
+    private(set) var detached: [ACPBrokerDetachParams] = []
 
     init(
         stallOpen: Bool = false,
@@ -5375,6 +5452,7 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
     }
 
     func detach(_ params: ACPBrokerDetachParams) async throws -> ACPBrokerSimpleOK {
+        detached.append(params)
         if stallDetach { await detachGate.wait() }
         return try await base.detach(params)
     }

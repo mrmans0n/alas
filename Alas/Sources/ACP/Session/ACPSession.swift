@@ -2247,9 +2247,10 @@ final class ACPSession: ObservableObject, Identifiable {
         queue.insert(item, at: min(dst, queue.count))
     }
 
-    /// Promote a pending queued item to the next drainable position and clear
-    /// any previous send error. If a `.sending` head is already in-flight, the
-    /// forced item is placed immediately behind it so completion can pop the
+    /// Promote a pending queued item to the next drainable position. Clear
+    /// ordinary send errors, but preserve uncertain-delivery state until the
+    /// user explicitly retries. If a `.sending` head is already in-flight,
+    /// place the forced item immediately behind it so completion can pop the
     /// current head safely.
     @discardableResult
     func forceQueueItem(id: UUID) -> Bool {
@@ -2266,7 +2267,9 @@ final class ACPSession: ObservableObject, Identifiable {
 
         var item = queue.remove(at: idx)
         item.status = .pending
-        item.lastError = nil
+        if !item.deliveryUncertain {
+            item.lastError = nil
+        }
         item.scheduledAt = nil
 
         let insertAt = protectedPrefixCount

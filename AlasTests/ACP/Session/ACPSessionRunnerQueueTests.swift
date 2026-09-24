@@ -146,6 +146,32 @@ struct ACPSessionRunnerQueueTests {
         #expect(try store.loadQueue(sessionId: "s") == session.queue)
     }
 
+    @Test("moving an uncertain prompt to the front preserves its retry state")
+    func promotingUncertainQueueItemPreservesRetryState() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        let ordinary = QueuedPrompt(blocks: [.text("ordinary")])
+        let uncertain = QueuedPrompt(
+            blocks: [.text("possibly already delivered")],
+            lastError: QueuedPrompt.deliveryUncertaintyMessage,
+            deliveryUncertain: true
+        )
+        session.restoreQueue([ordinary, uncertain])
+
+        #expect(session.forceQueueItem(id: uncertain.id))
+        #expect(session.queue.first?.id == uncertain.id)
+        #expect(session.queue.first?.lastError == QueuedPrompt.deliveryUncertaintyMessage)
+        #expect(session.queue.first?.deliveryUncertain == true)
+
+        runner.flushQueueIfIdle()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+
+        #expect(session.retryQueueItem(id: uncertain.id))
+        #expect(session.queue.first?.lastError == nil)
+        #expect(session.queue.first?.deliveryUncertain == false)
+        #expect(session.queue.first?.brokerOperationAttempt == 1)
+    }
+
     @Test("force send waits for initial scheduled persistence")
     func forceSendWaitsForInitialScheduledPersistence() async throws {
         let (runner, mock, session, _) = try mkRunner()
