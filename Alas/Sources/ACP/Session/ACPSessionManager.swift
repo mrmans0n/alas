@@ -4181,7 +4181,10 @@ extension ACPSessionManager {
         defer {
             attachingSessions.remove(sessionId)
             disposingAttachments.remove(sessionId)
-            if !attachSucceeded || session.agentState != .ready {
+            // Teardown already cleared the old picks. A late attach cleanup must not discard picks made after detach.
+            if !cancelledInFlightAttachments.contains(sessionId),
+               !attachSucceeded || session.agentState != .ready
+            {
                 discardDeferredModelModeUpdates(for: sessionId)
             }
             if !attachSucceeded {
