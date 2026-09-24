@@ -2274,6 +2274,27 @@ final class ACPSession: ObservableObject, Identifiable {
         queue[idx].blocks = blocks
         queue[idx].draft = nil
         queue[idx].advanceBrokerOperationAttempt()
+        queue[idx].dispatchedBrokerGeneration = nil
+        queue[idx].deliveryUncertain = false
+        queue[idx].lastError = nil
+    }
+
+    /// Explicitly retry a failed queued item. Uncertain delivery gets a new
+    /// operation key so a user's decision to resend cannot be deduplicated
+    /// against the operation from the abandoned broker generation.
+    @discardableResult
+    func retryQueueItem(id: UUID) -> Bool {
+        guard let idx = queue.firstIndex(where: { $0.id == id }),
+              queue[idx].status == .pending,
+              queue[idx].lastError != nil || queue[idx].deliveryUncertain
+        else { return false }
+        if queue[idx].deliveryUncertain {
+            queue[idx].advanceBrokerOperationAttempt()
+            queue[idx].dispatchedBrokerGeneration = nil
+            queue[idx].deliveryUncertain = false
+        }
+        queue[idx].lastError = nil
+        return true
     }
 
     /// Remove all `.pending` items. A `.sending` item is left in place —
@@ -2297,10 +2318,11 @@ final class ACPSession: ObservableObject, Identifiable {
     /// it spawns the prompt RPC. Clears any previous `lastError` so a
     /// retried item displays cleanly while in-flight.
     @discardableResult
-    func markQueueHeadSending() -> String? {
+    func markQueueHeadSending(brokerGeneration: ACPBrokerGeneration? = nil) -> String? {
         guard !queue.isEmpty, queue[0].status == .pending else { return nil }
         queue[0].status = .sending
         queue[0].lastError = nil
+        queue[0].dispatchedBrokerGeneration = brokerGeneration
         return queue[0].brokerOperationKey
     }
 
@@ -2341,9 +2363,27 @@ final class ACPSession: ObservableObject, Identifiable {
     /// from `ACPSessionManager.openSession` after pulling rows from the
     /// store. `.sending` items get flipped to `.pending` here so the
     /// flusher re-attempts on next idle.
-    func restoreQueue(_ items: [QueuedPrompt]) {
+    func restoreQueue(_ items: [QueuedPrompt], markLegacySendingUncertain: Bool = false) {
         forceSendAfterSendingHeadId = nil
-        queue = items.map { $0.normalizedAfterRestore() }
+        queue = items.map {
+            $0.normalizedAfterRestore(markLegacySendingUncertain: markLegacySendingUncertain)
+        }
+    }
+
+    /// Holds prompts dispatched on a broker generation that this connection
+    /// cannot adopt. Queue items with no dispatch provenance remain eligible.
+    @discardableResult
+    func markQueuedPromptsUncertain(afterBrokerGeneration generation: ACPBrokerGeneration) -> Bool {
+        var changed = false
+        for index in queue.indices {
+            guard let dispatchedGeneration = queue[index].dispatchedBrokerGeneration,
+                  dispatchedGeneration != generation,
+                  !queue[index].deliveryUncertain
+            else { continue }
+            queue[index].markDeliveryUncertain()
+            changed = true
+        }
+        return changed
     }
 
     /// Mark any pending/in_progress tool calls as canceled. Called when

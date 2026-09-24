@@ -405,6 +405,7 @@ final class ACPSessionManager: ObservableObject {
     }
 
     private func deferQueueForceSend(session: ACPSession, itemId: UUID) {
+        _ = session.retryQueueItem(id: itemId)
         pendingQueueForceSends[session.id, default: []].append(itemId)
         guard session.pendingQueuePersistenceCount == 0 else {
             onQueueChanged?(session.id, true)
@@ -433,8 +434,8 @@ final class ACPSessionManager: ObservableObject {
     func queueRetry(for id: ACPSession.ID, itemId: UUID) async {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         guard let idx = session.queue.firstIndex(where: { $0.id == itemId }) else { return }
-        guard session.queue[idx].status == .pending, session.queue[idx].lastError != nil else { return }
-        session.queue[idx].lastError = nil
+        guard session.queue[idx].status == .pending else { return }
+        guard session.retryQueueItem(id: itemId) else { return }
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
         onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
@@ -1727,7 +1728,7 @@ final class ACPSessionManager: ObservableObject {
         let tailStart = replaceTranscriptWithTail(messages, in: session, markCompletedBoundary: true)
         applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
         Self.restoreSubagents(from: result, in: session)
-        session.restoreQueue(result.queue)
+        session.restoreQueue(result.queue, markLegacySendingUncertain: true)
         // The composer is rendered (and focused) the moment the placeholder
         // appears, so the user can start typing before hydration finishes.
         // Only restore the draft when the live composer is still pristine
@@ -2873,7 +2874,15 @@ final class ACPSessionManager: ObservableObject {
         }
         client.preRegisterAwaitedOperationKeys(awaitedOperationKeys)
         do {
-            try await client.start()
+            let opened = try await client.start()
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                throw CancellationError()
+            }
+            if session.markQueuedPromptsUncertain(
+                afterBrokerGeneration: opened.snapshot.metadata.generation
+            ) {
+                persistQueue(for: session)
+            }
         } catch {
             // `open` may reveal a completed fork in its operation snapshot
             // before the following replay fails. Preserve that terminal
@@ -3836,7 +3845,7 @@ extension ACPSessionManager {
             // don't post a change notification, so the mirror's in-memory
             // queue can be stale at takeover time.
             let queue = (try? await persistence.loadQueue(sessionId: sessionId)) ?? []
-            session.restoreQueue(queue)
+            session.restoreQueue(queue, markLegacySendingUncertain: true)
             // Block immediate sends while the final mirror snapshot catches
             // the cached transcript up to the store before writer attach.
             session.agentState = .spawning
@@ -4102,7 +4111,7 @@ extension ACPSessionManager {
         syncMirrorSessionMetadata(result.row, to: session, recentRows: result.recent)
         // Always sync the queue — it can change (drain/clear) with no new
         // transcript rows, so this must run before any early-return below.
-        session.restoreQueue(result.queue)
+        session.restoreQueue(result.queue, markLegacySendingUncertain: true)
         scheduleScheduledQueueReconnect(sessionId: sessionId)
         // Before the early returns below: a mirror's child transcripts come
         // only from the store, so every refresh has to carry them.
@@ -5812,7 +5821,7 @@ extension ACPSessionManager {
             let completedRecovery = session.completeConnectionRecovery()
             scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
             if session.queue.contains(where: { $0.status == .sending }) {
-                session.restoreQueue(session.queue)
+                session.restoreQueue(session.queue, markLegacySendingUncertain: true)
             }
             if let remoteMCPNotice {
                 runner.appendAndPersistSystemNotice(remoteMCPNotice)
@@ -5983,7 +5992,7 @@ extension ACPSessionManager {
         endMirroring(sessionId: sessionId)
         session.agentState = .idle
         session.transcript.streamingState = .idle
-        session.restoreQueue(session.queue)
+        session.restoreQueue(session.queue, markLegacySendingUncertain: true)
         session.clearConnectionRecovery()
         session.lastError = nil
         session.setupState = .checking
@@ -6178,7 +6187,10 @@ extension ACPSessionManager {
     private func refreshScheduledReconnectQueue(sessionId: ACPSession.ID) async {
         guard let session = sessions[sessionId] else { return }
         do {
-            session.restoreQueue(try await persistence.loadQueue(sessionId: sessionId))
+            session.restoreQueue(
+                try await persistence.loadQueue(sessionId: sessionId),
+                markLegacySendingUncertain: true
+            )
         } catch {
             persistenceError = error.localizedDescription
         }
@@ -6250,6 +6262,7 @@ extension ACPSessionManager {
         guard let itemIds = pendingQueueForceSends.removeValue(forKey: sessionId) else { return false }
         var sent = false
         for itemId in itemIds.reversed() where session.queue.contains(where: { $0.id == itemId && $0.status == .pending }) {
+            _ = session.retryQueueItem(id: itemId)
             sent = session.forceQueueItem(id: itemId) || sent
         }
         if sent {
@@ -6873,7 +6886,7 @@ extension ACPSessionManager {
             // cached object (skipping `restoreQueue`), the post-attach
             // flush sees `.sending`, and the queue stays stuck until a
             // full app restart reloads from SQLite.
-            session.restoreQueue(session.queue)
+            session.restoreQueue(session.queue, markLegacySendingUncertain: true)
         }
         var closeError: (any Error)?
         if let runner = runners.removeValue(forKey: sessionId) {

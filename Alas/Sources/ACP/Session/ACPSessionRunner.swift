@@ -2325,7 +2325,8 @@ extension ACPSessionRunner {
               session.transcript.pendingUserInputs.isEmpty,
               let head = session.queue.first,
               head.status == .pending,
-              head.lastError == nil
+              head.lastError == nil,
+              !head.deliveryUncertain
         else { return }
         if case .needsAuth = session.setupState { return }
         guard head.isReady() else {
@@ -2334,7 +2335,8 @@ extension ACPSessionRunner {
         }
         scheduledQueueWakeTask?.cancel()
         scheduledQueueWakeTask = nil
-        let brokerOperationKey = session.markQueueHeadSending()
+        let brokerGeneration = (connection.client as? ACPBrokerClient)?.currentBrokerGeneration
+        let brokerOperationKey = session.markQueueHeadSending(brokerGeneration: brokerGeneration)
         persistQueue()
         sendNow(
             blocks: head.blocks,
@@ -2407,6 +2409,10 @@ extension ACPSessionRunner {
               session.queue[idx].status == .pending
         else { return }
         guard session.agentState == .ready else { return }
+        if session.queue[idx].deliveryUncertain {
+            guard session.retryQueueItem(id: id) else { return }
+            persistQueue()
+        }
         guard session.pendingQueuePersistenceCount == 0 else {
             if !pendingQueueForceSendsAfterPersistence.contains(id) {
                 pendingQueueForceSendsAfterPersistence.append(id)
@@ -2456,6 +2462,9 @@ extension ACPSessionRunner {
         pendingQueueForceSendsAfterPersistence.removeAll()
         var forced = false
         for itemId in itemIds.reversed() {
+            if session.queue.first(where: { $0.id == itemId })?.deliveryUncertain == true {
+                _ = session.retryQueueItem(id: itemId)
+            }
             forced = session.forceQueueItem(id: itemId) || forced
         }
         guard forced else { return false }

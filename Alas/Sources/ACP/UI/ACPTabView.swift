@@ -480,10 +480,7 @@ private struct ACPSessionView: View {
             },
             onQueueRetry: { id in
                 guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
-                guard let idx = session.queue.firstIndex(where: { $0.id == id }) else { return }
-                session.queue[idx].lastError = nil
-                manager.persistQueue(for: session)
-                manager.runners[sessionId]?.flushQueueIfIdle()
+                Task { await manager.queueRetry(for: sessionId, itemId: id) }
             },
             onQueueReorder: { src, dst in
                 guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }

@@ -138,6 +138,12 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private var pendingDurableStates: [ACPBrokerDurableState] = []
     private var isDrainingDurableStates = false
 
+    var currentBrokerGeneration: ACPBrokerGeneration? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return generation
+    }
+
     /// Interval used while `turnState` needs active polling (sending,
     /// streaming, awaiting input, cancelling).
     static let defaultBackgroundPollActiveIntervalNanoseconds: UInt64 = 50_000_000

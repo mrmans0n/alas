@@ -140,6 +140,190 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadLease(sessionId: session.id)?.token == replacementLease?.token)
     }
 
+    @Test("restored queue preserves uncertainty fields and marks legacy sends uncertain")
+    func restoredQueuePreservesDeliveryUncertainty() async throws {
+        let pending = QueuedPrompt(blocks: [.text("not sent")])
+        #expect(pending.normalizedAfterRestore().lastError == nil)
+
+        let legacySending = QueuedPrompt(blocks: [.text("possibly sent")], status: .sending)
+            .normalizedAfterRestore()
+        #expect(legacySending.status == .pending)
+        #expect(legacySending.lastError?.localizedCaseInsensitiveContains("delivery is uncertain") == true)
+
+        let id = UUID()
+        let prompt = try queuedPromptFixture(
+            id: id,
+            text: "uncertain prompt",
+            status: .pending,
+            brokerGeneration: 7,
+            deliveryUncertain: true,
+            lastError: QueuedPrompt.deliveryUncertaintyMessage
+        )
+        let encoded = try JSONEncoder().encode(prompt)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(object["dispatchedBrokerGeneration"] as? Int == 7)
+        #expect(object["deliveryUncertain"] as? Bool == true)
+        #expect(try JSONDecoder().decode(QueuedPrompt.self, from: encoded) == prompt)
+
+        var oldPendingJSON = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(pending)) as? [String: Any])
+        oldPendingJSON.removeValue(forKey: "dispatchedBrokerGeneration")
+        oldPendingJSON.removeValue(forKey: "deliveryUncertain")
+        let oldPendingData = try JSONSerialization.data(withJSONObject: oldPendingJSON)
+        let decodedOldPending = try JSONDecoder().decode(QueuedPrompt.self, from: oldPendingData)
+        #expect(decodedOldPending.dispatchedBrokerGeneration == nil)
+        #expect(!decodedOldPending.deliveryUncertain)
+        #expect(decodedOldPending.normalizedAfterRestore().lastError == nil)
+
+        var oldSendingJSON = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacySending)) as? [String: Any])
+        oldSendingJSON["status"] = QueuedPrompt.Status.sending.rawValue
+        oldSendingJSON.removeValue(forKey: "dispatchedBrokerGeneration")
+        oldSendingJSON.removeValue(forKey: "deliveryUncertain")
+        let oldSendingData = try JSONSerialization.data(withJSONObject: oldSendingJSON)
+        let decodedOldSending = try JSONDecoder().decode(QueuedPrompt.self, from: oldSendingData)
+        #expect(decodedOldSending.normalizedAfterRestore().deliveryUncertain)
+
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        try store.upsertQueue(sessionId: "local", items: [prompt])
+        let manager = manager(store: store, client: ACPMockClient())
+        let restoredSession = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        #expect(restoredSession.queue == [prompt])
+        #expect(restoredSession.queue.first?.deliveryUncertain == true)
+        #expect(restoredSession.queue.first?.lastError == QueuedPrompt.deliveryUncertaintyMessage)
+    }
+
+    @Test("same broker generation replays uncertain-in-flight key through durable deduplication")
+    func sameGenerationRestartReplaysDurableQueueKey() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let service = ManagerBrokerService(generation: 7, supportsPromptResponses: true)
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { service },
+            attachmentStartupTimeout: .milliseconds(50),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "same-generation-queue-session", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+
+        let dispatched = try queuedPromptFixture(
+            text: "broker already completed this",
+            status: .sending,
+            brokerGeneration: 7
+        )
+        session.queue = [dispatched]
+        manager.persistQueue(for: session)
+        await manager.flushAllPersistence()
+
+        let firstDelivery = try await service.send(ACPBrokerSendParams(
+            brokerId: ACPBrokerID(rawValue: "local-\(session.id)"),
+            generation: ACPBrokerGeneration(rawValue: 7),
+            operationKey: ACPBrokerOperationKey(rawValue: dispatched.brokerOperationKey),
+            method: "session/prompt",
+            params: .object([:])
+        ))
+        #expect(!firstDelivery.replayed)
+
+        await manager.restartConnection(to: session.id)
+        try await waitUntil { session.queue.isEmpty }
+
+        let replayedKeys = await service.replayedPromptOperationKeys.map(\.rawValue)
+        #expect(replayedKeys == [dispatched.brokerOperationKey])
+        #expect(session.agentState == .ready)
+    }
+
+    @Test("fresh broker leaves old queued prompts blocked while sending never-dispatched work")
+    func newBrokerGenerationBlocksOnlyPossiblyDeliveredPrompts() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerService(generation: 7, supportsPromptResponses: true)
+        let isolatedService = ManagerBrokerService(generation: 8, supportsPromptResponses: true)
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .milliseconds(50),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "uncertain-queue-session", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+
+        let neverSent = QueuedPrompt(blocks: [.text("never sent")])
+        let possiblySent = try queuedPromptFixture(
+            text: "sent but not acknowledged",
+            status: .sending,
+            brokerGeneration: 7
+        )
+        let pendingFromOldBroker = try queuedPromptFixture(
+            text: "normalized after an interrupted send",
+            status: .pending,
+            brokerGeneration: 7
+        )
+        session.queue = [neverSent, possiblySent, pendingFromOldBroker]
+        manager.persistQueue(for: session)
+        await manager.flushAllPersistence()
+
+        await sharedService.holdNextOpen()
+        let oldRunner = try #require(manager.runners[session.id])
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.openGate.hasEntered
+                && session.agentState == .ready
+                && manager.runners[session.id] !== oldRunner
+        }
+        await sharedService.openGate.release()
+        await restart.value
+        await manager.flushAllPersistence()
+
+        #expect(session.queue.map(\.id) == [possiblySent.id, pendingFromOldBroker.id])
+        #expect(session.queue.allSatisfy { $0.lastError?.localizedCaseInsensitiveContains("delivery is uncertain") == true })
+        let promptSends = await isolatedService.sent.filter { $0.method == "session/prompt" }
+        #expect(promptSends.count == 1)
+        #expect(promptSends.first?.operationKey.rawValue == neverSent.brokerOperationKey)
+    }
+
+    @Test("retrying uncertain queued prompt advances its durable key once")
+    func retryingUncertainQueuedPromptAdvancesOperationAttempt() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-retry")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        let uncertain = try queuedPromptFixture(
+            text: "deliver only on request",
+            status: .pending,
+            brokerGeneration: 7,
+            deliveryUncertain: true,
+            lastError: "Delivery is uncertain. Retry to send this prompt again."
+        )
+        session.queue = [uncertain]
+        manager.persistQueue(for: session)
+        await manager.flushAllPersistence()
+
+        await manager.queueRetry(for: session.id, itemId: uncertain.id)
+        await manager.queueRetry(for: session.id, itemId: uncertain.id)
+        try await waitUntil { session.queue.isEmpty }
+
+        let promptRequests = client.sent.filter { $0.method == "session/prompt" }
+        #expect(promptRequests.count == 1)
+        #expect(promptRequests.first?.brokerOperationKey == QueuedPrompt(
+            id: uncertain.id,
+            blocks: uncertain.blocks,
+            brokerOperationAttempt: 1
+        ).brokerOperationKey)
+    }
+
     @Test("new session attaches the current project MCP plan")
     func newSessionAttachesCurrentProjectMCPPlan() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -4808,7 +4992,36 @@ private actor ManagerBrokerGate {
     }
 }
 
+private func queuedPromptFixture(
+    id: UUID = UUID(),
+    text: String,
+    status: QueuedPrompt.Status,
+    brokerGeneration: UInt64?,
+    deliveryUncertain: Bool = false,
+    lastError: String? = nil
+) throws -> QueuedPrompt {
+    let prompt = QueuedPrompt(
+        id: id,
+        blocks: [.text(text)],
+        status: status,
+        lastError: lastError
+    )
+    var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(prompt)) as? [String: Any])
+    object["deliveryUncertain"] = deliveryUncertain
+    if let brokerGeneration {
+        object["dispatchedBrokerGeneration"] = brokerGeneration
+    }
+    let data = try JSONSerialization.data(withJSONObject: object)
+    return try JSONDecoder().decode(QueuedPrompt.self, from: data)
+}
+
 private actor ManagerBrokerService: ACPBrokerServicing {
+    let openGate = ManagerBrokerGate()
+    private let generation: UInt64
+    private let supportsPromptResponses: Bool
+    private var shouldHoldNextOpen = false
+    private var completedOperationKeys: Set<ACPBrokerOperationKey> = []
+    private(set) var replayedPromptOperationKeys: [ACPBrokerOperationKey] = []
     var opened: [ACPBrokerOpenParams] = []
     var attached: [ACPBrokerAttachParams] = []
     var sent: [ACPBrokerSendParams] = []
@@ -4820,6 +5033,15 @@ private actor ManagerBrokerService: ACPBrokerServicing {
     var snapshotInitializeResult: ACPBrokerJSONValue?
     var snapshotRemoteSessionResult: ACPBrokerJSONValue?
 
+    init(generation: UInt64 = 7, supportsPromptResponses: Bool = false) {
+        self.generation = generation
+        self.supportsPromptResponses = supportsPromptResponses
+    }
+
+    func holdNextOpen() {
+        shouldHoldNextOpen = true
+    }
+
     func setSnapshotResults(
         initializeResult: ACPBrokerJSONValue?,
         remoteSessionResult: ACPBrokerJSONValue?
@@ -4829,6 +5051,10 @@ private actor ManagerBrokerService: ACPBrokerServicing {
     }
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
+        if shouldHoldNextOpen {
+            shouldHoldNextOpen = false
+            await openGate.wait()
+        }
         opened.append(params)
         return ACPBrokerOpenResult(snapshot: snapshot(params: params), adopted: false)
     }
@@ -4844,6 +5070,7 @@ private actor ManagerBrokerService: ACPBrokerServicing {
     func send(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult {
         sent.append(params)
         let result: ACPBrokerJSONValue
+        var replayed = false
         switch params.method {
         case "initialize":
             result = .object([
@@ -4858,12 +5085,26 @@ private actor ManagerBrokerService: ACPBrokerServicing {
                 "promptSuggestions": .array([]),
                 "configOptions": .array([])
             ])
+        case "session/load" where supportsPromptResponses:
+            result = .object([
+                "sessionId": .string("remote-broker"),
+                "availableModels": .array([]),
+                "availableModes": .array([]),
+                "promptSuggestions": .array([]),
+                "configOptions": .array([])
+            ])
+        case "session/prompt" where supportsPromptResponses:
+            replayed = !completedOperationKeys.insert(params.operationKey).inserted
+            if replayed {
+                replayedPromptOperationKeys.append(params.operationKey)
+            }
+            result = .object(["stopReason": .string("end_turn")])
         default:
             throw ACPClientError.noScript(method: params.method)
         }
         return ACPBrokerSendResult(
             requestId: ACPBrokerAdapterRequestID(rawValue: UInt64(sent.count)),
-            replayed: false,
+            replayed: replayed,
             result: result,
             pending: nil
         )
@@ -4898,7 +5139,7 @@ private actor ManagerBrokerService: ACPBrokerServicing {
         ACPBrokerSnapshot(
             metadata: ACPBrokerMetadata(
                 brokerId: params.brokerId,
-                generation: ACPBrokerGeneration(rawValue: 7),
+                generation: ACPBrokerGeneration(rawValue: generation),
                 alasSessionId: params.sessionId,
                 adapterProgram: params.command,
                 adapterArgs: params.args,
@@ -4923,7 +5164,7 @@ private actor ManagerBrokerService: ACPBrokerServicing {
         ACPBrokerSnapshot(
             metadata: ACPBrokerMetadata(
                 brokerId: brokerId,
-                generation: ACPBrokerGeneration(rawValue: 7),
+                generation: ACPBrokerGeneration(rawValue: generation),
                 alasSessionId: "local-session-1",
                 adapterProgram: "mock",
                 adapterArgs: [],
