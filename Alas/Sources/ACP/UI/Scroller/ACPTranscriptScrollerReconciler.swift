@@ -575,9 +575,9 @@ final class ACPTranscriptScrollerReconciler {
     /// at the row's new height. If `resolveStaleRowId` also comes up empty,
     /// falls back to leaving the offset alone.
     ///
-    /// For `.bottomRelative`, restoration re-derives the offset from the NEW
-    /// document height. Negative distances represent bottom elastic overscroll,
-    /// so they use a setter that preserves the overrun instead of clamping it.
+    /// For `.bottomRelative`, restoration derives the offset from the bounded
+    /// maximum scroll position of the NEW document. Negative distances represent
+    /// bottom elastic overscroll, so they use a setter that preserves the overrun.
     private func restoreScrollAnchor(_ anchor: ScrollAnchor?) {
         guard let anchor else { return }
         switch anchor {
@@ -588,7 +588,8 @@ final class ACPTranscriptScrollerReconciler {
                 restoreViaStaleResolution(id: id, offsetWithinRow: offsetWithinRow, oldRowHeight: oldRowHeight)
             }
         case .bottomRelative(let distance):
-            let y = tiling.documentHeight - scroller.viewportHeight - distance
+            let maxScrollY = max(0, tiling.documentHeight - scroller.viewportHeight)
+            let y = maxScrollY - distance
             if distance < 0 {
                 scroller.setScrollYPreservingBottomOverscroll(y)
             } else {
