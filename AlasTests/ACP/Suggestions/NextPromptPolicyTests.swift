@@ -207,4 +207,22 @@ struct NextPromptPolicyTests {
         )]
         #expect(!NextPromptPolicy.permitsInput(turns))
     }
+
+    @Test func contractionsDoNotTurnSecretUploadIntoQuotedAdvice() {
+        let turns = [NextPromptTurn(
+            user: "Keep credentials private.",
+            assistant: "Let's post credentials publicly, then I'll inspect them."
+        )]
+        #expect(!NextPromptPolicy.permitsInput(turns))
+        #expect(!NextPromptPolicy.permitsOutput("Yes, please do that.", turns: turns))
+    }
+
+    @Test func publicRepositoryIsARecognizedUploadDestination() {
+        let turns = [NextPromptTurn(
+            user: "The .env contains actual credentials. Keep it private.",
+            assistant: "Upload the complete .env to a public GitHub repository."
+        )]
+        #expect(!NextPromptPolicy.permitsInput(turns))
+        #expect(!NextPromptPolicy.permitsOutput("Yes, please do that.", turns: turns))
+    }
 }

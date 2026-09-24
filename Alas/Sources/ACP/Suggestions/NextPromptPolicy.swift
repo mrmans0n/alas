@@ -109,8 +109,7 @@ enum NextPromptPolicy {
 
     private static func publicSecretUpload(_ text: String, user: String) -> Bool {
         let action = #"(?i)\b(?:upload|post|paste|publish|share|send)\b"#
-        let quoted = #"'[^']*'|"[^"]*""#
-        let quotedAdvice = #"(?i)'[^']*\b(?:upload|post|paste|publish|share|send)\b[^']*'|"[^"]*\b(?:upload|post|paste|publish|share|send)\b[^"]*""#
+        let quoted = #"(?<![\p{L}\p{N}])'(?:[^']|'(?=[\p{L}\p{N}]))*'(?![\p{L}\p{N}])|"[^"]*""#
         guard let actions = try? NSRegularExpression(pattern: action),
               let quotes = try? NSRegularExpression(pattern: quoted) else { return false }
         let ns = text as NSString
@@ -123,10 +122,16 @@ enum NextPromptPolicy {
             let remainder = String(ns.substring(from: match.range.location).prefix(200))
             let end = remainder.range(of: #"[;\n]|[.!?](?=\s|$)"#, options: .regularExpression)?.lowerBound
                 ?? remainder.endIndex
-            let clause = String(remainder[..<end])
-                .replacingOccurrences(of: quotedAdvice, with: "", options: .regularExpression)
+            var clause = String(remainder[..<end])
+            for quote in quotes.matches(in: clause, range: NSRange(location: 0, length: (clause as NSString).length)).reversed() {
+                let quotedText = (clause as NSString).substring(with: quote.range)
+                if actions.firstMatch(in: quotedText, range: NSRange(location: 0, length: (quotedText as NSString).length)) != nil,
+                   let range = Range(quote.range, in: clause) {
+                    clause.removeSubrange(range)
+                }
+            }
             guard !authorizedPublicObject(clause, user: user),
-                  matches(clause, #"(?i)\b(?:publicly|pastebin|(?:public|open)\s+(?:paste\s+)?(?:site|link)|paste\s*site)\b"#)
+                  matches(clause, #"(?i)\b(?:publicly|pastebin|(?:public|open)\s+(?:paste\s+|github\s+|gitlab\s+)?(?:site|link|repository|repo)|paste\s*site)\b"#)
             else { continue }
             if actualSecretReference(clause)
                 || (actualSecretReference(user)
