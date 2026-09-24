@@ -35,6 +35,7 @@ struct RunTabPresentationTests {
             scriptKey: "repo:dev.sh",
             scriptName: "Dev Server",
             worktreeID: "wt-1",
+            projectId: nil,
             branch: "main",
             target: RunExecutionTarget(host: host, workingDirectory: "/wt"),
             endpoint: endpoint,

@@ -152,6 +152,7 @@ struct AppStateRunRecordTests {
             scriptKey: fixture.script.key,
             scriptName: fixture.script.displayName,
             worktreeID: fixture.worktree.id,
+            projectId: fixture.worktree.projectId,
             branch: fixture.worktree.branch,
             target: RunExecutionTarget(host: "devbox", workingDirectory: fixture.directory.path),
             endpoint: fixture.script.endpoint,
@@ -301,8 +302,10 @@ struct AppStateRunRecordTests {
     }
 
     private func runRecord(_ fixture: Fixture, worktree: Worktree? = nil) -> RunRecord? {
-        fixture.state.runRecords.record(
-            worktreeID: (worktree ?? fixture.worktree).id,
+        let owner = worktree ?? fixture.worktree
+        return fixture.state.runRecords.record(
+            worktreeID: owner.id,
+            projectId: owner.projectId,
             scriptKey: fixture.script.key
         )
     }
@@ -453,7 +456,7 @@ struct AppStateRunRecordTests {
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         #expect(fixture.state.runRecords.record(
-            worktreeID: fixture.worktree.id, scriptKey: other.key
+            worktreeID: fixture.worktree.id, projectId: fixture.worktree.projectId, scriptKey: other.key
         )?.status == .finished(.succeeded))
         let afterUnrelatedSuccess = fixture.state.attentionAggregation
         #expect(afterUnrelatedSuccess.unresolvedCount == 1)
@@ -714,6 +717,7 @@ struct AppStateRunRecordTests {
             scriptKey: fixture.script.key,
             scriptName: fixture.script.displayName,
             worktreeID: fixture.worktree.id,
+            projectId: fixture.worktree.projectId,
             branch: fixture.worktree.branch,
             target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
             status: .starting,
@@ -729,9 +733,10 @@ struct AppStateRunRecordTests {
         let task = Task<Void, Never> {
             try? await Task.sleep(for: .seconds(30))
         }
-        fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: fixture.worktree.id, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
+        fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: fixture.worktree.id, projectId: fixture.worktree.projectId, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
             id: launchID,
             worktreeID: fixture.worktree.id,
+            projectId: fixture.worktree.projectId,
             scriptKey: fixture.script.key
         )
         fixture.state.pendingScriptLaunchTasks[launchID] = task
@@ -835,6 +840,7 @@ struct AppStateRunRecordTests {
             scriptKey: fixture.script.key,
             scriptName: fixture.script.displayName,
             worktreeID: fixture.worktree.id,
+            projectId: fixture.worktree.projectId,
             branch: fixture.worktree.branch,
             target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
             status: .starting,
@@ -845,9 +851,10 @@ struct AppStateRunRecordTests {
         let task = Task<Void, Never> {
             try? await Task.sleep(for: .seconds(30))
         }
-        fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: fixture.worktree.id, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
+        fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: fixture.worktree.id, projectId: fixture.worktree.projectId, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
             id: launchID,
             worktreeID: fixture.worktree.id,
+            projectId: fixture.worktree.projectId,
             scriptKey: fixture.script.key
         )
         fixture.state.pendingScriptLaunchTasks[launchID] = task
@@ -883,6 +890,7 @@ struct AppStateRunRecordTests {
             scriptKey: fixture.script.key,
             scriptName: fixture.script.displayName,
             worktreeID: worktreeID,
+            projectId: fixture.worktree.projectId,
             branch: fixture.worktree.branch,
             target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
             status: .starting,
@@ -893,9 +901,10 @@ struct AppStateRunRecordTests {
         let task = Task<Void, Never> {
             try? await Task.sleep(for: .seconds(30))
         }
-        fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: worktreeID, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
+        fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: worktreeID, projectId: fixture.worktree.projectId, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
             id: launchID,
             worktreeID: worktreeID,
+            projectId: fixture.worktree.projectId,
             scriptKey: fixture.script.key
         )
         fixture.state.pendingScriptLaunchTasks[launchID] = task
@@ -903,7 +912,7 @@ struct AppStateRunRecordTests {
         fixture.state.cancelPendingRunScriptLaunches(worktreeID: worktreeID)
 
         #expect(task.isCancelled)
-        #expect(fixture.state.runRecords.record(worktreeID: worktreeID, scriptKey: fixture.script.key)?.status == .finished(.stopped))
+        #expect(fixture.state.runRecords.record(worktreeID: worktreeID, projectId: fixture.worktree.projectId, scriptKey: fixture.script.key)?.status == .finished(.stopped))
     }
 
     @Test func gracefulTerminationArchivesPendingLaunch() async throws {
@@ -921,6 +930,7 @@ struct AppStateRunRecordTests {
             scriptKey: fixture.script.key,
             scriptName: fixture.script.displayName,
             worktreeID: worktreeID,
+            projectId: fixture.worktree.projectId,
             branch: fixture.worktree.branch,
             target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
             status: .starting,
@@ -930,9 +940,10 @@ struct AppStateRunRecordTests {
         let task = Task<Void, Never> {
             try? await Task.sleep(for: .seconds(30))
         }
-        fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: worktreeID, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
+        fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: worktreeID, projectId: fixture.worktree.projectId, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
             id: launchID,
             worktreeID: worktreeID,
+            projectId: fixture.worktree.projectId,
             scriptKey: fixture.script.key
         )
         fixture.state.pendingScriptLaunchTasks[launchID] = task
@@ -955,6 +966,7 @@ struct AppStateRunRecordTests {
                 scriptKey: fixture.script.key,
                 scriptName: fixture.script.displayName,
                 worktreeID: worktreeID,
+                projectId: fixture.worktree.projectId,
                 branch: fixture.worktree.branch,
                 target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
                 status: .starting,
@@ -964,9 +976,10 @@ struct AppStateRunRecordTests {
             let task = Task<Void, Never> {
                 try? await Task.sleep(for: .seconds(30))
             }
-            fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: worktreeID, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
+            fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: worktreeID, projectId: fixture.worktree.projectId, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
                 id: launchID,
                 worktreeID: worktreeID,
+                projectId: fixture.worktree.projectId,
                 scriptKey: fixture.script.key
             )
             fixture.state.pendingScriptLaunchTasks[launchID] = task
@@ -976,8 +989,8 @@ struct AppStateRunRecordTests {
 
         #expect(fixture.state.pendingScriptLaunches.count == 1)
         #expect(fixture.state.pendingScriptLaunches.values.first?.worktreeID == secondWorktreeID)
-        #expect(fixture.state.runRecords.record(worktreeID: firstWorktreeID, scriptKey: fixture.script.key)?.status == .finished(.stopped))
-        #expect(fixture.state.runRecords.record(worktreeID: secondWorktreeID, scriptKey: fixture.script.key)?.status == .starting)
+        #expect(fixture.state.runRecords.record(worktreeID: firstWorktreeID, projectId: fixture.worktree.projectId, scriptKey: fixture.script.key)?.status == .finished(.stopped))
+        #expect(fixture.state.runRecords.record(worktreeID: secondWorktreeID, projectId: fixture.worktree.projectId, scriptKey: fixture.script.key)?.status == .starting)
         fixture.state.cancelPendingRunScriptLaunches()
     }
 
@@ -994,6 +1007,7 @@ struct AppStateRunRecordTests {
                 scriptKey: identity.scriptKey,
                 scriptName: identity.scriptKey,
                 worktreeID: identity.worktreeID,
+                projectId: fixture.worktree.projectId,
                 branch: fixture.worktree.branch,
                 target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
                 status: .starting,
@@ -1002,10 +1016,12 @@ struct AppStateRunRecordTests {
             let launchID = UUID()
             fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(
                 worktreeID: identity.worktreeID,
+                projectId: fixture.worktree.projectId,
                 scriptKey: identity.scriptKey
             )] = PendingRunScriptLaunch(
                 id: launchID,
                 worktreeID: identity.worktreeID,
+                projectId: fixture.worktree.projectId,
                 scriptKey: identity.scriptKey
             )
             fixture.state.pendingScriptLaunchTasks[launchID] = Task<Void, Never> {
@@ -1017,8 +1033,8 @@ struct AppStateRunRecordTests {
 
         #expect(fixture.state.pendingScriptLaunches.count == 1)
         #expect(fixture.state.pendingScriptLaunches.values.first?.worktreeID == second.worktreeID)
-        #expect(fixture.state.runRecords.record(worktreeID: first.worktreeID, scriptKey: first.scriptKey)?.status == .finished(.stopped))
-        #expect(fixture.state.runRecords.record(worktreeID: second.worktreeID, scriptKey: second.scriptKey)?.status == .starting)
+        #expect(fixture.state.runRecords.record(worktreeID: first.worktreeID, projectId: fixture.worktree.projectId, scriptKey: first.scriptKey)?.status == .finished(.stopped))
+        #expect(fixture.state.runRecords.record(worktreeID: second.worktreeID, projectId: fixture.worktree.projectId, scriptKey: second.scriptKey)?.status == .starting)
         fixture.state.cancelPendingRunScriptLaunches()
     }
 
@@ -1106,11 +1122,11 @@ struct AppStateRunRecordTests {
         try await Task.sleep(for: .milliseconds(50))
 
         // A monitor is still watching, so reconciliation must not give up yet.
-        fixture.state.reconcileRunRecords(worktreeID: fixture.worktree.id)
+        fixture.state.reconcileRunRecords(worktree: fixture.worktree)
         #expect(runRecord(fixture)?.status == .running)
 
         fixture.state.cancelAllRunScriptCompletionTasks()
-        fixture.state.reconcileRunRecords(worktreeID: fixture.worktree.id)
+        fixture.state.reconcileRunRecords(worktree: fixture.worktree)
         #expect(runRecord(fixture)?.status == .finished(.unknown))
     }
 

@@ -116,7 +116,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
             await loadHistory()
             // Reconnecting to a worktree is the moment to settle runs whose
             // terminal disappeared while nothing was watching them.
-            state.reconcileRunRecords(worktreeID: worktree.id)
+            state.reconcileRunRecords(worktree: worktree)
             now = Date()
         }
         .onReceive(ticker) { now = $0 }
@@ -145,7 +145,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
 
     private var activeOrAllScripts: [RunScript] {
         let scriptsByKey = Dictionary(uniqueKeysWithValues: scripts.map { ($0.key, $0) })
-        let activeScripts = state.runRecords.records(worktreeID: worktree.id)
+        let activeScripts = state.runRecords.records(worktreeID: worktree.id, projectId: worktree.projectId)
             .filter(\.status.isActive)
             .compactMap { record in
                 scriptsByKey[record.scriptKey] ?? script(from: record)
@@ -184,7 +184,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
     }
 
     private func presentation(for script: RunScript) -> RunRowPresentation {
-        let record = state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)
+        let record = state.runRecords.record(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: script.key)
         return RunTabPresentation.row(
             RunRowInput(
                 script: script,
@@ -206,12 +206,12 @@ RightPaneLoadingSkeletonView(activeTab: .run)
     private func perform(_ action: RunRowAction, matching staleScript: RunScript) async {
         switch action {
         case .start:
-            let preRefreshRunID = state.runRecords.record(worktreeID: worktree.id, scriptKey: staleScript.key)?.id
+            let preRefreshRunID = state.runRecords.record(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: staleScript.key)?.id
             guard let script = await freshScript(matching: staleScript) else { return }
-            guard state.runRecords.record(worktreeID: worktree.id, scriptKey: staleScript.key)?.id == preRefreshRunID else {
+            guard state.runRecords.record(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: staleScript.key)?.id == preRefreshRunID else {
                 return
             }
-            if case .finished? = state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status {
+            if case .finished? = state.runRecords.record(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: script.key)?.status {
                 state.restartScript(script, in: worktree)
             } else if state.scriptTab(for: script, in: worktree) != nil {
                 state.restartScript(script, in: worktree)
@@ -221,11 +221,11 @@ RightPaneLoadingSkeletonView(activeTab: .run)
         case .stop:
             state.stopScript(staleScript, in: worktree)
         case .restart:
-            let stoppedRunID = state.runRecords.record(worktreeID: worktree.id, scriptKey: staleScript.key)?.id
+            let stoppedRunID = state.runRecords.record(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: staleScript.key)?.id
             state.stopScript(staleScript, in: worktree)
             guard let script = await freshScript(matching: staleScript) else { return }
             if let stoppedRunID,
-               state.runRecords.record(worktreeID: worktree.id, scriptKey: staleScript.key)?.id != stoppedRunID {
+               state.runRecords.record(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: staleScript.key)?.id != stoppedRunID {
                 return
             }
             state.restartScript(script, in: worktree)

@@ -73,12 +73,27 @@ enum ProjectCreationError: LocalizedError, Equatable {
 struct PendingRunScriptLaunch: Equatable {
     let id: UUID
     let worktreeID: String
+    let projectId: String?
     let scriptKey: String
+
+    init(id: UUID, worktreeID: String, projectId: String?, scriptKey: String) {
+        self.id = id
+        self.worktreeID = worktreeID
+        self.projectId = projectId
+        self.scriptKey = scriptKey
+    }
 }
 
 struct PendingRunScriptLaunchKey: Hashable {
     let worktreeID: String
+    let projectId: String?
     let scriptKey: String
+
+    init(worktreeID: String, projectId: String?, scriptKey: String) {
+        self.worktreeID = worktreeID
+        self.projectId = projectId
+        self.scriptKey = scriptKey
+    }
 }
 
 struct RemoteWorktreeStatusProjectScanToken: Equatable {
@@ -5059,6 +5074,10 @@ final class AppState {
         for candidateId in candidateIds {
             beforeIds.insert(candidateId)
         }
+        let projectWorktreeIds = candidateIds
+            .union(projectsManager.worktrees(projectId: id).map(\.id))
+            .union(projects.first(where: { $0.id == id })?.cachedWorktrees.map(\.id) ?? [])
+        cleanupProjectACPState(projectId: id, worktreeIDs: projectWorktreeIds)
         let remoteRootsToUnregister: [String]
         if let project = projects.first(where: { $0.id == id }),
            project.host != nil {
@@ -5084,6 +5103,32 @@ final class AppState {
             try? FileManager.default.removeItem(at: Paths.buffersDir(forWorktreeId: worktreeId))
         }
         return true
+    }
+
+    /// Remove one project's ACP tabs and manager state while retaining the
+    /// path-shared terminal and non-ACP tabs used by another project.
+    private func cleanupProjectACPState(projectId: String, worktreeIDs: Set<String>) {
+        let owners = acpManagers.keys.filter { $0.projectID == projectId }
+        var scopedWorktreeIDs = worktreeIDs
+        scopedWorktreeIDs.formUnion(owners.compactMap(\.worktreeID))
+
+        for worktreeID in scopedWorktreeIDs {
+            let owner = SessionOwnerID.projectWorktree(projectId: projectId, worktreeId: worktreeID)
+            let manager = acpManagers[owner]
+            for tab in tabs.tabs(forWorktree: worktreeID) {
+                guard case .acpSession(let state) = tab,
+                      state.projectId == projectId
+                        || (state.projectId == nil
+                            && (manager?.liveSession(for: state.sessionId) != nil
+                                || manager?.sessionRows.contains(where: { $0.id == state.sessionId }) == true))
+                else { continue }
+                tabs.close(worktreeId: worktreeID, tabId: tab.id)
+            }
+        }
+
+        for owner in owners {
+            disposeACPManager(owner: owner)
+        }
     }
 
     @discardableResult

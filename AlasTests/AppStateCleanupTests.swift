@@ -1757,6 +1757,83 @@ struct AppStateCleanupTests {
         #expect(state.tabs.tabs(forWorktree: mainWorktreeId).isEmpty)
     }
 
+    @Test func removingSharedPathProjectClosesOnlyItsACPTabAndManager() throws {
+        let sharedPath = "/tmp/alas-cleanup-shared-\(UUID().uuidString)"
+        let projectA = ProjectConfig(
+            id: "host-a-\(UUID().uuidString)",
+            name: "Host A",
+            path: "/repos/a",
+            color: "blue",
+            addedAt: .distantPast,
+            host: "host-a"
+        )
+        let projectB = ProjectConfig(
+            id: "host-b-\(UUID().uuidString)",
+            name: "Host B",
+            path: "/repos/b",
+            color: "green",
+            addedAt: .distantPast,
+            host: "host-b"
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [projectA, projectB])))
+        let first = Worktree(
+            id: sharedPath,
+            projectId: projectA.id,
+            name: "shared",
+            branch: "main",
+            path: URL(fileURLWithPath: sharedPath),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        let second = Worktree(
+            id: sharedPath,
+            projectId: projectB.id,
+            name: "shared",
+            branch: "main",
+            path: URL(fileURLWithPath: sharedPath),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        let ownerA = SessionOwnerID.projectWorktree(projectId: projectA.id, worktreeId: sharedPath)
+        let ownerB = SessionOwnerID.projectWorktree(projectId: projectB.id, worktreeId: sharedPath)
+        let databases = [Paths.acpSessionsDB(for: ownerA), Paths.acpSessionsDB(for: ownerB)]
+        defer {
+            try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: sharedPath))
+            for database in databases {
+                try? FileManager.default.removeItem(at: database)
+                try? FileManager.default.removeItem(atPath: database.path + "-wal")
+                try? FileManager.default.removeItem(atPath: database.path + "-shm")
+            }
+        }
+        state.projectsManager.insertOptimisticWorktree(first)
+        state.projectsManager.insertOptimisticWorktree(second)
+
+        let managerA = try #require(state.acpManager(for: first))
+        let managerB = try #require(state.acpManager(for: second))
+        let sessionA = managerA.createSession(agentId: "test-agent")
+        let sessionB = managerB.createSession(agentId: "test-agent")
+        let tabA = state.tabs.append(acpSession: .init(
+            sessionId: sessionA.id,
+            title: "Host A session",
+            projectId: projectA.id
+        ), to: sharedPath)
+        let tabB = state.tabs.append(acpSession: .init(
+            sessionId: sessionB.id,
+            title: "Host B session",
+            projectId: projectB.id
+        ), to: sharedPath)
+        let terminal = state.tabs.appendTerminal(worktreeId: sharedPath, title: "Shared terminal", sessionId: "shared-terminal")
+
+        state.removeProject(id: projectA.id)
+
+        #expect(state.acpManager(for: ownerA) == nil)
+        #expect(state.acpManager(for: ownerB) === managerB)
+        let remainingTabs = state.tabs.tabs(forWorktree: sharedPath)
+        #expect(!remainingTabs.contains(where: { $0.id == tabA.id }))
+        #expect(remainingTabs.contains(where: { $0.id == tabB.id }))
+        #expect(remainingTabs.contains(where: { $0.id == terminal.id }))
+    }
+
     @Test func removeProjectDeletesPersistedTabsFile() async throws {
         let repo = try await makeRepo(name: "remove-persisted")
         defer { try? FileManager.default.removeItem(at: repo) }

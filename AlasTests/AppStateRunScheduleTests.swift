@@ -151,7 +151,7 @@ struct AppStateRunScheduleTests {
         await fixture.state.flushRunHistoryPersistence()
 
         #expect(report.outcome == .failed(exitCode: 7))
-        let record = try #require(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh"))
+        let record = try #require(fixture.state.runRecords.record(worktreeID: "wt-1", projectId: fixture.project.id, scriptKey: "repo:dev.sh"))
         #expect(record.status == .finished(.failed(exitCode: 7)))
         #expect(record.target.host == nil)
         #expect(fixture.state.runScriptFailures(in: "wt-1").count == 1)
@@ -176,7 +176,7 @@ struct AppStateRunScheduleTests {
 
         let outcome = await fixture.state.runSchedule(schedule(target: .project(id: "project"))).outcome
         #expect(outcome == .succeeded)
-        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .finished(.succeeded))
+        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", projectId: fixture.project.id, scriptKey: "repo:dev.sh")?.status == .finished(.succeeded))
         #expect(fixture.state.runScriptFailures(in: "wt-1").isEmpty)
     }
 
@@ -188,7 +188,7 @@ struct AppStateRunScheduleTests {
 
         let outcome = await fixture.state.runSchedule(schedule(target: .allProjects)).outcome
         #expect(outcome == .succeeded)
-        let record = try #require(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh"))
+        let record = try #require(fixture.state.runRecords.record(worktreeID: "wt-1", projectId: fixture.project.id, scriptKey: "repo:dev.sh"))
         #expect(record.target.host == "devbox")
         #expect(record.target.workingDirectory == fixture.directory.path)
         guard case .remote(let host, _)? = fixture.locations.locations.first else {
@@ -204,7 +204,7 @@ struct AppStateRunScheduleTests {
 
         let outcome = await fixture.state.runSchedule(schedule(target: .project(id: "project"), scriptKey: "repo:nope.sh")).outcome
         #expect(outcome == .skipped(reason: "Script repo:nope.sh was not found in main."))
-        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:nope.sh") == nil)
+        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", projectId: fixture.project.id, scriptKey: "repo:nope.sh") == nil)
         #expect(fixture.errors().isEmpty)
     }
 
@@ -226,6 +226,7 @@ struct AppStateRunScheduleTests {
             scriptKey: "repo:dev.sh",
             scriptName: "dev",
             worktreeID: "wt-1",
+            projectId: fixture.project.id,
             branch: "main",
             target: .init(host: nil, workingDirectory: fixture.directory.path),
             status: .running,
@@ -234,7 +235,7 @@ struct AppStateRunScheduleTests {
 
         let outcome = await fixture.state.runSchedule(schedule(target: .project(id: "project"))).outcome
         #expect(outcome == .skipped(reason: "dev is already running in main."))
-        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.id == "manual")
+        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", projectId: fixture.project.id, scriptKey: "repo:dev.sh")?.id == "manual")
     }
 
     @Test func launchRefusalBecomesALaunchFailureWithoutAnAlert() async throws {
@@ -249,7 +250,7 @@ struct AppStateRunScheduleTests {
         }
         #expect(message.contains("zsh or bash"))
         #expect(fixture.errors().isEmpty)
-        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh") == nil)
+        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", projectId: fixture.project.id, scriptKey: "repo:dev.sh") == nil)
     }
 
     /// A terminal that fails to open asynchronously — an unreachable SSH host,
@@ -309,12 +310,12 @@ struct AppStateRunScheduleTests {
 
         let scheduled = await fixture.state.runSchedule(schedule(target: .allProjects)).outcome
         #expect(scheduled == .skipped(reason: "Every project with a main worktree is paused."))
-        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh") == nil)
+        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", projectId: fixture.project.id, scriptKey: "repo:dev.sh") == nil)
 
         // Run Now is an explicit instruction, so it still runs.
         let manual = await fixture.state.runSchedule(schedule(target: .allProjects), invocation: .manual).outcome
         #expect(manual == .succeeded)
-        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .finished(.succeeded))
+        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", projectId: fixture.project.id, scriptKey: "repo:dev.sh")?.status == .finished(.succeeded))
     }
 
     /// Run scripts may be servers that never exit. Fanning out must start
@@ -353,15 +354,16 @@ struct AppStateRunScheduleTests {
         // Wait on both: the targets start as independent tasks, so waiting on
         // only one of them and then asserting the other is a race the suite
         // loses whenever the second one happens to win.
-        func isRunning(_ worktreeID: String) -> Bool {
-            fixture.state.runRecords.record(worktreeID: worktreeID, scriptKey: "repo:dev.sh")?.status == .running
+        func isRunning(projectId: String, worktreeID: String) -> Bool {
+            fixture.state.runRecords.record(worktreeID: worktreeID, projectId: projectId, scriptKey: "repo:dev.sh")?.status == .running
         }
         let deadline = Date().addingTimeInterval(5)
-        while !(isRunning("wt-1") && isRunning("wt-2")), Date() < deadline {
+        while !(isRunning(projectId: fixture.project.id, worktreeID: "wt-1")
+            && isRunning(projectId: second.id, worktreeID: "wt-2")), Date() < deadline {
             await Task.yield()
         }
-        #expect(isRunning("wt-1"))
-        #expect(isRunning("wt-2"))
+        #expect(isRunning(projectId: fixture.project.id, worktreeID: "wt-1"))
+        #expect(isRunning(projectId: second.id, worktreeID: "wt-2"))
 
         await gate.open()
         #expect(await run.value == .succeeded)
@@ -406,11 +408,11 @@ struct AppStateRunScheduleTests {
         // Tear down only once the command is actually running: that is the
         // path where the worktree's runs are purged rather than finished.
         let deadline = Date().addingTimeInterval(5)
-        while fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status != .running,
+        while fixture.state.runRecords.record(worktreeID: "wt-1", projectId: fixture.project.id, scriptKey: "repo:dev.sh")?.status != .running,
               Date() < deadline {
             await Task.yield()
         }
-        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .running)
+        #expect(fixture.state.runRecords.record(worktreeID: "wt-1", projectId: fixture.project.id, scriptKey: "repo:dev.sh")?.status == .running)
         #expect(!fixture.state.runScriptSettlementHandlers.isEmpty)
 
         fixture.state.cleanupRunScriptState(worktreeID: "wt-1")
@@ -519,10 +521,10 @@ struct AppStateRunScheduleTests {
         #expect(reference.worktreeID == created.id)
         #expect(reference.branch == created.branch)
         // The script and its record belong to the new worktree, not main.
-        let record = try #require(state.runRecords.record(worktreeID: created.id, scriptKey: "repo:setup.sh"))
+        let record = try #require(state.runRecords.record(worktreeID: created.id, projectId: created.projectId, scriptKey: "repo:setup.sh"))
         #expect(record.status == .finished(.succeeded))
         #expect(record.target.workingDirectory == created.path.path)
-        #expect(state.runRecords.record(worktreeID: main.id, scriptKey: "repo:setup.sh") == nil)
+        #expect(state.runRecords.record(worktreeID: main.id, projectId: main.projectId, scriptKey: "repo:setup.sh") == nil)
         #expect(locations.locations.count == 1)
         // Script terminal + agent terminal, both attributed to the new worktree.
         let terminals = state.tabs.tabs(forWorktree: created.id).filter {
@@ -1060,7 +1062,7 @@ struct AppStateRunScheduleTests {
         #expect(outcome == .launchFailed(AppState.WorktreeAgentStartupError.agentUnavailable.localizedDescription))
         let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
         // The script still ran in the new worktree; only the agent step failed.
-        #expect(state.runRecords.record(worktreeID: created.id, scriptKey: "repo:setup.sh")?.status == .finished(.succeeded))
+        #expect(state.runRecords.record(worktreeID: created.id, projectId: created.projectId, scriptKey: "repo:setup.sh")?.status == .finished(.succeeded))
         guard case .launchFailed(_, _, let surface) = state.projectsManager.operationState(forWorktreeId: created.id, projectId: project.id) else {
             Issue.record("Expected a retryable launchFailed state on the new worktree")
             return

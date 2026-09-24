@@ -78,7 +78,7 @@ struct RunRecord: Identifiable, Equatable, Sendable {
         scriptKey: String,
         scriptName: String,
         worktreeID: String,
-        projectId: String? = nil,
+        projectId: String?,
         branch: String,
         target: RunExecutionTarget,
         endpoint: URL? = nil,
@@ -110,37 +110,45 @@ struct RunRecord: Identifiable, Equatable, Sendable {
     }
 }
 
-/// The latest run per (worktree, script). Keyed by worktree first so tearing
-/// a worktree down is one removal and no lookup can reach across worktrees.
+/// The latest run per (project, worktree, script). Keep the project dimension
+/// because different projects can expose the same path-derived worktree ID.
 ///
 /// Deliberately a plain value type with no knowledge of terminals: the Run
 /// tab, and any future local-checks surface, can share it.
 struct RunRecordStore: Equatable {
-    private(set) var byWorktree: [String: [String: RunRecord]] = [:]
+    private(set) var byWorktree: [String: [String?: [String: RunRecord]]] = [:]
 
-    func record(worktreeID: String, scriptKey: String) -> RunRecord? {
-        byWorktree[worktreeID]?[scriptKey]
+    func record(worktreeID: String, projectId: String?, scriptKey: String) -> RunRecord? {
+        byWorktree[worktreeID]?[projectId]?[scriptKey]
     }
 
-    func records(worktreeID: String) -> [RunRecord] {
-        Array(byWorktree[worktreeID, default: [:]].values)
+    func records(worktreeID: String, projectId: String?) -> [RunRecord] {
+        guard let scripts = byWorktree[worktreeID]?[projectId] else { return [] }
+        return Array(scripts.values)
     }
 
-    func isCurrentActiveRun(runID: String, worktreeID: String, scriptKey: String) -> Bool {
-        guard let record = record(worktreeID: worktreeID, scriptKey: scriptKey) else { return false }
+    func allRecords(worktreeID: String) -> [RunRecord] {
+        byWorktree[worktreeID]?.values.flatMap { $0.values } ?? []
+    }
+
+    func isCurrentActiveRun(runID: String, worktreeID: String, projectId: String?, scriptKey: String) -> Bool {
+        guard let record = record(worktreeID: worktreeID, projectId: projectId, scriptKey: scriptKey) else { return false }
         return record.id == runID && record.status.isActive
     }
 
     var activeRecords: [RunRecord] {
-        byWorktree.values.flatMap(\.values).filter(\.status.isActive)
+        byWorktree.values.flatMap { $0.values.flatMap(\.values) }.filter(\.status.isActive)
     }
 
     /// Starts a run, returning the record it displaced so a launch that fails
     /// before the command exists can put the previous outcome back.
     @discardableResult
     mutating func begin(_ record: RunRecord) -> RunRecord? {
-        let previous = byWorktree[record.worktreeID]?[record.scriptKey]
-        byWorktree[record.worktreeID, default: [:]][record.scriptKey] = record
+        var owners = byWorktree[record.worktreeID] ?? [:]
+        var scripts = owners[record.projectId] ?? [:]
+        let previous = scripts.updateValue(record, forKey: record.scriptKey)
+        owners[record.projectId] = scripts
+        byWorktree[record.worktreeID] = owners
         return previous
     }
 
@@ -149,10 +157,11 @@ struct RunRecordStore: Equatable {
     /// an old record over a newer run.
     mutating func rollback(runID: String, to previous: RunRecord?) {
         guard let location = locate(runID: runID) else { return }
-        byWorktree[location.worktreeID]?[location.scriptKey] = previous
-        if byWorktree[location.worktreeID]?.isEmpty == true {
-            byWorktree[location.worktreeID] = nil
-        }
+        var owners = byWorktree[location.worktreeID] ?? [:]
+        var scripts = owners[location.projectId] ?? [:]
+        scripts[location.scriptKey] = previous
+        owners[location.projectId] = scripts.isEmpty ? nil : scripts
+        byWorktree[location.worktreeID] = owners.isEmpty ? nil : owners
     }
 
     mutating func markRunning(runID: String, sessionID: String) {
@@ -175,8 +184,8 @@ struct RunRecordStore: Equatable {
     /// that already reported an exit status keeps that outcome even when its
     /// shell is closed afterwards.
     @discardableResult
-    mutating func markStopped(worktreeID: String, scriptKey: String, at date: Date) -> RunRecord? {
-        guard let record = record(worktreeID: worktreeID, scriptKey: scriptKey), record.status.isActive else { return nil }
+    mutating func markStopped(worktreeID: String, projectId: String?, scriptKey: String, at date: Date) -> RunRecord? {
+        guard let record = record(worktreeID: worktreeID, projectId: projectId, scriptKey: scriptKey), record.status.isActive else { return nil }
         return mutateActive(runID: record.id) {
             $0.status = .finished(.stopped)
             $0.finishedAt = date
@@ -194,8 +203,8 @@ struct RunRecordStore: Equatable {
     }
 
     @discardableResult
-    mutating func markLostObservation(worktreeID: String, scriptKey: String, at date: Date) -> RunRecord? {
-        guard let record = record(worktreeID: worktreeID, scriptKey: scriptKey) else { return nil }
+    mutating func markLostObservation(worktreeID: String, projectId: String?, scriptKey: String, at date: Date) -> RunRecord? {
+        guard let record = record(worktreeID: worktreeID, projectId: projectId, scriptKey: scriptKey) else { return nil }
         return markLostObservation(runID: record.id, at: date)
     }
 
@@ -208,18 +217,12 @@ struct RunRecordStore: Equatable {
     }
 
     mutating func purgeFinished(worktreeID: String) {
-        byWorktree[worktreeID] = byWorktree[worktreeID]?.filter { $0.value.status.isActive }
-        if byWorktree[worktreeID]?.isEmpty == true {
-            byWorktree[worktreeID] = nil
-        }
+        filterRecords(worktreeID: worktreeID) { $0.status.isActive }
     }
 
     mutating func purgeFinished(worktreeID: String, finishedOnOrBefore cutoff: Date) {
-        byWorktree[worktreeID] = byWorktree[worktreeID]?.filter { _, record in
-            record.status.isActive || (record.finishedAt ?? .distantPast) > cutoff
-        }
-        if byWorktree[worktreeID]?.isEmpty == true {
-            byWorktree[worktreeID] = nil
+        filterRecords(worktreeID: worktreeID) {
+            $0.status.isActive || ($0.finishedAt ?? .distantPast) > cutoff
         }
     }
 
@@ -233,10 +236,22 @@ struct RunRecordStore: Equatable {
         }
     }
 
-    private func locate(runID: String) -> (worktreeID: String, scriptKey: String)? {
-        for (worktreeID, records) in byWorktree {
-            for (scriptKey, record) in records where record.id == runID {
-                return (worktreeID, scriptKey)
+    private mutating func filterRecords(worktreeID: String, keeping: (RunRecord) -> Bool) {
+        guard var owners = byWorktree[worktreeID] else { return }
+        for projectId in Array(owners.keys) {
+            guard let scripts = owners[projectId] else { continue }
+            let retained = scripts.filter { keeping($0.value) }
+            owners[projectId] = retained.isEmpty ? nil : retained
+        }
+        byWorktree[worktreeID] = owners.isEmpty ? nil : owners
+    }
+
+    private func locate(runID: String) -> (worktreeID: String, projectId: String?, scriptKey: String)? {
+        for (worktreeID, owners) in byWorktree {
+            for (projectId, scripts) in owners {
+                for (scriptKey, record) in scripts where record.id == runID {
+                    return (worktreeID, projectId, scriptKey)
+                }
             }
         }
         return nil
@@ -244,11 +259,11 @@ struct RunRecordStore: Equatable {
 
     private mutating func mutateActive(runID: String, _ body: (inout RunRecord) -> Void) -> RunRecord? {
         guard let location = locate(runID: runID),
-              var record = byWorktree[location.worktreeID]?[location.scriptKey],
+              var record = byWorktree[location.worktreeID]?[location.projectId]?[location.scriptKey],
               record.status.isActive
         else { return nil }
         body(&record)
-        byWorktree[location.worktreeID]?[location.scriptKey] = record
+        byWorktree[location.worktreeID]?[location.projectId]?[location.scriptKey] = record
         return record
     }
 }

@@ -376,7 +376,7 @@ extension AppState {
             )
         }
         if runningScriptTab(for: script, in: worktree) != nil
-            || runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive == true {
+            || runRecords.record(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: script.key)?.status.isActive == true {
             return RunScheduleRunReport(
                 outcome: .skipped(reason: "\(script.displayName) is already running in \(worktree.branch).")
             )

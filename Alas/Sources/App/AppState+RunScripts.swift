@@ -281,15 +281,15 @@ extension AppState {
     }
 
     func restartScript(_ script: RunScript, in worktree: Worktree) {
-        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: script.key)
+        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: script.key)
         if pendingScriptLaunches[launchKey] != nil {
             stopScript(script, in: worktree)
             launchScript(script, in: worktree)
             return
         }
         if let existing = scriptTab(for: script, in: worktree) {
-            let capture = stoppedRunHistoryCapture(worktreeID: worktree.id, scriptKey: script.key)
-            let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+            let capture = stoppedRunHistoryCapture(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: script.key)
+            let finalized = runRecords.markStopped(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: script.key, at: Date())
             archiveFinalizedRun(finalized, capture: capture)
             closeTab(worktreeId: worktree.id, tabId: existing.id)
         }
@@ -300,9 +300,9 @@ extension AppState {
     /// is marked stopped *before* the close so the monitor-cancellation path
     /// can't relabel a deliberate stop as a lost process.
     func stopScript(_ script: RunScript, in worktree: Worktree) {
-        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: script.key)
+        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: script.key)
         if let pending = pendingScriptLaunches.removeValue(forKey: launchKey) {
-            let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+            let finalized = runRecords.markStopped(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: script.key, at: Date())
             archiveFinalizedRun(finalized, capture: .unavailable)
             pendingScriptLaunchTasks.removeValue(forKey: pending.id)?.cancel()
             return
@@ -310,12 +310,12 @@ extension AppState {
         guard let existing = scriptTab(for: script, in: worktree) else {
             // Nothing left to stop: whatever we thought was running is gone,
             // and we never saw it exit.
-            let finalized = runRecords.markLostObservation(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+            let finalized = runRecords.markLostObservation(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: script.key, at: Date())
             archiveFinalizedRun(finalized, capture: .unavailable)
             return
         }
-        let capture = stoppedRunHistoryCapture(worktreeID: worktree.id, scriptKey: script.key)
-        let finalized = runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+        let capture = stoppedRunHistoryCapture(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: script.key)
+        let finalized = runRecords.markStopped(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: script.key, at: Date())
         archiveFinalizedRun(finalized, capture: capture)
         closeTab(worktreeId: worktree.id, tabId: existing.id)
     }
@@ -330,9 +330,9 @@ extension AppState {
     /// Re-check active records whose terminal has gone away. Called when the
     /// Run tab appears, so reconnecting to a worktree settles uncertain runs
     /// instead of leaving them stuck on "Running".
-    func reconcileRunRecords(worktreeID: String) {
+    func reconcileRunRecords(worktree: Worktree) {
         let now = Date()
-        for record in runRecords.records(worktreeID: worktreeID) where record.status.isActive {
+        for record in runRecords.records(worktreeID: worktree.id, projectId: worktree.projectId) where record.status.isActive {
             guard let sessionID = record.sessionID else { continue }
             guard terminal.registry.session(for: sessionID) == nil else { continue }
             // A monitor may still be waiting on a completion file that outlives
@@ -371,7 +371,7 @@ extension AppState {
     /// port on this Mac.
     func openRunEndpoint(_ script: RunScript, in worktree: Worktree) {
         guard let endpoint = script.endpoint else { return }
-        let currentRecord = runRecords.record(worktreeID: worktree.id, scriptKey: script.key)
+        let currentRecord = runRecords.record(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: script.key)
         let target: RunExecutionTarget
         if let currentRecord, currentRecord.projectId == worktree.projectId, currentRecord.status.isActive {
             target = currentRecord.target
@@ -441,7 +441,7 @@ extension AppState {
         // that (double-click, repeated Enter) would both see "not running"
         // and both launch. Close that window with a synchronous in-flight
         // guard instead.
-        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: script.key)
+        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, projectId: worktree.projectId, scriptKey: script.key)
         guard pendingScriptLaunches[launchKey] == nil else { return .alreadyStarting }
 
         // Global scripts live in local Application Support and are read by
@@ -499,6 +499,7 @@ extension AppState {
         pendingScriptLaunches[launchKey] = PendingRunScriptLaunch(
             id: launchID,
             worktreeID: worktree.id,
+            projectId: worktree.projectId,
             scriptKey: script.key
         )
         let launchTask = Task { @MainActor in
@@ -739,8 +740,8 @@ extension AppState {
         case unavailable
     }
 
-    private func stoppedRunHistoryCapture(worktreeID: String, scriptKey: String) -> RunHistoryCapture {
-        guard let runID = runRecords.record(worktreeID: worktreeID, scriptKey: scriptKey)?.id,
+    private func stoppedRunHistoryCapture(worktreeID: String, projectId: String, scriptKey: String) -> RunHistoryCapture {
+        guard let runID = runRecords.record(worktreeID: worktreeID, projectId: projectId, scriptKey: scriptKey)?.id,
               let entry = runScriptCompletionTasks.removeValue(forKey: runID)
         else { return .unavailable }
         let capture = runHistoryCaptureBeforeCancelling(entry.location)
@@ -898,6 +899,7 @@ extension AppState {
                     guard runRecords.isCurrentActiveRun(
                         runID: runID,
                         worktreeID: worktree.id,
+                        projectId: worktree.projectId,
                         scriptKey: script.key
                     ) else {
                         // Something replaced this run's slot while it was in
@@ -1115,7 +1117,7 @@ extension AppState {
             }
         } else {
             let now = Date()
-            for record in runRecords.records(worktreeID: worktreeID) where record.status.isActive {
+            for record in runRecords.allRecords(worktreeID: worktreeID) where record.status.isActive {
                 let finalized = runRecords.markLostObservation(runID: record.id, at: now)
                 archiveFinalizedRun(finalized, capture: .unavailable)
             }
@@ -1136,8 +1138,8 @@ extension AppState {
         for key in pendingKeys {
             guard let pending = pendingScriptLaunches.removeValue(forKey: key) else { continue }
             pendingScriptLaunchTasks.removeValue(forKey: pending.id)?.cancel()
-            let runID = runRecords.record(worktreeID: pending.worktreeID, scriptKey: pending.scriptKey)?.id
-            let finalized = runRecords.markStopped(worktreeID: pending.worktreeID, scriptKey: pending.scriptKey, at: now)
+            let runID = runRecords.record(worktreeID: pending.worktreeID, projectId: pending.projectId, scriptKey: pending.scriptKey)?.id
+            let finalized = runRecords.markStopped(worktreeID: pending.worktreeID, projectId: pending.projectId, scriptKey: pending.scriptKey, at: now)
             archiveFinalizedRun(finalized, capture: .unavailable)
             // The cancelled launch task will never reach its own error path,
             // so a waiting caller is told here that the command never ran.

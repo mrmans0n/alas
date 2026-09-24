@@ -13,6 +13,7 @@ struct RunRecordStoreTests {
         id: String = "run-1",
         scriptKey: String = "repo:dev.sh",
         worktreeID: String = "wt-1",
+        projectId: String? = nil,
         branch: String = "main",
         host: String? = nil,
         endpoint: URL? = nil,
@@ -23,6 +24,7 @@ struct RunRecordStoreTests {
             scriptKey: scriptKey,
             scriptName: "Dev",
             worktreeID: worktreeID,
+            projectId: projectId,
             branch: branch,
             target: target(host: host),
             endpoint: endpoint,
@@ -33,16 +35,33 @@ struct RunRecordStoreTests {
 
     // MARK: - Lifecycle
 
+    @Test func samePathRunsFromDifferentProjectsKeepIndependentLifecycle() {
+        var store = RunRecordStore()
+        #expect(store.begin(record(id: "run-a", projectId: "project-a")) == nil)
+        #expect(store.begin(record(id: "run-b", projectId: "project-b")) == nil)
+        store.markRunning(runID: "run-a", sessionID: "session-a")
+        store.markRunning(runID: "run-b", sessionID: "session-b")
+
+        #expect(store.record(worktreeID: "wt-1", projectId: "project-a", scriptKey: "repo:dev.sh")?.sessionID == "session-a")
+        #expect(store.record(worktreeID: "wt-1", projectId: "project-b", scriptKey: "repo:dev.sh")?.sessionID == "session-b")
+        #expect(store.isCurrentActiveRun(runID: "run-a", worktreeID: "wt-1", projectId: "project-a", scriptKey: "repo:dev.sh"))
+        #expect(store.isCurrentActiveRun(runID: "run-b", worktreeID: "wt-1", projectId: "project-b", scriptKey: "repo:dev.sh"))
+
+        store.markStopped(worktreeID: "wt-1", projectId: "project-a", scriptKey: "repo:dev.sh", at: epoch)
+        #expect(store.record(worktreeID: "wt-1", projectId: "project-a", scriptKey: "repo:dev.sh")?.status == .finished(.stopped))
+        #expect(store.record(worktreeID: "wt-1", projectId: "project-b", scriptKey: "repo:dev.sh")?.status == .running)
+    }
+
     @Test func beginThenRunThenFinishTracksOneRun() {
         var store = RunRecordStore()
         #expect(store.begin(record()) == nil)
         store.markRunning(runID: "run-1", sessionID: "session-1")
-        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .running)
-        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.sessionID == "session-1")
+        #expect(store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh")?.status == .running)
+        #expect(store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh")?.sessionID == "session-1")
 
         store.finish(runID: "run-1", outcome: .succeeded, at: epoch.addingTimeInterval(12))
 
-        let finished = store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")
+        let finished = store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh")
         #expect(finished?.status == .finished(.succeeded))
         #expect(finished?.duration == 12)
         #expect(store.activeRecords.isEmpty)
@@ -55,8 +74,8 @@ struct RunRecordStoreTests {
 
         store.finish(runID: "run-1", outcome: .failed(exitCode: 42), at: epoch, failureID: "failure-1")
 
-        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .finished(.failed(exitCode: 42)))
-        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.failureID == "failure-1")
+        #expect(store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh")?.status == .finished(.failed(exitCode: 42)))
+        #expect(store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh")?.failureID == "failure-1")
     }
 
     @Test func finalizationReturnsTheRecordExactlyOnce() {
@@ -78,12 +97,13 @@ struct RunRecordStoreTests {
 
         let stopped = store.markStopped(
             worktreeID: "wt-1",
+            projectId: nil,
             scriptKey: "repo:dev.sh",
             at: epoch.addingTimeInterval(2)
         )
 
         #expect(stopped?.status == .finished(.stopped))
-        #expect(store.markStopped(worktreeID: "wt-1", scriptKey: "repo:dev.sh", at: epoch) == nil)
+        #expect(store.markStopped(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh", at: epoch) == nil)
 
         store.begin(record(id: "run-2"))
         let unknown = store.markLostObservation(runID: "run-2", at: epoch.addingTimeInterval(4))
@@ -104,7 +124,7 @@ struct RunRecordStoreTests {
 
         store.finish(runID: "run-1", outcome: .succeeded, at: epoch.addingTimeInterval(5))
 
-        let current = store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")
+        let current = store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh")
         #expect(current?.id == "run-2")
         #expect(current?.status == .running)
     }
@@ -117,7 +137,7 @@ struct RunRecordStoreTests {
 
         store.markLostObservation(runID: "run-1", at: epoch)
 
-        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .running)
+        #expect(store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh")?.status == .running)
     }
 
     @Test func rollbackRestoresTheDisplacedOutcome() {
@@ -128,7 +148,7 @@ struct RunRecordStoreTests {
 
         store.rollback(runID: "run-2", to: displaced)
 
-        let current = store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")
+        let current = store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh")
         #expect(current?.id == "run-1")
         #expect(current?.status == .finished(.failed(exitCode: 1)))
     }
@@ -140,7 +160,7 @@ struct RunRecordStoreTests {
 
         store.rollback(runID: "run-1", to: displaced)
 
-        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.id == "run-2")
+        #expect(store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh")?.id == "run-2")
     }
 
     @Test func rollbackWithNoPreviousRunClearsTheSlot() {
@@ -149,7 +169,7 @@ struct RunRecordStoreTests {
 
         store.rollback(runID: "run-1", to: displaced)
 
-        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh") == nil)
+        #expect(store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh") == nil)
         #expect(store.byWorktree["wt-1"] == nil)
     }
 
@@ -162,7 +182,7 @@ struct RunRecordStoreTests {
 
         store.markLostObservation(runID: "run-1", at: epoch.addingTimeInterval(3))
 
-        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .finished(.unknown))
+        #expect(store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh")?.status == .finished(.unknown))
     }
 
     /// The command reported an exit status; closing its shell afterwards is
@@ -174,9 +194,9 @@ struct RunRecordStoreTests {
         store.finish(runID: "run-1", outcome: .succeeded, at: epoch)
 
         store.markLostObservation(runID: "run-1", at: epoch.addingTimeInterval(60))
-        store.markStopped(worktreeID: "wt-1", scriptKey: "repo:dev.sh", at: epoch.addingTimeInterval(60))
+        store.markStopped(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh", at: epoch.addingTimeInterval(60))
 
-        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .finished(.succeeded))
+        #expect(store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh")?.status == .finished(.succeeded))
     }
 
     @Test func stopWinsOverLaterLostObservation() {
@@ -184,10 +204,10 @@ struct RunRecordStoreTests {
         store.begin(record())
         store.markRunning(runID: "run-1", sessionID: "session-1")
 
-        store.markStopped(worktreeID: "wt-1", scriptKey: "repo:dev.sh", at: epoch.addingTimeInterval(4))
+        store.markStopped(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh", at: epoch.addingTimeInterval(4))
         store.markLostObservation(runID: "run-1", at: epoch.addingTimeInterval(6))
 
-        let current = store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")
+        let current = store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh")
         #expect(current?.status == .finished(.stopped))
         #expect(current?.finishedAt == epoch.addingTimeInterval(4))
     }
@@ -201,10 +221,10 @@ struct RunRecordStoreTests {
         store.begin(record(id: "run-b", worktreeID: "wt-2"))
         store.markRunning(runID: "run-b", sessionID: "session-b")
 
-        store.markStopped(worktreeID: "wt-1", scriptKey: "repo:dev.sh", at: epoch)
+        store.markStopped(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh", at: epoch)
 
-        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:dev.sh")?.status == .finished(.stopped))
-        #expect(store.record(worktreeID: "wt-2", scriptKey: "repo:dev.sh")?.status == .running)
+        #expect(store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:dev.sh")?.status == .finished(.stopped))
+        #expect(store.record(worktreeID: "wt-2", projectId: nil, scriptKey: "repo:dev.sh")?.status == .running)
     }
 
     @Test func purgingOneWorktreeLeavesTheOthers() {
@@ -214,8 +234,8 @@ struct RunRecordStoreTests {
 
         store.purge(worktreeID: "wt-1")
 
-        #expect(store.records(worktreeID: "wt-1").isEmpty)
-        #expect(store.records(worktreeID: "wt-2").count == 1)
+        #expect(store.records(worktreeID: "wt-1", projectId: nil).isEmpty)
+        #expect(store.records(worktreeID: "wt-2", projectId: nil).count == 1)
     }
 
     @Test func purgeFinishedWithCutoffKeepsLaterCompletions() {
@@ -227,8 +247,8 @@ struct RunRecordStoreTests {
 
         store.purgeFinished(worktreeID: "wt-1", finishedOnOrBefore: epoch)
 
-        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:old.sh") == nil)
-        #expect(store.record(worktreeID: "wt-1", scriptKey: "repo:later.sh")?.id == "later")
+        #expect(store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:old.sh") == nil)
+        #expect(store.record(worktreeID: "wt-1", projectId: nil, scriptKey: "repo:later.sh")?.id == "later")
     }
 
     // MARK: - Endpoint ownership

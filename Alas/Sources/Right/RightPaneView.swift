@@ -309,7 +309,7 @@ struct RightPaneView: View {
 
     private var runningScriptNames: [String] {
         state.runRecords
-            .records(worktreeID: worktree.id)
+            .records(worktreeID: worktree.id, projectId: worktree.projectId)
             .filter { $0.status.isActive }
             .map(\.scriptName)
     }
