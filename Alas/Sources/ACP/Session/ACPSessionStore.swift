@@ -1214,7 +1214,7 @@ extension ACPSessionStore {
                 END
             WHERE session_leases.owner_instance = excluded.owner_instance
                OR session_leases.heartbeat_at < ?
-            """, bindings: [sessionId, instanceId, pid, now, leaseToken, replaceOwnedToken ? 0 : 1, staleCutoff])
+            """, bindings: [sessionId, instanceId, pid, now, leaseToken, replaceOwnedToken ? 1 : 0, staleCutoff])
             let won = try loadLease(sessionId: sessionId)?.ownerInstance == instanceId
             try db.exec("COMMIT")
             return won

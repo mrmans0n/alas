@@ -2796,7 +2796,8 @@ final class ACPSessionManager: ObservableObject {
         sessionId: ACPSession.ID,
         session: ACPSession,
         environment: [String: String],
-        attempt: AttachmentAttempt
+        attempt: AttachmentAttempt,
+        brokerIdOverride: ACPBrokerID? = nil
     ) async throws -> ACPConnection {
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
             throw CancellationError()
@@ -2804,9 +2805,10 @@ final class ACPSessionManager: ObservableObject {
         let callbackOwnerID = UUID()
         brokerCallbackOwnerIDs[sessionId] = callbackOwnerID
         let connectionOwnerID = attempt.id
-        let brokerId = ACPBrokerID(rawValue: persistedRows[sessionId]?.acpBrokerId ?? Self.defaultBrokerId(
-            for: sessionId
-        ))
+        let usesPersistedBrokerNamespace = brokerIdOverride == nil
+        let brokerId = brokerIdOverride ?? ACPBrokerID(
+            rawValue: persistedRows[sessionId]?.acpBrokerId ?? Self.defaultBrokerId(for: sessionId)
+        )
         let client = ACPBrokerClient(
             service: service,
             brokerId: brokerId,
@@ -2816,8 +2818,12 @@ final class ACPSessionManager: ObservableObject {
             cwd: worktreePath,
             env: environment,
             operationKeyPrefix: "\(instanceId):\(sessionId):\(UUID().uuidString)",
-            initialBrokerGeneration: Self.brokerGeneration(from: persistedRows[sessionId]),
-            initialAcknowledgedCursor: Self.brokerCursor(from: persistedRows[sessionId]),
+            initialBrokerGeneration: usesPersistedBrokerNamespace
+                ? Self.brokerGeneration(from: persistedRows[sessionId])
+                : nil,
+            initialAcknowledgedCursor: usesPersistedBrokerNamespace
+                ? Self.brokerCursor(from: persistedRows[sessionId])
+                : ACPBrokerEventCursor(rawValue: 0),
             onDurableStateChanged: { [weak self] state in
                 Task { @MainActor [weak self] in
                     guard let self,
@@ -2996,7 +3002,8 @@ final class ACPSessionManager: ObservableObject {
                 sessionId: sessionId,
                 session: session,
                 environment: environment,
-                attempt: attempt
+                attempt: attempt,
+                brokerIdOverride: ACPBrokerID(rawValue: "fallback-\(UUID().uuidString)")
             )
         }
         switch connectionOutcome {

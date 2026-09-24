@@ -94,6 +94,11 @@ struct ACPSessionManagerAttachRestoreTests {
     @Test("a stalled broker startup falls back to an isolated service")
     func stalledBrokerStartupFallsBackToIsolatedService() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
+        var storedRow = row(id: "stalled-broker-session", remoteSessionId: nil)
+        storedRow.acpBrokerId = "persisted-stalled-broker"
+        storedRow.acpBrokerGeneration = 7
+        storedRow.acpBrokerAcknowledgedCursor = 42
+        try store.upsertSession(storedRow)
         let sharedService = ManagerBrokerServiceProxy(stallOpen: true)
         let isolatedService = ManagerBrokerService()
         let manager = ACPSessionManager(
@@ -106,7 +111,8 @@ struct ACPSessionManagerAttachRestoreTests {
             attachmentStartupTimeout: .milliseconds(50),
             restartTeardownTimeout: .milliseconds(50)
         )
-        let session = manager.createSession(id: "stalled-broker-session", agentId: "claude")
+        let session = try #require(manager.placeholderSession(id: "stalled-broker-session"))
+        await manager.hydrateIfNeeded(id: session.id)
         session.enqueue(blocks: [.text("keep this queued")])
 
         let originalAttach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
@@ -117,6 +123,10 @@ struct ACPSessionManagerAttachRestoreTests {
             let opened = await isolatedService.opened
             return session.agentState == .ready && !opened.isEmpty
         }
+        let originalBrokerId = await sharedService.opened.first?.brokerId
+        let isolatedBrokerId = await isolatedService.opened.first?.brokerId
+        #expect(originalBrokerId != isolatedBrokerId)
+        #expect(await isolatedService.attached.first?.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
         #expect(await sharedService.openGate.hasWaiters)
         #expect(session.agentState == .ready)
         #expect(session.queue.count == 1)
@@ -4839,6 +4849,7 @@ struct ACPSessionManagerAttachRestoreTests {
     }
 
     private func row(
+        id: String = "local",
         remoteSessionId: String?,
         agentId: String = "claude",
         currentModel: String? = nil,
@@ -4846,7 +4857,7 @@ struct ACPSessionManagerAttachRestoreTests {
         configOptionValues: [String: ACPConfigValue] = [:]
     ) -> ACPSessionRow {
         ACPSessionRow(
-            id: "local",
+            id: id,
             agentId: agentId,
             title: "Stored session",
             titleSource: .placeholder,
@@ -5224,6 +5235,7 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
     private let base = ManagerBrokerService()
     private let stallOpen: Bool
     private let stallDetach: Bool
+    private(set) var opened: [ACPBrokerOpenParams] = []
 
     init(stallOpen: Bool = false, stallDetach: Bool = false) {
         self.stallOpen = stallOpen
@@ -5231,6 +5243,7 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
     }
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
+        opened.append(params)
         if stallOpen { await openGate.wait() }
         return try await base.open(params)
     }

@@ -53,6 +53,40 @@ import Foundation
         #expect(try store.claimLease(sessionId: "s1", instanceId: "A", pid: Int64(getpid()), now: now + 1, staleAfter: 15) == true)
     }
 
+    @Test("same-owner recovery rotates the lease token when requested")
+    func sameOwnerRecoveryRotatesToken() throws {
+        let store = try tempStore()
+        try seedSession(store, id: "s1")
+        let now = Int64(Date().timeIntervalSince1970)
+
+        #expect(try store.claimLease(
+            sessionId: "s1",
+            instanceId: "A",
+            pid: Int64(getpid()),
+            now: now,
+            staleAfter: 15,
+            leaseToken: "old-token"
+        ))
+        #expect(try store.claimLease(
+            sessionId: "s1",
+            instanceId: "A",
+            pid: Int64(getpid()),
+            now: now + 1,
+            staleAfter: 15,
+            leaseToken: "new-token",
+            replaceOwnedToken: true
+        ))
+
+        #expect(try store.loadLease(sessionId: "s1")?.token == "new-token")
+        let staleWrite = try store.withLeaseFence(
+            ACPSessionLeaseFence(sessionId: "s1", ownerInstance: "A", token: "old-token")
+        ) {
+            try store.setContextRecoveryPending(sessionId: "s1", pending: true)
+            return true
+        }
+        #expect(staleWrite == nil)
+    }
+
     @Test("stale-heartbeat lease is reclaimable even with a live pid")
     func staleHeartbeatReclaim() throws {
         let store = try tempStore()
