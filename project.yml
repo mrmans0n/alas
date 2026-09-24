@@ -58,6 +58,8 @@ targets:
         buildPhase: resources
       - path: Alas/Resources/NextPromptLicenses.txt
         buildPhase: resources
+      - path: Alas/Resources/NextPromptModelManifest.json
+        buildPhase: resources
       - path: Alas/Resources/RemoteWeb
         buildPhase: resources
         type: folder

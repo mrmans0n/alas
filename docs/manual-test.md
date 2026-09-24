@@ -455,3 +455,18 @@ Prerequisite: use the paired native-client GG build with `sc --staged-only` and 
 3. Run Sync and confirm only committed stack content is published.
 4. Confirm both local files remain unchanged under Changes after the stack and provider state refresh.
 5. If GG refuses because the stack base became stale, confirm Alas refreshes and presents Rebase without automatically retrying Sync.
+
+### Next-prompt model provisioning
+
+The model store is available as a development API; the settings controls are not wired yet. Use an isolated root such as `/private/tmp/alas-model-check/Application Support/Alas/Models/NextPromptSuggestions` when testing it. Pass that root explicitly to `NextPromptModelStore`; leave the normal Application Support directory alone.
+
+1. Load `NextPromptModelManifest.json` and provide a `NextPromptModelTransport` that reads the already verified local snapshot in chunks and sends them to `NextPromptModelSink.receive`. Keep the snapshot read-only. This exercises installation without downloading another copy from the network.
+2. Start `install()`, pause the transport after the first weights chunk, and call `cancelDownload()`. Await both calls. Confirm the transfer has stopped, the revision was not published, and its staging directory was removed.
+3. Retry explicitly with the transport unpaused. Confirm `.ready`, then acquire a verified lease and compare every installed file's byte count and SHA-256 with the bundled manifest. Close the lease after reading the files.
+4. Call `install()` again. Confirm it reuses the verified revision without invoking the transport.
+5. In a second process, open another store for the same root, acquire a verified lease, and retain it. The first process must receive `.busy` from removal and installation. Release the second process's lease, then remove the model successfully.
+6. Confirm `.lock` still has its original inode and an unrelated file beside the revision survived. A further installation must use that same lock file.
+
+Observed on 2026-09-25: cancellation after the first 1 MiB of weights drained before cleanup; retry installed and verified all 12 assets totaling 2,278,970,666 bytes. A second process held a verified lease, excluded both writers, and allowed removal after releasing it. The lock inode and unrelated file survived. The source snapshot still matched upstream metadata afterward.
+
+The live network check used HEAD requests against the exact pinned revision. The weights and tokenizer redirected from `huggingface.co` to `us.aws.cdn.hf.co`; `config.json` redirected within `huggingface.co`. No model response bodies were downloaded. The focused `NextPromptModelStoreTests` suite covers native URLSession response handling and cancellation with a local URL protocol, including oversized data, unexpected partial responses, interrupted transfers, and rejected redirects.

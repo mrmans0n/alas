@@ -1839,3 +1839,14 @@ Source/Cmlx/metal-cpp/LICENSE.txt
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+Pinned model asset manifest
+---------------------------
+NextPromptModelManifest.json lists the required files from
+mlx-community/Qwen3-4B-Instruct-2507-4bit at revision
+50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b. Every file has a SHA-256 digest
+and byte count. LFS files were checked against the revision's upstream LFS
+metadata; ordinary files were checked against their Git blob identities
+before computing SHA-256. README.md is retained with the model and includes
+its Apache-2.0 license declaration. This revision has no separate LICENSE
+file. The Apache-2.0 terms are reproduced above.
