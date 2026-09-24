@@ -173,7 +173,6 @@ struct CodePane: View {
         return status
     }
 
-
     private func statusBadge(_ status: LanguageServerAvailability.Status) -> some View {
         let label: String
         let color: Color
