@@ -72,6 +72,20 @@ final class FederatedSessionsProvider {
         weak var value: FederatedDownstream?
     }
 
+    private struct PendingPeerRequests {
+        var plan: RemotePlanPayload?
+        var elicitation: RemoteElicitationPayload?
+
+        var isEmpty: Bool { plan == nil && elicitation == nil }
+
+        func messages(sessionId: String) -> [RemoteServerMessage] {
+            var messages: [RemoteServerMessage] = []
+            if let plan { messages.append(.planRequest(sessionId: sessionId, payload: plan)) }
+            if let elicitation { messages.append(.elicitationRequest(sessionId: sessionId, payload: elicitation)) }
+            return messages
+        }
+    }
+
     private let links: FederatedPeerLinks
     private var downstreams: [UUID: WeakDownstream] = [:]
     /// Peers that carry sessions right now, by `serverId`.
@@ -80,6 +94,10 @@ final class FederatedSessionsProvider {
     private var peerRows: [String: [RemoteSessionSummary]] = [:]
     /// Namespaced session id → downstreams that asked for it.
     private var subscribers: [String: Set<UUID>] = [:]
+    /// Active prompt requests received while at least one downstream was subscribed.
+    /// A new downstream needs these independently of the upstream gateway's
+    /// per-connection request de-duplication.
+    private var pendingRequests: [String: PendingPeerRequests] = [:]
     private var pollTimer: Task<Void, Never>?
     private var lastListRequestAt: Date?
     private let now: () -> Date
@@ -152,6 +170,9 @@ final class FederatedSessionsProvider {
         switch message {
         case .subscribe:
             subscribers[namespaced, default: []].insert(downstream.id)
+            for pending in pendingRequests[namespaced]?.messages(sessionId: namespaced) ?? [] {
+                downstream.send(pending)
+            }
             // Re-asked on every downstream subscribe, even when the session
             // is already subscribed upstream: the peer answers a repeated
             // subscribe with a fresh snapshot, which is exactly what the
@@ -185,11 +206,24 @@ final class FederatedSessionsProvider {
                 notifySessionListChanged()
             case .sessionClosed(let sessionId):
                 let namespaced = RemoteFederatedSessionID.compose(serverId: serverId, sessionId: sessionId)
+                pendingRequests[namespaced] = nil
                 fanOut(.sessionClosed(sessionId: namespaced), to: namespaced)
                 subscribers[namespaced] = nil
             default:
                 guard let sessionId = message.sessionId else { return }
                 let namespaced = RemoteFederatedSessionID.compose(serverId: serverId, sessionId: sessionId)
+                switch message {
+                case .planRequest(_, let payload):
+                    pendingRequests[namespaced, default: PendingPeerRequests()].plan = payload
+                case .planResolved(_, let requestId):
+                    clearPendingPlan(requestId, for: namespaced)
+                case .elicitationRequest(_, let payload):
+                    pendingRequests[namespaced, default: PendingPeerRequests()].elicitation = payload
+                case .elicitationResolved(_, let requestId):
+                    clearPendingElicitation(requestId, for: namespaced)
+                default:
+                    break
+                }
                 fanOut(message.replacingSessionId(namespaced), to: namespaced)
             }
         }
@@ -210,6 +244,9 @@ final class FederatedSessionsProvider {
             for namespaced in subscribers.keys where namespaced.hasPrefix(prefix) {
                 fanOut(.sessionClosed(sessionId: namespaced), to: namespaced)
                 subscribers[namespaced] = nil
+            }
+            for namespaced in Array(pendingRequests.keys) where namespaced.hasPrefix(prefix) {
+                pendingRequests[namespaced] = nil
             }
         }
         for serverId in current.keys where previous[serverId] == nil {
@@ -274,12 +311,29 @@ final class FederatedSessionsProvider {
         guard var ids = subscribers[namespaced], ids.remove(id) != nil else { return }
         if ids.isEmpty {
             subscribers[namespaced] = nil
+            // The upstream gateway clears its request de-duplication state on
+            // unsubscribe and will re-emit any still-active requests on the
+            // next subscribe. Dropping our copy here also avoids replaying a
+            // request that resolved while nobody was listening.
+            pendingRequests[namespaced] = nil
             if let target = RemoteFederatedSessionID.parse(namespaced, peers: Set(activePeers.keys)) {
                 links.sendToPeer(.unsubscribe(sessionId: target.sessionId), serverId: target.serverId)
             }
         } else {
             subscribers[namespaced] = ids
         }
+    }
+
+    private func clearPendingPlan(_ requestId: JSONRPCID, for namespaced: String) {
+        guard var pending = pendingRequests[namespaced], pending.plan?.requestId == requestId else { return }
+        pending.plan = nil
+        pendingRequests[namespaced] = pending.isEmpty ? nil : pending
+    }
+
+    private func clearPendingElicitation(_ requestId: String, for namespaced: String) {
+        guard var pending = pendingRequests[namespaced], pending.elicitation?.requestId == requestId else { return }
+        pending.elicitation = nil
+        pendingRequests[namespaced] = pending.isEmpty ? nil : pending
     }
 
     private func notifySessionListChanged() {

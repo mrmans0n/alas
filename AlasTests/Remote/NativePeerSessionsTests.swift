@@ -593,11 +593,11 @@ struct NativePeerSessionsTests {
         #expect(state.booleanValues["enabled"] == false)
     }
 
-    @Test func planRejectionReasonResetsForANewRequest() {
+    @Test func planRejectionReasonResetsWhenARequestReusesItsWireID() {
         var state = NativePeerPlanRejectionState(requestId: .string("plan-1"))
         state.reason = "Old feedback"
 
-        state.reset(requestId: .string("plan-2"))
+        state.reset(requestId: .string("plan-1"))
 
         #expect(state.reason.isEmpty)
     }

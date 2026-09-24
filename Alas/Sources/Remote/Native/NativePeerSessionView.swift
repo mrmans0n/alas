@@ -389,7 +389,6 @@ struct NativePeerPlanRejectionState: Equatable {
     }
 
     mutating func reset(requestId: JSONRPCID) {
-        guard self.requestId != requestId else { return }
         self = Self(requestId: requestId)
     }
 }
@@ -687,7 +686,7 @@ private struct NativePeerPlanRequestCard: View {
             .disabled(!canDrive)
         }
         .requestCard()
-        .onChange(of: request.requestId) { _, requestId in state.reset(requestId: requestId) }
+        .onChange(of: request) { _, request in state.reset(requestId: request.requestId) }
     }
 }
 
