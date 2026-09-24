@@ -873,4 +873,43 @@ struct NewWorktreeDialogPresentationTests {
         queue.decide(.approve)
         #expect(await task.value == .approve)
     }
+
+    @Test func inactivePresenterLeavesRuntimeApprovalForRoot() async {
+        let queue = RepoHookApprovalQueue()
+        let controller = NSHostingController(
+            rootView: Text("Project").modifier(
+                RepoHookApprovalPresentationHandler(
+                    approvalQueue: queue,
+                    isActive: false,
+                    registersPresenter: false
+                )
+            )
+        )
+        controller.view.frame = NSRect(x: 0, y: 0, width: 320, height: 200)
+        controller.view.layoutSubtreeIfNeeded()
+        await Task.yield()
+
+        let bytes = Data("echo session open".utf8)
+        let hook = RepoHook(
+            event: .sessionOpen,
+            source: .local,
+            bytes: bytes,
+            text: String(decoding: bytes, as: UTF8.self),
+            hash: RepoHookTrust.hash(event: .sessionOpen, bytes: bytes)
+        )
+        let task = Task {
+            await queue.requestDecision(
+                hook: hook,
+                projectID: "project",
+                context: .sessionOpen
+            )
+        }
+        await Task.yield()
+
+        #expect(queue.activeRuntimeRequest?.context == .sessionOpen)
+        #expect(queue.activeDialogRequest == nil)
+
+        queue.decide(.approve)
+        #expect(await task.value == .approve)
+    }
 }

@@ -279,7 +279,8 @@ private struct ProjectDialog: View {
         }
         .modifier(RepoHookApprovalPresentationHandler(
             approvalQueue: state.repoHookApprovalQueue,
-            isActive: !mcpManagerPresented && !sshSetupPresented
+            isActive: !mcpManagerPresented && !sshSetupPresented && !imagePickerPresented,
+            registersPresenter: !imagePickerPresented
         ))
     }
 

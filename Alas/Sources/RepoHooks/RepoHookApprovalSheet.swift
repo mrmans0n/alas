@@ -3,13 +3,21 @@ import SwiftUI
 struct RepoHookApprovalPresentationHandler: ViewModifier {
     let approvalQueue: RepoHookApprovalQueue
     var isActive = true
+    /// Whether this view participates in dialog routing while `isActive` is false.
+    var registersPresenter = true
     @State private var presenterID = UUID()
 
     func body(content: Content) -> some View {
         @Bindable var queue = approvalQueue
         let requestBinding = presentationBinding(for: $queue.activeDialogRequest)
         content
-            .onAppear { queue.registerDialogPresenter(id: presenterID) }
+            .onChange(of: registersPresenter, initial: true) { _, shouldRegister in
+                if shouldRegister {
+                    queue.registerDialogPresenter(id: presenterID)
+                } else {
+                    queue.unregisterDialogPresenter(id: presenterID)
+                }
+            }
             .onDisappear { queue.unregisterDialogPresenter(id: presenterID) }
             .sheet(item: requestBinding) { request in
                 RepoHookApprovalSheet(request: request, queue: queue)
