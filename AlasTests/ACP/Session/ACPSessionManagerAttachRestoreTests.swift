@@ -1318,8 +1318,8 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
-    @Test("removing a queued prompt releases later model picks")
-    func removingQueuedPromptReleasesLaterModelPicks() async throws {
+    @Test("local queue mutations release later model picks", arguments: ["edit", "remove", "clear"])
+    func localQueueMutationsReleaseLaterModelPicks(_ mutation: String) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(
             remoteSessionId: "remote-old",
@@ -1384,10 +1384,19 @@ struct ACPSessionManagerAttachRestoreTests {
         await firstSelection.value
         try await waitUntil { session.queue.count == 1 && queuedPromptCompleted == true }
         let queuedItemId = try #require(session.queue.first?.id)
-        await manager.queueRemove(for: session.id, itemId: queuedItemId)
+        if mutation == "edit" {
+            await manager.queueEditIntoComposer(for: session.id, itemId: queuedItemId)
+        } else if mutation == "remove" {
+            await manager.queueRemove(for: session.id, itemId: queuedItemId)
+        } else {
+            await manager.queueClear(for: session.id)
+        }
         await laterSelection.value
 
         #expect(session.queue.isEmpty)
+        if mutation == "edit" {
+            #expect(session.composerDraft.segments == [.text("remove this queued prompt")])
+        }
         #expect(client.sent.filter {
             $0.method == "session/prompt"
         }.count == 1)

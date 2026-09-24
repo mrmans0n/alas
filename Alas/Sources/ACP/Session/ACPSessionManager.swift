@@ -471,6 +471,19 @@ final class ACPSessionManager: ObservableObject {
         return RemoteQueueProjection.plainText(from: draft)
     }
 
+    /// Return a pending queued prompt to the local composer without losing
+    /// its structured draft. The waiter is released so later model/mode
+    /// selections cannot remain blocked by an item that will not dispatch.
+    func queueEditIntoComposer(for id: ACPSession.ID, itemId: UUID) async {
+        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
+        guard let draft = session.takeForEditing(id: itemId) else { return }
+        persistComposerDraft(session.composerDraft.appending(draft), for: session)
+        resolveQueuedPromptDispatchWaiter(sessionId: id, itemId: itemId)
+        persistQueue(for: session)
+        runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
+    }
+
     func queueClear(for id: ACPSession.ID) async {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         let removedItems = session.clearPendingQueue()
