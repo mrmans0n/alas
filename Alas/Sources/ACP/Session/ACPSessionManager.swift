@@ -313,13 +313,13 @@ final class ACPSessionManager: ObservableObject {
             let lease = try await persistence.loadLease(sessionId: sessionId)
             observedLeases[sessionId] = lease
             guard lease?.ownerInstance == instanceId, lease?.token == token else {
-                await standDown(sessionId: sessionId)
+                await standDown(sessionId: sessionId, leaseToken: token)
                 return false
             }
             return true
         } catch {
             persistenceError = error.localizedDescription
-            await standDown(sessionId: sessionId)
+            await standDown(sessionId: sessionId, leaseToken: token)
             return false
         }
     }
@@ -580,9 +580,10 @@ final class ACPSessionManager: ObservableObject {
         let token = UUID()
         let task = Task { @MainActor [weak self] in
             await previousTask?.value
-            guard let self,
-                  self.modelModeSelectionGenerations[id] == generation
-            else { return }
+            guard let self else { return }
+            guard self.modelModeSelectionGenerations[id] == generation else {
+                return
+            }
             switch selection {
             case .model(let modelId):
                 await self.applyModelSelection(
@@ -1140,7 +1141,9 @@ final class ACPSessionManager: ObservableObject {
         waiters?.values.forEach { $0() }
     }
 
-    private func discardDeferredModelModeUpdates(for sessionId: ACPSession.ID) {
+    private func discardDeferredModelModeUpdates(
+        for sessionId: ACPSession.ID
+    ) {
         deferredModelModeUpdates[sessionId] = nil
         modelModeSelectionTails[sessionId] = nil
         modelModeSelectionGenerations[sessionId] = nil
@@ -3440,19 +3443,20 @@ extension ACPSessionManager {
 
     private func startHeartbeat(sessionId: ACPSession.ID) {
         _heartbeatTasks[sessionId]?.cancel()
+        guard let leaseToken = ownedLeaseTokens[sessionId] else { return }
         _heartbeatTasks[sessionId] = Task { @MainActor [weak self] in
             // Refresh immediately so the just-claimed lease doesn't rely on
             // the first 5s tick (a slow initialize/newSession could otherwise
             // let the heartbeat age past leaseStaleAfter mid-attach).
             guard let self else { return }
             if await self.heartbeatTick(sessionId: sessionId) {
-                await self.standDown(sessionId: sessionId)
+                await self.standDown(sessionId: sessionId, leaseToken: leaseToken)
             }
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)   // 5s
                 let shouldStandDown = await self.heartbeatTick(sessionId: sessionId)
                 if shouldStandDown {
-                    await self.standDown(sessionId: sessionId)
+                    await self.standDown(sessionId: sessionId, leaseToken: leaseToken)
                 }
             }
         }
@@ -3468,11 +3472,13 @@ extension ACPSessionManager {
     /// takeover ping triggers an immediate ownership re-check and stand-down
     /// rather than waiting up to 5 s for the heartbeat.
     private func startWriterWatch(sessionId: ACPSession.ID) {
-        guard writerWatchTokens[sessionId] == nil else { return }
+        guard writerWatchTokens[sessionId] == nil,
+              let leaseToken = ownedLeaseTokens[sessionId]
+        else { return }
         let token = changeNotifier.subscribe { [weak self] in
             // The Darwin notifier delivers off the main thread; hop back.
             Task { @MainActor [weak self] in
-                self?.scheduleWriterOwnershipCheck(sessionId: sessionId)
+                self?.scheduleWriterOwnershipCheck(sessionId: sessionId, leaseToken: leaseToken)
             }
         }
         writerWatchTokens[sessionId] = token
@@ -3485,15 +3491,18 @@ extension ACPSessionManager {
         delegatedMessageWatchTokens[sessionId] = delegatedMessageToken
     }
 
-    private func scheduleWriterOwnershipCheck(sessionId: ACPSession.ID) {
+    private func scheduleWriterOwnershipCheck(sessionId: ACPSession.ID, leaseToken: String) {
         writerWatchDebounce[sessionId]?.cancel()
         writerWatchDebounce[sessionId] = Task { @MainActor [weak self] in
             // 100 ms coalesce window: the writer itself posts a ping on every
             // persist, so we debounce to avoid checking on each of those.
             try? await Task.sleep(nanoseconds: 100_000_000)
-            guard let self, self._ownedLeases.contains(sessionId) else { return }
+            guard let self,
+                  self._ownedLeases.contains(sessionId),
+                  self.ownedLeaseTokens[sessionId] == leaseToken
+            else { return }
             if await self.heartbeatTick(sessionId: sessionId) {
-                await self.standDown(sessionId: sessionId)
+                await self.standDown(sessionId: sessionId, leaseToken: leaseToken)
             }
         }
     }
@@ -3600,7 +3609,11 @@ extension ACPSessionManager {
     /// Relinquish the writer role we just lost to a takeover: cancel any
     /// in-flight prompt, tear down the runner/agent, and become a mirror.
     /// Does NOT release the lease — we no longer own it.
-    private func standDown(sessionId: ACPSession.ID) async {
+    private func standDown(sessionId: ACPSession.ID, leaseToken: String) async {
+        // An ownership check may finish after detach or a later lease claim.
+        guard _ownedLeases.contains(sessionId),
+              ownedLeaseTokens[sessionId] == leaseToken
+        else { return }
         stopHeartbeat(sessionId: sessionId)
         stopWriterWatch(sessionId: sessionId)
         _ownedLeases.remove(sessionId)
@@ -4181,7 +4194,9 @@ extension ACPSessionManager {
         defer {
             attachingSessions.remove(sessionId)
             disposingAttachments.remove(sessionId)
-            if !attachSucceeded || session.agentState != .ready {
+            if !cancelledInFlightAttachments.contains(sessionId),
+               !attachSucceeded || session.agentState != .ready
+            {
                 discardDeferredModelModeUpdates(for: sessionId)
             }
             if !attachSucceeded {
