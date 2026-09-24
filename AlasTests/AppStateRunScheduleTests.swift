@@ -224,6 +224,18 @@ struct AppStateRunScheduleTests {
             managerSessionIDs: ["scheduled"],
             scheduledSessionID: "scheduled"
         ))
+        #expect(AppState.scheduledCleanupHasNoOtherSessions(
+            worktreeSessionIDs: ["scheduled", "script"],
+            managerSessionIDs: ["scheduled"],
+            scheduledSessionID: "scheduled",
+            scheduledScriptSessionID: "script"
+        ))
+        #expect(!AppState.scheduledCleanupHasNoOtherSessions(
+            worktreeSessionIDs: ["scheduled", "script", "terminal"],
+            managerSessionIDs: ["scheduled"],
+            scheduledSessionID: "scheduled",
+            scheduledScriptSessionID: "script"
+        ))
         #expect(!AppState.scheduledCleanupHasNoOtherSessions(
             worktreeSessionIDs: ["scheduled", "terminal"],
             managerSessionIDs: ["scheduled"],
@@ -234,6 +246,96 @@ struct AppStateRunScheduleTests {
             managerSessionIDs: ["scheduled", "other-acp"],
             scheduledSessionID: "scheduled"
         ))
+    }
+
+    @Test func scheduledCleanupRecognizesOnlyItsFinishedScriptTerminal() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let scriptRunID = "script-run"
+        let sessionID = "script-session"
+        let finishedAt = Date()
+        let report = ScheduledAgentReport(
+            id: "report",
+            occurrenceID: "occurrence",
+            scheduleID: "schedule",
+            scheduleName: "Nightly",
+            projectID: fixture.project.id,
+            projectName: fixture.project.name,
+            branch: fixture.worktree.branch,
+            baseCommit: "base",
+            worktreeID: fixture.worktree.id,
+            sessionID: "scheduled-session",
+            agentID: "codex",
+            request: "Run checks.",
+            scriptRun: RunScheduleFiring.RunReference(
+                worktreeID: fixture.worktree.id,
+                branch: fixture.worktree.branch,
+                runID: scriptRunID,
+                scriptName: "Checks"
+            ),
+            startedAt: finishedAt.addingTimeInterval(-1),
+            finishedAt: finishedAt,
+            taskState: .succeeded,
+            completion: ScheduledAgentCompletion(
+                outcome: .succeeded,
+                summary: "Complete.",
+                checks: [],
+                links: []
+            ),
+            cleanupRequested: true,
+            cleanupState: .pending
+        )
+        let run = RunRecord(
+            id: scriptRunID,
+            scriptKey: "repo:checks.sh",
+            scriptName: "Checks",
+            worktreeID: fixture.worktree.id,
+            branch: fixture.worktree.branch,
+            target: RunExecutionTarget(host: nil, workingDirectory: fixture.worktree.path.path),
+            status: .finished(.succeeded),
+            startedAt: finishedAt.addingTimeInterval(-1),
+            finishedAt: finishedAt,
+            sessionID: sessionID
+        )
+        var runRecords = RunRecordStore()
+        _ = runRecords.begin(run)
+        let scriptTab = Tab.terminal(TerminalTabState(
+            id: "script-tab",
+            title: "Checks",
+            sessionId: sessionID,
+            runScriptKey: run.scriptKey
+        ))
+
+        let terminal = try #require(AppState.scheduledScriptTerminalForCleanup(
+            report: report,
+            worktree: fixture.worktree,
+            runRecords: runRecords,
+            tabs: [scriptTab]
+        ))
+        #expect(terminal.tabID == "script-tab")
+        #expect(terminal.sessionID == sessionID)
+
+        var activeRecords = RunRecordStore()
+        var activeRun = run
+        activeRun.status = .running
+        _ = activeRecords.begin(activeRun)
+        #expect(AppState.scheduledScriptTerminalForCleanup(
+            report: report,
+            worktree: fixture.worktree,
+            runRecords: activeRecords,
+            tabs: [scriptTab]
+        )?.sessionID == nil)
+        let unrelatedTab = Tab.terminal(TerminalTabState(
+            id: "unrelated-tab",
+            title: "Terminal",
+            sessionId: "unrelated-session"
+        ))
+        #expect(AppState.scheduledScriptTerminalForCleanup(
+            report: report,
+            worktree: fixture.worktree,
+            runRecords: runRecords,
+            tabs: [unrelatedTab]
+        )?.sessionID == nil)
     }
 
     @Test func appStateReconcilesReportsLoadedFromDisk() async throws {

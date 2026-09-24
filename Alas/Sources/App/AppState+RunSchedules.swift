@@ -1356,6 +1356,12 @@ extension AppState {
                 store: store
             )
         }
+        let scheduledScriptTerminal = Self.scheduledScriptTerminalForCleanup(
+            report: report,
+            worktree: worktree,
+            runRecords: runRecords,
+            tabs: tabs.tabs(forWorktree: worktree.id)
+        )
         let sessionTabIDs = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> TabID? in
             guard case .acpSession(let state) = tab,
                   state.sessionId == registration.sessionID
@@ -1367,6 +1373,9 @@ extension AppState {
             projectId: project.id,
             tabIds: sessionTabIDs
         )
+        if let scheduledScriptTerminal {
+            closeTab(worktreeId: worktree.id, tabId: scheduledScriptTerminal.tabID)
+        }
         await disposeACPManagerAndWait(owner: .worktree(worktree.id))
         let sessionPersistence = ACPSessionPersistence(
             path: Paths.acpSessionsDB(forWorktreeId: worktree.id).path
@@ -1411,6 +1420,10 @@ extension AppState {
             return await retainScheduledWorktree(reportID: report.id, reason: reason, store: store)
         }
 
+        var authorizedSessionIDs: Set<String> = [registration.sessionID]
+        if let scheduledScriptTerminal {
+            authorizedSessionIDs.insert(scheduledScriptTerminal.sessionID)
+        }
         let siblings = projectsManager.visibleWorktrees(projectId: project.id)
         let removedIndex = siblings.firstIndex(where: { $0.id == worktree.id }) ?? 0
         let outcome = await performDeleteWorktree(
@@ -1422,7 +1435,7 @@ extension AppState {
             promptsForForce: false,
             authorizedDeleteContentFingerprint: finalFingerprint,
             authorizedDirtyTabsAtConfirmation: [:],
-            authorizedSessionIDs: [registration.sessionID]
+            authorizedSessionIDs: authorizedSessionIDs
         )
         switch outcome {
         case .deleted:
@@ -1507,12 +1520,51 @@ extension AppState {
     static func scheduledCleanupHasNoOtherSessions(
         worktreeSessionIDs: Set<String>,
         managerSessionIDs: Set<String>,
-        scheduledSessionID: String
+        scheduledSessionID: String,
+        scheduledScriptSessionID: String? = nil
     ) -> Bool {
         var otherSessionIDs = worktreeSessionIDs
         otherSessionIDs.formUnion(managerSessionIDs)
         otherSessionIDs.remove(scheduledSessionID)
+        if let scheduledScriptSessionID {
+            otherSessionIDs.remove(scheduledScriptSessionID)
+        }
         return otherSessionIDs.isEmpty
+    }
+
+    /// Return only the finished scheduled script's sole terminal leaf; split
+    /// or unrelated panes remain blockers rather than being closed.
+    static func scheduledScriptTerminalForCleanup(
+        report: ScheduledAgentReport,
+        worktree: Worktree,
+        runRecords: RunRecordStore,
+        tabs: [Tab]
+    ) -> (tabID: TabID, sessionID: String)? {
+        guard let scriptRun = report.scriptRun,
+              report.worktreeID == worktree.id,
+              scriptRun.worktreeID == worktree.id,
+              scriptRun.branch == worktree.branch,
+              let record = runRecords.records(worktreeID: worktree.id).first(where: {
+                  $0.id == scriptRun.runID
+                      && $0.scriptName == scriptRun.scriptName
+                      && $0.branch == worktree.branch
+              }),
+              case .finished(.succeeded) = record.status,
+              let sessionID = record.sessionID,
+              let tab = tabs.first(where: { tab in
+                  guard case .terminal(let state) = tab,
+                        state.runScriptKey == record.scriptKey,
+                        state.runScriptLeafId == sessionID
+                  else {
+                      return false
+                  }
+                  let leaves = state.root.leaves()
+                  return leaves.count == 1 && leaves[0].sessionId == sessionID
+              })
+        else {
+            return nil
+        }
+        return (tab.id, sessionID)
     }
 
     private func scheduledWorktreeCleanupCheck(
@@ -1572,10 +1624,17 @@ extension AppState {
                 if case .requested = status.disposition { return true }
                 return false
             } == true
+            let scheduledScriptSessionID = Self.scheduledScriptTerminalForCleanup(
+                report: report,
+                worktree: worktree,
+                runRecords: runRecords,
+                tabs: tabs.tabs(forWorktree: worktree.id)
+            )?.sessionID
             return Self.scheduledCleanupHasNoOtherSessions(
                 worktreeSessionIDs: tabSessionIDs,
                 managerSessionIDs: Set(manager.sessions.keys),
-                scheduledSessionID: registration.sessionID
+                scheduledSessionID: registration.sessionID,
+                scheduledScriptSessionID: scheduledScriptSessionID
             )
                 && session.agentState == .ready
                 && session.setupState == .ready
