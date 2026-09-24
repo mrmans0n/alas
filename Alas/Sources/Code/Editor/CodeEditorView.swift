@@ -104,6 +104,7 @@ struct CodeEditorView: NSViewRepresentable {
 
     let worktreeId: String
     var projectId: String? = nil
+    let projectHost: String?
     let worktreeRoot: URL
     let relativePath: String
     let tabId: TabID
@@ -178,7 +179,9 @@ struct CodeEditorView: NSViewRepresentable {
                 worktreeId: worktreeId,
                 tabId: tabId,
                 worktreeRoot: worktreeRoot,
-                relativePath: relativePath
+                relativePath: relativePath,
+                projectId: projectId,
+                projectHost: projectHost
             )
         }
 
@@ -233,7 +236,8 @@ struct CodeEditorView: NSViewRepresentable {
             externalAbsolutePath: externalAbsolutePath,
             originatingRelativePath: originatingRelativePath,
             externalEditable: externalEditable,
-            projectId: projectId
+            projectId: projectId,
+            projectHost: projectHost
         )
         scroll.configureMinimap(shown: showMinimap, theme: theme)
         return MinimapContainerView(scrollView: scroll)
@@ -255,7 +259,8 @@ struct CodeEditorView: NSViewRepresentable {
             externalAbsolutePath: externalAbsolutePath,
             originatingRelativePath: originatingRelativePath,
             externalEditable: externalEditable,
-            projectId: projectId
+            projectId: projectId,
+            projectHost: projectHost
         )
 
         if let textView = nsView.documentView as? CodeTextView {

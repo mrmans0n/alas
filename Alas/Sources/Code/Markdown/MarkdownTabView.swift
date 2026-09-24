@@ -43,6 +43,10 @@ struct MarkdownTabView: View {
             ?? appState.config.markdown.defaultViewMode
     }
 
+    private var projectHost: String? {
+        appState.projects.first(where: { $0.id == projectId })?.host
+    }
+
     private var splitFraction: Double {
         appState.tabs.editorTabState(worktreeId: worktreeId, tabId: tabId)?.markdownSplitFraction ?? 0.5
     }
@@ -69,7 +73,9 @@ struct MarkdownTabView: View {
                 worktreeId: worktreeId,
                 tabId: tabId,
                 worktreeRoot: worktreePath,
-                relativePath: relativePath
+                relativePath: relativePath,
+                projectId: projectId,
+                projectHost: projectHost
             )
         }
     }
@@ -179,6 +185,7 @@ struct MarkdownTabView: View {
         CodeEditorView(
             worktreeId: worktreeId,
             projectId: projectId,
+            projectHost: projectHost,
             worktreeRoot: worktreePath,
             relativePath: relativePath,
             tabId: tabId,

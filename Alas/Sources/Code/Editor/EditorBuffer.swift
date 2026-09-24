@@ -2,6 +2,11 @@ import AppKit
 import Foundation
 import Observation
 
+enum EditorBufferHostResolution {
+    case pathRegistry
+    case project(String?)
+}
+
 struct EditorSourceScrollAnchor {
     let sourceLine: Int
     let delta: CGFloat
@@ -562,24 +567,24 @@ final class EditorBuffer {
 
     /// Production initializer that opts into hot-exit (no LSP). The `store`
     /// is consulted at init time for any persisted snapshot.
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, checkConflictOnRestore: Bool = false, navigationResolvedRoot: URL? = nil) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, checkConflictOnRestore: checkConflictOnRestore, navigationResolvedRoot: navigationResolvedRoot)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, checkConflictOnRestore: Bool = false, navigationResolvedRoot: URL? = nil, hostResolution: EditorBufferHostResolution = .pathRegistry) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, checkConflictOnRestore: checkConflictOnRestore, navigationResolvedRoot: navigationResolvedRoot, hostResolution: hostResolution)
     }
 
     /// Synchronous load variant for non-UI save materialization. Normal editor
     /// opens use the async load path to avoid blocking the main thread.
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, loadSynchronously: Bool, navigationResolvedRoot: URL? = nil) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, loadSynchronously: loadSynchronously, navigationResolvedRoot: navigationResolvedRoot)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, loadSynchronously: Bool, navigationResolvedRoot: URL? = nil, hostResolution: EditorBufferHostResolution = .pathRegistry) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, loadSynchronously: loadSynchronously, navigationResolvedRoot: navigationResolvedRoot, hostResolution: hostResolution)
     }
 
     /// Production initializer that opts into hot-exit and opens an LSP
     /// document. The buffer owns the LSP open/close lifecycle for this file.
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, checkConflictOnRestore: Bool = false, navigationResolvedRoot: URL? = nil) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, checkConflictOnRestore: checkConflictOnRestore, navigationResolvedRoot: navigationResolvedRoot)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, checkConflictOnRestore: Bool = false, navigationResolvedRoot: URL? = nil, hostResolution: EditorBufferHostResolution = .pathRegistry) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, checkConflictOnRestore: checkConflictOnRestore, navigationResolvedRoot: navigationResolvedRoot, hostResolution: hostResolution)
     }
 
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, loadSynchronously: Bool, navigationResolvedRoot: URL? = nil) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, loadSynchronously: loadSynchronously, navigationResolvedRoot: navigationResolvedRoot)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, loadSynchronously: Bool, navigationResolvedRoot: URL? = nil, hostResolution: EditorBufferHostResolution = .pathRegistry) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, loadSynchronously: loadSynchronously, navigationResolvedRoot: navigationResolvedRoot, hostResolution: hostResolution)
     }
 
     /// External-mode init: loads `absoluteURL` synchronously, marks the buffer
@@ -610,14 +615,20 @@ final class EditorBuffer {
         )
     }
 
-    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false, checkConflictOnRestore: Bool = false, externalEditable: Bool = false, navigationResolvedRoot: URL? = nil) {
+    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false, checkConflictOnRestore: Bool = false, externalEditable: Bool = false, navigationResolvedRoot: URL? = nil, hostResolution: EditorBufferHostResolution = .pathRegistry) {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
         self.isExternal = isExternal
         self.externalEditable = externalEditable
-        let remoteHost = RemoteHostRegistry.shared.host(
-            forPath: worktreeRoot.appendingPathComponent(relativePath).path
-        )
+        let remoteHost: String?
+        switch hostResolution {
+        case .pathRegistry:
+            remoteHost = RemoteHostRegistry.shared.host(
+                forPath: worktreeRoot.appendingPathComponent(relativePath).path
+            )
+        case .project(let host):
+            remoteHost = host
+        }
         self.remoteHost = remoteHost
         self.navigationResolvedRoot = remoteHost == nil ? navigationResolvedRoot : nil
         self.localSaveRoot = remoteHost == nil ? navigationResolvedRoot ?? worktreeRoot.resolvingSymlinksInPath().standardizedFileURL : nil

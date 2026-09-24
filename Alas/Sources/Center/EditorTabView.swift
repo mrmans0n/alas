@@ -68,6 +68,10 @@ struct EditorTabView: View {
     @FocusState private var findFieldFocused: Bool
     @FocusState private var replaceFieldFocused: Bool
 
+    private var projectHost: String? {
+        appState.remoteHost(for: worktree)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             BreadcrumbView(
@@ -179,6 +183,7 @@ struct EditorTabView: View {
                 CodeEditorView(
                     worktreeId: worktreeId,
                     projectId: worktree.projectId,
+                    projectHost: projectHost,
                     worktreeRoot: worktreePath,
                     relativePath: relativePath,
                     tabId: tabId,
@@ -573,7 +578,9 @@ struct EditorTabView: View {
             worktreeId: worktreeId,
             tabId: tabId,
             worktreeRoot: worktreePath,
-            relativePath: relativePath
+            relativePath: relativePath,
+            projectId: worktree.projectId,
+            projectHost: projectHost
         )
     }
 
@@ -635,7 +642,8 @@ struct EditorTabView: View {
         let isExternal = externalAbsolutePath != nil
         let buffer: EditorBuffer? = isExternal ? nil : appState.tabs.buffer(
             worktreeId: worktreeId, tabId: tabId,
-            worktreeRoot: worktreePath, relativePath: relativePath
+            worktreeRoot: worktreePath, relativePath: relativePath,
+            projectId: worktree.projectId, projectHost: projectHost
         )
         let absolutePath = externalAbsolutePath ?? worktreePath.appendingPathComponent(relativePath).path
         let registry = appState.lsp.activeRegistry

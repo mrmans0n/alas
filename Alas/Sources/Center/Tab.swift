@@ -189,6 +189,10 @@ struct WebPreviewTabState: Codable, Equatable, Identifiable {
     /// Older path-keyed tab files omit this field.
     var projectId: String?
 
+    var browserCacheKey: String {
+        Self.browserCacheKey(ownerKey: ownerKey, projectId: projectId)
+    }
+
     var title: String { "Web Preview" }
 
     init(ownerKey: String, url: URL? = nil, remoteHost: String? = nil, projectId: String? = nil) {
@@ -196,7 +200,12 @@ struct WebPreviewTabState: Codable, Equatable, Identifiable {
         self.url = url
         self.remoteHost = remoteHost
         self.projectId = projectId
-        self.id = "web-preview:\(ownerKey)"
+        self.id = "web-preview:\(Self.browserCacheKey(ownerKey: ownerKey, projectId: projectId))"
+    }
+
+    static func browserCacheKey(ownerKey: String, projectId: String?) -> String {
+        guard let projectId else { return ownerKey }
+        return SessionOwnerID.projectWorktree(projectId: projectId, worktreeId: ownerKey).storageKey
     }
 
     func sessionOwnerKey(sharedOwner: SessionOwnerID?) -> String {

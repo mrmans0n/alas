@@ -79,6 +79,39 @@ struct TabsManagerBufferTests {
         #expect(b1 === b2)
     }
 
+    @Test func projectScopedEditorBufferUsesItsProjectHost() async throws {
+        let root = tempWorktree()
+        RemoteHostRegistry.shared.register(root: root.path, host: "host-a")
+        defer {
+            RemoteHostRegistry.shared.unregister(root: root.path)
+            try? FileManager.default.removeItem(at: root)
+            EditorBuffer.remoteReadResultForTesting = nil
+        }
+        EditorBuffer.remoteReadResultForTesting = { _, _ in
+            .file(data: Data("project B".utf8), mtime: .now)
+        }
+
+        let (manager, _, _) = makeManager()
+        let tab = manager.appendEditor(
+            worktreeId: root.path,
+            projectId: "project-b",
+            title: "main.swift",
+            relativePath: "main.swift"
+        )
+        let buffer = manager.buffer(
+            worktreeId: root.path,
+            tabId: tab.id,
+            worktreeRoot: root,
+            relativePath: "main.swift",
+            projectId: "project-b",
+            projectHost: "host-b"
+        )
+        defer { buffer.close(persistDirtySnapshot: false) }
+        await buffer.awaitLoadForTesting()
+
+        #expect(buffer.workspaceEditHost == "host-b")
+    }
+
     @Test func asyncSnapshotRestoreRemovesOriginalBufferKey() async throws {
         let root = tempWorktree()
         try "a\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)

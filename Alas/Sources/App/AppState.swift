@@ -1041,7 +1041,7 @@ final class AppState {
     }
 
     func remoteHost(for worktree: Worktree) -> String? {
-        projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+        projects.first(where: { $0.id == worktree.projectId })?.host
     }
 
     func workspaceCheckout(for owner: SessionOwnerID?) -> WorkspaceCheckout? {

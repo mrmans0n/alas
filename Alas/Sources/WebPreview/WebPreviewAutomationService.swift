@@ -35,9 +35,6 @@ struct WebPreviewAutomationService {
             return ["version": 1, "owner_key": owner.storageKey, "previews": previews().map { snapshot($0) }]
         }
         if command.action == .open {
-            // The tab bucket has one preview per path. Do not replace another
-            // project's preview when this owner requests an explicit URL.
-            guard !hasForeignPreview else { throw WebPreviewAutomationError.unavailable }
             let existing = previews().first
             if command.url == nil, command.scriptKey == nil, let existing {
                 focus(existing.id)
@@ -54,6 +51,7 @@ struct WebPreviewAutomationService {
                 let browser = tabs.webPreviewBrowser(
                     ownerKey: owner.tabStorageKey,
                     remoteHost: current.remoteHost,
+                    projectId: owner.projectID,
                     sessionOwnerKey: owner.storageKey
                 )
                 guard !browser.automationState.isBusy else { throw WebPreviewBrowserAutomationError.busy }
@@ -63,6 +61,7 @@ struct WebPreviewAutomationService {
             let browser = tabs.webPreviewBrowser(
                 ownerKey: owner.tabStorageKey,
                 remoteHost: state.remoteHost,
+                projectId: owner.projectID,
                 sessionOwnerKey: owner.storageKey
             )
             if let url = target.url, browser.webView.url != url {
@@ -79,6 +78,7 @@ struct WebPreviewAutomationService {
         let browser = tabs.webPreviewBrowser(
             ownerKey: owner.tabStorageKey,
             remoteHost: state.remoteHost,
+            projectId: owner.projectID,
             sessionOwnerKey: owner.storageKey
         )
         guard browser.automationID == command.previewID, !browser.isClosed else { throw WebPreviewAutomationError.stale }
@@ -108,17 +108,11 @@ struct WebPreviewAutomationService {
         }
     }
 
-    private var hasForeignPreview: Bool {
-        tabs.tabs(forWorktree: owner.tabStorageKey).contains {
-            guard case .webPreview(let state) = $0 else { return false }
-            return state.ownerKey == owner.tabStorageKey && state.projectId != owner.projectID
-        }
-    }
-
     private func snapshot(_ state: WebPreviewTabState) -> [String: Any] {
         let browser = tabs.webPreviewBrowser(
             ownerKey: owner.tabStorageKey,
             remoteHost: state.remoteHost,
+            projectId: owner.projectID,
             sessionOwnerKey: owner.storageKey
         )
         var result = browser.automationSnapshot()

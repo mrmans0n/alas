@@ -441,6 +441,60 @@ struct TabsManagerTests {
         #expect(manager.activeTabId(forWorktree: "owner-a") == blank.id)
     }
 
+    @Test func samePathWebPreviewsKeepProjectTabsAndBrowsersSeparate() {
+        let manager = TabsManager(store: RestoreMemoryStore())
+        let worktreeID = "/shared/web-preview"
+        let ownerA = SessionOwnerID.projectWorktree(projectId: "project-a", worktreeId: worktreeID)
+        let ownerB = SessionOwnerID.projectWorktree(projectId: "project-b", worktreeId: worktreeID)
+        let urlA = URL(string: "http://host-a:3000")!
+        let urlB = URL(string: "http://host-b:3000")!
+
+        let previewA = manager.openWebPreview(owner: ownerA, url: urlA, remoteHost: "host-a")
+        let browserA = manager.webPreviewBrowser(
+            ownerKey: worktreeID,
+            remoteHost: "host-a",
+            projectId: ownerA.projectID,
+            sessionOwnerKey: ownerA.storageKey
+        )
+        let previewB = manager.openWebPreview(owner: ownerB, url: urlB, remoteHost: "host-b")
+        let browserB = manager.webPreviewBrowser(
+            ownerKey: worktreeID,
+            remoteHost: "host-b",
+            projectId: ownerB.projectID,
+            sessionOwnerKey: ownerB.storageKey
+        )
+
+        #expect(previewA.id != previewB.id)
+        #expect(manager.tabs(forWorktree: worktreeID, projectId: "project-a").map(\.id) == [previewA.id])
+        #expect(manager.tabs(forWorktree: worktreeID, projectId: "project-b").map(\.id) == [previewB.id])
+        #expect(manager.webPreviewBrowser(
+            ownerKey: worktreeID,
+            remoteHost: "host-a",
+            projectId: ownerA.projectID,
+            sessionOwnerKey: ownerA.storageKey
+        ) === browserA)
+        #expect(browserA !== browserB)
+        #expect(!browserA.isClosed)
+
+        let updatedURLA = URL(string: "http://host-a:3000/next")!
+        browserA.onNavigate?(updatedURLA)
+
+        guard case .webPreview(let stateA)? = manager.tabs(forWorktree: worktreeID, projectId: "project-a").first,
+              case .webPreview(let stateB)? = manager.tabs(forWorktree: worktreeID, projectId: "project-b").first else {
+            Issue.record("Expected one project-scoped preview in each project")
+            return
+        }
+        #expect(stateA.url == updatedURLA)
+        #expect(stateB.url == urlB)
+
+        manager.close(worktreeId: worktreeID, tabId: previewA.id)
+        #expect(browserA.isClosed)
+        #expect(!browserB.isClosed)
+        #expect(manager.tabs(forWorktree: worktreeID, projectId: "project-b").map(\.id) == [previewB.id])
+
+        manager.close(worktreeId: worktreeID, tabId: previewB.id)
+    }
+
     @Test func webPreviewURLUpdatePreservesRemoteHostAndActiveSelection() {
         let manager = TabsManager(store: RestoreMemoryStore())
         let ownerKey = "owner-a"

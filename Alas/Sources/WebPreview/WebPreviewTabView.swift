@@ -34,6 +34,7 @@ struct WebPreviewTabView: View {
         _browser = State(initialValue: state.tabs.webPreviewBrowser(
             ownerKey: tab.ownerKey,
             remoteHost: tab.remoteHost,
+            projectId: tab.projectId,
             sessionOwnerKey: sessionOwnerKey
         ))
     }

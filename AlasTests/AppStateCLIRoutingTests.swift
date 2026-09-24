@@ -375,7 +375,7 @@ struct AppStateCLIRoutingTests {
             sessionId: sessionID
         )
         let owner = SessionOwnerID.projectWorktree(projectId: project.id, worktreeId: worktree.id)
-        _ = state.tabs.openWebPreview(owner: owner)
+        let preview = state.tabs.openWebPreview(owner: owner)
         state.startHarness()
 
         let handler = try #require(state.harness.socketServer.onCLIRequest)
@@ -394,7 +394,7 @@ struct AppStateCLIRoutingTests {
             return
         }
         #expect(previews.count == 1)
-        #expect(previews.first?["tab_id"] as? String == "web-preview:\(worktree.id)")
+        #expect(previews.first?["tab_id"] as? String == preview.id)
 
         let response = await handler(.init(
             version: 1,
@@ -410,7 +410,7 @@ struct AppStateCLIRoutingTests {
             Issue.record("A worktree terminal should be able to focus its project's existing preview")
             return
         }
-        #expect(payload["tab_id"] as? String == "web-preview:\(worktree.id)")
+        #expect(payload["tab_id"] as? String == preview.id)
     }
 
     @Test func persistedTerminalPreviewAutomationUsesTheProjectOwnedPreview() async throws {
@@ -427,7 +427,7 @@ struct AppStateCLIRoutingTests {
             sessionId: sessionID
         )
         let owner = SessionOwnerID.projectWorktree(projectId: project.id, worktreeId: worktree.id)
-        _ = state.tabs.openWebPreview(owner: owner)
+        let preview = state.tabs.openWebPreview(owner: owner)
         state.startHarness()
 
         let handler = try #require(state.harness.socketServer.onCLIRequest)
@@ -445,7 +445,7 @@ struct AppStateCLIRoutingTests {
             Issue.record("A persisted terminal should be able to focus its project's existing preview")
             return
         }
-        #expect(payload["tab_id"] as? String == "web-preview:\(worktree.id)")
+        #expect(payload["tab_id"] as? String == preview.id)
     }
 
     @Test func harnessSessionLocationResolvesLiveACPSession() async throws {

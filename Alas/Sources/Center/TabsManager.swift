@@ -1184,23 +1184,29 @@ final class TabsManager {
     }
 
     @discardableResult
-    func webPreviewBrowser(ownerKey: String, remoteHost: String?, sessionOwnerKey: String? = nil) -> WebPreviewBrowser {
+    func webPreviewBrowser(
+        ownerKey: String,
+        remoteHost: String?,
+        projectId: String? = nil,
+        sessionOwnerKey: String? = nil
+    ) -> WebPreviewBrowser {
+        let browserCacheKey = WebPreviewTabState.browserCacheKey(ownerKey: ownerKey, projectId: projectId)
         let resolvedSessionOwnerKey = sessionOwnerKey ?? ownerKey
-        if let browser = webPreviewBrowsers[ownerKey],
+        if let browser = webPreviewBrowsers[browserCacheKey],
            browser.remoteHost == remoteHost,
            browser.sessionOwnerKey == resolvedSessionOwnerKey {
             return browser
         }
-        clearWebPreviewBrowser(ownerKey: ownerKey)
+        clearWebPreviewBrowser(ownerKey: ownerKey, projectId: projectId)
         let browser = WebPreviewBrowser(
             ownerKey: ownerKey,
             sessionOwnerKey: resolvedSessionOwnerKey,
             remoteHost: remoteHost
         )
         browser.onNavigate = { [weak self] url in
-            self?.updateWebPreviewURL(worktreeId: ownerKey, url: url)
+            self?.updateWebPreviewURL(worktreeId: ownerKey, projectId: projectId, url: url)
         }
-        webPreviewBrowsers[ownerKey] = browser
+        webPreviewBrowsers[browserCacheKey] = browser
         return browser
     }
 
@@ -1228,7 +1234,7 @@ final class TabsManager {
         if var file = byWorktree[ownerKey],
            let idx = file.tabs.firstIndex(where: {
                if case .webPreview(let state) = $0 {
-                   return state.ownerKey == ownerKey
+                   return state.ownerKey == ownerKey && state.projectId == projectId
                }
                return false
            }) {
@@ -1237,8 +1243,7 @@ final class TabsManager {
                     state.url = url
                 }
                 if state.remoteHost != remoteHost {
-                    clearWebPreviewBrowser(ownerKey: ownerKey)
-                    if projectId == nil { state.projectId = nil }
+                    clearWebPreviewBrowser(ownerKey: ownerKey, projectId: state.projectId)
                 }
                 state.remoteHost = remoteHost
                 if let projectId { state.projectId = projectId }
@@ -1264,12 +1269,12 @@ final class TabsManager {
     }
 
     @discardableResult
-    func updateWebPreviewURL(worktreeId: String, url: URL) -> Tab? {
+    func updateWebPreviewURL(worktreeId: String, projectId: String? = nil, url: URL) -> Tab? {
         let ownerKey = worktreeId
         guard var file = byWorktree[ownerKey],
               let idx = file.tabs.firstIndex(where: {
                   if case .webPreview(let state) = $0 {
-                      return state.ownerKey == ownerKey
+                      return state.ownerKey == ownerKey && state.projectId == projectId
                   }
                   return false
               }),
@@ -1287,7 +1292,7 @@ final class TabsManager {
 
     @discardableResult
     func updateWebPreviewURL(owner: SessionOwnerID, url: URL) -> Tab? {
-        updateWebPreviewURL(worktreeId: owner.tabStorageKey, url: url)
+        updateWebPreviewURL(worktreeId: owner.tabStorageKey, projectId: owner.projectID, url: url)
     }
 
     private static func remoteHost(for owner: SessionOwnerID) -> String? {
@@ -2051,12 +2056,13 @@ final class TabsManager {
     private func clearWebPreviewBrowsers(for tabs: some Sequence<Tab>) {
         for tab in tabs {
             guard case .webPreview(let state) = tab else { continue }
-            clearWebPreviewBrowser(ownerKey: state.ownerKey)
+            clearWebPreviewBrowser(ownerKey: state.ownerKey, projectId: state.projectId)
         }
     }
 
-    private func clearWebPreviewBrowser(ownerKey: String) {
-        webPreviewBrowsers.removeValue(forKey: ownerKey)?.close()
+    private func clearWebPreviewBrowser(ownerKey: String, projectId: String?) {
+        let cacheKey = WebPreviewTabState.browserCacheKey(ownerKey: ownerKey, projectId: projectId)
+        webPreviewBrowsers.removeValue(forKey: cacheKey)?.close()
     }
 
     func close(worktreeId: String, tabId: TabID) {
@@ -2248,8 +2254,16 @@ final class TabsManager {
 
     /// Returns the buffer for `tabId`, creating it (cold-load from disk or
     /// hot-restore from snapshot) on first access.
-    func buffer(worktreeId: String, tabId: TabID, worktreeRoot: URL, relativePath: String) -> EditorBuffer {
+    func buffer(
+        worktreeId: String,
+        tabId: TabID,
+        worktreeRoot: URL,
+        relativePath: String,
+        projectId: String? = nil,
+        projectHost: String? = nil
+    ) -> EditorBuffer {
         if let existing = tabBuffers[tabId] { return existing }
+        let hostResolution: EditorBufferHostResolution = projectId.map { _ in .project(projectHost) } ?? .pathRegistry
         let editorState = tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }).flatMap { tab -> EditorTabState? in
             guard case .editor(let state) = tab else { return nil }
             return state
@@ -2286,7 +2300,8 @@ final class TabsManager {
                 tabId: tabId,
                 lsp: lsp,
                 checkConflictOnRestore: true,
-                navigationResolvedRoot: navigationResolvedRoot
+                navigationResolvedRoot: navigationResolvedRoot,
+                hostResolution: hostResolution
             )
         } else {
             buffer = EditorBuffer(
@@ -2296,7 +2311,8 @@ final class TabsManager {
                 worktreeId: worktreeId,
                 tabId: tabId,
                 checkConflictOnRestore: true,
-                navigationResolvedRoot: navigationResolvedRoot
+                navigationResolvedRoot: navigationResolvedRoot,
+                hostResolution: hostResolution
             )
         }
         buffer.startWatching()

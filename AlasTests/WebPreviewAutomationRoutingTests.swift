@@ -159,6 +159,51 @@ struct WebPreviewAutomationRoutingTests {
         #expect((legacyList["previews"] as? [[String: Any]])?.isEmpty == true)
     }
 
+    @Test func projectScopedAutomationCanOpenAlongsideAnotherProjectsPreview() async throws {
+        let tabs = TabsManager(store: MemoryStore())
+        let ownerA = SessionOwnerID.projectWorktree(projectId: "project-a", worktreeId: "shared-path")
+        let ownerB = SessionOwnerID.projectWorktree(projectId: "project-b", worktreeId: "shared-path")
+        let previewA = tabs.openWebPreview(owner: ownerA, url: URL(string: "https://example.com/a"), remoteHost: "host-a")
+        let browserA = tabs.webPreviewBrowser(
+            ownerKey: ownerA.tabStorageKey,
+            remoteHost: "host-a",
+            projectId: ownerA.projectID,
+            sessionOwnerKey: ownerA.storageKey
+        )
+        var focusedTabId: TabID?
+        let service = WebPreviewAutomationService(
+            tabs: tabs,
+            owner: ownerB,
+            isAuthorized: { true },
+            resolveOpen: { _ in .init(url: nil, remoteHost: "host-b") },
+            focus: { focusedTabId = $0 }
+        )
+
+        let result = try await service.perform(.init(action: .open))
+
+        let previewAID = previewA.id
+        let previewBID = try #require(result["tab_id"] as? String)
+        #expect(previewAID != previewBID)
+        #expect(focusedTabId == previewBID)
+        #expect(tabs.tabs(forWorktree: ownerA.tabStorageKey, projectId: "project-a").map(\.id) == [previewAID])
+        #expect(tabs.tabs(forWorktree: ownerB.tabStorageKey, projectId: "project-b").map(\.id) == [previewBID])
+        #expect(!browserA.isClosed)
+        #expect(tabs.webPreviewBrowser(
+            ownerKey: ownerA.tabStorageKey,
+            remoteHost: "host-a",
+            projectId: ownerA.projectID,
+            sessionOwnerKey: ownerA.storageKey
+        ) === browserA)
+        #expect(tabs.webPreviewBrowser(
+            ownerKey: ownerB.tabStorageKey,
+            remoteHost: "host-b",
+            projectId: ownerB.projectID,
+            sessionOwnerKey: ownerB.storageKey
+        ) !== browserA)
+
+        _ = tabs.closeAll(worktreeId: ownerA.tabStorageKey)
+    }
+
     @Test func closedAndReopenedPreviewRejectsOldHandle() async throws {
         let tabs = TabsManager(store: MemoryStore())
         let owner = SessionOwnerID.worktree("owner")

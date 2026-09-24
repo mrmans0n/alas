@@ -113,7 +113,7 @@ final class CodeEditorCoordinator {
         self.appState = appState
     }
 
-    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil, externalEditable: Bool = false, projectId: String? = nil) {
+    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil, externalEditable: Bool = false, projectId: String? = nil, projectHost: String? = nil) {
         self.textView = textView
         self.layoutManager = layoutManager
         self.currentWorktreeId = worktreeId
@@ -344,7 +344,7 @@ final class CodeEditorCoordinator {
         onTextViewAttached?(textView, tabId)
     }
 
-    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil, externalEditable: Bool = false, projectId: String? = nil) {
+    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil, externalEditable: Bool = false, projectId: String? = nil, projectHost: String? = nil) {
         // Re-query the registry every time so a registry change (e.g. a
         // server gets installed) still flips this comparison and triggers a
         // rebind. When the same tab is being re-evaluated and has an
@@ -442,7 +442,9 @@ final class CodeEditorCoordinator {
                     worktreeId: worktreeId,
                     tabId: tabId,
                     worktreeRoot: worktreeRoot,
-                    relativePath: relativePath
+                    relativePath: relativePath,
+                    projectId: projectId,
+                    projectHost: projectHost
                 )
             }
             bindBuffer(nextBuffer, theme: theme)
