@@ -63,6 +63,65 @@ struct InlayHintsFeatureTests {
         #expect(cleared == 0)
     }
 
+    @Test func awaitingRequestsIncludesDebounceAndActiveResponse() async throws {
+        let started = AsyncStream<Void>.makeStream()
+        defer { started.continuation.finish() }
+        var response: CheckedContinuation<[LSPInlayHint]?, Never>?
+        var debounceWaitFinished = false
+        var retiredWaitFinished = false
+        let feature = InlayHintsFeature(request: { _ in
+            await withCheckedContinuation {
+                response = $0
+                started.continuation.yield(())
+            }
+        }, apply: { _, _ in }, clear: {})
+        defer {
+            feature.stop()
+            response?.resume(returning: nil)
+        }
+
+        feature.refresh(range: NSRange(location: 0, length: 1), debounce: .milliseconds(20))
+        let debounceWaiter = Task {
+            await feature.awaitRequestsForTesting()
+            debounceWaitFinished = true
+        }
+        await Task.yield()
+        #expect(!debounceWaitFinished)
+        let requestStarted = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                var iterator = started.stream.makeAsyncIterator()
+                return await iterator.next() != nil
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(1))
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+        guard requestStarted else {
+            feature.stop()
+            Issue.record("Inlay request did not start before the liveness deadline")
+            return
+        }
+        #expect(!debounceWaitFinished)
+        feature.stop()
+        let retiredWaiter = Task {
+            await feature.awaitRequestsForTesting()
+            retiredWaitFinished = true
+        }
+        await Task.yield()
+        #expect(!retiredWaitFinished)
+        let continuation = try #require(response)
+        response = nil
+        continuation.resume(returning: [])
+        await debounceWaiter.value
+        await retiredWaiter.value
+        #expect(debounceWaitFinished)
+        #expect(retiredWaitFinished)
+    }
+
     @Test func freshResponseCancelsRetainedPresentationExpiry() async throws {
         var cleared = 0
         var applied = 0
