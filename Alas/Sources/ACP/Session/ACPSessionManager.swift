@@ -6874,6 +6874,7 @@ extension ACPSessionManager {
                 cancelledInFlightAttachments.insert(sessionId)
             }
         }
+        let attemptConnection = attachmentAttempts[sessionId]?.connection
         connectionOwnerIDs[sessionId] = nil
         brokerCallbackOwnerIDs[sessionId] = nil
         let attaching = attachingConnections.removeValue(forKey: sessionId)
@@ -6952,6 +6953,28 @@ extension ACPSessionManager {
                 }
             } else {
                 await attaching.connection.detach()
+            }
+        } else if let attemptConnection {
+            if shouldCloseRemote, let remoteSessionId, !remoteSessionId.isEmpty {
+                do {
+                    try await closeRemoteSession(
+                        id: remoteSessionId,
+                        using: attemptConnection,
+                        sessionCapabilities: sessionCapabilities
+                    )
+                } catch {
+                    closeError = error
+                }
+            }
+            if closeRemote {
+                let shutdownOutcome = await runBounded(timeout: .seconds(2)) {
+                    await attemptConnection.shutdown()
+                }
+                if case .timedOut = shutdownOutcome, closeError == nil {
+                    closeError = SessionDisposalError.timedOut
+                }
+            } else {
+                await attemptConnection.detach()
             }
         }
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()

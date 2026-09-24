@@ -87,6 +87,29 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(!manager.hasActiveCheckpointWriter)
     }
 
+    @Test("deleting a session during broker startup shuts down its owned connection")
+    func deletingDuringBrokerStartupShutsDownAttemptConnection() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let service = ManagerBrokerServiceProxy(stallOpen: true)
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { service },
+            attachmentStartupTimeout: .seconds(10)
+        )
+        let session = manager.createSession(agentId: "claude")
+        let attach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync { await service.openGate.hasEntered }
+
+        try await manager.disposeSession(id: session.id)
+        await service.openGate.release()
+        await attach.value
+
+        #expect(await service.closed.count == 1)
+    }
+
     @Test("attaching an already-ready session preserves its live update callback")
     func attachingReadySessionPreservesLiveUpdateCallback() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -5262,6 +5285,7 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
     private let stallOpen: Bool
     private let stallDetach: Bool
     private(set) var opened: [ACPBrokerOpenParams] = []
+    private(set) var closed: [ACPBrokerCloseParams] = []
 
     init(stallOpen: Bool = false, stallDetach: Bool = false) {
         self.stallOpen = stallOpen
@@ -5300,6 +5324,7 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
     }
 
     func close(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
-        try await base.close(params)
+        closed.append(params)
+        return try await base.close(params)
     }
 }
