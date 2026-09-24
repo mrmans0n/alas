@@ -8,6 +8,14 @@ compatibility: Requires git, an authenticated GitHub CLI, and network access to 
 
 Own the pull request until it is ready to merge. Prioritize valid Codex feedback, keep CI green, and leave no merge conflicts. Do not stop merely because a review or check is still running.
 
+## Feedback before CI
+
+Codex usually posts within 5–10 minutes of a push. CI takes 50 minutes or more and competes for shared compute. Never wait for CI to finish before acting on review feedback:
+
+- Address every valid Codex finding as soon as it appears, even while CI is running for the same head. The push cancels the in-flight CI run (`build.yml` uses `cancel-in-progress`), so there is nothing to gain by letting it finish first.
+- Batch all findings known at that moment into one push, so each push restarts CI once.
+- Wait for CI only after the Codex gate passes. While waiting, keep polling for new Codex feedback, and handle it first when it arrives.
+
 ## Invocation
 
 Accept a pull request number or URL. Without one, infer the pull request for the current branch.
@@ -63,7 +71,7 @@ The gate passes only when GitHub reports the current head as mergeable and not c
 
 ### 3. CI gate
 
-1. Inspect checks for the current head. Wait for required checks to finish.
+1. Inspect checks for the current head. Wait for required checks to finish, polling Codex feedback in the meantime. New valid feedback sends you back to the Codex gate without waiting for CI.
 2. For each failure, inspect the failing job and logs before editing code.
 3. Fix failures caused by the pull request, run the affected local tests, commit, push, and restart at the Codex gate.
 4. Rerun a failed job only when evidence points to an infrastructure or flaky failure. Do not hide a deterministic failure by rerunning it repeatedly.
