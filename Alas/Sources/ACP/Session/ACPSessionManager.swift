@@ -5999,7 +5999,8 @@ extension ACPSessionManager {
         let oldLeaseToken = oldAttempt?.leaseToken ?? ownedLeaseTokens[sessionId]
         let oldAttachingConnection = attachingConnections.removeValue(forKey: sessionId)?.connection
         let oldRunner = runners.removeValue(forKey: sessionId)
-        let oldConnection = oldAttempt?.connection ?? oldAttachingConnection ?? oldRunner?.connection
+        let oldAttemptConnection = oldAttempt?.connection
+        let oldConnection = oldAttemptConnection ?? oldAttachingConnection ?? oldRunner?.connection
         let oldBrokerClient = oldAttempt?.brokerClient
         oldRunner?.invalidateActivePrompt()
         oldRunner?.stop()
@@ -6022,11 +6023,18 @@ extension ACPSessionManager {
         }
         if let oldConnection {
             _ = await runBounded(timeout: restartTeardownTimeout) {
-                await oldConnection.detach()
+                if oldAttemptConnection != nil {
+                    // A startup RPC may still be pending in the broker. Detach
+                    // leaves that process alive, so close this attempt's
+                    // generation before retrying with its stable operation key.
+                    await oldConnection.shutdown()
+                } else {
+                    await oldConnection.detach()
+                }
             }
         } else if let oldBrokerClient {
             _ = await runBounded(timeout: restartTeardownTimeout) {
-                await oldBrokerClient.detach()
+                await oldBrokerClient.shutdown()
             }
         }
         guard sessions[sessionId] === session,

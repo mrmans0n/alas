@@ -110,6 +110,46 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(await service.closed.count == 1)
     }
 
+    @Test("restarting during a stalled initialize shuts down the old broker")
+    func restartDuringStalledInitializeShutsDownOldBroker() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let service = ManagerBrokerServiceProxy(stallClose: true, stallSendMethod: "initialize")
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { service },
+            attachmentStartupTimeout: .seconds(10),
+            restartTeardownTimeout: .seconds(5)
+        )
+        let session = manager.createSession(agentId: "claude")
+        let originalAttach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync { await service.sendGate.hasEntered }
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync { await service.closeGate.hasEntered }
+        #expect(await service.closeGate.hasWaiters)
+        #expect(await service.opened.count == 1)
+        #expect(session.agentState != .ready)
+
+        await service.closeGate.release()
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            let openCount = await service.opened.count
+            return session.agentState == .ready && openCount == 2
+        }
+
+        #expect(await service.closed.count > 0)
+        let replacementRunner = manager.runners[session.id]
+        await service.sendGate.release()
+        await originalAttach.value
+        await restart.value
+
+        #expect(session.agentState == .ready)
+        #expect(manager.runners[session.id] === replacementRunner)
+        #expect(await service.closed.count > 0)
+    }
+
     @Test("attaching an already-ready session preserves its live update callback")
     func attachingReadySessionPreservesLiveUpdateCallback() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -5281,15 +5321,27 @@ private actor ManagerBrokerService: ACPBrokerServicing {
 private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
     let openGate = ManagerBrokerGate()
     let detachGate = ManagerBrokerGate()
+    let closeGate = ManagerBrokerGate()
+    let sendGate = ManagerBrokerGate()
     private let base = ManagerBrokerService()
     private let stallOpen: Bool
     private let stallDetach: Bool
+    private let stallClose: Bool
+    private let stallSendMethod: String?
+    private var hasStalledSend = false
     private(set) var opened: [ACPBrokerOpenParams] = []
     private(set) var closed: [ACPBrokerCloseParams] = []
 
-    init(stallOpen: Bool = false, stallDetach: Bool = false) {
+    init(
+        stallOpen: Bool = false,
+        stallDetach: Bool = false,
+        stallClose: Bool = false,
+        stallSendMethod: String? = nil
+    ) {
         self.stallOpen = stallOpen
         self.stallDetach = stallDetach
+        self.stallClose = stallClose
+        self.stallSendMethod = stallSendMethod
     }
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
@@ -5303,7 +5355,11 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
     }
 
     func send(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult {
-        try await base.send(params)
+        if !hasStalledSend, params.method == stallSendMethod {
+            hasStalledSend = true
+            await sendGate.wait()
+        }
+        return try await base.send(params)
     }
 
     func notify(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK {
@@ -5325,6 +5381,7 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
 
     func close(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
         closed.append(params)
+        if stallClose { await closeGate.wait() }
         return try await base.close(params)
     }
 }
