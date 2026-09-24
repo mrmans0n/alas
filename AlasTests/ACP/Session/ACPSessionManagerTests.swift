@@ -152,6 +152,54 @@ struct ACPSessionManagerTests {
         await deadline.release()
     }
 
+    @Test("scheduled settlement distinguishes unrelated queued prompts")
+    func scheduledPromptSettlementTracksUnrelatedQueuedPrompts() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-scheduled-unrelated-settlement-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
+        let promptID = UUID()
+        let unrelatedPromptID = UUID()
+        session.queue = [QueuedPrompt(id: promptID, blocks: [.text("scheduled task")])]
+        session.mcpAttachmentSummary = MCPAttachmentSummary(
+            statuses: [.init(
+                id: BuiltInAlasMCP.statusId,
+                name: "Alas",
+                transport: .stdio,
+                disposition: .requested
+            )],
+            configurationFingerprint: "test"
+        )
+        session.builtInMCPRegistration = .registered
+        let deadline = AsyncGate()
+        let waiter = Task {
+            await manager.waitForScheduledPrompt(
+                for: session.id,
+                promptID: promptID,
+                timeout: .seconds(4),
+                deadlineWaiter: { _ in await deadline.enterAndWait() }
+            )
+        }
+
+        session.queue[0].status = .sending
+        await deadline.waitUntilEntered()
+        session.queue.append(QueuedPrompt(id: unrelatedPromptID, blocks: [.text("follow-up")]))
+        session.queue.removeAll { $0.id == promptID }
+        session.queue[0].status = .sending
+        session.transcript.streamingState = .sending
+        session.queue.removeAll()
+        session.transcript.streamingState = .idle
+
+        let result = await waiter.value
+        guard case .settledWithUnrelatedPrompt = result else {
+            Issue.record("Expected unrelated queued work to remain distinguishable, got \(result).")
+            await deadline.release()
+            return
+        }
+        await deadline.release()
+    }
+
     @Test("scheduled prompt timeout begins at dispatch and is cancellable")
     func scheduledPromptTimeoutUsesAnInjectedDeadline() async throws {
         let url = FileManager.default.temporaryDirectory

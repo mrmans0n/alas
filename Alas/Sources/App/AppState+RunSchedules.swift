@@ -448,7 +448,7 @@ extension AppState {
 
     private func scheduledAgentReportsStore() throws -> ScheduledAgentReportStore {
         if let scheduledAgentReportStore { return scheduledAgentReportStore }
-        let store = try ScheduledAgentReportStore()
+        let store = try ScheduledAgentReportStore(path: scheduledAgentReportDatabasePath)
         scheduledAgentReportStore = store
         return store
     }
@@ -1187,7 +1187,7 @@ extension AppState {
                 reportID: reportID
             )
             return .launchFailed(message)
-        case .settled:
+        case .settled, .settledWithUnrelatedPrompt:
             guard let completion = activeScheduledAgentRunsBySession[prepared.sessionID]?.completion else {
                 let reason = "The ACP task ended without calling schedule_complete; its worktree was retained."
                 await finishScheduledReport(reportID, state: .needsAttention, reason: reason, store: store)
@@ -1220,8 +1220,15 @@ extension AppState {
                 var notificationSeverity = InAppNotificationSeverity.success
                 if report.cleanupRequested {
                     let cleanupResult: ScheduledWorktreeCleanupResult
-                    if let registration = activeScheduledAgentRunsBySession[prepared.sessionID],
-                       registration.reportID == reportID {
+                    if case .settledWithUnrelatedPrompt = settlement {
+                        let reason = "A non-scheduled ACP prompt was queued during the scheduled turn."
+                        cleanupResult = await retainScheduledWorktree(
+                            reportID: reportID,
+                            reason: reason,
+                            store: store
+                        )
+                    } else if let registration = activeScheduledAgentRunsBySession[prepared.sessionID],
+                              registration.reportID == reportID {
                         cleanupResult = await cleanupScheduledAgentWorktree(
                             report: report,
                             registration: registration,

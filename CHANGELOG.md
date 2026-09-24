@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixes
 
 - Preserve ACP tail scrolling when activity folds during scroll settling, retaining any bottom elastic overscroll without jumping back to the activity header. Layout corrections no longer count as user scrolling or resume paused tail-follow; downward scrollbar-track clicks continue paging into hidden newer messages.
+- Bind scheduled cleanup authorization to verified HEAD, retain worktrees after unrelated ACP prompts, and write reports to their configured database path (#1465).
 
 ## [0.19.7] - 2026-09-24
 

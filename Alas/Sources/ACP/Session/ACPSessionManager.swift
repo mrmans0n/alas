@@ -3,6 +3,7 @@ import Foundation
 
 enum ScheduledPromptSettlement: Equatable, Sendable {
     case settled(dispatchedAt: Date)
+    case settledWithUnrelatedPrompt(dispatchedAt: Date)
     case failed(String)
     case timedOut
     case cancelled
@@ -10,6 +11,7 @@ enum ScheduledPromptSettlement: Equatable, Sendable {
 
 private struct ScheduledPromptSnapshot: Sendable {
     let targetSending: Bool
+    let hasUnrelatedQueuedPrompt: Bool
     let targetPresent: Bool
     let targetError: String?
     let queueEmpty: Bool
@@ -29,6 +31,27 @@ private enum ScheduledPromptSignal: Sendable {
     case timedOut
     case cancelled
 }
+
+// Combine records queue admissions synchronously; the waiter reads this flag from its actor task.
+
+private final class ScheduledPromptQueueObservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var observedUnrelatedPrompt = false
+
+    func observe(_ queue: [QueuedPrompt], excluding promptID: UUID) {
+        guard queue.contains(where: { $0.id != promptID }) else { return }
+        lock.lock()
+        observedUnrelatedPrompt = true
+        lock.unlock()
+    }
+
+    var hasObservedUnrelatedPrompt: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return observedUnrelatedPrompt
+    }
+}
+
 private struct ACPTranscriptScrollMemory: Equatable {
     var anchorMessageId: String?
     /// ACP view ids for persisted text rows are regenerated during hydration;
@@ -381,7 +404,7 @@ final class ACPSessionManager: ObservableObject {
 
     /// Observes the exact queued prompt, not merely `session/prompt`'s
     /// dispatch acknowledgement. The deadline starts when that queue item
-    /// enters `.sending`; success requires its removal and a fully idle session.
+    /// enters `.sending`; unrelated queued prompt IDs remain distinguishable.
     func waitForScheduledPrompt(
         for id: ACPSession.ID,
         promptID: UUID,
@@ -393,10 +416,15 @@ final class ACPSessionManager: ObservableObject {
         guard let session = sessions[id] else {
             return .failed("The scheduled ACP session is no longer available.")
         }
-
         let (signals, continuation) = AsyncStream<ScheduledPromptSignal>.makeStream()
+
+        let queueObservation = ScheduledPromptQueueObservation()
+        let queueChanges = session.$queue
+            .handleEvents(receiveOutput: { queueObservation.observe($0, excluding: promptID) })
+            .map { _ in () }
+            .eraseToAnyPublisher()
         let publishers: [AnyPublisher<Void, Never>] = [
-            session.$queue.map { _ in () }.eraseToAnyPublisher(),
+            queueChanges,
             session.transcript.$streamingState.map { _ in () }.eraseToAnyPublisher(),
             session.transcript.$pendingPermission.map { _ in () }.eraseToAnyPublisher(),
             session.transcript.$pendingQuestion.map { _ in () }.eraseToAnyPublisher(),
@@ -434,6 +462,7 @@ final class ACPSessionManager: ObservableObject {
             }
             return ScheduledPromptSnapshot(
                 targetSending: target?.status == .sending,
+                hasUnrelatedQueuedPrompt: queueObservation.hasObservedUnrelatedPrompt,
                 targetPresent: target != nil,
                 targetError: target?.lastError,
                 queueEmpty: session.queue.isEmpty,
@@ -505,6 +534,9 @@ final class ACPSessionManager: ObservableObject {
                               snapshot.builtInMCPRegistered
                         else {
                             return .failed("The built-in Alas MCP tool was not active for this ACP session.")
+                        }
+                        if snapshot.hasUnrelatedQueuedPrompt {
+                            return .settledWithUnrelatedPrompt(dispatchedAt: dispatchedAt)
                         }
                         return .settled(dispatchedAt: dispatchedAt)
                     }

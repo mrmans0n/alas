@@ -232,6 +232,7 @@ final class AppState {
     /// owns, including ones that never produced an archivable record.
     @ObservationIgnored var runScriptSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
     @ObservationIgnored var scheduledAgentReportStore: ScheduledAgentReportStore?
+    @ObservationIgnored let scheduledAgentReportDatabasePath: String
     @ObservationIgnored var activeScheduledAgentRunsBySession: [String: ScheduledAgentRunRegistration] = [:]
     @ObservationIgnored var scheduledPromptSettlementTasks: [String: Task<ScheduledPromptSettlement, Never>] = [:]
     @ObservationIgnored var scheduledAgentReportsRecoveryTask: Task<Void, Never>?
@@ -1322,6 +1323,7 @@ final class AppState {
         scheduledAgentReportDatabasePath: String = Paths.scheduledAgentReportsDB.path
     ) {
         self.store = store
+        self.scheduledAgentReportDatabasePath = scheduledAgentReportDatabasePath
         self.workspaceStore = workspaceStore
         self.workspaceRemoteTransport = workspaceRemoteTransport
         self.attentionStore = attentionStore ?? AttentionStore()

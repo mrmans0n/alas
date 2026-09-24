@@ -1230,6 +1230,8 @@ struct WorktreeService {
             cwd: worktreePath
         )
         guard status.exitCode == 0 else { throw WorktreeError.gitFailed(status.stderr) }
+        let head = try await Process.gitData(["rev-parse", "HEAD"], cwd: worktreePath)
+        guard head.exitCode == 0 else { throw WorktreeError.gitFailed(head.stderr) }
 
         let diff = try await Process.gitData(
             ["diff", "--no-ext-diff", "--binary", "--full-index", "--submodule=diff", "HEAD", "--"],
@@ -1276,6 +1278,7 @@ struct WorktreeService {
             payload.append(data)
             payload.append(0)
         }
+        append("head", head.stdout)
         append("status", status.stdout)
         append("diff", diff.stdout)
         append("cachedDiff", cachedDiff.stdout)

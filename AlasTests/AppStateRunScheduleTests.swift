@@ -369,6 +369,22 @@ struct AppStateRunScheduleTests {
         #expect(recovered.cleanupState == .retained)
     }
 
+    @Test func lazyScheduledReportStoreUsesConfiguredDatabasePath() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("scheduled-report-lazy-path-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databasePath = directory.appendingPathComponent("reports.sqlite").path
+        let state = AppState(
+            store: MemoryStore(),
+            scheduledAgentReportDatabasePath: databasePath
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: databasePath))
+        let reports = try await state.scheduledAgentReportPage(projectID: "project", offset: 0)
+        #expect(reports.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: databasePath))
+    }
+
     /// Lives here because this is the suite the problem was found in, but the
     /// invariant is repo-wide: most `AlasTests` fixtures do not inject
     /// `fileActionErrorHandler`, and its default ends in `NSAlert.runModal`.
