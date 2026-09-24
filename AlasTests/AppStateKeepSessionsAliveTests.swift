@@ -121,6 +121,43 @@ struct AppStateKeepSessionsAliveTests {
         #expect(state.terminal.registry.session(for: "leaf-hook") == nil)
     }
 
+    @Test func terminalRestoreContextUsesPersistedProjectForDuplicateWorktreeIDs() throws {
+        let sharedID = "/repos/shared-checkout"
+        let projectA = ProjectConfig(
+            id: "restore-project-a", name: "Project A", path: "/repos/a",
+            color: "blue", addedAt: .distantPast, host: "host-a"
+        )
+        let projectB = ProjectConfig(
+            id: "restore-project-b", name: "Project B", path: "/repos/b",
+            color: "green", addedAt: .distantPast, host: "host-b"
+        )
+        let state = AppState(store: MemoryStore())
+        state.projectsManager = ProjectsManager(persistedProjects: [projectA, projectB])
+        for project in [projectA, projectB] {
+            state.projectsManager.insertOptimisticWorktree(Worktree(
+                id: sharedID,
+                projectId: project.id,
+                name: "shared",
+                branch: "shared",
+                path: URL(fileURLWithPath: sharedID),
+                status: .clean,
+                lastActivity: .distantPast
+            ))
+        }
+        let tab = state.tabs.appendTerminal(
+            worktreeId: sharedID,
+            projectId: projectB.id,
+            title: "Project B shell",
+            sessionId: "project-b-saved-session"
+        )
+
+        let context = try #require(state.terminalRestoreContext(worktreeId: sharedID, tabId: tab.id))
+
+        #expect(context.worktree.projectId == projectB.id)
+        #expect(context.project.id == projectB.id)
+        #expect(context.project.host == "host-b")
+    }
+
     /// `reloadTabs` runs once on launch and is the only path that touches
     /// every persisted terminal tab across every worktree. When
     /// `keepSessionsAlive` is off, it must prune them all — including

@@ -205,6 +205,68 @@ struct ClosedTabAppStateTests {
         #expect(state.tabs.tabs(forWorktree: sharedID).contains { $0.id == tab.id })
     }
 
+    @Test func reopeningTerminalFocusesTheRecordedProjectsSpace() async {
+        let sharedID = "closed-tabs-terminal-shared-id"
+        let projectA = ProjectConfig(
+            id: "closed-tabs-terminal-project-a",
+            name: "Project A",
+            path: "/repos/project-a",
+            color: "blue",
+            addedAt: .distantPast
+        )
+        let projectB = ProjectConfig(
+            id: "closed-tabs-terminal-project-b",
+            name: "Project B",
+            path: "/repos/project-b",
+            color: "green",
+            addedAt: .distantPast,
+            host: "project-b-host"
+        )
+        var openedProjectIDs: [String] = []
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, project, _, _, _, _, _, _, _ in
+                openedProjectIDs.append(project.id)
+                return .init(id: "reopened-terminal-session", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [projectA, projectB])
+        let spaceA = state.spacesManager.activeSpaceId
+        state.spacesManager.addProject(projectA.id, toSpace: spaceA)
+        let spaceB = state.spacesManager.addSpace(name: "Project B", emoji: "🌱")
+        state.spacesManager.addProject(projectB.id, toSpace: spaceB)
+
+        let worktreeA = Worktree(
+            id: sharedID, projectId: projectA.id, name: "shared", branch: "shared",
+            path: URL(fileURLWithPath: sharedID), status: .clean, lastActivity: .distantPast
+        )
+        let worktreeB = Worktree(
+            id: sharedID, projectId: projectB.id, name: "shared", branch: "shared",
+            path: URL(fileURLWithPath: sharedID), status: .clean, lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(worktreeA)
+        state.projectsManager.insertOptimisticWorktree(worktreeB)
+        state.focusGlobalWorktree(id: sharedID, projectId: projectA.id)
+        let tab = state.tabs.appendTerminal(
+            worktreeId: sharedID,
+            projectId: projectB.id,
+            title: "Project B shell",
+            sessionId: "closed-project-b-session"
+        )
+        state.requestCloseTab(worktreeId: sharedID, projectId: projectB.id, tabId: tab.id)
+
+        await state.reopenLastClosedTab()
+
+        #expect(openedProjectIDs == [projectB.id])
+        #expect(state.spacesManager.activeSpaceId == spaceB)
+        #expect(state.selectedWorktreeId == sharedID)
+        guard case .terminal(let reopened)? = state.tabs.tabs(forWorktree: sharedID).first(where: { $0.id == tab.id }) else {
+            Issue.record("Expected the saved terminal tab to reopen")
+            return
+        }
+        #expect(reopened.projectId == projectB.id)
+    }
+
     @Test func reopeningDoesNotUseAnotherProjectsSamePathWhenRecordedProjectLostCheckout() async {
         let sharedID = "closed-tabs-removed-project-id"
         let recordedProject = ProjectConfig(

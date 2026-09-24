@@ -7807,10 +7807,16 @@ final class AppState {
     /// walk, leaves processed up to that point have already been persisted with
     /// their new sessionIds. Re-calling this method is safe — already-restored
     /// leaves are skipped, and the failing leaf is retried.
-
     @discardableResult
-    func restoreTerminalTabIfNeededAsync(worktreeId: String, tabId: TabID) async throws -> Tab? {
-        guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktreeId) else {
+    func restoreTerminalTabIfNeededAsync(
+        worktreeId: String,
+        tabId: TabID,
+        projectId: String? = nil
+    ) async throws -> Tab? {
+        guard let context = terminalRestoreContext(worktreeId: worktreeId, tabId: tabId, projectId: projectId) else {
+            return nil
+        }
+        guard await !checkpointRestoreBlocksWritersAfterDiscovery(for: context.worktree) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
         let legacySessionInfos = await legacySessionInfosForTerminalRestore(
@@ -7820,6 +7826,7 @@ final class AppState {
         return try await restoreTerminalTabIfNeeded(
             worktreeId: worktreeId,
             tabId: tabId,
+            projectId: context.project.id,
             legacySessionInfos: legacySessionInfos
         )
     }
@@ -7827,11 +7834,42 @@ final class AppState {
     @discardableResult
     func restoreTerminalTabIfNeededAsync(owner: SessionOwnerID, tabId: TabID) async throws -> Tab? {
         switch owner {
-        case .worktree(let worktreeID), .projectWorktree(_, let worktreeID):
+        case .worktree(let worktreeID):
             return try await restoreTerminalTabIfNeededAsync(worktreeId: worktreeID, tabId: tabId)
+        case .projectWorktree(let projectID, let worktreeID):
+            return try await restoreTerminalTabIfNeededAsync(
+                worktreeId: worktreeID,
+                tabId: tabId,
+                projectId: projectID
+            )
         case .workspaceCheckout(let checkoutID, _):
             return try await restoreCheckoutTerminalTabIfNeeded(checkoutID: checkoutID, owner: owner, tabID: tabId)
         }
+    }
+
+    /// Resolve a persisted terminal from its saved project before using its
+    /// path-derived worktree id. Older tabs without a project marker retain
+    /// the historical first-match fallback.
+    func terminalRestoreContext(
+        worktreeId: String,
+        tabId: TabID,
+        projectId: String? = nil
+    ) -> (worktree: Worktree, project: ProjectConfig)? {
+        guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
+              case .terminal(let state) = tab else { return nil }
+        if let projectId, let savedProjectId = state.projectId, projectId != savedProjectId {
+            return nil
+        }
+        let ownerProjectId = state.projectId ?? projectId
+        let worktree: Worktree?
+        if let ownerProjectId {
+            worktree = self.worktree(withId: worktreeId, inProjectId: ownerProjectId)
+        } else {
+            worktree = self.worktree(withId: worktreeId)
+        }
+        guard let worktree,
+              let project = projects.first(where: { $0.id == worktree.projectId }) else { return nil }
+        return (worktree, project)
     }
 
     @discardableResult
@@ -7905,12 +7943,14 @@ final class AppState {
     private func restoreTerminalTabIfNeeded(
         worktreeId: String,
         tabId: TabID,
+        projectId: String?,
         legacySessionInfos: [ZmxSessionInfo]?
     ) async throws -> Tab? {
         guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
               case .terminal(let state) = tab,
-              let worktree = worktree(withId: worktreeId),
-              let project = projects.first(where: { $0.id == worktree.projectId }) else { return nil }
+              let context = terminalRestoreContext(worktreeId: worktreeId, tabId: tabId, projectId: projectId) else { return nil }
+        let worktree = context.worktree
+        let project = context.project
 
         // When the user has opted out of cross-quit persistence and none of
         // the tab's leaves have a live session (the only way to reach this
@@ -7929,7 +7969,7 @@ final class AppState {
             let hasLiveLeaf = state.root.leaves()
                 .contains { terminal.registry.session(for: $0.id) != nil }
             if !hasLiveLeaf {
-                closeTab(worktreeId: worktreeId, tabId: tabId)
+                closeTab(worktreeId: worktreeId, projectId: project.id, tabId: tabId)
                 return nil
             }
         }
@@ -8603,9 +8643,15 @@ final class AppState {
         body(session)
     }
 
-    func closeTab(worktreeId: String, tabId: TabID, cancelRunScriptMonitors: Bool = true) {
+    func closeTab(
+        worktreeId: String,
+        projectId: String? = nil,
+        tabId: TabID,
+        cancelRunScriptMonitors: Bool = true
+    ) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
-        let projectPath = projectPath(forWorktreeId: worktreeId)
+        let projectPath = projectId.flatMap { id in projects.first(where: { $0.id == id })?.path }
+            ?? projectPath(forWorktreeId: worktreeId)
         if let tab = allTabs.first(where: { $0.id == tabId }) {
             if case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
@@ -9072,7 +9118,11 @@ final class AppState {
         }
 
         if tabs.tabs(forWorktree: worktreeID).contains(where: { $0.id == tab.id }) {
-            selectWorktree(id: worktreeID)
+            if let projectID = projectID ?? oldState.projectId ?? worktree(withId: worktreeID)?.projectId {
+                focusGlobalWorktree(id: worktreeID, projectId: projectID)
+            } else {
+                selectWorktree(id: worktreeID)
+            }
             activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
             closedTabHistory.remove(id: entry.id)
             return
@@ -9135,14 +9185,16 @@ final class AppState {
                 }
             }
 
+            let restoredProjectID = projectID ?? oldState.projectId ?? worktree.projectId
             let reopened = TerminalTabState(
                 id: oldState.id,
                 title: oldState.title,
                 root: oldState.root.replacingLeaves(using: replacements),
-                focusedLeafId: focusedLeafID
+                focusedLeafId: focusedLeafID,
+                projectId: restoredProjectID
             )
             _ = tabs.restore(tab: .terminal(reopened), worktreeID: worktreeID, placement: entry.placement)
-            selectWorktree(id: worktreeID)
+            focusGlobalWorktree(id: worktreeID, projectId: restoredProjectID)
             activateWorktreeCenterTab(worktreeId: worktreeID, tabId: reopened.id)
             closedTabHistory.remove(id: entry.id)
         } catch RepoHookPreflightError.cancelled {
