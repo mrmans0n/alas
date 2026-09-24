@@ -604,6 +604,54 @@ extension WorktreeServiceTests {
         )))
     }
 
+    @Test func scheduledCleanupRequiresRemoteReachabilityForInitializedSubmodule() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "scheduled-submodule-local-only")
+        defer { fixture.removeFiles() }
+
+        let baseResult = try await Process.git(["rev-parse", "HEAD"], cwd: fixture.worktree.path)
+        try #require(baseResult.exitCode == 0)
+        let base = baseResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let superprojectRemote = "refs/remotes/origin/\(fixture.worktree.branch)"
+        let initialSuperprojectRemote = try await Process.git(
+            ["update-ref", superprojectRemote, base],
+            cwd: fixture.worktree.path
+        )
+        try #require(initialSuperprojectRemote.exitCode == 0)
+        let submodulePath = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
+        let initialSubmoduleRemote = try await Process.git(
+            ["update-ref", "refs/remotes/origin/main", "HEAD"],
+            cwd: submodulePath
+        )
+        try #require(initialSubmoduleRemote.exitCode == 0)
+
+        try "local-only".write(
+            to: submodulePath.appendingPathComponent("tracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let submoduleCommit = try await Process.git(["commit", "-am", "local-only submodule commit"], cwd: submodulePath)
+        try #require(submoduleCommit.exitCode == 0)
+        let updatedGitlink = try await Process.git(["add", "Deps/Submodule"], cwd: fixture.worktree.path)
+        try #require(updatedGitlink.exitCode == 0)
+        let superprojectCommit = try await Process.git(
+            ["commit", "-m", "update submodule gitlink"],
+            cwd: fixture.worktree.path
+        )
+        try #require(superprojectCommit.exitCode == 0)
+
+        let reachableSuperprojectHead = try await Process.git(
+            ["update-ref", superprojectRemote, "HEAD"],
+            cwd: fixture.worktree.path
+        )
+        try #require(reachableSuperprojectHead.exitCode == 0)
+
+        #expect(!(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        )))
+    }
+
     @Test func lockedDeletePreflightReasonIsParsedFromPorcelain() {
         let path = URL(fileURLWithPath: "/repos/app-worktree")
         let porcelain = """

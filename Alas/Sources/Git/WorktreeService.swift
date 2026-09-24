@@ -1261,6 +1261,8 @@ struct WorktreeService {
             """
             set -e
             printf 'path=%s\\n' "$sm_path"
+            head=$(git rev-parse HEAD)
+            printf 'head=%s\\n' "$head"
             git status --porcelain=v1 --ignore-submodules=none --untracked-files=all
             git diff --no-ext-diff --binary --full-index --submodule=diff HEAD --
             git diff --cached --no-ext-diff --binary --full-index --submodule=diff HEAD --
@@ -1379,7 +1381,21 @@ struct WorktreeService {
             usesRemoteHostRegistry: false
         )
         guard remoteRefs.exitCode == 0 else { throw WorktreeError.gitFailed(remoteRefs.stderr) }
-        return !remoteRefs.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard !remoteRefs.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+        let submoduleRemoteRefs = try await Process.git(
+            [
+                "submodule", "foreach", "--quiet", "--recursive",
+                "refs=$(git for-each-ref --contains=HEAD --format='%(refname)' refs/remotes/) && test -n \"$refs\""
+            ],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        // foreach visits only initialized submodules. A missing remote ref,
+        // nested command failure, or inability to inspect one must all refuse
+        // scheduled deletion.
+        return submoduleRemoteRefs.exitCode == 0
     }
 
     static func porcelainMarksWorktreeLocked(_ porcelain: String, worktreePath: URL) -> Bool {

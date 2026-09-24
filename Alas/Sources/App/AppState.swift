@@ -233,6 +233,7 @@ final class AppState {
     @ObservationIgnored var runScriptSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
     @ObservationIgnored var scheduledAgentReportStore: ScheduledAgentReportStore?
     @ObservationIgnored let scheduledAgentReportDatabasePath: String
+    @ObservationIgnored let scheduledAgentReportFinalizer: ScheduledAgentReportFinalizer
     @ObservationIgnored var activeScheduledAgentRunsBySession: [String: ScheduledAgentRunRegistration] = [:]
     @ObservationIgnored var scheduledPromptSettlementTasks: [String: Task<ScheduledPromptSettlement, Never>] = [:]
     @ObservationIgnored var scheduledAgentReportsRecoveryTask: Task<Void, Never>?
@@ -1320,10 +1321,18 @@ final class AppState {
         attentionNavigationEnvironment: AttentionNavigationEnvironment? = nil,
         harnessAttentionSettleInterval: TimeInterval = 1.5,
         scheduledAgentReportStore: ScheduledAgentReportStore? = nil,
-        scheduledAgentReportDatabasePath: String = Paths.scheduledAgentReportsDB.path
+        scheduledAgentReportDatabasePath: String = Paths.scheduledAgentReportsDB.path,
+        scheduledAgentReportFinalizer: ScheduledAgentReportFinalizer? = nil
     ) {
         self.store = store
         self.scheduledAgentReportDatabasePath = scheduledAgentReportDatabasePath
+        self.scheduledAgentReportFinalizer = scheduledAgentReportFinalizer ?? { reportStore, reportID, state, reason in
+            _ = try await reportStore.finishWithoutCompletion(
+                reportID: reportID,
+                state: state,
+                reason: reason
+            )
+        }
         self.workspaceStore = workspaceStore
         self.workspaceRemoteTransport = workspaceRemoteTransport
         self.attentionStore = attentionStore ?? AttentionStore()

@@ -20,6 +20,64 @@ enum RunScriptSettlement: Equatable, Sendable {
     case finished(RunOutcome)
     /// The command never started (terminal failed to open, shell rejected).
     case launchFailed(String)
+    case cancelled
+}
+
+typealias ScheduledAgentReportFinalizer = @MainActor (
+    ScheduledAgentReportStore,
+    String,
+    ScheduledAgentTaskState,
+    String
+) async throws -> Void
+
+/// Races a script settlement against cancellation without ever resuming its
+/// checked continuation more than once.
+private final class ScheduledScriptSettlement: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<RunScriptSettlement, Never>?
+    private var pending: RunScriptSettlement?
+
+    func install(_ continuation: CheckedContinuation<RunScriptSettlement, Never>) {
+        lock.lock()
+        let pending = self.pending
+        if pending == nil {
+            self.continuation = continuation
+        }
+        lock.unlock()
+        if let pending {
+            continuation.resume(returning: pending)
+        }
+    }
+
+    func resolve(_ settlement: RunScriptSettlement) {
+        lock.lock()
+        guard pending == nil else {
+            lock.unlock()
+            return
+        }
+        pending = settlement
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(returning: settlement)
+    }
+}
+
+private final class ScheduledScriptRunID: @unchecked Sendable {
+    private let lock = NSLock()
+    private var valueStorage: String?
+
+    var value: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return valueStorage
+    }
+
+    func set(_ value: String) {
+        lock.lock()
+        valueStorage = value
+        lock.unlock()
+    }
 }
 
 extension AppState {
@@ -261,14 +319,27 @@ extension AppState {
                 return RunScheduleRunReport(outcome: .launchFailed(message))
             }
             if let reason = scheduledAgentEligibilityFailure(composition) {
-                await finishScheduledReport(
+                let finalizationError = await finishScheduledReport(
                     reportID!,
                     state: .needsAttention,
                     reason: reason,
                     store: reportStore!
                 )
+                let outcomeReason = finalizationError.map {
+                    "\($0) The report was not committed; the worktree was retained."
+                } ?? reason
+                if finalizationError != nil {
+                    reportScheduleFailure(
+                        schedule,
+                        reason: outcomeReason,
+                        project: project,
+                        worktree: originWorktree,
+                        reportID: reportID,
+                        evenIfCancelled: true
+                    )
+                }
                 return RunScheduleRunReport(
-                    outcome: .launchFailed(reason),
+                    outcome: .launchFailed(outcomeReason),
                     reportIDs: [reportID!]
                 )
             }
@@ -289,26 +360,53 @@ extension AppState {
                         )
                     } catch {
                         let reason = "Could not record the scheduled worktree identity: \(error.localizedDescription)"
-                        await finishScheduledReport(
+                        let finalizationError = await finishScheduledReport(
                             reportID,
                             state: .failed,
                             reason: reason,
                             store: reportStore
                         )
+                        let outcomeReason = finalizationError.map {
+                            "\(reason) \($0) The report was not committed; the worktree was retained."
+                        } ?? reason
+                        reportScheduleFailure(
+                            schedule,
+                            reason: outcomeReason,
+                            project: project,
+                            worktree: created,
+                            reportID: reportID,
+                            evenIfCancelled: finalizationError != nil
+                        )
                         return RunScheduleRunReport(
-                            outcome: .launchFailed(reason),
+                            outcome: .launchFailed(outcomeReason),
                             reportIDs: [reportID]
                         )
                     }
                 }
             case .failure(let failure):
                 if Task.isCancelled {
+                    var finalizationError: String?
                     if let reportID, let reportStore {
-                        await finishScheduledReport(
+                        finalizationError = await finishScheduledReport(
                             reportID,
                             state: .interrupted,
                             reason: "The schedule was removed while its worktree was being created.",
                             store: reportStore
+                        )
+                    }
+                    if let reportID, let finalizationError {
+                        let reason = "\(finalizationError) The report was not committed; the worktree was retained."
+                        reportScheduleFailure(
+                            schedule,
+                            reason: reason,
+                            project: project,
+                            worktree: originWorktree,
+                            reportID: reportID,
+                            evenIfCancelled: true
+                        )
+                        return RunScheduleRunReport(
+                            outcome: .launchFailed(reason),
+                            reportIDs: [reportID]
                         )
                     }
                     return RunScheduleRunReport(
@@ -316,23 +414,28 @@ extension AppState {
                         reportIDs: reportID.map { [$0] } ?? []
                     )
                 }
+                var finalizationError: String?
                 if let reportID, let reportStore {
-                    await finishScheduledReport(
+                    finalizationError = await finishScheduledReport(
                         reportID,
                         state: .failed,
                         reason: failure.message,
                         store: reportStore
                     )
                 }
+                let outcomeReason = finalizationError.map {
+                    "\(failure.message) \($0) The report was not committed; the worktree was retained."
+                } ?? failure.message
                 reportScheduleFailure(
                     schedule,
-                    reason: failure.message,
+                    reason: outcomeReason,
                     project: project,
                     worktree: originWorktree,
-                    reportID: reportID
+                    reportID: reportID,
+                    evenIfCancelled: finalizationError != nil
                 )
                 return RunScheduleRunReport(
-                    outcome: .launchFailed(failure.message),
+                    outcome: .launchFailed(outcomeReason),
                     reportIDs: reportID.map { [$0] } ?? []
                 )
             }
@@ -347,21 +450,25 @@ extension AppState {
                     try await reportStore.associateScriptRun(reportID: reportID, scriptRun: run)
                 } catch {
                     let reason = "Could not record the scheduled script run: \(error.localizedDescription)"
-                    await finishScheduledReport(
+                    let finalizationError = await finishScheduledReport(
                         reportID,
                         state: .failed,
                         reason: reason,
                         store: reportStore
                     )
+                    let outcomeReason = finalizationError.map {
+                        "\(reason) \($0) The report was not committed; the worktree was retained."
+                    } ?? reason
                     reportScheduleFailure(
                         schedule,
-                        reason: reason,
+                        reason: outcomeReason,
                         project: project,
                         worktree: worktree,
-                        reportID: reportID
+                        reportID: reportID,
+                        evenIfCancelled: finalizationError != nil
                     )
                     return RunScheduleRunReport(
-                        outcome: .launchFailed(reason),
+                        outcome: .launchFailed(outcomeReason),
                         runs: references,
                         reportIDs: [reportID]
                     )
@@ -370,12 +477,26 @@ extension AppState {
             guard case .succeeded = script.outcome else {
                 let reason = runScheduleOutcomeDescription(script.outcome)
                 if let reportID, let reportStore {
-                    await finishScheduledReport(
+                    if let finalizationError = await finishScheduledReport(
                         reportID,
                         state: Task.isCancelled ? .interrupted : (isSkipped(script.outcome) ? .needsAttention : .failed),
                         reason: reason,
                         store: reportStore
-                    )
+                    ) {
+                        reportScheduleFailure(
+                            schedule,
+                            reason: "\(finalizationError) The report was not committed; the worktree was retained.",
+                            project: project,
+                            worktree: worktree,
+                            reportID: reportID,
+                            evenIfCancelled: true
+                        )
+                        return RunScheduleRunReport(
+                            outcome: .launchFailed(finalizationError),
+                            runs: references,
+                            reportIDs: [reportID]
+                        )
+                    }
                 }
                 switch script.outcome {
                 case .skipped:
@@ -412,21 +533,35 @@ extension AppState {
         }
         if let reportID, let reportStore,
            let reason = scheduledAgentMCPUnavailableReason(project: project, worktree: worktree) {
-            await finishScheduledReport(
+            let finalizationError = await finishScheduledReport(
                 reportID,
                 state: .needsAttention,
                 reason: reason,
                 store: reportStore
             )
-            inAppNotifications.post(
-                "\(schedule.name): \(reason) The worktree was retained. Report: \(reportID).",
-                severity: .error,
-                worktreeID: worktree.id,
-                actionTitle: "Open report",
-                action: scheduledAgentReportOpenAction(reportID)
-            )
+            let outcomeReason = finalizationError.map {
+                "\($0) The report was not committed; the worktree was retained."
+            } ?? reason
+            if finalizationError != nil {
+                reportScheduleFailure(
+                    schedule,
+                    reason: outcomeReason,
+                    project: project,
+                    worktree: worktree,
+                    reportID: reportID,
+                    evenIfCancelled: true
+                )
+            } else {
+                inAppNotifications.post(
+                    "\(schedule.name): \(outcomeReason) The worktree was retained. Report: \(reportID).",
+                    severity: .error,
+                    worktreeID: worktree.id,
+                    actionTitle: "Open report",
+                    action: scheduledAgentReportOpenAction(reportID)
+                )
+            }
             return RunScheduleRunReport(
-                outcome: .launchFailed(reason),
+                outcome: .launchFailed(outcomeReason),
                 runs: references,
                 reportIDs: [reportID]
             )
@@ -583,10 +718,9 @@ extension AppState {
         guard let socketPath = harness.socketServer.socketPath else {
             return "The Alas MCP socket is unavailable, so scheduled completion cannot be reported."
         }
-        let repo = repoConfig(worktreeRoot: worktree.path)
         let configuredServers = RepoMCPResolver.merge(
             appServers: project.mcpServers,
-            repoServers: repo?.mcpServers ?? [],
+            repoServers: repoConfig(worktreeRoot: worktree.path)?.mcpServers ?? [],
             disabledNames: Set(project.disabledRepoMCPServers),
             trust: project.repoMCPTrust
         ).active
@@ -605,21 +739,33 @@ extension AppState {
         _ reportID: String,
         state: ScheduledAgentTaskState,
         reason: String,
-        store: ScheduledAgentReportStore
-    ) async {
+        store providedStore: ScheduledAgentReportStore? = nil
+    ) async -> String? {
+        let store: ScheduledAgentReportStore
         do {
-            _ = try await store.finishWithoutCompletion(
-                reportID: reportID,
-                state: state,
-                reason: reason
-            )
+            if let providedStore {
+                store = providedStore
+            } else {
+                store = try scheduledAgentReportsStore()
+            }
         } catch {
+            let message = "Could not reopen the scheduled-agent report store: \(error.localizedDescription)"
+            runScheduleLogger.error(
+                "Could not reopen scheduled report \(reportID, privacy: .public): \(String(describing: error), privacy: .public)"
+            )
+            return message
+        }
+        do {
+            try await scheduledAgentReportFinalizer(store, reportID, state, reason)
+            return nil
+        } catch {
+            let message = "Could not commit the scheduled-agent report finalization: \(error.localizedDescription)"
             runScheduleLogger.error(
                 "Could not finalize scheduled report \(reportID, privacy: .public): \(String(describing: error), privacy: .public)"
             )
+            return message
         }
     }
-
     private func runScheduleOutcomeDescription(_ outcome: RunScheduleOutcome) -> String {
         switch outcome {
         case .succeeded:
@@ -724,9 +870,10 @@ extension AppState {
         reason: String,
         project: ProjectConfig,
         worktree: Worktree,
-        reportID: String? = nil
+        reportID: String? = nil,
+        evenIfCancelled: Bool = false
     ) {
-        guard !Task.isCancelled else { return }
+        guard evenIfCancelled || !Task.isCancelled else { return }
         let notificationReason = reportID.map { reason.contains($0) ? reason : "\(reason) Report: \($0)." } ?? reason
         inAppNotifications.post(
             "\(schedule.name): \(notificationReason)",
@@ -838,24 +985,43 @@ extension AppState {
             )
         }
         var reference: RunScheduleFiring.RunReference?
-        let settlement: RunScriptSettlement = await withCheckedContinuation { continuation in
-            switch startScriptLaunch(script, in: worktree, presentsLaunchFailure: false) {
-            case .started(let runID):
-                reference = RunScheduleFiring.RunReference(
-                    worktreeID: worktree.id,
-                    branch: worktree.branch,
-                    runID: runID,
-                    scriptName: script.displayName
-                )
-                awaitRunScriptSettlement(runID: runID, worktreeID: worktree.id) {
-                    continuation.resume(returning: $0)
+        let settlementGate = ScheduledScriptSettlement()
+        let runID = ScheduledScriptRunID()
+        let settlement: RunScriptSettlement = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                settlementGate.install(continuation)
+                guard !Task.isCancelled else {
+                    settlementGate.resolve(.cancelled)
+                    return
                 }
-            case .alreadyStarting:
-                continuation.resume(returning: .launchFailed("\(script.displayName) is already starting in \(worktree.branch)."))
-            case .projectUnavailable:
-                continuation.resume(returning: .launchFailed("The project is no longer available."))
-            case let .refused(_, message):
-                continuation.resume(returning: .launchFailed(message))
+                switch startScriptLaunch(script, in: worktree, presentsLaunchFailure: false) {
+                case .started(let startedRunID):
+                    runID.set(startedRunID)
+                    reference = RunScheduleFiring.RunReference(
+                        worktreeID: worktree.id,
+                        branch: worktree.branch,
+                        runID: startedRunID,
+                        scriptName: script.displayName
+                    )
+                    awaitRunScriptSettlement(runID: startedRunID, worktreeID: worktree.id) {
+                        settlementGate.resolve($0)
+                    }
+                    if Task.isCancelled {
+                        resolveRunScriptSettlement(runID: startedRunID, .cancelled)
+                    }
+                case .alreadyStarting:
+                    settlementGate.resolve(.launchFailed("\(script.displayName) is already starting in \(worktree.branch)."))
+                case .projectUnavailable:
+                    settlementGate.resolve(.launchFailed("The project is no longer available."))
+                case let .refused(_, message):
+                    settlementGate.resolve(.launchFailed(message))
+                }
+            }
+        } onCancel: {
+            settlementGate.resolve(.cancelled)
+            Task { @MainActor [weak self] in
+                guard let self, let runID = runID.value else { return }
+                self.resolveRunScriptSettlement(runID: runID, .cancelled)
             }
         }
         switch settlement {
@@ -869,6 +1035,11 @@ extension AppState {
             )
         case .launchFailed(let message):
             return RunScheduleRunReport(outcome: .launchFailed(message))
+        case .cancelled:
+            return RunScheduleRunReport(
+                outcome: .skipped(reason: "The schedule was removed while its script was running."),
+                runs: reference.map { [$0] } ?? []
+            )
         }
     }
 
@@ -909,17 +1080,26 @@ extension AppState {
         let agentId = composition.agentId ?? defaultAgentID(projectId: project.id, worktreeRoot: worktree.path)
         guard let agentId else {
             let message = "No agent is configured to launch for \(project.name)."
-            if let reportID, let store = try? scheduledAgentReportsStore() {
-                await finishScheduledReport(reportID, state: .failed, reason: message, store: store)
+            var finalizationError: String?
+            if let reportID {
+                finalizationError = await finishScheduledReport(
+                    reportID,
+                    state: .failed,
+                    reason: message
+                )
             }
+            let outcomeReason = finalizationError.map {
+                "\(message) \($0) The report was not committed; the worktree was retained."
+            } ?? message
             reportScheduleFailure(
                 schedule,
-                reason: message,
+                reason: outcomeReason,
                 project: project,
                 worktree: worktree,
-                reportID: reportID
+                reportID: reportID,
+                evenIfCancelled: finalizationError != nil
             )
-            return .launchFailed(message)
+            return .launchFailed(outcomeReason)
         }
         let sessionID = UUID().uuidString
         let promptID = UUID()
@@ -941,10 +1121,23 @@ extension AppState {
         if let reportID {
             guard case .acp(_, let prepared?) = launchSurface else {
                 let reason = "Scheduled report and cleanup require a native ACP session."
-                if let store = try? scheduledAgentReportsStore() {
-                    await finishScheduledReport(reportID, state: .needsAttention, reason: reason, store: store)
-                }
-                return .launchFailed(reason)
+                let finalizationError = await finishScheduledReport(
+                    reportID,
+                    state: .needsAttention,
+                    reason: reason
+                )
+                let outcomeReason = finalizationError.map {
+                    "\(reason) \($0) The report was not committed; the worktree was retained."
+                } ?? reason
+                reportScheduleFailure(
+                    schedule,
+                    reason: outcomeReason,
+                    project: project,
+                    worktree: worktree,
+                    reportID: reportID,
+                    evenIfCancelled: finalizationError != nil
+                )
+                return .launchFailed(outcomeReason)
             }
             do {
                 let store = try scheduledAgentReportsStore()
@@ -960,10 +1153,23 @@ extension AppState {
                 )
             } catch {
                 let reason = "Could not bind the scheduled report to its ACP session: \(error.localizedDescription)"
-                if let store = try? scheduledAgentReportsStore() {
-                    await finishScheduledReport(reportID, state: .failed, reason: reason, store: store)
-                }
-                return .launchFailed(reason)
+                let finalizationError = await finishScheduledReport(
+                    reportID,
+                    state: .failed,
+                    reason: reason
+                )
+                let outcomeReason = finalizationError.map {
+                    "\(reason) \($0) The report was not committed; the worktree was retained."
+                } ?? reason
+                reportScheduleFailure(
+                    schedule,
+                    reason: outcomeReason,
+                    project: project,
+                    worktree: worktree,
+                    reportID: reportID,
+                    evenIfCancelled: finalizationError != nil
+                )
+                return .launchFailed(outcomeReason)
             }
         }
         defer {
@@ -975,30 +1181,56 @@ extension AppState {
             scheduledPromptSettlementTasks.removeValue(forKey: sessionID)?.cancel()
         }
         guard !Task.isCancelled else {
-            if let reportID, let store = try? scheduledAgentReportsStore() {
-                await finishScheduledReport(
+            let reason = "The schedule was removed while its agent was launching."
+            var finalizationError: String?
+            if let reportID {
+                finalizationError = await finishScheduledReport(
                     reportID,
                     state: .interrupted,
-                    reason: "The schedule was removed while its agent was launching.",
-                    store: store
+                    reason: reason
                 )
             }
-            return .skipped(reason: "The schedule was removed while its agent was launching.")
+            if let reportID, let finalizationError {
+                let message = "\(finalizationError) The report was not committed; the worktree was retained."
+                reportScheduleFailure(
+                    schedule,
+                    reason: message,
+                    project: project,
+                    worktree: worktree,
+                    reportID: reportID,
+                    evenIfCancelled: true
+                )
+                return .launchFailed(message)
+            }
+            return .skipped(reason: reason)
         }
         let tab: Tab?
         do {
             tab = try await launchWorktreeSurface(launchSurface, worktree: worktree, project: project)
         } catch {
             if Task.isCancelled || error is CancellationError {
-                if let reportID, let store = try? scheduledAgentReportsStore() {
-                    await finishScheduledReport(
+                let reason = "The schedule was removed while its agent was launching."
+                var finalizationError: String?
+                if let reportID {
+                    finalizationError = await finishScheduledReport(
                         reportID,
                         state: .interrupted,
-                        reason: "The schedule was removed while its agent was launching.",
-                        store: store
+                        reason: reason
                     )
                 }
-                return .skipped(reason: "The schedule was removed while its agent was launching.")
+                if let reportID, let finalizationError {
+                    let message = "\(finalizationError) The report was not committed; the worktree was retained."
+                    reportScheduleFailure(
+                        schedule,
+                        reason: message,
+                        project: project,
+                        worktree: worktree,
+                        reportID: reportID,
+                        evenIfCancelled: true
+                    )
+                    return .launchFailed(message)
+                }
+                return .skipped(reason: reason)
             }
             markWorktreeLaunchFailed(
                 worktree: worktree,
@@ -1006,25 +1238,30 @@ extension AppState {
                 error: error,
                 launchSurface: launchSurface
             )
-            reportScheduleFailure(
-                schedule,
-                reason: error.localizedDescription,
-                project: project,
-                worktree: worktree,
-                reportID: reportID
-            )
-            if let reportID, let store = try? scheduledAgentReportsStore() {
-                await finishScheduledReport(
+            let reason = error.localizedDescription
+            var finalizationError: String?
+            if let reportID {
+                finalizationError = await finishScheduledReport(
                     reportID,
                     state: .failed,
-                    reason: error.localizedDescription,
-                    store: store
+                    reason: reason
                 )
             }
+            let outcomeReason = finalizationError.map {
+                "\(reason) \($0) The report was not committed; the worktree was retained."
+            } ?? reason
+            reportScheduleFailure(
+                schedule,
+                reason: outcomeReason,
+                project: project,
+                worktree: worktree,
+                reportID: reportID,
+                evenIfCancelled: finalizationError != nil
+            )
             runScheduleLogger.error(
                 "Scheduled agent launch failed for \(schedule.id, privacy: .public): \(String(describing: error), privacy: .public)"
             )
-            return .launchFailed(error.localizedDescription)
+            return .launchFailed(outcomeReason)
         }
         let agentName = agentRegistry.agents.first { $0.id == agentId }?.displayName ?? agentId
         if case .acp(_, let prepared?) = launchSurface {
@@ -1068,45 +1305,76 @@ extension AppState {
         reportID: String?
     ) async -> RunScheduleOutcome {
         guard !Task.isCancelled else {
-            if let reportID, let store = try? scheduledAgentReportsStore() {
-                await finishScheduledReport(
+            let reason = "The schedule was removed while its agent was launching."
+            var finalizationError: String?
+            if let reportID {
+                finalizationError = await finishScheduledReport(
                     reportID,
                     state: .interrupted,
-                    reason: "The schedule was removed while its agent was launching.",
-                    store: store
+                    reason: reason
                 )
             }
-            return .skipped(reason: "The schedule was removed while its agent was launching.")
+            if let reportID, let finalizationError {
+                let message = "\(finalizationError) The report was not committed; the worktree was retained."
+                reportScheduleFailure(
+                    schedule,
+                    reason: message,
+                    project: project,
+                    worktree: worktree,
+                    reportID: reportID,
+                    evenIfCancelled: true
+                )
+                return .launchFailed(message)
+            }
+            return .skipped(reason: reason)
         }
         guard let manager = acpManager(forWorktreeId: worktree.id),
               let session = manager.liveSession(for: prepared.sessionID)
         else {
-            let message = "Could not open a chat session for \(agentName) in \(worktree.branch)."
+            let reason = "Could not open a chat session for \(agentName) in \(worktree.branch)."
+            var finalizationError: String?
+            if let reportID {
+                finalizationError = await finishScheduledReport(
+                    reportID,
+                    state: .failed,
+                    reason: reason
+                )
+            }
+            let outcomeReason = finalizationError.map {
+                "\(reason) \($0) The report was not committed; the worktree was retained."
+            } ?? reason
             reportScheduleFailure(
                 schedule,
-                reason: message,
+                reason: "\(outcomeReason)\(reportID.map { " Report: \($0)." } ?? "")",
                 project: project,
                 worktree: worktree,
-                reportID: reportID
+                reportID: reportID,
+                evenIfCancelled: finalizationError != nil
             )
-            if let reportID, let store = try? scheduledAgentReportsStore() {
-                await finishScheduledReport(reportID, state: .failed, reason: message, store: store)
-            }
-            return .launchFailed(message)
+            return .launchFailed(outcomeReason)
         }
         if let reason = session.lastError {
             let message = "\(agentName) could not start in \(worktree.branch): \(reason)"
+            var finalizationError: String?
+            if let reportID {
+                finalizationError = await finishScheduledReport(
+                    reportID,
+                    state: .failed,
+                    reason: message
+                )
+            }
+            let outcomeReason = finalizationError.map {
+                "\(message) \($0) The report was not committed; the worktree was retained."
+            } ?? message
             reportScheduleFailure(
                 schedule,
-                reason: message,
+                reason: "\(outcomeReason)\(reportID.map { " Report: \($0)." } ?? "")",
                 project: project,
                 worktree: worktree,
-                reportID: reportID
+                reportID: reportID,
+                evenIfCancelled: finalizationError != nil
             )
-            if let reportID, let store = try? scheduledAgentReportsStore() {
-                await finishScheduledReport(reportID, state: .failed, reason: message, store: store)
-            }
-            return .launchFailed(message)
+            return .launchFailed(outcomeReason)
         }
         if let modelID = prepared.modelID, session.currentModel != modelID {
             let modelName = acpModelCatalog.models(for: session.agentId).first { $0.id == modelID }?.name ?? modelID
@@ -1126,17 +1394,23 @@ extension AppState {
         }
         guard let settlementTask = scheduledPromptSettlementTasks[prepared.sessionID] else {
             let reason = "The scheduled ACP prompt could not be observed; the worktree was retained."
-            if let store = try? scheduledAgentReportsStore() {
-                await finishScheduledReport(reportID, state: .needsAttention, reason: reason, store: store)
-            }
+            let finalizationError = await finishScheduledReport(
+                reportID,
+                state: .needsAttention,
+                reason: reason
+            )
+            let outcomeReason = finalizationError.map {
+                "\(reason) \($0) The report was not committed; the worktree was retained."
+            } ?? reason
             reportScheduleFailure(
                 schedule,
-                reason: "\(reason) Report: \(reportID).",
+                reason: "\(outcomeReason) Report: \(reportID).",
                 project: project,
                 worktree: worktree,
-                reportID: reportID
+                reportID: reportID,
+                evenIfCancelled: finalizationError != nil
             )
-            return .launchFailed(reason)
+            return .launchFailed(outcomeReason)
         }
         let settlement = await withTaskCancellationHandler {
             await settlementTask.value
@@ -1147,7 +1421,7 @@ extension AppState {
         do {
             store = try scheduledAgentReportsStore()
         } catch {
-            let reason = "Could not reopen the scheduled-agent report store."
+            let reason = "Could not reopen the scheduled-agent report store: \(error.localizedDescription). The report was not committed; the worktree was retained."
             reportScheduleFailure(
                 schedule,
                 reason: "\(reason) Report: \(reportID).",
@@ -1159,46 +1433,85 @@ extension AppState {
         }
         switch settlement {
         case .cancelled:
-            await finishScheduledReport(
+            let reason = "The schedule was removed while the ACP task was running."
+            if let finalizationError = await finishScheduledReport(
                 reportID,
                 state: .interrupted,
-                reason: "The schedule was removed while the ACP task was running.",
+                reason: reason,
                 store: store
-            )
-            return .skipped(reason: "The schedule was removed while the ACP task was running.")
+            ) {
+                let message = "\(finalizationError) The report was not committed; the worktree was retained."
+                reportScheduleFailure(
+                    schedule,
+                    reason: message,
+                    project: project,
+                    worktree: worktree,
+                    reportID: reportID,
+                    evenIfCancelled: true
+                )
+                return .launchFailed(message)
+            }
+            return .skipped(reason: reason)
         case .timedOut:
             let reason = "The ACP task did not finish within four hours; its worktree was retained."
-            await finishScheduledReport(reportID, state: .needsAttention, reason: reason, store: store)
+            let finalizationError = await finishScheduledReport(
+                reportID,
+                state: .needsAttention,
+                reason: reason,
+                store: store
+            )
+            let outcomeReason = finalizationError.map {
+                "\($0) The report was not committed; the worktree was retained."
+            } ?? reason
             reportScheduleFailure(
                 schedule,
-                reason: "\(reason) Report: \(reportID).",
+                reason: "\(outcomeReason) Report: \(reportID).",
                 project: project,
                 worktree: worktree,
-                reportID: reportID
+                reportID: reportID,
+                evenIfCancelled: finalizationError != nil
             )
-            return .launchFailed(reason)
+            return .launchFailed(outcomeReason)
         case .failed(let message):
-            await finishScheduledReport(reportID, state: .failed, reason: message, store: store)
+            let finalizationError = await finishScheduledReport(
+                reportID,
+                state: .failed,
+                reason: message,
+                store: store
+            )
+            let outcomeReason = finalizationError.map {
+                "\($0) The report was not committed; the worktree was retained."
+            } ?? message
             reportScheduleFailure(
                 schedule,
-                reason: "\(message) Worktree retained. Report: \(reportID).",
+                reason: "\(outcomeReason) Worktree retained. Report: \(reportID).",
                 project: project,
                 worktree: worktree,
-                reportID: reportID
+                reportID: reportID,
+                evenIfCancelled: finalizationError != nil
             )
-            return .launchFailed(message)
+            return .launchFailed(outcomeReason)
         case .settled, .settledWithUnrelatedPrompt:
             guard let completion = activeScheduledAgentRunsBySession[prepared.sessionID]?.completion else {
                 let reason = "The ACP task ended without calling schedule_complete; its worktree was retained."
-                await finishScheduledReport(reportID, state: .needsAttention, reason: reason, store: store)
+                let finalizationError = await finishScheduledReport(
+                    reportID,
+                    state: .needsAttention,
+                    reason: reason,
+                    store: store
+                )
+                let outcomeReason = finalizationError.map {
+                    "\($0) The report was not committed; the worktree was retained."
+                } ?? reason
                 reportScheduleFailure(
                     schedule,
-                    reason: "\(reason) Report: \(reportID).",
+                    reason: "\(outcomeReason) Report: \(reportID).",
                     project: project,
                     worktree: worktree,
-                    reportID: reportID
+                    reportID: reportID,
+                    evenIfCancelled: finalizationError != nil
                 )
-                return .launchFailed(reason)
+                return .launchFailed(outcomeReason)
             }
             do {
                 let report = try await store.finishRecordedCompletion(
@@ -1271,7 +1584,7 @@ extension AppState {
                 )
                 return .succeeded
             } catch {
-                let reason = "Could not finalize the scheduled-agent report; the worktree was retained."
+                let reason = "Could not finalize the scheduled-agent report; the report was not committed and the worktree was retained."
                 reportScheduleFailure(
                     schedule,
                     reason: "\(reason) Report: \(reportID).",
