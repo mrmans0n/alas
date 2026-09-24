@@ -53,6 +53,17 @@ struct NativePeerSessionsTests {
               options: options, defaultValue: defaultValue)
     }
 
+    @Test func permissionPresentationKeepsToolNameAlongsideTitle() {
+        let request = RemotePermissionPayload(
+            requestId: 1, toolName: "bash", options: [], title: "Run command?"
+        )
+
+        let presentation = NativePeerPermissionPresentation(request: request)
+
+        #expect(presentation.title == "Run command?")
+        #expect(presentation.toolName == "bash")
+    }
+
     @Test func startSelectionAndStopOwnOneDownstream() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

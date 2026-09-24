@@ -221,6 +221,12 @@ struct StartupRecoveryTests {
             workspacesEnabled: false,
             hasWorkspaceContent: false
         ))
+        #expect(RootWorkspaceVisibilityPolicy.showsWorkspace(
+            hasProjects: false,
+            workspacesEnabled: false,
+            hasWorkspaceContent: false,
+            hasPeerGroups: true
+        ))
     }
 
     @Test func recoveryLaunchSkipsRemoteProjectGitWatchers() {

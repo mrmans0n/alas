@@ -55,6 +55,16 @@ struct NativePeerMessagePresentation {
     }
 }
 
+struct NativePeerPermissionPresentation {
+    let title: String
+    let toolName: String
+
+    init(request: RemotePermissionPayload) {
+        title = request.title ?? "Permission request"
+        toolName = request.toolName
+    }
+}
+
 /// Read and drive the selected peer through forwarded gateway frames only.
 struct NativePeerSessionView: View {
     @Bindable var client: NativePeerSessions
@@ -142,7 +152,11 @@ struct NativePeerSessionView: View {
     private func pendingRequests(_ transcript: NativePeerTranscript) -> some View {
         if let request = transcript.pendingPermission {
             VStack(alignment: .leading, spacing: 8) {
-                Text(request.title ?? "Allow \(request.toolName)?").font(.headline)
+                let presentation = NativePeerPermissionPresentation(request: request)
+                Text(presentation.title).font(.headline)
+                Text(presentation.toolName)
+                    .font(.callout.monospaced())
+                    .textSelection(.enabled)
                 if let reason = request.reason { Text(reason).font(.callout) }
                 HStack {
                     ForEach(request.options, id: \.optionId) { option in
