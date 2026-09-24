@@ -1267,7 +1267,8 @@ struct WorktreeService {
             git diff --no-ext-diff --binary --full-index --submodule=diff HEAD --
             git diff --cached --no-ext-diff --binary --full-index --submodule=diff HEAD --
             git ls-files --others --exclude-standard -z | perl -0ne 'chomp; print "untracked-path-hex=", unpack("H*", $_), "\\n"; system("git","hash-object","--",$_) == 0 or exit 1'
-            git for-each-ref --format='ref=%(refname)=%(objectname)' refs/heads refs/tags refs/notes refs/stash
+            # Bind the scheduled cleanup reachability audit to the staged-delete fingerprint.
+            git for-each-ref --format='ref=%(refname)=%(objectname)' refs/heads refs/tags refs/notes refs/stash refs/remotes
             git rev-list --max-count=50 --reflog --not --remotes 2>/dev/null | while IFS= read -r oid; do printf 'reflog=%s\\n' "$oid"; done
             """
         ], cwd: worktreePath)

@@ -652,6 +652,36 @@ extension WorktreeServiceTests {
         )))
     }
 
+    @Test func worktreeDeleteContentFingerprintTracksSubmoduleRemoteRefChanges() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-remote-ref-fingerprint")
+        defer { fixture.removeFiles() }
+        let submodulePath = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
+        let primaryRef = try await Process.git(
+            ["update-ref", "refs/remotes/origin/main", "HEAD"],
+            cwd: submodulePath
+        )
+        try #require(primaryRef.exitCode == 0)
+        let extraRef = try await Process.git(
+            ["update-ref", "refs/remotes/origin/backup", "HEAD"],
+            cwd: submodulePath
+        )
+        try #require(extraRef.exitCode == 0)
+
+        let before = try await WorktreeService.worktreeDeleteContentFingerprint(
+            worktreePath: fixture.worktree.path
+        )
+        let removeExtraRef = try await Process.git(
+            ["update-ref", "-d", "refs/remotes/origin/backup"],
+            cwd: submodulePath
+        )
+        try #require(removeExtraRef.exitCode == 0)
+        let after = try await WorktreeService.worktreeDeleteContentFingerprint(
+            worktreePath: fixture.worktree.path
+        )
+
+        #expect(after != before)
+    }
+
     @Test func lockedDeletePreflightReasonIsParsedFromPorcelain() {
         let path = URL(fileURLWithPath: "/repos/app-worktree")
         let porcelain = """
