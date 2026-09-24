@@ -29,6 +29,11 @@ private struct SpinnerRepresentable: NSViewRepresentable {
     func updateNSView(_ view: SpinnerAnimationView, context: Context) {
         view.update(lineWidth: lineWidth, duration: duration, color: color)
     }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: SpinnerAnimationView, context: Context) -> CGSize? {
+        let side = min(proposal.width ?? 16, proposal.height ?? 16, 32)
+        return CGSize(width: side, height: side)
+    }
 }
 
 @MainActor
@@ -37,6 +42,8 @@ final class SpinnerAnimationView: NSView {
 
     let spinnerLayer = CAShapeLayer()
     private var animationDuration: Double
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 16, height: 16) }
 
     init(lineWidth: CGFloat, duration: Double, color: NSColor) {
         animationDuration = duration
@@ -57,8 +64,14 @@ final class SpinnerAnimationView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         spinnerLayer.frame = bounds
+        let diameter = max(0, min(bounds.width, bounds.height) - spinnerLayer.lineWidth)
         spinnerLayer.path = CGPath(
-            ellipseIn: bounds.insetBy(dx: spinnerLayer.lineWidth / 2, dy: spinnerLayer.lineWidth / 2),
+            ellipseIn: CGRect(
+                x: bounds.midX - diameter / 2,
+                y: bounds.midY - diameter / 2,
+                width: diameter,
+                height: diameter
+            ),
             transform: nil
         )
         CATransaction.commit()
