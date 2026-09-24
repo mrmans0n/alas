@@ -236,6 +236,37 @@ struct AppStateRunScheduleTests {
         ))
     }
 
+    @Test func appStateReconcilesReportsLoadedFromDisk() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("scheduled-report-recovery-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databasePath = directory.appendingPathComponent("reports.sqlite").path
+        let initialStore = try ScheduledAgentReportStore(path: databasePath)
+        try await initialStore.create(ScheduledAgentReport(
+            id: "interrupted",
+            occurrenceID: "occurrence",
+            scheduleID: "schedule",
+            scheduleName: "Nightly",
+            projectID: "project",
+            projectName: "Alas",
+            agentID: "claude",
+            request: "Review the repository.",
+            startedAt: Date(),
+            cleanupRequested: true
+        ))
+
+        let state = AppState(
+            store: MemoryStore(),
+            scheduledAgentReportDatabasePath: databasePath
+        )
+        await state.scheduledAgentReportsRecoveryTask?.value
+
+        let reopenedStore = try ScheduledAgentReportStore(path: databasePath)
+        let recovered = try #require(try await reopenedStore.report(id: "interrupted"))
+        #expect(recovered.taskState == .interrupted)
+        #expect(recovered.cleanupState == .retained)
+    }
+
     /// Lives here because this is the suite the problem was found in, but the
     /// invariant is repo-wide: most `AlasTests` fixtures do not inject
     /// `fileActionErrorHandler`, and its default ends in `NSAlert.runModal`.

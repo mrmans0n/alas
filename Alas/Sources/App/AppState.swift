@@ -1318,7 +1318,8 @@ final class AppState {
         attentionStore: AttentionStore? = nil,
         attentionNavigationEnvironment: AttentionNavigationEnvironment? = nil,
         harnessAttentionSettleInterval: TimeInterval = 1.5,
-        scheduledAgentReportStore: ScheduledAgentReportStore? = nil
+        scheduledAgentReportStore: ScheduledAgentReportStore? = nil,
+        scheduledAgentReportDatabasePath: String = Paths.scheduledAgentReportsDB.path
     ) {
         self.store = store
         self.workspaceStore = workspaceStore
@@ -1339,9 +1340,9 @@ final class AppState {
         let existingAgentReportsStore: ScheduledAgentReportStore?
         if let scheduledAgentReportStore {
             existingAgentReportsStore = scheduledAgentReportStore
-        } else if FileManager.default.fileExists(atPath: Paths.scheduledAgentReportsDB.path) {
+        } else if FileManager.default.fileExists(atPath: scheduledAgentReportDatabasePath) {
             do {
-                existingAgentReportsStore = try ScheduledAgentReportStore()
+                existingAgentReportsStore = try ScheduledAgentReportStore(path: scheduledAgentReportDatabasePath)
             } catch {
                 existingAgentReportsStore = nil
                 self.persistenceErrorHandler("Scheduled Reports Load Failed", error.localizedDescription)
@@ -1452,7 +1453,7 @@ final class AppState {
             self?.persistenceErrorHandler("Schedules Save Failed", message)
         }
         installRunScheduleRunner()
-        if let reportStore = scheduledAgentReportStore {
+        if let reportStore = existingAgentReportsStore {
             scheduledAgentReportsRecoveryTask = Task { [weak self] in
                 do {
                     _ = try await reportStore.reconcileAfterRestart()
