@@ -75,6 +75,11 @@ struct NativePeerPermissionPresentation {
     func isDefaultAction(_ option: RemotePermissionOption) -> Bool {
         defaultToNo && isDefaultStyled(option)
     }
+
+    func description(for option: RemotePermissionOption) -> String? {
+        guard let description = option.description, !description.isEmpty else { return nil }
+        return description
+    }
 }
 
 /// Read and drive the selected peer through forwarded gateway frames only.
@@ -175,11 +180,7 @@ struct NativePeerSessionView: View {
                         .foregroundStyle(.secondary)
                 }
                 if let reason = request.reason { Text(reason).font(.callout) }
-                HStack {
-                    ForEach(request.options, id: \.optionId) { option in
-                        permissionButton(option, presentation: presentation, request: request)
-                    }
-                }
+                permissionOptions(request, presentation: presentation)
             }
             .requestCard()
         }
@@ -194,6 +195,38 @@ struct NativePeerSessionView: View {
         if let request = transcript.pendingElicitation {
             NativePeerElicitationRequestCard(request: request, canDrive: canDrive, client: client)
                 .id("\(client.selectedSessionId ?? ""):\(request.requestId)")
+        }
+    }
+
+    @ViewBuilder
+    private func permissionOptions(
+        _ request: RemotePermissionPayload,
+        presentation: NativePeerPermissionPresentation
+    ) -> some View {
+        if request.options.contains(where: { presentation.description(for: $0) != nil }) {
+            VStack(alignment: .trailing, spacing: 8) {
+                ForEach(request.options, id: \.optionId) { option in
+                    VStack(alignment: .trailing, spacing: 3) {
+                        HStack {
+                            Spacer()
+                            permissionButton(option, presentation: presentation, request: request)
+                        }
+                        if let description = presentation.description(for: option) {
+                            Text(description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                }
+            }
+        } else {
+            HStack {
+                ForEach(request.options, id: \.optionId) { option in
+                    permissionButton(option, presentation: presentation, request: request)
+                }
+            }
         }
     }
 
@@ -510,6 +543,16 @@ enum NativePeerElicitationForm {
     }
 }
 
+struct NativePeerElicitationOptionPresentation {
+    let title: String
+    let description: String?
+
+    init(option: RemoteElicitationOption) {
+        title = option.title ?? option.value
+        description = option.description.flatMap { $0.isEmpty ? nil : $0 }
+    }
+}
+
 private struct NativePeerQuestionRequestCard: View {
     let request: RemoteQuestionPayload
     let canDrive: Bool
@@ -710,8 +753,9 @@ private struct NativePeerElicitationRequestCard: View {
             switch field.type {
             case "array":
                 ForEach(field.options, id: \.value) { option in
+                    let presentation = NativePeerElicitationOptionPresentation(option: option)
                     let selected = formState.selectedOptions[field.key]?.contains(option.value) == true
-                    Toggle(option.title ?? option.value, isOn: Binding(
+                    Toggle(isOn: Binding(
                         get: { formState.selectedOptions[field.key]?.contains(option.value) == true },
                         set: { isSelected in
                             var options = formState.selectedOptions[field.key] ?? []
@@ -719,25 +763,41 @@ private struct NativePeerElicitationRequestCard: View {
                             else { options.remove(option.value) }
                             formState.selectedOptions[field.key] = options
                         }
-                    ))
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(presentation.title)
+                            if let description = presentation.description {
+                                Text(description).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                     .disabled(!canDrive || (!selected && field.maxItems.map {
                         (formState.selectedOptions[field.key]?.count ?? 0) >= $0
                     } == true))
                 }
             case "string" where !field.options.isEmpty:
                 ForEach(field.options, id: \.value) { option in
+                    let presentation = NativePeerElicitationOptionPresentation(option: option)
                     let selected = formState.selectedOptions[field.key]?.contains(option.value) == true
-                    Button {
-                        var options = formState.selectedOptions[field.key] ?? []
-                        if selected { options.remove(option.value) }
-                        else { options = [option.value] }
-                        formState.selectedOptions[field.key] = options
-                    } label: {
-                        Label(option.title ?? option.value,
-                              systemImage: selected ? "largecircle.fill.circle" : "circle")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Button {
+                            var options = formState.selectedOptions[field.key] ?? []
+                            if selected { options.remove(option.value) }
+                            else { options = [option.value] }
+                            formState.selectedOptions[field.key] = options
+                        } label: {
+                            Label(presentation.title,
+                                  systemImage: selected ? "largecircle.fill.circle" : "circle")
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canDrive)
+                        if let description = presentation.description {
+                            Text(description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 22)
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!canDrive)
                 }
             case "boolean":
                 Toggle(field.title, isOn: Binding(

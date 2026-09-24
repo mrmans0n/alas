@@ -221,7 +221,11 @@ final class NativePeerSessions {
             deliveryError = "Prompt was not delivered. Your draft was kept."
             return
         }
-        transcript?.apply(message)
+        let needsResubscribe = transcript?.apply(message) == true
+        if needsResubscribe, let downstream,
+           !federation.route(.subscribe(sessionId: selectedSessionId), from: downstream) {
+            transcript?.resetResubscribeRequest()
+        }
         if let pendingPrompt,
            let confirmed = transcript?.messages.first(where: {
                $0.kind == "user" && $0.text == pendingPrompt && !knownUserMessageIDs.contains($0.stableId)

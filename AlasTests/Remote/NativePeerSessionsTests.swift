@@ -82,6 +82,19 @@ struct NativePeerSessionsTests {
         #expect(!presentation.isDefaultAction(allowOnce))
     }
 
+    @Test func permissionPresentationIncludesOptionDescriptions() {
+        let described = RemotePermissionOption(
+            optionId: "allow-once", name: "Allow", kind: "allow_once", description: "For this request only."
+        )
+        let empty = RemotePermissionOption(optionId: "reject", name: "Reject", kind: "reject_once", description: "")
+        let presentation = NativePeerPermissionPresentation(request: RemotePermissionPayload(
+            requestId: 1, toolName: "bash", options: [described, empty]
+        ))
+
+        #expect(presentation.description(for: described) == "For this request only.")
+        #expect(presentation.description(for: empty) == nil)
+    }
+
     @Test func startSelectionAndStopOwnOneDownstream() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
@@ -105,6 +118,42 @@ struct NativePeerSessionsTests {
         #expect(!federation.isPollingPeerLists)
         #expect(client.snapshot.groups.isEmpty)
         #expect(client.selectedSessionId == nil)
+    }
+
+    @Test func transcriptRevisionGapResubscribesUntilANewSnapshotArrives() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        let subscriptionCount: () -> Int = {
+            links.sent(to: "B").filter { if case .subscribe = $0 { true } else { false } }.count
+        }
+        let initialSubscriptions = subscriptionCount()
+
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
+                                          messages: [], firstIndex: 0, totalCount: 0, epoch: 3, revision: 8), from: "B")
+        links.receive(.transcriptDelta(sessionId: "s", streamingState: "streaming", canDrive: false,
+                                       upserts: [], epoch: 3, revision: 10), from: "B")
+        let subscriptionsAfterGap = subscriptionCount()
+        links.receive(.transcriptDelta(sessionId: "s", streamingState: "idle", canDrive: false,
+                                       upserts: [], epoch: 3, revision: 11), from: "B")
+        #expect(subscriptionsAfterGap == initialSubscriptions + 1)
+        #expect(subscriptionCount() == subscriptionsAfterGap)
+        #expect(client.transcript?.canDrive == false)
+
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
+                                          messages: [], firstIndex: 0, totalCount: 0, epoch: 3, revision: 10), from: "B")
+        let row = RemoteWireMessage(stableId: "m", kind: "agent", text: "Recovered", json: nil, index: 0)
+        links.receive(.transcriptDelta(sessionId: "s", streamingState: "idle", canDrive: true,
+                                       upserts: [row], epoch: 3, revision: 11), from: "B")
+        #expect(subscriptionCount() == subscriptionsAfterGap)
+        #expect(client.transcript?.messages.map(\.stableId) == ["m"])
+        #expect(client.transcript?.canDrive == true)
     }
 
     @Test func offlineRemovesRowsAndAttentionButPreservesDraftUntilForgotten() {
@@ -280,6 +329,20 @@ struct NativePeerSessionsTests {
         )
 
         #expect(content == ["scopes": .strings(["read", "write"])])
+    }
+
+    @Test func elicitationOptionPresentationIncludesDescriptions() {
+        let described = NativePeerElicitationOptionPresentation(option: .init(
+            value: "write", title: "Write access", description: "Allows changes to files."
+        ))
+        let untitled = NativePeerElicitationOptionPresentation(option: .init(
+            value: "read", title: nil, description: ""
+        ))
+
+        #expect(described.title == "Write access")
+        #expect(described.description == "Allows changes to files.")
+        #expect(untitled.title == "read")
+        #expect(untitled.description == nil)
     }
 
     @Test func planPreviewIncludesPlanTodosAndPhases() {

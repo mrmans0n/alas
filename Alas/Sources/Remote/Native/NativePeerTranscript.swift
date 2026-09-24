@@ -14,6 +14,7 @@ struct NativePeerTranscript {
     private(set) var firstIndex = 0
     private(set) var totalCount = 0
     private(set) var isClosed = false
+    private(set) var needsResubscribe = false
     private(set) var pendingPermission: RemotePermissionPayload?
     private(set) var pendingQuestion: RemoteQuestionPayload?
     private(set) var pendingPlan: RemotePlanPayload?
@@ -36,12 +37,13 @@ struct NativePeerTranscript {
         clearPendingRequests()
     }
 
-    mutating func apply(_ message: RemoteServerMessage) {
-        guard message.sessionId == sessionId else { return }
+    @discardableResult
+    mutating func apply(_ message: RemoteServerMessage) -> Bool {
+        guard message.sessionId == sessionId else { return false }
         switch message {
         case .transcriptSnapshot(_, let state, let drive, let rows,
                                  let first, let total, let incomingEpoch, let incomingRevision):
-            guard epoch == nil || incomingEpoch >= epoch! else { return }
+            guard epoch == nil || incomingEpoch >= epoch! else { return false }
             if epoch != incomingEpoch { clearPendingRequests() }
             epoch = incomingEpoch
             revision = incomingRevision
@@ -50,24 +52,34 @@ struct NativePeerTranscript {
             firstIndex = first
             totalCount = total
             isClosed = false
+            needsResubscribe = false
             messagesByStableID = Dictionary(rows.map { ($0.stableId, $0) }, uniquingKeysWith: { _, newer in newer })
+            return false
 
         case .transcriptDelta(_, let state, let drive, let upserts, let incomingEpoch, let incomingRevision):
+            guard !isClosed else { return false }
             guard let epoch, let revision,
-                  incomingEpoch == epoch, incomingRevision == revision + 1,
-                  !isClosed else { return }
+                  incomingEpoch == epoch, incomingRevision == revision + 1 else {
+                guard !needsResubscribe else { return false }
+                needsResubscribe = true
+                driveAllowed = false
+                return true
+            }
             self.revision = incomingRevision
             streamingState = state
             driveAllowed = drive
+            needsResubscribe = false
             for row in upserts { messagesByStableID[row.stableId] = row }
             if let last = upserts.map(\.index).max() { totalCount = max(totalCount, last + 1) }
+            return false
 
         case .transcriptPage(_, let incomingEpoch, let first, let rows):
-            guard let epoch, incomingEpoch == epoch, first < firstIndex, !isClosed else { return }
+            guard let epoch, incomingEpoch == epoch, first < firstIndex, !isClosed else { return false }
             for row in rows where row.index < firstIndex {
                 messagesByStableID[row.stableId] = row
             }
             firstIndex = first
+            return false
 
         case .permissionRequest(_, let payload): pendingPermission = payload
         case .permissionResolved(_, let requestId):
@@ -85,6 +97,11 @@ struct NativePeerTranscript {
             markUnavailable()
         default: break
         }
+        return false
+    }
+
+    mutating func resetResubscribeRequest() {
+        needsResubscribe = false
     }
 
     private mutating func clearPendingRequests() {
