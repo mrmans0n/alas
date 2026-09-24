@@ -3,6 +3,7 @@ import SwiftUI
 struct DraftCommitTabView: View {
     let worktreePath: URL
     let worktreeId: String
+    let projectId: String
     let tabState: DraftCommitTabState
     let executionTarget: AgentExecutionTarget
     @Bindable var appState: AppState
@@ -55,7 +56,7 @@ struct DraftCommitTabView: View {
     }
 
     private var hasStaged: Bool {
-        guard let rps = appState.rightPaneStore.activeState(worktreeId: worktreeId) else { return false }
+        guard let rps = appState.rightPaneStore.activeState(worktreeId: worktreeId, projectId: projectId) else { return false }
         return rps.changes.contains { $0.stage == .staged }
     }
     private var checkpointLeaseActive: Bool { Self.checkpointLeaseActiveForRecovery(rightPane: rightPane) }
@@ -68,7 +69,7 @@ struct DraftCommitTabView: View {
         return tabState.publishCheckpoint
     }
     private var mutationsDisabled: Bool { checkpointLeaseActive || presentation.mutationsDisabled }
-    private var rightPane: RightPaneState? { appState.rightPaneStore.activeState(worktreeId: worktreeId) }
+    private var rightPane: RightPaneState? { appState.rightPaneStore.activeState(worktreeId: worktreeId, projectId: projectId) }
 
     static func checkpointLeaseActiveForRecovery(rightPane: RightPaneState?) -> Bool {
         rightPane?.checkpointMutationsDisabled ?? true
@@ -136,7 +137,7 @@ struct DraftCommitTabView: View {
     /// SwiftUI tracks reads of `@Observable` properties, so this recomputes
     /// automatically when `rps.changes` mutates.
     private var stagedKey: String {
-        guard let rps = appState.rightPaneStore.activeState(worktreeId: worktreeId) else {
+        guard let rps = appState.rightPaneStore.activeState(worktreeId: worktreeId, projectId: projectId) else {
             return "no-rps"
         }
         let staged = rps.changes
@@ -152,7 +153,7 @@ struct DraftCommitTabView: View {
     /// needing a tab reopen). The value itself doesn't matter, only that
     /// it shifts when HEAD does.
     private var amendProbeKey: String {
-        appState.rightPaneStore.activeState(worktreeId: worktreeId)?.currentHeadSHA ?? ""
+        appState.rightPaneStore.activeState(worktreeId: worktreeId, projectId: projectId)?.currentHeadSHA ?? ""
     }
 
     // Overlays mutation actions onto a loaded session. Built once per load
@@ -443,7 +444,7 @@ struct DraftCommitTabView: View {
         let amendSnapshot = amend
         let wt = worktreePath
         let prompt = appState.config.changes.prompt
-        let baseBranch = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) ?? "HEAD"
+        let baseBranch = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId, projectId: projectId) ?? "HEAD"
 
         localBusy = true
         error = nil
@@ -558,7 +559,7 @@ struct DraftCommitTabView: View {
                 }
                 try await git.unstage(worktreePath: worktreePath, files: paths)
                 await loadStagedSession()
-                await appState.rightPaneStore.refresh(worktreeId: worktreeId)
+                await appState.rightPaneStore.refresh(worktreeId: worktreeId, projectId: projectId)
             } catch {
                 self.error = (error as NSError).localizedDescription
             }
@@ -575,7 +576,7 @@ struct DraftCommitTabView: View {
             do {
                 try await git.unstageHunk(worktreePath: worktreePath, path: path, hunk: hunk)
                 await loadStagedSession()
-                await appState.rightPaneStore.refresh(worktreeId: worktreeId)
+                await appState.rightPaneStore.refresh(worktreeId: worktreeId, projectId: projectId)
             } catch {
                 self.error = (error as NSError).localizedDescription
             }
@@ -609,7 +610,7 @@ struct DraftCommitTabView: View {
                 let shortSha = String(newSha.prefix(7))
                 let title = "\(shortSha) \(subjectSnapshot)"
                 let baseRef: String
-                if let ref = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) {
+                if let ref = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId, projectId: projectId) {
                     baseRef = ref
                 } else {
                     // No active comparison — try the new commit's first parent. If the
@@ -629,7 +630,7 @@ struct DraftCommitTabView: View {
                     newSha: newSha,
                     title: title
                 )
-                await appState.rightPaneStore.refresh(worktreeId: worktreeId)
+                await appState.rightPaneStore.refresh(worktreeId: worktreeId, projectId: projectId)
                 await refreshCanAmend()
             } catch {
                 self.error = (error as NSError).localizedDescription
@@ -658,7 +659,7 @@ struct DraftCommitTabView: View {
         } else {
             ggTarget = nil
         }
-        let comparisonBase = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId)
+        let comparisonBase = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId, projectId: projectId)
         error = nil
         var operations = CommitPublishOperations.live(
             worktreePath: worktreePath, reviewLoop: rps.reviewLoop, comparisonBase: comparisonBase,

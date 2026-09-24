@@ -1261,7 +1261,7 @@ extension AppState {
         case .repo:
             openFile(
                 relativePath: "\(RunScriptStore.repoScriptsRelativeDir)/\(script.fileName)",
-                worktreeId: worktree.id
+                worktree: worktree
             )
         case .global:
             _ = tabs.openExternalEditor(
@@ -1333,7 +1333,7 @@ extension AppState {
         case .repo:
             openFile(
                 relativePath: "\(RunScriptStore.repoScriptsRelativeDir)/\(url.lastPathComponent)",
-                worktreeId: worktree.id
+                worktree: worktree
             )
         case .global:
             _ = tabs.openExternalEditor(

@@ -283,8 +283,8 @@ extension AppState {
             }
         for entry in attentionWorktrees {
             let owner = AttentionWorktreeIdentity.make(worktree: entry.worktree, project: entry.project)
-            if rightPaneStore.isActiveState(worktreeId: entry.worktree.id),
-               let pane = rightPaneStore.activeState(worktreeId: entry.worktree.id),
+            if rightPaneStore.isActiveState(for: entry.worktree),
+               let pane = rightPaneStore.activeState(for: entry.worktree),
                pane.hasCurrentAttentionSnapshot {
                 observations += rightPaneAttentionObservations(snapshot: pane.attentionSnapshot, owner: owner, display: entry.resolved.display)
             }
@@ -335,9 +335,11 @@ extension AppState {
         return sessionIDs
     }
 
-    func observeRightPaneAttention(worktreeID: String, snapshot: RightPaneAttentionSnapshot, at date: Date = Date()) {
+    func observeRightPaneAttention(worktreeID: String, projectId: String? = nil, snapshot: RightPaneAttentionSnapshot, at date: Date = Date()) {
         refreshAttentionAliases()
-        guard let entry = attentionWorktrees.first(where: { $0.worktree.id == worktreeID }),
+        guard let entry = attentionWorktrees.first(where: {
+            $0.worktree.id == worktreeID && (projectId == nil || $0.worktree.projectId == projectId)
+        }),
               let context = attentionContext(for: entry.worktree) else { return }
         let observations = rightPaneAttentionObservations(snapshot: snapshot, owner: context.owner, display: context.display)
         let activeKeys = Set(observations.compactMap(\.activeSignal).map(\.sourceKey))

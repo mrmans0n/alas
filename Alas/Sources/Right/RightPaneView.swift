@@ -13,6 +13,7 @@ struct RightPaneView: View {
     @Environment(\.theme) var theme
     @State private var rps: RightPaneState?
     @State private var agentManager: ACPSessionManager?
+    @State private var agentManagerWorktreeKey: String?
     @State private var agentSidebarRevision = 0
     /// Last rendered width of the rail-hosted body, so its collapse
     /// transition can lag the content by a fraction of it.
@@ -40,7 +41,11 @@ struct RightPaneView: View {
         // Resolve without activating: the cached state (if any) gives us
         // something to render immediately, and `.task` handles the mutating
         // activation + refresh off the view-update path.
-        _rps = State(initialValue: state.rightPaneStore.activeState(worktreeId: worktree.id))
+        _rps = State(initialValue: state.rightPaneStore.activeState(for: worktree))
+    }
+
+    private var worktreeKey: String {
+        "\(worktree.projectId)\u{0000}\(worktree.id)"
     }
 
     var body: some View {
@@ -51,17 +56,22 @@ struct RightPaneView: View {
                 choice: state.config.sidebarMaterial,
                 backgroundOpacity: override.backgroundOpacity
             )
-            if let rps = rps, rps.worktree.id == worktree.id {
+            if let rps = rps,
+               rps.worktree.id == worktree.id,
+               rps.worktree.projectId == worktree.projectId {
                 presentation(rps: rps)
                 .sidebarChromeTheme(textContrast: override.textContrast)
                 .onReceive(NotificationCenter.default.publisher(for: .alasSelectRightPaneTab)) { notification in
                     handleTabShortcut(notification, rps: rps)
                 }
-                .task(id: worktree.id) {
+                .task(id: worktreeKey) {
                     agentManager = state.acpManager(for: worktree)
+                    agentManagerWorktreeKey = worktreeKey
                 }
                 .background {
-                    if let agentManager, agentManager.worktreeId == worktree.id {
+                    if let agentManager,
+                       agentManagerWorktreeKey == worktreeKey,
+                       agentManager.worktreeId == worktree.id {
                         AgentSidebarManagerObserver(manager: agentManager) {
                             agentSidebarRevision &+= 1
                         }
@@ -80,8 +90,8 @@ struct RightPaneView: View {
         // expected escape hatch — switching away and back should surface current
         // state. Activation happens inside the task, not during body evaluation,
         // so `RightPaneStore` mutations don't run inside a view update.
-        .task(id: "\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(state.config.worktrees.baseBranch)\u{0000}\(state.config.changes.comparisonMode.rawValue)") {
-            if rps?.worktree.id != worktree.id {
+        .task(id: "\(worktreeKey)\u{0000}\(worktree.branch)\u{0000}\(state.config.worktrees.baseBranch)\u{0000}\(state.config.changes.comparisonMode.rawValue)") {
+            if rps?.worktree.id != worktree.id || rps?.worktree.projectId != worktree.projectId {
                 rps = nil
             }
             let activated = state.rightPaneStore.state(
@@ -93,10 +103,10 @@ struct RightPaneView: View {
             await activated.refresh(forceReviewLoopRemote: true)
         }
         .onAppear {
-            state.rightPaneStore.prepareForVisiblePane(worktreeId: worktree.id)
+            state.rightPaneStore.prepareForVisiblePane(for: worktree)
         }
-        .onChange(of: worktree.id) { _, worktreeId in
-            state.rightPaneStore.consumePendingRevealForVisiblePane(worktreeId: worktreeId)
+        .onChange(of: worktreeKey) { _, _ in
+            state.rightPaneStore.consumePendingRevealForVisiblePane(for: worktree)
         }
         // When the right pane is hidden or unmounted (no worktree selected),
         // stop the active state's filesystem watcher and 5-min sync timer
@@ -140,7 +150,7 @@ struct RightPaneView: View {
                     ),
                     onSelectFile: onSelectTreeFile,
                     onFileHistory: { node in
-                        state.openFileHistory(relativePath: node.path, worktreeId: worktree.id)
+                        state.openFileHistory(relativePath: node.path, worktreeId: worktree.id, projectId: worktree.projectId)
                     },
                     onCreateFile: { path in
                         state.newFile(in: worktree.id, directoryPath: path) {
@@ -193,9 +203,11 @@ struct RightPaneView: View {
                 }
             case .agent:
                 Group {
-                    if let agentManager, agentManager.worktreeId == worktree.id {
+                    if let agentManager,
+                       agentManagerWorktreeKey == worktreeKey,
+                       agentManager.worktreeId == worktree.id {
                         AgentWorktreeTabView(state: state, worktree: worktree, manager: agentManager)
-                            .id(worktree.id)
+                            .id(worktreeKey)
                     } else {
                         RightPaneLoadingSkeletonView(activeTab: .agent)
                     }

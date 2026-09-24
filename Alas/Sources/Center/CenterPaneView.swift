@@ -462,6 +462,7 @@ struct CenterPaneView: View {
                                                                  : s.relativePath) {
                             MarkdownTabView(worktreePath: worktree.path,
                                             worktreeId: worktree.id,
+                                            projectId: worktree.projectId,
                                             tabId: s.id,
                                             relativePath: s.relativePath,
                                             externalAbsolutePath: s.externalAbsolutePath,
@@ -519,10 +520,10 @@ struct CenterPaneView: View {
                             codeFontSize: CGFloat(state.config.code.fontSize),
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) },
                             onOpenFile: openAvailable
-                                ? { state.openFile(relativePath: s.relativePath, worktreeId: worktree.id) }
+                            ? { state.openFile(relativePath: s.relativePath, worktree: worktree) }
                                 : nil,
                             onRequestDiscardFile: {
-                                let rps = state.rightPaneStore.activeState(worktreeId: worktree.id)
+                                let rps = state.rightPaneStore.activeState(for: worktree)
                                     ?? activateRightPaneStateForCenterTab()
                                 rps.requestDiscardFile(path: s.relativePath)
                             }
@@ -541,7 +542,7 @@ struct CenterPaneView: View {
                         )
                         .id(s.id)
                     case .checkpointDiff(let s):
-                        let checkpointRightPaneState = state.rightPaneStore.activeState(worktreeId: worktree.id)
+                        let checkpointRightPaneState = state.rightPaneStore.activeState(for: worktree)
                             ?? activateRightPaneStateForCenterTab()
                         CheckpointDiffTabView(
                             state: s,
@@ -557,6 +558,7 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             tabState: s,
                             worktreeId: worktree.id,
+                            projectId: worktree.projectId,
                             appState: state,
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
@@ -565,6 +567,7 @@ struct CenterPaneView: View {
                         CommitEditorTabView(
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
+                            projectId: worktree.projectId,
                             tabState: s,
                             executionTarget: composerExecutionTarget,
                             appState: state,
@@ -575,6 +578,7 @@ struct CenterPaneView: View {
                         DraftCommitTabView(
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
+                            projectId: worktree.projectId,
                             tabState: draftState,
                             executionTarget: composerExecutionTarget,
                             appState: state,
@@ -588,6 +592,7 @@ struct CenterPaneView: View {
                         DraftReviewRequestTabView(
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
+                            projectId: worktree.projectId,
                             tabState: draftState,
                             executionTarget: composerExecutionTarget,
                             appState: state,
@@ -704,7 +709,7 @@ struct CenterPaneView: View {
                             .id(s.id)
                     case .ggSplitCommit(let s):
                         let capabilities = GGAvailability.shared.capabilities
-                        if let rightPaneState = state.rightPaneStore.activeState(worktreeId: worktree.id) {
+                        if let rightPaneState = state.rightPaneStore.activeState(for: worktree) {
                             let hasBlockingGitOperation = rightPaneState.mergeOp.current != nil
                             let ggActionState = rightPaneState.ggActionState
                             let targetEntry = s.targetEntry(in: rightPaneState.ggStack)
@@ -850,7 +855,7 @@ struct CenterPaneView: View {
     }
 
     private var rightPaneStartupRecoveryReady: Bool {
-        let rightPaneState = state.rightPaneStore.activeState(worktreeId: worktree.id)
+        let rightPaneState = state.rightPaneStore.activeState(for: worktree)
         return Self.shouldCompleteStartupRecoveryForRightPane(
             isRightPaneVisible: effectiveRightPaneVisible,
             hasLoadedSnapshot: rightPaneState?.hasLoadedSnapshot ?? false,
@@ -905,7 +910,7 @@ struct CenterPaneView: View {
         )
         return Self.startupRecoveryActiveKey(
             activeTab: composition.activeTab,
-            rightPaneState: state.rightPaneStore.activeState(worktreeId: worktree.id)
+            rightPaneState: state.rightPaneStore.activeState(for: worktree)
         )
     }
 
@@ -922,7 +927,7 @@ struct CenterPaneView: View {
     }
 
     private var rightPaneActivationKey: String {
-        "\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(state.config.worktrees.baseBranch)\u{0000}\(state.config.changes.comparisonMode.rawValue)"
+        "\(worktree.projectId)\u{0000}\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(state.config.worktrees.baseBranch)\u{0000}\(state.config.changes.comparisonMode.rawValue)"
     }
 
     @discardableResult

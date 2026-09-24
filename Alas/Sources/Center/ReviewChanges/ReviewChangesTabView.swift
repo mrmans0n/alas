@@ -144,7 +144,7 @@ struct ReviewChangesTabView: View {
         ReviewChangesLoadKey.build(
             tabID: tabState.id,
             worktreePath: worktree.path,
-            rightPaneState: appState.rightPaneStore.activeState(worktreeId: worktree.id)
+            rightPaneState: appState.rightPaneStore.activeState(for: worktree)
         )
     }
 

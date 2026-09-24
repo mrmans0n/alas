@@ -79,7 +79,7 @@ struct EditorTabView: View {
                     if isLast {
                         return .file(BreadcrumbFileMenu(
                             onViewAtHEAD: externalAbsolutePath == nil
-                                ? { appState.openFileSnapshotAtHEAD(relativePath: relativePath, worktreeId: worktreeId) }
+                                ? { appState.openFileSnapshotAtHEAD(relativePath: relativePath, worktreeId: worktreeId, projectId: worktree.projectId) }
                                 : nil,
                             onCompareWithHEAD: externalAbsolutePath == nil
                                 ? { appState.openDiffTab(
@@ -90,7 +90,7 @@ struct EditorTabView: View {
                                   ) }
                                 : nil,
                             onFileHistory: externalAbsolutePath == nil
-                                ? { appState.openFileHistory(relativePath: relativePath, worktreeId: worktreeId) }
+                                ? { appState.openFileHistory(relativePath: relativePath, worktreeId: worktreeId, projectId: worktree.projectId) }
                                 : nil,
                             onCopyRelativePath: externalAbsolutePath == nil ? { Clipboard.copy(relativePath) } : nil,
                             onCopyFullPath: { Clipboard.copy(absoluteFilePath) },

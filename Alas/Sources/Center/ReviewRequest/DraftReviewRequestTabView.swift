@@ -4,6 +4,7 @@ import SwiftUI
 struct DraftReviewRequestTabView: View {
     let worktreePath: URL
     let worktreeId: String
+    let projectId: String
     let tabState: DraftReviewRequestTabState
     let executionTarget: AgentExecutionTarget
     @Bindable var appState: AppState
@@ -49,7 +50,7 @@ struct DraftReviewRequestTabView: View {
     private enum Field: Hashable { case title, body }
 
     private var snapshot: ReviewLoopSnapshot? {
-        appState.rightPaneStore.activeState(worktreeId: worktreeId)?.reviewLoop.snapshot
+        appState.rightPaneStore.activeState(worktreeId: worktreeId, projectId: projectId)?.reviewLoop.snapshot
     }
 
     private var matchingSnapshot: ReviewLoopSnapshot? {
@@ -507,7 +508,7 @@ struct DraftReviewRequestTabView: View {
                         worktreePath: worktreePath,
                         relativePath: path
                     ) { path in
-                        appState.openFile(relativePath: path, worktreeId: worktreeId)
+                        appState.openFile(relativePath: path, worktreeId: worktreeId, projectId: projectId)
                     }
                 },
                 contextProviderForPath: { path, originalPath in
@@ -651,7 +652,7 @@ struct DraftReviewRequestTabView: View {
             defer { busy = false }
             do {
                 let url = try await appState.rightPaneStore
-                    .activeState(worktreeId: worktreeId)?
+                    .activeState(worktreeId: worktreeId, projectId: projectId)?
                     .reviewLoop
                     .createReviewRequest(
                         snapshot: snapshot,

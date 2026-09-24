@@ -4,6 +4,7 @@ import AppKit
 struct MarkdownTabView: View {
     let worktreePath: URL
     let worktreeId: String
+    let projectId: String
     let tabId: TabID
     let relativePath: String
     let externalAbsolutePath: String?
@@ -367,6 +368,7 @@ struct MarkdownTabView: View {
                 let relative = String(candidate.path.dropFirst(worktreeRootPath.count + 1))
                 appState.openMarkdownLink(
                     worktreeId: worktreeId,
+                    projectId: projectId,
                     worktreeRoot: worktreePath,
                     relativePath: relative
                 )

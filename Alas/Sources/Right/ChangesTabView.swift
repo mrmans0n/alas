@@ -912,7 +912,7 @@ struct ChangesTabView: View {
             onDiscardAll: { rps.requestDiscardAll() },
             onDiscardFolder: { rps.requestDiscardFolder(path: $0) },
             onOpenFile: { file in
-                appState.openFile(relativePath: file.path, worktreeId: rps.worktree.id)
+                appState.openFile(relativePath: file.path, worktree: rps.worktree)
             },
             onCopyRelative: { Clipboard.copy($0.path) },
             onCopyFull: { file in
@@ -922,7 +922,8 @@ struct ChangesTabView: View {
             onViewAtHEAD: { file in
                 appState.openFileSnapshotAtHEAD(
                     relativePath: file.renameFrom ?? file.path,
-                    worktreeId: rps.worktree.id
+                    worktreeId: rps.worktree.id,
+                    projectId: rps.worktree.projectId
                 )
             },
             onCompareWithHEAD: { file in
@@ -936,7 +937,8 @@ struct ChangesTabView: View {
             onFileHistory: { file in
                 appState.openFileHistory(
                     relativePath: file.renameFrom ?? file.path,
-                    worktreeId: rps.worktree.id
+                    worktreeId: rps.worktree.id,
+                    projectId: rps.worktree.projectId
                 )
             },
             onDiscardFile: { rps.requestDiscardFile(path: $0.path) },

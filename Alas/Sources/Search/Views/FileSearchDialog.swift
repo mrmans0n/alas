@@ -141,6 +141,7 @@ struct FileSearchDialog: View {
         appState.openFile(
             relativePath: hit.relativePath,
             worktreeId: hit.worktreeId,
+            projectId: hit.projectId,
             revealLine: hit.revealLine,
             revealCharacter: hit.revealCharacter
         )
@@ -210,7 +211,7 @@ struct FileSearchDialog: View {
             close()
             return
         }
-        appState.openFile(relativePath: r.relativePath, worktreeId: r.worktreeId)
+        appState.openFile(relativePath: r.relativePath, worktreeId: r.worktreeId, projectId: r.projectId)
         close()
     }
 

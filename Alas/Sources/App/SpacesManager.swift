@@ -150,6 +150,7 @@ final class SpacesManager {
         } else {
             spaces[index].projectIds.removeAll { $0 == projectId }
         }
+        clearSavedSelectionOwnerIfRemoved(projectId, fromSpaceAt: index)
         return true
     }
 
@@ -160,7 +161,15 @@ final class SpacesManager {
             } else {
                 spaces[index].projectIds.removeAll { $0 == projectId }
             }
+            clearSavedSelectionOwnerIfRemoved(projectId, fromSpaceAt: index)
         }
+    }
+
+    private func clearSavedSelectionOwnerIfRemoved(_ projectId: String, fromSpaceAt index: Int) {
+        guard !spaces[index].projectIds.contains(projectId),
+              spaces[index].lastSelectedWorktreeProjectId == projectId
+        else { return }
+        spaces[index].lastSelectedWorktreeProjectId = nil
     }
 
     func membershipCount(forProject projectId: String) -> Int {
@@ -262,6 +271,11 @@ final class SpacesManager {
     func pruneMissingProjects(validProjectIds: Set<String>) -> Bool {
         var changed = false
         for index in spaces.indices {
+            if let selectedProjectId = spaces[index].lastSelectedWorktreeProjectId,
+               !validProjectIds.contains(selectedProjectId) {
+                spaces[index].lastSelectedWorktreeProjectId = nil
+                changed = true
+            }
             if let members = spaces[index].members {
                 let pruned = members.filter { reference in
                     guard case .project(let projectID) = reference else { return true }

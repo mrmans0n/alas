@@ -10,12 +10,27 @@ struct RightPaneGGStackSnapshot: Equatable {
 @Observable
 @MainActor
 final class RightPaneStore {
-    private var states: [String: RightPaneState] = [:]
+    private struct WorktreeKey: Hashable {
+        let worktreeId: String
+        let projectId: String
+
+        init(_ worktree: Worktree) {
+            worktreeId = worktree.id
+            projectId = worktree.projectId
+        }
+
+        init(worktreeId: String, projectId: String) {
+            self.worktreeId = worktreeId
+            self.projectId = projectId
+        }
+    }
+
+    private var states: [WorktreeKey: RightPaneState] = [:]
 
     /// Id of the state currently being surfaced in the UI. Only that state
     /// runs its background sync timer + watcher; others sit cached but
     /// quiescent until they're requested again.
-    private var activeId: String? = nil
+    private var activeKey: WorktreeKey? = nil
 
     /// Weak back-reference used to close diff tabs after a successful discard.
     /// Set by `AppState` after both objects exist. Weak so the store doesn't
@@ -25,9 +40,9 @@ final class RightPaneStore {
     @ObservationIgnored
     var reviewSnapshotDidChange: ((String, String, ReviewLoopSnapshot) -> Void)?
     @ObservationIgnored
-    var attentionSnapshotDidChange: ((String, RightPaneAttentionSnapshot) -> Void)?
+    var attentionSnapshotDidChange: ((Worktree, RightPaneAttentionSnapshot) -> Void)?
     @ObservationIgnored
-    var worktreeDidChange: ((String) -> Void)?
+    var worktreeDidChange: ((Worktree) -> Void)?
 
     private let git: GitService
 
@@ -41,7 +56,7 @@ final class RightPaneStore {
         let pane = state(for: worktree, baseBranch: appState.config.worktrees.baseBranch,
                          comparisonMode: appState.config.changes.comparisonMode)
         guard await pane.refresh() else { return false }
-        guard activeId == worktree.id,
+        guard activeKey == WorktreeKey(worktree),
               appState.isAttentionNavigationCurrent(generation: navigationGeneration, owner: context.owner, worktreeID: worktree.id) else { return false }
         let revealTarget = Self.refreshedAttentionTarget(for: target, pane: pane, owner: context.owner, display: context.display)
         guard pane.revealAttentionTarget(revealTarget) else { return false }
@@ -108,11 +123,12 @@ final class RightPaneStore {
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "right-pane-store")
 
     func state(for worktree: Worktree, baseBranch: String, comparisonMode: AppConfig.Changes.ChangesComparisonMode) -> RightPaneState {
+        let key = WorktreeKey(worktree)
         let id = worktree.id
-        let wasCached = states[id] != nil
+        let wasCached = states[key] != nil
         let result: RightPaneState
         let rawDefault = Self.effectiveBaseBranch(worktree: worktree, baseBranch: baseBranch)
-        if let existing = states[id] {
+        if let existing = states[key] {
             let comparisonModeChanged = existing.comparisonMode != comparisonMode
 
             // Settings change: the configured base branch changed. Reset to the
@@ -189,7 +205,7 @@ final class RightPaneStore {
             }
             new.openConflict = { [weak self] path in
                 guard let app = self?.appState,
-                      self?.states[id]?.changes.contains(where: { $0.path == path && $0.conflict != nil }) == true else { return }
+                      self?.states[key]?.changes.contains(where: { $0.path == path && $0.conflict != nil }) == true else { return }
                 let title = (path as NSString).lastPathComponent
                 let tab = app.tabs.openMergeConflict(
                     worktreeId: id,
@@ -238,10 +254,10 @@ final class RightPaneStore {
                 )
             }
             new.attentionSnapshotDidChange = { [weak self] snapshot in
-                self?.attentionSnapshotDidChange?(worktree.id, snapshot)
+                self?.attentionSnapshotDidChange?(worktree, snapshot)
             }
             new.worktreeDidChange = { [weak self] in
-                self?.worktreeDidChange?(worktree.id)
+                self?.worktreeDidChange?(worktree)
             }
 
             if shouldDeferInitialRefresh {
@@ -258,7 +274,7 @@ final class RightPaneStore {
                         // Even if we didn't change the base branch, kick off
                         // the deferred initial refresh now that verification
                         // is done, but only if this state is still active.
-                        guard self?.activeId == id else { return }
+                        guard self?.activeKey == key else { return }
                         state.start()
                         return
                     }
@@ -268,25 +284,25 @@ final class RightPaneStore {
                     state.markSnapshotUnknown()
                     state.baseBranch = confirmed
                     state.behindBase = nil
-                    guard self?.activeId == id else { return }
+                    guard self?.activeKey == key else { return }
                     state.start()
                     await state.refresh()
                     await state.refreshSyncStatus()
                 }
             }
 
-            states[id] = new
+            states[key] = new
             result = new
         }
-        if activeId != id {
-            if let prev = activeId, let prevState = states[prev] {
+        if activeKey != key {
+            if let prev = activeKey, let prevState = states[prev] {
                 prevState.endAttentionReveal()
                 prevState.stop()
             }
             if wasCached, result.currentBranch != worktree.branch {
                 result.seedGGContext(branch: worktree.branch)
             }
-            activeId = id
+            activeKey = key
             // Don't start the state's background work here if we deferred it
             // above to wait for the base-branch probe; the probe's task will
             // call start() once it knows the real comparison ref.
@@ -337,13 +353,22 @@ final class RightPaneStore {
     /// merge-conflict editor after `Mark resolved` so the Conflicts section
     /// reflects the staged resolution immediately without waiting for the
     /// FSEvents debouncer.
-    func refresh(worktreeId: String, forceReviewLoopRemote: Bool = false) async {
-        guard let state = states[worktreeId] else { return }
+    func refresh(worktreeId: String, projectId: String? = nil, forceReviewLoopRemote: Bool = false) async {
+        guard let state = cachedState(worktreeId: worktreeId, projectId: projectId) else { return }
+        await state.refresh(forceReviewLoopRemote: forceReviewLoopRemote)
+    }
+
+    func refresh(for worktree: Worktree, forceReviewLoopRemote: Bool = false) async {
+        guard let state = states[WorktreeKey(worktree)] else { return }
         await state.refresh(forceReviewLoopRemote: forceReviewLoopRemote)
     }
 
     func invalidateSnapshot(worktreeId: String) {
-        states[worktreeId]?.markSnapshotUnknown()
+        cachedState(worktreeId: worktreeId)?.markSnapshotUnknown()
+    }
+
+    func invalidateSnapshot(for worktree: Worktree) {
+        states[WorktreeKey(worktree)]?.markSnapshotUnknown()
     }
 
     func observeCompletedRemoteReviewRefresh(
@@ -353,8 +378,8 @@ final class RightPaneStore {
         reviewSnapshotDidChange?(worktreeId, snapshot.local.baseBranch, snapshot)
     }
 
-    func reviewSnapshot(worktreeId: String, baseBranch: String) -> ReviewLoopSnapshot? {
-        guard let state = states[worktreeId],
+    func reviewSnapshot(worktreeId: String, projectId: String? = nil, baseBranch: String) -> ReviewLoopSnapshot? {
+        guard let state = cachedState(worktreeId: worktreeId, projectId: projectId),
               state.reviewLoop.currentBaseBranch == baseBranch
         else { return nil }
         return state.reviewLoop.snapshot
@@ -413,7 +438,7 @@ final class RightPaneStore {
     ) -> Task<Void, Never>? {
         var activeRefresh: Task<Void, Never>?
         for state in affectedStates {
-            let shouldRefresh = state.worktree.id == activeId
+            let shouldRefresh = WorktreeKey(state.worktree) == activeKey
             if let task = state.invalidateGGPresentation(startingRefresh: shouldRefresh) {
                 activeRefresh = task
             }
@@ -429,12 +454,21 @@ final class RightPaneStore {
     /// changes. Returns nil when that worktree has no cached pane state.
     @discardableResult
     func reevaluateGGGate(worktreeId: String) -> Task<Void, Never>? {
-        states[worktreeId]?.reevaluateGGGate()
+        cachedState(worktreeId: worktreeId)?.reevaluateGGGate()
     }
 
-    func commitEditorComparisonRef(worktreeId: String) -> String? {
-        guard let state = states[worktreeId] else { return nil }
+    @discardableResult
+    func reevaluateGGGate(for worktree: Worktree) -> Task<Void, Never>? {
+        states[WorktreeKey(worktree)]?.reevaluateGGGate()
+    }
+
+    func commitEditorComparisonRef(worktreeId: String, projectId: String? = nil) -> String? {
+        guard let state = cachedState(worktreeId: worktreeId, projectId: projectId) else { return nil }
         return state.comparisonRef
+    }
+
+    func commitEditorComparisonRef(for worktree: Worktree) -> String? {
+        states[WorktreeKey(worktree)]?.comparisonRef
     }
 
     /// Stops the currently-active state's background work. Call when the
@@ -442,18 +476,25 @@ final class RightPaneStore {
     /// watcher and the 5-min sync timer don't keep running with no
     /// consumer.
     func deactivate() {
-        if let prev = activeId, let prevState = states[prev] {
+        if let prev = activeKey, let prevState = states[prev] {
             prevState.endAttentionReveal()
             prevState.stop()
         }
-        activeId = nil
+        activeKey = nil
     }
 
     /// Selects the initial tab when the right pane is mounted. Center-pane
     /// tabs can activate this store while the sidebar is hidden, so visibility
-    /// is tracked by the view lifecycle rather than `activeId`.
+    /// is tracked by the view lifecycle rather than `activeKey`.
     func prepareForVisiblePane(worktreeId: String) {
-        guard let state = states[worktreeId] else { return }
+        guard let state = cachedState(worktreeId: worktreeId) else { return }
+        state.completeInitialTabSelection()
+        guard !state.consumePendingRevealForPaneMount() else { return }
+        state.activeTab = .changes
+    }
+
+    func prepareForVisiblePane(for worktree: Worktree) {
+        guard let state = states[WorktreeKey(worktree)] else { return }
         state.completeInitialTabSelection()
         guard !state.consumePendingRevealForPaneMount() else { return }
         state.activeTab = .changes
@@ -462,7 +503,13 @@ final class RightPaneStore {
     /// Clears a reveal intent when its worktree replaces an already-visible
     /// pane. Unlike mounting a pane, switching worktrees must not reset tabs.
     func consumePendingRevealForVisiblePane(worktreeId: String) {
-        guard let state = states[worktreeId] else { return }
+        guard let state = cachedState(worktreeId: worktreeId) else { return }
+        state.completeInitialTabSelection()
+        _ = state.consumePendingRevealForPaneMount()
+    }
+
+    func consumePendingRevealForVisiblePane(for worktree: Worktree) {
+        guard let state = states[WorktreeKey(worktree)] else { return }
         state.completeInitialTabSelection()
         _ = state.consumePendingRevealForPaneMount()
     }
@@ -470,19 +517,40 @@ final class RightPaneStore {
     /// The cached `RightPaneState` for `worktreeId`, if one exists.
     /// Does NOT create a new state — returns nil if the worktree isn't active.
     /// Used by `DraftCommitTabView` to observe staged-set changes.
-    func activeState(worktreeId: String) -> RightPaneState? {
-        states[worktreeId]
+    func activeState(worktreeId: String, projectId: String? = nil) -> RightPaneState? {
+        cachedState(worktreeId: worktreeId, projectId: projectId)
     }
 
-    func isActiveState(worktreeId: String) -> Bool {
-        activeId == worktreeId
+    func activeState(for worktree: Worktree) -> RightPaneState? {
+        states[WorktreeKey(worktree)]
     }
 
-    func activeState(worktreeId: String, baseBranch: String) -> RightPaneState? {
-        guard let state = states[worktreeId],
+    func isActiveState(worktreeId: String, projectId: String? = nil) -> Bool {
+        guard activeKey?.worktreeId == worktreeId else { return false }
+        return projectId == nil || activeKey?.projectId == projectId
+    }
+
+    func isActiveState(for worktree: Worktree) -> Bool {
+        activeKey == WorktreeKey(worktree)
+    }
+
+    func activeState(worktreeId: String, projectId: String? = nil, baseBranch: String) -> RightPaneState? {
+        guard let state = cachedState(worktreeId: worktreeId, projectId: projectId),
               state.reviewLoop.currentBaseBranch == baseBranch
         else { return nil }
         return state
+    }
+
+    private func cachedState(worktreeId: String, projectId: String? = nil) -> RightPaneState? {
+        if let projectId {
+            return states[WorktreeKey(worktreeId: worktreeId, projectId: projectId)]
+        }
+        if let activeKey, activeKey.worktreeId == worktreeId {
+            return states[activeKey]
+        }
+        let matches = states.filter { $0.key.worktreeId == worktreeId }
+        guard matches.count == 1 else { return nil }
+        return matches.first?.value
     }
 
     /// The first cached state currently reporting a merge failure, if any.
@@ -518,9 +586,25 @@ final class RightPaneStore {
         effectiveContext: GGWorktreeContext,
         liveBranch: String
     ) -> RightPaneGGStackSnapshot? {
-        guard let state = states.values.first(where: { $0.worktree.path.path == path }) else {
-            return nil
-        }
+        let matchingStates = states.values.filter { $0.worktree.path.path == path }
+        guard matchingStates.count == 1, let state = matchingStates.first else { return nil }
+        return ggStackSnapshot(state: state, effectiveContext: effectiveContext, liveBranch: liveBranch)
+    }
+
+    func ggStackSnapshot(
+        for worktree: Worktree,
+        effectiveContext: GGWorktreeContext,
+        liveBranch: String
+    ) -> RightPaneGGStackSnapshot? {
+        guard let state = states[WorktreeKey(worktree)] else { return nil }
+        return ggStackSnapshot(state: state, effectiveContext: effectiveContext, liveBranch: liveBranch)
+    }
+
+    private func ggStackSnapshot(
+        state: RightPaneState,
+        effectiveContext: GGWorktreeContext,
+        liveBranch: String
+    ) -> RightPaneGGStackSnapshot {
         let loadState: GGStackLoadState
         let recoveredDetachedContext = Self.canUseRecoveredDetachedContext(
             state: state,
@@ -551,7 +635,25 @@ final class RightPaneStore {
         branchContext: GGWorktreeContext,
         liveBranch: String
     ) -> GGWorktreeContext {
-        guard let state = states.values.first(where: { $0.worktree.path.path == path }),
+        let matchingStates = states.values.filter { $0.worktree.path.path == path }
+        guard matchingStates.count == 1,
+              let state = matchingStates.first,
+              Self.canUseRecoveredDetachedContext(
+                  state: state,
+                  branchContext: branchContext,
+                  liveBranch: liveBranch
+              ),
+              state.ggStackCommitsKey == state.currentGGStackCommitsKey
+        else { return branchContext }
+        return state.ggContext
+    }
+
+    func effectiveGGContext(
+        for worktree: Worktree,
+        branchContext: GGWorktreeContext,
+        liveBranch: String
+    ) -> GGWorktreeContext {
+        guard let state = states[WorktreeKey(worktree)],
               Self.canUseRecoveredDetachedContext(
                   state: state,
                   branchContext: branchContext,
@@ -583,9 +685,17 @@ final class RightPaneStore {
     /// Latest branch observed by the active pane state. Quiescent cached panes
     /// have no watcher and must not override a newer topology snapshot.
     func currentBranchForWorktreePath(_ path: String) -> String? {
-        guard let activeId,
-              let state = states[activeId],
+        guard let activeKey,
+              let state = states[activeKey],
               state.worktree.path.path == path
+        else { return nil }
+        return state.currentBranch
+    }
+
+    func currentBranch(for worktree: Worktree) -> String? {
+        guard let activeKey,
+              activeKey == WorktreeKey(worktree),
+              let state = states[activeKey]
         else { return nil }
         return state.currentBranch
     }

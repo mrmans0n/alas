@@ -3,6 +3,7 @@ import SwiftUI
 struct CommitEditorTabView: View {
     let worktreePath: URL
     let worktreeId: String
+    let projectId: String
     let tabState: CommitEditorTabState
     let executionTarget: AgentExecutionTarget
     @Bindable var appState: AppState
@@ -251,7 +252,7 @@ struct CommitEditorTabView: View {
                             wrapLines: diffPreferences.wrapLines,
                             showWhitespace: diffPreferences.showWhitespace,
                             onOpenFile: openAvailable
-                                ? { appState.openFile(relativePath: path, worktreeId: worktreeId) }
+                                ? { appState.openFile(relativePath: path, worktreeId: worktreeId, projectId: projectId) }
                                 : nil,
                             onDropHunk: { pendingDropHunk = PendingCommitHunkDrop(sha: tabState.currentSha, path: path, hunk: $0) },
                             dropHunkEnabled: { file, hunk in canDropHunk(file: file, hunk: hunk) }
@@ -415,7 +416,7 @@ struct CommitEditorTabView: View {
         }
         let targetSha = tabState.currentSha
         let tabId = tabState.id
-        let baseRef = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) ?? tabState.baseRef
+        let baseRef = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId, projectId: projectId) ?? tabState.baseRef
 
         busy = true
         error = nil
@@ -459,7 +460,7 @@ struct CommitEditorTabView: View {
                     currentSha: result.currentSha,
                     title: tabTitle(from: refreshedDetails)
                 )
-                await appState.rightPaneStore.refresh(worktreeId: worktreeId)
+                await appState.rightPaneStore.refresh(worktreeId: worktreeId, projectId: projectId)
             } catch {
                 self.error = (error as NSError).localizedDescription
             }

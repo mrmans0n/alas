@@ -207,7 +207,7 @@ struct SidebarView: View {
                                     },
                                     commitQuery: { wt in
                                         guard !state.projectsManager.isMain(wt, in: project) else { return nil }
-                                        let pane = state.rightPaneStore.activeState(worktreeId: wt.id)
+                                        let pane = state.rightPaneStore.activeState(for: wt)
                                         let override = pane.flatMap { pane in
                                             pane.userOverrodeBaseBranch
                                                 && pane.lastConfigBaseBranch == state.config.worktrees.baseBranch

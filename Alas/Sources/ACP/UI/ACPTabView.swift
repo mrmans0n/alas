@@ -423,7 +423,7 @@ private struct ACPSessionView: View {
                 state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
             },
             onOpenTranscriptLink: { url in
-                switch state.transcriptLinkRoute(url, worktreeId: worktree.id) {
+                switch state.transcriptLinkRoute(url, worktreeId: worktree.id, projectId: worktree.projectId) {
                 case .opened:
                     return true
                 case .systemOpen(let fileURL):
@@ -562,7 +562,7 @@ private struct ACPSessionView: View {
                 }
             },
             onRestoreCheckpoint: { checkpointID in
-                guard let pane = state.rightPaneStore.activeState(worktreeId: worktree.id) else {
+                guard let pane = state.rightPaneStore.activeState(for: worktree) else {
                     session.lastError = "Checkpoint restore is unavailable for this worktree."
                     return
                 }

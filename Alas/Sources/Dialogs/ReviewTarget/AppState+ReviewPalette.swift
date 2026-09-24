@@ -126,7 +126,7 @@ extension AppState {
         guard let projectId else { return [:] }
         var resolutions: [String: (baseBranch: String, resolution: GitService.BaseResolution)] = [:]
         for worktree in projectsManager.visibleWorktrees(projectId: projectId) {
-            guard let state = rightPaneStore.activeState(worktreeId: worktree.id) else { continue }
+            guard let state = rightPaneStore.activeState(for: worktree) else { continue }
             resolutions[worktree.id] = (
                 state.baseBranch,
                 GitService.BaseResolution.forCommits(

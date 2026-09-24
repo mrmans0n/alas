@@ -5,10 +5,10 @@ import Foundation
 @MainActor
 @Suite(.serialized)
 struct RightPaneStoreBaseBranchTests {
-    private func makeWorktree(at path: URL, branch: String) -> Worktree {
+    private func makeWorktree(at path: URL, branch: String, projectId: String = "test-project") -> Worktree {
         Worktree(
             id: Worktree.makeId(path: path),
-            projectId: "test-project",
+            projectId: projectId,
             name: branch,
             branch: branch,
             path: path,
@@ -109,6 +109,22 @@ struct RightPaneStoreBaseBranchTests {
         let reactivated = store.state(for: first, baseBranch: "main", comparisonMode: .manual)
 
         #expect(reactivated.activeTab == .files)
+    }
+
+    @Test func samePathWorktreesInDifferentProjectsHaveDistinctPaneState() async throws {
+        let repo = try await makeRepoOnMain()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let first = makeWorktree(at: repo, branch: "feature/first", projectId: "project-a")
+        let second = makeWorktree(at: repo, branch: "feature/second", projectId: "project-b")
+        let store = RightPaneStore(git: GitService())
+
+        let firstState = store.state(for: first, baseBranch: "main", comparisonMode: .manual)
+        firstState.activeTab = .files
+        let secondState = store.state(for: second, baseBranch: "main", comparisonMode: .manual)
+
+        #expect(secondState !== firstState)
+        #expect(secondState.worktree.projectId == second.projectId)
+        #expect(store.activeState(for: second) === secondState)
     }
 
     @Test func pendingFileRevealKeepsFilesTabWhenPaneAppears() async throws {

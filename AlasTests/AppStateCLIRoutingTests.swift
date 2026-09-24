@@ -541,6 +541,23 @@ struct AppStateCLIRoutingTests {
         await managerB.flushAllPersistence()
     }
 
+    @Test func openingFileBySelectedSharedWorktreeIdPreservesItsProjectOwner() throws {
+        let sharedID = "/tmp/alas-open-file-shared-\(UUID().uuidString)"
+        let orchestrationPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-open-file-orchestration-\(UUID().uuidString).sqlite")
+        let persistence = ACPOrchestrationPersistence(path: orchestrationPath.path)
+        let (state, _, projectB, _, worktreeB) = makeStateWithSharedPathWorktrees(
+            id: sharedID,
+            orchestrationPersistence: persistence
+        )
+
+        state.focusGlobalWorktree(id: sharedID, projectId: projectB.id)
+        state.openFile(relativePath: "README.md", worktreeId: sharedID)
+
+        #expect(state.selectedWorktreeProjectId == projectB.id)
+        #expect(state.projectsManager.worktrees(projectId: projectB.id).contains(worktreeB))
+    }
+
     @Test func persistedDelegatedSessionLookupEnumeratesSamePathProjects() async throws {
         let sharedID = "/tmp/alas-recovery-lookup-shared-\(UUID().uuidString)"
         let orchestrationPath = FileManager.default.temporaryDirectory

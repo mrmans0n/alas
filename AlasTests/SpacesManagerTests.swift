@@ -113,6 +113,47 @@ struct SpacesManagerTests {
         #expect(manager.space(id: manager.activeSpaceId)?.projectIds == ["p2"])
     }
 
+    @Test func removingProjectFromSpaceClearsItsSavedSelectionOwner() {
+        let manager = SpacesManager.migrating(projects: [project("p1"), project("p2")], now: date)
+        let firstSpace = manager.activeSpaceId
+        let secondSpace = manager.addSpace(name: "Side", emoji: "🧪", now: date)
+        manager.addProject("p1", toSpace: secondSpace)
+        manager.setLastSelectedWorktree("shared-worktree", projectId: "p1", forSpace: firstSpace)
+
+        let removed = manager.removeProject("p1", fromSpace: firstSpace)
+
+        #expect(removed)
+        #expect(manager.space(id: firstSpace)?.lastSelectedWorktreeId == "shared-worktree")
+        #expect(manager.space(id: firstSpace)?.lastSelectedWorktreeProjectId == nil)
+    }
+
+    @Test func removingProjectEverywhereClearsItsSavedSelectionOwnerInEverySpace() {
+        let manager = SpacesManager.migrating(projects: [project("p1"), project("p2")], now: date)
+        let firstSpace = manager.activeSpaceId
+        let secondSpace = manager.addSpace(name: "Side", emoji: "🧪", now: date)
+        manager.addProject("p1", toSpace: secondSpace)
+        manager.setLastSelectedWorktree("first-shared", projectId: "p1", forSpace: firstSpace)
+        manager.setLastSelectedWorktree("second-shared", projectId: "p1", forSpace: secondSpace)
+
+        manager.removeProjectEverywhere("p1")
+
+        #expect(manager.space(id: firstSpace)?.lastSelectedWorktreeId == "first-shared")
+        #expect(manager.space(id: firstSpace)?.lastSelectedWorktreeProjectId == nil)
+        #expect(manager.space(id: secondSpace)?.lastSelectedWorktreeId == "second-shared")
+        #expect(manager.space(id: secondSpace)?.lastSelectedWorktreeProjectId == nil)
+    }
+
+    @Test func pruningMissingProjectsClearsInvalidSavedSelectionOwner() {
+        let manager = SpacesManager.migrating(projects: [project("p1"), project("p2")], now: date)
+        manager.setLastSelectedWorktree("shared-worktree", projectId: "removed-project")
+
+        let changed = manager.pruneMissingProjects(validProjectIds: ["p1", "p2"])
+
+        #expect(changed)
+        #expect(manager.activeSpace?.lastSelectedWorktreeId == "shared-worktree")
+        #expect(manager.activeSpace?.lastSelectedWorktreeProjectId == nil)
+    }
+
     @Test func deletingActiveSpaceSwitchesToNeighborAndKeepsProjects() {
         let manager = SpacesManager.migrating(projects: [project("p1")], now: date)
         let second = manager.addSpace(name: "Side", emoji: "🧪", now: date)

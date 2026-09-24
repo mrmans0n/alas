@@ -421,7 +421,7 @@ struct RootView: View {
 
     private func openOrFocusDiff(worktree: Worktree, path: String, staged: Bool, originalPath: String?) {
         if ImageFileType.isSupported(relativePath: path) {
-            state.openFile(relativePath: path, worktreeId: worktree.id)
+            state.openFile(relativePath: path, worktree: worktree)
             return
         }
 
@@ -435,7 +435,7 @@ struct RootView: View {
     }
 
     private func openOrFocusEditor(worktree: Worktree, path: String) {
-        state.openFile(relativePath: path, worktreeId: worktree.id)
+        state.openFile(relativePath: path, worktree: worktree)
     }
 
     private func openOrFocusCommit(worktree: Worktree, commit: CommitInfo) {

@@ -142,6 +142,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
                         openFileAction(
                             appState: appState,
                             worktreeID: target.worktreeID,
+                            projectId: worktree.projectId,
                             worktreePath: target.repositoryPath,
                             relativePath: path
                         )
@@ -158,7 +159,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
                     base: base, head: head, threeDot: false,
                     files: files,
                     openFileForPath: { path in
-                        openFileAction(appState: appState, worktreeID: target.worktreeID, worktreePath: target.repositoryPath, relativePath: path)
+                        openFileAction(appState: appState, worktreeID: target.worktreeID, projectId: worktree.projectId, worktreePath: target.repositoryPath, relativePath: path)
                     }
                 )
             },
@@ -172,7 +173,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
                     base: base, head: head, threeDot: true,
                     files: files,
                     openFileForPath: { path in
-                        openFileAction(appState: appState, worktreeID: target.worktreeID, worktreePath: target.repositoryPath, relativePath: path)
+                        openFileAction(appState: appState, worktreeID: target.worktreeID, projectId: worktree.projectId, worktreePath: target.repositoryPath, relativePath: path)
                     }
                 )
             },
@@ -234,6 +235,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
                         openFileAction(
                             appState: appState,
                             worktreeID: target.worktreeID,
+                            projectId: worktree.projectId,
                             worktreePath: target.repositoryPath,
                             relativePath: path
                         )
@@ -314,6 +316,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
     private static func openFileAction(
         appState: AppState,
         worktreeID: String,
+        projectId: String,
         worktreePath: URL,
         relativePath: String
     ) -> (() -> Void)? {
@@ -322,7 +325,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
         }
         return {
             Task { @MainActor in
-                appState.openFile(relativePath: relativePath, worktreeId: worktreeID)
+                appState.openFile(relativePath: relativePath, worktreeId: worktreeID, projectId: projectId)
             }
         }
     }

@@ -422,14 +422,12 @@ final class AppState {
     }
 
     private func checkpointPaneForAdmission(for worktree: Worktree) -> RightPaneState {
-        if let cached = rightPaneStore.activeState(worktreeId: worktree.id),
-           cached.worktree.projectId == worktree.projectId {
+        if let cached = rightPaneStore.activeState(for: worktree) {
             return cached
         }
-        // The visible pane cache is path-keyed. Another project may have
-        // claimed this id; validate this project's journal in an isolated
-        // state rather than admitting (or blocking) its writers using that
-        // other project's checkpoint state.
+        // Another project's pane may have the same path-derived id. Validate
+        // this project's journal in an isolated state rather than admitting
+        // (or blocking) its writers using that other project's checkpoint.
         return RightPaneState(worktree: worktree, baseBranch: config.worktrees.baseBranch)
     }
 
@@ -1456,11 +1454,11 @@ final class AppState {
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
         // refreshAll() returns.
         rightPaneStore.appState = self
-        rightPaneStore.attentionSnapshotDidChange = { [weak self] worktreeID, snapshot in
-            self?.observeRightPaneAttention(worktreeID: worktreeID, snapshot: snapshot)
+        rightPaneStore.attentionSnapshotDidChange = { [weak self] worktree, snapshot in
+            self?.observeRightPaneAttention(worktreeID: worktree.id, projectId: worktree.projectId, snapshot: snapshot)
         }
-        rightPaneStore.worktreeDidChange = { [weak self] worktreeID in
-            self?.rescanWorktreeStatus(worktreeId: worktreeID)
+        rightPaneStore.worktreeDidChange = { [weak self] worktree in
+            self?.rescanWorktreeStatus(worktreeId: worktree.id, projectId: worktree.projectId)
         }
         RemoteHostStatusStore.shared.onStatusTransition = { [weak self] host, isDisconnected, date in
             guard let self else { return }
@@ -1941,9 +1939,9 @@ final class AppState {
         ggSidebarRefresh.refresh(projects: targets)
     }
 
-    private func rescanWorktreeStatus(worktreeId: String) {
+    private func rescanWorktreeStatus(worktreeId: String, projectId: String? = nil) {
         refreshGGSidebar()
-        guard let resolved = projectAndWorktree(withWorktreeId: worktreeId) else { return }
+        guard let resolved = projectAndWorktree(withWorktreeId: worktreeId, inProjectId: projectId) else { return }
         if resolved.project.host != nil {
             enqueueRemoteWorktreeStatusRescan(project: resolved.project, worktree: resolved.worktree)
         } else {
@@ -2386,6 +2384,7 @@ final class AppState {
         openFile(
             relativePath: relativePath,
             worktreeId: worktreeId,
+            projectId: selectedWorktreeProjectId,
             revealLine: revealLine,
             revealEndLine: revealEndLine,
             revealCharacter: revealCharacter
@@ -3655,7 +3654,7 @@ final class AppState {
         var stacks: [String: GGStack] = [:]
         for member in checkout.members where member.availability == .available {
             guard let worktreeID = workspaceMemberWorktreeIDs(checkout)[member.id],
-                  let stack = rightPaneStore.activeState(worktreeId: worktreeID)?.ggStack
+                  let stack = rightPaneStore.activeState(worktreeId: worktreeID, projectId: member.projectID)?.ggStack
             else { continue }
             let qualifiedWorktreeID = WorkspaceReviewSessionIdentity.worktreeID(
                 projectID: member.projectID,
@@ -4232,7 +4231,6 @@ final class AppState {
         reconciledCreateFailureCompletionClaims.remove(
             WorktreeOperationKey(projectId: projectId, worktreeId: optimisticId)
         )
-        rightPaneStore.invalidateSnapshot(worktreeId: optimisticId)
         let optimistic = Worktree(
             id: optimisticId,
             projectId: projectId,
@@ -4242,6 +4240,7 @@ final class AppState {
             status: .clean,
             lastActivity: Date()
         )
+        rightPaneStore.invalidateSnapshot(for: optimistic)
         if launchSurface != .delegated,
            let containing = spacesManager.containingSpaceId(forProjectId: projectId),
            containing != spacesManager.activeSpaceId {
@@ -4254,7 +4253,7 @@ final class AppState {
             mode: ggWorktreeMode
         )
         projectsManager.setOperationState(forWorktreeId: optimistic.id, projectId: projectId, state: .creating)
-        rightPaneStore.reevaluateGGGate(worktreeId: optimistic.id)
+        rightPaneStore.reevaluateGGGate(for: optimistic)
         if launchSurface != .delegated {
             selectWorktree(id: optimistic.id, projectId: projectId)
         }
@@ -4326,7 +4325,7 @@ final class AppState {
                     if ggWorktreeMode != .inherit {
                         saveProjects()
                     }
-                    rightPaneStore.reevaluateGGGate(worktreeId: newWorktree.id)
+                    rightPaneStore.reevaluateGGGate(for: newWorktree)
                     projectsManager.setOperationState(forWorktreeId: optimistic.id, projectId: projectId, state: nil)
                     if wasHidden {
                         saveProjects()
@@ -5508,7 +5507,7 @@ final class AppState {
         guard let worktree = worktree(withId: worktreeID) else { return }
         let currentGGID = followedStackEntryGGID(worktreeID: worktreeID, tabID: tabID)
         let displayedSHA = displayedCommitSHA(worktreeID: worktreeID, tabID: tabID)
-        if let rightPaneState = rightPaneStore.activeState(worktreeId: worktreeID),
+        if let rightPaneState = rightPaneStore.activeState(for: worktree),
            rightPaneState.ggStackLoadState == .loaded,
            rightPaneState.ggStackCommitsKey == rightPaneState.currentGGStackCommitsKey,
            let stack = rightPaneState.ggStack {
@@ -5572,11 +5571,11 @@ final class AppState {
     /// with an active gg stack; fall back to deriving the context directly
     /// in that case rather than reporting unsupported.
     func ggFollowSupported(worktreeID: String) -> Bool {
-        if let context = rightPaneStore.activeState(worktreeId: worktreeID)?.ggContext {
+        guard let worktree = worktree(withId: worktreeID) else { return false }
+        if let context = rightPaneStore.activeState(for: worktree)?.ggContext {
             return context.isActive
         }
-        guard let worktree = worktree(withId: worktreeID),
-              let project = projectsManager.projects.first(where: { $0.id == worktree.projectId })
+        guard let project = projectsManager.projects.first(where: { $0.id == worktree.projectId })
         else { return false }
         return ggWorktreeContext(
             project: project,
@@ -8232,7 +8231,7 @@ final class AppState {
                 else { return }
                 do {
                     try await Self.createRemoteEmptyFile(host: host, worktreeRoot: worktree.path, relativePath: relativePath)
-                    self.openFile(relativePath: relativePath, worktreeId: worktreeId)
+                    self.openFile(relativePath: relativePath, worktree: worktree)
                 } catch {
                     self.showFileActionError(title: "New File Failed", message: error.localizedDescription)
                 }
@@ -8258,7 +8257,7 @@ final class AppState {
                 }
                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try Data().write(to: url, options: .withoutOverwriting)
-                self.openFile(relativePath: relativePath, worktreeId: worktreeId)
+                self.openFile(relativePath: relativePath, worktree: worktree)
             } catch {
                 self.showFileActionError(title: "New File Failed", message: error.localizedDescription)
             }
@@ -8286,7 +8285,7 @@ final class AppState {
                         worktreeRoot: worktree.path,
                         relativePath: relativePath
                     )
-                    self.openFile(relativePath: relativePath, worktreeId: worktreeId)
+                    self.openFile(relativePath: relativePath, worktree: worktree)
                     onCreated()
                 } catch {
                     self.showFileActionError(title: "New File Failed", message: error.localizedDescription)
@@ -8302,7 +8301,7 @@ final class AppState {
             else { return }
             do {
                 try Data().write(to: url, options: .withoutOverwriting)
-                self.openFile(relativePath: relativePath, worktreeId: worktreeId)
+                self.openFile(relativePath: relativePath, worktree: worktree)
                 onCreated()
             } catch {
                 self.showFileActionError(title: "New File Failed", message: error.localizedDescription)
@@ -9835,11 +9834,12 @@ final class AppState {
     func openFile(
         relativePath: String,
         worktreeId: String,
+        projectId: String? = nil,
         revealLine: Int? = nil,
         revealEndLine: Int? = nil,
         revealCharacter: Int? = nil
     ) {
-        guard let worktree = worktree(withId: worktreeId) else { return }
+        guard let worktree = worktreeForFileOpen(worktreeId, projectId: projectId) else { return }
         openFile(
             relativePath: relativePath,
             worktree: worktree,
@@ -9847,6 +9847,24 @@ final class AppState {
             revealEndLine: revealEndLine,
             revealCharacter: revealCharacter
         )
+    }
+
+    private func worktreeForFileOpen(_ worktreeId: String, projectId: String?) -> Worktree? {
+        let selectedProjectId = selectedWorktreeId == worktreeId ? selectedWorktreeProjectId : nil
+        let ownerProjectId = projectId ?? selectedProjectId
+        if let ownerProjectId {
+            if let selected = workspaceSelectedWorktree(matching: worktreeId),
+               selected.worktree.projectId == ownerProjectId {
+                return selected.worktree
+            }
+            return worktree(withId: worktreeId, inProjectId: ownerProjectId)
+        }
+
+        let matches = projectsManager.projects.flatMap { project in
+            projectsManager.visibleWorktrees(projectId: project.id).filter { $0.id == worktreeId }
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
     }
 
     func openFile(
@@ -9899,8 +9917,8 @@ final class AppState {
     /// Open a markdown relative-link target as a new editor tab in the same worktree.
     /// Delegates to `openFile` which handles find-or-create, activate, and
     /// worktree-switch if necessary.
-    func openMarkdownLink(worktreeId: String, worktreeRoot: URL, relativePath: String) {
-        openFile(relativePath: relativePath, worktreeId: worktreeId)
+    func openMarkdownLink(worktreeId: String, projectId: String? = nil, worktreeRoot: URL, relativePath: String) {
+        openFile(relativePath: relativePath, worktreeId: worktreeId, projectId: projectId)
     }
 
     /// Where a clicked ACP transcript link ends up.
@@ -9923,8 +9941,14 @@ final class AppState {
     /// a sibling worktree of the same repo — open there, switching the
     /// selected worktree. Anything else that exists on disk comes back as a
     /// `file:` URL for the system to open.
-    func transcriptLinkRoute(_ url: URL, worktreeId: String) -> TranscriptLinkRoute {
-        guard let worktree = worktree(withId: worktreeId) else { return .unhandled }
+    func transcriptLinkRoute(_ url: URL, worktreeId: String, projectId: String? = nil) -> TranscriptLinkRoute {
+        let worktree: Worktree?
+        if let projectId {
+            worktree = self.worktree(withId: worktreeId, inProjectId: projectId)
+        } else {
+            worktree = self.worktree(withId: worktreeId)
+        }
+        guard let worktree else { return .unhandled }
 
         let rawPath: String
         if url.isFileURL {
@@ -9971,7 +9995,7 @@ final class AppState {
         if let relativePath = Self.containedRelativePath(for: target.url, in: worktree.path) {
             openFile(
                 relativePath: relativePath,
-                worktreeId: worktree.id,
+                worktree: worktree,
                 revealLine: target.revealLine,
                 revealCharacter: target.revealCharacter
             )
@@ -9980,7 +10004,7 @@ final class AppState {
         if let match = deepestVisibleWorktree(containing: target.url) {
             openFile(
                 relativePath: match.relativePath,
-                worktreeId: match.worktree.id,
+                worktree: match.worktree,
                 revealLine: target.revealLine,
                 revealCharacter: target.revealCharacter
             )
@@ -10042,7 +10066,7 @@ final class AppState {
 
         openFile(
             relativePath: relativePath,
-            worktreeId: worktree.id,
+            worktree: worktree,
             revealLine: target.revealLine,
             revealCharacter: target.revealCharacter
         )
@@ -12222,7 +12246,7 @@ final class AppState {
             repositoryName = projects.first(where: { $0.id == member.projectID })?.name ?? member.fallbackProjectName
         }
 
-        let pane = rightPaneStore.activeState(worktreeId: worktree.id)
+        let pane = rightPaneStore.activeState(for: worktree)
         let dirtyEditorPaths = CheckpointCoordinationSnapshot.overlappingPaths(
             dirtyPaths: tabs.unsavedRelativePaths(forWorktree: worktree.id),
             selectedPaths: selectedPaths
@@ -12620,7 +12644,7 @@ final class AppState {
                             hasAttachments: hasAttachments
                         )
                     )
-                    await self.rightPaneStore.activeState(worktreeId: worktree.id)?.refreshCheckpoints()
+                    await self.rightPaneStore.activeState(for: worktree)?.refreshCheckpoints()
                     return checkpoint.id
                 } catch {
                     return nil
@@ -12762,7 +12786,7 @@ final class AppState {
             },
             ggMCPProvider: { [weak self] worktreePath in
                 guard let self,
-                      let integration = self.ggACPWorktreeIntegration(worktreePath: worktreePath),
+                      let integration = self.ggACPWorktreeIntegration(worktreePath: worktreePath, projectId: worktree.projectId),
                       Self.shouldAttachGGMCP(context: integration.context)
                 else { return nil }
                 // A local project's approved repo-defined server named
@@ -12792,15 +12816,15 @@ final class AppState {
             },
             ggPreambleProvider: { [weak self] worktreePath in
                 guard let self,
-                      let integration = self.ggACPWorktreeIntegration(worktreePath: worktreePath)
+                      let integration = self.ggACPWorktreeIntegration(worktreePath: worktreePath, projectId: worktree.projectId)
                 else { return .none }
                 return Self.ggPreambleSignal(
                     context: integration.context,
-                    snapshot: self.rightPaneStore.ggStackSnapshotForWorktreePath(
-                        integration.worktree.path.path,
+                    snapshot: self.rightPaneStore.ggStackSnapshot(
+                        for: integration.worktree,
                         effectiveContext: integration.context,
-                        liveBranch: self.rightPaneStore.currentBranchForWorktreePath(
-                            integration.worktree.path.path
+                        liveBranch: self.rightPaneStore.currentBranch(
+                            for: integration.worktree
                         ) ?? integration.worktree.branch
                     )
                 )
@@ -14151,20 +14175,20 @@ final class AppState {
         }
     }
 
-    func openFileSnapshotAtHEAD(relativePath: String, worktreeId: String) {
-        guard let worktree = worktree(withId: worktreeId) else { return }
+    func openFileSnapshotAtHEAD(relativePath: String, worktreeId: String, projectId: String? = nil) {
+        guard let worktree = worktreeForFileOpen(worktreeId, projectId: projectId) else { return }
         guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
-        if selectedWorktreeId != worktree.id {
+        if selectedWorktreeId != worktree.id || selectedWorktreeProjectId != worktree.projectId {
             focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
         }
         let tab = tabs.openOrFocusFileSnapshot(worktreeId: worktree.id, relativePath: relativePath, ref: "HEAD")
         activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
     }
 
-    func openFileHistory(relativePath: String, worktreeId: String) {
-        guard let worktree = worktree(withId: worktreeId) else { return }
+    func openFileHistory(relativePath: String, worktreeId: String, projectId: String? = nil) {
+        guard let worktree = worktreeForFileOpen(worktreeId, projectId: projectId) else { return }
         guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
-        if selectedWorktreeId != worktree.id {
+        if selectedWorktreeId != worktree.id || selectedWorktreeProjectId != worktree.projectId {
             focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
         }
         let tab = tabs.openOrFocusFileHistory(worktreeId: worktree.id, relativePath: relativePath)
@@ -14358,14 +14382,22 @@ final class AppState {
 
     func ggACPWorktreeIntegration(
         worktreePath: String,
+        projectId: String? = nil,
         ggInstalled: Bool = GGAvailability.shared.isInstalled
     ) -> (project: ProjectConfig, worktree: Worktree, context: GGWorktreeContext)? {
         let requestedPath = Self.canonicalWorktreePath(worktreePath)
-        for project in projects {
+        let candidateProjects: [ProjectConfig]
+        if let projectId {
+            guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
+            candidateProjects = [project]
+        } else {
+            candidateProjects = projects
+        }
+        for project in candidateProjects {
             guard let worktree = projectsManager.worktrees(projectId: project.id).first(where: {
                 Self.canonicalWorktreePath($0.path.path) == requestedPath
             }) else { continue }
-            let branch = rightPaneStore.currentBranchForWorktreePath(worktree.path.path)
+            let branch = rightPaneStore.currentBranch(for: worktree)
                 ?? worktree.branch
             let branchContext = ggWorktreeContext(
                 project: project,
@@ -14376,8 +14408,8 @@ final class AppState {
             return (
                 project,
                 worktree,
-                rightPaneStore.effectiveGGContextForWorktreePath(
-                    worktree.path.path,
+                rightPaneStore.effectiveGGContext(
+                    for: worktree,
                     branchContext: branchContext,
                     liveBranch: branch
                 )
@@ -14469,7 +14501,7 @@ final class AppState {
             selectedWorktreeId: selectedWorktreeId,
             projectWorktreeIds: projectWorktreeIds
         ),
-            let state = rightPaneStore.activeState(worktreeId: worktreeId)
+            let state = rightPaneStore.activeState(worktreeId: worktreeId, projectId: projectId)
         else { return }
         state.restartGGLand(target: session.target)
     }

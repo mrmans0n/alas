@@ -99,7 +99,7 @@ struct MergeConflictTabView: View {
                                 // watcher would catch up eventually, but
                                 // the debouncer + watcher latency made the
                                 // change feel sticky.
-                                await state.rightPaneStore.refresh(worktreeId: worktree.id)
+                                await state.rightPaneStore.refresh(for: worktree)
                                 state.closeTab(worktreeId: worktree.id, tabId: tabState.id)
                             } catch {
                                 // markResolved is best-effort; the gitService

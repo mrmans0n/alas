@@ -5,6 +5,7 @@ struct CommitTabView: View {
     let worktreePath: URL
     let tabState: CommitTabState
     let worktreeId: String
+    let projectId: String
     @Bindable var appState: AppState
     var onStartupRecoveryReady: () -> Void = {}
 
@@ -383,7 +384,7 @@ struct CommitTabView: View {
         }
         return {
             Task { @MainActor in
-                appState.openFile(relativePath: path, worktreeId: worktreeId)
+                appState.openFile(relativePath: path, worktreeId: worktreeId, projectId: projectId)
             }
         }
     }
