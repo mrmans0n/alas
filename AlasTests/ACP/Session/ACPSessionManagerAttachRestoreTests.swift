@@ -265,6 +265,39 @@ struct ACPSessionManagerAttachRestoreTests {
         await originalAttach.value
     }
 
+    @Test("a timed-out primary broker is closed if its open completes late")
+    func latePrimaryBrokerOpenIsClosedAfterTimeout() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let primaryService = ManagerBrokerServiceProxy(stallOpen: true)
+        let isolatedService = ManagerBrokerServiceProxy()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { primaryService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .milliseconds(50),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(agentId: "claude")
+        let attach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync { await primaryService.openGate.hasEntered }
+        await attach.value
+        #expect(session.agentState == .ready)
+
+        await primaryService.openGate.release()
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await primaryService.completedOpenCount == 1
+        }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await primaryService.closed.count + primaryService.detached.count >= 1
+        }
+        #expect(await primaryService.closed.count == 1)
+        #expect(await primaryService.detached.isEmpty)
+        #expect(await isolatedService.opened.count == 1)
+    }
+
     @Test("a timed-out isolated broker cannot register after startup resumes")
     func isolatedBrokerResumingAfterTimeoutDoesNotRegister() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -285,8 +318,8 @@ struct ACPSessionManagerAttachRestoreTests {
         manager.beforeBrokerClientRegistrationForTesting = { isolated in
             if isolated { await registrationGate.enterAndWait() }
         }
-        manager.afterBrokerClientShutdownRequestedForTesting = {
-            await shutdownGate.enterAndWait()
+        manager.afterBrokerClientShutdownRequestedForTesting = { isolated in
+            if isolated { await shutdownGate.enterAndWait() }
         }
         let session = manager.createSession(agentId: "claude")
         let originalAttach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
@@ -5405,6 +5438,7 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
     private let stallClose: Bool
     private let stallSendMethod: String?
     private var hasStalledSend = false
+    private(set) var completedOpenCount = 0
     private(set) var opened: [ACPBrokerOpenParams] = []
     private(set) var closed: [ACPBrokerCloseParams] = []
     private(set) var detached: [ACPBrokerDetachParams] = []
@@ -5424,7 +5458,9 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
         opened.append(params)
         if stallOpen { await openGate.wait() }
-        return try await base.open(params)
+        let result = try await base.open(params)
+        completedOpenCount += 1
+        return result
     }
 
     func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {

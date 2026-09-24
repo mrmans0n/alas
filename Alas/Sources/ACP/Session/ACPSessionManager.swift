@@ -1191,7 +1191,7 @@ final class ACPSessionManager: ObservableObject {
     private let restartTeardownTimeout: Duration
 #if DEBUG
     var beforeBrokerClientRegistrationForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
-    var afterBrokerClientShutdownRequestedForTesting: (@MainActor () async -> Void)?
+    var afterBrokerClientShutdownRequestedForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
 #endif
     private var resolvedRemoteAdapters: [String: ACPResolvedRemoteAdapter] = [:]
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
@@ -1257,8 +1257,9 @@ final class ACPSessionManager: ObservableObject {
         var waiters: [AttachmentWaiter] = []
         var leaseToken: String?
         var brokerClient: ACPBrokerClient?
+        var brokerClientStartupID: UUID?
         var connection: ACPConnection?
-        var brokerClientShutdownRequested = false
+        var shutdownRequestedBrokerStartupIDs = Set<UUID>()
     }
     private var attachmentAttempts: [ACPSession.ID: AttachmentAttempt] = [:]
     /// Identifies the latest connection generation after its attach task has
@@ -2800,12 +2801,13 @@ final class ACPSessionManager: ObservableObject {
         session: ACPSession,
         environment: [String: String],
         attempt: AttachmentAttempt,
+        startupID: UUID,
         brokerIdOverride: ACPBrokerID? = nil
     ) async throws -> ACPConnection {
 #if DEBUG
         await beforeBrokerClientRegistrationForTesting?(brokerIdOverride != nil)
 #endif
-        guard !attempt.brokerClientShutdownRequested,
+        guard !attempt.shutdownRequestedBrokerStartupIDs.contains(startupID),
               !Task.isCancelled,
               isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
         else {
@@ -2857,6 +2859,14 @@ final class ACPSessionManager: ObservableObject {
             }
         )
         let connection = ACPConnection(client: client)
+        guard !attempt.shutdownRequestedBrokerStartupIDs.contains(startupID),
+              !Task.isCancelled,
+              isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
+        else {
+            await client.shutdown()
+            throw CancellationError()
+        }
+        attempt.brokerClientStartupID = startupID
         attempt.brokerClient = client
         attempt.connection = connection
         // The restored queue may still hold a `.pending` item that was
@@ -2876,7 +2886,7 @@ final class ACPSessionManager: ObservableObject {
            let source = try await persistence.loadSession(id: fork.sourceSessionID),
            let sourceRemoteSessionID = source.remoteSessionId,
            !sourceRemoteSessionID.isEmpty {
-            guard !attempt.brokerClientShutdownRequested,
+            guard !attempt.shutdownRequestedBrokerStartupIDs.contains(startupID),
                   !Task.isCancelled,
                   isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
             else {
@@ -2891,7 +2901,7 @@ final class ACPSessionManager: ObservableObject {
             negotiatingForkOperationKey = operationKey
         }
         client.preRegisterAwaitedOperationKeys(awaitedOperationKeys)
-        guard !attempt.brokerClientShutdownRequested,
+        guard !attempt.shutdownRequestedBrokerStartupIDs.contains(startupID),
               !Task.isCancelled,
               isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
         else {
@@ -2900,7 +2910,7 @@ final class ACPSessionManager: ObservableObject {
         }
         do {
             let opened = try await client.start()
-            guard !attempt.brokerClientShutdownRequested,
+            guard !attempt.shutdownRequestedBrokerStartupIDs.contains(startupID),
                   !Task.isCancelled,
                   isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
             else {
@@ -2920,7 +2930,7 @@ final class ACPSessionManager: ObservableObject {
             let terminalOutcome = negotiatingForkOperationKey.flatMap {
                 client.terminalOutcome(forPreRegisteredOperationKey: $0)
             }
-            if attempt.brokerClientShutdownRequested || Task.isCancelled {
+            if attempt.shutdownRequestedBrokerStartupIDs.contains(startupID) || Task.isCancelled {
                 await client.shutdown()
             } else {
                 Task { await client.detach() }
@@ -2933,13 +2943,13 @@ final class ACPSessionManager: ObservableObject {
             }
             throw error
         }
-        guard !attempt.brokerClientShutdownRequested,
+        guard !attempt.shutdownRequestedBrokerStartupIDs.contains(startupID),
               !Task.isCancelled,
               isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
               connectionOwnerIDs[sessionId] == connectionOwnerID,
               brokerCallbackOwnerIDs[sessionId] == callbackOwnerID
         else {
-            if attempt.brokerClientShutdownRequested || Task.isCancelled {
+            if attempt.shutdownRequestedBrokerStartupIDs.contains(startupID) || Task.isCancelled {
                 await client.shutdown()
             } else {
                 Task { await client.detach() }
@@ -2977,6 +2987,7 @@ final class ACPSessionManager: ObservableObject {
             )
         }
 
+        let startupID = UUID()
         let connectionOutcome = await runBoundedValue(timeout: attachmentStartupTimeout) {
             try await self.makeBrokerConnection(
                 service: service,
@@ -2984,7 +2995,8 @@ final class ACPSessionManager: ObservableObject {
                 sessionId: sessionId,
                 session: session,
                 environment: environment,
-                attempt: attempt
+                attempt: attempt,
+                startupID: startupID
             )
         }
         switch connectionOutcome {
@@ -2993,7 +3005,7 @@ final class ACPSessionManager: ObservableObject {
         case .failed(let error):
             throw error
         case .timedOut:
-            await detachBrokerClient(for: attempt)
+            await shutdownBrokerClient(for: attempt, startupID: startupID, isolated: false)
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                 throw CancellationError()
             }
@@ -3027,6 +3039,7 @@ final class ACPSessionManager: ObservableObject {
         case .timedOut:
             throw ACPBrokerStartupTimedOutError()
         }
+        let startupID = UUID()
         let connectionOutcome = await runBoundedValue(timeout: attachmentStartupTimeout) {
             try await self.makeBrokerConnection(
                 service: service,
@@ -3035,6 +3048,7 @@ final class ACPSessionManager: ObservableObject {
                 session: session,
                 environment: environment,
                 attempt: attempt,
+                startupID: startupID,
                 brokerIdOverride: ACPBrokerID(rawValue: "fallback-\(UUID().uuidString)")
             )
         }
@@ -3044,26 +3058,25 @@ final class ACPSessionManager: ObservableObject {
         case .failed(let error):
             throw error
         case .timedOut:
-            await shutdownBrokerClient(for: attempt)
+            await shutdownBrokerClient(for: attempt, startupID: startupID, isolated: true)
             throw ACPBrokerStartupTimedOutError()
         }
     }
 
-    private func shutdownBrokerClient(for attempt: AttachmentAttempt) async {
-        attempt.brokerClientShutdownRequested = true
+    private func shutdownBrokerClient(
+        for attempt: AttachmentAttempt,
+        startupID: UUID,
+        isolated: Bool
+    ) async {
+        attempt.shutdownRequestedBrokerStartupIDs.insert(startupID)
 #if DEBUG
-        await afterBrokerClientShutdownRequestedForTesting?()
+        await afterBrokerClientShutdownRequestedForTesting?(isolated)
 #endif
-        guard let client = attempt.brokerClient else { return }
+        guard attempt.brokerClientStartupID == startupID,
+              let client = attempt.brokerClient
+        else { return }
         _ = await runBounded(timeout: restartTeardownTimeout) {
             await client.shutdown()
-        }
-    }
-
-    private func detachBrokerClient(for attempt: AttachmentAttempt) async {
-        guard let client = attempt.brokerClient else { return }
-        _ = await runBounded(timeout: restartTeardownTimeout) {
-            await client.detach()
         }
     }
 
