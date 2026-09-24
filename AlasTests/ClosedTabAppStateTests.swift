@@ -215,7 +215,7 @@ struct ClosedTabAppStateTests {
         #expect(state.tabs.tabs(forWorktree: sharedID).contains { $0.id == tab.id })
     }
 
-    @Test func reopeningTerminalFocusesTheRecordedProjectsSpace() async {
+    @Test func reopeningTerminalSelectsTheRecordedProjectWhenBothShareASpace() async throws {
         let sharedID = "closed-tabs-terminal-shared-id"
         let projectA = ProjectConfig(
             id: "closed-tabs-terminal-project-a",
@@ -245,8 +245,7 @@ struct ClosedTabAppStateTests {
         state.projectsManager = ProjectsManager(persistedProjects: [projectA, projectB])
         let spaceA = state.spacesManager.activeSpaceId
         state.spacesManager.addProject(projectA.id, toSpace: spaceA)
-        let spaceB = state.spacesManager.addSpace(name: "Project B", emoji: "🌱")
-        state.spacesManager.addProject(projectB.id, toSpace: spaceB)
+        state.spacesManager.addProject(projectB.id, toSpace: spaceA)
 
         let worktreeA = Worktree(
             id: sharedID, projectId: projectA.id, name: "shared", branch: "shared",
@@ -272,13 +271,36 @@ struct ClosedTabAppStateTests {
         await state.reopenLastClosedTab()
 
         #expect(openedProjectIDs == [projectB.id])
-        #expect(state.spacesManager.activeSpaceId == spaceB)
+        #expect(state.spacesManager.activeSpaceId == spaceA)
         #expect(state.selectedWorktreeId == sharedID)
+        let centerSelection = CenterSelectionStateResolver(
+            selectedWorktreeId: state.selectedWorktreeId,
+            selectedWorktreeProjectId: state.selectedWorktreeProjectId,
+            projects: state.navigationProjects,
+            projectsManager: state.projectsManager
+        ).resolve()
+        #expect(centerSelection == .worktree(worktreeB))
+        let rightSelection = RightPaneSelectionStateResolver(
+            selectedWorktreeId: state.selectedWorktreeId,
+            selectedWorktreeProjectId: state.selectedWorktreeProjectId,
+            projects: state.navigationProjects,
+            projectsManager: state.projectsManager
+        ).resolve()
+        #expect(rightSelection == .active(worktreeB))
         guard case .terminal(let reopened)? = state.tabs.tabs(forWorktree: sharedID).first(where: { $0.id == tab.id }) else {
             Issue.record("Expected the saved terminal tab to reopen")
             return
         }
         #expect(reopened.projectId == projectB.id)
+
+        // A cold-start selection restores the project identity saved with the
+        // path-derived worktree id instead of falling back to Project A.
+        let savedSpaces = try JSONEncoder().encode(state.spacesManager.file)
+        let restoredSpaces = try JSONDecoder().decode(SpacesFile.self, from: savedSpaces)
+        state.spacesManager = SpacesManager(file: restoredSpaces)
+        state.selectedWorktreeId = nil
+        state.selectInitialWorktree(id: sharedID)
+        #expect(state.selectedWorktreeProjectId == projectB.id)
     }
 
     @Test func closingACPSessionRecordsItsProjectInsteadOfTheDisplayedProject() {

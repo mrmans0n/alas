@@ -18,6 +18,7 @@ enum RightPaneSelectionState: Equatable {
 
 struct RightPaneSelectionStateResolver {
     let selectedWorktreeId: String?
+    var selectedWorktreeProjectId: String? = nil
     let projects: [ProjectConfig]
     let projectsManager: ProjectsManager
     /// See `CenterSelectionStateResolver.allowedWorktreeIDs`.
@@ -58,6 +59,15 @@ struct RightPaneSelectionStateResolver {
 
     @MainActor
     private func findWorktree(by id: String) -> Worktree? {
+        if let selectedWorktreeProjectId {
+            guard projects.contains(where: { $0.id == selectedWorktreeProjectId }) else { return nil }
+            if let scope = checkoutFocusedWorktreeScope,
+               (scope.projectID != selectedWorktreeProjectId
+                   || scope.executionLocation != projects.first(where: { $0.id == selectedWorktreeProjectId })?.executionLocation) {
+                return nil
+            }
+            return projectsManager.visibleWorktrees(projectId: selectedWorktreeProjectId).first(where: { $0.id == id })
+        }
         for project in projects {
             if let scope = checkoutFocusedWorktreeScope,
                (scope.projectID != project.id || scope.executionLocation != project.executionLocation) {

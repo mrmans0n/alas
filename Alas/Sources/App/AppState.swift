@@ -308,11 +308,11 @@ final class AppState {
     var selectedWorktreeId: String? {
         didSet {
             guard oldValue != selectedWorktreeId else { return }
-            attentionNavigationGeneration += 1
-            worktreeSelectionFollowUpGeneration += 1
-            attentionPendingReviewReveal = nil
-            if let oldValue { rightPaneStore.activeState(worktreeId: oldValue)?.endAttentionReveal() }
+            invalidateWorktreeSelectionDependents(previousWorktreeId: oldValue)
         }
+    }
+    var selectedWorktreeProjectId: String? {
+        checkoutFocusedWorktreeScope?.projectID ?? spacesManager.activeSpace?.lastSelectedWorktreeProjectId
     }
     let suppressesRestoredRightPaneAfterAbandonedStartup: Bool
     private(set) var isRefreshingProjectTopologies = false
@@ -1354,6 +1354,7 @@ final class AppState {
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
         runScheduler: RunScheduler? = nil,
         acpModelCatalog: ACPAgentModelCatalog? = nil,
+        acpOrchestrationPersistence: ACPOrchestrationPersistence = ACPOrchestrationPersistence(),
         tabsManager: TabsManager? = nil,
         lspManager: WorkspaceLSPManager? = nil,
         restoreActiveTabsOnStartup: Bool = true,
@@ -1399,6 +1400,7 @@ final class AppState {
         self.runHistoryStore = runHistoryStore
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
+        self.acpOrchestrationPersistence = acpOrchestrationPersistence
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceBridge)
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
@@ -1565,11 +1567,15 @@ final class AppState {
         })
     }
 
-    private func reconcileInterruptedDelegations() async {
+    func reconcileInterruptedDelegations() async {
         guard let records = try? await acpOrchestrationPersistence.incompleteDelegations() else { return }
         for record in records {
-            let worktree = record.childWorktreeId.flatMap(worktree(withId:))
-                ?? worktree(atPersistedDestinationPath: record.worktreeRequest.destinationPath)
+            let worktree = record.childWorktreeId.flatMap {
+                worktree(withId: $0, inProjectId: record.projectId)
+            } ?? worktree(
+                atPersistedDestinationPath: record.worktreeRequest.destinationPath,
+                inProjectId: record.projectId
+            )
             guard let worktree,
                   let manager = acpManager(for: worktree)
             else {
@@ -1685,6 +1691,7 @@ final class AppState {
             }
             guard let manager = await acpManagerForPersistedSession(
                 sessionId: sessionId,
+                preferredProjectId: childRecord?.projectId,
                 preferredWorktreeId: childRecord?.childWorktreeId ?? childRecord?.worktreeRequest.worktreeId
             ) else { continue }
             await deliverPendingDelegatedMessages(to: sessionId, manager: manager)
@@ -1703,18 +1710,33 @@ final class AppState {
         }
     }
 
-    private func acpManagerForPersistedSession(
+    func acpManagerForPersistedSession(
         sessionId: String,
+        preferredProjectId: String? = nil,
         preferredWorktreeId: String?
     ) async -> ACPSessionManager? {
-        var worktreeIds: [String] = []
-        if let preferredWorktreeId {
-            worktreeIds.append(preferredWorktreeId)
+        let candidateProjects: [ProjectConfig]
+        if let preferredProjectId {
+            guard let preferredProject = projects.first(where: { $0.id == preferredProjectId }) else { return nil }
+            candidateProjects = [preferredProject]
+        } else {
+            candidateProjects = projects
         }
-        worktreeIds.append(contentsOf: allWorktreeIds().filter { $0 != preferredWorktreeId }.sorted())
-        for worktreeId in worktreeIds {
-            guard let worktree = worktree(withId: worktreeId),
-                  let manager = acpManager(for: worktree),
+        var candidateWorktrees: [Worktree] = []
+        if let preferredWorktreeId {
+            for project in candidateProjects {
+                if let worktree = projectsManager.worktrees(projectId: project.id).first(where: { $0.id == preferredWorktreeId }) {
+                    candidateWorktrees.append(worktree)
+                }
+            }
+        }
+        for project in candidateProjects {
+            candidateWorktrees.append(contentsOf: projectsManager.worktrees(projectId: project.id)
+                .sorted { $0.id < $1.id }
+                .filter { $0.id != preferredWorktreeId })
+        }
+        for worktree in candidateWorktrees {
+            guard let manager = acpManager(for: worktree),
                   let row = await manager.persistedSessionRow(id: sessionId),
                   !row.archived
             else { continue }
@@ -2175,6 +2197,7 @@ final class AppState {
     func completeStartupRecoveryIfCenterPaneWillNotAppear() {
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: selectedWorktreeId,
+            selectedWorktreeProjectId: selectedWorktreeProjectId,
             projects: activeSpaceProjects,
             projectsManager: projectsManager,
             isRefreshingProjectTopologies: isRefreshingProjectTopologies
@@ -2605,24 +2628,43 @@ final class AppState {
         _ = saveSpaces()
     }
 
-    func selectWorktree(id: String?, includeRemoteStatus: Bool = true) {
+    func selectWorktree(id: String?, projectId: String? = nil, includeRemoteStatus: Bool = true) {
         nativePeerSessions?.clearSelection()
+        let previousWorktreeId = selectedWorktreeId
+        let previousProjectId = selectedWorktreeProjectId
         workspaceNavigationState.clearCheckoutSelection()
-        guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
+        let targetProjectId = projectIdForSelection(
+            worktreeId: id,
+            requestedProjectId: projectId,
+            previousWorktreeId: previousWorktreeId,
+            previousProjectId: previousProjectId
+        )
+        let selectionChanged = previousWorktreeId != id || previousProjectId != targetProjectId
+        let spaceSelectionChanged = spacesManager.activeSpace?.lastSelectedWorktreeId != id
+            || spacesManager.activeSpace?.lastSelectedWorktreeProjectId != targetProjectId
+        guard selectionChanged || spaceSelectionChanged else { return }
         selectedWorktreeId = id
-        spacesManager.setLastSelectedWorktree(id)
+        if previousWorktreeId == id, previousProjectId != targetProjectId {
+            invalidateWorktreeSelectionDependents(previousWorktreeId: previousWorktreeId)
+        }
+        spacesManager.setLastSelectedWorktree(id, projectId: targetProjectId)
         scheduleSpacesSave()
-        scheduleWorktreeSelectionFollowUp(id: id, includeRemoteStatus: includeRemoteStatus)
+        scheduleWorktreeSelectionFollowUp(
+            id: id,
+            projectId: targetProjectId,
+            includeRemoteStatus: includeRemoteStatus
+        )
     }
 
-    func selectWorktreeFromSidebar(id: String) {
-        selectWorktree(id: id)
-        scheduleWorktreeSelectionFollowUp(id: id, acknowledgeSidebar: true)
+    func selectWorktreeFromSidebar(id: String, projectId: String? = nil) {
+        selectWorktree(id: id, projectId: projectId)
+        scheduleWorktreeSelectionFollowUp(id: id, projectId: selectedWorktreeProjectId, acknowledgeSidebar: true)
     }
 
     private func scheduleWorktreeSelectionFollowUp(
-        id: String?, includeRemoteStatus: Bool = true, acknowledgeSidebar: Bool = false
+        id: String?, projectId: String? = nil, includeRemoteStatus: Bool = true, acknowledgeSidebar: Bool = false
     ) {
+        let targetProjectId = projectId ?? (selectedWorktreeId == id ? selectedWorktreeProjectId : nil)
         worktreeSelectionFollowUp?.cancel()
         let generation = worktreeSelectionFollowUpGeneration
         worktreeSelectionFollowUp = Task { @MainActor [weak self] in
@@ -2630,12 +2672,13 @@ final class AppState {
             // work. Coalesce rapid selections before starting any refreshes.
             do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
             guard let self, !Task.isCancelled, self.selectedWorktreeId == id,
+                  self.selectedWorktreeProjectId == targetProjectId,
                   self.worktreeSelectionFollowUpGeneration == generation, let id else { return }
             if acknowledgeSidebar {
                 self.acknowledgeAttentionSurface(worktreeID: id, target: .remoteWorktree)
             }
             self.refreshGGSidebar()
-            guard let resolved = self.projectAndWorktree(withWorktreeId: id) else { return }
+            guard let resolved = self.projectAndWorktree(withWorktreeId: id, inProjectId: targetProjectId) else { return }
             if resolved.project.host == nil {
                 // Once a scan starts, let it finish. Canceling a later selection
                 // must not terminate Git processes belonging to that scan.
@@ -2656,6 +2699,40 @@ final class AppState {
 
     func selectInitialWorktree(id: String?, includeRemoteStatus: Bool = true) {
         selectWorktree(id: id, includeRemoteStatus: includeRemoteStatus)
+    }
+
+    private func projectIdForSelection(
+        worktreeId: String?,
+        requestedProjectId: String?,
+        previousWorktreeId: String?,
+        previousProjectId: String?
+    ) -> String? {
+        guard let worktreeId else { return nil }
+        if let requestedProjectId { return requestedProjectId }
+        if spacesManager.activeSpace?.lastSelectedWorktreeId == worktreeId,
+           let savedProjectId = spacesManager.activeSpace?.lastSelectedWorktreeProjectId,
+           spacesManager.activeSpace?.projectIds.contains(savedProjectId) == true,
+           projectsManager.visibleWorktrees(projectId: savedProjectId).contains(where: { $0.id == worktreeId }) {
+            return savedProjectId
+        }
+        if worktreeId == previousWorktreeId,
+           let previousProjectId,
+           spacesManager.activeSpace?.projectIds.contains(previousProjectId) == true,
+           projectsManager.visibleWorktrees(projectId: previousProjectId).contains(where: { $0.id == worktreeId }) {
+            return previousProjectId
+        }
+        return activeSpaceProjects.first { project in
+            projectsManager.visibleWorktrees(projectId: project.id).contains { $0.id == worktreeId }
+        }?.id
+    }
+
+    private func invalidateWorktreeSelectionDependents(previousWorktreeId: String?) {
+        attentionNavigationGeneration += 1
+        worktreeSelectionFollowUpGeneration += 1
+        attentionPendingReviewReveal = nil
+        if let previousWorktreeId {
+            rightPaneStore.activeState(worktreeId: previousWorktreeId)?.endAttentionReveal()
+        }
     }
 
     func activateWorktreeCenterTab(worktreeId: String, tabId: TabID) {
@@ -4092,7 +4169,7 @@ final class AppState {
            containing != spacesManager.activeSpaceId {
             spacesManager.switchToSpace(id: containing)
         }
-        selectWorktree(id: id)
+        selectWorktree(id: id, projectId: projectId)
     }
 
     /// Optimistically insert a worktree row and run the git operation async.
@@ -4179,7 +4256,7 @@ final class AppState {
         projectsManager.setOperationState(forWorktreeId: optimistic.id, projectId: projectId, state: .creating)
         rightPaneStore.reevaluateGGGate(worktreeId: optimistic.id)
         if launchSurface != .delegated {
-            selectWorktree(id: optimistic.id)
+            selectWorktree(id: optimistic.id, projectId: projectId)
         }
 
         Task { @MainActor in
@@ -4264,7 +4341,7 @@ final class AppState {
                     }
 
                     if launchSurface != .delegated {
-                        selectWorktree(id: newWorktree.id)
+                        selectWorktree(id: newWorktree.id, projectId: project.id)
                     }
 
                     do {
@@ -5973,7 +6050,7 @@ final class AppState {
             }
 
             if launchSurface != .delegated {
-                selectWorktree(id: worktree.id)
+                selectWorktree(id: worktree.id, projectId: projectId)
             }
 
             do {
@@ -9382,10 +9459,17 @@ final class AppState {
         return projectsManager.worktrees(projectId: projectId).first(where: { $0.id == id })
     }
 
-    private func worktree(atPersistedDestinationPath path: String?) -> Worktree? {
+    private func worktree(atPersistedDestinationPath path: String?, inProjectId projectId: String?) -> Worktree? {
         guard let path, !path.isEmpty else { return nil }
         let targetPath = URL(fileURLWithPath: path).standardizedFileURL.path
-        for project in projects {
+        let matchingProjects: [ProjectConfig]
+        if let projectId {
+            guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
+            matchingProjects = [project]
+        } else {
+            matchingProjects = projects
+        }
+        for project in matchingProjects {
             if let worktree = projectsManager.worktrees(projectId: project.id).first(where: {
                 $0.path.standardizedFileURL.path == targetPath
             }) {
@@ -9665,7 +9749,7 @@ final class AppState {
 
     func focusMainWorktreeForCurrentProject() {
         guard let main = mainWorktreeForCurrentProject() else { return }
-        selectWorktree(id: main.id)
+        selectWorktree(id: main.id, projectId: main.projectId)
     }
 
     private func mainWorktreeForCurrentProject() -> Worktree? {
@@ -12037,7 +12121,7 @@ final class AppState {
     private var acpManagers: [SessionOwnerID: ACPSessionManager] = [:]
 
     @ObservationIgnored
-    private let acpOrchestrationPersistence = ACPOrchestrationPersistence()
+    private let acpOrchestrationPersistence: ACPOrchestrationPersistence
 
     /// Observed, not `@ObservationIgnored`: the agent sidebar reads this to
     /// draw delegated children under their parent, so a newly recorded link
@@ -12389,7 +12473,7 @@ final class AppState {
                   manager.liveSession(for: sessionID) != nil
                     || manager.sessionRows.contains(where: { $0.id == sessionID && !$0.archived })
             else { return }
-            selectWorktree(id: worktree.id)
+            selectWorktree(id: worktree.id, projectId: worktree.projectId)
             await openExistingACPSession(sessionId: sessionID, worktree: worktree)
         case .terminal(let tabID, let sessionID):
             let matchingLeafID = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> String? in
@@ -12401,7 +12485,7 @@ final class AppState {
                 return leaf.id
             }.first
             guard let matchingLeafID else { return }
-            selectWorktree(id: worktree.id)
+            selectWorktree(id: worktree.id, projectId: worktree.projectId)
             _ = tabs.setFocusedLeaf(worktreeId: worktree.id, tabId: tabID, leafId: matchingLeafID)
             activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tabID)
         }

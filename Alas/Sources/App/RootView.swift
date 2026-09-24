@@ -289,6 +289,7 @@ struct RootView: View {
     private var rightPaneSelectionState: RightPaneSelectionState {
         RightPaneSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
+            selectedWorktreeProjectId: state.selectedWorktreeProjectId,
             projects: state.navigationProjects,
             projectsManager: state.projectsManager,
             allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
@@ -326,6 +327,7 @@ struct RootView: View {
     ) -> some View {
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
+            selectedWorktreeProjectId: state.selectedWorktreeProjectId,
             projects: state.navigationProjects,
             projectsManager: state.projectsManager,
             allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
@@ -401,6 +403,7 @@ struct RootView: View {
     private func selectedWorktree() -> Worktree? {
         let resolver = RightPaneSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
+            selectedWorktreeProjectId: state.selectedWorktreeProjectId,
             projects: state.navigationProjects,
             projectsManager: state.projectsManager,
             allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,

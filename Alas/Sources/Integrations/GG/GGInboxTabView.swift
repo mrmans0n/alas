@@ -377,6 +377,7 @@ struct GGInboxTabView: View {
 
     private func row(_ entry: GGInboxEntry, bucket: GGInboxBucket) -> some View {
         let targetWorktreeId = resolveWorktreeId(entry)
+        let targetProjectId = project?.id
         let kind = Self.reviewRequestKind(prURL: entry.prUrl)
         let tint = theme.color(bucket.themeToken)
         return HStack(spacing: 10) {
@@ -450,13 +451,13 @@ struct GGInboxTabView: View {
         .contentShape(Rectangle())
         .opacity(targetWorktreeId == nil ? 0.55 : 1)
         .onTapGesture {
-            if let id = targetWorktreeId { state.selectWorktree(id: id) }
+            if let id = targetWorktreeId { state.selectWorktree(id: id, projectId: targetProjectId) }
         }
         .focusable()
         .focusEffectDisabled()
         .onKeyPress(.return) {
             if let id = targetWorktreeId {
-                state.selectWorktree(id: id)
+                state.selectWorktree(id: id, projectId: targetProjectId)
                 return .handled
             }
             return .ignored

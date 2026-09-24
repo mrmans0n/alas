@@ -37,6 +37,48 @@ struct AppStateCLIRoutingTests {
         return (state, project, worktree)
     }
 
+    private func makeStateWithSharedPathWorktrees(
+        id: String,
+        orchestrationPersistence: ACPOrchestrationPersistence
+    ) -> (AppState, ProjectConfig, ProjectConfig, Worktree, Worktree) {
+        let projectA = ProjectConfig(
+            id: "recovery-a-\(UUID().uuidString)", name: "A", path: "/repos/recovery-a",
+            color: "blue", addedAt: .distantPast
+        )
+        let projectB = ProjectConfig(
+            id: "recovery-b-\(UUID().uuidString)", name: "B", path: "/repos/recovery-b",
+            color: "green", addedAt: .distantPast, host: "project-b-host"
+        )
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [projectA, projectB])),
+            runHistoryStore: nil,
+            acpOrchestrationPersistence: orchestrationPersistence,
+            restoreActiveTabsOnStartup: false
+        )
+        let path = URL(fileURLWithPath: id)
+        let worktreeA = Worktree(
+            id: id, projectId: projectA.id, name: "shared", branch: "shared",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        let worktreeB = Worktree(
+            id: id, projectId: projectB.id, name: "shared", branch: "shared",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(worktreeA)
+        state.projectsManager.insertOptimisticWorktree(worktreeB)
+        return (state, projectA, projectB, worktreeA, worktreeB)
+    }
+
+    private func removeACPDatabaseFiles(projects: [ProjectConfig], worktreeID: String) {
+        let paths = projects.map { Paths.acpSessionsDB(forProjectId: $0.id, worktreeId: worktreeID).path }
+            + [Paths.acpSessionsDB(forWorktreeId: worktreeID).path]
+        for path in paths {
+            for suffix in ["", "-wal", "-shm", ".owner"] {
+                try? FileManager.default.removeItem(atPath: path + suffix)
+            }
+        }
+    }
+
     @Test func makeCLICommandRouterUsesTerminalRegistryAndTabs() async throws {
         let repo = try await makeRepo(name: "router")
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -463,6 +505,64 @@ struct AppStateCLIRoutingTests {
 
         #expect(response == .text(AlasCLIWorktreeResolver.rows(worktrees: [second], currentWorktreeId: sharedID)))
         #expect(router.resolveACPSessionOrigin(session.id)?.projectId == secondProject.id)
+    }
+
+    @Test func interruptedDelegationRecoveryUsesTheRecordedProjectForSharedWorktreeIDs() async throws {
+        let sharedID = "/tmp/alas-recovery-shared-\(UUID().uuidString)"
+        let orchestrationPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-orchestration-recovery-\(UUID().uuidString).sqlite")
+        let persistence = ACPOrchestrationPersistence(path: orchestrationPath.path)
+        let (state, projectA, projectB, worktreeA, worktreeB) = makeStateWithSharedPathWorktrees(
+            id: sharedID,
+            orchestrationPersistence: persistence
+        )
+        defer { removeACPDatabaseFiles(projects: [projectA, projectB], worktreeID: sharedID) }
+        let childSessionID = "recovery-child-\(UUID().uuidString)"
+        try await persistence.insert(ACPDelegationRecord(
+            childSessionId: childSessionID,
+            parentSessionId: "recovery-parent-\(UUID().uuidString)",
+            projectId: projectB.id,
+            parentWorktreeId: sharedID,
+            childWorktreeId: sharedID,
+            agentId: "pi",
+            worktreeRequest: .current(worktreeId: sharedID),
+            pendingInitialPrompt: nil,
+            phase: .starting,
+            failureMessage: nil,
+            createdAt: 1,
+            updatedAt: 1
+        ))
+
+        await state.reconcileInterruptedDelegations()
+
+        let managerB = try #require(state.acpManager(for: worktreeB))
+        #expect(await managerB.persistedSessionRow(id: childSessionID) != nil)
+        await state.acpManager(for: worktreeA)?.flushAllPersistence()
+        await managerB.flushAllPersistence()
+    }
+
+    @Test func persistedDelegatedSessionLookupEnumeratesSamePathProjects() async throws {
+        let sharedID = "/tmp/alas-recovery-lookup-shared-\(UUID().uuidString)"
+        let orchestrationPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-orchestration-lookup-\(UUID().uuidString).sqlite")
+        let persistence = ACPOrchestrationPersistence(path: orchestrationPath.path)
+        let (state, projectA, projectB, _, worktreeB) = makeStateWithSharedPathWorktrees(
+            id: sharedID,
+            orchestrationPersistence: persistence
+        )
+        defer { removeACPDatabaseFiles(projects: [projectA, projectB], worktreeID: sharedID) }
+        let childSessionID = "recovery-lookup-child-\(UUID().uuidString)"
+        let managerB = try #require(state.acpManager(for: worktreeB))
+        _ = managerB.createSession(id: childSessionID, agentId: "pi")
+        await managerB.flushAllPersistence()
+
+        let resolved = await state.acpManagerForPersistedSession(
+            sessionId: childSessionID,
+            preferredProjectId: projectB.id,
+            preferredWorktreeId: sharedID
+        )
+
+        #expect(resolved === managerB)
     }
 
     @Test func routeTerminalOpenURLResolvesRelativePathAgainstShellCwd() async throws {

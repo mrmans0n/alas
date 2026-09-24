@@ -17,6 +17,7 @@ struct CheckoutFocusedWorktreeScope: Equatable, Sendable {
 
 struct CenterSelectionStateResolver {
     let selectedWorktreeId: String?
+    var selectedWorktreeProjectId: String? = nil
     let projects: [ProjectConfig]
     let projectsManager: ProjectsManager
     /// When a checkout is selected, only its explicitly focused member may
@@ -55,6 +56,10 @@ struct CenterSelectionStateResolver {
 
     @MainActor
     private func findWorktree(by id: String) -> Worktree? {
+        if let selectedWorktreeProjectId {
+            guard projects.contains(where: { $0.id == selectedWorktreeProjectId }) else { return nil }
+            return candidateWorktrees(projectId: selectedWorktreeProjectId).first(where: { $0.id == id })
+        }
         for project in projects {
             guard matchesCheckoutScope(project: project, worktreeID: id) else { continue }
             if let wt = candidateWorktrees(projectId: project.id).first(where: { $0.id == id }) {
@@ -67,21 +72,16 @@ struct CenterSelectionStateResolver {
     @MainActor
     private func selectedWorktree() -> Worktree? {
         guard let id = selectedWorktreeId else { return nil }
-        for project in projects {
-            guard matchesCheckoutScope(project: project, worktreeID: id) else { continue }
-            if let wt = candidateWorktrees(projectId: project.id).first(where: { $0.id == id }) {
-                if let op = projectsManager.operationState(forWorktreeId: wt.id, projectId: wt.projectId) {
-                    switch op {
-                    case .creating, .deleting, .createFailed:
-                        return nil
-                    case .preparingDelete, .launchFailed, .deleteFailed:
-                        break
-                    }
-                }
-                return wt
+        guard let wt = findWorktree(by: id) else { return nil }
+        if let op = projectsManager.operationState(forWorktreeId: wt.id, projectId: wt.projectId) {
+            switch op {
+            case .creating, .deleting, .createFailed:
+                return nil
+            case .preparingDelete, .launchFailed, .deleteFailed:
+                break
             }
         }
-        return nil
+        return wt
     }
 
     @MainActor

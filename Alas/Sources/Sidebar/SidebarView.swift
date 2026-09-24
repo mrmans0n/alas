@@ -88,7 +88,7 @@ struct SidebarView: View {
                                     ggMenuModel: { wt in
                                         state.ggWorktreeMenuModel(project: project, worktree: wt)
                                     },
-                                    onSelect: { wt in state.selectWorktreeFromSidebar(id: wt.id) },
+                                    onSelect: { wt in state.selectWorktreeFromSidebar(id: wt.id, projectId: wt.projectId) },
                                     onNewWorktree: { onNewWorktree(project.id) },
                                     onEditProject: { onEditProject(project.id) },
                                     onRemoveProject: { onRemoveProject(project.id) },
@@ -111,7 +111,7 @@ struct SidebarView: View {
                                         state.toggleProject(projectId: project.id, inSpace: spaceId)
                                     },
                                     onOpenTerminal: { wt in
-                                        state.selectWorktree(id: wt.id)
+                                        state.selectWorktree(id: wt.id, projectId: wt.projectId)
                                         Task { @MainActor in
                                             _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: wt)
                                         }

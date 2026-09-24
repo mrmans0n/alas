@@ -169,10 +169,15 @@ final class SpacesManager {
         }
     }
 
-    func setLastSelectedWorktree(_ worktreeId: String?, forSpace spaceId: String? = nil) {
+    func setLastSelectedWorktree(
+        _ worktreeId: String?,
+        projectId: String? = nil,
+        forSpace spaceId: String? = nil
+    ) {
         let targetId = spaceId ?? activeSpaceId
         guard let index = spaces.firstIndex(where: { $0.id == targetId }) else { return }
         spaces[index].lastSelectedWorktreeId = worktreeId
+        spaces[index].lastSelectedWorktreeProjectId = projectId
     }
 
     func reorderProjectInActiveSpace(movingId: String, destinationId: String) {

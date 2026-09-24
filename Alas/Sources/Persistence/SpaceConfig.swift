@@ -46,6 +46,9 @@ struct SpaceConfig: Codable, Equatable, Identifiable {
     /// stays as the downgrade-safe projection written for older builds.
     var members: [SpaceMemberReference]?
     var lastSelectedWorktreeId: String?
+    /// Path-derived worktree ids can be shared by projects, so keep the owner
+    /// alongside the selected id when restoring this Space.
+    var lastSelectedWorktreeProjectId: String? = nil
     var createdAt: Date
 }
 
