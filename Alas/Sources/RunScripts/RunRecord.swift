@@ -59,6 +59,8 @@ struct RunRecord: Identifiable, Equatable, Sendable {
     let scriptKey: String
     let scriptName: String
     let worktreeID: String
+    /// The project that launched this run; a path-derived worktree ID can be shared.
+    let projectId: String?
     let branch: String
     let target: RunExecutionTarget
     let endpoint: URL?
@@ -76,6 +78,7 @@ struct RunRecord: Identifiable, Equatable, Sendable {
         scriptKey: String,
         scriptName: String,
         worktreeID: String,
+        projectId: String? = nil,
         branch: String,
         target: RunExecutionTarget,
         endpoint: URL? = nil,
@@ -90,6 +93,7 @@ struct RunRecord: Identifiable, Equatable, Sendable {
         self.scriptKey = scriptKey
         self.scriptName = scriptName
         self.worktreeID = worktreeID
+        self.projectId = projectId
         self.branch = branch
         self.target = target
         self.endpoint = endpoint

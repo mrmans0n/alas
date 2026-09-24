@@ -352,8 +352,10 @@ extension AppState {
     }
 
     func webPreviewRemoteHost(for worktree: Worktree) -> String? {
-        projects.first(where: { $0.id == worktree.projectId })?.host
-            ?? RemoteHostRegistry.shared.host(forPath: worktree.path.path)
+        if let project = projects.first(where: { $0.id == worktree.projectId }) {
+            return project.host
+        }
+        return RemoteHostRegistry.shared.host(forPath: worktree.path.path)
     }
 
     func openWebPreview(in worktree: Worktree, url: URL? = nil) {
@@ -371,7 +373,7 @@ extension AppState {
         guard let endpoint = script.endpoint else { return }
         let currentRecord = runRecords.record(worktreeID: worktree.id, scriptKey: script.key)
         let target: RunExecutionTarget
-        if let currentRecord, currentRecord.status.isActive {
+        if let currentRecord, currentRecord.projectId == worktree.projectId, currentRecord.status.isActive {
             target = currentRecord.target
         } else {
             target = runExecutionTarget(for: script, in: worktree)
@@ -484,6 +486,7 @@ extension AppState {
             scriptKey: script.key,
             scriptName: script.displayName,
             worktreeID: worktree.id,
+            projectId: worktree.projectId,
             branch: worktree.branch,
             target: target,
             endpoint: script.endpoint,

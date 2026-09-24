@@ -16,7 +16,8 @@ struct AppStateRunRecordTests {
         )
         fixture.state.runRecords.begin(RunRecord(
             id: "remote-run", scriptKey: "repo:dev.sh", scriptName: "Dev",
-            worktreeID: fixture.worktree.id, branch: fixture.worktree.branch,
+            worktreeID: fixture.worktree.id, projectId: fixture.worktree.projectId,
+            branch: fixture.worktree.branch,
             target: .init(host: "devbox", workingDirectory: "/srv/repo"),
             endpoint: URL(string: "http://devbox:5173"), status: .running, startedAt: .now
         ))
@@ -32,13 +33,13 @@ struct AppStateRunRecordTests {
         }
     }
 
-    @Test func previewAutomationUsesTheProjectsHostForSharedPaths() async throws {
+    @Test func previewAutomationIgnoresAnotherProjectsActiveRun() async throws {
         let fixture = try makeFixture(host: "host-a")
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
         let firstProject = try #require(fixture.state.projects.first)
         let secondProject = ProjectConfig(
             id: "host-b-\(UUID().uuidString)", name: "Host B", path: "/repos/b",
-            color: "green", addedAt: .distantPast, host: "host-b"
+            color: "green", addedAt: .distantPast
         )
         fixture.state.projectsManager = ProjectsManager(persistedProjects: [firstProject, secondProject])
         fixture.state.projectsManager.insertOptimisticWorktree(fixture.worktree)
@@ -48,13 +49,26 @@ struct AppStateRunRecordTests {
             status: .clean, lastActivity: .distantPast
         )
         fixture.state.projectsManager.insertOptimisticWorktree(second)
+        let scripts = RunScriptStore.repoScriptsDir(worktreeRoot: fixture.directory)
+        try FileManager.default.createDirectory(at: scripts, withIntermediateDirectories: true)
+        try "# alas-url: http://localhost:5173\necho hi\n".write(
+            to: scripts.appendingPathComponent("dev.sh"), atomically: true, encoding: .utf8
+        )
+        fixture.state.runRecords.begin(RunRecord(
+            id: "host-a-run", scriptKey: "repo:dev.sh", scriptName: "Dev",
+            worktreeID: fixture.worktree.id, projectId: fixture.worktree.projectId,
+            branch: fixture.worktree.branch,
+            target: .init(host: "host-a", workingDirectory: "/repos/a"),
+            endpoint: URL(string: "http://host-a:5173"), status: .running, startedAt: .now
+        ))
 
         let target = try await fixture.state.previewOpenTarget(
-            .init(action: .open, url: "http://localhost:5173"),
+            .init(action: .open, scriptKey: "repo:dev.sh"),
             owner: .projectWorktree(projectId: secondProject.id, worktreeId: second.id)
         )
 
-        #expect(target.remoteHost == "host-b")
+        #expect(target.remoteHost == nil)
+        #expect(target.url?.host == "localhost")
     }
 
     @Test func previewAutomationRequiresWritableOpenSession() async throws {
@@ -114,6 +128,7 @@ struct AppStateRunRecordTests {
             scriptKey: fixture.script.key,
             scriptName: fixture.script.displayName,
             worktreeID: fixture.worktree.id,
+            projectId: fixture.worktree.projectId,
             branch: fixture.worktree.branch,
             target: RunExecutionTarget(host: "devbox", workingDirectory: fixture.directory.path),
             endpoint: fixture.script.endpoint,
@@ -156,6 +171,37 @@ struct AppStateRunRecordTests {
         #expect(preview.url == endpoint)
         #expect(preview.remoteHost == nil)
         #expect(fixture.errors().isEmpty)
+    }
+
+    @Test func endpointLaunchIgnoresAnotherProjectsActiveRun() throws {
+        let endpoint = URL(string: "http://localhost:5173")!
+        let fixture = try makeFixture(endpoint: endpoint)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let record = RunRecord(
+            id: "project-a-run", scriptKey: fixture.script.key,
+            scriptName: fixture.script.displayName, worktreeID: fixture.worktree.id,
+            projectId: fixture.worktree.projectId,
+            branch: fixture.worktree.branch,
+            target: .init(host: "host-a", workingDirectory: "/repos/a"),
+            endpoint: endpoint, status: .running, startedAt: .now
+        )
+        fixture.state.runRecords.begin(record)
+        let second = Worktree(
+            id: fixture.worktree.id, projectId: "project-b", name: fixture.worktree.name,
+            branch: fixture.worktree.branch, path: fixture.worktree.path,
+            status: .clean, lastActivity: .now
+        )
+
+        fixture.state.openRunEndpoint(fixture.script, in: second)
+
+        let tab = try #require(fixture.state.tabs.tabs(forWorktree: second.id).first)
+        guard case .webPreview(let preview) = tab else {
+            Issue.record("Expected B's local endpoint preview")
+            return
+        }
+        #expect(preview.projectId == second.projectId)
+        #expect(preview.remoteHost == nil)
+        #expect(preview.url == endpoint)
     }
 
     private struct MemoryStore: PersistenceStoreProtocol {

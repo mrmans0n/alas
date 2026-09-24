@@ -77,7 +77,7 @@ extension AppState {
                 : "Multiple endpoints are configured. Supply url or script_key. Candidates: \(candidates.map(\.key).joined(separator: ", "))")
         }
         let record = runRecords.record(worktreeID: worktree.id, scriptKey: script.key)
-        let target = record.flatMap { $0.status.isActive ? $0.target : nil }
+        let target = record.flatMap { $0.projectId == worktree.projectId && $0.status.isActive ? $0.target : nil }
             ?? runExecutionTarget(for: script, in: worktree)
         return WebPreviewOpenTarget(url: endpoint, remoteHost: target.host)
     }
