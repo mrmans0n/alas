@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import Darwin
@@ -339,7 +340,7 @@ struct RemoteAppStateAccessTests {
         #expect(summaries.first?.updatedAt == 2)
     }
 
-    @Test func samePathWorktreesOnDifferentHostsGetDistinctACPSessionManagers() throws {
+    @Test func samePathWorktreesOnDifferentHostsGetDistinctACPSessionManagers() async throws {
         let sharedPath = "/tmp/shared-worktree-\(UUID().uuidString)"
         let firstProject = ProjectConfig(
             id: "host-a-\(UUID().uuidString)",
@@ -395,6 +396,20 @@ struct RemoteAppStateAccessTests {
             sessionId: secondSession.id, title: "Host B session", projectId: secondProject.id
         )
         #expect(state.acpManager(for: secondTab, displayedIn: firstWorktree) === secondManager)
+        state.tabs.append(acpSession: secondTab, to: sharedPath)
+        secondManager.renameSession(id: secondSession.id, title: "Host B transcript", source: .manual)
+        let previousClipboard = NSPasteboard.general.string(forType: .string)
+        defer {
+            if let previousClipboard { Clipboard.copy(previousClipboard) }
+            else { NSPasteboard.general.clearContents() }
+        }
+        Clipboard.copy("waiting for host B")
+        state.copyACPSessionMarkdown(worktree: firstWorktree, tabId: secondTab.id)
+        for _ in 0..<100 {
+            if NSPasteboard.general.string(forType: .string)?.contains("Host B transcript") == true { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(NSPasteboard.general.string(forType: .string)?.contains("Host B transcript") == true)
 
         let tabState = ACPSessionTabState(sessionId: "project-scoped-tab", title: "Project-scoped")
         state.tabs.append(acpSession: tabState, to: sharedPath)
@@ -1215,6 +1230,55 @@ struct RemoteAppStateAccessTests {
         #expect(state.tabs.activeTabId(forWorktree: worktreeId) == tab.id)
     }
 
+    @Test func remoteWorktreeCreationAttachesSessionToTheCreatingProject() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        let worktreeRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-shared-create-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: worktreeRoot)
+            try? FileManager.default.removeItem(at: repository)
+        }
+        let firstProject = ProjectConfig(
+            id: "first-\(UUID().uuidString)", name: "First", path: "/repos/first",
+            color: "red", addedAt: .distantPast
+        )
+        let secondProject = ProjectConfig(
+            id: "second-\(UUID().uuidString)", name: "Second", path: repository.path,
+            color: "blue", addedAt: .distantPast
+        )
+        let state = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [firstProject, secondProject])
+        ))
+        state.config.worktrees.rootPath = worktreeRoot.path
+        state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
+        state.agentRegistry = enabledClaudeRegistry()
+        state.remoteSessionAttachScheduler = { _, _ in }
+        let destination = WorktreePathTemplateRenderer.render(
+            template: state.config.worktrees.pathTemplate,
+            worktreeRoot: worktreeRoot.path,
+            repoName: secondProject.name,
+            branch: "feature/phone"
+        )
+        let sharedID = Worktree.makeId(path: destination)
+        defer { cleanupRemoteRenameFiles(worktreeId: sharedID) }
+        state.projectsManager.insertOptimisticWorktree(Worktree(
+            id: sharedID, projectId: firstProject.id, name: "shared",
+            branch: "feature/phone", path: destination,
+            status: .clean, lastActivity: .distantPast
+        ))
+
+        let result = await state.createRemoteWorktreeSession(
+            projectId: secondProject.id, base: "main", branch: "feature/phone", agentId: "claude"
+        )
+
+        guard case .success(let summary) = result else {
+            Issue.record("Expected session creation in the second project, got \(result)")
+            return
+        }
+        #expect(summary.projectId == secondProject.id)
+        #expect(summary.worktreeId == sharedID)
+    }
+
     @Test func remoteCreateWorktreeSessionRejectsMissingProjectAndInvalidBranchSafely() async throws {
         let repository = try await makeRemoteBranchesRepository()
         defer { try? FileManager.default.removeItem(at: repository) }
@@ -1323,7 +1387,7 @@ struct RemoteAppStateAccessTests {
             return ProcessResult(exitCode: 0, stdout: "", stderr: "")
         }
         var sessionCreationAttempted = false
-        state.remoteSessionCreator = { _, _ in
+        state.remoteSessionCreator = { _, _, _ in
             sessionCreationAttempted = true
             return .failure("should not be reached")
         }
@@ -1368,7 +1432,7 @@ struct RemoteAppStateAccessTests {
         state.config.worktrees.rootPath = worktreeRoot.path
         state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
         state.agentRegistry = enabledClaudeRegistry()
-        state.remoteSessionCreator = { _, _ in .failure("internal details") }
+        state.remoteSessionCreator = { _, _, _ in .failure("internal details") }
 
         let result = await state.createRemoteWorktreeSession(
             projectId: project.id,

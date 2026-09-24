@@ -613,7 +613,7 @@ final class AppState {
     @ObservationIgnored
     var remoteWorktreeCommandRunner: (@MainActor (String, String?, String) async throws -> ProcessResult)?
     @ObservationIgnored
-    var remoteSessionCreator: (@MainActor (String, String) async -> RemoteCreateSessionResult)?
+    var remoteSessionCreator: (@MainActor (String, String, String) async -> RemoteCreateSessionResult)?
 
     private func makeRemoteInterfaces() -> [RemoteNetworkInterface] {
         RemoteNetwork.interfaces()
@@ -8355,7 +8355,7 @@ final class AppState {
     func renameACPSessionTab(worktree: Worktree, tabId: TabID) {
         guard let tab = tabs.tabs(forWorktree: worktree.id).first(where: { $0.id == tabId }),
               case .acpSession(let state) = tab,
-              let mgr = acpManager(for: worktree) else { return }
+              let mgr = acpManager(for: state, displayedIn: worktree) else { return }
         renameACPSessionTab(tabState: state, manager: mgr) { [tabs] title in
             _ = tabs.renameACPSession(worktreeId: worktree.id, tabId: tabId, title: title)
         }
@@ -8505,7 +8505,7 @@ final class AppState {
     ) async {
         guard let tab = tabs.tabs(forWorktree: worktree.id).first(where: { $0.id == tabId }),
               case .acpSession(let tabState) = tab,
-              let mgr = acpManager(for: worktree),
+              let mgr = acpManager(for: tabState, displayedIn: worktree),
               mgr.placeholderSession(id: tabState.sessionId) != nil else { return }
         mgr.retainSession(id: tabState.sessionId)
         defer { mgr.releaseSession(id: tabState.sessionId) }
@@ -11363,12 +11363,24 @@ final class AppState {
             exceptProjectId: worktree.projectId
         )
         if sharedRuntimeStateLives {
-            for tab in tabs.tabs(forWorktree: worktree.id) {
+            let sharedTabs = tabs.tabs(forWorktree: worktree.id)
+            let hasLegacyACPTabs = sharedTabs.contains {
+                if case .acpSession(let state) = $0 { return state.projectId == nil }
+                return false
+            }
+            let owner = Self.projectScopedACPOwner(for: worktree)
+            let manager = acpManagers[owner] ?? (hasLegacyACPTabs ? acpManager(for: worktree) : nil)
+            if hasLegacyACPTabs { await manager?.refreshRecentNow() }
+            for tab in sharedTabs {
                 guard case .acpSession(let state) = tab,
-                      state.projectId == worktree.projectId else { continue }
+                      state.projectId == worktree.projectId
+                        || (state.projectId == nil
+                            && (manager?.liveSession(for: state.sessionId) != nil
+                                || manager?.sessionRows.contains(where: { $0.id == state.sessionId }) == true))
+                else { continue }
                 tabs.close(worktreeId: worktree.id, tabId: tab.id)
             }
-            disposeACPManager(owner: Self.projectScopedACPOwner(for: worktree))
+            disposeACPManager(owner: owner)
         }
         let runHistoryPurgeTask = sharedRuntimeStateLives ? nil : cleanupWorktreeState(worktreeId: worktree.id)
         await runHistoryPurgeTask?.value
@@ -11436,6 +11448,18 @@ final class AppState {
                     projectId: worktree.projectId
                 )
                 saveProjects()
+            }
+            // Another project's deletion can finish while this one is
+            // suspended before its refresh. Both removals may have skipped
+            // path-shared cleanup after observing the other's stale row, so
+            // the last refresh must release it once no project lists the id.
+            if sharedRuntimeStateLives {
+                let isStillListed = projects.contains { project in
+                    projectsManager.worktrees(projectId: project.id).contains { $0.id == worktree.id }
+                }
+                if !isStillListed {
+                    await cleanupWorktreeState(worktreeId: worktree.id)?.value
+                }
             }
             // The refresh has removed this project's row, so it can no longer
             // be used to identify which project owned the selected id. Keep
@@ -14518,9 +14542,9 @@ extension AppState: RemoteSessionsProvider {
         switch worktreeResult {
         case .success(let worktree):
             let sessionResult = if let remoteSessionCreator {
-                await remoteSessionCreator(worktree.id, agentId)
+                await remoteSessionCreator(worktree.id, worktree.projectId, agentId)
             } else {
-                await createRemoteSession(worktreeId: worktree.id, agentId: agentId)
+                await createRemoteSession(worktreeId: worktree.id, projectId: worktree.projectId, agentId: agentId)
             }
             return Self.remoteWorktreeSessionResult(
                 worktree: worktree,

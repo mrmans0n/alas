@@ -303,6 +303,7 @@ struct AppStateWorktreeCleanupBatchTests {
         fixture.state.projectsManager.insertOptimisticWorktree(sibling)
         let firstManager = try #require(fixture.state.acpManager(for: target))
         let secondManager = try #require(fixture.state.acpManager(for: sibling))
+        let legacySession = firstManager.createSession(id: "legacy-owner-session", agentId: "test")
         let firstTab = ACPSessionTabState(
             sessionId: "first-owner-session", title: "First", projectId: fixture.project.id
         )
@@ -311,6 +312,8 @@ struct AppStateWorktreeCleanupBatchTests {
         )
         fixture.state.tabs.append(acpSession: firstTab, to: target.id)
         fixture.state.tabs.append(acpSession: secondTab, to: target.id)
+        let legacyTab = ACPSessionTabState(sessionId: legacySession.id, title: "Legacy")
+        fixture.state.tabs.append(acpSession: legacyTab, to: target.id)
         fixture.state.tabs.appendTerminal(
             worktreeId: target.id,
             title: "shared",
@@ -318,7 +321,7 @@ struct AppStateWorktreeCleanupBatchTests {
         )
         let preflight = try await WorktreeService().deletePreflight(worktreePath: target.path)
         let authorization = WorktreeCleanupDeleteAuthorization(
-            sessionIDsByWorktree: [target.id: ["shared-session", firstTab.sessionId, secondTab.sessionId]],
+            sessionIDsByWorktree: [target.id: ["shared-session", firstTab.sessionId, secondTab.sessionId, legacyTab.sessionId]],
             preflightByWorktree: [target.id: preflight]
         )
 
@@ -331,11 +334,50 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(fixture.state.acpManager(for: secondManager.owner) === secondManager)
         let remaining = fixture.state.tabs.tabs(forWorktree: target.id)
         #expect(!remaining.contains { $0.id == firstTab.id })
+        #expect(!remaining.contains { $0.id == legacyTab.id })
         #expect(remaining.contains { $0.id == secondTab.id })
         #expect(remaining.contains {
             if case .terminal = $0 { return true }
             return false
         })
+    }
+
+    @Test func singleDeleteCleansSharedRuntimeWhenTheOtherOwnerDisappearsBeforeRefresh() async throws {
+        @MainActor final class RemovalProbe {
+            weak var state: AppState?
+            var projectID = ""
+            var worktreeID = ""
+        }
+        let probe = RemovalProbe()
+        let fixture = try await makeCleanupFixture(worktreeCount: 2) { _ in
+            probe.state?.projectsManager.dropRemovedWorktree(id: probe.worktreeID, projectId: probe.projectID)
+        }
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        let secondRepo = fixture.temporaryRoot.appendingPathComponent("second-repo")
+        try FileManager.default.createDirectory(at: secondRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: secondRepo)
+        let secondProject = try await fixture.state.projectsManager.addProject(
+            path: secondRepo, displayName: "second", color: "blue"
+        )
+        fixture.state.projectsManager.insertOptimisticWorktree(Worktree(
+            id: target.id, projectId: secondProject.id, name: target.name,
+            branch: target.branch, path: target.path, status: .clean, lastActivity: .distantPast
+        ))
+        probe.state = fixture.state
+        probe.projectID = secondProject.id
+        probe.worktreeID = target.id
+        fixture.state.tabs.appendTerminal(worktreeId: target.id, title: "shared", sessionId: "shared-terminal")
+
+        #expect(await fixture.state.cliDeleteWorktree(target, force: true, keepBranch: true) == .ok)
+        for _ in 0..<500 {
+            let firstGone = !fixture.state.projectsManager.worktrees(projectId: fixture.project.id).contains { $0.id == target.id }
+            if firstGone && fixture.state.tabs.tabs(forWorktree: target.id).isEmpty { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!fixture.state.projectsManager.worktrees(projectId: fixture.project.id).contains { $0.id == target.id })
+        #expect(!fixture.state.projectsManager.worktrees(projectId: secondProject.id).contains { $0.id == target.id })
+        #expect(fixture.state.tabs.tabs(forWorktree: target.id).isEmpty)
     }
 
     /// A batch holds each item's `.deleting` claim past the removal itself.
