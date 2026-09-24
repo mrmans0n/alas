@@ -13,7 +13,7 @@ struct LSPInstallProgressSheetPresentationTests {
     }
 
     @Test func sheetOwnsRuntimeHookApprovals() async throws {
-        let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
+        let state = AppState(store: InMemoryStore(), restoreActiveTabsOnStartup: false)
         let sheet = LSPInstallProgressSheet(
             installer: state.lspInstaller,
             approvalQueue: state.repoHookApprovalQueue
@@ -52,6 +52,14 @@ struct LSPInstallProgressSheetPresentationTests {
 
         #expect(nestedRequest?.context == .sessionOpen)
         #expect(await task.value == .approve)
+    }
+
+    private struct InMemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? {
+            nil
+        }
     }
 
     private func waitUntil(_ condition: () -> Bool) async {
