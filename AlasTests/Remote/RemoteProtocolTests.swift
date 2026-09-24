@@ -480,6 +480,7 @@ struct RemoteProtocolTests {
                     maxItems: nil,
                     format: nil,
                     pattern: nil,
+                    isSecret: true,
                     options: [.init(value: "safe", title: "Safe", description: nil)],
                     defaultValue: .string("safe")
                 )
@@ -501,6 +502,13 @@ struct RemoteProtocolTests {
             content: ["strategy": .string("safe")]
         )
         #expect(try roundTrip(response) == response)
+    }
+
+    @Test func elicitationFieldWithoutSecretFlagDecodesForOlderPeers() throws {
+        let json = #"{"key":"name","type":"string","title":"Name","required":true,"options":[]}"#.data(using: .utf8)!
+        let field = try JSONDecoder().decode(RemoteElicitationField.self, from: json)
+
+        #expect(!field.isSecret)
     }
 
     @Test func clientMessageDecodesSendPrompt() throws {

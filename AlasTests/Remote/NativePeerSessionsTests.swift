@@ -44,13 +44,14 @@ struct NativePeerSessionsTests {
         maxItems: Int? = nil,
         format: String? = nil,
         pattern: String? = nil,
+        isSecret: Bool = false,
         options: [RemoteElicitationOption] = [],
         defaultValue: ACPElicitationValue? = nil
     ) -> RemoteElicitationField {
         .init(key: key, type: type, title: key, description: nil, required: required,
               minLength: minLength, maxLength: maxLength, minimum: minimum, maximum: maximum,
               minItems: minItems, maxItems: maxItems, format: format, pattern: pattern,
-              options: options, defaultValue: defaultValue)
+              isSecret: isSecret, options: options, defaultValue: defaultValue)
     }
 
     @Test func permissionPresentationKeepsToolNameAlongsideTitle() {
@@ -310,6 +311,40 @@ struct NativePeerSessionsTests {
         #expect(links.sent(to: "B").contains(
             .elicitationResponse(sessionId: "s", requestId: "url-request", action: "accept", content: [:])
         ))
+    }
+
+    @Test func formElicitationCanBeCancelled() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
+                                          messages: [], firstIndex: 0, totalCount: 0, epoch: 1, revision: 0), from: "B")
+        links.receive(.elicitationRequest(sessionId: "s", payload: .init(
+            requestId: "form-request", title: "Choose", message: "Pick a value", mode: "form", fields: [],
+            elicitationId: nil, url: nil
+        )), from: "B")
+
+        client.respondToElicitation(requestId: "form-request", action: "cancel")
+
+        #expect(links.sent(to: "B").contains(
+            .elicitationResponse(sessionId: "s", requestId: "form-request", action: "cancel", content: nil)
+        ))
+    }
+
+    @Test func secretStringElicitationFieldsUseMaskedInput() {
+        let secret = elicitationField("token", type: "string", isSecret: true)
+        let regular = elicitationField("name", type: "string")
+        let nonString = elicitationField("count", type: "integer", isSecret: true)
+
+        #expect(NativePeerElicitationFieldPresentation.usesSecureInput(for: secret))
+        #expect(!NativePeerElicitationFieldPresentation.usesSecureInput(for: regular))
+        #expect(!NativePeerElicitationFieldPresentation.usesSecureInput(for: nonString))
     }
 
     @Test func arrayElicitationSubmitsSelectedOptionsAsStringArray() {

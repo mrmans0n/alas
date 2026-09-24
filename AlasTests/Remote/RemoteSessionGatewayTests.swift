@@ -1245,7 +1245,10 @@ struct RemoteSessionGatewayTests {
             ACPElicitationRequestParams.self,
             from: Data(#"""
             {"sessionId":"remote","mode":"form","message":"Pick", "requestedSchema":{
-              "properties":{"strategy":{"type":"string","enum":["safe","fast"]}},
+              "properties":{
+                "strategy":{"type":"string","enum":["safe","fast"]},
+                "token":{"type":"string","_meta":{"codex":{"isSecret":true}}}
+              },
               "required":["strategy"]
             }}
             """#.utf8)
@@ -1261,7 +1264,8 @@ struct RemoteSessionGatewayTests {
             return nil
         }.first)
         #expect(payload.requestId == pending.id.uuidString)
-        #expect(payload.fields.first?.options.map(\.value) == ["safe", "fast"])
+        #expect(payload.fields.first { $0.key == "strategy" }?.options.map(\.value) == ["safe", "fast"])
+        #expect(payload.fields.first { $0.key == "token" }?.isSecret == true)
 
         session.transcript.messages.append(.agent(id: UUID(), StreamingText("still waiting")))
         try await Task.sleep(nanoseconds: 250_000_000)

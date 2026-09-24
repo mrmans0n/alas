@@ -566,6 +566,12 @@ struct NativePeerElicitationOptionPresentation {
     }
 }
 
+enum NativePeerElicitationFieldPresentation {
+    static func usesSecureInput(for field: RemoteElicitationField) -> Bool {
+        field.type == "string" && field.options.isEmpty && field.isSecret
+    }
+}
+
 private struct NativePeerQuestionRequestCard: View {
     let request: RemoteQuestionPayload
     let canDrive: Bool
@@ -749,6 +755,10 @@ private struct NativePeerElicitationRequestCard: View {
                     client.respondToElicitation(requestId: request.requestId, action: "decline")
                 }
                 .disabled(!canDrive)
+                Button("Cancel", role: .cancel) {
+                    client.respondToElicitation(requestId: request.requestId, action: "cancel")
+                }
+                .disabled(!canDrive)
             }
         }
     }
@@ -812,6 +822,12 @@ private struct NativePeerElicitationRequestCard: View {
                         }
                     }
                 }
+            case "string" where NativePeerElicitationFieldPresentation.usesSecureInput(for: field):
+                SecureField(field.title, text: Binding(
+                    get: { formState.values[field.key] ?? "" },
+                    set: { formState.values[field.key] = $0 }
+                ))
+                .disabled(!canDrive)
             case "boolean":
                 Toggle(field.title, isOn: Binding(
                     get: { formState.booleanValues[field.key] ?? false },

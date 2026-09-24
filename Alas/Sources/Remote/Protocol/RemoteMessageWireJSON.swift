@@ -320,8 +320,73 @@ struct RemoteElicitationField: Codable, Equatable, Sendable {
     let maxItems: Int?
     let format: String?
     let pattern: String?
+    /// Whether free-form string input should be masked in native prompts.
+    let isSecret: Bool
     let options: [RemoteElicitationOption]
     let defaultValue: ACPElicitationValue?
+
+    init(
+        key: String,
+        type: String,
+        title: String,
+        description: String?,
+        required: Bool,
+        minLength: Int?,
+        maxLength: Int?,
+        minimum: Double?,
+        maximum: Double?,
+        minItems: Int?,
+        maxItems: Int?,
+        format: String?,
+        pattern: String?,
+        isSecret: Bool = false,
+        options: [RemoteElicitationOption],
+        defaultValue: ACPElicitationValue?
+    ) {
+        self.key = key
+        self.type = type
+        self.title = title
+        self.description = description
+        self.required = required
+        self.minLength = minLength
+        self.maxLength = maxLength
+        self.minimum = minimum
+        self.maximum = maximum
+        self.minItems = minItems
+        self.maxItems = maxItems
+        self.format = format
+        self.pattern = pattern
+        self.isSecret = isSecret
+        self.options = options
+        self.defaultValue = defaultValue
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key, type, title, description, required, minLength, maxLength, minimum, maximum
+        case minItems, maxItems, format, pattern, isSecret, options, defaultValue
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            key: try container.decode(String.self, forKey: .key),
+            type: try container.decode(String.self, forKey: .type),
+            title: try container.decode(String.self, forKey: .title),
+            description: try container.decodeIfPresent(String.self, forKey: .description),
+            required: try container.decode(Bool.self, forKey: .required),
+            minLength: try container.decodeIfPresent(Int.self, forKey: .minLength),
+            maxLength: try container.decodeIfPresent(Int.self, forKey: .maxLength),
+            minimum: try container.decodeIfPresent(Double.self, forKey: .minimum),
+            maximum: try container.decodeIfPresent(Double.self, forKey: .maximum),
+            minItems: try container.decodeIfPresent(Int.self, forKey: .minItems),
+            maxItems: try container.decodeIfPresent(Int.self, forKey: .maxItems),
+            format: try container.decodeIfPresent(String.self, forKey: .format),
+            pattern: try container.decodeIfPresent(String.self, forKey: .pattern),
+            isSecret: try container.decodeIfPresent(Bool.self, forKey: .isSecret) ?? false,
+            options: try container.decode([RemoteElicitationOption].self, forKey: .options),
+            defaultValue: try container.decodeIfPresent(ACPElicitationValue.self, forKey: .defaultValue)
+        )
+    }
 }
 
 struct RemoteElicitationPayload: Codable, Equatable, Sendable {

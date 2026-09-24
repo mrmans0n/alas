@@ -871,6 +871,7 @@ final class RemoteSessionGateway {
                     maxItems: field.schema.maxItems,
                     format: field.schema.format,
                     pattern: field.schema.pattern,
+                    isSecret: field.schema.isSecret,
                     options: field.schema.options.map {
                         .init(value: $0.const, title: $0.title, description: $0.description)
                     },
