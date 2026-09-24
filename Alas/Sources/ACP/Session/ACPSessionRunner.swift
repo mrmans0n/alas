@@ -56,6 +56,7 @@ final class ACPSessionRunner {
     /// written. Callers that track "last activity" want this one.
     private let onMessageActivity: (() -> Void)?
     private let onPromptWorkChanged: (() -> Void)?
+    private let onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)?
     private let onSessionTitleUpdated: ((String) -> Void)?
     private let localTitlesEnabled: @MainActor () -> Bool
     private let localTitleGenerator: @Sendable (String) async -> String?
@@ -202,6 +203,7 @@ final class ACPSessionRunner {
          onPersist: (() -> Void)? = nil,
          onMessageActivity: (() -> Void)? = nil,
          onPromptWorkChanged: (() -> Void)? = nil,
+         onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
          localTitleGenerator: @escaping @Sendable (String) async -> String? = { await ACPLocalTitleGenerator.generate(from: $0) },
@@ -233,6 +235,7 @@ final class ACPSessionRunner {
         self.onPersist = onPersist
         self.onMessageActivity = onMessageActivity
         self.onPromptWorkChanged = onPromptWorkChanged
+        self.onQueuedPromptDispatchRegistration = onQueuedPromptDispatchRegistration
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.localTitlesEnabled = localTitlesEnabled
         self.localTitleGenerator = localTitleGenerator
@@ -1907,6 +1910,7 @@ extension ACPSessionRunner {
         attachments: [ACPMessage.Attachment],
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft? = nil,
+        onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
         onDispatchRegistered: @escaping @Sendable () -> Void,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
@@ -1914,6 +1918,7 @@ extension ACPSessionRunner {
             blocks: Self.blocks(text: text, attachments: attachments),
             intent: intent,
             draft: draft,
+            onQueuedPromptEnqueued: onQueuedPromptEnqueued,
             onDispatchRegistered: onDispatchRegistered,
             onPromptFinished: onPromptFinished
         )
@@ -2055,6 +2060,7 @@ extension ACPSessionRunner {
         blocks: [ACPContentBlock],
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft? = nil,
+        onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
@@ -2084,9 +2090,16 @@ extension ACPSessionRunner {
                 Task { @MainActor in onPromptFinished?(false) }
                 return
             }
-            session.enqueue(blocks: blocks, draft: draft)
+            let queuedPromptId = UUID()
+            session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft)
             persistQueue()
-            onDispatchRegistered?()
+            if let onDispatchRegistered {
+                if let onQueuedPromptEnqueued {
+                    onQueuedPromptEnqueued(queuedPromptId)
+                } else {
+                    onDispatchRegistered()
+                }
+            }
             Task { @MainActor in onPromptFinished?(true) }
             return
         }
@@ -2116,9 +2129,16 @@ extension ACPSessionRunner {
             )
         case .enqueue:
             let scheduledWasHead = session.queue.first?.scheduledAt != nil
-            session.enqueue(blocks: blocks, draft: draft)
+            let queuedPromptId = UUID()
+            session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft)
             persistQueue()
-            onDispatchRegistered?()
+            if let onDispatchRegistered {
+                if let onQueuedPromptEnqueued {
+                    onQueuedPromptEnqueued(queuedPromptId)
+                } else {
+                    onDispatchRegistered()
+                }
+            }
             if scheduledWasHead { flushQueueIfIdle() }
             // The user's prompt was accepted into the queue — from the
             // composer's perspective this is a successful submission so
@@ -2308,8 +2328,12 @@ extension ACPSessionRunner {
             // text — annotating from it would invent a wrong end-of-message
             // offset instead of leaving `textOffset` nil as documented on
             // `ACPMessage.Attachment.textOffset`.
-            draft: head.draft
+            draft: head.draft,
+            onDispatchRegistered: queuedPromptDispatchRegistration(for: head.id)
         )
+    }
+    private func queuedPromptDispatchRegistration(for itemId: UUID) -> (@Sendable () -> Void)? {
+        onQueuedPromptDispatchRegistration?(itemId)
     }
 
     private func scheduleQueueWake(at date: Date) {
@@ -2399,7 +2423,8 @@ extension ACPSessionRunner {
             recordUserPrompt: !item.transcriptRecorded,
             // See the matching comment in `flushQueueIfIdle`: the raw
             // optional, not the heuristic `restorableDraft`.
-            draft: item.draft
+            draft: item.draft,
+            onDispatchRegistered: queuedPromptDispatchRegistration(for: item.id)
         )
     }
 

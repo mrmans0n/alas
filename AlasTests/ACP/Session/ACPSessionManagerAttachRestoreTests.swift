@@ -1211,6 +1211,194 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(promptCompleted == true)
     }
 
+    @Test("queued prompt holds a later model pick until RPC handoff")
+    func queuedPromptHoldsLaterModelPickUntilHandoff() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        let activePromptGate = PromptGate()
+        let queuedPromptGate = PromptGate()
+        let promptCounter = PromptCounter()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [.init(id: "plan", name: "Plan")],
+                currentModel: "sonnet",
+                currentMode: "plan",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { request in
+            let params = try #require(request.params as? ACPSessionSetModelParams)
+            if params.modelId == "haiku" {
+                await modelGate.enterAndWait()
+            }
+            return Data("{}".utf8)
+        }
+        client.scriptAsync(method: "session/prompt") { _ in
+            switch await promptCounter.next() {
+            case 1:
+                await activePromptGate.waitInPrompt()
+            case 2:
+                await queuedPromptGate.waitInPrompt()
+            default:
+                break
+            }
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        var activePromptCompleted: Bool?
+        #expect(manager.submit(
+            sessionId: session.id,
+            text: "active turn",
+            attachments: [],
+            intent: .auto
+        ) { activePromptCompleted = $0 })
+        try await waitUntilAsync { await activePromptGate.hasEntered }
+
+        let firstSelection = manager.enqueueModelSelection(for: session.id, modelId: "haiku")
+        try await waitUntilAsync { await modelGate.hasEntered }
+        var queuedPromptCompleted: Bool?
+        #expect(manager.submit(
+            sessionId: session.id,
+            text: "queue this prompt",
+            attachments: [],
+            intent: .auto
+        ) { queuedPromptCompleted = $0 })
+        let laterSelection = manager.enqueueModelSelection(for: session.id, modelId: "opus")
+
+        await modelGate.release()
+        await firstSelection.value
+        try await waitUntil {
+            session.queue.count == 1 && queuedPromptCompleted == true
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(client.sent.compactMap {
+            ($0.params as? ACPSessionSetModelParams)?.modelId
+        } == ["haiku"])
+
+        await activePromptGate.release()
+        try await waitUntilAsync { await queuedPromptGate.hasEntered }
+        await laterSelection.value
+
+        let orderedRequests = client.sent.filter {
+            $0.method == "session/prompt" || $0.method == "session/set_model"
+        }
+        #expect(orderedRequests.map(\.method) == [
+            "session/prompt",
+            "session/set_model",
+            "session/prompt",
+            "session/set_model",
+        ])
+        #expect(orderedRequests.compactMap {
+            ($0.params as? ACPSessionSetModelParams)?.modelId
+        } == ["haiku", "opus"])
+
+        await queuedPromptGate.release()
+        try await waitUntil {
+            activePromptCompleted == true
+                && queuedPromptCompleted == true
+                && session.queue.isEmpty
+                && session.transcript.streamingState == .idle
+        }
+    }
+
+    @Test("removing a queued prompt releases later model picks")
+    func removingQueuedPromptReleasesLaterModelPicks() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet",
+            currentMode: "plan"
+        ))
+        let client = ACPMockClient()
+        let modelGate = AttachPhaseGate()
+        let activePromptGate = PromptGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "haiku", name: "Haiku"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [.init(id: "plan", name: "Plan")],
+                currentModel: "sonnet",
+                currentMode: "plan",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { request in
+            let params = try #require(request.params as? ACPSessionSetModelParams)
+            if params.modelId == "haiku" {
+                await modelGate.enterAndWait()
+            }
+            return Data("{}".utf8)
+        }
+        client.scriptAsync(method: "session/prompt") { _ in
+            await activePromptGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        var activePromptCompleted: Bool?
+        #expect(manager.submit(
+            sessionId: session.id,
+            text: "active turn",
+            attachments: [],
+            intent: .auto
+        ) { activePromptCompleted = $0 })
+        try await waitUntilAsync { await activePromptGate.hasEntered }
+
+        let firstSelection = manager.enqueueModelSelection(for: session.id, modelId: "haiku")
+        try await waitUntilAsync { await modelGate.hasEntered }
+        var queuedPromptCompleted: Bool?
+        #expect(manager.submit(
+            sessionId: session.id,
+            text: "remove this queued prompt",
+            attachments: [],
+            intent: .auto
+        ) { queuedPromptCompleted = $0 })
+        let laterSelection = manager.enqueueModelSelection(for: session.id, modelId: "opus")
+
+        await modelGate.release()
+        await firstSelection.value
+        try await waitUntil { session.queue.count == 1 && queuedPromptCompleted == true }
+        let queuedItemId = try #require(session.queue.first?.id)
+        await manager.queueRemove(for: session.id, itemId: queuedItemId)
+        await laterSelection.value
+
+        #expect(session.queue.isEmpty)
+        #expect(client.sent.filter {
+            $0.method == "session/prompt"
+        }.count == 1)
+        #expect(client.sent.compactMap {
+            ($0.params as? ACPSessionSetModelParams)?.modelId
+        } == ["haiku", "opus"])
+
+        await activePromptGate.release()
+        try await waitUntil { activePromptCompleted == true && session.transcript.streamingState == .idle }
+    }
+
     @Test("detaching cancels a prompt behind model selection")
     func detachingCancelsPromptBehindModelSelection() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

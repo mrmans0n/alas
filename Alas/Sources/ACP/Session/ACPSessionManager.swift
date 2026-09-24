@@ -422,6 +422,7 @@ final class ACPSessionManager: ObservableObject {
     func queueRemove(for id: ACPSession.ID, itemId: UUID) async {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         guard session.removeFromQueue(id: itemId) else { return }
+        resolveQueuedPromptDispatchWaiter(sessionId: id, itemId: itemId)
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
         onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
@@ -463,6 +464,7 @@ final class ACPSessionManager: ObservableObject {
         }
         guard !hasUnrepresentableSegment else { return nil }
         guard let draft = session.takeForEditing(id: itemId) else { return nil }
+        resolveQueuedPromptDispatchWaiter(sessionId: id, itemId: itemId)
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
         onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
@@ -471,7 +473,10 @@ final class ACPSessionManager: ObservableObject {
 
     func queueClear(for id: ACPSession.ID) async {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
-        session.clearPendingQueue()
+        let removedItems = session.clearPendingQueue()
+        for item in removedItems {
+            resolveQueuedPromptDispatchWaiter(sessionId: id, itemId: item.id)
+        }
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
         onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
@@ -531,6 +536,7 @@ final class ACPSessionManager: ObservableObject {
     }
     private var modelModeSelectionTails: [ACPSession.ID: ModelModeSelectionQueueTail] = [:]
     private var modelModeSelectionGenerations: [ACPSession.ID: UUID] = [:]
+    private var queuedPromptDispatchWaiters: [ACPSession.ID: [UUID: @Sendable () -> Void]] = [:]
 
     /// Toggle auto-run for a remotely-driven session. Writer-gated; persists.
     func setAutoRun(for id: ACPSession.ID, enabled: Bool) async {
@@ -1100,10 +1106,32 @@ final class ACPSessionManager: ObservableObject {
         activeDeferredConfigOptionUpdates[sessionId] = nil
     }
 
+    private func registerQueuedPromptDispatchWaiter(
+        sessionId: ACPSession.ID,
+        itemId: UUID,
+        waiter: @escaping @Sendable () -> Void
+    ) {
+        queuedPromptDispatchWaiters[sessionId, default: [:]][itemId] = waiter
+    }
+
+    private func resolveQueuedPromptDispatchWaiter(sessionId: ACPSession.ID, itemId: UUID) {
+        guard var waiters = queuedPromptDispatchWaiters[sessionId],
+              let waiter = waiters.removeValue(forKey: itemId)
+        else { return }
+        queuedPromptDispatchWaiters[sessionId] = waiters.isEmpty ? nil : waiters
+        waiter()
+    }
+
+    private func resolveQueuedPromptDispatchWaiters(for sessionId: ACPSession.ID) {
+        let waiters = queuedPromptDispatchWaiters.removeValue(forKey: sessionId)
+        waiters?.values.forEach { $0() }
+    }
+
     private func discardDeferredModelModeUpdates(for sessionId: ACPSession.ID) {
         deferredModelModeUpdates[sessionId] = nil
         modelModeSelectionTails[sessionId] = nil
         modelModeSelectionGenerations[sessionId] = nil
+        resolveQueuedPromptDispatchWaiters(for: sessionId)
     }
 
     /// Sessions for which THIS instance holds the writer lease (backing store).
@@ -4640,6 +4668,19 @@ extension ACPSessionManager {
                                           onPromptWorkChanged: { [weak self] in
                                               self?.onQueueChanged?(sessionId, self?.retainedCleanupHasActivePromptWork(for: sessionId) == true)
                                           },
+                                          onQueuedPromptDispatchRegistration: { [weak self] itemId in
+                                              guard let self,
+                                                    self.queuedPromptDispatchWaiters[sessionId]?[itemId] != nil
+                                              else { return nil }
+                                              return {
+                                                  Task { @MainActor [weak self] in
+                                                      self?.resolveQueuedPromptDispatchWaiter(
+                                                        sessionId: sessionId,
+                                                        itemId: itemId
+                                                      )
+                                                  }
+                                              }
+                                          },
                                           onSessionTitleUpdated: { [weak self] title in
                                               self?.refreshRecent()
                                               self?.onSessionTitleUpdated?(sessionId, title)
@@ -5666,6 +5707,7 @@ extension ACPSessionManager {
         draft: ACPComposerDraft? = nil,
         scheduledAt: Date? = nil,
         into sessionId: ACPSession.ID,
+        onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
         onPersisted: (@MainActor (_ persisted: Bool) -> Void)? = nil
     ) {
         guard let session = sessions[sessionId] else {
@@ -5677,7 +5719,9 @@ extension ACPSessionManager {
         if let scheduledAt {
             scheduledId = session.enqueueScheduled(blocks: blocks, scheduledAt: scheduledAt, draft: draft)
         } else {
-            session.enqueue(blocks: blocks, draft: draft)
+            let queuedPromptId = UUID()
+            session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft)
+            onQueuedPromptEnqueued?(queuedPromptId)
             scheduledId = nil
         }
         let items = session.queue
@@ -5889,6 +5933,22 @@ extension ACPSessionManager {
             }
         }
 
+        let onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)?
+        if let waiter = onDispatchRegistered, scheduledAt == nil {
+            onQueuedPromptEnqueued = { [weak self] itemId in
+                guard let self else {
+                    waiter()
+                    return
+                }
+                self.registerQueuedPromptDispatchWaiter(
+                    sessionId: sessionId,
+                    itemId: itemId,
+                    waiter: waiter
+                )
+            }
+        } else {
+            onQueuedPromptEnqueued = nil
+        }
         switch session.agentState {
         case .ready:
             if waitForModelModeSelections,
@@ -5938,9 +5998,10 @@ extension ACPSessionManager {
                     draft: draft,
                     scheduledAt: scheduledAt,
                     into: sessionId,
+                    onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                     onPersisted: onScheduledPersisted
                 )
-                onDispatchRegistered?()
+                if onQueuedPromptEnqueued == nil { onDispatchRegistered?() }
                 if scheduledAt == nil {
                     Task { @MainActor in onCompleted(true) }
                 }
@@ -5954,6 +6015,7 @@ extension ACPSessionManager {
                 attachments: attachments,
                 intent: intent,
                 draft: draft,
+                onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onDispatchRegistered: { onDispatchRegistered?() },
                 onPromptFinished: { succeeded in onCompleted(succeeded) }
             )
@@ -5968,9 +6030,10 @@ extension ACPSessionManager {
                 draft: draft,
                 scheduledAt: scheduledAt,
                 into: sessionId,
+                onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onPersisted: onScheduledPersisted
             )
-            onDispatchRegistered?()
+            if onQueuedPromptEnqueued == nil { onDispatchRegistered?() }
             if scheduledAt == nil {
                 Task { @MainActor in onCompleted(true) }
             }
@@ -5988,9 +6051,10 @@ extension ACPSessionManager {
                 draft: draft,
                 scheduledAt: scheduledAt,
                 into: sessionId,
+                onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onPersisted: onScheduledPersisted
             )
-            onDispatchRegistered?()
+            if onQueuedPromptEnqueued == nil { onDispatchRegistered?() }
             if scheduledAt == nil {
                 Task { @MainActor in onCompleted(true) }
             }
