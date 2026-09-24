@@ -52,7 +52,7 @@ struct WebPreviewAutomationRoutingTests {
     @Test func projectScopedWorktreeOwnerUsesThePathKeyedTabBucket() async throws {
         let tabs = TabsManager(store: MemoryStore())
         let owner = SessionOwnerID.projectWorktree(projectId: "project-a", worktreeId: "shared-path")
-        _ = tabs.openWebPreview(worktreeId: owner.tabStorageKey, url: URL(string: "https://example.com"))
+        _ = tabs.openWebPreview(owner: owner, url: URL(string: "https://example.com"))
         let service = WebPreviewAutomationService(
             tabs: tabs, owner: owner, isAuthorized: { true },
             resolveOpen: { _ in throw WebPreviewAutomationError.unavailable },
@@ -64,6 +64,40 @@ struct WebPreviewAutomationRoutingTests {
 
         #expect(previews.count == 1)
         #expect(previews.first?["owner_key"] as? String == owner.storageKey)
+    }
+
+    @Test func projectScopedAutomationCannotSeeAnotherProjectsPreview() async throws {
+        let tabs = TabsManager(store: MemoryStore())
+        let first = SessionOwnerID.projectWorktree(projectId: "project-a", worktreeId: "shared-path")
+        let second = SessionOwnerID.projectWorktree(projectId: "project-b", worktreeId: "shared-path")
+        _ = tabs.openWebPreview(owner: first, url: URL(string: "https://example.com/a"), remoteHost: "host-a")
+        let service = WebPreviewAutomationService(
+            tabs: tabs, owner: second, isAuthorized: { true },
+            resolveOpen: { _ in throw WebPreviewAutomationError.unavailable },
+            focus: { _ in Issue.record("A foreign preview must not be focused") }
+        )
+
+        let listed = try await service.perform(.init(action: .list))
+        #expect((listed["previews"] as? [[String: Any]])?.isEmpty == true)
+        await #expect(throws: WebPreviewAutomationError.self) {
+            _ = try await service.perform(.init(action: .open))
+        }
+        await #expect(throws: WebPreviewAutomationError.self) {
+            _ = try await service.perform(.init(action: .open, url: "https://example.com/b"))
+        }
+        let retained = try #require(tabs.tabs(forWorktree: first.tabStorageKey).compactMap { tab -> WebPreviewTabState? in
+            guard case .webPreview(let state) = tab else { return nil }
+            return state
+        }.first)
+        #expect(retained.projectId == first.projectID)
+        #expect(retained.url?.absoluteString == "https://example.com/a")
+        let legacy = WebPreviewAutomationService(
+            tabs: tabs, owner: .worktree("shared-path"), isAuthorized: { true },
+            resolveOpen: { _ in throw WebPreviewAutomationError.unavailable },
+            focus: { _ in Issue.record("An unqualified owner must not claim A's preview") }
+        )
+        let legacyList = try await legacy.perform(.init(action: .list))
+        #expect((legacyList["previews"] as? [[String: Any]])?.isEmpty == true)
     }
 
     @Test func closedAndReopenedPreviewRejectsOldHandle() async throws {

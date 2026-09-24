@@ -11937,7 +11937,14 @@ final class AppState {
 
     private func checkpointACPLeaseCount(owner: SessionOwnerID) -> Int {
         do {
-            return try ACPSessionStore(path: Paths.acpSessionsDB(for: owner).path).activeLeaseCount(
+            let databaseURL: URL
+            if case .projectWorktree(let projectId, let worktreeId) = owner,
+               let worktree = worktree(withId: worktreeId, inProjectId: projectId) {
+                databaseURL = acpSessionsDatabaseURL(for: worktree, owner: owner)
+            } else {
+                databaseURL = Paths.acpSessionsDB(for: owner)
+            }
+            return try ACPSessionStore(path: databaseURL.path).activeLeaseCount(
                 now: Int64(Date().timeIntervalSince1970),
                 staleAfter: ACPSessionManager.leaseStaleAfter
             )
@@ -11965,16 +11972,21 @@ final class AppState {
 
     private func acpSessionsDatabaseURL(for worktree: Worktree, owner: SessionOwnerID) -> URL {
         let scopedURL = Paths.acpSessionsDB(for: owner)
+        let previousScopedURL = Paths.previousProjectScopedACPSessionsDB(for: owner)
         let legacyURL = Paths.acpSessionsDB(forWorktreeId: worktree.id)
         let ownerURL = URL(fileURLWithPath: legacyURL.path + ".owner")
         if FileManager.default.fileExists(atPath: ownerURL.path) {
-            guard let recordedID = try? String(contentsOf: ownerURL, encoding: .utf8),
-                  recordedID == worktree.projectId,
-                  FileManager.default.fileExists(atPath: legacyURL.path)
-            else { return scopedURL }
-            return legacyURL
+            if let recordedID = try? String(contentsOf: ownerURL, encoding: .utf8),
+               recordedID == worktree.projectId,
+               FileManager.default.fileExists(atPath: legacyURL.path) {
+                return legacyURL
+            }
         }
         if FileManager.default.fileExists(atPath: scopedURL.path) { return scopedURL }
+        if let previousScopedURL, FileManager.default.fileExists(atPath: previousScopedURL.path) {
+            return previousScopedURL
+        }
+        if FileManager.default.fileExists(atPath: ownerURL.path) { return scopedURL }
         let hasDuplicateProjectPath = otherProjectsStillListWorktree(
             id: worktree.id,
             exceptProjectId: worktree.projectId

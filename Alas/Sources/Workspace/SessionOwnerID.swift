@@ -29,7 +29,7 @@ enum SessionOwnerID: Hashable, Sendable {
     }
 
     /// Worktree tabs remain stored under the path-derived ID used by the
-    /// worktree APIs. ACP persistence uses `storageKey` to distinguish projects.
+    /// worktree APIs. ACP persistence derives a project-scoped database name.
     var tabStorageKey: String {
         switch self {
         case .worktree(let id), .projectWorktree(_, let id): id

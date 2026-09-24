@@ -35,6 +35,9 @@ struct WebPreviewAutomationService {
             return ["version": 1, "owner_key": owner.storageKey, "previews": previews().map { snapshot($0) }]
         }
         if command.action == .open {
+            // The tab bucket has one preview per path. Do not replace another
+            // project's preview when this owner requests an explicit URL.
+            guard !hasForeignPreview else { throw WebPreviewAutomationError.unavailable }
             let existing = previews().first
             if command.url == nil, command.scriptKey == nil, let existing {
                 focus(existing.id)
@@ -98,8 +101,17 @@ struct WebPreviewAutomationService {
 
     private func previews() -> [WebPreviewTabState] {
         tabs.tabs(forWorktree: owner.tabStorageKey).compactMap {
-            guard case .webPreview(let state) = $0, state.ownerKey == owner.tabStorageKey else { return nil }
+            guard case .webPreview(let state) = $0,
+                  state.ownerKey == owner.tabStorageKey,
+                  state.projectId == owner.projectID else { return nil }
             return state
+        }
+    }
+
+    private var hasForeignPreview: Bool {
+        tabs.tabs(forWorktree: owner.tabStorageKey).contains {
+            guard case .webPreview(let state) = $0 else { return false }
+            return state.ownerKey == owner.tabStorageKey && state.projectId != owner.projectID
         }
     }
 

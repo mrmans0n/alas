@@ -510,6 +510,33 @@ struct RemoteAppStateAccessTests {
         #expect(!reopenedManager.sessionRows.contains { $0.id == "legacy-session" })
     }
 
+    @Test func projectScopedACPHistoryFromPreviousFilenameRemainsReadable() async throws {
+        let fixture = try makeSharedPathState()
+        defer { cleanupSharedPathFiles(fixture) }
+        let owner = SessionOwnerID.projectWorktree(
+            projectId: fixture.second.projectId, worktreeId: fixture.second.id
+        )
+        let previousURL = try #require(Paths.previousProjectScopedACPSessionsDB(for: owner))
+        defer {
+            for suffix in ["", "-wal", "-shm"] {
+                try? FileManager.default.removeItem(atPath: previousURL.path + suffix)
+            }
+        }
+        let previous = ACPSessionPersistence(path: previousURL.path)
+        let now = Int64(Date().timeIntervalSince1970)
+        try await previous.upsertSession(ACPSessionRow(
+            id: "previous-scoped-session", agentId: "test-agent", title: "Previous scoped history",
+            titleSource: .manual, currentModel: nil, currentMode: nil,
+            autoRun: false, createdAt: now, updatedAt: now,
+            lastOpenedAt: now, archived: false
+        ))
+
+        let manager = try #require(fixture.state.acpManager(for: fixture.second))
+        await manager.refreshRecentNow()
+        #expect(manager.persistence.path == previousURL.path)
+        #expect(manager.sessionRows.contains { $0.id == "previous-scoped-session" })
+    }
+
     @Test func reloadTabsBootstrapsEachProjectScopedACPOwner() async throws {
         let fixture = try makeSharedPathState()
         defer { cleanupSharedPathFiles(fixture) }

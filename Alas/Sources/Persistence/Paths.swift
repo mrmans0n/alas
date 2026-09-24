@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum Paths {
@@ -61,11 +62,21 @@ extension Paths {
         acpSessionsRoot.appendingPathComponent("\(id).sqlite")
     }
 
-    /// Worktree owners deliberately retain the historical filename while a
-    /// checkout gets its own namespaced database. This keeps existing ACP
-    /// histories intact and prevents equal paths on separate hosts colliding.
+    /// Legacy worktree owners retain the historical path; project worktrees
+    /// use a bounded, namespaced filename, and checkouts keep their own name.
     static func acpSessionsDB(for owner: SessionOwnerID) -> URL {
-        acpSessionsDB(forWorktreeId: owner.storageKey)
+        if case .projectWorktree(let projectId, let worktreeId) = owner {
+            let identity = Data("\(projectId.utf8.count):\(projectId)\(worktreeId)".utf8)
+            let digest = SHA256.hash(data: identity).map { String(format: "%02x", $0) }.joined()
+            return acpSessionsDB(forWorktreeId: "project-worktree-v2--\(digest)")
+        }
+        return acpSessionsDB(forWorktreeId: owner.storageKey)
+    }
+
+    /// Pre-digest project-scoped databases remain readable after upgrading.
+    static func previousProjectScopedACPSessionsDB(for owner: SessionOwnerID) -> URL? {
+        guard case .projectWorktree = owner else { return nil }
+        return acpSessionsDB(forWorktreeId: owner.storageKey)
     }
 
     static func acpSessionsDB(forProjectId projectId: String, worktreeId: String) -> URL {
