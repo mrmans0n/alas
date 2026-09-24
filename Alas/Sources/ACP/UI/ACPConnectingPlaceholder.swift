@@ -6,12 +6,22 @@ import SwiftUI
 /// agent token.
 struct ACPConnectingPlaceholder: View {
     let agentDisplayName: String
+    let connectionStartedAt: Date?
+    let reconnectAvailable: Bool
+    let restartInProgress: Bool
+    let onRestart: () -> Void
     @Environment(\.theme) private var theme
     @State private var pulse = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             statusHeader
+            ACPStalledConnectionButton(
+                startedAt: connectionStartedAt,
+                reconnectAvailable: reconnectAvailable,
+                restartInProgress: restartInProgress,
+                onRestart: onRestart
+            )
             skeletonBlock(lineCount: 3, widths: [0.78, 0.55, 0.42])
             skeletonBlock(lineCount: 2, widths: [0.62, 0.34])
             skeletonToolRow

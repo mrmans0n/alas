@@ -30,6 +30,24 @@ struct ACPSessionAgentStateTests {
         #expect(session.agentState == .failed("boom"))
     }
 
+    @Test("connection attempt clock starts on spawn and resets on failure")
+    func connectionAttemptClock() {
+        let session = ACPSession(id: "clock", agentId: "claude", worktreeId: "wt", title: "t")
+        #expect(session.connectionAttemptStartedAt == nil)
+
+        let beforeSpawn = Date()
+        session.agentState = .spawning
+        let startedAt = session.connectionAttemptStartedAt
+        #expect(startedAt != nil)
+        #expect(startedAt! >= beforeSpawn)
+
+        session.agentState = .spawning
+        #expect(session.connectionAttemptStartedAt == startedAt)
+
+        session.agentState = .failed("launch failed")
+        #expect(session.connectionAttemptStartedAt == nil)
+    }
+
     @Test("provider state is runtime-only and isolated per session")
     func providerStateIsIsolated() {
         let first = ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "one")
@@ -141,6 +159,114 @@ struct ACPSessionAgentStateTests {
         #expect(session.completeConnectionRecovery())
         #expect(session.connectionRecoveryState == nil)
         #expect(!session.completeConnectionRecovery())
+    }
+}
+
+@MainActor
+@Suite("ACP connection recovery actions")
+struct ACPConnectionRecoveryPolicyTests {
+    private let startedAt = Date(timeIntervalSince1970: 1_000)
+
+    @Test("an active attempt offers restart only after thirty seconds")
+    func stalledAttemptOffersRestart() {
+        let state = ACPConnectionRecoveryState.reconnecting(attempt: 1, maxAttempts: 5)
+
+        #expect(ACPConnectionRecoveryActionPolicy.action(
+            recoveryState: state, agentState: .spawning,
+            startedAt: startedAt, now: startedAt.addingTimeInterval(29)
+        ) == nil)
+        #expect(ACPConnectionRecoveryActionPolicy.action(
+            recoveryState: state, agentState: .spawning,
+            startedAt: startedAt, now: startedAt.addingTimeInterval(30)
+        ) == .restart)
+        #expect(ACPConnectionRecoveryActionPolicy.action(
+            recoveryState: state, agentState: .spawning,
+            startedAt: startedAt, now: startedAt.addingTimeInterval(30),
+            restartInProgress: true
+        ) == nil)
+    }
+
+    @Test("an empty chat can restart a stalled initial connection")
+    func stalledInitialConnectionOffersRestart() {
+        #expect(ACPConnectionRecoveryActionPolicy.action(
+            recoveryState: nil, agentState: .spawning,
+            startedAt: startedAt, now: startedAt.addingTimeInterval(30)
+        ) == .restart)
+
+        let latestAttemptStartedAt = startedAt.addingTimeInterval(60)
+        #expect(ACPConnectionRecoveryActionPolicy.action(
+            recoveryState: nil, agentState: .spawning,
+            startedAt: latestAttemptStartedAt, now: latestAttemptStartedAt.addingTimeInterval(29)
+        ) == nil)
+        #expect(ACPConnectionRecoveryActionPolicy.action(
+            recoveryState: nil, agentState: .spawning,
+            startedAt: latestAttemptStartedAt, now: latestAttemptStartedAt.addingTimeInterval(30)
+        ) == .restart)
+    }
+
+    @Test("only active connection attempts offer stalled recovery")
+    func idleAndReadyDoNotOfferRestart() {
+        #expect(ACPConnectionRecoveryActionPolicy.action(
+            recoveryState: nil, agentState: .idle,
+            startedAt: startedAt, now: startedAt.addingTimeInterval(30)
+        ) == nil)
+        #expect(ACPConnectionRecoveryActionPolicy.action(
+            recoveryState: nil, agentState: .ready,
+            startedAt: startedAt, now: startedAt.addingTimeInterval(30)
+        ) == nil)
+    }
+
+    @Test("a failed connection offers retry immediately")
+    func failedConnectionOffersRetry() {
+        #expect(ACPConnectionRecoveryActionPolicy.action(
+            recoveryState: nil, agentState: .failed("launch failed"),
+            startedAt: nil, now: startedAt
+        ) == .retry)
+        #expect(ACPConnectionRecoveryActionPolicy.action(
+            recoveryState: .exhausted(attempts: 5), agentState: .failed("launch failed"),
+            startedAt: nil, now: startedAt
+        ) == .retry)
+    }
+
+    @Test("connecting surfaces hide duplicate actions in mirrors and during restart")
+    func connectingSurfaceRecoveryAvailability() {
+        #expect(ACPStalledConnectionPresentation.actionTitle(
+            startedAt: startedAt,
+            reconnectAvailable: true,
+            restartInProgress: false,
+            now: startedAt.addingTimeInterval(30)
+        ) == "Restart connection")
+        #expect(ACPStalledConnectionPresentation.actionTitle(
+            startedAt: startedAt,
+            reconnectAvailable: false,
+            restartInProgress: false,
+            now: startedAt.addingTimeInterval(30)
+        ) == nil)
+        #expect(ACPStalledConnectionPresentation.actionTitle(
+            startedAt: startedAt,
+            reconnectAvailable: true,
+            restartInProgress: true,
+            now: startedAt.addingTimeInterval(30)
+        ) == nil)
+    }
+
+    @Test("transcript recovery copy calls out uncertain queued delivery")
+    func recoveryCardExplainsUncertainQueueHead() {
+        let presentation = ACPConnectionRecoveryPresentation.make(
+            state: .reconnecting(attempt: 1, maxAttempts: 5),
+            agentState: .spawning,
+            startedAt: startedAt,
+            queuedMessageCount: 1,
+            uncertainQueuedMessageCount: 1,
+            reconnectAvailable: false,
+            restartInProgress: true,
+            now: startedAt.addingTimeInterval(30)
+        )
+
+        #expect(presentation.actionTitle == nil)
+        #expect(presentation.detail.localizedCaseInsensitiveContains("restarting the connection"))
+        #expect(presentation.detail.localizedCaseInsensitiveContains("delivery is uncertain"))
+        #expect(presentation.detail.localizedCaseInsensitiveContains("retry it explicitly"))
     }
 }
 

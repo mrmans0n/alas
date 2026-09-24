@@ -199,6 +199,8 @@ private struct ACPSessionView: View {
                 }
                 if let err = session.lastError {
                     errorBanner(err)
+                } else if case .failed(let reason) = session.agentState {
+                    errorBanner(reason, dismissible: false)
                 }
                 if case .failed(let msg) = session.hydrationState {
                     hydrationFailureBanner(message: msg)
@@ -363,6 +365,13 @@ private struct ACPSessionView: View {
                     ACPFirstRunConnectingView(
                         agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
                         phase: phase,
+                        connectionStartedAt: session.connectionAttemptStartedAt,
+                        reconnectAvailable: !isMirror,
+                        restartInProgress: session.connectionRestartInProgress,
+                        onRestart: {
+                            guard !isMirror else { return }
+                            Task { await manager.reconnectNow(to: sessionId) }
+                        },
                         bottomInset: 0
                     )
                 }
@@ -380,7 +389,14 @@ private struct ACPSessionView: View {
             } else {
                 if isConnecting {
                     ACPConnectingPlaceholder(
-                        agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId
+                        agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
+                        connectionStartedAt: session.connectionAttemptStartedAt,
+                        reconnectAvailable: !isMirror,
+                        restartInProgress: session.connectionRestartInProgress,
+                        onRestart: {
+                            guard !isMirror else { return }
+                            Task { await manager.reconnectNow(to: sessionId) }
+                        }
                     )
                 } else {
                     messageList(contentMaxWidth: contentMaxWidth, showMinimap: showMinimap)
@@ -1062,7 +1078,7 @@ private struct ACPSessionView: View {
         }
     }
 
-    private func errorBanner(_ err: String) -> some View {
+    private func errorBanner(_ err: String, dismissible: Bool = true) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(theme.color("del"))
@@ -1071,14 +1087,25 @@ private struct ACPSessionView: View {
                 .textSelection(.enabled)
                 .foregroundStyle(theme.color("fg"))
             Spacer()
-            Button {
-                session.lastError = nil
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10))
-                    .foregroundStyle(theme.color("fg-faint"))
+            if case .failed = session.agentState,
+               session.connectionRecoveryState == nil,
+               !isMirror {
+                Button("Try again") { Task { await manager.reconnectNow(to: sessionId) } }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(theme.color("accent"))
+                    .disabled(session.connectionRestartInProgress)
             }
-            .buttonStyle(.plain)
+            if dismissible {
+                Button {
+                    session.lastError = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10))
+                        .foregroundStyle(theme.color("fg-faint"))
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(theme.color("del").opacity(0.10))

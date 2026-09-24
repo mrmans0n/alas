@@ -5960,8 +5960,10 @@ extension ACPSessionManager {
         guard let session = sessions[sessionId],
               restartingConnections.insert(sessionId).inserted
         else { return }
+        session.connectionRestartInProgress = true
         retainSession(id: sessionId)
         defer {
+            session.connectionRestartInProgress = false
             restartingConnections.remove(sessionId)
             releaseSession(id: sessionId)
         }
@@ -5971,6 +5973,9 @@ extension ACPSessionManager {
             remoteSessionId: session.remoteSessionId
         )
         let wasRecovering = session.connectionRecoveryState != nil
+        if wasRecovering {
+            session.beginConnectionRecoveryAttempt()
+        }
         cancelAutoReconnect(sessionId: sessionId)
         let oldAttempt = supersedeAttachmentAttempt(for: sessionId)
         cancelledInFlightAttachments.remove(sessionId)
@@ -5993,7 +5998,6 @@ extension ACPSessionManager {
         session.agentState = .idle
         session.transcript.streamingState = .idle
         session.restoreQueue(session.queue, markLegacySendingUncertain: true)
-        session.clearConnectionRecovery()
         session.lastError = nil
         session.setupState = .checking
         if let oldRunner {
@@ -6020,10 +6024,6 @@ extension ACPSessionManager {
         guard sessions[sessionId] === session,
               isCurrentAttachment(sessionId: sessionId, attempt: replacementAttempt, session: session)
         else { return }
-        if wasRecovering {
-            session.beginConnectionRecovery()
-            session.beginConnectionRecoveryAttempt()
-        }
         await runAttachmentAttempt(
             replacementAttempt,
             to: sessionId,
@@ -6038,14 +6038,13 @@ extension ACPSessionManager {
     /// Remote failures resume the bounded retry policy after the immediate
     /// attempt; local adapter exits remain manual.
     func reconnectNow(to sessionId: ACPSession.ID) async {
-        guard !restartingConnections.contains(sessionId) else { return }
+        guard let session = sessions[sessionId],
+              !session.connectionRestartInProgress,
+              !restartingConnections.contains(sessionId)
+        else { return }
         cancelAutoReconnect(sessionId: sessionId)
         onQueueChanged?(sessionId, false)
-        if sessions[sessionId]?.agentState == .spawning {
-            await restartConnection(to: sessionId)
-        } else {
-            await reattach(to: sessionId)
-        }
+        await restartConnection(to: sessionId)
         guard sessions[sessionId]?.agentState != .ready,
               effectiveRemoteHost() != nil
         else { return }

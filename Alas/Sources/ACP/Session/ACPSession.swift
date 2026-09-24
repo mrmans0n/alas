@@ -165,7 +165,22 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Note: `AgentState.idle` means "no runner spawned yet" (process
     /// lifecycle), distinct from `StreamingState.idle` which means
     /// "runner is attached but not currently mid-prompt" (turn lifecycle).
-    @Published var agentState: AgentState = .idle
+    @Published var agentState: AgentState = .idle {
+        didSet {
+            if agentState == .spawning {
+                if oldValue != .spawning {
+                    connectionAttemptStartedAt = Date()
+                }
+            } else {
+                connectionAttemptStartedAt = nil
+            }
+        }
+    }
+    @Published private(set) var connectionAttemptStartedAt: Date?
+    /// True while a user-triggered restart or retry is replacing the active
+    /// connection. Views use it to keep recovery visible without offering a
+    /// second action against the same session.
+    @Published var connectionRestartInProgress = false
     /// Runtime-only state for the current unexpected connection loss.
     /// Nil outside a recovery incident.
     @Published private(set) var connectionRecoveryState: ACPConnectionRecoveryState?
