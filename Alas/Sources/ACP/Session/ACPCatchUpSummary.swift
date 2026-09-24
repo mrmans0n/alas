@@ -68,8 +68,14 @@ enum ACPCatchUpSourceBuilder {
             resultStatus: String?
         )
         var candidates: [Candidate] = []
+        var lastIndexByStableID: [String: Int] = [:]
+        for (index, message) in messages.enumerated() {
+            lastIndexByStableID[message.stableId] = index
+        }
 
-        for (index, message) in messages.enumerated() where index != activeMessageIndex {
+        for (index, message) in messages.enumerated()
+            where index != activeMessageIndex && lastIndexByStableID[message.stableId] == index
+        {
             switch message {
             case .user(_, _, let text, _, _):
                 let visibleText = ACPSession.removingAlasWorkspaceContext(from: text)
@@ -153,9 +159,10 @@ enum ACPCatchUpSourceBuilder {
     }
 
     private static func terminalStatus(_ status: String) -> String? {
-        switch status.lowercased() {
-        case "completed", "success": "completed"
-        case "failed", "error": "failed"
+        guard ACPSession.isFinalStatus(status) else { return nil }
+        return switch status {
+        case "completed": "completed"
+        case "failed": "failed"
         case "cancelled", "canceled": "cancelled"
         default: nil
         }

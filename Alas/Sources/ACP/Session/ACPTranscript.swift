@@ -171,7 +171,7 @@ final class ACPTranscript: ObservableObject {
 
     @discardableResult
     func requestNavigation(toStableID stableID: String) -> NavigationRequest? {
-        guard let index = messages.firstIndex(where: { stableId(for: $0) == stableID }) else {
+        guard let index = messages.lastIndex(where: { stableId(for: $0) == stableID }) else {
             return nil
         }
         setVisibleWindow(around: index)

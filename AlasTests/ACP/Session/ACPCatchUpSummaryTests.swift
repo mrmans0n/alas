@@ -48,6 +48,21 @@ struct ACPCatchUpSummaryTests {
         #expect(snapshot.scope == .fullSession)
     }
 
+    @Test("source snapshots retain only the last replayed message with a stable ID")
+    func duplicateSourcesUseLastSnapshot() throws {
+        let snapshot = try #require(ACPCatchUpSourceBuilder.make(
+            sessionID: "session-1",
+            messages: [
+                .user(id: UUID(), messageId: "replayed", text: "Older replay snapshot", attachments: []),
+                .user(id: UUID(), messageId: "replayed", text: "Latest replay snapshot", attachments: [])
+            ]
+        ))
+
+        #expect(snapshot.entries.count == 1)
+        #expect(snapshot.entries[0].text == "Latest replay snapshot")
+        #expect(snapshot.entries[0].stableID == "acp-user:replayed")
+    }
+
     @Test("active-turn agent rows are excluded even when an older stream can resume")
     func activeTurnAgentRowsAreIncomplete() throws {
         let messages: [ACPMessage] = [
@@ -128,6 +143,17 @@ struct ACPCatchUpSummaryTests {
 
         #expect(snapshot.scope == .recentActivity(omittedEntryCount: 1))
         #expect(snapshot.resultEvidence == .init(completedCount: 0, failedCount: 0, cancelledCount: 0))
+    }
+
+    @Test("only canonical terminal tool statuses enter source snapshots")
+    func toolStatusesUseCanonicalAllowlist() {
+        let messages: [ACPMessage] = [
+            .toolCall(.init(toolCallId: "success-alias", title: "Alias", status: "success")),
+            .toolCall(.init(toolCallId: "error-alias", title: "Alias", status: "error")),
+            .toolCall(.init(toolCallId: "case-variant", title: "Variant", status: "COMPLETED"))
+        ]
+
+        #expect(ACPCatchUpSourceBuilder.make(sessionID: "session-1", messages: messages) == nil)
     }
 
     @Test("validation rejects generated references outside the selected snapshot")
@@ -243,5 +269,22 @@ struct ACPCatchUpSummaryTests {
         #expect(secondRequest.id != firstRequest.id)
         #expect(transcript.navigationRequest == secondRequest)
         #expect(transcript.requestNavigation(toStableID: "fabricated") == nil)
+    }
+
+    @Test("message navigation targets the last replayed snapshot")
+    func sourceNavigationUsesLastReplaySnapshot() throws {
+        var messages = (0..<100).map { index in
+            ACPMessage.user(id: UUID(), messageId: "u\(index)", text: "Message \(index)", attachments: [])
+        }
+        messages[5] = .user(id: UUID(), messageId: "replayed", text: "Older snapshot", attachments: [])
+        messages.append(.user(id: UUID(), messageId: "replayed", text: "Latest snapshot", attachments: []))
+        let transcript = ACPTranscript()
+        transcript.messages = messages
+
+        let request = try #require(transcript.requestNavigation(toStableID: "acp-user:replayed"))
+
+        #expect(request.stableID == "acp-user:replayed")
+        #expect(transcript.visibleHead > 5)
+        #expect(transcript.visibleTailBound > messages.count - 1)
     }
 }
