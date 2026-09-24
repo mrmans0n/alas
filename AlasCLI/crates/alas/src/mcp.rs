@@ -1397,6 +1397,7 @@ fn transport_error_result(err: &TransportError) -> Value {
     // Mirrors describe() in main.rs so agents and humans read the same words.
     let message = match err {
         TransportError::Malformed => "malformed response from Alas",
+        TransportError::RequestTooLarge => "request to Alas exceeded 64 KiB",
         TransportError::ResponseTooLarge => "response from Alas exceeded 12 MiB",
         TransportError::Connect | TransportError::Io => "could not reach Alas",
     };
@@ -2903,6 +2904,36 @@ mod tests {
             "/wt"
         )
         .is_err());
+    }
+
+    #[test]
+    fn schedule_complete_rejects_json_expansion_over_socket_limit() {
+        let env = McpEnv {
+            socket: std::env::temp_dir().join(format!(
+                "alas-mcp-oversized-schedule-{}-{}.sock",
+                std::process::id(),
+                line!()
+            )),
+            worktree_dir: "/wt".into(),
+            session_id: "session".into(),
+            parent_session_id: None,
+            workspace_only: false,
+        };
+        let summary = "\"".repeat(40_000);
+        let reply = handle_line(
+            &call(
+                "schedule_complete",
+                json!({ "status": "succeeded", "summary": summary }),
+            ),
+            "/wt",
+            |command| dispatch(&env, command),
+        )
+        .unwrap();
+        assert_eq!(reply["result"]["isError"], json!(true));
+        assert_eq!(
+            reply["result"]["content"][0]["text"],
+            json!("request to Alas exceeded 64 KiB")
+        );
     }
 
     #[test]

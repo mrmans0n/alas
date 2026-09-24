@@ -828,6 +828,7 @@ pub enum TransportError {
     Connect,
     Io,
     Malformed,
+    RequestTooLarge,
     ResponseTooLarge,
 }
 
@@ -837,6 +838,8 @@ pub enum TransportError {
 /// forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RESPONSE_BYTES: usize = 12 * 1024 * 1024;
+/// Must match `AgentHookSocketServer.maxPayloadSize` in the app.
+const MAX_REQUEST_BYTES: usize = 65_536;
 
 /// Bound on how long a single non-mutating `resolve` probe (used to find the
 /// owning instance among several live sockets) may take. Kept short and
@@ -859,6 +862,9 @@ fn send_with_timeout(
     read_timeout: Duration,
 ) -> Result<Response, TransportError> {
     let payload = serde_json::to_vec(req).map_err(|_| TransportError::Malformed)?;
+    if payload.len() > MAX_REQUEST_BYTES {
+        return Err(TransportError::RequestTooLarge);
+    }
     let mut stream = UnixStream::connect(socket).map_err(|_| TransportError::Connect)?;
     stream
         .set_read_timeout(Some(read_timeout))

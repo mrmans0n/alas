@@ -68,6 +68,9 @@ fn describe(err: &DispatchError) -> (String, u8) {
         DispatchError::Transport(TransportError::Malformed) => {
             ("malformed response from Alas".into(), 1)
         }
+        DispatchError::Transport(TransportError::RequestTooLarge) => {
+            ("request to Alas exceeded 64 KiB".into(), 1)
+        }
         DispatchError::Transport(TransportError::ResponseTooLarge) => {
             ("response from Alas exceeded 12 MiB".into(), 1)
         }
@@ -140,6 +143,13 @@ mod tests {
     fn describe_gives_malformed_replies_a_distinct_message() {
         let (msg, code) = describe(&DispatchError::Transport(TransportError::Malformed));
         assert_eq!(msg, "malformed response from Alas");
+        assert_eq!(code, 1);
+    }
+
+    #[test]
+    fn describe_reports_oversized_requests() {
+        let (msg, code) = describe(&DispatchError::Transport(TransportError::RequestTooLarge));
+        assert_eq!(msg, "request to Alas exceeded 64 KiB");
         assert_eq!(code, 1);
     }
 
