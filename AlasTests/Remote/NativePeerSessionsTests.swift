@@ -539,6 +539,20 @@ struct NativePeerSessionsTests {
         ])
     }
 
+    @Test func requiredStringCanSubmitAnEmptyValueWhenTheSchemaAllowsIt() {
+        let message = elicitationField("message", type: "string")
+
+        #expect(!NativePeerElicitationForm.canSubmit(
+            fields: [message], values: [:], selectedOptions: [:]
+        ))
+        #expect(NativePeerElicitationForm.canSubmit(
+            fields: [message], values: ["message": ""], selectedOptions: [:]
+        ))
+        #expect(NativePeerElicitationForm.submittedContent(
+            fields: [message], values: ["message": ""], selectedOptions: [:]
+        ) == ["message": .string("")])
+    }
+
     @Test func booleanElicitationAcceptsEitherExplicitChoice() {
         let enabled = elicitationField("enabled", type: "boolean")
 

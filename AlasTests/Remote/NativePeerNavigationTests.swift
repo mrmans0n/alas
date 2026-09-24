@@ -97,6 +97,49 @@ struct NativePeerNavigationTests {
         #expect(state.tabs.activeTab(forWorktree: worktree.id) != nil)
     }
 
+    @Test func openingConflictClosesPeerOverlay() async throws {
+        let repo = try await makeRepo(name: "open-conflict")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState(store: MemoryStore())
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let worktree = try #require(state.projectsManager.worktrees(projectId: project.id).first)
+        state.selectedWorktreeId = worktree.id
+        let pane = state.rightPaneStore.state(
+            for: worktree,
+            baseBranch: "",
+            comparisonMode: state.config.changes.comparisonMode
+        )
+        defer { state.rightPaneStore.deactivate() }
+        pane.changes = [ChangedFile(
+            path: "file.swift", status: "U", stage: .unstaged,
+            add: 0, del: 0, renameFrom: nil, conflict: .bothModified
+        )]
+
+        let links = FakeLinks()
+        let client = NativePeerSessions(federation: FederatedSessionsProvider(links: links), peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        state.installNativePeerSessionsForTesting(client)
+        client.start()
+        links.receive(.sessionList(sessions: [
+            .init(id: "s", title: "Peer session", agentId: "claude", status: "idle", canDrive: false)
+        ]))
+        client.select("B:s")
+
+        pane.openConflict?("file.swift")
+
+        #expect(client.selectedSessionId == nil)
+        guard let active = state.tabs.activeTab(forWorktree: worktree.id),
+              case .mergeConflict = active else {
+            Issue.record("Expected the conflict tab to become active")
+            return
+        }
+    }
+
     @Test func structuredMessagesExposeUsefulContentWithoutRawJSON() throws {
         let tool = ACPMessage.ToolCall(toolCallId: "tool-1", title: "Run checks",
                                        status: "completed", content: "All checks passed")

@@ -196,7 +196,7 @@ final class RightPaneStore {
                     relativePath: path,
                     title: title
                 )
-                app.tabs.activate(worktreeId: id, tabId: tab.id)
+                app.activateWorktreeCenterTab(worktreeId: id, tabId: tab.id)
                 app.acknowledgeAttentionSurface(worktreeID: id, target: .conflicts(path: path))
             }
             new.ggContextProvider = { [weak self] branch in

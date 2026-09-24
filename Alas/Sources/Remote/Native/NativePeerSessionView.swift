@@ -467,8 +467,10 @@ enum NativePeerElicitationForm {
             else { return "Choose a listed option." }
             return stringValidationMessage(value, for: field)
         case "string":
-            let value = values[field.key] ?? ""
-            if value.isEmpty { return field.required ? "This field is required." : nil }
+            guard let value = values[field.key] else {
+                return field.required ? "This field is required." : nil
+            }
+            if value.isEmpty && !field.required { return nil }
             return stringValidationMessage(value, for: field)
         case "integer", "number":
             let rawValue = values[field.key] ?? ""
@@ -562,7 +564,7 @@ enum NativePeerElicitationForm {
                     content[field.key] = .string(value)
                 }
             case "string":
-                if let value = values[field.key], !value.isEmpty {
+                if let value = values[field.key], !value.isEmpty || field.required {
                     content[field.key] = .string(value)
                 }
             case "integer":
