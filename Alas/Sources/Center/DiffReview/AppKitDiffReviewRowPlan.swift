@@ -173,7 +173,6 @@ struct AppKitDiffReviewRowInput {
         state.pendingDraftAnchor = anchor
         state.pendingNonLineDraftAnchor = nil
         state.pendingDraftBody = ""
-        state.quoteInsertionGeneration = 0
         state.insertCodeGeneration = 0
         state.draftComposerFocusRequestGeneration &+= 1
     }
@@ -191,7 +190,6 @@ struct AppKitDiffReviewRowInput {
         state.pendingDraftAnchor = nil
         state.pendingNonLineDraftAnchor = anchor
         state.pendingDraftBody = ""
-        state.quoteInsertionGeneration = 0
         state.insertCodeGeneration = 0
         state.draftComposerFocusRequestGeneration &+= 1
     }
@@ -200,7 +198,6 @@ struct AppKitDiffReviewRowInput {
         state.pendingDraftAnchor = nil
         state.pendingNonLineDraftAnchor = nil
         state.pendingDraftBody = ""
-        state.quoteInsertionGeneration = 0
         state.insertCodeGeneration = 0
         state.isDraftComposerFocused = false
     }
@@ -788,7 +785,6 @@ enum AppKitDiffReviewRowPlanBuilder {
     private static func composerSignature(_ state: AppKitDiffReviewFileState) -> Int {
         var hasher = Hasher()
         hasher.combine(state.draftComposerFocusRequestGeneration)
-        hasher.combine(state.quoteInsertionGeneration)
         hasher.combine(state.insertCodeGeneration)
         return hasher.finalize()
     }
@@ -1693,10 +1689,6 @@ struct AppKitDiffReviewComposerRowBody: View {
                     theme: input.theme,
                     isFocused: $isFocused,
                     focusRequestGeneration: input.state.draftComposerFocusRequestGeneration,
-                    quoteMarkdown: input.state.pendingDraftAnchor.map {
-                        ReviewDraftQuote.markdown(path: $0.path, selectedText: $0.selectedText)
-                    },
-                    quoteInsertionGeneration: input.state.quoteInsertionGeneration,
                     codeBlockStyle: .standard(
                         theme: input.theme,
                         baseFont: .systemFont(ofSize: 12),
@@ -1723,15 +1715,6 @@ struct AppKitDiffReviewComposerRowBody: View {
                         .stroke(input.theme.color("accent").opacity(0.65), lineWidth: 0.75))
                     .accessibilityIdentifier("diff-review-draft-composer")
                 HStack {
-                    if input.state.pendingDraftAnchor != nil {
-                        Button("Quote lines") { input.state.quoteInsertionGeneration &+= 1 }
-                            .buttonStyle(.plain).font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(input.theme.color("fg-muted"))
-                            .padding(.horizontal, 8).frame(height: 24)
-                            .background(input.theme.color("bg-3"))
-                            .clipShape(RoundedRectangle(cornerRadius: 5))
-                            .accessibilityIdentifier("diff-review-draft-composer-quote")
-                    }
                     if composerContext?.codeSnippet != nil {
                         Button("Insert code") { input.state.insertCodeGeneration &+= 1 }
                             .buttonStyle(.plain).font(.system(size: 10, weight: .semibold))

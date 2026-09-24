@@ -105,7 +105,7 @@ enum ReviewDraftQuote {
 }
 
 /// What the composer header shows and what "Insert code" drops into the
-/// message. `anchorDescription` mirrors the rail's line labels ("lines 12-15");
+/// message. `lineDescription` mirrors the rail's line labels ("lines 12-15");
 /// `codeSnippet` is `nil` for whole-file anchors, where there is nothing to
 /// quote.
 struct ReviewDraftComposerContext {
@@ -151,8 +151,6 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
     let theme: Theme
     let isFocused: FocusState<Bool>.Binding
     let focusRequestGeneration: Int
-    let quoteMarkdown: String?
-    let quoteInsertionGeneration: Int
     let codeBlockStyle: MarkdownCodeBlockStyle?
     var composerContext: ReviewDraftComposerContext? = nil
     var insertCodeGeneration: Int = 0
@@ -165,8 +163,6 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         theme: Theme,
         isFocused: FocusState<Bool>.Binding,
         focusRequestGeneration: Int = 0,
-        quoteMarkdown: String? = nil,
-        quoteInsertionGeneration: Int = 0,
         codeBlockStyle: MarkdownCodeBlockStyle? = nil,
         composerContext: ReviewDraftComposerContext? = nil,
         insertCodeGeneration: Int = 0,
@@ -178,8 +174,6 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         self.theme = theme
         self.isFocused = isFocused
         self.focusRequestGeneration = focusRequestGeneration
-        self.quoteMarkdown = quoteMarkdown
-        self.quoteInsertionGeneration = quoteInsertionGeneration
         self.codeBlockStyle = codeBlockStyle
         self.composerContext = composerContext
         self.insertCodeGeneration = insertCodeGeneration
@@ -246,14 +240,12 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         }
         applyTheme(to: scrollView, textView: textView)
         applyCodeBlockStyle(to: textView)
-        context.coordinator.requestQuoteInsertionIfNeeded()
         context.coordinator.requestInsertCodeIfNeeded()
         context.coordinator.requestFocusIfNeeded()
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         coordinator.cancelScheduledFocusRequest()
-        coordinator.cancelScheduledQuoteInsertion()
         coordinator.cancelScheduledInsertCode()
         guard let textView = scrollView.documentView as? ReviewDraftComposerNSTextView else { return }
         textView.onKeyboardAction = nil
@@ -289,8 +281,6 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         var parent: ReviewDraftComposerTextEditor
         weak var textView: NSTextView?
         private var latestFulfilledFocusRequestGeneration = 0
-        private var latestQuoteInsertionGeneration = 0
-        private var scheduledQuoteInsertionTask: Task<Void, Never>?
         private var latestInsertCodeGeneration = 0
         private var scheduledInsertCodeTask: Task<Void, Never>?
 
@@ -304,7 +294,6 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
 
         deinit {
             scheduledFocusTask?.cancel()
-            scheduledQuoteInsertionTask?.cancel()
             scheduledInsertCodeTask?.cancel()
         }
 
@@ -323,31 +312,6 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
 
         func textDidEndEditing(_ notification: Notification) {
             parent.isFocused.wrappedValue = false
-        }
-
-        func requestQuoteInsertionIfNeeded() {
-            let generation = parent.quoteInsertionGeneration
-            if generation == 0 {
-                latestQuoteInsertionGeneration = 0
-                scheduledQuoteInsertionTask?.cancel()
-                return
-            }
-            guard generation != latestQuoteInsertionGeneration else { return }
-            latestQuoteInsertionGeneration = generation
-            scheduledQuoteInsertionTask = Task { @MainActor [weak self] in
-                await Task.yield()
-                guard !Task.isCancelled,
-                      let self,
-                      self.parent.quoteInsertionGeneration == generation,
-                      let markdown = self.parent.quoteMarkdown,
-                      let textView = self.textView as? PairedDelimiterTextView
-                else { return }
-                let range = textView.selectedRange()
-                let insertion = ReviewDraftQuote.insertion(markdown: markdown, in: textView.string, replacing: range)
-                textView.performNativeTextInsertion {
-                    textView.insertText(insertion, replacementRange: range)
-                }
-            }
         }
 
         func requestInsertCodeIfNeeded() {
@@ -383,11 +347,6 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         func cancelScheduledInsertCode() {
             scheduledInsertCodeTask?.cancel()
             scheduledInsertCodeTask = nil
-        }
-
-        func cancelScheduledQuoteInsertion() {
-            scheduledQuoteInsertionTask?.cancel()
-            scheduledQuoteInsertionTask = nil
         }
 
         func requestFocusIfNeeded() {
