@@ -2707,22 +2707,30 @@ extension ACPSessionRunner {
         // and persist `lastError` on the queue head — defeating the
         // detach-clears-cleanly fix from the previous commit.
         activePromptID = promptID
-        latestPromptTask = Task { [weak self, onDispatchRegistered, onPromptFinished] in
+        let connectionIsCurrent = isConnectionCurrent
+        latestPromptTask = Task { [weak self, onDispatchRegistered, onPromptFinished, connectionIsCurrent] in
             guard let self else {
                 await MainActor.run {
                     onDispatchRegistered?()
-                    onPromptFinished?(false)
+                    if connectionIsCurrent() {
+                        onPromptFinished?(false)
+                    }
                 }
                 return
             }
             guard await self.hasConfirmedLeaseForSideEffect() else {
                 await MainActor.run {
+                    let canFinishPrompt = self.isConnectionCurrent() && !self.stopped &&
+                        !self.steerInProgress &&
+                        (self.activePromptID == nil || self.activePromptID == promptID)
                     if self.activePromptID == promptID {
                         self.activePromptID = nil
                     }
                     self.cancelledPromptIDs.remove(promptID)
                     onDispatchRegistered?()
-                    onPromptFinished?(false)
+                    if canFinishPrompt {
+                        onPromptFinished?(false)
+                    }
                 }
                 return
             }
@@ -2736,6 +2744,11 @@ extension ACPSessionRunner {
                 // detached session.
                 if self.activePromptID != promptID {
                     self.cancelledPromptIDs.remove(promptID)
+                    onDispatchRegistered?()
+                    if self.isConnectionCurrent(), !self.stopped,
+                       !self.steerInProgress, self.activePromptID == nil {
+                        onPromptFinished?(false)
+                    }
                     return (false, nil)
                 }
                 // Re-allow streaming boundary crossings now that we are inside
@@ -2796,13 +2809,7 @@ extension ACPSessionRunner {
                 self.session.transcript.streamingState = .sending
                 return (true, nil)
             }
-            guard promptRecording.proceeded else {
-                await MainActor.run {
-                    onDispatchRegistered?()
-                    onPromptFinished?(false)
-                }
-                return
-            }
+            guard promptRecording.proceeded else { return }
             if let messageID = promptRecording.messageID,
                let checkpointID = await self.onCheckpointCapture?(checkpointPrompt, checkpointHasAttachments) {
                 await MainActor.run {

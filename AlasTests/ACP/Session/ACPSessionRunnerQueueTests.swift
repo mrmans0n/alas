@@ -685,6 +685,58 @@ struct ACPSessionRunnerQueueTests {
         #expect(finished == nil)
     }
 
+    @Test("superseded prompt lease failure does not finish its callback")
+    func supersededPromptLeaseFailureDoesNotFinish() async throws {
+        let currentConnection = ConnectionCurrentFlag(true)
+        let leaseGate = LeaseValidationGate(result: false)
+        let (runner, _, _, _) = try mkRunner(
+            validateLease: { await leaseGate.validate() },
+            isConnectionCurrent: { currentConnection.isCurrent }
+        )
+
+        var finished: Bool?
+        runner.sendNow(
+            blocks: [.text("pending")],
+            queuedItemId: nil,
+            onPromptFinished: { finished = $0 }
+        )
+        await leaseGate.waitUntilEntered()
+
+        runner.invalidateActivePrompt()
+        runner.stop()
+        currentConnection.set(false)
+        await leaseGate.release()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(finished == nil)
+    }
+
+    @Test("superseded prompt does not finish after its lease check")
+    func supersededPromptDoesNotFinishAfterLeaseCheck() async throws {
+        let currentConnection = ConnectionCurrentFlag(true)
+        let leaseGate = LeaseValidationGate()
+        let (runner, _, _, _) = try mkRunner(
+            validateLease: { await leaseGate.validate() },
+            isConnectionCurrent: { currentConnection.isCurrent }
+        )
+
+        var finished: Bool?
+        runner.sendNow(
+            blocks: [.text("pending")],
+            queuedItemId: nil,
+            onPromptFinished: { finished = $0 }
+        )
+        await leaseGate.waitUntilEntered()
+
+        runner.invalidateActivePrompt()
+        runner.stop()
+        currentConnection.set(false)
+        await leaseGate.release()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(finished == nil)
+    }
+
     @Test("queued prompt response ack waits for durable queue pop and resumes draining")
     func queuedPromptResponseAckWaitsForDurableQueuePopAndResumesDraining() async throws {
         let (runner, mock, session, store) = try mkRunner()
@@ -1266,14 +1318,19 @@ private actor QueueTestGate {
 private actor LeaseValidationGate {
     private let entered = QueueTestGate()
     private let releaseGate = QueueTestGate()
+    private let result: Bool
     private var blocksFirstValidation = true
+
+    init(result: Bool = true) {
+        self.result = result
+    }
 
     func validate() async -> Bool {
         guard blocksFirstValidation else { return true }
         blocksFirstValidation = false
         await entered.open()
         await releaseGate.wait()
-        return true
+        return result
     }
 
     func waitUntilEntered() async {
