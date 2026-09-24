@@ -47,7 +47,6 @@ struct DiffTabView: View {
     @State private var pendingDraftAnchor: DiffReviewLineAnchor?
     @State private var pendingDraftBody = ""
     @State private var draftComposerFocusRequestGeneration = 0
-    @State private var quoteInsertionGeneration = 0
     @State private var insertCodeGeneration = 0
     @State private var reviewExpandedCollapsedRowIDs: Set<String> = []
     @State private var wrapLines = false
@@ -570,7 +569,6 @@ struct DiffTabView: View {
     private func clearPendingDraft() {
         pendingDraftAnchor = nil
         pendingDraftBody = ""
-        quoteInsertionGeneration = 0
         insertCodeGeneration = 0
         draftComposerFocused = false
     }
@@ -578,7 +576,6 @@ struct DiffTabView: View {
     private func beginPendingDraft(at anchor: DiffReviewLineAnchor) {
         pendingDraftAnchor = anchor
         pendingDraftBody = ""
-        quoteInsertionGeneration = 0
         insertCodeGeneration = 0
         draftComposerFocusRequestGeneration &+= 1
     }
@@ -916,10 +913,6 @@ struct DiffTabView: View {
                 theme: theme,
                 isFocused: $draftComposerFocused,
                 focusRequestGeneration: draftComposerFocusRequestGeneration,
-                quoteMarkdown: pendingDraftAnchor.map {
-                    ReviewDraftQuote.markdown(path: $0.path, selectedText: $0.selectedText)
-                },
-                quoteInsertionGeneration: quoteInsertionGeneration,
                 codeBlockStyle: .standard(
                     theme: theme,
                     baseFont: .systemFont(ofSize: 12),
@@ -938,15 +931,6 @@ struct DiffTabView: View {
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(theme.color("line"), lineWidth: 0.5))
             .accessibilityIdentifier("diff-review-draft-composer")
             HStack(spacing: 6) {
-                Button("Quote lines") { quoteInsertionGeneration &+= 1 }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(theme.color("fg-muted"))
-                    .padding(.horizontal, 8)
-                    .frame(height: 24)
-                    .background(theme.color("bg-3"))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                    .accessibilityIdentifier("diff-review-draft-composer-quote")
                 if composerContext?.codeSnippet != nil {
                     Button("Insert code") { insertCodeGeneration &+= 1 }
                         .buttonStyle(.plain)

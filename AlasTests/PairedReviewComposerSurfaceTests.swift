@@ -63,24 +63,6 @@ struct PairedReviewComposerSurfaceTests {
         #expect(blank.headerText == "Adding a comment on A.swift line 1")
     }
 
-    @Test func reviewDraftComposerInsertsRequestedQuoteAtTheSelection() async throws {
-        let quote = ReviewDraftQuote.markdown(path: "Sources/App.swift", selectedText: "let value = 1")
-        let model = ReviewDraftComposerCapture(text: "beforeafter", quoteMarkdown: quote)
-        let controller = NSHostingController(
-            rootView: ReviewDraftComposerCaptureHarness(model: model, theme: try! ThemeStore().current)
-        )
-        let window = attach(controller)
-        defer { window.orderOut(nil) }
-        await drain(controller.view)
-
-        let composer = try #require(textView(containing: model.text, in: controller.view))
-        composer.setSelectedRange(NSRange(location: 6, length: 0))
-        model.quoteInsertionGeneration += 1
-        await drain(controller.view)
-
-        #expect(model.text == "before\n\n\(quote)\n\nafter")
-    }
-
     @Test func reviewDraftComposerInsertsCodeSnippetAtTheSelection() async throws {
         let context = ReviewDraftComposerContext(
             path: "Sources/App.swift",
@@ -479,9 +461,7 @@ struct PairedReviewComposerSurfaceTests {
 @MainActor
 private final class ReviewDraftComposerCapture: ObservableObject {
     @Published var text: String
-    @Published var quoteInsertionGeneration = 0
     @Published var insertCodeGeneration = 0
-    let quoteMarkdown: String?
     let composerContext: ReviewDraftComposerContext?
     let codeBlockStyle: MarkdownCodeBlockStyle?
     var saveCount = 0
@@ -489,12 +469,10 @@ private final class ReviewDraftComposerCapture: ObservableObject {
 
     init(
         text: String,
-        quoteMarkdown: String? = nil,
         composerContext: ReviewDraftComposerContext? = nil,
         codeBlockStyle: MarkdownCodeBlockStyle? = nil
     ) {
         self.text = text
-        self.quoteMarkdown = quoteMarkdown
         self.composerContext = composerContext
         self.codeBlockStyle = codeBlockStyle
     }
@@ -511,8 +489,6 @@ private struct ReviewDraftComposerCaptureHarness: View {
             text: $model.text,
             theme: theme,
             isFocused: $isFocused,
-            quoteMarkdown: model.quoteMarkdown,
-            quoteInsertionGeneration: model.quoteInsertionGeneration,
             codeBlockStyle: model.codeBlockStyle,
             composerContext: model.composerContext,
             insertCodeGeneration: model.insertCodeGeneration,
