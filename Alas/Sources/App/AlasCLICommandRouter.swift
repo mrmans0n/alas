@@ -105,7 +105,7 @@ struct AlasCLICommandRouter {
                     return .error("Unknown Alas session. Preview commands cannot fall back to another owner.")
                 }
             } else if let cwd = request.cwd, let worktree = service.resolveWorktree(forDirectory: cwd) {
-                owner = .worktree(worktree.id)
+                owner = .projectWorktree(projectId: worktree.projectId, worktreeId: worktree.id)
             } else {
                 return .error("not inside an Alas worktree")
             }

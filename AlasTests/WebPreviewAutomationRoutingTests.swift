@@ -30,6 +30,65 @@ struct WebPreviewAutomationRoutingTests {
         return }
     }
 
+    @Test func cwdOnlyPreviewCommandsUseTheResolvedProjectOwner() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-preview-cwd-owner-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let projectID = "cwd-preview-project"
+        let worktreeID = "cwd-preview-worktree"
+        let worktree = Worktree(
+            id: worktreeID,
+            projectId: projectID,
+            name: "main",
+            branch: "main",
+            path: root,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        let tabs = TabsManager(store: MemoryStore())
+        _ = tabs.openWebPreview(
+            owner: .projectWorktree(projectId: projectID, worktreeId: worktreeID),
+            url: URL(string: "https://project.example")
+        )
+        var listedPreviewCount: Int?
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in nil },
+            originatingWorktree: { _ in nil },
+            visibleWorktrees: { [worktree] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            previewCommand: { command, owner, _ in
+                let service = WebPreviewAutomationService(
+                    tabs: tabs,
+                    owner: owner,
+                    isAuthorized: { true },
+                    resolveOpen: { _ in throw WebPreviewAutomationError.unavailable },
+                    focus: { _ in Issue.record("Listing cannot focus UI") }
+                )
+                do {
+                    let result = try await service.perform(command)
+                    listedPreviewCount = (result["previews"] as? [[String: Any]])?.count
+                    return .ok
+                } catch {
+                    return .error(String(describing: error))
+                }
+            },
+            activateApp: {}
+        )
+
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: nil,
+            cwd: root.path,
+            command: .preview(.init(action: .list))
+        ))
+
+        #expect(response == .ok)
+        #expect(listedPreviewCount == 1)
+    }
+
     @Test func listIsOwnerScopedAndDoesNotLoadPageOrFocus() async throws {
         let tabs = TabsManager(store: MemoryStore())
         let owner = SessionOwnerID.workspaceCheckout(UUID(), .local)

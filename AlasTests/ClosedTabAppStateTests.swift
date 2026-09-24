@@ -281,6 +281,63 @@ struct ClosedTabAppStateTests {
         #expect(reopened.projectId == projectB.id)
     }
 
+    @Test func closingACPSessionRecordsItsProjectInsteadOfTheDisplayedProject() {
+        let state = AppState(store: MemoryStore())
+        let sharedID = "closed-tabs-acp-owner-shared-id"
+        let tab = state.tabs.append(
+            acpSession: ACPSessionTabState(
+                sessionId: "closed-tabs-acp-owner-session",
+                title: "Project A chat",
+                projectId: "project-a"
+            ),
+            to: .projectWorktree(projectId: "project-a", worktreeId: sharedID)
+        )
+
+        state.requestCloseTab(worktreeId: sharedID, projectId: "project-b", tabId: tab.id)
+
+        #expect(state.closedTabHistory.last?.snapshot.projectID == "project-a")
+    }
+
+    @Test func closingWebPreviewRecordsItsProjectInsteadOfTheDisplayedProject() {
+        let state = AppState(store: MemoryStore())
+        let sharedID = "closed-tabs-preview-owner-shared-id"
+        let tab = state.tabs.openWebPreview(
+            owner: .projectWorktree(projectId: "project-a", worktreeId: sharedID),
+            url: URL(string: "https://project-a.example")
+        )
+
+        state.requestCloseTab(worktreeId: sharedID, projectId: "project-b", tabId: tab.id)
+
+        #expect(state.closedTabHistory.last?.snapshot.projectID == "project-a")
+    }
+
+    @Test func closingProjectSpecificTabsRecordsTheirPersistedProject() {
+        let state = AppState(store: MemoryStore())
+        let sharedID = "closed-tabs-project-specific-tabs-shared-id"
+        let tabs = [
+            state.tabs.openOrFocusRunReport(
+                worktreeId: sharedID,
+                projectId: "project-a",
+                runID: "closed-tabs-project-a-run"
+            ),
+            state.tabs.openOrFocusGGLanding(
+                worktreeId: sharedID,
+                projectId: "project-a",
+                stackName: "project-a-stack"
+            ),
+            state.tabs.openOrFocusGGInbox(
+                worktreeId: sharedID,
+                projectId: "project-a",
+                projectName: "Project A"
+            )
+        ]
+
+        for tab in tabs {
+            state.requestCloseTab(worktreeId: sharedID, projectId: "project-b", tabId: tab.id)
+            #expect(state.closedTabHistory.last?.snapshot.projectID == "project-a")
+        }
+    }
+
     @Test func reopeningDoesNotUseAnotherProjectsSamePathWhenRecordedProjectLostCheckout() async {
         let sharedID = "closed-tabs-removed-project-id"
         let recordedProject = ProjectConfig(

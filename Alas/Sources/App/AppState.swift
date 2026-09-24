@@ -8753,6 +8753,21 @@ final class AppState {
             if case .terminal(let terminalState) = tab, let projectID = terminalState.projectId {
                 return projectID
             }
+            if case .acpSession(let sessionState) = tab, let projectID = sessionState.projectId {
+                return projectID
+            }
+            if case .webPreview(let previewState) = tab, let projectID = previewState.projectId {
+                return projectID
+            }
+            if case .runReport(let reportState) = tab, let projectID = reportState.projectId {
+                return projectID
+            }
+            if case .ggInbox(let inboxState) = tab {
+                return inboxState.projectId
+            }
+            if case .ggLanding(let landingState) = tab {
+                return landingState.projectId
+            }
             return projectId ?? worktree(withId: worktreeId)?.projectId
         }()
         closedTabHistory.record(ClosedTabEntry(
