@@ -65,6 +65,23 @@ struct AppConfigHarnessTests {
         #expect(decoded.harness.acpCollapseFinishedToolCalls)
     }
 
+    @Test("catch-up summaries default off and round-trip when enabled")
+    func catchUpSummariesFeatureFlag() throws {
+        #expect(!AppConfig.defaults.harness.acpCatchUpSummariesEnabled)
+
+        var config = AppConfig.defaults
+        config.harness.acpCatchUpSummariesEnabled = true
+        let restored = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+        #expect(restored.harness.acpCatchUpSummariesEnabled)
+
+        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(config)) as? [String: Any])
+        var harness = try #require(object["harness"] as? [String: Any])
+        harness.removeValue(forKey: "acpCatchUpSummariesEnabled")
+        object["harness"] = harness
+        let legacy = try JSONDecoder().decode(AppConfig.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(!legacy.harness.acpCatchUpSummariesEnabled)
+    }
+
     @Test("on-device titles can be disabled without disabling legacy configs")
     func localTitleOptOutPersists() throws {
         var config = AppConfig.defaults

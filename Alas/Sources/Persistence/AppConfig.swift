@@ -294,6 +294,9 @@ struct AppConfig: Codable, Equatable {
         /// Generate an on-device title when the ACP agent does not provide one.
         /// Default: true; users can opt out in Chat settings.
         var acpLocalTitlesEnabled: Bool
+        /// Enables explicit on-device catch-up summaries in ACP sessions.
+        /// Default: false while factuality evaluation remains release-blocking.
+        var acpCatchUpSummariesEnabled: Bool
         var acpShowMinimap: Bool
         /// When true, the chat transcript groups consecutive thinking and
         /// finished tool calls into an expandable activity row.
@@ -312,7 +315,8 @@ struct AppConfig: Codable, Equatable {
         enum CodingKeys: String, CodingKey {
             case notifyOnFinish, notifyOnAwaiting,
                  dismissedHookInstallNudges, dismissedACPSetupNudges,
-                 confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault, acpLocalTitlesEnabled, acpShowMinimap,
+                 confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault, acpLocalTitlesEnabled,
+                 acpCatchUpSummariesEnabled, acpShowMinimap,
                  acpCollapseFinishedToolCalls,
                  exposeAlasMCP, alasMCPTransport, acpDictationLocale
         }
@@ -324,6 +328,7 @@ struct AppConfig: Codable, Equatable {
              acpSendOnEnter: Bool = true,
              acpAutoRunByDefault: Bool = false,
              acpLocalTitlesEnabled: Bool = true,
+             acpCatchUpSummariesEnabled: Bool = false,
              acpShowMinimap: Bool = false,
              acpCollapseFinishedToolCalls: Bool = false,
              exposeAlasMCP: Bool = true,
@@ -338,6 +343,7 @@ struct AppConfig: Codable, Equatable {
             self.acpSendOnEnter = acpSendOnEnter
             self.acpAutoRunByDefault = acpAutoRunByDefault
             self.acpLocalTitlesEnabled = acpLocalTitlesEnabled
+            self.acpCatchUpSummariesEnabled = acpCatchUpSummariesEnabled
             self.acpShowMinimap = acpShowMinimap
             self.acpCollapseFinishedToolCalls = acpCollapseFinishedToolCalls
             self.exposeAlasMCP = exposeAlasMCP
@@ -355,6 +361,7 @@ struct AppConfig: Codable, Equatable {
             acpSendOnEnter = (try? c.decode(Bool.self, forKey: .acpSendOnEnter)) ?? true
             acpAutoRunByDefault = (try? c.decode(Bool.self, forKey: .acpAutoRunByDefault)) ?? false
             acpLocalTitlesEnabled = (try? c.decode(Bool.self, forKey: .acpLocalTitlesEnabled)) ?? true
+            acpCatchUpSummariesEnabled = (try? c.decode(Bool.self, forKey: .acpCatchUpSummariesEnabled)) ?? false
             acpShowMinimap = (try? c.decode(Bool.self, forKey: .acpShowMinimap)) ?? false
             acpCollapseFinishedToolCalls = (try? c.decode(Bool.self, forKey: .acpCollapseFinishedToolCalls)) ?? false
             exposeAlasMCP = (try? c.decode(Bool.self, forKey: .exposeAlasMCP)) ?? true

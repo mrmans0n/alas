@@ -107,6 +107,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// Stable id to align at the viewport top after its bounded window
         /// has been reconciled into the AppKit tiling map.
         private var pendingLogicalTargetId: String?
+        private var lastNavigationRequestID: UUID?
         private var pendingMinimapRowFraction: CGFloat = 0
         private var minimapGestureRange: (count: Int, proportion: CGFloat, layout: ACPTranscriptMinimapLayout?)?
         private var isPendingLogicalResolutionScheduled = false
@@ -286,6 +287,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         func update(host: ACPTranscriptScroller) {
             self.host = host
+            applyNavigationRequestIfNeeded(host.transcript.navigationRequest)
             schedulePendingLogicalTargetResolutionIfPossible()
             // Re-apply unconditionally: `reconciler.apply` itself early-
             // returns and records nothing for a non-positive width (host
@@ -327,6 +329,30 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             restoreInitialPositionIfNeeded()
             alignPendingLogicalTargetIfPossible()
             syncLogicalScrollerMetrics()
+        }
+
+        private func applyNavigationRequestIfNeeded(_ request: ACPTranscript.NavigationRequest?) {
+            guard let request, request.id != lastNavigationRequestID, let host else { return }
+            lastNavigationRequestID = request.id
+            guard host.transcript.messages.contains(where: {
+                host.transcript.stableId(for: $0) == request.stableID
+            }) else { return }
+            host.session.followsTranscriptTail = false
+            reconciler?.setFollowsTail(false)
+            pendingLogicalTargetGlobalIndex = nil
+            pendingMinimapRowFraction = 0
+            pendingLogicalTargetId = request.stableID
+            expandToolCallGroupIfNeeded(containing: request.stableID, host: host)
+        }
+
+        private func expandToolCallGroupIfNeeded(containing stableID: String, host: ACPTranscriptScroller) {
+            guard let group = currentRenderRows(host: host).compactMap({ row -> ACPTranscriptToolCallGroup? in
+                guard case .toolCallGroup(let group) = row,
+                      group.members.contains(where: { $0.stableId == stableID })
+                else { return nil }
+                return group
+            }).first else { return }
+            toolCallGroupExpansionSeeds.setExpanded(true, members: group.members.map(\.stableId))
         }
 
         // MARK: row specs
