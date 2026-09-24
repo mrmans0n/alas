@@ -411,6 +411,52 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(scroller.distanceFromBottom < 1)
     }
 
+    @Test("folding a tail anchor during gesture settling preserves its bottom distance", arguments: [0.0, 20.0])
+    func foldingDuringScrollSettlePreservesTailDistance(distance: Double) {
+        let (reconciler, scroller, _) = makeStack()
+        let history = (0..<20).map { spec("history\($0)") }
+        let spacer = spec("__composer_spacer__", height: 220)
+        reconciler.apply(
+            specs: history + [spec("activity", height: 600), spacer],
+            contentWidth: 600, followsTail: true
+        )
+        scroller.setScrollY(scroller.scrollY - distance)
+        reconciler.noteUserScroll()
+        reconciler.resolveStaleRowId = {
+            $0 == "activity" ? (rowId: "group", assumeHeadGrowth: false) : nil
+        }
+
+        reconciler.apply(
+            specs: history + [spec("group", height: 28), spec("answer", height: 900), spacer],
+            contentWidth: 600, followsTail: true
+        )
+
+        #expect(abs(scroller.distanceFromBottom - distance) < 1)
+    }
+
+    @Test("incremental folding during gesture settling preserves the tail rather than the group header")
+    func incrementalFoldDuringScrollSettlePreservesTail() {
+        let (reconciler, scroller, _) = makeStack()
+        let history = (0..<20).map { spec("history\($0)") }
+        let group = spec("group", height: 28)
+        let spacer = spec("__composer_spacer__", height: 220)
+        reconciler.apply(
+            specs: history + [group, spec("activity", height: 600), spec("answer", height: 40), spacer],
+            contentWidth: 600, followsTail: true
+        )
+        reconciler.noteUserScroll()
+        reconciler.resolveStaleRowId = {
+            $0 == "activity" ? (rowId: "group", assumeHeadGrowth: false) : nil
+        }
+
+        reconciler.apply(
+            specs: history + [group, spec("answer", token: 1, height: 900), spacer],
+            contentWidth: 600, followsTail: true
+        )
+
+        #expect(scroller.distanceFromBottom < 1)
+    }
+
     @Test("append while browsing does not move the viewport")
     func appendWhileBrowsing() {
         let (reconciler, scroller, _) = makeStack()

@@ -1359,6 +1359,9 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
 
         // A wheel/trackpad scroll in the materialized tail is newer user
         // intent than the queued release into unhydrated history.
+        NotificationCenter.default.post(
+            name: NSScrollView.willStartLiveScrollNotification, object: scroller
+        )
         scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: 0))
         scroller.reflectScrolledClipView(scroller.contentView)
         #expect(coordinator.pendingLogicalTargetGlobalIndexForTesting == nil)
@@ -1392,6 +1395,9 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         coordinator.attach(scroller: scroller, host: host)
         scroller.layoutSubtreeIfNeeded()
 
+        NotificationCenter.default.post(
+            name: NSScrollView.willStartLiveScrollNotification, object: scroller
+        )
         scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: 0))
         scroller.reflectScrolledClipView(scroller.contentView)
 
@@ -1430,6 +1436,9 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         session.followsTranscriptTail = false
         let (coordinator, scroller, _) = try attach(session: session)
 
+        NotificationCenter.default.post(
+            name: NSScrollView.willStartLiveScrollNotification, object: scroller
+        )
         scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: 0))
         scroller.reflectScrolledClipView(scroller.contentView)
 
@@ -1450,6 +1459,9 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         session.followsTranscriptTail = false
         let (coordinator, scroller, _) = try attach(session: session)
 
+        NotificationCenter.default.post(
+            name: NSScrollView.willStartLiveScrollNotification, object: scroller
+        )
         let bottom = max(0, scroller.contentHeight - scroller.viewportHeight)
         scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: bottom - 1))
         scroller.reflectScrolledClipView(scroller.contentView)

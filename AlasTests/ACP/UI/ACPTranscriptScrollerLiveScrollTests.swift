@@ -66,6 +66,92 @@ struct ACPTranscriptScrollerLiveScrollTests {
         )
     }
 
+    @Test("folding completed activity keeps a windowed transcript pinned through layout", arguments: [false, true])
+    func completedActivityKeepsTailPinned(whileSettling: Bool) async throws {
+        let (originalHost, scroller, coordinator) = tailFollowingHost()
+        var host = originalHost
+        host.collapsesFinishedToolCalls = true
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = scroller
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+            window.close()
+            withExtendedLifetime(coordinator) {}
+        }
+        window.orderFront(nil)
+        host.transcript.messages.append(.user(
+            id: UUID(), messageId: "prompt", text: "Investigate", attachments: []
+        ))
+        for index in 0..<8 {
+            host.transcript.messages.append(.agent(
+                id: UUID(), messageId: "status\(index)",
+                StreamingText(String(repeating: "Investigating the scroll regression. ", count: 30), phase: .commentary)
+            ))
+            host.transcript.messages.append(.toolCall(.init(
+                toolCallId: "read\(index)", title: "Read source", kind: "read", status: "completed"
+            )))
+        }
+        coordinator.update(host: host)
+        for _ in 0..<5 {
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(host.session.followsTranscriptTail)
+        if whileSettling {
+            liveScroll(scroller, to: scroller.scrollY - 20)
+            liveScroll(scroller, to: scroller.contentHeight - scroller.viewportHeight)
+        }
+        #expect(scroller.distanceFromBottom < 1)
+
+        host.transcript.messages.append(.agent(
+            id: UUID(), messageId: "answer",
+            StreamingText(String(repeating: "The final answer remains visible while earlier activity folds. ", count: 100), phase: .finalAnswer)
+        ))
+        host.transcript.messages.append(.user(
+            id: UUID(), messageId: "next", text: "Continue", attachments: []
+        ))
+        coordinator.update(host: host)
+        for _ in 0..<10 {
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+            #expect(host.session.followsTranscriptTail)
+            #expect(scroller.distanceFromBottom < 1, "folding left the viewport \(scroller.distanceFromBottom)pt above the tail")
+        }
+    }
+
+    @Test("layout-driven bounds movement does not suppress the next tail update")
+    func layoutMovementDoesNotSuppressTailFollow() {
+        let (host, scroller, coordinator) = tailFollowingHost()
+        // AppKit may move the clip view outside our explicit scroll primitives.
+        // With no live gesture, this is layout, not a request to browse history.
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: scroller.scrollY - 100))
+        scroller.reflectScrolledClipView(scroller.contentView)
+        #expect(scroller.distanceFromBottom < 1, "idle layout must retain the tail without waiting for more output")
+        host.transcript.messages.append(.systemNotice(id: UUID(), text: "New streamed content"))
+        coordinator.update(host: host)
+
+        #expect(host.session.followsTranscriptTail)
+        #expect(scroller.distanceFromBottom < 1)
+    }
+
+    @Test("layout reaching the bottom does not resume paused tail-follow")
+    func layoutMovementDoesNotResumeTailFollow() async throws {
+        let (host, scroller, coordinator) = tailFollowingHost()
+        liveScroll(scroller, to: scroller.scrollY - 400)
+        #expect(!host.session.followsTranscriptTail)
+        try await Task.sleep(for: .milliseconds(700))
+        // An idle layout correction reaching the bottom is not a user gesture.
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: scroller.contentHeight - scroller.viewportHeight))
+        scroller.reflectScrolledClipView(scroller.contentView)
+        coordinator.update(host: host)
+        #expect(!host.session.followsTranscriptTail)
+    }
+
     @Test("an upward live scroll pauses tail-follow, with no current NSEvent")
     func liveScrollUpPausesTailFollow() {
         // The coordinator must stay in scope: its `onScroll` closure captures

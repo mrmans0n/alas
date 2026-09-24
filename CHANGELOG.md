@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixes
+
+- Preserve ACP tail scrolling when activity folds during scroll settling, without jumping back to the activity header. Layout corrections no longer count as user scrolling or resume paused tail-follow.
+
 ## [0.19.7] - 2026-09-24
 
 ### ✨ Features
