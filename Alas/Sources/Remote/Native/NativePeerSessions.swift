@@ -7,7 +7,7 @@ final class NativePeerSessions {
     private let federation: FederatedSessionsProvider
     private let peers: @MainActor () -> [RemoteHelloPeer]
     @ObservationIgnored private var downstream: FederatedDownstream?
-    @ObservationIgnored private var pendingPrompt: String?
+    private(set) var pendingPrompt: String?
     @ObservationIgnored private var knownUserMessageIDs: Set<String> = []
 
     private(set) var snapshot = NativePeerSidebarSnapshot(groups: [], attentionRows: [])
@@ -26,6 +26,8 @@ final class NativePeerSessions {
         guard let selectedSessionId else { return nil }
         return snapshot.groups.flatMap(\.sessions).first { $0.id == selectedSessionId }
     }
+
+    var isPromptPending: Bool { pendingPrompt != nil }
 
     var selectedPeer: NativePeerGroup? {
         guard let selectedSessionId else { return nil }
@@ -109,7 +111,8 @@ final class NativePeerSessions {
     }
 
     func sendPrompt() {
-        guard let selectedSessionId, let downstream, selectedPeer?.state.carriesSessions == true,
+        guard pendingPrompt == nil,
+              let selectedSessionId, let downstream, selectedPeer?.state.carriesSessions == true,
               transcript?.canDrive == true else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }

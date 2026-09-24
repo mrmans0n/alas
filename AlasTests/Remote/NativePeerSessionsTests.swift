@@ -32,6 +32,27 @@ struct NativePeerSessionsTests {
         .init(id: id, title: id, agentId: "claude", status: status, canDrive: true)
     }
 
+    private func elicitationField(
+        _ key: String,
+        type: String,
+        required: Bool = true,
+        minLength: Int? = nil,
+        maxLength: Int? = nil,
+        minimum: Double? = nil,
+        maximum: Double? = nil,
+        minItems: Int? = nil,
+        maxItems: Int? = nil,
+        format: String? = nil,
+        pattern: String? = nil,
+        options: [RemoteElicitationOption] = [],
+        defaultValue: ACPElicitationValue? = nil
+    ) -> RemoteElicitationField {
+        .init(key: key, type: type, title: key, description: nil, required: required,
+              minLength: minLength, maxLength: maxLength, minimum: minimum, maximum: maximum,
+              minItems: minItems, maxItems: maxItems, format: format, pattern: pattern,
+              options: options, defaultValue: defaultValue)
+    }
+
     @Test func startSelectionAndStopOwnOneDownstream() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
@@ -230,5 +251,181 @@ struct NativePeerSessionsTests {
         )
 
         #expect(content == ["scopes": .strings(["read", "write"])])
+    }
+
+    @Test func planPreviewIncludesPlanTodosAndPhases() {
+        let request = RemotePlanPayload(
+            requestId: .string("plan-1"), toolCallId: "tool-1", name: "Implement feature",
+            overview: "Add peer visibility.", plan: "Render peer sessions grouped by owner.",
+            todos: [.init(id: "todo-1", content: "Update the sidebar", status: "pending")],
+            isProject: false,
+            phases: [.init(name: "Verification", todos: [
+                .init(id: "todo-2", content: "Run native tests", status: "pending"),
+            ])]
+        )
+
+        let details = NativePeerPlanPresentation.details(for: request)
+        #expect(details.contains("Render peer sessions grouped by owner."))
+        #expect(details.contains("Todos:\n- [pending] Update the sidebar"))
+        #expect(details.contains("Phase: Verification\n- [pending] Run native tests"))
+    }
+
+    @Test func stopControlIsShownForEveryActivePeerState() {
+        #expect(NativePeerSessionControls.showsStop(for: "streaming"))
+        #expect(NativePeerSessionControls.showsStop(for: "awaitingPermission"))
+        #expect(NativePeerSessionControls.showsStop(for: "awaitingInput"))
+        #expect(!NativePeerSessionControls.showsStop(for: "idle"))
+    }
+
+    @Test func pendingPromptCannotBeRoutedTwiceBeforeConfirmation() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
+                                          messages: [], firstIndex: 0, totalCount: 0, epoch: 1, revision: 0), from: "B")
+        client.draft = "run the checks"
+
+        client.sendPrompt()
+        client.sendPrompt()
+
+        #expect(links.sent(to: "B").filter {
+            if case .sendPrompt(_, "run the checks", _, _) = $0 { return true }
+            return false
+        }.count == 1)
+        #expect(client.isPromptPending)
+    }
+
+    @Test func scalarElicitationRejectsValuesOutsideTheForwardedSchema() {
+        let environment = elicitationField("environment", type: "string", options: [
+            .init(value: "staging", title: "Staging", description: nil),
+            .init(value: "production", title: "Production", description: nil),
+        ])
+        let port = elicitationField("port", type: "integer", minimum: 1024, maximum: 65535)
+        let email = elicitationField("email", type: "string", format: "email")
+        let name = elicitationField("name", type: "string", minLength: 3, maxLength: 16, pattern: "^[A-Z].*")
+        let fields = [environment, port, email, name]
+        let values = ["environment": "production", "port": "3000", "email": "ops@example.com", "name": "Alas"]
+
+        #expect(NativePeerElicitationForm.canSubmit(
+            fields: fields, values: values, selectedOptions: ["environment": ["production"]]
+        ))
+
+        #expect(!NativePeerElicitationForm.canSubmit(
+            fields: fields, values: values, selectedOptions: ["environment": ["unknown"]]
+        ))
+        #expect(!NativePeerElicitationForm.canSubmit(
+            fields: fields,
+            values: ["environment": "production", "port": "80", "email": "ops@example.com", "name": "Alas"],
+            selectedOptions: ["environment": ["production"]]
+        ))
+        #expect(!NativePeerElicitationForm.canSubmit(
+            fields: fields,
+            values: ["environment": "production", "port": "3000", "email": "not-an-email", "name": "Alas"],
+            selectedOptions: ["environment": ["production"]]
+        ))
+        #expect(!NativePeerElicitationForm.canSubmit(
+            fields: fields,
+            values: ["environment": "production", "port": "3000", "email": "ops@example.com", "name": "ab"],
+            selectedOptions: ["environment": ["production"]]
+        ))
+        #expect(!NativePeerElicitationForm.canSubmit(
+            fields: fields,
+            values: ["environment": "production", "port": "3000", "email": "ops@example.com", "name": "lowercase"],
+            selectedOptions: ["environment": ["production"]]
+        ))
+    }
+
+    @Test func dateElicitationRejectsImpossibleCalendarDate() {
+        let date = elicitationField("date", type: "string", format: "date")
+
+        #expect(!NativePeerElicitationForm.canSubmit(
+            fields: [date], values: ["date": "2026-02-31"], selectedOptions: [:]
+        ))
+        #expect(NativePeerElicitationForm.canSubmit(
+            fields: [date], values: ["date": "2026-02-28"], selectedOptions: [:]
+        ))
+    }
+
+    @Test func scalarElicitationSubmitsSelectedOptionsAndTypedValues() {
+        let environment = elicitationField("environment", type: "string", options: [
+            .init(value: "staging", title: "Staging", description: nil),
+            .init(value: "production", title: "Production", description: nil),
+        ])
+        let port = elicitationField("port", type: "integer", minimum: 1024, maximum: 65535)
+        let enabled = elicitationField("enabled", type: "boolean")
+
+        let content = NativePeerElicitationForm.submittedContent(
+            fields: [environment, port, enabled],
+            values: ["port": "3000"],
+            selectedOptions: ["environment": ["production"]],
+            booleanValues: ["enabled": true]
+        )
+
+        #expect(content == [
+            "environment": .string("production"),
+            "port": .integer(3000),
+            "enabled": .boolean(true),
+        ])
+    }
+
+    @Test func booleanElicitationAcceptsEitherExplicitChoice() {
+        let enabled = elicitationField("enabled", type: "boolean")
+
+        #expect(!NativePeerElicitationForm.canSubmit(
+            fields: [enabled], values: [:], selectedOptions: [:]
+        ))
+        #expect(NativePeerElicitationForm.canSubmit(
+            fields: [enabled], values: [:], selectedOptions: [:], booleanValues: ["enabled": false]
+        ))
+        #expect(NativePeerElicitationForm.canSubmit(
+            fields: [enabled], values: [:], selectedOptions: [:], booleanValues: ["enabled": true]
+        ))
+    }
+
+    @Test func elicitationFormResetClearsValuesWhenRequestChanges() {
+        let originalFields = [
+            elicitationField("name", type: "string", defaultValue: .string("old default")),
+            elicitationField("scopes", type: "array", required: false),
+            elicitationField("enabled", type: "boolean", defaultValue: .boolean(false)),
+        ]
+        var state = NativePeerElicitationForm.State(requestId: "first", fields: originalFields)
+        state.values["name"] = "typed value"
+        state.selectedOptions["scopes"] = ["read"]
+        state.booleanValues["enabled"] = true
+
+        let nextFields = [
+            elicitationField("name", type: "string", defaultValue: .string("new default")),
+            elicitationField("scopes", type: "array", required: false),
+            elicitationField("enabled", type: "boolean", defaultValue: .boolean(false)),
+        ]
+        state.reset(requestId: "second", fields: nextFields)
+
+        #expect(state.values["name"] == "new default")
+        #expect(state.selectedOptions["scopes"] == nil)
+        #expect(state.booleanValues["enabled"] == false)
+    }
+
+    @Test func planRejectionReasonResetsForANewRequest() {
+        var state = NativePeerPlanRejectionState(requestId: .string("plan-1"))
+        state.reason = "Old feedback"
+
+        state.reset(requestId: .string("plan-2"))
+
+        #expect(state.reason.isEmpty)
+    }
+
+    @Test func questionSelectionsResetForANewRequest() {
+        var state = NativePeerQuestionSelectionState(requestId: 1)
+        state.selectedOptions["branch"] = ["main"]
+
+        state.reset(requestId: 2)
+
+        #expect(state.selectedOptions.isEmpty)
     }
 }
