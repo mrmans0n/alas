@@ -1,5 +1,60 @@
 import SwiftUI
 
+struct NativePeerMessagePresentation {
+    let title: String
+    let body: String
+
+    init(message: RemoteWireMessage) {
+        let data = message.json.map { Data($0.utf8) }
+        switch message.kind {
+        case "user":
+            title = "You"
+            body = message.text ?? ""
+        case "agent":
+            title = "Agent"
+            body = message.text ?? ""
+        case "thought":
+            title = "Thought"
+            body = message.text ?? ""
+        case "systemNotice":
+            title = "System"
+            body = message.text ?? ""
+        case "toolCall":
+            if let data, let call = try? JSONDecoder().decode(ACPMessage.ToolCall.self, from: data) {
+                title = "Tool call · \(call.title)"
+                body = Self.limited([call.status, call.content.isEmpty ? call.preview : call.content]
+                    .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n"))
+            } else {
+                title = "Tool call"
+                body = "Tool details are unavailable."
+            }
+        case "fileEdit":
+            if let data, let edit = try? JSONDecoder().decode(ACPMessage.FileEdit.self, from: data) {
+                title = "File edit"
+                body = Self.limited("\(edit.path) · +\(edit.added) −\(edit.removed)\n\n\(edit.newText)")
+            } else {
+                title = "File edit"
+                body = "Edit details are unavailable."
+            }
+        case "plan":
+            if let data, let items = try? JSONDecoder().decode([ACPMessage.PlanItem].self, from: data) {
+                title = "Plan"
+                body = Self.limited(items.map { "\($0.status): \($0.content)" }.joined(separator: "\n"))
+            } else {
+                title = "Plan"
+                body = "Plan details are unavailable."
+            }
+        default:
+            title = "Message"
+            body = message.text ?? ""
+        }
+    }
+
+    private static func limited(_ text: String) -> String {
+        String(text.prefix(4_000))
+    }
+}
+
 /// Read and drive the selected peer through forwarded gateway frames only.
 struct NativePeerSessionView: View {
     @Bindable var client: NativePeerSessions
@@ -74,29 +129,14 @@ struct NativePeerSessionView: View {
     }
 
     private func messageCard(_ message: RemoteWireMessage) -> some View {
-        let kind = message.kind
-        let title: String = switch kind {
-        case "user": "You"
-        case "agent": "Agent"
-        case "thought": "Thought"
-        case "toolCall": "Tool call"
-        case "fileEdit": "File edit"
-        case "plan": "Plan"
-        case "systemNotice": "System"
-        default: "Message"
-        }
+        let presentation = NativePeerMessagePresentation(message: message)
         return VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            if let text = message.text, !text.isEmpty {
-                Text(text).textSelection(.enabled)
-            } else {
-                Text("Structured \(title.lowercased())")
-                    .foregroundStyle(.secondary)
-            }
+            Text(presentation.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Text(presentation.body).textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(kind == "user" ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.08),
+        .background(message.kind == "user" ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.08),
                     in: RoundedRectangle(cornerRadius: 10))
     }
 

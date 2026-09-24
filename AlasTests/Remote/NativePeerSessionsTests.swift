@@ -102,4 +102,33 @@ struct NativePeerSessionsTests {
         #expect(client.draft == "hello")
         #expect(client.deliveryError != nil)
     }
+
+    @Test func selectedSessionResubscribesWhenPeerReturns() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        var peers = [RemoteHelloPeer(serverId: "B", name: "Mac B", state: "online")]
+        let client = NativePeerSessions(federation: federation, peers: { peers })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        client.draft = "continue later"
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
+                                          messages: [], firstIndex: 0, totalCount: 0, epoch: 4, revision: 0), from: "B")
+        links.offline("B")
+        peers = [.init(serverId: "B", name: "Mac B", state: "offline")]
+        client.refresh()
+        #expect(client.transcript?.isClosed == true)
+
+        peers = [.init(serverId: "B", name: "Mac B", state: "online")]
+        links.online("B", name: "Mac B")
+        let subscriptionsBefore = links.sent(to: "B").filter { $0 == .subscribe(sessionId: "s") }.count
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        let subscriptionsAfter = links.sent(to: "B").filter { $0 == .subscribe(sessionId: "s") }.count
+        #expect(subscriptionsAfter == subscriptionsBefore + 1)
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
+                                          messages: [], firstIndex: 0, totalCount: 0, epoch: 1, revision: 0), from: "B")
+        #expect(client.transcript?.canDrive == true)
+        #expect(client.draft == "continue later")
+    }
 }

@@ -71,6 +71,13 @@ final class NativePeerSessions {
         }
         if !group.state.carriesSessions || selectedRow == nil {
             transcript?.markUnavailable()
+        } else if transcript?.isClosed == true, let selectedSessionId, let downstream {
+            // The provider discarded subscriptions when this peer went away.
+            // Its new transcript may also have a lower epoch after a restart.
+            transcript = NativePeerTranscript(sessionId: selectedSessionId)
+            pendingPrompt = nil
+            knownUserMessageIDs = []
+            _ = federation.route(.subscribe(sessionId: selectedSessionId), from: downstream)
         }
     }
 
@@ -79,7 +86,10 @@ final class NativePeerSessions {
               snapshot.groups.contains(where: { group in
                   group.state.carriesSessions && group.sessions.contains { $0.id == sessionId }
               }) else { return }
-        if selectedSessionId == sessionId { return }
+        if selectedSessionId == sessionId {
+            refresh()
+            return
+        }
         clearSelection()
         selectedSessionId = sessionId
         transcript = NativePeerTranscript(sessionId: sessionId)

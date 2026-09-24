@@ -1,5 +1,23 @@
 import SwiftUI
 
+struct NativePeerSessionRowPresentation {
+    let detail: String
+
+    init(row: RemoteSessionSummary) {
+        let status = switch row.status {
+        case "awaitingPermission": "Needs permission"
+        case "awaitingInput": "Needs input"
+        case "streaming": "Streaming"
+        case "idle": "Idle"
+        default: row.status
+        }
+        detail = [row.agentId, row.worktree?.worktreeName, status]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+    }
+}
+
 /// App-scoped peer groups live beside the workspace tree, never inside a
 /// worktree's Agents list.
 struct NativePeerSidebarView: View {
@@ -25,6 +43,7 @@ struct NativePeerSidebarView: View {
                     )) {
                         if group.state.carriesSessions {
                             ForEach(group.sessions, id: \.id) { row in
+                                let presentation = NativePeerSessionRowPresentation(row: row)
                                 Button {
                                     client.select(row.id)
                                 } label: {
@@ -32,8 +51,13 @@ struct NativePeerSidebarView: View {
                                         Image(systemName: "bubble.left")
                                             .font(.system(size: 11))
                                             .foregroundStyle(.secondary)
-                                        Text(row.title)
-                                            .lineLimit(1)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(row.title).lineLimit(1)
+                                            Text(presentation.detail)
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
                                         Spacer(minLength: 4)
                                         if row.status == "awaitingPermission" || row.status == "awaitingInput" {
                                             Image(systemName: "exclamationmark.circle.fill")
@@ -48,7 +72,7 @@ struct NativePeerSidebarView: View {
                                                 in: RoundedRectangle(cornerRadius: 6))
                                 }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel("\(row.title), \(group.name) peer session")
+                                .accessibilityLabel("\(row.title), \(presentation.detail), \(group.name) peer session")
                             }
                         }
                     } label: {
