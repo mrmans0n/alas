@@ -108,12 +108,33 @@ enum NextPromptPolicy {
     }
 
     private static func publicSecretUpload(_ text: String, user: String) -> Bool {
-        guard !authorizedPublicObject(text, user: user) else { return false }
-        let action = #"\b(?:upload|post|paste|publish|share|send)\b"#
-        let destination = #"\b(?:public|publicly|paste\s*site|pastebin|open\s+link)\b"#
-        return activeMatch(text, pattern: "(?i)\(action).{0,100}\(secretReferencePattern).{0,100}\(destination)")
-            || (actualSecretReference(user)
-                && activeMatch(text, pattern: "(?i)\(action).{0,100}\\b(?:it|them|both\\s+files|that\\s+file)\\b.{0,100}\(destination)"))
+        let action = #"(?i)\b(?:upload|post|paste|publish|share|send)\b"#
+        let quoted = #"'[^']*'|"[^"]*""#
+        let quotedAdvice = #"(?i)'[^']*\b(?:upload|post|paste|publish|share|send)\b[^']*'|"[^"]*\b(?:upload|post|paste|publish|share|send)\b[^"]*""#
+        guard let actions = try? NSRegularExpression(pattern: action),
+              let quotes = try? NSRegularExpression(pattern: quoted) else { return false }
+        let ns = text as NSString
+        let fullRange = NSRange(location: 0, length: ns.length)
+        let quotedRanges = quotes.matches(in: text, range: fullRange).map(\.range)
+        for match in actions.matches(in: text, range: fullRange) {
+            guard activeActionPrefix(ns.substring(to: match.range.location)),
+                  !quotedRanges.contains(where: { NSLocationInRange(match.range.location, $0) })
+            else { continue }
+            let remainder = String(ns.substring(from: match.range.location).prefix(200))
+            let end = remainder.range(of: #"[;\n]|[.!?](?=\s|$)"#, options: .regularExpression)?.lowerBound
+                ?? remainder.endIndex
+            let clause = String(remainder[..<end])
+                .replacingOccurrences(of: quotedAdvice, with: "", options: .regularExpression)
+            guard !authorizedPublicObject(clause, user: user),
+                  matches(clause, #"(?i)\b(?:publicly|pastebin|(?:public|open)\s+(?:paste\s+)?(?:site|link)|paste\s*site)\b"#)
+            else { continue }
+            if actualSecretReference(clause)
+                || (actualSecretReference(user)
+                    && matches(clause, #"(?i)\b(?:it|them|both\s+files|that\s+file)\b"#)) {
+                return true
+            }
+        }
+        return false
     }
 
     private static let secretReferencePattern = #"(?:\.env\b(?!\.example)|\b(?:secrets?|credentials?|private\s+keys?|api[_ -]?keys?|tokens?)\b)"#
@@ -178,15 +199,17 @@ enum NextPromptPolicy {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
         let ns = text as NSString
         for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
-            let prefix = ns.substring(to: match.range.location)
-            let near = String(prefix.suffix(35))
-            if matches(near, #"(?i)\b(?:never|not|don.t|do\s+not|must\s+not|avoid)\s+(?:\w+\s+){0,2}$"#) {
-                continue
-            }
-            if let last = near.last, last == "'" || last == "\"" { continue }
-            return true
+            if activeActionPrefix(ns.substring(to: match.range.location)) { return true }
         }
         return false
+    }
+
+    private static func activeActionPrefix(_ prefix: String) -> Bool {
+        let near = String(prefix.suffix(35))
+        if matches(near, #"(?i)\b(?:never|not|don.t|do\s+not|must\s+not|avoid)\s+(?:\w+\s+){0,2}$"#) {
+            return false
+        }
+        return near.last != "'" && near.last != "\""
     }
 
     private static func matches(_ text: String, _ pattern: String) -> Bool {

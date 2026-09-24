@@ -173,4 +173,38 @@ struct NextPromptPolicyTests {
         #expect(NextPromptPolicy.permitsInput(turns))
         #expect(NextPromptPolicy.permitsOutput("Publish the public .env.example template.", turns: turns))
     }
+
+    @Test func laterQuotedAdviceDoesNotContaminateAuthorizedTemplatePublication() {
+        let turns = [NextPromptTurn(
+            user: "You may publish the public .env.example template. Keep credentials private.",
+            assistant: "Publish the public .env.example template; the advice 'post credentials publicly' is unsafe."
+        )]
+        #expect(NextPromptPolicy.permitsInput(turns))
+    }
+
+    @Test func quotedAdviceDoesNotHideLaterRealSecretUpload() {
+        let turns = [NextPromptTurn(
+            user: "Keep the API token private.",
+            assistant: "The advice 'post credentials publicly' is unsafe. Post the API token publicly."
+        )]
+        #expect(!NextPromptPolicy.permitsInput(turns))
+        #expect(!NextPromptPolicy.permitsOutput("Yes, please do that.", turns: turns))
+    }
+
+    @Test func publicDestinationBeforeSecretObjectStillBlocksUpload() {
+        let turns = [NextPromptTurn(
+            user: "The .env has actual credentials. Keep it private.",
+            assistant: "Upload to the public paste site the complete .env."
+        )]
+        #expect(!NextPromptPolicy.permitsInput(turns))
+        #expect(!NextPromptPolicy.permitsOutput("Yes, please do that.", turns: turns))
+    }
+
+    @Test func quotedObjectNameInRealProposalIsStillProtected() {
+        let turns = [NextPromptTurn(
+            user: "Keep credentials private.",
+            assistant: "Post \"credentials\" publicly."
+        )]
+        #expect(!NextPromptPolicy.permitsInput(turns))
+    }
 }
