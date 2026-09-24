@@ -98,6 +98,7 @@ final class ACPTranscript: ObservableObject {
     /// A one-shot request for the AppKit transcript scroller to align a
     /// source row. The UUID makes repeat taps on the same source observable.
     @Published private(set) var navigationRequest: NavigationRequest?
+    private var consumedNavigationRequestID: UUID?
 
     /// Number of known persisted messages that precede `messages[0]` while
     /// tail-first hydration is still materialising the older prefix. This is
@@ -177,6 +178,13 @@ final class ACPTranscript: ObservableObject {
         setVisibleWindow(around: index)
         let request = NavigationRequest(id: UUID(), stableID: stableID)
         navigationRequest = request
+        return request
+    }
+
+    func takePendingNavigationRequest() -> NavigationRequest? {
+        guard let request = navigationRequest,
+              request.id != consumedNavigationRequestID else { return nil }
+        consumedNavigationRequestID = request.id
         return request
     }
 

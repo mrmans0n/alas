@@ -287,4 +287,20 @@ struct ACPCatchUpSummaryTests {
         #expect(transcript.visibleHead > 5)
         #expect(transcript.visibleTailBound > messages.count - 1)
     }
+
+    @Test("consumed navigation requests do not replay to a recreated coordinator")
+    func navigationRequestsAreConsumedOnce() throws {
+        let transcript = ACPTranscript()
+        transcript.messages = [
+            .user(id: UUID(), messageId: "u1", text: "First", attachments: [])
+        ]
+        let first = try #require(transcript.requestNavigation(toStableID: "acp-user:u1"))
+
+        #expect(transcript.takePendingNavigationRequest() == first)
+        #expect(transcript.takePendingNavigationRequest() == nil)
+
+        let second = try #require(transcript.requestNavigation(toStableID: "acp-user:u1"))
+        #expect(second.id != first.id)
+        #expect(transcript.takePendingNavigationRequest() == second)
+    }
 }

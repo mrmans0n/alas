@@ -287,7 +287,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         func update(host: ACPTranscriptScroller) {
             self.host = host
-            applyNavigationRequestIfNeeded(host.transcript.navigationRequest)
+            applyNavigationRequestIfNeeded()
             schedulePendingLogicalTargetResolutionIfPossible()
             // Re-apply unconditionally: `reconciler.apply` itself early-
             // returns and records nothing for a non-positive width (host
@@ -331,8 +331,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             syncLogicalScrollerMetrics()
         }
 
-        private func applyNavigationRequestIfNeeded(_ request: ACPTranscript.NavigationRequest?) {
-            guard let request, request.id != lastNavigationRequestID, let host else { return }
+        private func applyNavigationRequestIfNeeded() {
+            guard let host,
+                  let request = host.transcript.takePendingNavigationRequest(),
+                  request.id != lastNavigationRequestID else { return }
             lastNavigationRequestID = request.id
             guard host.transcript.messages.contains(where: {
                 host.transcript.stableId(for: $0) == request.stableID
