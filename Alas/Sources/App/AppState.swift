@@ -5089,6 +5089,14 @@ final class AppState {
             .union(projectsManager.worktrees(projectId: id).map(\.id))
             .union(projects.first(where: { $0.id == id })?.cachedWorktrees.map(\.id) ?? [])
         cleanupProjectACPState(projectId: id, worktreeIDs: projectWorktreeIds)
+        for worktreeID in projectWorktreeIds {
+            _ = cleanupRunScriptState(
+                worktreeID: worktreeID,
+                projectId: id,
+                purgeFailures: true,
+                purgeHistory: true
+            )
+        }
         let remoteRootsToUnregister: [String]
         if let project = projects.first(where: { $0.id == id }),
            project.host != nil {

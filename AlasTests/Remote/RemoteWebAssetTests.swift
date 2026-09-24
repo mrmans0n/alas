@@ -102,12 +102,12 @@ struct RemoteWebAssetTests {
 
         #expect((versions["/hub-registry.js"] ?? 0) > 1)
         #expect((versions["/hub-links.js"] ?? 0) > 1)
-        #expect((versions["/app.js"] ?? 0) > 90)
+        #expect((versions["/app.js"] ?? 0) > 91)
 
         let cacheVersion = try #require(
             sw.matches(of: #/alas-remote-shell-v(\d+)/#).first.flatMap { Int($0.1) }
         )
-        #expect(cacheVersion > 72)
+        #expect(cacheVersion > 73)
     }
 
     @Test func toolCardsUseExplicitToggleInsteadOfNativeDetails() throws {

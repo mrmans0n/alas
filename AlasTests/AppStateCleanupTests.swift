@@ -1860,6 +1860,186 @@ struct AppStateCleanupTests {
         #expect(!remainingTabs.contains(where: { $0.id == previewA.id }))
     }
 
+    @Test func removingSharedPathProjectPurgesOnlyItsOwnedRunScriptState() async throws {
+        let worktreeID = "/tmp/alas-cleanup-run-shared-\(UUID().uuidString)"
+        let projectA = ProjectConfig(
+            id: "run-host-a-\(UUID().uuidString)",
+            name: "Run Host A",
+            path: "/repos/run-a",
+            color: "blue",
+            addedAt: .distantPast,
+            host: "run-host-a"
+        )
+        let projectB = ProjectConfig(
+            id: "run-host-b-\(UUID().uuidString)",
+            name: "Run Host B",
+            path: "/repos/run-b",
+            color: "green",
+            addedAt: .distantPast,
+            host: "run-host-b"
+        )
+        let historyPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-cleanup-run-history-\(UUID().uuidString).sqlite")
+        let history = try RunHistoryStore(path: historyPath.path)
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [projectA, projectB])),
+            runHistoryStore: history
+        )
+        let first = Worktree(
+            id: worktreeID,
+            projectId: projectA.id,
+            name: "shared",
+            branch: "main",
+            path: URL(fileURLWithPath: worktreeID),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        let second = Worktree(
+            id: worktreeID,
+            projectId: projectB.id,
+            name: "shared",
+            branch: "main",
+            path: URL(fileURLWithPath: worktreeID),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(first)
+        state.projectsManager.insertOptimisticWorktree(second)
+
+        let now = Date()
+        func record(id: String, project: ProjectConfig) -> RunRecord {
+            RunRecord(
+                id: id,
+                scriptKey: "repo:dev.sh",
+                scriptName: "Dev",
+                worktreeID: worktreeID,
+                projectId: project.id,
+                branch: "main",
+                target: .init(host: project.host, workingDirectory: worktreeID),
+                status: .running,
+                startedAt: now
+            )
+        }
+        func historyEntry(id: String, project: ProjectConfig) -> RunHistoryEntry {
+            RunHistoryEntry(
+                id: id,
+                scriptKey: "repo:dev.sh",
+                scriptName: "Dev",
+                worktreeID: worktreeID,
+                projectId: project.id,
+                branch: "main",
+                target: .init(host: project.host, workingDirectory: worktreeID),
+                endpoint: nil,
+                outcome: .succeeded,
+                startedAt: now,
+                finishedAt: now,
+                portConflict: nil,
+                output: .unavailable
+            )
+        }
+        let runA = record(id: "run-project-a", project: projectA)
+        let runB = record(id: "run-project-b", project: projectB)
+        state.runRecords.begin(runA)
+        state.runRecords.begin(runB)
+        let failureA = RunScriptFailure(
+            id: "failure-project-a", runID: runA.id, scriptKey: runA.scriptKey,
+            scriptName: runA.scriptName, worktreeID: worktreeID, projectId: projectA.id,
+            branch: runA.branch, exitCode: 1, completedAt: now
+        )
+        let failureB = RunScriptFailure(
+            id: "failure-project-b", runID: runB.id, scriptKey: runB.scriptKey,
+            scriptName: runB.scriptName, worktreeID: worktreeID, projectId: projectB.id,
+            branch: runB.branch, exitCode: 1, completedAt: now
+        )
+        state.runScriptFailureQueue.append(failureA)
+        state.runScriptFailureQueue.append(failureB)
+        let historyA = historyEntry(id: "history-project-a", project: projectA)
+        let historyB = historyEntry(id: "history-project-b", project: projectB)
+        try await history.append(historyA)
+        try await history.append(historyB)
+
+        let ownerA = RunHistoryOwner(worktreeID: worktreeID, projectId: projectA.id)
+        let ownerB = RunHistoryOwner(worktreeID: worktreeID, projectId: projectB.id)
+        let reportA = historyEntry(id: "report-project-a", project: projectA)
+        let reportB = historyEntry(id: "report-project-b", project: projectB)
+        state.transientRunReports[RunHistoryReportKey(owner: ownerA, runID: reportA.id)] = reportA
+        state.transientRunReports[RunHistoryReportKey(owner: ownerB, runID: reportB.id)] = reportB
+        state.durableRunReportIDsByOwner[ownerA] = [historyA.id]
+        state.durableRunReportIDsByOwner[ownerB] = [historyB.id]
+        let reportTabA = state.tabs.openOrFocusRunReport(
+            worktreeId: worktreeID, projectId: projectA.id, runID: reportA.id
+        )
+        let reportTabB = state.tabs.openOrFocusRunReport(
+            worktreeId: worktreeID, projectId: projectB.id, runID: reportB.id
+        )
+
+        let pendingID_A = UUID()
+        let pendingID_B = UUID()
+        let pendingTaskA = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
+        let pendingTaskB = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
+        let pendingA = PendingRunScriptLaunchKey(worktreeID: worktreeID, projectId: projectA.id, scriptKey: "pending-a")
+        let pendingB = PendingRunScriptLaunchKey(worktreeID: worktreeID, projectId: projectB.id, scriptKey: "pending-b")
+        state.pendingScriptLaunches[pendingA] = PendingRunScriptLaunch(
+            id: pendingID_A, worktreeID: worktreeID, projectId: projectA.id, scriptKey: pendingA.scriptKey
+        )
+        state.pendingScriptLaunches[pendingB] = PendingRunScriptLaunch(
+            id: pendingID_B, worktreeID: worktreeID, projectId: projectB.id, scriptKey: pendingB.scriptKey
+        )
+        state.pendingScriptLaunchTasks[pendingID_A] = pendingTaskA
+        state.pendingScriptLaunchTasks[pendingID_B] = pendingTaskB
+
+        let completionTaskA = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
+        let completionTaskB = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
+        let completionID_A = "completion-project-a"
+        let completionID_B = "completion-project-b"
+        let locationA = RunScriptCaptureLocation.local(paths: .init(
+            transcript: historyPath.path + ".a.log", completion: historyPath.path + ".a.done"
+        ))
+        let locationB = RunScriptCaptureLocation.local(paths: .init(
+            transcript: historyPath.path + ".b.log", completion: historyPath.path + ".b.done"
+        ))
+        state.runScriptCompletionTasks[completionID_A] = (
+            worktreeID: worktreeID, projectId: projectA.id, sessionID: "session-a", location: locationA,
+            task: completionTaskA
+        )
+        state.runScriptCompletionTasks[completionID_B] = (
+            worktreeID: worktreeID, projectId: projectB.id, sessionID: "session-b", location: locationB,
+            task: completionTaskB
+        )
+
+        state.removeProject(id: projectA.id)
+
+        #expect(state.projects.contains(where: { $0.id == projectA.id }) == false)
+        #expect(state.projects.contains(where: { $0.id == projectB.id }))
+        #expect(state.runRecords.record(worktreeID: worktreeID, projectId: projectA.id, scriptKey: runA.scriptKey) == nil)
+        #expect(state.runRecords.record(worktreeID: worktreeID, projectId: projectB.id, scriptKey: runB.scriptKey) == runB)
+        #expect(state.runScriptFailures(in: worktreeID, projectId: projectA.id).isEmpty)
+        #expect(state.runScriptFailures(in: worktreeID, projectId: projectB.id) == [failureB])
+        #expect(state.transientRunReports[RunHistoryReportKey(owner: ownerA, runID: reportA.id)] == nil)
+        #expect(state.transientRunReports[RunHistoryReportKey(owner: ownerB, runID: reportB.id)] == reportB)
+        #expect(state.durableRunReportIDsByOwner[ownerA] == nil)
+        #expect(state.durableRunReportIDsByOwner[ownerB] == [historyB.id])
+        #expect(state.tabs.tabs(forWorktree: worktreeID).contains { $0.id == reportTabA.id } == false)
+        #expect(state.tabs.tabs(forWorktree: worktreeID).contains { $0.id == reportTabB.id })
+        #expect(pendingTaskA.isCancelled)
+        #expect(!pendingTaskB.isCancelled)
+        #expect(state.pendingScriptLaunches[pendingA] == nil)
+        #expect(state.pendingScriptLaunches[pendingB] != nil)
+        #expect(completionTaskA.isCancelled)
+        #expect(!completionTaskB.isCancelled)
+        #expect(state.runScriptCompletionTasks[completionID_A] == nil)
+        #expect(state.runScriptCompletionTasks[completionID_B] != nil)
+
+        for _ in 0..<50 {
+            if try await history.page(worktreeID: worktreeID, projectID: projectA.id, offset: 0, limit: 10).totalCount == 0 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(try await history.page(worktreeID: worktreeID, projectID: projectA.id, offset: 0, limit: 10).totalCount == 0)
+        #expect(try await history.page(worktreeID: worktreeID, projectID: projectB.id, offset: 0, limit: 10).entries.map(\.id) == [historyB.id])
+    }
+
     @Test func removeProjectDeletesPersistedTabsFile() async throws {
         let repo = try await makeRepo(name: "remove-persisted")
         defer { try? FileManager.default.removeItem(at: repo) }
