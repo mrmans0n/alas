@@ -6,6 +6,7 @@ import SwiftUI
 /// declining keeps them off without nagging.
 struct RepoMCPTrustBanner: View {
     let pendingServers: [ProjectMCPServer]
+    let approvalQueue: RepoHookApprovalQueue
     let onApproveAll: () -> Void
     let onDeclineAll: () -> Void
     /// Per-server decisions from the review sheet. Nil disables the affordance.
@@ -115,6 +116,7 @@ struct RepoMCPTrustBanner: View {
         }
         .padding(20)
         .frame(width: 420)
+        .modifier(RepoHookApprovalPresentationHandler(approvalQueue: approvalQueue))
     }
 
     static func headline(serverCount: Int) -> String {
