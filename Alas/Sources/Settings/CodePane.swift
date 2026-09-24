@@ -131,7 +131,10 @@ struct CodePane: View {
             // own buttons; reset the installer so the next install starts clean.
             state.lspInstaller.reset()
         }) {
-            LSPInstallProgressSheet(installer: state.lspInstaller) { completedLanguage in
+            LSPInstallProgressSheet(
+                installer: state.lspInstaller,
+                approvalQueue: state.repoHookApprovalQueue
+            ) { completedLanguage in
                 installSheetVisible = false
                 state.refreshInstallerHost()
                 // Re-fire didOpen for any open buffers in the just-installed

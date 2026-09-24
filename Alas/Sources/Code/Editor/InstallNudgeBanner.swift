@@ -32,7 +32,10 @@ struct InstallNudgeBanner: View {
             pendingMasonPackage = nil
             appState.lspInstaller.reset()
         }) {
-            LSPInstallProgressSheet(installer: appState.lspInstaller) { completedLanguage in
+            LSPInstallProgressSheet(
+                installer: appState.lspInstaller,
+                approvalQueue: appState.repoHookApprovalQueue
+            ) { completedLanguage in
                 installSheetVisible = false
                 appState.refreshInstallerHost()
                 // Re-fire didOpen for any open buffers in the just-
