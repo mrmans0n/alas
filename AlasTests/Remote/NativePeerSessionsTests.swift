@@ -66,6 +66,22 @@ struct NativePeerSessionsTests {
         #expect(presentation.mcpServerName == "build-tools")
     }
 
+    @Test func permissionDefaultToNoEmphasizesOneTimeRejection() {
+        let presentation = NativePeerPermissionPresentation(request: RemotePermissionPayload(
+            requestId: 1,
+            toolName: "bash",
+            options: [],
+            defaultToNo: true
+        ))
+        let rejectOnce = RemotePermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")
+        let allowOnce = RemotePermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")
+
+        #expect(presentation.isDefaultStyled(rejectOnce))
+        #expect(presentation.isDefaultAction(rejectOnce))
+        #expect(!presentation.isDefaultStyled(allowOnce))
+        #expect(!presentation.isDefaultAction(allowOnce))
+    }
+
     @Test func startSelectionAndStopOwnOneDownstream() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
@@ -399,6 +415,23 @@ struct NativePeerSessionsTests {
         #expect(NativePeerElicitationForm.canSubmit(
             fields: [enabled], values: [:], selectedOptions: [:], booleanValues: ["enabled": true]
         ))
+    }
+
+    @Test func untouchedOptionalBooleanIsOmittedFromElicitationResponse() {
+        let optional = elicitationField("enabled", type: "boolean", required: false)
+        let state = NativePeerElicitationForm.State(requestId: "request", fields: [optional])
+
+        let untouched = NativePeerElicitationForm.submittedContent(
+            fields: [optional], values: state.values, selectedOptions: state.selectedOptions,
+            booleanValues: state.booleanValues
+        )
+        let explicitlyFalse = NativePeerElicitationForm.submittedContent(
+            fields: [optional], values: state.values, selectedOptions: state.selectedOptions,
+            booleanValues: ["enabled": false]
+        )
+
+        #expect(untouched.isEmpty)
+        #expect(explicitlyFalse == ["enabled": .boolean(false)])
     }
 
     @Test func elicitationFormResetClearsValuesWhenRequestChanges() {

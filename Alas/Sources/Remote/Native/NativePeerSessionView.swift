@@ -59,11 +59,21 @@ struct NativePeerPermissionPresentation {
     let title: String
     let toolName: String
     let mcpServerName: String?
+    let defaultToNo: Bool
 
     init(request: RemotePermissionPayload) {
         title = request.title ?? "Permission request"
         toolName = request.toolName
         mcpServerName = request.mcpServerName
+        defaultToNo = request.defaultToNo
+    }
+
+    func isDefaultStyled(_ option: RemotePermissionOption) -> Bool {
+        defaultToNo ? option.kind == "reject_once" : option.kind == "allow_once"
+    }
+
+    func isDefaultAction(_ option: RemotePermissionOption) -> Bool {
+        defaultToNo && isDefaultStyled(option)
     }
 }
 
@@ -167,10 +177,7 @@ struct NativePeerSessionView: View {
                 if let reason = request.reason { Text(reason).font(.callout) }
                 HStack {
                     ForEach(request.options, id: \.optionId) { option in
-                        Button(option.name) {
-                            client.decidePermission(requestId: request.requestId, optionId: option.optionId)
-                        }
-                        .disabled(!canDrive)
+                        permissionButton(option, presentation: presentation, request: request)
                     }
                 }
             }
@@ -187,6 +194,29 @@ struct NativePeerSessionView: View {
         if let request = transcript.pendingElicitation {
             NativePeerElicitationRequestCard(request: request, canDrive: canDrive, client: client)
                 .id("\(client.selectedSessionId ?? ""):\(request.requestId)")
+        }
+    }
+
+    @ViewBuilder
+    private func permissionButton(
+        _ option: RemotePermissionOption,
+        presentation: NativePeerPermissionPresentation,
+        request: RemotePermissionPayload
+    ) -> some View {
+        if presentation.isDefaultStyled(option) {
+            Button(option.name) {
+                client.decidePermission(requestId: request.requestId, optionId: option.optionId)
+            }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(presentation.isDefaultAction(option) ? .defaultAction : nil)
+            .disabled(!canDrive)
+        } else {
+            Button(option.name) {
+                client.decidePermission(requestId: request.requestId, optionId: option.optionId)
+            }
+            .buttonStyle(.bordered)
+            .keyboardShortcut(presentation.isDefaultAction(option) ? .defaultAction : nil)
+            .disabled(!canDrive)
         }
     }
 
@@ -307,7 +337,7 @@ enum NativePeerElicitationForm {
         private mutating func seed(_ fields: [RemoteElicitationField]) {
             for field in fields {
                 guard let defaultValue = field.defaultValue else {
-                    if field.type == "boolean" { booleanValues[field.key] = false }
+                    if field.type == "boolean", field.required { booleanValues[field.key] = false }
                     continue
                 }
                 switch (field.type, defaultValue) {
@@ -467,7 +497,11 @@ enum NativePeerElicitationForm {
                     content[field.key] = .number(number)
                 }
             case "boolean":
-                content[field.key] = .boolean(booleanValues[field.key] ?? false)
+                if let value = booleanValues[field.key] {
+                    content[field.key] = .boolean(value)
+                } else if field.required {
+                    content[field.key] = .boolean(false)
+                }
             default:
                 continue
             }
