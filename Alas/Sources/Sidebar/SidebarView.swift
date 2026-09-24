@@ -5,9 +5,9 @@ struct SidebarAttentionPresentation {
     let showsInbox: Bool
     let count: Int
 
-    init(enabled: Bool, aggregation: AttentionAggregation) {
+    init(enabled: Bool, aggregation: AttentionAggregation, peerRows: [RemoteSessionSummary] = []) {
         showsInbox = enabled
-        count = enabled ? aggregation.unresolvedCount : 0
+        count = enabled ? aggregation.unresolvedCount + peerRows.count : 0
     }
 }
 
@@ -343,8 +343,11 @@ private struct SidebarAttentionHeader: View {
 
     var body: some View {
         let aggregation = state.attentionAggregation
+        let peerRows = state.config.remote.federationEnabled && state.config.needsAttentionEnabled
+            ? state.nativePeerSessions?.snapshot.attentionRows ?? [] : []
         let presentation = SidebarAttentionPresentation(
-            enabled: state.config.needsAttentionEnabled, aggregation: aggregation
+            enabled: state.config.needsAttentionEnabled, aggregation: aggregation,
+            peerRows: peerRows
         )
         SidebarHeaderView(
             worktreeSortMode: state.config.worktrees.defaultOrdering,
@@ -358,11 +361,16 @@ private struct SidebarAttentionHeader: View {
             showsAttentionInbox: presentation.showsInbox,
             attentionInboxOpen: $state.isAttentionInboxOpen,
             attentionAggregation: aggregation,
+            peerAttentionRows: peerRows,
             attentionLoadError: state.attentionStore.loadError?.localizedDescription,
             attentionWriteError: state.attentionStore.writeError?.localizedDescription,
             attentionNavigationErrors: state.attentionNavigationErrors,
             onDismissAttentionItem: { state.dismissAttentionItem($0) },
-            onOpenAttentionItem: { item in _ = await state.openAttentionItem(item) }
+            onOpenAttentionItem: { item in _ = await state.openAttentionItem(item) },
+            onOpenPeerSession: { row in
+                state.nativePeerSessions?.select(row.id)
+                state.isAttentionInboxOpen = false
+            }
         )
     }
 }

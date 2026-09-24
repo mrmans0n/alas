@@ -18,6 +18,58 @@ struct AttentionInboxViewTests {
         #expect(enabled.count == 1)
     }
 
+    @Test func livePeerAttentionAddsOnceToBadgeAndInboxWithoutChangingLocalRows() {
+        let local = aggregation(items: [makeItem(), makeItem()])
+        let peer = RemoteSessionSummary(id: "B:s", title: "Peer request", agentId: "claude",
+                                        status: "awaitingInput", canDrive: false,
+                                        serverId: "B", serverName: "Mac B")
+        let snapshot = NativePeerSidebarSnapshot.build(
+            peers: [.init(serverId: "B", name: "Mac B", state: "online")],
+            rows: [peer, peer], enabled: true
+        )
+        let badge = SidebarAttentionPresentation(enabled: true, aggregation: local,
+                                                 peerRows: snapshot.attentionRows)
+        let inbox = AttentionInboxPresentation(aggregation: local, loadError: nil,
+                                               peerRows: snapshot.attentionRows)
+
+        #expect(snapshot.attentionCount == 1)
+        #expect(badge.count == 3)
+        #expect(inbox.totalCount == badge.count)
+        #expect(inbox.activeRows.count == 2)
+        #expect(inbox.peerRows.map(\.id) == ["B:s"])
+        #expect(inbox.acknowledgeLabel == "Acknowledge local")
+
+        let peerOnly = AttentionInboxPresentation(aggregation: aggregation(), loadError: nil,
+                                                  peerRows: snapshot.attentionRows)
+        #expect(peerOnly.emptyTitle == nil)
+        #expect(peerOnly.totalCount == 1)
+        #expect(peerOnly.acknowledgeLabel == nil)
+    }
+
+    @Test func clearingOrDisablingPeerAttentionRemovesOnlyLiveContribution() {
+        let local = aggregation(items: [makeItem()])
+        let peer = RemoteSessionSummary(id: "B:s", title: "Peer request", agentId: "claude",
+                                        status: "awaitingInput", canDrive: false,
+                                        serverId: "B", serverName: "Mac B")
+        let cleared = RemoteSessionSummary(id: "B:s", title: "Peer request", agentId: "claude",
+                                           status: "idle", canDrive: false,
+                                           serverId: "B", serverName: "Mac B")
+        let peers = [RemoteHelloPeer(serverId: "B", name: "Mac B", state: "online")]
+        let active = NativePeerSidebarSnapshot.build(peers: peers, rows: [peer], enabled: true)
+        let resolved = NativePeerSidebarSnapshot.build(peers: peers, rows: [cleared], enabled: true)
+        let disabled = NativePeerSidebarSnapshot.build(peers: peers, rows: [peer], enabled: false)
+
+        #expect(SidebarAttentionPresentation(enabled: true, aggregation: local,
+                                            peerRows: active.attentionRows).count == 2)
+        #expect(SidebarAttentionPresentation(enabled: true, aggregation: local,
+                                            peerRows: resolved.attentionRows).count == 1)
+        #expect(SidebarAttentionPresentation(enabled: true, aggregation: local,
+                                            peerRows: disabled.attentionRows).count == 1)
+        #expect(SidebarAttentionPresentation(enabled: false, aggregation: local,
+                                            peerRows: active.attentionRows).count == 0)
+        #expect(local.unresolvedCount == 1)
+    }
+
     @Test func headerBadgeOnlyAppearsForNonzeroAttention() {
         #expect(!SidebarHeaderView.showsAttentionBadge(count: 0))
         #expect(SidebarHeaderView.showsAttentionBadge(count: 4))
