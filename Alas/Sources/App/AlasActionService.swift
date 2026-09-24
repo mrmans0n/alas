@@ -15,6 +15,10 @@ struct AlasActionService {
     var openExternalFile: (URL, String) -> Void
     var openRelativeFileAtLines: (String, String, ClosedRange<Int>) -> Void = { _, _, _ in }
     var openExternalFileAtLines: (URL, String, ClosedRange<Int>) -> Void = { _, _, _ in }
+    var openRelativeFileInWorktree: ((String, Worktree) -> Void)? = nil
+    var openExternalFileInWorktree: ((URL, Worktree) -> Void)? = nil
+    var openRelativeFileAtLinesInWorktree: ((String, Worktree, ClosedRange<Int>) -> Void)? = nil
+    var openExternalFileAtLinesInWorktree: ((URL, Worktree, ClosedRange<Int>) -> Void)? = nil
     var focusWorktree: (Worktree) -> Void = { _ in }
     var createWorktree: (Worktree, String, String?) async -> AlasCLIResponse = { _, _, _ in
         .error("Creating worktrees from the terminal is not available yet.")
@@ -74,7 +78,23 @@ struct AlasActionService {
     }
 
     func open(paths: [String], fallbackWorktreeId: String) -> AlasCLIResponse {
-        open(paths: paths, fallbackWorktreeId: fallbackWorktreeId, lineRange: nil)
+        open(
+            paths: paths,
+            fallbackWorktreeId: fallbackWorktreeId,
+            fallbackWorktree: nil,
+            preferredProjectId: nil,
+            lineRange: nil
+        )
+    }
+
+    func open(paths: [String], fallbackWorktree: Worktree) -> AlasCLIResponse {
+        open(
+            paths: paths,
+            fallbackWorktreeId: fallbackWorktree.id,
+            fallbackWorktree: fallbackWorktree,
+            preferredProjectId: fallbackWorktree.projectId,
+            lineRange: nil
+        )
     }
 
     func openAt(path: String, line: Int, endLine: Int?, fallbackWorktreeId: String) -> AlasCLIResponse {
@@ -82,6 +102,19 @@ struct AlasActionService {
         return open(
             paths: [path],
             fallbackWorktreeId: fallbackWorktreeId,
+            fallbackWorktree: nil,
+            preferredProjectId: nil,
+            lineRange: start ... ((endLine ?? line) - 1)
+        )
+    }
+
+    func openAt(path: String, line: Int, endLine: Int?, fallbackWorktree: Worktree) -> AlasCLIResponse {
+        let start = line - 1
+        return open(
+            paths: [path],
+            fallbackWorktreeId: fallbackWorktree.id,
+            fallbackWorktree: fallbackWorktree,
+            preferredProjectId: fallbackWorktree.projectId,
             lineRange: start ... ((endLine ?? line) - 1)
         )
     }
@@ -89,6 +122,8 @@ struct AlasActionService {
     private func open(
         paths: [String],
         fallbackWorktreeId: String,
+        fallbackWorktree: Worktree?,
+        preferredProjectId: String?,
         lineRange: ClosedRange<Int>?
     ) -> AlasCLIResponse {
         var errors: [String] = []
@@ -103,17 +138,33 @@ struct AlasActionService {
                 errors.append("\(url.path) is a directory.")
                 continue
             }
-            if let match = containingWorktree(for: url) {
+            if let match = containingWorktree(for: url, preferredProjectId: preferredProjectId) {
                 if let lineRange {
-                    openRelativeFileAtLines(match.relativePath, match.worktree.id, lineRange)
+                    if let openRelativeFileAtLinesInWorktree {
+                        openRelativeFileAtLinesInWorktree(match.relativePath, match.worktree, lineRange)
+                    } else {
+                        openRelativeFileAtLines(match.relativePath, match.worktree.id, lineRange)
+                    }
                 } else {
-                    openRelativeFile(match.relativePath, match.worktree.id)
+                    if let openRelativeFileInWorktree {
+                        openRelativeFileInWorktree(match.relativePath, match.worktree)
+                    } else {
+                        openRelativeFile(match.relativePath, match.worktree.id)
+                    }
                 }
             } else {
                 if let lineRange {
-                    openExternalFileAtLines(url, fallbackWorktreeId, lineRange)
+                    if let fallbackWorktree, let openExternalFileAtLinesInWorktree {
+                        openExternalFileAtLinesInWorktree(url, fallbackWorktree, lineRange)
+                    } else {
+                        openExternalFileAtLines(url, fallbackWorktreeId, lineRange)
+                    }
                 } else {
-                    openExternalFile(url, fallbackWorktreeId)
+                    if let fallbackWorktree, let openExternalFileInWorktree {
+                        openExternalFileInWorktree(url, fallbackWorktree)
+                    } else {
+                        openExternalFile(url, fallbackWorktreeId)
+                    }
                 }
             }
             openedAny = true
@@ -687,14 +738,18 @@ struct AlasActionService {
 
     // MARK: - Worktree matching (moved verbatim from AlasCLICommandRouter)
 
-    private func containingWorktree(for url: URL) -> (worktree: Worktree, relativePath: String)? {
+    private func containingWorktree(for url: URL, preferredProjectId: String? = nil) -> (worktree: Worktree, relativePath: String)? {
         var bestMatch: (worktree: Worktree, relativePath: String, rootComponentCount: Int)?
         for worktree in visibleWorktrees() {
             let rootURL = worktree.path.standardizedFileURL
             guard let match = Self.relativePathAndDepth(for: url, in: rootURL) else { continue }
-            if let currentBest = bestMatch,
-               match.rootComponentCount <= currentBest.rootComponentCount {
-                continue
+            if let currentBest = bestMatch {
+                if match.rootComponentCount < currentBest.rootComponentCount { continue }
+                if match.rootComponentCount == currentBest.rootComponentCount {
+                    guard currentBest.worktree.projectId != preferredProjectId,
+                          worktree.projectId == preferredProjectId
+                    else { continue }
+                }
             }
             bestMatch = (worktree, match.relativePath, match.rootComponentCount)
         }

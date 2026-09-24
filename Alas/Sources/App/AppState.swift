@@ -5127,6 +5127,11 @@ final class AppState {
             let owner = SessionOwnerID.projectWorktree(projectId: projectId, worktreeId: worktreeID)
             let manager = acpManagers[owner]
             for tab in tabs.tabs(forWorktree: worktreeID) {
+                if case .webPreview(let state) = tab,
+                   state.projectId == projectId {
+                    tabs.close(worktreeId: worktreeID, tabId: tab.id)
+                    continue
+                }
                 if case .terminal(let terminalState) = tab,
                    terminalState.projectId == projectId {
                     closeTab(
@@ -6744,6 +6749,44 @@ final class AppState {
                    let worktree = self.worktree(withId: worktreeId) {
                     self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
                 }
+            },
+            openRelativeFileInWorktree: { [weak self] relativePath, worktree in
+                self?.openFile(relativePath: relativePath, worktree: worktree)
+            },
+            openExternalFileInWorktree: { [weak self] url, worktree in
+                guard let self else { return }
+                self.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+                if BinaryFileType.isKnownBinary(relativePath: url.path) {
+                    _ = self.tabs.openBinaryPreview(worktreeId: worktree.id, relativePath: url.path)
+                    return
+                }
+                _ = self.tabs.openExternalEditor(
+                    worktreeId: worktree.id,
+                    absoluteURL: url,
+                    revealLine: nil,
+                    revealCharacter: nil,
+                    originatingRelativePath: nil
+                )
+            },
+            openRelativeFileAtLinesInWorktree: { [weak self] relativePath, worktree, lines in
+                self?.openFile(
+                    relativePath: relativePath,
+                    worktree: worktree,
+                    revealLine: lines.lowerBound,
+                    revealEndLine: lines.upperBound,
+                    revealCharacter: 0
+                )
+            },
+            openExternalFileAtLinesInWorktree: { [weak self] url, worktree, lines in
+                guard let self else { return }
+                self.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+                _ = self.tabs.openExternalEditor(
+                    worktreeId: worktree.id,
+                    absoluteURL: url,
+                    revealLine: lines.lowerBound,
+                    revealCharacter: 0,
+                    revealEndLine: lines.upperBound
+                )
             },
             focusWorktree: { [weak self] worktree in
                 self?.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
@@ -9690,15 +9733,29 @@ final class AppState {
         revealCharacter: Int? = nil
     ) {
         guard let worktree = worktree(withId: worktreeId) else { return }
+        openFile(
+            relativePath: relativePath,
+            worktree: worktree,
+            revealLine: revealLine,
+            revealEndLine: revealEndLine,
+            revealCharacter: revealCharacter
+        )
+    }
+
+    func openFile(
+        relativePath: String,
+        worktree: Worktree,
+        revealLine: Int? = nil,
+        revealEndLine: Int? = nil,
+        revealCharacter: Int? = nil
+    ) {
         // Reject archived worktrees: their ids may still appear in some legacy
         // call sites (e.g. older persisted tabs). Selecting one would set
         // `selectedWorktreeId` to a hidden id that `RootView.selectedWorktree()`
         // (now visibility-aware) would reject anyway, leaving an empty pane.
         guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
         nativePeerSessions?.clearSelection()
-        if selectedWorktreeId != worktree.id {
-            focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
-        }
+        focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
 
         let hasRevealTarget = revealLine != nil || revealCharacter != nil
         if ImageFileType.isSupported(relativePath: relativePath),
@@ -11519,6 +11576,11 @@ final class AppState {
             let manager = acpManagers[owner] ?? (hasLegacyACPTabs ? acpManager(for: worktree) : nil)
             if hasLegacyACPTabs { await manager?.refreshRecentNow() }
             for tab in sharedTabs {
+                if case .webPreview(let previewState) = tab,
+                   previewState.projectId == worktree.projectId {
+                    tabs.close(worktreeId: worktree.id, tabId: tab.id)
+                    continue
+                }
                 if case .terminal(let terminalState) = tab,
                    terminalState.projectId == worktree.projectId {
                     closeTab(

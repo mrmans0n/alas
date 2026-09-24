@@ -1841,6 +1841,11 @@ struct AppStateCleanupTests {
             title: "Legacy shared terminal",
             sessionId: "shared-terminal"
         )
+        let previewA = state.tabs.openWebPreview(
+            owner: ownerA,
+            url: URL(string: "https://host-a.example"),
+            remoteHost: "host-a"
+        )
 
         state.removeProject(id: projectA.id)
 
@@ -1852,6 +1857,7 @@ struct AppStateCleanupTests {
         #expect(!remainingTabs.contains(where: { $0.id == terminalA.id }))
         #expect(remainingTabs.contains(where: { $0.id == terminalB.id }))
         #expect(remainingTabs.contains(where: { $0.id == sharedTerminal.id }))
+        #expect(!remainingTabs.contains(where: { $0.id == previewA.id }))
     }
 
     @Test func removeProjectDeletesPersistedTabsFile() async throws {

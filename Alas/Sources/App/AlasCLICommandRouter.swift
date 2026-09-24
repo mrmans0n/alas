@@ -13,6 +13,10 @@ struct AlasCLICommandRouter {
     var openExternalFile: (URL, String) -> Void
     var openRelativeFileAtLines: (String, String, ClosedRange<Int>) -> Void = { _, _, _ in }
     var openExternalFileAtLines: (URL, String, ClosedRange<Int>) -> Void = { _, _, _ in }
+    var openRelativeFileInWorktree: ((String, Worktree) -> Void)? = nil
+    var openExternalFileInWorktree: ((URL, Worktree) -> Void)? = nil
+    var openRelativeFileAtLinesInWorktree: ((String, Worktree, ClosedRange<Int>) -> Void)? = nil
+    var openExternalFileAtLinesInWorktree: ((URL, Worktree, ClosedRange<Int>) -> Void)? = nil
     var focusWorktree: (Worktree) -> Void = { _ in }
     var createWorktree: (Worktree, String, String?) async -> AlasCLIResponse = { _, _, _ in
         .error("Creating worktrees from the terminal is not available yet.")
@@ -63,6 +67,10 @@ struct AlasCLICommandRouter {
             openExternalFile: openExternalFile,
             openRelativeFileAtLines: openRelativeFileAtLines,
             openExternalFileAtLines: openExternalFileAtLines,
+            openRelativeFileInWorktree: openRelativeFileInWorktree,
+            openExternalFileInWorktree: openExternalFileInWorktree,
+            openRelativeFileAtLinesInWorktree: openRelativeFileAtLinesInWorktree,
+            openExternalFileAtLinesInWorktree: openExternalFileAtLinesInWorktree,
             focusWorktree: focusWorktree,
             createWorktree: createWorktree,
             deleteWorktreeAction: deleteWorktree,
@@ -185,13 +193,13 @@ struct AlasCLICommandRouter {
         case .resolve:
             return .ok
         case .open(let paths):
-            return service.open(paths: paths, fallbackWorktreeId: origin.id)
+            return service.open(paths: paths, fallbackWorktree: origin)
         case .openAt(let path, let line, let endLine):
             return service.openAt(
                 path: path,
                 line: line,
                 endLine: endLine,
-                fallbackWorktreeId: origin.id
+                fallbackWorktree: origin
             )
         case .notify(let body, let title, let level):
             return service.notify(

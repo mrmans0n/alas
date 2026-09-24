@@ -303,6 +303,11 @@ struct AppStateWorktreeCleanupBatchTests {
         fixture.state.projectsManager.insertOptimisticWorktree(sibling)
         let firstManager = try #require(fixture.state.acpManager(for: target))
         let secondManager = try #require(fixture.state.acpManager(for: sibling))
+        let siblingPreview = fixture.state.tabs.openWebPreview(
+            owner: .projectWorktree(projectId: secondProject.id, worktreeId: target.id),
+            url: URL(string: "https://second-host.example"),
+            remoteHost: "second-host"
+        )
         let history = try #require(fixture.state.runHistoryStore)
         let now = Date()
         let firstRun = RunRecord(
@@ -418,6 +423,48 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(fixture.state.durableRunReportIDsByOwner[secondReportOwner] == [secondHistory.id])
         #expect(!fixture.state.tabs.tabs(forWorktree: target.id).contains { $0.id == firstReportTab.id })
         #expect(fixture.state.tabs.tabs(forWorktree: target.id).contains { $0.id == secondReportTab.id })
+        #expect(fixture.state.tabs.tabs(forWorktree: target.id).contains { $0.id == siblingPreview.id })
+    }
+
+    @Test func deletingOneProjectClosesItsOwnedWebPreview() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        let secondRepo = fixture.temporaryRoot.appendingPathComponent("second-preview-repo")
+        try FileManager.default.createDirectory(at: secondRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: secondRepo)
+        let secondProject = try await fixture.state.projectsManager.addProject(
+            path: secondRepo,
+            displayName: "second",
+            color: "#5fb7c4"
+        )
+        fixture.state.projectsManager.insertOptimisticWorktree(Worktree(
+            id: target.id,
+            projectId: secondProject.id,
+            name: target.name,
+            branch: target.branch,
+            path: target.path,
+            status: .clean,
+            lastActivity: .distantPast
+        ))
+        let ownedPreview = fixture.state.tabs.openWebPreview(
+            owner: .projectWorktree(projectId: fixture.project.id, worktreeId: target.id),
+            url: URL(string: "https://first-host.example"),
+            remoteHost: nil
+        )
+        let preflight = try await WorktreeService().deletePreflight(worktreePath: target.path)
+        let authorization = WorktreeCleanupDeleteAuthorization(
+            sessionIDsByWorktree: [:],
+            preflightByWorktree: [target.id: preflight]
+        )
+
+        let results = await fixture.state.batchDeleteWorktrees(
+            [target], keepBranch: true, authorization: authorization
+        )
+
+        #expect(results.map(\.outcome) == [.deleted])
+        #expect(fixture.state.projectsManager.worktrees(projectId: secondProject.id).contains { $0.id == target.id })
+        #expect(!fixture.state.tabs.tabs(forWorktree: target.id).contains { $0.id == ownedPreview.id })
     }
 
     @Test func singleDeleteCleansSharedRuntimeWhenTheOtherOwnerDisappearsBeforeRefresh() async throws {

@@ -38,6 +38,56 @@ struct AlasCLICommandRouterTests {
         #expect(opened[0].relativePath == "a.txt")
     }
 
+    @Test func openCommandsPreserveTheOriginProjectForDuplicatePaths() async throws {
+        let file = try makeFile("repo/a.txt")
+        let externalFile = try makeFile("outside/note.txt")
+        let root = file.deletingLastPathComponent()
+        let worktreeA = Worktree(
+            id: "shared-id", projectId: "project-a", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: .distantPast
+        )
+        let worktreeB = Worktree(
+            id: "shared-id", projectId: "project-b", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: .distantPast
+        )
+        var openedProjects: [String] = []
+        var openedExternalProjects: [String] = []
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in "shared-id" },
+            sessionOwner: { _ in .projectWorktree(projectId: "project-b", worktreeId: "shared-id") },
+            originatingWorktree: { _ in worktreeA },
+            originatingWorktreeInProject: { _, projectId in projectId == "project-b" ? worktreeB : worktreeA },
+            visibleWorktrees: { [worktreeA, worktreeB] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in Issue.record("expected a relative file open") },
+            openRelativeFileInWorktree: { _, worktree in openedProjects.append(worktree.projectId) },
+            openExternalFileInWorktree: { _, worktree in openedExternalProjects.append(worktree.projectId) },
+            openRelativeFileAtLinesInWorktree: { _, worktree, _ in openedProjects.append(worktree.projectId) },
+            openExternalFileAtLinesInWorktree: { _, worktree, _ in openedExternalProjects.append(worktree.projectId) },
+            activateApp: {}
+        )
+
+        let openResponse = await router.handle(.init(
+            version: 1, sessionId: "session-b", cwd: nil, command: .open(paths: [file.path])
+        ))
+        let openAtResponse = await router.handle(.init(
+            version: 1, sessionId: "session-b", cwd: nil, command: .openAt(path: file.path, line: 1, endLine: nil)
+        ))
+        let externalOpenResponse = await router.handle(.init(
+            version: 1, sessionId: "session-b", cwd: nil, command: .open(paths: [externalFile.path])
+        ))
+        let externalOpenAtResponse = await router.handle(.init(
+            version: 1, sessionId: "session-b", cwd: nil, command: .openAt(path: externalFile.path, line: 2, endLine: 3)
+        ))
+
+        #expect(openResponse == .ok)
+        #expect(openAtResponse == .ok)
+        #expect(externalOpenResponse == .ok)
+        #expect(externalOpenAtResponse == .ok)
+        #expect(openedProjects == ["project-b", "project-b"])
+        #expect(openedExternalProjects == ["project-b", "project-b"])
+    }
+
     @Test func resolvesOriginFromCwdWhenNoSession() async throws {
         let root = try makeFile("repo/a.txt").deletingLastPathComponent()
         let worktree = Worktree(
