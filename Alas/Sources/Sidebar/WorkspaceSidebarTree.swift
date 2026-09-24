@@ -109,7 +109,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             }
         }
         .sheet(item: $checkoutRowDeletionConfirmation) { pending in
-            WorkspaceDeletionConfirmationSheet(model: pending.model) { action in
+            WorkspaceDeletionConfirmationSheet(
+                model: pending.model,
+                approvalQueue: state.repoHookApprovalQueue
+            ) { action in
                 confirmCheckoutRowDeletion(action, checkoutID: pending.checkoutID)
             }
             .modifier(WorkspaceLifecycleErrorAlert(error: $lifecycleError))
@@ -507,10 +510,12 @@ struct WorkspaceCheckoutInspector: View {
             }
         )
         .sheet(item: $deletionConfirmation) { pending in
-            WorkspaceDeletionConfirmationSheet(model: pending.model) { action in
+            WorkspaceDeletionConfirmationSheet(
+                model: pending.model,
+                approvalQueue: state.repoHookApprovalQueue
+            ) { action in
                 confirmDeletion(action, checkoutID: pending.checkoutID, memberID: pending.memberID)
             }
-            .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             .modifier(WorkspaceLifecycleErrorAlert(error: $lifecycleError))
         }
         .sheet(item: $repairPlan) { pending in

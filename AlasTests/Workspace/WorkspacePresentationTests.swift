@@ -148,6 +148,41 @@ struct WorkspacePresentationTests {
         #expect(await task.value == .approve)
     }
 
+    @Test func deletionConfirmationSheetOwnsRuntimeHookApprovalPresentation() async throws {
+        let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
+        let sheet = WorkspaceDeletionConfirmationSheet(
+            model: .checkoutDeletion(risks: ["Uncommitted changes"]),
+            approvalQueue: state.repoHookApprovalQueue
+        ) { _ in }
+        let theme = try ThemeStore().current
+        let controller = NSHostingController(rootView: sheet.environment(\.theme, theme))
+        controller.view.frame = NSRect(x: 0, y: 0, width: 560, height: 480)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let bytes = Data("echo session open".utf8)
+        let hook = RepoHook(
+            event: .sessionOpen,
+            source: .local,
+            bytes: bytes,
+            text: String(decoding: bytes, as: UTF8.self),
+            hash: RepoHookTrust.hash(event: .sessionOpen, bytes: bytes)
+        )
+        let task = Task {
+            await state.repoHookApprovalQueue.requestDecision(
+                hook: hook,
+                projectID: "project",
+                context: .sessionOpen
+            )
+        }
+
+        await Task.yield()
+        let nestedRequest = state.repoHookApprovalQueue.activeDialogRequest
+        state.repoHookApprovalQueue.decide(.approve)
+
+        #expect(nestedRequest?.context == .sessionOpen)
+        #expect(await task.value == .approve)
+    }
+
     @Test func definitionDialogOwnsRuntimeHookApprovalPresentation() async throws {
         let state = AppState(store: MemoryStore(), restoreActiveTabsOnStartup: false)
         let dialog = NewWorkspaceDialog(state: state, presented: .constant(true))
