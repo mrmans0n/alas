@@ -1539,6 +1539,32 @@ struct ACPBrokerClientTests {
         #expect(recorder.records().isEmpty)
     }
 
+    @Test func snapshotTurnStateCallbackIsDroppedAfterTerminationDuringDurableCallback() async throws {
+        let service = MockBrokerService()
+        await service.setOpenSnapshotTurnState(.streaming)
+        let clientReference = ACPBrokerClientReference()
+        let detachFinished = DispatchSemaphore(value: 0)
+        let terminationCompleted = SyncBooleanRecorder()
+        let turnStates = SyncTurnStateRecorder()
+        let client = makeClient(
+            service: service,
+            onTurnStateChanged: { state in turnStates.append(state) },
+            onDurableStateChanged: { _ in
+                Task.detached(priority: .userInitiated) {
+                    await clientReference.detach()
+                    detachFinished.signal()
+                }
+                terminationCompleted.set(detachFinished.wait(timeout: .now() + 2) == .success)
+            }
+        )
+        clientReference.store(client)
+
+        try await client.start()
+
+        #expect(terminationCompleted.value)
+        #expect(turnStates.records().isEmpty)
+    }
+
     // Regression (code review on #853, P1): with the background poller now
     // running continuously, it can dispatch an operation's
     // `operationCompleted` event on its OWN independent attach() call,
@@ -2107,6 +2133,44 @@ private final class SyncTurnStateRecorder: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return recordedStates
+    }
+}
+
+private final class ACPBrokerClientReference: @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var client: ACPBrokerClient?
+
+    func store(_ client: ACPBrokerClient) {
+        lock.lock()
+        self.client = client
+        lock.unlock()
+    }
+
+    func detach() async {
+        await referencedClient()?.detach()
+    }
+
+    private func referencedClient() -> ACPBrokerClient? {
+        lock.lock()
+        defer { lock.unlock() }
+        return client
+    }
+}
+
+private final class SyncBooleanRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedValue = false
+
+    var value: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedValue
+    }
+
+    func set(_ value: Bool) {
+        lock.lock()
+        recordedValue = value
+        lock.unlock()
     }
 }
 

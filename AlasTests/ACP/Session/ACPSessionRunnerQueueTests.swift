@@ -703,7 +703,6 @@ struct ACPSessionRunnerQueueTests {
         await leaseGate.waitUntilEntered()
 
         runner.invalidateActivePrompt()
-        runner.stop()
         currentConnection.set(false)
         await leaseGate.release()
         try await Task.sleep(for: .milliseconds(100))
@@ -729,7 +728,6 @@ struct ACPSessionRunnerQueueTests {
         await leaseGate.waitUntilEntered()
 
         runner.invalidateActivePrompt()
-        runner.stop()
         currentConnection.set(false)
         await leaseGate.release()
         try await Task.sleep(for: .milliseconds(100))

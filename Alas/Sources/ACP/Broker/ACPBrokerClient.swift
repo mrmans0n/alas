@@ -1253,7 +1253,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         if shouldDrainDurableStates {
             drainDurableStateCallbacks()
         }
-        if let changedTurnState {
+        if let changedTurnState, !isConnectionTerminated() {
             onTurnStateChanged?(changedTurnState)
         }
         return true
@@ -1271,6 +1271,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         }
         turnState = state
         stateLock.unlock()
+        guard !isConnectionTerminated() else { return }
         onTurnStateChanged?(state)
     }
 
@@ -1323,6 +1324,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             }
             let state = pendingDurableStates.removeFirst()
             stateLock.unlock()
+            guard !isConnectionTerminated() else { continue }
             onDurableStateChanged?(state)
         }
     }
