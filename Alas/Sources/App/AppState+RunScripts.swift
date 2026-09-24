@@ -597,9 +597,10 @@ extension AppState {
     func awaitRunScriptSettlement(
         runID: String,
         worktreeID: String,
+        projectId: String? = nil,
         notify: @escaping (RunScriptSettlement) -> Void
     ) {
-        runScriptSettlementHandlers[runID] = (worktreeID: worktreeID, notify: notify)
+        runScriptSettlementHandlers[runID] = (worktreeID: worktreeID, projectId: projectId, notify: notify)
     }
 
     /// Hands a waiting caller the run's final state. A no-op when nobody is
@@ -612,19 +613,26 @@ extension AppState {
     /// teardown paths that discard runs wholesale instead of finishing them —
     /// without it, a scheduled run in a deleted worktree would wait forever
     /// and its schedule would never fire again.
-    private func resolveRunScriptSettlements(worktreeID: String, _ settlement: RunScriptSettlement) {
-        for (runID, entry) in runScriptSettlementHandlers where entry.worktreeID == worktreeID {
+    private func resolveRunScriptSettlements(
+        worktreeID: String,
+        projectId: String? = nil,
+        _ settlement: RunScriptSettlement
+    ) {
+        for (runID, entry) in runScriptSettlementHandlers where entry.worktreeID == worktreeID
+            && (projectId == nil || entry.projectId == projectId) {
             resolveRunScriptSettlement(runID: runID, settlement)
         }
     }
 
-    func runScriptFailures(in worktreeID: String) -> [RunScriptFailure] {
-        runScriptFailureQueue.failures(for: worktreeID)
+    func runScriptFailures(in worktreeID: String, projectId: String? = nil) -> [RunScriptFailure] {
+        runScriptFailureQueue.failures(for: worktreeID, projectId: projectId)
     }
 
-    func dismissRunScriptFailure(id: String, worktreeID: String) {
-        if let failure = runScriptFailureQueue.failures(for: worktreeID).first(where: { $0.id == id }),
-           let worktree = attentionWorktrees.first(where: { $0.worktree.id == worktreeID })?.worktree,
+    func dismissRunScriptFailure(id: String, worktreeID: String, projectId: String? = nil) {
+        if let failure = runScriptFailureQueue.failures(for: worktreeID, projectId: projectId).first(where: { $0.id == id }),
+           let worktree = attentionWorktrees.first(where: {
+               $0.worktree.id == worktreeID && (projectId == nil || $0.worktree.projectId == projectId)
+           })?.worktree,
            let context = attentionContext(for: worktree) {
             let keys = [
                 AttentionProducer.scriptSourceKey(scriptKey: failure.scriptKey, owner: context.owner),
@@ -635,13 +643,16 @@ extension AppState {
             }
         }
         for event in attentionStore.events where event.kind == .runScriptFailure
-            && event.jumpTarget == .runScriptFailure(failureID: id)
-            && attentionWorktree(for: event.owner)?.id == worktreeID {
+            && event.jumpTarget == .runScriptFailure(failureID: id) {
+            guard let eventWorktree = attentionWorktree(for: event.owner),
+                  eventWorktree.id == worktreeID,
+                  projectId == nil || eventWorktree.projectId == projectId
+            else { continue }
             guard let current = attentionStore.document.observations[event.sourceKey],
                   current.isActive, current.eventID == event.id else { continue }
             observeAttention(.inactive(sourceKey: event.sourceKey))
         }
-        runScriptFailureQueue.dismiss(id: id, worktreeID: worktreeID)
+        runScriptFailureQueue.dismiss(id: id, worktreeID: worktreeID, projectId: projectId)
     }
 
     private func retireRunScriptAttention(scriptKey: String, worktree: Worktree, at date: Date) {
@@ -651,9 +662,10 @@ extension AppState {
             )), at: date)
         }
         // Legacy run-keyed occurrences can only be matched while their script metadata survives.
-        for failure in runScriptFailureQueue.failures(for: worktree.id) where failure.scriptKey == scriptKey {
+        for failure in runScriptFailureQueue.failures(for: worktree.id, projectId: worktree.projectId)
+            where failure.scriptKey == scriptKey {
             observeAttention(.inactive(sourceKey: .init(rawValue: "script:\(failure.runID):failure")), at: date)
-            runScriptFailureQueue.dismiss(id: failure.id, worktreeID: worktree.id)
+            runScriptFailureQueue.dismiss(id: failure.id, worktreeID: worktree.id, projectId: worktree.projectId)
         }
     }
 
@@ -937,6 +949,7 @@ extension AppState {
     ) {
         runScriptCompletionTasks[runID] = (
             worktreeID: worktree.id,
+            projectId: worktree.projectId,
             sessionID: sessionID,
             location: location,
             task: Task { @MainActor [weak self] in
@@ -990,6 +1003,7 @@ extension AppState {
                         scriptKey: script.key,
                         scriptName: script.displayName,
                         worktreeID: worktree.id,
+                        projectId: worktree.projectId,
                         branch: worktree.branch,
                         exitCode: completion.exitCode,
                         completedAt: observedAt
@@ -1111,12 +1125,14 @@ extension AppState {
     @discardableResult
     func cleanupRunScriptState(
         worktreeID: String,
+        projectId: String? = nil,
         purgeFailures: Bool = true,
         purgeHistory: Bool = true
     ) -> Task<Void, Never>? {
         var historyPurgeTask: Task<Void, Never>?
-        cancelPendingRunScriptLaunches(worktreeID: worktreeID)
-        for (runID, entry) in runScriptCompletionTasks where entry.worktreeID == worktreeID {
+        cancelPendingRunScriptLaunches(worktreeID: worktreeID, projectId: projectId)
+        for (runID, entry) in runScriptCompletionTasks where entry.worktreeID == worktreeID
+            && (projectId == nil || entry.projectId == projectId) {
             if purgeFailures {
                 let capture = purgeHistory ? .location(entry.location) : runHistoryCaptureBeforeCancelling(entry.location)
                 runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
@@ -1134,29 +1150,41 @@ extension AppState {
             // The worktree itself is going away, so its run history goes with
             // it rather than leaking into a future worktree that reuses the id.
             for event in attentionStore.events where event.kind == .runScriptFailure
-                && attentionWorktree(for: event.owner)?.id == worktreeID {
+                && attentionWorktree(for: event.owner)?.id == worktreeID
+                && (projectId == nil || attentionWorktree(for: event.owner)?.projectId == projectId) {
                 observeAttention(.inactive(sourceKey: event.sourceKey))
             }
-            if let worktree = attentionWorktrees.first(where: { $0.worktree.id == worktreeID })?.worktree,
-               let context = attentionContext(for: worktree) {
+            let ownedWorktrees = attentionWorktrees.map(\.worktree).filter {
+                $0.id == worktreeID && (projectId == nil || $0.projectId == projectId)
+            }
+            for worktree in ownedWorktrees {
+                guard let context = attentionContext(for: worktree) else { continue }
                 let prefix = "script:\(context.owner.storageKey):"
                 for key in attentionStore.document.observations.keys where key.rawValue.hasPrefix(prefix) {
                     observeAttention(.inactive(sourceKey: key))
                 }
             }
-            runRecords.purge(worktreeID: worktreeID)
-            runScriptFailureQueue.purge(worktreeID: worktreeID)
-            transientRunReports = transientRunReports.filter { $0.key.owner.worktreeID != worktreeID }
-            durableRunReportIDsByOwner = durableRunReportIDsByOwner.filter { $0.key.worktreeID != worktreeID }
-            tabs.closeRunReports(worktreeId: worktreeID)
+            if let projectId {
+                runRecords.purge(worktreeID: worktreeID, projectId: projectId)
+            } else {
+                runRecords.purge(worktreeID: worktreeID)
+            }
+            runScriptFailureQueue.purge(worktreeID: worktreeID, projectId: projectId)
+            transientRunReports = transientRunReports.filter {
+                $0.key.owner.worktreeID != worktreeID || (projectId != nil && $0.key.owner.projectId != projectId)
+            }
+            durableRunReportIDsByOwner = durableRunReportIDsByOwner.filter {
+                $0.key.worktreeID != worktreeID || (projectId != nil && $0.key.projectId != projectId)
+            }
+            tabs.closeRunReports(worktreeId: worktreeID, projectId: projectId)
             if purgeHistory, let runHistoryStore {
                 historyPurgeTask = Task { @MainActor [weak self, runHistoryStore] in
-                    await self?.flushRunHistoryPersistence(worktreeID: worktreeID)
+                    await self?.flushRunHistoryPersistence(worktreeID: worktreeID, projectId: projectId)
                     do {
                         try await RunHistoryPersistenceRetry.attempt {
-                            try await runHistoryStore.purge(worktreeID: worktreeID)
+                            try await runHistoryStore.purge(worktreeID: worktreeID, projectID: projectId)
                         }
-                        self?.noteRunHistoryChanged(worktreeID: worktreeID)
+                        self?.noteRunHistoryChanged(worktreeID: worktreeID, projectId: projectId)
                     } catch {
                         let message = "Could not purge run history: \(error.localizedDescription)"
                         self?.runHistoryError = message
@@ -1174,15 +1202,17 @@ extension AppState {
         // Purging discards runs instead of finishing them, so anything still
         // waiting on one has to be released here rather than by a record
         // transition that will now never happen.
-        resolveRunScriptSettlements(worktreeID: worktreeID, .finished(.unknown))
+        resolveRunScriptSettlements(worktreeID: worktreeID, projectId: projectId, .finished(.unknown))
         return historyPurgeTask
     }
 
-    func cancelPendingRunScriptLaunches(worktreeID: String? = nil) {
+    func cancelPendingRunScriptLaunches(worktreeID: String? = nil, projectId: String? = nil) {
         let now = Date()
         let pendingKeys = pendingScriptLaunches.compactMap { key, pending -> PendingRunScriptLaunchKey? in
-            guard let worktreeID else { return key }
-            return pending.worktreeID == worktreeID ? key : nil
+            guard worktreeID == nil || pending.worktreeID == worktreeID,
+                  projectId == nil || pending.projectId == projectId
+            else { return nil }
+            return key
         }
         for key in pendingKeys {
             guard let pending = pendingScriptLaunches.removeValue(forKey: key) else { continue }

@@ -658,6 +658,7 @@ struct RunScriptLaunchTests {
         let runID = UUID().uuidString
         state.runScriptCompletionTasks[runID] = (
             worktreeID: worktree.id,
+            projectId: worktree.projectId,
             sessionID: "session",
             location: try RunScriptCompletionMonitor.paths(runID: runID, host: "devbox"),
             task: Task {}
@@ -719,6 +720,7 @@ struct RunScriptLaunchTests {
         let runID = UUID().uuidString
         state.runScriptCompletionTasks[runID] = (
             worktreeID: "wt",
+            projectId: nil,
             sessionID: "session",
             location: try RunScriptCompletionMonitor.paths(runID: runID, host: "devbox"),
             task: Task {}
@@ -737,6 +739,7 @@ struct RunScriptLaunchTests {
         let runID = UUID().uuidString
         state.runScriptCompletionTasks[runID] = (
             worktreeID: "wt",
+            projectId: nil,
             sessionID: "session",
             location: try RunScriptCompletionMonitor.paths(runID: runID, host: "devbox"),
             task: Task {}
@@ -763,6 +766,7 @@ struct RunScriptLaunchTests {
         let runID = UUID().uuidString
         state.runScriptCompletionTasks[runID] = (
             worktreeID: "wt",
+            projectId: nil,
             sessionID: "session",
             location: .local(paths: paths),
             task: Task {}

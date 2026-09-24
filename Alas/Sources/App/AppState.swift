@@ -239,13 +239,18 @@ final class AppState {
     @ObservationIgnored var attentionAliasRetryTask: Task<Void, Never>?
     @ObservationIgnored var attentionAliasRetryAttempts = 0
     @ObservationIgnored var attentionAliasRetryNotBefore: Date?
-    @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
+    @ObservationIgnored var runScriptCompletionTasks: [String: (
+        worktreeID: String, projectId: String?, sessionID: String,
+        location: RunScriptCaptureLocation, task: Task<Void, Never>
+    )] = [:]
     @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
     /// Told exactly once when a run settles, keyed by run ID. Only the
     /// scheduler registers here; manual runs are observed through `runRecords`.
-    /// The worktree is carried so a worktree teardown can settle every run it
-    /// owns, including ones that never produced an archivable record.
-    @ObservationIgnored var runScriptSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
+    /// The concrete owner is carried so teardown can settle runs without
+    /// affecting a different project that shares the path-derived ID.
+    @ObservationIgnored var runScriptSettlementHandlers: [String: (
+        worktreeID: String, projectId: String?, notify: (RunScriptSettlement) -> Void
+    )] = [:]
     /// Decides when scheduled runs start. Execution is delegated back here so
     /// a scheduled run is a manual run with a different trigger.
     let runScheduler: RunScheduler
@@ -11524,7 +11529,17 @@ final class AppState {
             }
             disposeACPManager(owner: owner)
         }
-        let runHistoryPurgeTask = sharedRuntimeStateLives ? nil : cleanupWorktreeState(worktreeId: worktree.id)
+        let runHistoryPurgeTask: Task<Void, Never>?
+        if sharedRuntimeStateLives {
+            runHistoryPurgeTask = cleanupRunScriptState(
+                worktreeID: worktree.id,
+                projectId: worktree.projectId,
+                purgeFailures: true,
+                purgeHistory: true
+            )
+        } else {
+            runHistoryPurgeTask = cleanupWorktreeState(worktreeId: worktree.id)
+        }
         await runHistoryPurgeTask?.value
         if case .staged(let ticket) = outcome {
             do {

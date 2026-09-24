@@ -431,7 +431,7 @@ struct CenterPaneView: View {
                     activeTabId: activeId
                 )
             }
-            let runScriptFailures = state.runScriptFailures(in: worktree.id)
+            let runScriptFailures = state.runScriptFailures(in: worktree.id, projectId: worktree.projectId)
                 .sorted { $0.completedAt > $1.completedAt }
             Group {
                 if tabs.isEmpty, !state.tabs.hasLoaded {
@@ -781,7 +781,13 @@ struct CenterPaneView: View {
                             RunScriptFailureBanner(
                                 presentation: RunScriptFailureBannerPresentation(failure: failure),
                                 onOpen: { state.openRunReport(worktreeID: worktree.id, projectId: worktree.projectId, runID: failure.runID) },
-                                onDismiss: { state.dismissRunScriptFailure(id: failure.id, worktreeID: worktree.id) }
+                                onDismiss: {
+                                    state.dismissRunScriptFailure(
+                                        id: failure.id,
+                                        worktreeID: worktree.id,
+                                        projectId: worktree.projectId
+                                    )
+                                }
                             )
                             .frame(width: 360)
                             .transition(.move(edge: .bottom).combined(with: .opacity))

@@ -394,7 +394,7 @@ extension AppState {
                     runID: runID,
                     scriptName: script.displayName
                 )
-                awaitRunScriptSettlement(runID: runID, worktreeID: worktree.id) {
+                awaitRunScriptSettlement(runID: runID, worktreeID: worktree.id, projectId: worktree.projectId) {
                     continuation.resume(returning: $0)
                 }
             case .alreadyStarting:

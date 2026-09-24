@@ -8,9 +8,32 @@ struct RunScriptFailure: Identifiable, Equatable, Sendable {
     let scriptKey: String
     let scriptName: String
     let worktreeID: String
+    let projectId: String?
     let branch: String
     let exitCode: Int32
     let completedAt: Date
+
+    init(
+        id: String,
+        runID: String,
+        scriptKey: String,
+        scriptName: String,
+        worktreeID: String,
+        projectId: String? = nil,
+        branch: String,
+        exitCode: Int32,
+        completedAt: Date
+    ) {
+        self.id = id
+        self.runID = runID
+        self.scriptKey = scriptKey
+        self.scriptName = scriptName
+        self.worktreeID = worktreeID
+        self.projectId = projectId
+        self.branch = branch
+        self.exitCode = exitCode
+        self.completedAt = completedAt
+    }
 }
 
 struct RunScriptFailureQueue: Equatable {
@@ -22,17 +45,27 @@ struct RunScriptFailureQueue: Equatable {
         byWorktree[failure.worktreeID] = Array(byWorktree[failure.worktreeID]!.prefix(3))
     }
 
-    func failures(for worktreeID: String) -> [RunScriptFailure] {
-        byWorktree[worktreeID, default: []]
+    func failures(for worktreeID: String, projectId: String? = nil) -> [RunScriptFailure] {
+        let failures = byWorktree[worktreeID, default: []]
+        guard let projectId else { return failures }
+        return failures.filter { $0.projectId == projectId }
     }
 
-    mutating func dismiss(id: String, worktreeID: String) {
+    mutating func dismiss(id: String, worktreeID: String, projectId: String? = nil) {
         guard var failures = byWorktree[worktreeID] else { return }
-        failures.removeAll { $0.id == id }
+        failures.removeAll { failure in
+            failure.id == id && (projectId == nil || failure.projectId == projectId)
+        }
         byWorktree[worktreeID] = failures.isEmpty ? nil : failures
     }
 
-    mutating func purge(worktreeID: String) {
-        byWorktree[worktreeID] = nil
+    mutating func purge(worktreeID: String, projectId: String? = nil) {
+        guard let projectId else {
+            byWorktree[worktreeID] = nil
+            return
+        }
+        guard var failures = byWorktree[worktreeID] else { return }
+        failures.removeAll { $0.projectId == projectId }
+        byWorktree[worktreeID] = failures.isEmpty ? nil : failures
     }
 }

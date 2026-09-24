@@ -303,6 +303,61 @@ struct AppStateWorktreeCleanupBatchTests {
         fixture.state.projectsManager.insertOptimisticWorktree(sibling)
         let firstManager = try #require(fixture.state.acpManager(for: target))
         let secondManager = try #require(fixture.state.acpManager(for: sibling))
+        let history = try #require(fixture.state.runHistoryStore)
+        let now = Date()
+        let firstRun = RunRecord(
+            id: "first-project-run", scriptKey: "repo:dev.sh", scriptName: "Dev",
+            worktreeID: target.id, projectId: fixture.project.id, branch: target.branch,
+            target: .init(host: nil, workingDirectory: target.path.path),
+            status: .running, startedAt: now
+        )
+        let secondRun = RunRecord(
+            id: "second-project-run", scriptKey: "repo:dev.sh", scriptName: "Dev",
+            worktreeID: target.id, projectId: secondProject.id, branch: sibling.branch,
+            target: .init(host: "second-host", workingDirectory: sibling.path.path),
+            status: .running, startedAt: now
+        )
+        fixture.state.runRecords.begin(firstRun)
+        fixture.state.runRecords.begin(secondRun)
+        func historyEntry(id: String, projectId: String) -> RunHistoryEntry {
+            RunHistoryEntry(
+                id: id, scriptKey: "repo:dev.sh", scriptName: "Dev",
+                worktreeID: target.id, projectId: projectId, branch: target.branch,
+                target: .init(host: projectId == fixture.project.id ? nil : "second-host", workingDirectory: target.path.path),
+                endpoint: nil, outcome: .succeeded, startedAt: now, finishedAt: now,
+                portConflict: nil, output: .available(text: "done", truncated: false)
+            )
+        }
+        let firstHistory = historyEntry(id: "first-project-history", projectId: fixture.project.id)
+        let secondHistory = historyEntry(id: "second-project-history", projectId: secondProject.id)
+        try await history.append(firstHistory)
+        try await history.append(secondHistory)
+        let firstFailure = RunScriptFailure(
+            id: "first-project-failure", runID: "first-project-run", scriptKey: "repo:dev.sh",
+            scriptName: "Dev", worktreeID: target.id, projectId: fixture.project.id, branch: target.branch,
+            exitCode: 1, completedAt: now
+        )
+        let secondFailure = RunScriptFailure(
+            id: "second-project-failure", runID: "second-project-run", scriptKey: "repo:dev.sh",
+            scriptName: "Dev", worktreeID: target.id, projectId: secondProject.id, branch: sibling.branch,
+            exitCode: 1, completedAt: now.addingTimeInterval(-1)
+        )
+        fixture.state.runScriptFailureQueue.append(firstFailure)
+        fixture.state.runScriptFailureQueue.append(secondFailure)
+        let firstReport = historyEntry(id: "first-project-report", projectId: fixture.project.id)
+        let secondReport = historyEntry(id: "second-project-report", projectId: secondProject.id)
+        let firstReportOwner = RunHistoryOwner(worktreeID: target.id, projectId: fixture.project.id)
+        let secondReportOwner = RunHistoryOwner(worktreeID: target.id, projectId: secondProject.id)
+        fixture.state.transientRunReports[RunHistoryReportKey(owner: firstReportOwner, runID: firstReport.id)] = firstReport
+        fixture.state.transientRunReports[RunHistoryReportKey(owner: secondReportOwner, runID: secondReport.id)] = secondReport
+        fixture.state.durableRunReportIDsByOwner[firstReportOwner] = [firstHistory.id]
+        fixture.state.durableRunReportIDsByOwner[secondReportOwner] = [secondHistory.id]
+        let firstReportTab = fixture.state.tabs.openOrFocusRunReport(
+            worktreeId: target.id, projectId: fixture.project.id, runID: firstReport.id
+        )
+        let secondReportTab = fixture.state.tabs.openOrFocusRunReport(
+            worktreeId: target.id, projectId: secondProject.id, runID: secondReport.id
+        )
         let legacySession = firstManager.createSession(id: "legacy-owner-session", agentId: "test")
         let firstTab = ACPSessionTabState(
             sessionId: "first-owner-session", title: "First", projectId: fixture.project.id
@@ -348,6 +403,21 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(remaining.contains { $0.id == secondTab.id })
         #expect(!remaining.contains { $0.id == firstTerminal.id })
         #expect(remaining.contains { $0.id == secondTerminal.id })
+        #expect(fixture.state.runRecords.record(
+            worktreeID: target.id, projectId: fixture.project.id, scriptKey: firstRun.scriptKey
+        ) == nil)
+        #expect(fixture.state.runRecords.record(
+            worktreeID: target.id, projectId: secondProject.id, scriptKey: secondRun.scriptKey
+        ) == secondRun)
+        #expect(Set(fixture.state.runScriptFailures(in: target.id).map(\.id)) == [secondFailure.id])
+        #expect(try await history.page(worktreeID: target.id, projectID: fixture.project.id, offset: 0, limit: 10).totalCount == 0)
+        #expect(try await history.page(worktreeID: target.id, projectID: secondProject.id, offset: 0, limit: 10).entries.map(\.id) == [secondHistory.id])
+        #expect(fixture.state.transientRunReports[RunHistoryReportKey(owner: firstReportOwner, runID: firstReport.id)] == nil)
+        #expect(fixture.state.transientRunReports[RunHistoryReportKey(owner: secondReportOwner, runID: secondReport.id)] == secondReport)
+        #expect(fixture.state.durableRunReportIDsByOwner[firstReportOwner] == nil)
+        #expect(fixture.state.durableRunReportIDsByOwner[secondReportOwner] == [secondHistory.id])
+        #expect(!fixture.state.tabs.tabs(forWorktree: target.id).contains { $0.id == firstReportTab.id })
+        #expect(fixture.state.tabs.tabs(forWorktree: target.id).contains { $0.id == secondReportTab.id })
     }
 
     @Test func singleDeleteCleansSharedRuntimeWhenTheOtherOwnerDisappearsBeforeRefresh() async throws {

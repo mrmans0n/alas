@@ -216,6 +216,12 @@ struct RunRecordStore: Equatable {
         byWorktree[worktreeID] = nil
     }
 
+    mutating func purge(worktreeID: String, projectId: String) {
+        guard var owners = byWorktree[worktreeID] else { return }
+        owners[projectId] = nil
+        byWorktree[worktreeID] = owners.isEmpty ? nil : owners
+    }
+
     mutating func purgeFinished(worktreeID: String) {
         filterRecords(worktreeID: worktreeID) { $0.status.isActive }
     }
