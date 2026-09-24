@@ -75,6 +75,8 @@ final class CodeEditorCoordinator {
     private var pullDiagnosticsTask: Task<Void, Never>?
     private var hover: HoverFeature?
     private var hoverObservers: [NSObjectProtocol] = []
+    private var visibleRangeRefreshTask: Task<Void, Never>?
+    private var hoverObserversID = UUID()
     private var definition: DefinitionFeature?
     private var navigation: NavigationFeature?
     private var hoverHighlight: HoverHighlightFeature?
@@ -767,7 +769,7 @@ final class CodeEditorCoordinator {
                 self?.hover?.notifyScrolled()
                 self?.definition?.notifyScrolled()
                 self?.signatureHelp?.notifyScrolled()
-                Task { @MainActor [weak self] in self?.scheduleSemanticRefresh(visibleRangeChanged: true) }
+                self?.enqueueVisibleRangeRefresh()
             }
             hoverObservers.append(token)
         }
@@ -798,7 +800,7 @@ final class CodeEditorCoordinator {
             self.hover?.notifyWindowResized()
             self.definition?.notifyWindowResized()
             self.signatureHelp?.notifyWindowResized()
-            Task { @MainActor [weak self] in self?.scheduleSemanticRefresh(visibleRangeChanged: true) }
+            self.enqueueVisibleRangeRefresh()
         }
         hoverObservers.append(resizeToken)
 
@@ -809,12 +811,24 @@ final class CodeEditorCoordinator {
     }
 
     private func clearHoverObservers() {
+        hoverObserversID = UUID()
+        visibleRangeRefreshTask?.cancel()
+        visibleRangeRefreshTask = nil
         let nc = NotificationCenter.default
         for token in hoverObservers {
             nc.removeObserver(token)
         }
         hoverObservers.removeAll()
         textView?.escapeHandler = nil
+    }
+
+    private func enqueueVisibleRangeRefresh() {
+        visibleRangeRefreshTask?.cancel()
+        let observersID = hoverObserversID
+        visibleRangeRefreshTask = Task { [weak self] in
+            guard !Task.isCancelled, let self, hoverObserversID == observersID else { return }
+            scheduleSemanticRefresh(visibleRangeChanged: true)
+        }
     }
 
     // MARK: - Editor commands
@@ -1553,6 +1567,15 @@ final class CodeEditorCoordinator {
         }
         do { try layout.replace(hints, covering: covering, revision: response.revision, settings: settings) }
         catch { layout.clear() }
+    }
+
+    func awaitInlayRequestsForTesting() async {
+        await inlayFeature?.awaitRequestsForTesting()
+    }
+
+    func awaitScheduledInlayRefreshForTesting() async {
+        await visibleRangeRefreshTask?.value
+        await inlayFeature?.awaitRequestsForTesting()
     }
 
     // MARK: - Diagnostics subscription
