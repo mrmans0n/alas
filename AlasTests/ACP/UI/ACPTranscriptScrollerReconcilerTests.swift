@@ -411,6 +411,101 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(scroller.distanceFromBottom < 1)
     }
 
+    @Test("folding a tail anchor during gesture settling preserves its bottom distance", arguments: [0.0, 20.0])
+    func foldingDuringScrollSettlePreservesTailDistance(distance: Double) {
+        let (reconciler, scroller, _) = makeStack()
+        let history = (0..<20).map { spec("history\($0)") }
+        let spacer = spec("__composer_spacer__", height: 220)
+        reconciler.apply(
+            specs: history + [spec("activity", height: 600), spacer],
+            contentWidth: 600, followsTail: true
+        )
+        scroller.setScrollY(scroller.scrollY - distance)
+        reconciler.noteUserScroll()
+        reconciler.resolveStaleRowId = {
+            $0 == "activity" ? (rowId: "group", assumeHeadGrowth: false) : nil
+        }
+
+        reconciler.apply(
+            specs: history + [spec("group", height: 28), spec("answer", height: 900), spacer],
+            contentWidth: 600, followsTail: true
+        )
+
+        #expect(abs(scroller.distanceFromBottom - distance) < 1)
+    }
+
+    @Test("folding a tail anchor preserves bottom elastic overscroll")
+    func foldingTailAnchorPreservesBottomElasticOverscroll() {
+        let (reconciler, scroller, _) = makeStack()
+        scroller.contentView = ElasticClipView(frame: scroller.contentView.frame)
+        scroller.documentView = scroller.flippedDocumentView
+
+        let history = (0..<20).map { spec("history\($0)") }
+        let spacer = spec("__composer_spacer__", height: 220)
+        reconciler.apply(
+            specs: history + [spec("activity", height: 600), spacer],
+            contentWidth: 600, followsTail: true
+        )
+
+        let overrun: CGFloat = 36
+        let bottom = scroller.contentHeight - scroller.viewportHeight
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: bottom + overrun))
+        reconciler.noteUserScroll()
+        reconciler.resolveStaleRowId = {
+            $0 == "activity" ? (rowId: "group", assumeHeadGrowth: false) : nil
+        }
+
+        reconciler.apply(
+            specs: history + [spec("group", height: 28), spec("answer", height: 900), spacer],
+            contentWidth: 600, followsTail: true
+        )
+
+        let restoredOverrun = scroller.scrollY - (scroller.contentHeight - scroller.viewportHeight)
+        #expect(abs(restoredOverrun - overrun) < 1)
+    }
+
+    @Test("folding a short transcript preserves bottom elastic overscroll")
+    func foldingShortTranscriptPreservesBottomElasticOverscroll() {
+        let (reconciler, scroller, _) = makeStack()
+        scroller.contentView = ElasticClipView(frame: scroller.contentView.frame)
+        scroller.documentView = scroller.flippedDocumentView
+        reconciler.apply(specs: [spec("activity", height: 160)], contentWidth: 600, followsTail: true)
+        #expect(scroller.contentHeight < scroller.viewportHeight)
+
+        let overrun: CGFloat = 36
+        let bottom = max(0, scroller.contentHeight - scroller.viewportHeight)
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: bottom + overrun))
+        reconciler.noteUserScroll()
+        reconciler.apply(specs: [spec("answer", height: 100)], contentWidth: 600, followsTail: true)
+
+        let newBottom = max(0, scroller.contentHeight - scroller.viewportHeight)
+        let restoredOverrun = scroller.scrollY - newBottom
+        #expect(abs(restoredOverrun - overrun) < 1)
+    }
+
+    @Test("incremental folding during gesture settling preserves the tail rather than the group header")
+    func incrementalFoldDuringScrollSettlePreservesTail() {
+        let (reconciler, scroller, _) = makeStack()
+        let history = (0..<20).map { spec("history\($0)") }
+        let group = spec("group", height: 28)
+        let spacer = spec("__composer_spacer__", height: 220)
+        reconciler.apply(
+            specs: history + [group, spec("activity", height: 600), spec("answer", height: 40), spacer],
+            contentWidth: 600, followsTail: true
+        )
+        reconciler.noteUserScroll()
+        reconciler.resolveStaleRowId = {
+            $0 == "activity" ? (rowId: "group", assumeHeadGrowth: false) : nil
+        }
+
+        reconciler.apply(
+            specs: history + [group, spec("answer", token: 1, height: 900), spacer],
+            contentWidth: 600, followsTail: true
+        )
+
+        #expect(scroller.distanceFromBottom < 1)
+    }
+
     @Test("append while browsing does not move the viewport")
     func appendWhileBrowsing() {
         let (reconciler, scroller, _) = makeStack()

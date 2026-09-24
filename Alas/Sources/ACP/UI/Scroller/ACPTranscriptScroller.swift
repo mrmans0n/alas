@@ -1144,23 +1144,45 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             isProgrammatic: Bool
         ) {
             guard let host, let scroller, let reconciler else { return }
-            // `apply()` issues its own programmatic scrolls synchronously
-            // (`applyPrepend`, `scrollToBottom`) while `specsById`/
-            // `orderedIds` are mid-mutation; running a layout pass here
-            // against that stale state would mount views from the previous
-            // update instead of the one `apply()` is still installing.
-            // `apply()`'s own trailing `layoutMountedRows()` call covers
-            // this once it's safe — see `isApplyingSpecs`'s doc comment.
-            // Other programmatic scrolls that happen OUTSIDE of `apply()`
-            // (`resumeTailFollow`, `restoreInitialPositionIfNeeded`) are not
-            // covered by that trailing call, but `isApplyingSpecs` is false
-            // at those sites too, so this same guard still lets their
-            // `onScroll` callback run `layoutMountedRows()` normally — no
-            // explicit call is needed at either site.
-            guard !isProgrammatic else {
+            // Reconciliation may move the clip view while row geometry is only
+            // partly installed. Ignore intent until its trailing layout pass.
+            if isProgrammatic || reconciler.isApplyingSpecs {
                 if !reconciler.isApplyingSpecs {
                     reconciler.layoutMountedRowsForScroll()
                 }
+                syncLogicalScrollerMetrics()
+                return
+            }
+
+            let event = NSApp.currentEvent
+            let eventIsFresh = ACPUserScrollEvent.isFresh(
+                eventTimestamp: event?.timestamp,
+                now: ProcessInfo.processInfo.systemUptime
+            )
+            let currentEventType = eventIsFresh ? event?.type : nil
+            // Responsive scrolling often replaces NSApp.currentEvent with a
+            // tracking event. Live-scroll notifications cover those gestures;
+            // the fresh-event fallback also covers scrollbar track clicks.
+            let isScrollbarTrackHit = ACPUserScrollEvent.isScrollbarTrackMouseDown(eventIsFresh ? event : nil)
+            let isHeadPaginationDriven = scroller.isUserScrollActive
+                || ACPUserScrollEvent.isHeadPaginationDriven(
+                    currentEventType,
+                    previousMinY: previousY,
+                    newMinY: newY,
+                    isScrollbarTrackHit: isScrollbarTrackHit
+                )
+            let hasUserScrollInput = scroller.isUserScrollActive
+                || ACPUserScrollEvent.isScrollInput(
+                    currentEventType, isScrollbarTrackHit: isScrollbarTrackHit
+                )
+
+            guard hasUserScrollInput else {
+                // Idle layout must neither disarm tail-follow nor strand it
+                // above the newest content until another model update arrives.
+                if host.session.followsTranscriptTail {
+                    scroller.scrollToBottom()
+                }
+                reconciler.layoutMountedRowsForScroll()
                 syncLogicalScrollerMetrics()
                 return
             }
@@ -1181,49 +1203,6 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             reconciler.invalidatePendingAnchorRestore()
             reconciler.noteUserScroll()
             scrollSettleTimer.poke()
-
-            let event = NSApp.currentEvent
-            let eventIsFresh = ACPUserScrollEvent.isFresh(
-                eventTimestamp: event?.timestamp,
-                now: ProcessInfo.processInfo.systemUptime
-            )
-            let currentEventType = eventIsFresh ? event?.type : nil
-            // Classifies whether to PAUSE tail-follow, and nothing else — the
-            // pagination decisions below are geometric (see
-            // `shouldStepHeadBack`). Mirrors the legacy scroll-geometry
-            // handler: a click on the scrollbar track arrives as a plain
-            // `.leftMouseDown`, which
-            // `ACPUserScrollEvent.isUserDriven` alone rejects (a bare click
-            // can't be told apart from clicking a transcript control by event
-            // type). Widen to `isHeadPaginationDriven`, which additionally
-            // accepts that click when it actually hit the scrollbar track AND
-            // the geometry genuinely moved upward, so a track click pauses
-            // tail-follow the same as a trackpad gesture or scroller-knob
-            // drag would — without misclassifying clicks on transcript
-            // controls (which aren't scrollbar hits) as scrolling.
-            //
-            // `scroller.isUserScrollActive` is what makes this reachable at
-            // all. The event-based test alone answers false for ~97-99% of
-            // scroll ticks under responsive scrolling (the same measurement
-            // `shouldStepHeadBack` documents), so the pause it gates almost
-            // never fired: a reader who scrolled up out of the tail kept
-            // `followsTranscriptTail` set, and once their gesture ended —
-            // and with it the suppression window in
-            // `ACPTranscriptScrollerReconciler.repinsToTail` — the next
-            // update pinned them straight back to the bottom. The scroll
-            // view's own live-scroll notifications are posted only for
-            // genuine user scrolling and never for a programmatic
-            // `setBoundsOrigin`, so they identify the gesture where the event
-            // stream cannot. The event test is kept alongside because it
-            // additionally covers input that never opens a live-scroll
-            // session (a scrollbar-track click, magnify, swipe).
-            let isHeadPaginationDriven = scroller.isUserScrollActive
-                || ACPUserScrollEvent.isHeadPaginationDriven(
-                    currentEventType,
-                    previousMinY: previousY,
-                    newMinY: newY,
-                    isScrollbarTrackHit: ACPUserScrollEvent.isScrollbarTrackMouseDown(eventIsFresh ? event : nil)
-                )
 
             let decision = ACPScrollDirectionClassifier.decide(
                 previousOffsetY: previousY,

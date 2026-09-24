@@ -1359,6 +1359,9 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
 
         // A wheel/trackpad scroll in the materialized tail is newer user
         // intent than the queued release into unhydrated history.
+        NotificationCenter.default.post(
+            name: NSScrollView.willStartLiveScrollNotification, object: scroller
+        )
         scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: 0))
         scroller.reflectScrolledClipView(scroller.contentView)
         #expect(coordinator.pendingLogicalTargetGlobalIndexForTesting == nil)
@@ -1392,6 +1395,9 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         coordinator.attach(scroller: scroller, host: host)
         scroller.layoutSubtreeIfNeeded()
 
+        NotificationCenter.default.post(
+            name: NSScrollView.willStartLiveScrollNotification, object: scroller
+        )
         scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: 0))
         scroller.reflectScrolledClipView(scroller.contentView)
 
@@ -1430,6 +1436,9 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         session.followsTranscriptTail = false
         let (coordinator, scroller, _) = try attach(session: session)
 
+        NotificationCenter.default.post(
+            name: NSScrollView.willStartLiveScrollNotification, object: scroller
+        )
         scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: 0))
         scroller.reflectScrolledClipView(scroller.contentView)
 
@@ -1450,6 +1459,9 @@ struct ACPTranscriptScrollerLogicalNavigationTests {
         session.followsTranscriptTail = false
         let (coordinator, scroller, _) = try attach(session: session)
 
+        NotificationCenter.default.post(
+            name: NSScrollView.willStartLiveScrollNotification, object: scroller
+        )
         let bottom = max(0, scroller.contentHeight - scroller.viewportHeight)
         scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: bottom - 1))
         scroller.reflectScrolledClipView(scroller.contentView)
@@ -1587,28 +1599,23 @@ struct ACPTranscriptScrollerPolicyTests {
     }
 }
 
-/// Regression coverage for the review's fix-round-2 finding: a click on the
-/// scrollbar track arrives as a plain `.leftMouseDown`, which
-/// `ACPUserScrollEvent.isUserDriven` alone rejects. `handleScroll` widens the
-/// tail-follow pause/resume classification to
-/// `ACPUserScrollEvent.isHeadPaginationDriven` — which additionally accepts a
-/// `.leftMouseDown` when it is a genuine scrollbar-track hit AND the geometry
-/// actually moved upward.
+/// Scrollbar track clicks arrive as plain `.leftMouseDown` events, which
+/// `ACPUserScrollEvent.isUserDriven` rejects. `handleScroll` therefore uses a
+/// general input gate for verified track hits, while its separate
+/// `isHeadPaginationDriven` classification only accepts upward track movement
+/// when deciding whether to pause tail-follow.
 ///
-/// That classification governs the tail-follow PAUSE only. Pagination (head
-/// and tail) no longer consults the event stream at all — see
-/// `ACPTranscriptScroller.shouldStepHeadBack`'s doc comment on why the event
-/// signal is unusable under responsive scrolling — so a track click paginates
-/// for the same reason any other way of arriving near the window's edge
-/// does: the geometry says so.
+/// Once a track interaction passes the gate, pagination follows geometry:
+/// downward movement can expose newer messages and upward movement can expose
+/// older messages, independent of whether AppKit delivered a scroll event.
 ///
 /// `handleScroll` itself is a private, `NSApp.currentEvent`-driven method
 /// that needs a real `NSEvent` routed through an actual window's view
 /// hierarchy (for `isScrollbarTrackMouseDown`'s hit-test) to exercise for
 /// real — not something a headless unit test can synthesize. These tests
 /// instead exercise the pure `nonisolated static` predicates directly
-/// (`ACPUserScrollEvent.isHeadPaginationDriven`, `ACPScrollDirectionClassifier
-/// .decide`, `ACPTranscriptScroller.shouldStepHeadBack`/
+/// (`ACPUserScrollEvent.isScrollInput`, `isHeadPaginationDriven`,
+/// `ACPScrollDirectionClassifier.decide`, `ACPTranscriptScroller.shouldStepHeadBack`/
 /// `shouldStepTailForward`), composed exactly the way `handleScroll` composes
 /// them, which is why those predicates are `nonisolated static` in the first
 /// place.
@@ -1640,6 +1647,7 @@ struct ACPTranscriptScrollerScrollbarTrackClickTests {
         let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
             .leftMouseDown, previousMinY: 2000, newMinY: 100, isScrollbarTrackHit: false
         )
+        #expect(!ACPUserScrollEvent.isScrollInput(.leftMouseDown, isScrollbarTrackHit: false))
         #expect(!isHeadPaginationDriven)
 
         let decision = ACPScrollDirectionClassifier.decide(
@@ -1656,7 +1664,13 @@ struct ACPTranscriptScrollerScrollbarTrackClickTests {
         let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
             .leftMouseDown, previousMinY: 100, newMinY: 2000, isScrollbarTrackHit: true
         )
+        #expect(ACPUserScrollEvent.isScrollInput(.leftMouseDown, isScrollbarTrackHit: true))
         #expect(!isHeadPaginationDriven)
+        #expect(ACPTranscriptScroller.shouldStepTailForward(
+            visibleTail: 100, messageCount: 200, distanceFromBottom: 900,
+            threshold: Self.threshold,
+            previousScrollY: 1000, newScrollY: 1050
+        ))
 
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: 100, newOffsetY: 2000,

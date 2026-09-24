@@ -244,7 +244,14 @@ final class ACPTranscriptScrollerReconciler {
 
         // Read before the mutations below, so a row that this update removes
         // can still be identified afterwards.
-        let anchorBeforeUpdate = repins ? nil : captureScrollAnchor()
+        var anchorBeforeUpdate = repins ? nil : captureScrollAnchor()
+        // Gesture settling suppresses a forced tail pin, not tail-follow intent.
+        // If folding removes the visible activity row, anchoring to its group
+        // header would jump backward. Retain the signed bottom-relative position:
+        // a gap during settling stays a gap, and elastic overrun stays elastic.
+        if followsTail, case .row(let id, _, _) = anchorBeforeUpdate, newSpecs[id] == nil {
+            anchorBeforeUpdate = .bottomRelative(distance: scroller.distanceFromBottomIncludingOverscroll)
+        }
 
         contentWidth = width
         if isPureWidthChange {
@@ -255,7 +262,7 @@ final class ACPTranscriptScrollerReconciler {
             // visible content is never wrong), and debounce the full
             // re-measure-every-row reset until the resize settles — so a
             // live drag doesn't rebuild thousands of hosting views per tick.
-            applyDiff(idDiff, specs: specs, widthChanged: true, repinsToTail: repins)
+            applyDiff(idDiff, specs: specs, widthChanged: true, anchor: anchorBeforeUpdate)
             widthSettleTimer.poke()
         } else {
             let change: Diff = widthChanged ? .reset : idDiff
@@ -271,10 +278,13 @@ final class ACPTranscriptScrollerReconciler {
                 // settle window.
                 widthSettleTimer.cancel()
             }
-            applyDiff(change, specs: specs, widthChanged: widthChanged, repinsToTail: repins)
+            applyDiff(change, specs: specs, widthChanged: widthChanged, anchor: anchorBeforeUpdate)
         }
 
-        trackAnchorAcrossUpdate(anchorBeforeUpdate, repinsToTail: repins)
+        if followsTail, case .bottomRelative = anchorBeforeUpdate {
+            restoreScrollAnchor(anchorBeforeUpdate)
+        }
+        trackAnchorAcrossUpdate(anchorBeforeUpdate, followsTail: followsTail)
 
         orderedIds = newIds
         specsById = newSpecs
@@ -304,8 +314,8 @@ final class ACPTranscriptScrollerReconciler {
     /// Restoration deliberately runs after the diff's own compensation,
     /// overwriting it: compensation computed against a document that was
     /// missing the block is exactly what produced the wrong offset.
-    private func trackAnchorAcrossUpdate(_ before: ScrollAnchor?, repinsToTail: Bool) {
-        guard !repinsToTail else {
+    private func trackAnchorAcrossUpdate(_ before: ScrollAnchor?, followsTail: Bool) {
+        guard !followsTail else {
             pendingAnchorRestore = nil
             return
         }
@@ -407,13 +417,10 @@ final class ACPTranscriptScrollerReconciler {
         lastUserScrollUptime = ProcessInfo.processInfo.systemUptime
     }
 
-    /// `repinsToTail` is the caller's already-made decision about whether this
-    /// update ends by re-pinning to the tail (see
-    /// `repinsToTail(followsTail:wasFollowingTail:)`),
-    /// not the raw tail-follow flag: `performReset` must not capture and
-    /// restore a scroll anchor it is only going to overwrite.
+    /// Applies geometry changes using the anchor captured before any mutation.
+    /// A nil anchor means the caller will pin the viewport to the tail.
     private func applyDiff(
-        _ change: Diff, specs: [ACPTranscriptRowSpec], widthChanged: Bool, repinsToTail: Bool
+        _ change: Diff, specs: [ACPTranscriptRowSpec], widthChanged: Bool, anchor: ScrollAnchor?
     ) {
         switch change {
         case .unchanged:
@@ -446,7 +453,7 @@ final class ACPTranscriptScrollerReconciler {
             // of `keep` and `pool.releaseAll(except:)` cleans them up.
             updateChangedContent(specs: specs)
         case .reset:
-            performReset(specs: specs, widthChanged: widthChanged, repinsToTail: repinsToTail)
+            performReset(specs: specs, widthChanged: widthChanged, anchor: anchor)
         }
     }
 
@@ -468,15 +475,7 @@ final class ACPTranscriptScrollerReconciler {
     ///     reset after browsing deep into a long transcript allocated and
     ///     synchronously measured a hosting view per row in the whole render
     ///     window.
-    private func performReset(specs: [ACPTranscriptRowSpec], widthChanged: Bool, repinsToTail: Bool) {
-        // When the update ends by re-pinning, `apply()`'s own
-        // `scrollToBottom()` (or `performWidthSettledReset`'s) is the correct
-        // final position and must win — don't fight it with a restored
-        // anchor. When it does NOT re-pin — including a tail-following
-        // viewport the user has scrolled off the tail, which no longer
-        // re-pins — the anchor is what keeps the reset from moving the
-        // content under them.
-        let anchor = repinsToTail ? nil : captureScrollAnchor()
+    private func performReset(specs: [ACPTranscriptRowSpec], widthChanged: Bool, anchor: ScrollAnchor?) {
         tiling.replaceAll(rows: resetHeights(specs: specs, widthChanged: widthChanged))
         scroller.setDocumentHeight(tiling.documentHeight)
         restoreScrollAnchor(anchor)
@@ -544,7 +543,7 @@ final class ACPTranscriptScrollerReconciler {
             index += 1
         }
         guard index < tiling.rowCount else {
-            return .bottomRelative(distance: scroller.distanceFromBottom)
+            return .bottomRelative(distance: scroller.distanceFromBottomIncludingOverscroll)
         }
         let row = tiling.rowLayout(at: index)
         return .row(id: row.id, offsetWithinRow: viewportMinY - row.minY, rowHeight: row.height)
@@ -576,10 +575,9 @@ final class ACPTranscriptScrollerReconciler {
     /// at the row's new height. If `resolveStaleRowId` also comes up empty,
     /// falls back to leaving the offset alone.
     ///
-    /// For `.bottomRelative`, `setScrollY` re-derives the offset from the
-    /// NEW `documentHeight` (already installed by the caller before this
-    /// runs) and the captured distance, reproducing the same visual gap
-    /// from the bottom edge.
+    /// For `.bottomRelative`, restoration derives the offset from the bounded
+    /// maximum scroll position of the NEW document. Negative distances represent
+    /// bottom elastic overscroll, so they use a setter that preserves the overrun.
     private func restoreScrollAnchor(_ anchor: ScrollAnchor?) {
         guard let anchor else { return }
         switch anchor {
@@ -590,7 +588,13 @@ final class ACPTranscriptScrollerReconciler {
                 restoreViaStaleResolution(id: id, offsetWithinRow: offsetWithinRow, oldRowHeight: oldRowHeight)
             }
         case .bottomRelative(let distance):
-            scroller.setScrollY(tiling.documentHeight - scroller.viewportHeight - distance)
+            let maxScrollY = max(0, tiling.documentHeight - scroller.viewportHeight)
+            let y = maxScrollY - distance
+            if distance < 0 {
+                scroller.setScrollYPreservingBottomOverscroll(y)
+            } else {
+                scroller.setScrollY(y)
+            }
         }
     }
 
@@ -736,7 +740,7 @@ final class ACPTranscriptScrollerReconciler {
         isApplyingSpecs = true
         defer { isApplyingSpecs = false }
         let repins = repinsToTail(followsTail: lastFollowsTail, wasFollowingTail: lastFollowsTail)
-        performReset(specs: lastAppliedSpecs, widthChanged: true, repinsToTail: repins)
+        performReset(specs: lastAppliedSpecs, widthChanged: true, anchor: repins ? nil : captureScrollAnchor())
         layoutMountedRows(pinToTail: repins)
     }
 
