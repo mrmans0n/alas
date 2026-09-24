@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ImagePreviewTabView: View {
     let worktreePath: URL
+    let remoteHost: String?
     let relativePath: String
     let onRevealInFiles: (String) -> Void
     var onStartupRecoveryReady: () -> Void = {}
@@ -35,14 +36,14 @@ struct ImagePreviewTabView: View {
             content
         }
         .background(theme.color("bg-1"))
-        .task(id: absoluteURL) {
+        .task(id: ImagePreviewLoadIdentity(absoluteURL: absoluteURL, remoteHost: remoteHost)) {
             await loadImage()
             onStartupRecoveryReady()
         }
     }
 
     private var isRemote: Bool {
-        worktreePath.isRemoteAlasPath
+        remoteHost != nil
     }
 
     @ViewBuilder
@@ -143,7 +144,7 @@ struct ImagePreviewTabView: View {
 
         let url = absoluteURL
         let data: Data
-        if let host = RemoteHostRegistry.shared.host(forPath: url.path) {
+        if let host = remoteHost {
             do {
                 switch try await RemoteFileAccess.read(host: host, path: url.path) {
                 case let .file(contents, _): data = contents
@@ -185,6 +186,11 @@ struct ImagePreviewTabView: View {
         }
         return CGSize(width: cgImage.width, height: cgImage.height)
     }
+}
+
+private struct ImagePreviewLoadIdentity: Equatable {
+    let absoluteURL: URL
+    let remoteHost: String?
 }
 
 private enum LoadState {

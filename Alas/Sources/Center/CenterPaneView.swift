@@ -632,6 +632,7 @@ struct CenterPaneView: View {
                         .id(sessionState.viewID)
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
+                                             remoteHost: state.remoteHost(for: worktree),
                                              relativePath: s.relativePath,
                                              onRevealInFiles: { path in
                                                  state.revealInFiles(

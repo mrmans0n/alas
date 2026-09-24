@@ -467,6 +467,156 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(!fixture.state.tabs.tabs(forWorktree: target.id).contains { $0.id == ownedPreview.id })
     }
 
+    @Test func deletingOneProjectPurgesItsEditorAndDraftState() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: target.id)) }
+        let secondRepo = fixture.temporaryRoot.appendingPathComponent("second-editor-repo")
+        try FileManager.default.createDirectory(at: secondRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: secondRepo)
+        _ = try await Process.git(["config", "user.email", "t@e"], cwd: secondRepo)
+        _ = try await Process.git(["config", "user.name", "test"], cwd: secondRepo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: secondRepo)
+        let secondProject = try await fixture.state.projectsManager.addProject(
+            path: secondRepo,
+            displayName: "second-editor-project",
+            color: "#5fb7c4"
+        )
+        fixture.state.projectsManager.insertOptimisticWorktree(Worktree(
+            id: target.id,
+            projectId: secondProject.id,
+            name: target.name,
+            branch: target.branch,
+            path: target.path,
+            status: .clean,
+            lastActivity: .distantPast
+        ))
+
+        let sourceURL = target.path.appendingPathComponent("main.swift")
+        try "base\n".write(to: sourceURL, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "main.swift"], cwd: target.path)
+        _ = try await Process.git(["commit", "-q", "-m", "add source"], cwd: target.path)
+
+        let tabA = fixture.state.tabs.appendEditor(
+            worktreeId: target.id,
+            projectId: fixture.project.id,
+            title: "main.swift",
+            relativePath: "main.swift"
+        )
+        let tabB = fixture.state.tabs.appendEditor(
+            worktreeId: target.id,
+            projectId: secondProject.id,
+            title: "main.swift",
+            relativePath: "main.swift"
+        )
+        let bufferA = fixture.state.tabs.buffer(
+            worktreeId: target.id,
+            tabId: tabA.id,
+            worktreeRoot: target.path,
+            relativePath: "main.swift",
+            projectId: fixture.project.id,
+            projectHost: nil
+        )
+        let bufferB = fixture.state.tabs.buffer(
+            worktreeId: target.id,
+            tabId: tabB.id,
+            worktreeRoot: target.path,
+            relativePath: "main.swift",
+            projectId: secondProject.id,
+            projectHost: nil
+        )
+        defer {
+            bufferA.close(persistDirtySnapshot: false)
+            bufferB.close(persistDirtySnapshot: false)
+        }
+        let bufferSnapshots = EditorBufferStore()
+        defer { bufferSnapshots.discard(worktreeId: target.id, tabId: tabA.id) }
+        await bufferA.awaitLoadForTesting()
+        await bufferB.awaitLoadForTesting()
+        bufferA.storage.replaceCharacters(
+            in: NSRange(location: 0, length: bufferA.storage.length),
+            with: "discarded A edit\n"
+        )
+        bufferA.snapshotNow()
+        #expect(try bufferSnapshots.read(worktreeId: target.id, tabId: tabA.id) != nil)
+
+        let draftA = fixture.state.tabs.openOrFocusDraftCommit(worktreeId: target.id, projectId: fixture.project.id)
+        _ = fixture.state.tabs.updateDraftCommit(worktreeId: target.id, tabId: draftA.id) {
+            $0.subject = "draft A"
+        }
+        fixture.state.tabs.close(worktreeId: target.id, tabId: draftA.id)
+        let liveDraftA = fixture.state.tabs.openOrFocusDraftCommit(worktreeId: target.id, projectId: fixture.project.id)
+        let draftB = fixture.state.tabs.openOrFocusDraftCommit(worktreeId: target.id, projectId: secondProject.id)
+        _ = fixture.state.tabs.updateDraftCommit(worktreeId: target.id, tabId: draftB.id) {
+            $0.subject = "draft B"
+        }
+        fixture.state.tabs.close(worktreeId: target.id, tabId: draftB.id)
+        let liveDraftB = fixture.state.tabs.openOrFocusDraftCommit(worktreeId: target.id, projectId: secondProject.id)
+
+        #expect(fixture.state.tabs.stashedDraft(worktreeId: target.id, projectId: fixture.project.id)?.subject == "draft A")
+        #expect(fixture.state.tabs.stashedDraft(worktreeId: target.id, projectId: secondProject.id)?.subject == "draft B")
+        let preflight = try await WorktreeService().deletePreflight(worktreePath: target.path)
+        let authorization = WorktreeCleanupDeleteAuthorization(
+            dirtyTabsByWorktree: [target.id: [tabA.id: bufferA.editGeneration]],
+            preflightByWorktree: [target.id: preflight]
+        )
+
+        let results = await fixture.state.batchDeleteWorktrees(
+            [target], keepBranch: true, authorization: authorization
+        )
+
+        #expect(results.map(\.outcome) == [.deleted])
+        #expect(fixture.state.tabs.tabs(forWorktree: target.id).contains { $0.id == tabB.id })
+        #expect(fixture.state.tabs.tabs(forWorktree: target.id).contains { $0.id == liveDraftB.id })
+        #expect(!fixture.state.tabs.tabs(forWorktree: target.id).contains { $0.id == tabA.id })
+        #expect(!fixture.state.tabs.tabs(forWorktree: target.id).contains { $0.id == liveDraftA.id })
+        #expect(fixture.state.tabs.peekBuffer(tabId: tabA.id) == nil)
+        #expect(fixture.state.tabs.peekBuffer(tabId: tabB.id) === bufferB)
+        #expect(try bufferSnapshots.read(worktreeId: target.id, tabId: tabA.id) == nil)
+        #expect(fixture.state.tabs.stashedDraft(worktreeId: target.id, projectId: fixture.project.id) == nil)
+        #expect(fixture.state.tabs.stashedDraft(worktreeId: target.id, projectId: secondProject.id)?.subject == "draft B")
+        #expect(fixture.state.tabs.activeTabId(forWorktree: target.id, projectId: fixture.project.id) == nil)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: target.id, projectId: secondProject.id) == liveDraftB.id)
+    }
+
+    @Test func openingSamePathImagePreviewsKeepsProjectOwnership() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        let secondRepo = fixture.temporaryRoot.appendingPathComponent("second-image-preview-repo")
+        try FileManager.default.createDirectory(at: secondRepo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: secondRepo)
+        _ = try await Process.git(["config", "user.email", "t@e"], cwd: secondRepo)
+        _ = try await Process.git(["config", "user.name", "test"], cwd: secondRepo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: secondRepo)
+
+        let secondProject = try await fixture.state.projectsManager.addProject(
+            path: secondRepo,
+            displayName: "second-image-preview",
+            color: "#5fb7c4"
+        )
+        let sibling = Worktree(
+            id: target.id,
+            projectId: secondProject.id,
+            name: target.name,
+            branch: target.branch,
+            path: target.path,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        fixture.state.projectsManager.insertOptimisticWorktree(sibling)
+
+        fixture.state.openFile(relativePath: "Assets/logo.png", worktree: target)
+        let projectATab = try #require(fixture.state.tabs.tabs(forWorktree: target.id, projectId: target.projectId).first)
+        fixture.state.openFile(relativePath: "Assets/logo.png", worktree: sibling)
+        let projectBTab = try #require(fixture.state.tabs.tabs(forWorktree: target.id, projectId: secondProject.id).first)
+
+        #expect(projectATab.id != projectBTab.id)
+        #expect(fixture.state.tabs.tabs(forWorktree: target.id, projectId: target.projectId).map(\.id) == [projectATab.id])
+        #expect(fixture.state.tabs.tabs(forWorktree: target.id, projectId: secondProject.id).map(\.id) == [projectBTab.id])
+    }
+
     @Test func singleDeleteCleansSharedRuntimeWhenTheOtherOwnerDisappearsBeforeRefresh() async throws {
         @MainActor final class RemovalProbe {
             weak var state: AppState?

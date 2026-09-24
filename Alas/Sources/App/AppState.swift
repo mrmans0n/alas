@@ -3641,7 +3641,7 @@ final class AppState {
         guard let checkout = workspacesManager.checkout(id: checkoutID),
               let worktree = workspaceMemberWorktrees(checkout)[memberID]
         else { return nil }
-        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
+        let dirty = dirtyEditorTabIds(for: worktree)
         guard !dirty.isEmpty else { return worktree }
         switch promptForDirtyBuffers(
             action: "Delete",
@@ -5138,22 +5138,24 @@ final class AppState {
 
         let liveById = Dictionary(uniqueKeysWithValues: liveWorktrees.map { ($0.id, $0) })
         let dirtyByWorktree: [(worktree: Worktree, count: Int)] = candidateIds.compactMap { worktreeId in
-            let dirty = dirtyEditorTabIds(worktreeId: worktreeId)
-            guard !dirty.isEmpty else { return nil }
+            let worktree: Worktree
             if let live = liveById[worktreeId] {
-                return (worktree: live, count: dirty.count)
+                worktree = live
+            } else {
+                let path = URL(fileURLWithPath: worktreeId)
+                worktree = Worktree(
+                    id: worktreeId,
+                    projectId: project.id,
+                    name: path.lastPathComponent,
+                    branch: path.lastPathComponent,
+                    path: path,
+                    status: .clean,
+                    lastActivity: Date()
+                )
             }
-            let path = URL(fileURLWithPath: worktreeId)
-            let synthetic = Worktree(
-                id: worktreeId,
-                projectId: project.id,
-                name: path.lastPathComponent,
-                branch: path.lastPathComponent,
-                path: path,
-                status: .clean,
-                lastActivity: Date()
-            )
-            return (worktree: synthetic, count: dirty.count)
+            let dirty = dirtyEditorTabIds(for: worktree)
+            guard !dirty.isEmpty else { return nil }
+            return (worktree: worktree, count: dirty.count)
         }
 
         let dirtyTotal = dirtyByWorktree.reduce(0) { $0 + $1.count }
@@ -6230,7 +6232,7 @@ final class AppState {
     /// it, marks the path hidden in `ProjectConfig`, and re-points selection if
     /// the archived worktree was selected. Does NOT touch git or disk.
     func archiveWorktree(_ worktree: Worktree) {
-        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
+        let dirty = dirtyEditorTabIds(for: worktree)
         if !dirty.isEmpty {
             switch promptForDirtyBuffers(
                 action: "Archive",
@@ -6325,8 +6327,8 @@ final class AppState {
     /// gets a fixed sentinel generation, since there is no live edit counter
     /// to read until the tab is opened; a snapshot's content can't change on
     /// its own, so this stays stable as long as the tab remains unopened.
-    private func dirtyTabGenerations(worktreeId: String) -> [TabID: Int] {
-        Dictionary(uniqueKeysWithValues: dirtyEditorTabIds(worktreeId: worktreeId).map {
+    private func dirtyTabGenerations(for worktree: Worktree) -> [TabID: Int] {
+        Dictionary(uniqueKeysWithValues: dirtyEditorTabIds(for: worktree).map {
             ($0, tabs.peekBuffer(tabId: $0)?.editGeneration ?? -1)
         })
     }
@@ -6366,7 +6368,7 @@ final class AppState {
         // each dirty tab's edit generation, not just its id, also catches a
         // tab re-edited (from another window) after being acknowledged here.
         let dirtyTabsAtConfirmation = Dictionary(
-            uniqueKeysWithValues: worktrees.map { ($0.id, dirtyTabGenerations(worktreeId: $0.id)) }
+            uniqueKeysWithValues: worktrees.map { ($0.id, dirtyTabGenerations(for: $0)) }
         )
         let dirtyCount = dirtyTabsAtConfirmation.values.reduce(0) { $0 + $1.count }
         if dirtyCount > 0 {
@@ -6405,7 +6407,7 @@ final class AppState {
             // dirty at confirmation time and discarded is expected here, but
             // a tab that turned dirty (or newly opened dirty), OR was edited
             // again since being acknowledged, must not be torn down.
-            let currentDirtyGenerations = dirtyTabGenerations(worktreeId: worktree.id)
+            let currentDirtyGenerations = dirtyTabGenerations(for: worktree)
             let knownDirtyGenerations = dirtyTabsAtConfirmation[worktree.id] ?? [:]
             guard Self.hasOnlyAcknowledgedDirtiness(
                 current: currentDirtyGenerations,
@@ -9977,7 +9979,12 @@ final class AppState {
         let hasRevealTarget = revealLine != nil || revealCharacter != nil
         if ImageFileType.isSupported(relativePath: relativePath),
            !hasRevealTarget || !ImageFileType.isTextBacked(relativePath: relativePath) {
-            _ = tabs.openImagePreview(worktreeId: worktree.id, relativePath: relativePath)
+            _ = tabs.openImagePreview(
+                worktreeId: worktree.id,
+                projectId: worktree.projectId,
+                includesLegacyUnownedProjectTabs: legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId,
+                relativePath: relativePath
+            )
             return
         }
         if BinaryFileType.isKnownBinary(relativePath: relativePath) {
@@ -10389,7 +10396,7 @@ final class AppState {
             showFileActionError(title: "Delete Failed", message: refusal)
             return
         }
-        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
+        let dirty = dirtyEditorTabIds(for: worktree)
         let saveBuffersFirst: Bool
         if dirty.isEmpty {
             saveBuffersFirst = false
@@ -10469,7 +10476,7 @@ final class AppState {
         let dirtyTabsAtConfirmation = authorization?.dirtyTabsByWorktree
             ?? Dictionary(
                 uniqueKeysWithValues: worktrees.map {
-                    ($0.id, dirtyTabGenerations(worktreeId: $0.id))
+                    ($0.id, dirtyTabGenerations(for: $0))
                 }
             )
         let dirtyCount = dirtyTabsAtConfirmation.values.reduce(0) { $0 + $1.count }
@@ -10517,7 +10524,7 @@ final class AppState {
             // dirty at confirmation time and discarded is expected here, but
             // a tab that turned dirty, or was edited again since being
             // acknowledged, must not be torn down.
-            let currentDirtyGenerations = dirtyTabGenerations(worktreeId: worktree.id)
+            let currentDirtyGenerations = dirtyTabGenerations(for: worktree)
             let knownDirtyGenerations = dirtyTabsAtConfirmation[worktree.id] ?? [:]
             guard Self.hasOnlyAcknowledgedDirtiness(
                 current: currentDirtyGenerations,
@@ -10602,7 +10609,7 @@ final class AppState {
                         }
                     }
                     let postPreflightDirtyIsAcknowledged = Self.hasOnlyAcknowledgedDirtiness(
-                        current: dirtyTabGenerations(worktreeId: worktree.id),
+                        current: dirtyTabGenerations(for: worktree),
                         acknowledgedAtConfirmation: dirtyTabsAtConfirmation[worktree.id] ?? [:]
                     )
                     let postPreflightSessionsAreAcknowledged = worktreeCleanupSessionIDs(worktreeId: worktree.id)
@@ -11020,7 +11027,7 @@ final class AppState {
                 }
                 forceReasons[worktree.id] = reasons
             }
-            let dirty = dirtyTabGenerations(worktreeId: worktree.id)
+            let dirty = dirtyTabGenerations(for: worktree)
             if !dirty.isEmpty { dirtyTabsByWorktree[worktree.id] = dirty }
             sessionIDsByWorktree[worktree.id] = worktreeCleanupSessionIDs(worktreeId: worktree.id)
         }
@@ -11058,7 +11065,7 @@ final class AppState {
                 unavailableReasons[worktree.id] = "Another operation is in progress"
                 continue
             }
-            let dirty = dirtyTabGenerations(worktreeId: worktree.id)
+            let dirty = dirtyTabGenerations(for: worktree)
             if !dirty.isEmpty { dirtyTabsByWorktree[worktree.id] = dirty }
             sessionIDsByWorktree[worktree.id] = worktreeCleanupSessionIDs(worktreeId: worktree.id)
         }
@@ -11134,7 +11141,7 @@ final class AppState {
                 continue
             }
             let dirtyIsAcknowledged = Self.hasOnlyAcknowledgedDirtiness(
-                current: dirtyTabGenerations(worktreeId: worktree.id),
+                current: dirtyTabGenerations(for: worktree),
                 acknowledgedAtConfirmation: authorization.dirtyTabsByWorktree[worktree.id] ?? [:]
             )
             let sessionsAreAcknowledged = worktreeCleanupSessionIDs(worktreeId: worktree.id)
@@ -11313,7 +11320,7 @@ final class AppState {
             projectsManager.setOperationState(for: worktree, state: nil)
             return .error(Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
         }
-        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
+        let dirty = dirtyEditorTabIds(for: worktree)
         if !dirty.isEmpty && !force {
             projectsManager.setOperationState(for: worktree, state: nil)
             return .error("worktree has unsaved editor changes; save them or rerun with --force to delete")
@@ -11668,7 +11675,7 @@ final class AppState {
         if let authorizedDirtyTabsAtConfirmation,
            let authorizedSessionIDs {
             let volatileStateIsStillAuthorized = Self.hasOnlyAcknowledgedDirtiness(
-                current: dirtyTabGenerations(worktreeId: worktree.id),
+                current: dirtyTabGenerations(for: worktree),
                 acknowledgedAtConfirmation: authorizedDirtyTabsAtConfirmation
             )
                 && worktreeCleanupSessionIDs(worktreeId: worktree.id).isSubset(of: authorizedSessionIDs)
@@ -11823,6 +11830,11 @@ final class AppState {
                 else { continue }
                 tabs.close(worktreeId: worktree.id, tabId: tab.id)
             }
+            tabs.purgeProjectOwnedEditorState(
+                worktreeId: worktree.id,
+                projectId: worktree.projectId,
+                includesLegacyUnownedProjectTabs: legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId
+            )
             disposeACPManager(owner: owner)
         }
         let runHistoryPurgeTask: Task<Void, Never>?
@@ -12154,8 +12166,12 @@ final class AppState {
     /// Returns the editor tabs in this worktree whose buffers have unsaved
     /// changes — including tabs whose buffers are not yet instantiated but
     /// have a persisted hot-exit snapshot on disk.
-    private func dirtyEditorTabIds(worktreeId: String) -> [TabID] {
-        tabs.tabIdsWithUnsavedChanges(forWorktree: worktreeId)
+    private func dirtyEditorTabIds(for worktree: Worktree) -> [TabID] {
+        tabs.tabIdsWithUnsavedChanges(
+            forWorktree: worktree.id,
+            projectId: worktree.projectId,
+            includesLegacyUnownedProjectTabs: legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId
+        )
     }
 
     /// Three-way prompt for actions (archive, delete) that would otherwise
@@ -12224,7 +12240,13 @@ final class AppState {
     /// surfaces an aggregate error and returns false so the caller can bail
     /// before the destructive cleanup.
     private func saveDirtyBuffers(in worktree: Worktree) async -> Bool {
-        let errors = await tabs.saveAllUnsavedAwaitingRemote(forWorktree: worktree.id, root: worktree.path)
+        let errors = await tabs.saveAllUnsavedAwaitingRemote(
+            forWorktree: worktree.id,
+            root: worktree.path,
+            projectId: worktree.projectId,
+            includesLegacyUnownedProjectTabs: legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId,
+            projectHost: remoteHost(for: worktree)
+        )
         if !errors.isEmpty {
             let count = errors.count
             showFileActionError(

@@ -14,7 +14,7 @@ struct TabsManagerTests {
         #expect(oldTab.projectId == nil)
     }
 
-    @Test func projectOwnedSessionTabsAreHiddenFromSiblingWorktrees() {
+    @Test func projectOwnedTabsAreHiddenFromSiblingWorktrees() {
         let worktreeID = "/shared/session-tabs"
         let projectA = "project-a"
         let projectB = "project-b"
@@ -24,11 +24,15 @@ struct TabsManagerTests {
             .acpSession(.init(sessionId: "acp-a", title: "A agent", projectId: projectA)),
             .webPreview(.init(ownerKey: ownerKeyA, projectId: projectA)),
             .runReport(.init(worktreeId: worktreeID, projectId: projectA, runID: "run-a")),
+            .ggInbox(.init(projectId: projectA, projectName: "Project A")),
+            .ggLanding(.init(projectId: projectA, stackName: "stack-a")),
         ]
         let projectBTabs: [Tab] = [
             .terminal(.init(id: "terminal-b", title: "B terminal", sessionId: "terminal-session-b", projectId: projectB)),
             .acpSession(.init(sessionId: "acp-b", title: "B agent", projectId: projectB)),
             .runReport(.init(worktreeId: worktreeID, projectId: projectB, runID: "run-b")),
+            .ggInbox(.init(projectId: projectB, projectName: "Project B")),
+            .ggLanding(.init(projectId: projectB, stackName: "stack-b")),
         ]
         let legacyTabs: [Tab] = [
             .terminal(.init(id: "terminal-legacy", title: "Legacy terminal", sessionId: "terminal-session-legacy")),
@@ -601,10 +605,19 @@ struct TabsManagerTests {
     }
 
     @Test func imagePreviewTabStateRoundTrips() throws {
-        let state = ImagePreviewTabState(id: "img", title: "logo.png", relativePath: "Assets/logo.png")
+        let state = ImagePreviewTabState(
+            id: "img",
+            title: "logo.png",
+            relativePath: "Assets/logo.png",
+            projectId: "project-b"
+        )
         let data = try JSONEncoder().encode(state)
         let decoded = try JSONDecoder().decode(ImagePreviewTabState.self, from: data)
         #expect(decoded == state)
+        #expect(decoded.projectId == "project-b")
+
+        let legacy = Data(#"{"id":"legacy-image","title":"logo.png","relativePath":"Assets/logo.png"}"#.utf8)
+        #expect(try JSONDecoder().decode(ImagePreviewTabState.self, from: legacy).projectId == nil)
     }
 
     @Test func imagePreviewTabRoundTripsAndExposesFilePath() throws {

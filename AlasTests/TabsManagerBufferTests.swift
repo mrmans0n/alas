@@ -112,6 +112,110 @@ struct TabsManagerBufferTests {
         #expect(buffer.workspaceEditHost == "host-b")
     }
 
+    @Test func savingUnsavedBuffersLeavesSiblingProjectBuffersUntouched() async throws {
+        let root = tempWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appendingPathComponent("main.swift")
+        try "base\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        let worktreeId = root.path
+        let projectA = "project-a"
+        let projectB = "project-b"
+        let (manager, _, _) = makeManager()
+        let tabA = manager.appendEditor(
+            worktreeId: worktreeId,
+            projectId: projectA,
+            title: "main.swift",
+            relativePath: "main.swift"
+        )
+        let tabB = manager.appendEditor(
+            worktreeId: worktreeId,
+            projectId: projectB,
+            title: "main.swift",
+            relativePath: "main.swift"
+        )
+        let bufferA = manager.buffer(
+            worktreeId: worktreeId,
+            tabId: tabA.id,
+            worktreeRoot: root,
+            relativePath: "main.swift",
+            projectId: projectA,
+            projectHost: nil
+        )
+        let bufferB = manager.buffer(
+            worktreeId: worktreeId,
+            tabId: tabB.id,
+            worktreeRoot: root,
+            relativePath: "main.swift",
+            projectId: projectB,
+            projectHost: nil
+        )
+        defer {
+            bufferA.close(persistDirtySnapshot: false)
+            bufferB.close(persistDirtySnapshot: false)
+        }
+        await bufferA.awaitLoadForTesting()
+        await bufferB.awaitLoadForTesting()
+        bufferA.storage.replaceCharacters(
+            in: NSRange(location: 0, length: bufferA.storage.length),
+            with: "project A\n"
+        )
+        bufferB.storage.replaceCharacters(
+            in: NSRange(location: 0, length: bufferB.storage.length),
+            with: "project B\n"
+        )
+
+        let errors = await manager.saveAllUnsavedAwaitingRemote(
+            forWorktree: worktreeId,
+            root: root,
+            projectId: projectA
+        )
+
+        #expect(errors.isEmpty)
+        #expect(!bufferA.dirty)
+        #expect(bufferB.dirty)
+        #expect(try String(contentsOf: fileURL, encoding: .utf8) == "project A\n")
+    }
+
+    @Test func savingProjectDoesNotMaterializeSiblingProjectSnapshot() async throws {
+        let root = tempWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appendingPathComponent("main.swift")
+        try "project A base\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        let worktreeId = root.path
+        let (manager, store, _) = makeManager()
+        _ = manager.appendEditor(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            title: "main.swift",
+            relativePath: "main.swift"
+        )
+        let siblingTab = manager.appendEditor(
+            worktreeId: worktreeId,
+            projectId: "project-b",
+            title: "main.swift",
+            relativePath: "main.swift"
+        )
+        let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let siblingSnapshot = EditorBufferStore.Snapshot(
+            relativePath: "main.swift",
+            content: "project B draft\n",
+            originalText: "project B base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(siblingSnapshot, worktreeId: worktreeId, tabId: siblingTab.id)
+
+        let errors = await manager.saveAllUnsavedAwaitingRemote(
+            forWorktree: worktreeId,
+            root: root,
+            projectId: "project-a"
+        )
+
+        #expect(errors.isEmpty)
+        #expect(try store.read(worktreeId: worktreeId, tabId: siblingTab.id) == siblingSnapshot)
+        #expect(try String(contentsOf: fileURL, encoding: .utf8) == "project A base\n")
+    }
+
     @Test func asyncSnapshotRestoreRemovesOriginalBufferKey() async throws {
         let root = tempWorktree()
         try "a\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)

@@ -146,6 +146,12 @@ final class TabsManager {
             preview.projectId == projectId || (includesLegacyUnownedProjectTabs && preview.projectId == nil)
         case .runReport(let report):
             report.projectId == projectId || (includesLegacyUnownedProjectTabs && report.projectId == nil)
+        case .imagePreview(let preview):
+            preview.projectId == projectId || (includesLegacyUnownedProjectTabs && preview.projectId == nil)
+        case .ggInbox(let inbox):
+            inbox.projectId == projectId
+        case .ggLanding(let landing):
+            landing.projectId == projectId
         default:
             nil
         }
@@ -1896,10 +1902,20 @@ final class TabsManager {
 
     /// Open or focus an image preview tab for `relativePath`.
     @discardableResult
-    func openImagePreview(worktreeId: String, relativePath: String) -> Tab {
+    func openImagePreview(
+        worktreeId: String,
+        projectId: String? = nil,
+        includesLegacyUnownedProjectTabs: Bool = false,
+        relativePath: String
+    ) -> Tab {
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: {
-               if case .imagePreview(let s) = $0 { return s.relativePath == relativePath }
+               if case .imagePreview(let s) = $0 {
+                   return s.relativePath == relativePath
+                       && (projectId == nil
+                           ? s.projectId == nil
+                           : s.projectId == projectId || (includesLegacyUnownedProjectTabs && s.projectId == nil))
+               }
                return false
            }) {
             if case .imagePreview(let s) = file.tabs[idx] {
@@ -1911,7 +1927,12 @@ final class TabsManager {
         }
 
         let title = (relativePath as NSString).lastPathComponent
-        let state = ImagePreviewTabState(id: UUID().uuidString, title: title, relativePath: relativePath)
+        let state = ImagePreviewTabState(
+            id: UUID().uuidString,
+            title: title,
+            relativePath: relativePath,
+            projectId: projectId
+        )
         let tab = Tab.imagePreview(state)
         append(tab, to: worktreeId)
         return tab
@@ -2088,6 +2109,66 @@ final class TabsManager {
             } else {
                 let neighbourIdx = max(0, idx - 1)
                 file.activeTabId = file.tabs[neighbourIdx].id
+            }
+        }
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+    }
+
+    /// Discards the editor, image-preview, and commit-draft state owned by one
+    /// project while another project still uses the same path-derived bucket.
+    /// Unlike `close`, this does not preserve a live draft in its stash: the
+    /// caller is completing a destructive worktree removal.
+    func purgeProjectOwnedEditorState(
+        worktreeId: String,
+        projectId: String,
+        includesLegacyUnownedProjectTabs: Bool = false
+    ) {
+        guard var file = byWorktree[worktreeId] else { return }
+        let removedTabs = file.tabs.filter { tab in
+            switch tab {
+            case .editor(let state):
+                state.projectId == projectId || (includesLegacyUnownedProjectTabs && state.projectId == nil)
+            case .imagePreview(let state):
+                state.projectId == projectId || (includesLegacyUnownedProjectTabs && state.projectId == nil)
+            case .draftCommit(let state):
+                state.projectId == projectId || (includesLegacyUnownedProjectTabs && state.projectId == nil)
+            default:
+                false
+            }
+        }
+        guard !removedTabs.isEmpty
+            || file.stashedDraftsByProject[projectId] != nil
+            || file.stashedDraft.map({ $0.projectId == projectId || (includesLegacyUnownedProjectTabs && $0.projectId == nil) }) == true
+            || file.activeEditorTabIds[projectId] != nil else { return }
+
+        let removedTabIDs = Set(removedTabs.map(\.id))
+        let activeTabIndex = file.tabs.firstIndex(where: { $0.id == file.activeTabId })
+        for tab in removedTabs {
+            if case .editor = tab {
+                discardBuffer(worktreeId: worktreeId, tabId: tab.id)
+            }
+        }
+        file.tabs.removeAll { removedTabIDs.contains($0.id) }
+        file.activeEditorTabIds[projectId] = nil
+        file.stashedDraftsByProject[projectId] = nil
+        if let stashedDraft = file.stashedDraft,
+           stashedDraft.projectId == projectId || (includesLegacyUnownedProjectTabs && stashedDraft.projectId == nil) {
+            file.stashedDraft = nil
+        }
+        for tab in removedTabs {
+            if case .draftCommit(let state) = tab,
+               commitPublishSessions[state.id]?.isRunning != true {
+                commitPublishSessions[state.id] = nil
+            }
+        }
+        if let activeTabId = file.activeTabId, removedTabIDs.contains(activeTabId) {
+            if file.tabs.isEmpty {
+                file.activeTabId = nil
+            } else {
+                let oldIndex = activeTabIndex ?? 0
+                let neighbourIndex = max(0, min(oldIndex - 1, file.tabs.count - 1))
+                file.activeTabId = file.tabs[neighbourIndex].id
             }
         }
         byWorktree[worktreeId] = file
@@ -2759,12 +2840,17 @@ final class TabsManager {
     /// buffer or a persisted hot-exit snapshot for a buffer that hasn't been
     /// instantiated yet. Returns IDs in tab order (declaration order within the
     /// worktree's tab list).
-    func tabIdsWithUnsavedChanges(forWorktree worktreeId: String, projectId: String? = nil) -> [TabID] {
+    func tabIdsWithUnsavedChanges(
+        forWorktree worktreeId: String,
+        projectId: String? = nil,
+        includesLegacyUnownedProjectTabs: Bool = false
+    ) -> [TabID] {
         guard let file = byWorktree[worktreeId] else { return [] }
         var result: [TabID] = []
         for tab in file.tabs {
             guard case .editor(let state) = tab,
-                  projectId == nil || state.projectId == projectId else { continue }
+                  projectId == nil || state.projectId == projectId
+                      || (includesLegacyUnownedProjectTabs && state.projectId == nil) else { continue }
             let tabId = state.id
             if let buffer = peekBuffer(tabId: tabId) {
                 if buffer.saveDisposition != .clean { result.append(tabId) }
@@ -2936,12 +3022,20 @@ final class TabsManager {
     /// worktree so archive/delete can save before teardown.
     /// Returns an array of (tabId, error) pairs; empty on full success.
     @discardableResult
-    func saveAllUnsaved(forWorktree worktreeId: String, root: URL) -> [(tabId: TabID, error: Error)] {
+    func saveAllUnsaved(
+        forWorktree worktreeId: String,
+        root: URL,
+        projectId: String? = nil,
+        includesLegacyUnownedProjectTabs: Bool = false,
+        projectHost: String? = nil
+    ) -> [(tabId: TabID, error: Error)] {
         var errors: [(TabID, Error)] = []
         var saved = Set<ObjectIdentifier>()
         // Pass 1: live dirty buffers belonging to this worktree.
         for (tabId, key) in bufferKeys {
             guard key.worktreeId == worktreeId,
+                  projectId == nil || key.projectId == projectId
+                      || (includesLegacyUnownedProjectTabs && key.projectId == nil),
                   let buffer = peekBuffer(tabId: tabId), buffer.saveDisposition != .clean else { continue }
             let id = ObjectIdentifier(buffer)
             guard !saved.contains(id) else { continue }
@@ -2956,6 +3050,12 @@ final class TabsManager {
         // to this worktree — tracked in `externalTabURLs`, not `bufferKeys`.
         for (tabId, entry) in externalTabURLs {
             guard entry.worktreeId == worktreeId,
+                  tabIsInProjectSaveScope(
+                      tabId,
+                      worktreeId: worktreeId,
+                      projectId: projectId,
+                      includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
+                  ),
                   let buffer = peekExternalBuffer(tabId: tabId), buffer.saveDisposition != .clean else { continue }
             let id = ObjectIdentifier(buffer)
             guard !saved.contains(id) else { continue }
@@ -2970,9 +3070,20 @@ final class TabsManager {
         guard let file = byWorktree[worktreeId] else { return errors }
         for tab in file.tabs {
             guard case .editor(let state) = tab,
+                  editorStateBelongsToSaveProject(
+                      state,
+                      projectId: projectId,
+                      includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
+                  ),
                   peekBuffer(tabId: state.id) == nil,
                   (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
-            guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, state: state, worktreeRoot: root) else { continue }
+            guard let buffer = materializeSnapshotBufferForSave(
+                worktreeId: worktreeId,
+                state: state,
+                worktreeRoot: root,
+                projectId: projectId,
+                projectHost: projectHost
+            ) else { continue }
             do {
                 try buffer.saveRecordingError()
                 buffer.close(persistDirtySnapshot: false)
@@ -2985,12 +3096,20 @@ final class TabsManager {
     }
 
     @discardableResult
-    func saveAllUnsavedAwaitingRemote(forWorktree worktreeId: String, root: URL) async -> [(tabId: TabID, error: Error)] {
+    func saveAllUnsavedAwaitingRemote(
+        forWorktree worktreeId: String,
+        root: URL,
+        projectId: String? = nil,
+        includesLegacyUnownedProjectTabs: Bool = false,
+        projectHost: String? = nil
+    ) async -> [(tabId: TabID, error: Error)] {
         var errors: [(TabID, Error)] = []
         var saved = Set<ObjectIdentifier>()
         // Pass 1: live dirty buffers belonging to this worktree.
         for (tabId, key) in bufferKeys {
             guard key.worktreeId == worktreeId,
+                  projectId == nil || key.projectId == projectId
+                      || (includesLegacyUnownedProjectTabs && key.projectId == nil),
                   let buffer = buffers[key], buffer.dirty else { continue }
             let id = ObjectIdentifier(buffer)
             guard !saved.contains(id) else { continue }
@@ -3005,6 +3124,12 @@ final class TabsManager {
         // to this worktree — tracked in `externalTabURLs`, not `bufferKeys`.
         for (tabId, entry) in externalTabURLs {
             guard entry.worktreeId == worktreeId,
+                  tabIsInProjectSaveScope(
+                      tabId,
+                      worktreeId: worktreeId,
+                      projectId: projectId,
+                      includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
+                  ),
                   let buffer = peekExternalBuffer(tabId: tabId), buffer.dirty else { continue }
             let id = ObjectIdentifier(buffer)
             guard !saved.contains(id) else { continue }
@@ -3019,9 +3144,20 @@ final class TabsManager {
         guard let file = byWorktree[worktreeId] else { return errors }
         for tab in file.tabs {
             guard case .editor(let state) = tab,
+                  editorStateBelongsToSaveProject(
+                      state,
+                      projectId: projectId,
+                      includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
+                  ),
                   peekBuffer(tabId: state.id) == nil,
                   (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
-            guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, state: state, worktreeRoot: root) else { continue }
+            guard let buffer = materializeSnapshotBufferForSave(
+                worktreeId: worktreeId,
+                state: state,
+                worktreeRoot: root,
+                projectId: projectId,
+                projectHost: projectHost
+            ) else { continue }
             do {
                 try await buffer.saveRecordingErrorAwaitingRemote()
                 buffer.close(persistDirtySnapshot: false)
@@ -3033,7 +3169,39 @@ final class TabsManager {
         return errors
     }
 
-    private func materializeSnapshotBufferForSave(worktreeId: String, state: EditorTabState, worktreeRoot: URL?) -> EditorBuffer? {
+    private func editorStateBelongsToSaveProject(
+        _ state: EditorTabState,
+        projectId: String?,
+        includesLegacyUnownedProjectTabs: Bool
+    ) -> Bool {
+        guard let projectId else { return true }
+        return state.projectId == projectId || (includesLegacyUnownedProjectTabs && state.projectId == nil)
+    }
+
+    private func tabIsInProjectSaveScope(
+        _ tabId: TabID,
+        worktreeId: String,
+        projectId: String?,
+        includesLegacyUnownedProjectTabs: Bool
+    ) -> Bool {
+        guard let projectId else { return true }
+        guard let tab = byWorktree[worktreeId]?.tabs.first(where: { $0.id == tabId }),
+              case .editor(let state) = tab
+        else { return false }
+        return editorStateBelongsToSaveProject(
+            state,
+            projectId: projectId,
+            includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
+        )
+    }
+
+    private func materializeSnapshotBufferForSave(
+        worktreeId: String,
+        state: EditorTabState,
+        worktreeRoot: URL?,
+        projectId: String? = nil,
+        projectHost: String? = nil
+    ) -> EditorBuffer? {
         let tabId = state.id
         guard let snapshot = (try? bufferStore.read(worktreeId: worktreeId, tabId: tabId)) ?? nil else { return nil }
         if let externalAbsolutePath = state.externalAbsolutePath, state.isExternalEditable {
@@ -3057,6 +3225,7 @@ final class TabsManager {
             return nil
         }
         let buffer: EditorBuffer
+        let hostResolution: EditorBufferHostResolution = projectId.map { _ in .project(projectHost) } ?? .pathRegistry
         if let lsp {
             buffer = EditorBuffer(
                 worktreeRoot: worktreeRoot,
@@ -3066,7 +3235,8 @@ final class TabsManager {
                 tabId: tabId,
                 lsp: lsp,
                 loadSynchronously: true,
-                navigationResolvedRoot: state.navigationResolvedRoot
+                navigationResolvedRoot: state.navigationResolvedRoot,
+                hostResolution: hostResolution
             )
         } else {
             buffer = EditorBuffer(
@@ -3076,7 +3246,8 @@ final class TabsManager {
                 worktreeId: worktreeId,
                 tabId: tabId,
                 loadSynchronously: true,
-                navigationResolvedRoot: state.navigationResolvedRoot
+                navigationResolvedRoot: state.navigationResolvedRoot,
+                hostResolution: hostResolution
             )
         }
         if buffer.relativePath != relativePath {

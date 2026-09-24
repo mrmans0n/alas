@@ -988,6 +988,7 @@ struct ImagePreviewTabState: Codable, Equatable, Identifiable {
     let id: TabID
     var title: String
     var relativePath: String
+    var projectId: String? = nil
 }
 
 struct BinaryPreviewTabState: Codable, Equatable, Identifiable {
