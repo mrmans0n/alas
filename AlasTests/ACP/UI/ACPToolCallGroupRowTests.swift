@@ -16,6 +16,32 @@ struct ACPToolCallGroupRowTests {
         #expect(headerHeight(expanded: true, theme: theme) == headerHeight(expanded: false, theme: theme))
     }
 
+    @Test("a live reasoning preview does not make the collapsed header taller")
+    func livePreviewPreservesHeaderHeight() throws {
+        let theme = try ThemeStore().current
+        let narration = ACPToolCallGroupLiveNarration(
+            kind: .thinking,
+            buffer: StreamingText(String(repeating: "Inspecting transcript state. ", count: 20))
+        )
+
+        #expect(
+            headerHeight(expanded: false, theme: theme, liveNarration: narration)
+                == headerHeight(expanded: false, theme: theme)
+        )
+    }
+
+    @Test("live reasoning preview uses and bounds the latest non-empty line")
+    func livePreviewUsesBoundedLatestLine() {
+        let longTail = Array(repeating: "latest", count: 40).joined(separator: " ")
+        let preview = ACPToolCallGroupLiveNarration.previewText(
+            in: "old reasoning\n   \n  \(longTail)  \n"
+        )
+
+        #expect(!preview.contains("old reasoning"))
+        #expect(preview.count == ACPToolCallGroupLiveNarration.previewCharacterLimit)
+        #expect(longTail.hasSuffix(preview))
+    }
+
     @Test("a member row renders the card handed to it")
     func memberRowRendersItsContent() throws {
         let theme = try ThemeStore().current
@@ -43,13 +69,18 @@ struct ACPToolCallGroupRowTests {
         )
     }
 
-    private func headerHeight(expanded: Bool, theme: Theme) -> CGFloat {
+    private func headerHeight(
+        expanded: Bool,
+        theme: Theme,
+        liveNarration: ACPToolCallGroupLiveNarration? = nil
+    ) -> CGFloat {
         measure(
             ACPToolCallGroupHeaderRow(
                 summary: ACPToolCallGroupSummary(
                     toolCalls: [.init(toolCallId: "a", title: "a", status: "completed")]
                 ),
-                expanded: expanded
+                expanded: expanded,
+                liveNarration: liveNarration
             ),
             theme: theme
         )

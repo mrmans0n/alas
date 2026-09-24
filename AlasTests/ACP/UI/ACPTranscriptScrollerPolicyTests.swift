@@ -284,6 +284,29 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(!before.isEqual(to: after))
     }
 
+    @Test("group row token changes when hidden narration becomes live")
+    func groupTokenChangesOnLiveNarration() throws {
+        let host = makeHost(collapsesFinishedToolCalls: true)
+        let thought = ACPMessage.thought(
+            id: UUID(),
+            messageId: "thinking",
+            StreamingText("Inspecting the transcript")
+        )
+        host.transcript.messages = [tool("a"), thought]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let idle = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+            .first { $0.id == "tcg-tc-a" }?.equalityToken)
+
+        host.transcript.lastContentTouchIndex = 1
+        host.transcript.streamingState = .streaming
+        let live = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+            .first { $0.id == "tcg-tc-a" }?.equalityToken)
+
+        #expect(!idle.isEqual(to: live))
+    }
+
     @Test("group row token changes when the bundle's expanded state changes")
     func groupTokenChangesOnExpansion() throws {
         let host = makeHost(collapsesFinishedToolCalls: true)
