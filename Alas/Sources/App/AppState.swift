@@ -578,6 +578,12 @@ final class AppState {
     }()
     /// Native sidebar consumer, present only while Remote and federation run.
     private(set) var nativePeerSessions: NativePeerSessions?
+
+    #if DEBUG
+    func installNativePeerSessionsForTesting(_ client: NativePeerSessions) {
+        nativePeerSessions = client
+    }
+    #endif
     /// The live server, or nil when remote control is disabled. Mutated only
     /// by `syncRemoteServer()`.
     @ObservationIgnored
@@ -2273,6 +2279,7 @@ final class AppState {
 
     func selectWorkspace(id: UUID) {
         guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        nativePeerSessions?.clearSelection()
         workspaceNavigationState.selectWorkspace(id)
         selectedWorktreeId = nil
     }
@@ -2280,6 +2287,7 @@ final class AppState {
     func selectWorkspaceCheckout(id: UUID) {
         guard config.workspacesEnabled, workspacesManager.canMutate else { return }
         guard let checkout = workspacesManager.checkout(id: id) else { return }
+        nativePeerSessions?.clearSelection()
         workspaceNavigationState.selectCheckout(checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
         selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
         if let selectedWorktreeId {
@@ -2290,6 +2298,7 @@ final class AppState {
     func focusWorkspaceCheckoutMember(id: UUID) {
         guard config.workspacesEnabled, workspacesManager.canMutate else { return }
         guard let checkout = selectedWorkspaceCheckout else { return }
+        nativePeerSessions?.clearSelection()
         workspaceNavigationState.selectMember(id, in: checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
         selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
         if let selectedWorktreeId {
@@ -2560,6 +2569,7 @@ final class AppState {
     }
 
     func selectWorktree(id: String?, includeRemoteStatus: Bool = true) {
+        nativePeerSessions?.clearSelection()
         workspaceNavigationState.clearCheckoutSelection()
         guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id

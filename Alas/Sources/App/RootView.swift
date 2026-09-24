@@ -303,11 +303,16 @@ struct RootView: View {
         hasRightPaneRail: Bool,
         rightPaneStartupSuppressed: Bool
     ) -> some View {
-        worktreeCenterContent(
-            effectiveRightPaneVisible: effectiveRightPaneVisible,
-            hasRightPaneRail: hasRightPaneRail,
-            rightPaneStartupSuppressed: rightPaneStartupSuppressed
-        )
+        if let client = state.nativePeerSessions, client.selectedSessionId != nil {
+            NativePeerSessionView(client: client)
+                .id(client.selectedSessionId)
+        } else {
+            worktreeCenterContent(
+                effectiveRightPaneVisible: effectiveRightPaneVisible,
+                hasRightPaneRail: hasRightPaneRail,
+                rightPaneStartupSuppressed: rightPaneStartupSuppressed
+            )
+        }
     }
 
     @ViewBuilder

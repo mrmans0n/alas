@@ -223,6 +223,10 @@ struct SidebarView: View {
                                     }
                                 )
                             }
+                            if state.config.remote.federationEnabled,
+                               let nativePeerSessions = state.nativePeerSessions {
+                                NativePeerSidebarView(client: nativePeerSessions)
+                            }
                             Color.clear
                                 .frame(maxWidth: .infinity, minHeight: 40)
                                 .contentShape(Rectangle())
