@@ -21,6 +21,10 @@ final class ACPImageChipHoverController {
     /// Range + URL the pending timer will show for; lets `hide` cancel a
     /// chip-to-chip move instead of flashing a stale popover.
     private var pendingTarget: ChipTarget?
+    /// The chip whose popover is currently displayed, so moving from one
+    /// chip directly onto another closes the stale preview immediately
+    /// instead of leaving it up during the next chip's debounce.
+    private var shownTarget: ChipTarget?
 
     static let hoverDelay: TimeInterval = 0.25
 
@@ -42,6 +46,13 @@ final class ACPImageChipHoverController {
     func scheduleShow(range: NSRange, fileURL: URL, in textView: ACPNSTextView) {
         cancelPendingShow()
         let target = ChipTarget(range: range, fileURL: fileURL)
+        // Moving onto a different chip while another popover is up closes it
+        // right away — the debounced show below will open the new one.
+        if shownTarget != target {
+            popover?.performClose(nil)
+            popover = nil
+            self.shownTarget = nil
+        }
         pendingTarget = target
         let work = DispatchWorkItem { [weak self, weak textView] in
             guard let self, let textView else { return }
@@ -57,6 +68,7 @@ final class ACPImageChipHoverController {
         cancelPendingShow()
         popover?.performClose(nil)
         popover = nil
+        shownTarget = nil
     }
 
     private func cancelPendingShow() {
@@ -68,6 +80,7 @@ final class ACPImageChipHoverController {
     private func show(range: NSRange, fileURL: URL, in textView: ACPNSTextView) {
         guard let image = ACPImageThumbnail.loadImage(from: fileURL) else { return }
         guard let anchor = textView.imageChipAnchorRect(for: range) else { return }
+        let target = ChipTarget(range: range, fileURL: fileURL)
 
         // Cap: composer width, and half the main screen's height — whichever
         // binds first for the image's aspect ratio.
@@ -88,6 +101,7 @@ final class ACPImageChipHoverController {
         )
         popover.show(relativeTo: anchor, of: textView, preferredEdge: .maxY)
         self.popover = popover
+        self.shownTarget = target
     }
 }
 

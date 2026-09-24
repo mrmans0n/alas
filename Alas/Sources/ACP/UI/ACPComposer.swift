@@ -1114,6 +1114,13 @@ final class ACPNSTextView: PairedDelimiterTextView {
         let attrs = textStorage.attributes(at: characterIndex, effectiveRange: &chipRange)
         guard let uri = attrs[.imageAttachmentURI] as? String,
               let fileURL = URL(string: uri) else { return nil }
+        // The nearest-character lookup can resolve a character even when the
+        // point is in blank space beside a glyph (e.g. after an end-of-line
+        // chip) — require the chip's glyph rect to actually contain the point.
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: chipRange, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else { return nil }
+        let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        guard glyphRect.contains(containerPoint) else { return nil }
         return (range: chipRange, fileURL: fileURL)
     }
 

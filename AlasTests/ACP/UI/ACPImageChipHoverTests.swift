@@ -124,6 +124,32 @@ struct ACPImageChipHoverTests {
         #expect(textView.imageChipRange(at: textPoint) == nil)
     }
 
+    @Test("point over blank space beside an end-of-line chip does not resolve")
+    func pointBesideEndOfLineChipDoesNotResolve() throws {
+        let fileURL = try makeStubPNGFile()
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        // Chip is the final glyph on its line — blank space to its right is
+        // the exact case where TextKit's nearest-character lookup lies.
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 120))
+        let attachment = ACPImageChipAttachment(fileURL: fileURL, mimeType: "image/png")
+        let chip = NSMutableAttributedString(attachment: attachment)
+        chip.addAttributes(
+            [.imageAttachmentURI: fileURL.absoluteString, .imageAttachmentMime: "image/png"],
+            range: NSRange(location: 0, length: chip.length)
+        )
+        let full = NSMutableAttributedString(string: "before ")
+        full.append(chip)
+        textView.textStorage?.setAttributedString(full)
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+        let chipRange = (full.string as NSString).range(of: "\u{FFFC}")
+        try #require(chipRange.location != NSNotFound)
+        let glyphRect = try #require(textView.imageChipAnchorRect(for: chipRange))
+        // Blank space to the right of the chip, inside the text view.
+        let blankPoint = NSPoint(x: glyphRect.maxX + 30, y: glyphRect.midY)
+
+        #expect(textView.imageChipRange(at: blankPoint) == nil)
+    }
+
     @Test("anchor rect is a positive-size rect inside the text view")
     func anchorRectIsPositive() throws {
         let fileURL = try makeStubPNGFile()
