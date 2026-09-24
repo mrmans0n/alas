@@ -160,6 +160,13 @@
 8. Restart Alas and confirm the chat returns.
 9. Confirm the composer is enabled only if ACP resume succeeds; otherwise the transcript is read-only.
 
+### Successful turn completion boundary
+
+1. Start a temporary scripted ACP session whose `session/prompt` response arrives before its final `session/update` notification. Send an ordinary user prompt.
+2. Confirm the successful-turn observer receives no event at the RPC response. Release the final update and confirm it receives exactly one event for the recorded user row after the transcript output boundary closes.
+3. Repeat with a pending ordinary prompt in the queue. Confirm queue dispatch takes precedence and no event is offered for the preceding turn.
+4. Repeat with a user cancellation whose prompt response says `end_turn`. Confirm no successful-turn event is emitted.
+
 ## ACP Provider Auto-Discovery
 
 1. Ensure `opencode` is installed and available on `PATH`.

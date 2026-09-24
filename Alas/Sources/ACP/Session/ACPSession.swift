@@ -50,6 +50,18 @@ final class ACPSession: ObservableObject, Identifiable {
     typealias ID = String
 
     let id: ID
+    let incarnation = UUID()
+    /// Runner replacements share this counter while this session object lives.
+    /// A consumed turn ID must not be reused after reconnect.
+    private(set) var nextPromptID = 0
+    /// Only newly queued ordinary user turns can publish a completion event.
+    /// Restored queue rows have no runtime origin, so they stay ineligible.
+    var normalQueuedTurnIDs: Set<UUID> = []
+
+    func allocatePromptID() -> Int {
+        defer { nextPromptID += 1 }
+        return nextPromptID
+    }
     let agentId: String
     let worktreeId: String
     /// The durable owner of this session. `worktreeId` remains the historical

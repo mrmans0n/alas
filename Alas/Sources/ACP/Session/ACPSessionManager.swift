@@ -140,6 +140,7 @@ final class ACPSessionManager: ObservableObject {
     private let onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)?
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
     private let onQueueChanged: ((ACPSession.ID, Bool) -> Void)?
+    private let onSuccessfulTurn: @MainActor (NextPromptCompletedTurn) -> Void
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
@@ -341,12 +342,14 @@ final class ACPSessionManager: ObservableObject {
     /// land between the gateway's `isWriter` gate and here, and `submit`'s
     /// `.idle`/`.disconnected` path would otherwise enqueue + persist the prompt
     /// as a mirror — injecting it into a session another instance now drives.
-    func sendPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
+    func sendPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], normalUserTurn: Bool = true, onResult: @escaping @MainActor (Bool) -> Void) async {
         guard await confirmedWriterLease(for: id) else {
             onResult(false)
             return
         }
         let accepted = submit(sessionId: id, text: text, attachments: attachments, intent: .auto,
+                              draft: nil, waitForModelModeSelections: true,
+                              normalUserTurn: normalUserTurn,
                               onCompleted: { ok in onResult(ok) })
         if !accepted { onResult(false) }   // submit refused synchronously; onCompleted won't fire
     }
@@ -1334,6 +1337,7 @@ final class ACPSessionManager: ObservableObject {
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)? = nil,
          onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
+         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
          onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
@@ -1376,6 +1380,7 @@ final class ACPSessionManager: ObservableObject {
         self.onPlanAwaiting = onPlanAwaiting
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
         self.onQueueChanged = onQueueChanged
+        self.onSuccessfulTurn = onSuccessfulTurn
         self.onCheckpointCapture = onCheckpointCapture
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
@@ -5341,6 +5346,9 @@ extension ACPSessionManager {
                                               else { return }
                                               self.onQueueChanged?(sessionId, self.retainedCleanupHasActivePromptWork(for: sessionId))
                                           },
+                                          onSuccessfulTurn: { [weak self] turn in
+                                              self?.onSuccessfulTurn(turn)
+                                          },
                                           onQueuedPromptDispatchRegistration: { [weak self] itemId in
                                               guard let self,
                                                     self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID,
@@ -6745,6 +6753,7 @@ extension ACPSessionManager {
         attachments: [ACPMessage.Attachment],
         draft: ACPComposerDraft? = nil,
         scheduledAt: Date? = nil,
+        normalUserTurn: Bool = false,
         into sessionId: ACPSession.ID,
         onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
         onPersisted: (@MainActor (_ persisted: Bool) -> Void)? = nil
@@ -6757,9 +6766,11 @@ extension ACPSessionManager {
         let scheduledId: UUID?
         if let scheduledAt {
             scheduledId = session.enqueueScheduled(blocks: blocks, scheduledAt: scheduledAt, draft: draft)
+            if normalUserTurn, let scheduledId { session.normalQueuedTurnIDs.insert(scheduledId) }
         } else {
             let queuedPromptId = UUID()
             session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft)
+            if normalUserTurn { session.normalQueuedTurnIDs.insert(queuedPromptId) }
             onQueuedPromptEnqueued?(queuedPromptId)
             scheduledId = nil
         }
@@ -6944,6 +6955,7 @@ extension ACPSessionManager {
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft?,
         waitForModelModeSelections: Bool,
+        normalUserTurn: Bool = true,
         onCompleted: @escaping @MainActor (Bool) -> Void,
         onDispatchRegistered: (@Sendable () -> Void)? = nil
     ) -> Bool {
@@ -7010,6 +7022,7 @@ extension ACPSessionManager {
                             intent: intent,
                             draft: draft,
                             waitForModelModeSelections: false,
+                            normalUserTurn: normalUserTurn,
                             onCompleted: onCompleted,
                             onDispatchRegistered: { continuation.resume() }
                         )
@@ -7036,6 +7049,7 @@ extension ACPSessionManager {
                     attachments: attachments,
                     draft: draft,
                     scheduledAt: scheduledAt,
+                    normalUserTurn: normalUserTurn,
                     into: sessionId,
                     onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                     onPersisted: onScheduledPersisted
@@ -7054,6 +7068,7 @@ extension ACPSessionManager {
                 attachments: attachments,
                 intent: intent,
                 draft: draft,
+                normalUserTurn: normalUserTurn,
                 onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onDispatchRegistered: { onDispatchRegistered?() },
                 onPromptFinished: { succeeded in onCompleted(succeeded) }
@@ -7068,6 +7083,7 @@ extension ACPSessionManager {
                 attachments: attachments,
                 draft: draft,
                 scheduledAt: scheduledAt,
+                normalUserTurn: normalUserTurn,
                 into: sessionId,
                 onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onPersisted: onScheduledPersisted
@@ -7089,6 +7105,7 @@ extension ACPSessionManager {
                 attachments: attachments,
                 draft: draft,
                 scheduledAt: scheduledAt,
+                normalUserTurn: normalUserTurn,
                 into: sessionId,
                 onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onPersisted: onScheduledPersisted

@@ -5,6 +5,14 @@ struct NextPromptTurn: Equatable, Sendable {
     let assistant: String
 }
 
+struct NextPromptCompletedTurn: Equatable, Sendable {
+    let sessionID: String
+    let incarnation: UUID
+    let promptID: Int
+    let userMessageID: UUID
+    let transcriptRevision: UInt64
+}
+
 struct NextPromptRequestID: Equatable, Sendable {
     let sessionID: String
     let incarnation: UUID

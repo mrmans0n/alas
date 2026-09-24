@@ -11906,6 +11906,7 @@ final class AppState {
                     await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
                 }
             },
+            onSuccessfulTurn: { _ in },
             onQueueChanged: { [weak self] sessionId, retainActivePrompt in
                 self?.restartRetainedACPSessionCleanupIfNeeded(
                     owner: owner,
@@ -12328,6 +12329,7 @@ final class AppState {
                     owner: owner
                 )
             },
+            onSuccessfulTurn: { _ in },
             onQueueChanged: { [weak self] sessionId, retainActivePrompt in
                 self?.restartRetainedACPSessionCleanupIfNeeded(
                     owner: owner,
@@ -14299,8 +14301,14 @@ extension AppState: RemoteSessionsProvider {
     /// `onResult` fires once (false when no manager owns the id, the manager
     /// refuses, or delivery later fails) so the gateway can restore the text.
     func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
+        await sendPrompt(for: id, text: text, attachments: attachments,
+                         normalUserTurn: true, onResult: onResult)
+    }
+
+    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], normalUserTurn: Bool, onResult: @escaping @MainActor (Bool) -> Void) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.sendPrompt(for: id, text: text, attachments: attachments, onResult: onResult)
+            await mgr.sendPrompt(for: id, text: text, attachments: attachments,
+                                 normalUserTurn: normalUserTurn, onResult: onResult)
             return
         }
         onResult(false)

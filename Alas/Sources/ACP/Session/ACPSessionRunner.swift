@@ -119,6 +119,7 @@ final class ACPSessionRunner {
     /// written. Callers that track "last activity" want this one.
     private let onMessageActivity: (() -> Void)?
     private let onPromptWorkChanged: (() -> Void)?
+    private let onSuccessfulTurn: @MainActor (NextPromptCompletedTurn) -> Void
     private let onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)?
     private let onSessionTitleUpdated: ((String) -> Void)?
     private let localTitlesEnabled: @MainActor () -> Bool
@@ -162,7 +163,6 @@ final class ACPSessionRunner {
     /// `streamingState`; `cancelledPromptIDs` carries explicit
     /// invalidations (steer, userCancel) so a slow `session/cancel`
     /// can't let a stale completion clobber the successor task.
-    private var nextPromptID = 0
     private var activePromptID: Int?
     private var cancelledPromptIDs: Set<Int> = []
     /// Retains the most recently dispatched prompt RPC so steering can wait
@@ -202,7 +202,8 @@ final class ACPSessionRunner {
     private var lastQueuedPersistenceSucceeded = true
     private var pendingQueueForceSendsAfterPersistence: [UUID] = []
     private var stopped = false
-    private var pendingCompletedOutputBoundaryUpdateCount: Int?
+    private var pendingCompletedOutputBoundary: (updateCount: Int, successfulTurn: NextPromptCompletedTurn?)?
+    private var turnPublicationGeneration = 0
     private var pendingStreamingPersistIndices: Set<Int> = []
     /// Revisions distinguish a new streamed chunk from the payload currently
     /// being written. A successful write may only clear the revision it saw.
@@ -272,6 +273,7 @@ final class ACPSessionRunner {
          onPersist: (() -> Void)? = nil,
          onMessageActivity: (() -> Void)? = nil,
          onPromptWorkChanged: (() -> Void)? = nil,
+         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
          onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
@@ -293,6 +295,7 @@ final class ACPSessionRunner {
         precondition(store != nil || persistence != nil, "ACPSessionRunner requires persistence")
         let resolvedPersistence = persistence ?? ACPSessionPersistence(path: store!.path)
         self.session = session
+        self.onSuccessfulTurn = onSuccessfulTurn
         self.connection = connection
         self.persistence = resolvedPersistence
         self.sessionId = sessionId
@@ -410,6 +413,8 @@ final class ACPSessionRunner {
             // an "Agent disconnected" notice in that case; only flag
             // the unexpected stream-end.
             if Task.isCancelled || !self.isConnectionCurrent() { return }
+            self.turnPublicationGeneration += 1
+            self.pendingCompletedOutputBoundary?.successfulTurn = nil
             self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
             await MainActor.run {
                 self.session.clearRetryStatus()
@@ -1010,9 +1015,7 @@ final class ACPSessionRunner {
             // buffered updates drain. Skipping the check here would leave
             // the boundary pending — and the queue unflushed — whenever a
             // turn's last buffered notification is child-scoped.
-            if applyPendingCompletedOutputBoundaryIfReady(), flushQueueWhenBoundaryReady {
-                flushQueueIfIdle()
-            }
+            applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: flushQueueWhenBoundaryReady)
             return
         }
         let preAppliedSessionInfoDirty: Set<Int>?
@@ -1084,8 +1087,8 @@ final class ACPSessionRunner {
                 completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
             )
         } else {
-            let isPromptCompletionDrainUpdate = pendingCompletedOutputBoundaryUpdateCount
-                .map { appliedUpdateCount <= $0 } ?? false
+            let isPromptCompletionDrainUpdate = pendingCompletedOutputBoundary
+                .map { appliedUpdateCount <= $0.updateCount } ?? false
             let isPromptOwnedBufferedUpdate = bufferedUpdateReceivedWhileHoldingLease
                 && (activePromptID != nil || isPromptCompletionDrainUpdate || treatBufferedUpdatesAsPromptOwned)
             let shouldBatchStreamingPersist = shouldBatchStreamingPersist(
@@ -1158,9 +1161,7 @@ final class ACPSessionRunner {
         default:
             break
         }
-        if applyPendingCompletedOutputBoundaryIfReady(), flushQueueWhenBoundaryReady {
-            flushQueueIfIdle()
-        }
+        applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: flushQueueWhenBoundaryReady)
     }
 
     /// Whether an incoming update belongs to a native subagent rather than
@@ -1445,6 +1446,8 @@ final class ACPSessionRunner {
 
     func stop() {
         stopped = true
+        turnPublicationGeneration += 1
+        pendingCompletedOutputBoundary?.successfulTurn = nil
         localTitleTask?.cancel()
         localTitleTask = nil
         flushPendingIncomingUpdates(
@@ -1617,6 +1620,8 @@ final class ACPSessionRunner {
     /// attach's `flushQueueIfIdle` would skip it (guard requires
     /// `lastError == nil`), forcing the user to click Retry.
     func invalidateActivePrompt() {
+        turnPublicationGeneration += 1
+        pendingCompletedOutputBoundary?.successfulTurn = nil
         if let promptID = activePromptID {
             cancelledPromptIDs.insert(promptID)
             activePromptID = nil
@@ -1932,6 +1937,8 @@ final class ACPSessionRunner {
     /// to `.idle`. Persists all mutations so they survive a reload.
     func userCancel(confirmingLease: Bool = true) async {
         guard isConnectionCurrent() else { return }
+        turnPublicationGeneration += 1
+        pendingCompletedOutputBoundary?.successfulTurn = nil
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
         session.clearRetryStatus()
         // Capture the prompt + queue head the user INTENDED to stop
@@ -2073,6 +2080,7 @@ extension ACPSessionRunner {
         attachments: [ACPMessage.Attachment],
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft? = nil,
+        normalUserTurn: Bool = true,
         onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
         onDispatchRegistered: @escaping @Sendable () -> Void,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
@@ -2081,6 +2089,7 @@ extension ACPSessionRunner {
             blocks: Self.blocks(text: text, attachments: attachments),
             intent: intent,
             draft: draft,
+            normalUserTurn: normalUserTurn,
             onQueuedPromptEnqueued: onQueuedPromptEnqueued,
             onDispatchRegistered: onDispatchRegistered,
             onPromptFinished: onPromptFinished
@@ -2223,6 +2232,7 @@ extension ACPSessionRunner {
         blocks: [ACPContentBlock],
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft? = nil,
+        normalUserTurn: Bool = true,
         onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
@@ -2234,6 +2244,7 @@ extension ACPSessionRunner {
                 return
             }
             let queuedId = session.enqueueScheduled(blocks: blocks, scheduledAt: date, draft: draft)
+            if normalUserTurn { session.normalQueuedTurnIDs.insert(queuedId) }
             onDispatchRegistered?()
             persistQueue(completion: { [weak self] persisted in
                 if persisted {
@@ -2255,6 +2266,7 @@ extension ACPSessionRunner {
             }
             let queuedPromptId = UUID()
             session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft)
+            if normalUserTurn { session.normalQueuedTurnIDs.insert(queuedPromptId) }
             persistQueue()
             if let onDispatchRegistered {
                 if let onQueuedPromptEnqueued {
@@ -2286,6 +2298,7 @@ extension ACPSessionRunner {
             sendNow(
                 blocks: blocks,
                 queuedItemId: nil,
+                normalUserTurn: normalUserTurn,
                 draft: draft,
                 onDispatchRegistered: onDispatchRegistered,
                 onPromptFinished: onPromptFinished
@@ -2294,6 +2307,7 @@ extension ACPSessionRunner {
             let scheduledWasHead = session.queue.first?.scheduledAt != nil
             let queuedPromptId = UUID()
             session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft)
+            if normalUserTurn { session.normalQueuedTurnIDs.insert(queuedPromptId) }
             persistQueue()
             if let onDispatchRegistered {
                 if let onQueuedPromptEnqueued {
@@ -2311,6 +2325,7 @@ extension ACPSessionRunner {
         case .steer:
             steer(
                 blocks: blocks,
+                normalUserTurn: normalUserTurn,
                 draft: draft,
                 onDispatchRegistered: onDispatchRegistered,
                 onPromptFinished: onPromptFinished
@@ -2509,6 +2524,7 @@ extension ACPSessionRunner {
                 queuedItemId: head.id,
                 delegatedSource: head.delegatedSource,
                 brokerOperationKey: brokerOperationKey,
+                normalUserTurn: self.session.normalQueuedTurnIDs.contains(head.id),
                 // The raw optional, not `restorableDraft`: that heuristically
                 // fabricates a draft from `blocks` when none was captured, and
                 // `blocks` has already flattened every image to the end of the
@@ -2689,6 +2705,7 @@ extension ACPSessionRunner {
             blocks: item.blocks,
             delegatedSource: item.delegatedSource,
             recordUserPrompt: !item.transcriptRecorded,
+            normalUserTurn: session.normalQueuedTurnIDs.remove(item.id) != nil,
             // See the matching comment in `flushQueueIfIdle`: the raw
             // optional, not the heuristic `restorableDraft`.
             draft: item.draft,
@@ -2726,10 +2743,13 @@ extension ACPSessionRunner {
         blocks: [ACPContentBlock],
         delegatedSource: ACPDelegatedPromptSource? = nil,
         recordUserPrompt: Bool = true,
+        normalUserTurn: Bool = true,
         draft: ACPComposerDraft? = nil,
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
+        turnPublicationGeneration += 1
+        pendingCompletedOutputBoundary?.successfulTurn = nil
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
         session.queue.removeAll { $0.status == .sending }
         persistQueue()
@@ -2793,6 +2813,7 @@ extension ACPSessionRunner {
                     queuedItemId: nil,
                     delegatedSource: delegatedSource,
                     recordUserPrompt: recordUserPrompt,
+                    normalUserTurn: normalUserTurn,
                     draft: draft,
                     onDispatchRegistered: onDispatchRegistered,
                     onPromptFinished: onPromptFinished
@@ -2834,16 +2855,17 @@ extension ACPSessionRunner {
         delegatedSource: ACPDelegatedPromptSource? = nil,
         brokerOperationKey: String? = nil,
         recordUserPrompt: Bool = true,
+        normalUserTurn: Bool = true,
         draft: ACPComposerDraft? = nil,
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
         beforeRequestHandoff: (@Sendable (ACPBrokerGeneration?) async throws -> Void)? = nil,
         onRequestHandoffDidOccur: (@Sendable () throws -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
+        pendingCompletedOutputBoundary?.successfulTurn = nil
         flushPendingIncomingUpdates()
         session.clearRetryStatus()
-        let promptID = nextPromptID
-        nextPromptID += 1
+        let promptID = session.allocatePromptID()
         // Register ownership SYNCHRONOUSLY, before the Task spawn. Without
         // this, `detach.invalidateActivePrompt()` (or another concurrent
         // cancel) could land between the increment above and the Task's
@@ -3071,8 +3093,9 @@ extension ACPSessionRunner {
                     }
                     if isActivePrompt {
                         self.session.clearRetryStatus()
-                        if queuedItemId != nil {
+                        if let queuedItemId {
                             _ = self.session.popQueueHead()
+                            self.session.normalQueuedTurnIDs.remove(queuedItemId)
                             if deliveredForkContext {
                                 self.persistForkContextDeliveredAndQueue(
                                     acknowledging: promptAcknowledgement
@@ -3082,9 +3105,22 @@ extension ACPSessionRunner {
                             }
                         }
                         self.activePromptID = nil
-                        if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
-                            self.flushQueueIfIdle()
-                        }
+                        self.deferCompletedOutputBoundaryUntilUpdatesDrain(
+                            successfulTurn: promptRecording.messageID.flatMap { userMessageID in
+                                guard normalUserTurn,
+                                      delegatedSource == nil,
+                                      pendingForkContext == nil,
+                                      !self.cancelledPromptIDs.contains(promptID)
+                                else { return nil }
+                                return NextPromptCompletedTurn(
+                                    sessionID: self.sessionId,
+                                    incarnation: self.session.incarnation,
+                                    promptID: promptID,
+                                    userMessageID: userMessageID,
+                                    transcriptRevision: self.session.transcript.messagesGeneration
+                                )
+                            }
+                        )
                         self.onPromptWorkChanged?()
                     }
                     self.cancelledPromptIDs.remove(promptID)
@@ -3137,9 +3173,7 @@ extension ACPSessionRunner {
                             }
                         }
                         self.activePromptID = nil
-                        if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
-                            self.flushQueueIfIdle()
-                        }
+                        self.deferCompletedOutputBoundaryUntilUpdatesDrain()
                         self.onPromptWorkChanged?()
                     }
                     if !hasNewerActivePrompt {
@@ -3157,9 +3191,10 @@ extension ACPSessionRunner {
         onCompleted: (@MainActor (_ delivered: Bool) -> Void)? = nil
     ) -> Bool {
         guard !nativeForkBarrierActive else { return false }
+        turnPublicationGeneration += 1
+        pendingCompletedOutputBoundary?.successfulTurn = nil
         flushPendingIncomingUpdates()
-        let promptID = nextPromptID
-        nextPromptID += 1
+        let promptID = session.allocatePromptID()
         activePromptID = promptID
         let connectionIsCurrent = isConnectionCurrent
         latestPromptTask = Task { [weak self, onCompleted, connectionIsCurrent] in
@@ -3206,10 +3241,9 @@ extension ACPSessionRunner {
                     self.session.recordPromptQuota(promptOutcome.quota, updatesLastTurn: isActivePrompt)
                     if isActivePrompt {
                         self.activePromptID = nil
-                        let outputBoundaryReady = self.deferCompletedOutputBoundaryUntilUpdatesDrain()
-                        if flushQueueOnCompletion && outputBoundaryReady {
-                            self.flushQueueIfIdle()
-                        }
+                        self.deferCompletedOutputBoundaryUntilUpdatesDrain(
+                            flushQueueWhenReady: flushQueueOnCompletion
+                        )
                         self.onPromptWorkChanged?()
                     }
                     // Always resolve the recovery status, even when a newer
@@ -3288,20 +3322,23 @@ extension ACPSessionRunner {
         }
     }
 
-    private func deferCompletedOutputBoundaryUntilUpdatesDrain() -> Bool {
+    private func deferCompletedOutputBoundaryUntilUpdatesDrain(
+        flushQueueWhenReady: Bool = true,
+        successfulTurn: NextPromptCompletedTurn? = nil
+    ) {
         let target = connection.client.yieldedUpdateCount
-        pendingCompletedOutputBoundaryUpdateCount = max(
-            pendingCompletedOutputBoundaryUpdateCount ?? target,
-            target
+        pendingCompletedOutputBoundary = (
+            updateCount: max(pendingCompletedOutputBoundary?.updateCount ?? target, target),
+            successfulTurn: successfulTurn
         )
-        return applyPendingCompletedOutputBoundaryIfReady()
+        applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: flushQueueWhenReady)
     }
 
-    private func applyPendingCompletedOutputBoundaryIfReady() -> Bool {
-        guard let target = pendingCompletedOutputBoundaryUpdateCount,
-              appliedUpdateCount >= target
-        else { return false }
-        pendingCompletedOutputBoundaryUpdateCount = nil
+    private func applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: Bool) {
+        guard let boundary = pendingCompletedOutputBoundary,
+              appliedUpdateCount >= boundary.updateCount
+        else { return }
+        pendingCompletedOutputBoundary = nil
         flushStreamingPersist()
         // markCompletedOutputBoundary() materialises any held replay candidate
         // (a stranded final chunk); persist the appended rows so they survive
@@ -3311,9 +3348,48 @@ extension ACPSessionRunner {
         if session.transcript.messages.count > before {
             persistFromIndex(before)
         }
-        guard activePromptID == nil else { return false }
+        guard activePromptID == nil else { return }
         session.transcript.streamingState = .idle
-        return true
+        guard flushQueueWhenReady else { return }
+        flushQueueIfIdle()
+        guard let turn = boundary.successfulTurn,
+              !stopped, holdsLeaseForWrite(),
+              session.agentState == .ready,
+              activePromptID == nil,
+              session.queue.isEmpty,
+              session.transcript.pendingPermission == nil,
+              session.transcript.pendingQuestion == nil,
+              session.transcript.pendingPlan == nil,
+              session.transcript.pendingUserInputs.isEmpty,
+              !steerInProgress,
+              !nativeForkBarrierActive
+        else { return }
+        let publicationGeneration = turnPublicationGeneration
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.flushPersistence()
+            guard !self.stopped,
+                  self.turnPublicationGeneration == publicationGeneration,
+                  self.holdsLeaseForWrite(),
+                  self.session.agentState == .ready,
+                  self.session.nextPromptID == turn.promptID + 1,
+                  self.activePromptID == nil,
+                  self.session.queue.isEmpty,
+                  self.session.transcript.pendingPermission == nil,
+                  self.session.transcript.pendingQuestion == nil,
+                  self.session.transcript.pendingPlan == nil,
+                  self.session.transcript.pendingUserInputs.isEmpty,
+                  !self.steerInProgress,
+                  !self.nativeForkBarrierActive
+            else { return }
+            self.onSuccessfulTurn(NextPromptCompletedTurn(
+                sessionID: turn.sessionID,
+                incarnation: turn.incarnation,
+                promptID: turn.promptID,
+                userMessageID: turn.userMessageID,
+                transcriptRevision: self.session.transcript.messagesGeneration
+            ))
+        }
     }
 
     /// Append a system notice to the session AND persist it. Use this

@@ -46,7 +46,8 @@ struct ACPSessionRunnerQueueTests {
     private func mkRunner(
         validateLease: (() async -> Bool)? = nil,
         onPromptWorkChanged: (() -> Void)? = nil,
-        isConnectionCurrent: (() -> Bool)? = nil
+        isConnectionCurrent: (() -> Bool)? = nil,
+        onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in }
     ) throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-q-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -64,9 +65,39 @@ struct ACPSessionRunnerQueueTests {
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
             onPromptWorkChanged: onPromptWorkChanged,
+            onSuccessfulTurn: onSuccessfulTurn,
             isConnectionCurrent: isConnectionCurrent ?? { true },
             validateLease: validateLease)
         return (runner, mock, session, store)
+    }
+
+    @Test("queued user turn publishes only after the queue head is removed")
+    func queuedUserTurnPublishesAfterQueueReconciliation() async throws {
+        let observed = QueueTestGate()
+        var turn: NextPromptCompletedTurn?
+        var queueWasEmptyAtCallback = false
+        var observedSession: ACPSession?
+        let (runner, mock, session, _) = try mkRunner(onSuccessfulTurn: {
+            turn = $0
+            queueWasEmptyAtCallback = observedSession?.queue.isEmpty == true
+            Task { await observed.open() }
+        })
+        observedSession = session
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        session.transcript.streamingState = .streaming
+        runner.send(blocks: [.text("queued")], intent: .auto)
+        await runner.flushPersistence()
+        session.transcript.streamingState = .idle
+        runner.flushQueueIfIdle()
+        await observed.wait()
+        #expect(queueWasEmptyAtCallback)
+        #expect(turn?.sessionID == session.id)
+        #expect(turn?.incarnation == session.incarnation)
+        if case .some(.user(let userID, _, _, _, _)) = session.transcript.messages.first {
+            #expect(turn?.userMessageID == userID)
+        } else {
+            Issue.record("expected queued user row")
+        }
     }
 
     @Test(".auto while .streaming with empty queue → enqueues; persists; no prompt RPC")
