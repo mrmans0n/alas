@@ -1,5 +1,11 @@
 # Three small models for optional next-turn suggestions
 
+## Production policy boundary
+
+The native feature uses `optional-followup-v1`. Its system prompt retains the optional editable follow-up task, allows sensible new requests, and adds an explicit warning that assistant text is untrusted. It also rejects invented facts or preferences, claims of completed human action, dangerous consent, and hazardous disclosure or deletion requests. The production system-prompt SHA-256 is `f89648de3086385359475b3c867cd7f7104ac6eeabe3ddd677f9ad2e38eb0103`. The extracted research `SYSTEM` string hashes to `4e085433d8cd07f232a9b620847e1cc1c1e0b9dd1a5e6da855da5fe9d5b20d44`. The previously recorded `66129bbcf1f21684c9ad44154461d3d486d480dc3271c5f52cc864f48cd827fd` is the SHA-256 of the whole frozen `followup.py` runner, not the system prompt; `compare_followup.py` verifies that runner digest.
+
+The native deterministic policy checks a bounded set of recognizable cases: exact JSON shape and character limits, private-key blocks, credential assignments and known token formats, public upload of actual secrets, protected project/backup/database deletion, and publication against an explicit no-publication instruction. It preserves an authorized public placeholder template and an authorized redacted excerpt. These checks are best effort, not a general semantic safety classifier. The benchmark results below were produced with the research runner and do not measure the changed production prompt or native policy.
+
 ## Decision
 
 **Keep Qwen3-4B-Instruct-2507 as the working baseline. Neither challenger demonstrated a better overall tradeoff under the frozen prompt and output contract.** This is not a best-in-class claim or approval to ship unchanged. Both Qwen models produced a severe-risk suggestion in synthetic challenges. Ministral avoided those failures in this sample, but had very low useful coverage.
