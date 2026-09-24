@@ -281,8 +281,12 @@ enum ACPToolCallGrouping {
                 index > user && index < answer && isCompletedTurnWork(messages[index])
             }
             guard !memberIndices.isEmpty else { return }
-            let duration = messageCreatedAt(user).flatMap { start in
-                messageCreatedAt(answer).map { max(0, $0.timeIntervalSince(start)) }
+            let start = messageCreatedAt(user)
+            let end = messageCreatedAt(answer)
+            let duration: TimeInterval? = if let start, let end {
+                max(0, end.timeIntervalSince(start))
+            } else {
+                nil
             }
             let kind = ACPTranscriptToolCallGroup.Kind.completedTurn(duration: duration)
             for index in memberIndices { result[index] = kind }
