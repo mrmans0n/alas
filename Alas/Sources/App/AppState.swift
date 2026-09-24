@@ -2622,6 +2622,7 @@ final class AppState {
     }
 
     func activateWorktreeCenterTab(worktreeId: String, tabId: TabID) {
+        nativePeerSessions?.clearSelection()
         if let pending = attentionPendingReviewReveal,
            pending.worktreeID != worktreeId || pending.tabID != tabId {
             attentionPendingReviewReveal = nil
@@ -3600,18 +3601,20 @@ final class AppState {
     func openWorkspaceReview(_ action: WorkspaceReviewAction) {
         guard workspaceMutationAvailable else { return }
         WorkspaceReviewActionHandler(open: { [weak self] worktreeID, record in
-            _ = self?.tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: record)
-            self?.selectedWorktreeId = worktreeID
-            if let checkoutID = self?.workspaceNavigationState.selectedCheckoutID,
-               let checkout = self?.workspacesManager.checkout(id: checkoutID),
+            guard let self else { return }
+            let tab = self.tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: record)
+            self.activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
+            self.selectedWorktreeId = worktreeID
+            if let checkoutID = self.workspaceNavigationState.selectedCheckoutID,
+               let checkout = self.workspacesManager.checkout(id: checkoutID),
                checkout.members.contains(where: { $0.id == action.memberID }) {
-                self?.workspaceNavigationState.selectMember(
+                self.workspaceNavigationState.selectMember(
                     action.memberID,
                     in: checkout,
-                    resolvedWorktreeIDs: self?.workspaceMemberWorktreeIDs(checkout) ?? [:]
+                    resolvedWorktreeIDs: self.workspaceMemberWorktreeIDs(checkout)
                 )
-                self?.selectedWorktreeId = self?.workspaceNavigationState.repositoryFocusWorktreeID
-                self?.tabs.clearActiveTab(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
+                self.selectedWorktreeId = self.workspaceNavigationState.repositoryFocusWorktreeID
+                self.tabs.clearActiveTab(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
             }
         }).open(action)
     }
@@ -3855,6 +3858,7 @@ final class AppState {
         sharedSessionOwner: SessionOwnerID?,
         tabID: TabID
     ) {
+        nativePeerSessions?.clearSelection()
         if let sharedSessionOwner,
            tabs.tabs(for: sharedSessionOwner).contains(where: { $0.id == tabID }) {
             tabs.activate(owner: sharedSessionOwner, tabId: tabID)
@@ -3949,6 +3953,7 @@ final class AppState {
     func synchronizeVisibleWorktreeCenterTabIfNeeded(worktreeId: String, activeTabId: TabID?) {
         guard let activeTabId else { return }
         guard tabs.tabs(forWorktree: worktreeId).contains(where: { $0.id == activeTabId }) else { return }
+        nativePeerSessions?.clearSelection()
         tabs.activate(worktreeId: worktreeId, tabId: activeTabId)
     }
 
@@ -9409,6 +9414,7 @@ final class AppState {
         // `selectedWorktreeId` to a hidden id that `RootView.selectedWorktree()`
         // (now visibility-aware) would reject anyway, leaving an empty pane.
         guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
+        nativePeerSessions?.clearSelection()
         if selectedWorktreeId != worktree.id {
             focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
         }

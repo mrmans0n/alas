@@ -18,6 +18,15 @@ struct NativePeerNavigationTests {
         }
     }
 
+    private func makeRepo(name: String) async throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-peer-navigation-\(name)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: dir)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: dir)
+        return dir
+    }
+
     @Test func peerSelectionOverlaysLocalSelectionAndLocalClickClosesIt() {
         let state = AppState(store: MemoryStore())
         let localSelection = state.selectedWorktreeId
@@ -39,6 +48,53 @@ struct NativePeerNavigationTests {
         state.selectWorktree(id: localSelection)
         #expect(client.selectedSessionId == nil)
         #expect(state.selectedWorktreeId == localSelection)
+    }
+
+    @Test func localCenterTabActivationClosesPeerOverlay() {
+        let state = AppState(store: MemoryStore())
+        let localTab = state.tabs.appendEditor(worktreeId: "local", title: "Local file", relativePath: "a.txt")
+        let links = FakeLinks()
+        let client = NativePeerSessions(federation: FederatedSessionsProvider(links: links), peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        state.installNativePeerSessionsForTesting(client)
+        client.start()
+        links.receive(.sessionList(sessions: [
+            .init(id: "s", title: "Peer session", agentId: "claude", status: "idle", canDrive: false)
+        ]))
+        client.select("B:s")
+
+        state.activateWorktreeCenterTab(worktreeId: "local", tabId: localTab.id)
+
+        #expect(client.selectedSessionId == nil)
+        #expect(state.tabs.activeTabId(forWorktree: "local") == localTab.id)
+    }
+
+    @Test func openingLocalFileClosesPeerOverlay() async throws {
+        let repo = try await makeRepo(name: "open-file")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState(store: MemoryStore())
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let worktree = try #require(state.projectsManager.worktrees(projectId: project.id).first)
+        let links = FakeLinks()
+        let client = NativePeerSessions(federation: FederatedSessionsProvider(links: links), peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        state.installNativePeerSessionsForTesting(client)
+        client.start()
+        links.receive(.sessionList(sessions: [
+            .init(id: "s", title: "Peer session", agentId: "claude", status: "idle", canDrive: false)
+        ]))
+        client.select("B:s")
+
+        state.openFile(relativePath: "a.txt", worktreeId: worktree.id)
+
+        #expect(client.selectedSessionId == nil)
+        #expect(state.tabs.activeTab(forWorktree: worktree.id) != nil)
     }
 
     @Test func structuredMessagesExposeUsefulContentWithoutRawJSON() throws {

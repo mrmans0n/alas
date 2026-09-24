@@ -58,10 +58,12 @@ struct NativePeerMessagePresentation {
 struct NativePeerPermissionPresentation {
     let title: String
     let toolName: String
+    let mcpServerName: String?
 
     init(request: RemotePermissionPayload) {
         title = request.title ?? "Permission request"
         toolName = request.toolName
+        mcpServerName = request.mcpServerName
     }
 }
 
@@ -157,6 +159,11 @@ struct NativePeerSessionView: View {
                 Text(presentation.toolName)
                     .font(.callout.monospaced())
                     .textSelection(.enabled)
+                if let server = presentation.mcpServerName, !server.isEmpty {
+                    Text("via \(server)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 if let reason = request.reason { Text(reason).font(.callout) }
                 HStack {
                     ForEach(request.options, id: \.optionId) { option in

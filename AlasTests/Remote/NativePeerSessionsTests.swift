@@ -55,13 +55,15 @@ struct NativePeerSessionsTests {
 
     @Test func permissionPresentationKeepsToolNameAlongsideTitle() {
         let request = RemotePermissionPayload(
-            requestId: 1, toolName: "bash", options: [], title: "Run command?"
+            requestId: 1, toolName: "bash", options: [], title: "Run command?",
+            mcpServerName: "build-tools"
         )
 
         let presentation = NativePeerPermissionPresentation(request: request)
 
         #expect(presentation.title == "Run command?")
         #expect(presentation.toolName == "bash")
+        #expect(presentation.mcpServerName == "build-tools")
     }
 
     @Test func startSelectionAndStopOwnOneDownstream() {

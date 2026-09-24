@@ -440,17 +440,17 @@ struct RootView: View {
             if case .commit(let s) = tab { return s.fixedSHA == commit.sha } else { return false }
         }
         if let existing {
-            state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+            state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: existing.id)
         } else {
             let title = "\(commit.shortSha) \(commit.subject)"
             let tab = state.tabs.appendCommit(worktreeId: worktree.id, sha: commit.sha, title: title)
-            state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+            state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
         }
     }
 
     private func openOrFocusCommitEditor(worktree: Worktree, commit: CommitInfo, baseRef: String) {
         if let existing = state.tabs.commitEditorTab(worktreeId: worktree.id, currentSha: commit.sha) {
-            state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+            state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: existing.id)
             return
         }
 
@@ -462,7 +462,7 @@ struct RootView: View {
             currentSha: commit.sha,
             title: title
         )
-        state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+        state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
     }
 
     static func commitReviewSessionTarget(worktree: Worktree, commit: CommitInfo) -> ReviewSessionTarget {
@@ -484,7 +484,8 @@ struct RootView: View {
             save: { try store.save($0) },
             open: { record in
                 commitReviewSessionLaunchError = nil
-                state.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
+                let tab = state.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
+                state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
             },
             onFailure: { error in
                 commitReviewSessionLaunchError = CommitReviewSessionLaunchError(
