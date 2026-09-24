@@ -145,11 +145,56 @@ final class NativePeerSessions {
 
     func respondToPlan(requestId: JSONRPCID, action: String, reason: String? = nil) {
         guard transcript?.pendingPlan?.requestId == requestId else { return }
-        routeDrive { .planResponse(sessionId: $0, requestId: requestId, action: action, reason: reason) }
+        let responseReason: String?
+        if action == "reject" {
+            let trimmed = (reason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            responseReason = trimmed
+        } else {
+            responseReason = reason
+        }
+        routeDrive { .planResponse(sessionId: $0, requestId: requestId, action: action, reason: responseReason) }
     }
 
     func respondToElicitation(requestId: String, action: String,
                                content: [String: ACPElicitationValue]? = nil) {
+        guard let pending = transcript?.pendingElicitation,
+              pending.requestId == requestId,
+              pending.mode != "url" || action != "accept"
+        else { return }
+        sendElicitationResponse(requestId: requestId, action: action, content: content)
+    }
+
+    func openElicitationURL(
+        requestId: String,
+        openURL: @MainActor (URL, @escaping @MainActor (Bool) -> Void) -> Void,
+        completion: @escaping @MainActor (Bool) -> Void
+    ) {
+        guard let pending = transcript?.pendingElicitation,
+              pending.requestId == requestId,
+              pending.mode == "url",
+              let rawURL = pending.url,
+              let url = URL(string: rawURL),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host != nil
+        else {
+            completion(false)
+            return
+        }
+
+        openURL(url) { [weak self] didOpen in
+            guard didOpen else {
+                completion(false)
+                return
+            }
+            self?.sendElicitationResponse(requestId: requestId, action: "accept", content: [:])
+            completion(true)
+        }
+    }
+
+    private func sendElicitationResponse(requestId: String, action: String,
+                                          content: [String: ACPElicitationValue]?) {
         guard transcript?.pendingElicitation?.requestId == requestId else { return }
         routeDrive { .elicitationResponse(sessionId: $0, requestId: requestId,
                                            action: action, content: content) }

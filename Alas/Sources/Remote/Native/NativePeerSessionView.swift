@@ -58,11 +58,18 @@ struct NativePeerMessagePresentation {
 /// Read and drive the selected peer through forwarded gateway frames only.
 struct NativePeerSessionView: View {
     @Bindable var client: NativePeerSessions
+    @Environment(\.openURL) private var openURL
     @State private var questionSelections: [String: Set<String>] = [:]
     @State private var elicitationValues: [String: String] = [:]
+    @State private var elicitationSelections: [String: Set<String>] = [:]
+    @State private var planRejectionReason = ""
+    @State private var elicitationOpenError = false
 
     private var online: Bool { client.selectedPeer?.state.carriesSessions == true }
     private var canDrive: Bool { online && client.transcript?.canDrive == true }
+    private var trimmedPlanRejectionReason: String {
+        planRejectionReason.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -192,9 +199,15 @@ struct NativePeerSessionView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(request.name).font(.headline)
                 Text(request.overview).font(.callout)
+                TextField("Reason for rejection", text: $planRejectionReason)
+                    .disabled(!canDrive)
                 HStack {
                     Button("Accept plan") { client.respondToPlan(requestId: request.requestId, action: "accept") }
-                    Button("Reject plan") { client.respondToPlan(requestId: request.requestId, action: "reject") }
+                    Button("Reject plan") {
+                        client.respondToPlan(requestId: request.requestId, action: "reject",
+                                             reason: trimmedPlanRejectionReason)
+                    }
+                    .disabled(!canDrive || trimmedPlanRejectionReason.isEmpty)
                 }
                 .disabled(!canDrive)
             }
@@ -202,33 +215,95 @@ struct NativePeerSessionView: View {
         }
         if let request = transcript.pendingElicitation {
             VStack(alignment: .leading, spacing: 8) {
-                Text(request.title ?? "Information requested").font(.headline)
+                Text(request.mode == "url" ? "Continue in browser" : request.title ?? "Information requested")
+                    .font(.headline)
                 Text(request.message).font(.callout)
-                ForEach(request.fields, id: \.key) { field in
-                    TextField(field.title, text: Binding(
-                        get: { elicitationValues[field.key] ?? "" },
-                        set: { elicitationValues[field.key] = $0 }
-                    ))
-                    .disabled(!canDrive)
-                }
-                HStack {
-                    Button("Submit") {
-                        let content = Dictionary(uniqueKeysWithValues: request.fields.compactMap { field -> (String, ACPElicitationValue)? in
-                            guard let value = elicitationValues[field.key], !value.isEmpty else { return nil }
-                            switch field.type {
-                            case "integer": return Int(value).map { (field.key, .integer($0)) }
-                            case "number": return Double(value).map { (field.key, .number($0)) }
-                            case "boolean": return (field.key, .boolean(value == "true"))
-                            default: return (field.key, .string(value))
+                if request.mode == "url" {
+                    Text(request.url ?? "URL unavailable.")
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                    if elicitationOpenError {
+                        Text("The browser could not open this URL.")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    HStack {
+                        Button("Decline") {
+                            client.respondToElicitation(requestId: request.requestId, action: "decline")
+                        }
+                        .disabled(!canDrive)
+                        Button("Cancel", role: .cancel) {
+                            client.respondToElicitation(requestId: request.requestId, action: "cancel")
+                        }
+                        .disabled(!canDrive)
+                        Spacer()
+                        Button("Open Browser") {
+                            elicitationOpenError = false
+                            client.openElicitationURL(requestId: request.requestId, openURL: { url, finish in
+                                openURL(url) { accepted in
+                                    Task { @MainActor in finish(accepted) }
+                                }
+                            }, completion: { didOpen in
+                                elicitationOpenError = !didOpen
+                            })
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!canDrive)
+                    }
+                } else {
+                    ForEach(request.fields, id: \.key) { field in
+                        if field.type == "array" {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(field.title).font(.callout.weight(.medium))
+                                if let description = field.description, !description.isEmpty {
+                                    Text(description).font(.caption).foregroundStyle(.secondary)
+                                }
+                                ForEach(field.options, id: \.value) { option in
+                                    let selected = elicitationSelections[field.key]?.contains(option.value) == true
+                                    Toggle(option.title ?? option.value, isOn: Binding(
+                                        get: { elicitationSelections[field.key]?.contains(option.value) == true },
+                                        set: { isSelected in
+                                            var selections = elicitationSelections[field.key] ?? []
+                                            if isSelected {
+                                                selections.insert(option.value)
+                                            } else {
+                                                selections.remove(option.value)
+                                            }
+                                            elicitationSelections[field.key] = selections
+                                        }
+                                    ))
+                                    .disabled(!canDrive || (!selected && field.maxItems.map {
+                                        (elicitationSelections[field.key]?.count ?? 0) >= $0
+                                    } == true))
+                                }
                             }
-                        })
-                        client.respondToElicitation(requestId: request.requestId, action: "accept", content: content)
+                        } else {
+                            TextField(field.title, text: Binding(
+                                get: { elicitationValues[field.key] ?? "" },
+                                set: { elicitationValues[field.key] = $0 }
+                            ))
+                            .disabled(!canDrive)
+                        }
                     }
-                    .disabled(!canDrive || request.fields.contains { $0.required && (elicitationValues[$0.key] ?? "").isEmpty })
-                    Button("Decline") {
-                        client.respondToElicitation(requestId: request.requestId, action: "decline")
+                    HStack {
+                        Button("Submit") {
+                            let content = NativePeerElicitationForm.submittedContent(
+                                fields: request.fields,
+                                values: elicitationValues,
+                                selectedOptions: elicitationSelections
+                            )
+                            client.respondToElicitation(requestId: request.requestId, action: "accept", content: content)
+                        }
+                        .disabled(!canDrive || !NativePeerElicitationForm.canSubmit(
+                            fields: request.fields,
+                            values: elicitationValues,
+                            selectedOptions: elicitationSelections
+                        ))
+                        Button("Decline") {
+                            client.respondToElicitation(requestId: request.requestId, action: "decline")
+                        }
+                        .disabled(!canDrive)
                     }
-                    .disabled(!canDrive)
                 }
             }
             .requestCard()
@@ -260,6 +335,56 @@ struct NativePeerSessionView: View {
             }
         }
         .padding(14)
+    }
+}
+
+enum NativePeerElicitationForm {
+    static func canSubmit(
+        fields: [RemoteElicitationField],
+        values: [String: String],
+        selectedOptions: [String: Set<String>]
+    ) -> Bool {
+        fields.allSatisfy { field in
+            guard field.type == "array" else {
+                return !field.required || !(values[field.key] ?? "").isEmpty
+            }
+
+            let selectedCount = selectedOptions[field.key]?.count ?? 0
+            let minimum = max(field.required ? 1 : 0, field.minItems ?? 0)
+            if selectedCount == 0 && !field.required { return true }
+            return selectedCount >= minimum && field.maxItems.map { selectedCount <= $0 } != false
+        }
+    }
+
+    static func submittedContent(
+        fields: [RemoteElicitationField],
+        values: [String: String],
+        selectedOptions: [String: Set<String>]
+    ) -> [String: ACPElicitationValue] {
+        var content: [String: ACPElicitationValue] = [:]
+        for field in fields {
+            if field.type == "array" {
+                let selected = selectedOptions[field.key] ?? []
+                let ordered = field.options.map(\.value).filter(selected.contains)
+                if !ordered.isEmpty || field.required {
+                    content[field.key] = .strings(ordered)
+                }
+                continue
+            }
+
+            guard let value = values[field.key], !value.isEmpty else { continue }
+            switch field.type {
+            case "integer":
+                if let integer = Int(value) { content[field.key] = .integer(integer) }
+            case "number":
+                if let number = Double(value) { content[field.key] = .number(number) }
+            case "boolean":
+                content[field.key] = .boolean(value == "true")
+            default:
+                content[field.key] = .string(value)
+            }
+        }
+        return content
     }
 }
 

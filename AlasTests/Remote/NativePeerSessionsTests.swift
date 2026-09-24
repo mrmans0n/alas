@@ -131,4 +131,104 @@ struct NativePeerSessionsTests {
         #expect(client.transcript?.canDrive == true)
         #expect(client.draft == "continue later")
     }
+
+    @Test func planRejectionRequiresAndTrimsReason() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
+                                          messages: [], firstIndex: 0, totalCount: 0, epoch: 1, revision: 0), from: "B")
+        links.receive(.planRequest(sessionId: "s", payload: .init(
+            requestId: .string("plan-1"), toolCallId: "tool-1", name: "Plan", overview: "",
+            plan: "", todos: [], isProject: false, phases: []
+        )), from: "B")
+
+        client.respondToPlan(requestId: .string("plan-1"), action: "reject", reason: "  \n ")
+        #expect(!links.sent(to: "B").contains {
+            if case .planResponse(_, .string("plan-1"), _, _) = $0 { return true }
+            return false
+        })
+
+        client.respondToPlan(requestId: .string("plan-1"), action: "reject", reason: "  Needs a clearer scope.  ")
+        #expect(links.sent(to: "B").contains(
+            .planResponse(sessionId: "s", requestId: .string("plan-1"),
+                          action: "reject", reason: "Needs a clearer scope.")
+        ))
+    }
+
+    @Test func urlElicitationCannotBeAcceptedBeforeOpeningBrowser() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
+                                          messages: [], firstIndex: 0, totalCount: 0, epoch: 1, revision: 0), from: "B")
+        links.receive(.elicitationRequest(sessionId: "s", payload: .init(
+            requestId: "url-request", title: nil, message: "Sign in", mode: "url", fields: [],
+            elicitationId: "oauth", url: "https://example.com/connect"
+        )), from: "B")
+
+        client.respondToElicitation(requestId: "url-request", action: "accept", content: [:])
+
+        #expect(!links.sent(to: "B").contains {
+            if case .elicitationResponse(_, "url-request", "accept", _) = $0 { return true }
+            return false
+        })
+
+        var requestedURL: URL?
+        var finishOpening: (@MainActor (Bool) -> Void)?
+        var didOpen = false
+        client.openElicitationURL(requestId: "url-request", openURL: { url, finish in
+            requestedURL = url
+            finishOpening = finish
+        }, completion: { didOpen = $0 })
+        #expect(requestedURL?.absoluteString == "https://example.com/connect")
+        finishOpening?(false)
+        #expect(!didOpen)
+        #expect(!links.sent(to: "B").contains {
+            if case .elicitationResponse(_, "url-request", "accept", _) = $0 { return true }
+            return false
+        })
+
+        client.openElicitationURL(requestId: "url-request", openURL: { url, finish in
+            requestedURL = url
+            finishOpening = finish
+        }, completion: { didOpen = $0 })
+        finishOpening?(true)
+        #expect(didOpen)
+        #expect(links.sent(to: "B").contains(
+            .elicitationResponse(sessionId: "s", requestId: "url-request", action: "accept", content: [:])
+        ))
+    }
+
+    @Test func arrayElicitationSubmitsSelectedOptionsAsStringArray() {
+        let field = RemoteElicitationField(
+            key: "scopes", type: "array", title: "Scopes", description: nil, required: true,
+            minLength: nil, maxLength: nil, minimum: nil, maximum: nil, minItems: 1, maxItems: nil,
+            format: nil, pattern: nil,
+            options: [
+                .init(value: "read", title: "Read", description: nil),
+                .init(value: "write", title: "Write", description: nil),
+                .init(value: "admin", title: "Admin", description: nil),
+            ],
+            defaultValue: nil
+        )
+
+        let content = NativePeerElicitationForm.submittedContent(
+            fields: [field], values: [:], selectedOptions: ["scopes": ["write", "read"]]
+        )
+
+        #expect(content == ["scopes": .strings(["read", "write"])])
+    }
 }
