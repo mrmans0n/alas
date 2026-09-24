@@ -2188,10 +2188,10 @@ extension ACPSessionRunner {
     }
 
     /// Persist the current queue snapshot. Called after every mutation:
-    /// enqueue, edit, remove, reorder, head-status flip. Failures are
-    /// swallowed — the same pattern as transcript persistence; surfacing
-    /// would block the UI for a transient SQLite error and we'd rather
-    /// lose a queue snapshot than the user's draft.
+    /// enqueue, edit, remove, reorder, head-status flip. Fire-and-forget
+    /// snapshots swallow write failures, matching transcript persistence.
+    /// Callers that gate an external side effect pass a completion and must
+    /// honor its result before proceeding.
     func persistQueue(
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil,
         completion: (@MainActor (_ persisted: Bool) -> Void)? = nil
@@ -2336,22 +2336,45 @@ extension ACPSessionRunner {
         scheduledQueueWakeTask?.cancel()
         scheduledQueueWakeTask = nil
         let brokerGeneration = (connection.client as? ACPBrokerClient)?.currentBrokerGeneration
-        let brokerOperationKey = session.markQueueHeadSending(brokerGeneration: brokerGeneration)
-        persistQueue()
-        sendNow(
-            blocks: head.blocks,
-            queuedItemId: head.id,
-            delegatedSource: head.delegatedSource,
-            brokerOperationKey: brokerOperationKey,
-            // The raw optional, not `restorableDraft`: that heuristically
-            // fabricates a draft from `blocks` when none was captured, and
-            // `blocks` has already flattened every image to the end of the
-            // text — annotating from it would invent a wrong end-of-message
-            // offset instead of leaving `textOffset` nil as documented on
-            // `ACPMessage.Attachment.textOffset`.
-            draft: head.draft,
-            onDispatchRegistered: queuedPromptDispatchRegistration(for: head.id)
-        )
+        guard let brokerOperationKey = session.markQueueHeadSending(brokerGeneration: brokerGeneration) else {
+            return
+        }
+        persistQueue(completion: { [weak self] persisted in
+            guard let self else { return }
+            guard persisted else {
+                guard self.isConnectionCurrent(),
+                      !self.stopped,
+                      self.session.queue.first?.id == head.id,
+                      self.session.queue.first?.status == .sending
+                else { return }
+                self.session.setQueueHeadError(
+                    "Could not save queued message; it was not sent.",
+                    clearDispatchProvenance: true
+                )
+                self.persistQueue()
+                self.onPromptWorkChanged?()
+                return
+            }
+            guard self.isConnectionCurrent(),
+                  !self.stopped,
+                  self.session.queue.first?.id == head.id,
+                  self.session.queue.first?.status == .sending
+            else { return }
+            self.sendNow(
+                blocks: head.blocks,
+                queuedItemId: head.id,
+                delegatedSource: head.delegatedSource,
+                brokerOperationKey: brokerOperationKey,
+                // The raw optional, not `restorableDraft`: that heuristically
+                // fabricates a draft from `blocks` when none was captured, and
+                // `blocks` has already flattened every image to the end of the
+                // text — annotating from it would invent a wrong end-of-message
+                // offset instead of leaving `textOffset` nil as documented on
+                // `ACPMessage.Attachment.textOffset`.
+                draft: head.draft,
+                onDispatchRegistered: self.queuedPromptDispatchRegistration(for: head.id)
+            )
+        })
     }
     private func queuedPromptDispatchRegistration(for itemId: UUID) -> (@Sendable () -> Void)? {
         onQueuedPromptDispatchRegistration?(itemId)

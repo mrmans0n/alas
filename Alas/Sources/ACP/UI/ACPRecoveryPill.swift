@@ -120,9 +120,12 @@ struct ACPConnectionRecoveryPresentation {
 
     private static func queueDetail(count: Int, uncertainCount: Int) -> String? {
         var details: [String] = []
-        if count > 0 {
-            let noun = count == 1 ? "message" : "messages"
-            details.append("\(count) \(noun) queued; \(count == 1 ? "it" : "they") will send after reconnection.")
+        let sendAfterReconnectCount = max(0, count - uncertainCount)
+        if sendAfterReconnectCount > 0 {
+            let noun = sendAfterReconnectCount == 1 ? "message" : "messages"
+            details.append(
+                "\(sendAfterReconnectCount) \(noun) queued; \(sendAfterReconnectCount == 1 ? "it" : "they") will send after reconnection."
+            )
         }
         if uncertainCount > 0 {
             let noun = uncertainCount == 1 ? "message" : "messages"

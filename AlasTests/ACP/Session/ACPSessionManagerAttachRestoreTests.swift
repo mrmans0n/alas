@@ -61,6 +61,36 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadLease(sessionId: session.id)?.token == replacementLease?.token)
     }
 
+    @Test("attaching an already-ready session preserves its live update callback")
+    func attachingReadySessionPreservesLiveUpdateCallback() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-ready")
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "claude")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+        let liveRunner = try #require(manager.runners[session.id])
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+        #expect(manager.runners[session.id] === liveRunner)
+
+        client.emit(.init(
+            sessionId: "remote-ready",
+            update: .agentMessageChunk(.text("still connected"))
+        ))
+        try await waitUntil { session.transcript.messages.count == 1 }
+
+        if let message = session.transcript.messages.first,
+           case .agent(_, _, let text) = message {
+            #expect(text.value == "still connected")
+        } else {
+            Issue.record("Expected the existing runner's live update to reach the transcript")
+        }
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("a stalled broker startup falls back to an isolated service")
     func stalledBrokerStartupFallsBackToIsolatedService() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -282,6 +312,11 @@ struct ACPSessionManagerAttachRestoreTests {
         await restart.value
         await manager.flushAllPersistence()
 
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            let promptSends = await isolatedService.sent.filter { $0.method == "session/prompt" }
+            return session.queue.map(\.id) == [possiblySent.id, pendingFromOldBroker.id]
+                && promptSends.count == 1
+        }
         #expect(session.queue.map(\.id) == [possiblySent.id, pendingFromOldBroker.id])
         #expect(session.queue.allSatisfy { $0.lastError?.localizedCaseInsensitiveContains("delivery is uncertain") == true })
         let promptSends = await isolatedService.sent.filter { $0.method == "session/prompt" }

@@ -265,6 +265,7 @@ struct ACPConnectionRecoveryPolicyTests {
 
         #expect(presentation.actionTitle == nil)
         #expect(presentation.detail.localizedCaseInsensitiveContains("restarting the connection"))
+        #expect(!presentation.detail.localizedCaseInsensitiveContains("will send after reconnection"))
         #expect(presentation.detail.localizedCaseInsensitiveContains("delivery is uncertain"))
         #expect(presentation.detail.localizedCaseInsensitiveContains("retry it explicitly"))
     }

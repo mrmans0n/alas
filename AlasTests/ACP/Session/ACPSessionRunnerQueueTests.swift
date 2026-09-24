@@ -19,6 +19,27 @@ private final class DispatchRegistrationFlag: @unchecked Sendable {
     }
 }
 
+private final class ConnectionCurrentFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Bool
+
+    init(_ value: Bool) {
+        self.value = value
+    }
+
+    var isCurrent: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func set(_ value: Bool) {
+        lock.lock()
+        self.value = value
+        lock.unlock()
+    }
+}
+
 @MainActor
 @Suite("ACPSessionRunner queue routing")
 struct ACPSessionRunnerQueueTests {
@@ -374,6 +395,82 @@ struct ACPSessionRunnerQueueTests {
 
         #expect(session.queue.isEmpty)
         #expect(mock.sent.contains { $0.method == "session/prompt" })
+    }
+
+    @Test("queue head is not sent when dispatch provenance cannot be persisted")
+    func queueHeadIsNotSentWhenProvenancePersistenceFails() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-q-provenance-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let mock = ACPMockClient()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.enqueue(blocks: [.text("must stay unsent")])
+        let originalQueue = session.queue
+        try store.upsertQueue(sessionId: "s", items: originalQueue)
+        let missingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-q-missing-\(UUID())", isDirectory: true)
+        let failingPersistence = ACPSessionPersistence(
+            path: missingDirectory.appendingPathComponent("queue.sqlite").path
+        )
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            persistence: failingPersistence
+        )
+
+        runner.flushQueueIfIdle()
+        await runner.flushPersistence()
+
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+        #expect(session.queue.first?.status == .pending)
+        #expect(session.queue.first?.lastError?.localizedCaseInsensitiveContains("not sent") == true)
+        #expect(try store.loadQueue(sessionId: "s") == originalQueue)
+    }
+
+    @Test("stale queue persistence failure does not mutate a replacement queue head")
+    func staleQueuePersistenceFailureDoesNotMutateReplacementHead() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-q-stale-failure-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.enqueue(blocks: [.text("old queue head")])
+        let current = ConnectionCurrentFlag(true)
+        let missingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-q-stale-missing-\(UUID())", isDirectory: true)
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            isConnectionCurrent: { current.isCurrent },
+            persistence: ACPSessionPersistence(path: missingDirectory.appendingPathComponent("queue.sqlite").path)
+        )
+
+        runner.flushQueueIfIdle()
+        current.set(false)
+        runner.stop()
+        session.queue.removeAll()
+        let replacementId = UUID()
+        session.enqueue(id: replacementId, blocks: [.text("replacement queue head")])
+        await runner.flushPersistence()
+
+        #expect(session.queue.first?.id == replacementId)
+        #expect(session.queue.first?.status == .pending)
+        #expect(session.queue.first?.lastError == nil)
     }
 
     @Test("force send parked by queue persistence is retained")
@@ -1001,7 +1098,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.contains { $0.method == "session/prompt" })
     }
 
-    @Test("queue survives runner restart: persist + restart + drain")
+    @Test("uncertain queue head survives restart until explicitly retried")
     func persistenceRoundTrip() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-rt-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -1021,7 +1118,8 @@ struct ACPSessionRunnerQueueTests {
         runner1.send(blocks: [.text("beta")], intent: .auto)
         try await Task.sleep(nanoseconds: 100_000_000)
         // Simulate the "in-flight head when app quit" case by flipping
-        // the head to .sending and persisting.
+        // the head to .sending and persisting. On restore its delivery is
+        // uncertain, so it must not be silently sent again.
         session1.markQueueHeadSending()
         runner1.persistQueue()
         await runner1.flushPersistence()
@@ -1039,11 +1137,17 @@ struct ACPSessionRunnerQueueTests {
         #expect(session2.queue.count == 2)
         // .sending was normalized to .pending on restore.
         #expect(session2.queue[0].status == .pending)
+        #expect(session2.queue[0].deliveryUncertain)
         let runner2 = ACPSessionRunner(
             session: session2, connection: ACPConnection(client: mock2), store: store,
             sessionId: "rt", worktreePath: FileManager.default.temporaryDirectory.path)
         runner2.flushQueueIfIdle()
-        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(mock2.sent.isEmpty)
+
+        runner2.forceSendQueuedItem(id: session2.queue[0].id)
+        for _ in 0 ..< 100 where !session2.queue.isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         #expect(session2.queue.isEmpty)
         let prompts = mock2.sent.filter { $0.method == "session/prompt" }
         #expect(prompts.count == 2)

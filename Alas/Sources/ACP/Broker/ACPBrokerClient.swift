@@ -60,6 +60,11 @@ struct ACPBrokerReplayedOperationCompletion {
 }
 
 final class ACPBrokerClient: ACPClient, @unchecked Sendable {
+    private enum TerminationRequest {
+        case detach
+        case close
+    }
+
     let providesDurableOperationKeyDeduplication = true
 
     private let service: ACPBrokerServicing
@@ -131,6 +136,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     private var dispatchedEventCursors: Set<ACPBrokerEventCursor> = []
     private var turnState: ACPBrokerTurnState = .idle
     private var isTerminated = false
+    private var terminationRequest: TerminationRequest?
     private var backgroundPollingTask: Task<Void, Never>?
     private let backgroundPollActiveIntervalNanoseconds: UInt64
     private let backgroundPollIdleIntervalNanoseconds: UInt64
@@ -312,7 +318,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
             env: env
         )
         var opened = try await service.open(openParams)
-        guard !isConnectionTerminated() else { throw CancellationError() }
+        try await checkTermination(afterOpening: opened)
         if opened.adopted, opened.snapshot.cursorTodosByToolCallId == nil {
             // Best-effort, like the close in shutdown() below: closing a
             // legacy broker so it can be replaced is inherently racy against
@@ -331,10 +337,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
                 brokerId: brokerId,
                 generation: opened.snapshot.metadata.generation
             ))
-            guard !isConnectionTerminated() else { throw CancellationError() }
+            try await checkTermination(afterOpening: opened)
             resetAcknowledgedCursor()
             opened = try await service.open(openParams)
-            guard !isConnectionTerminated() else { throw CancellationError() }
+            try await checkTermination(afterOpening: opened)
             if opened.adopted, opened.snapshot.cursorTodosByToolCallId == nil {
                 // The close above may never have reached the broker at all,
                 // leaving it alive and unchanged — the reopen just adopted
@@ -351,7 +357,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
            initialBrokerGeneration != opened.snapshot.metadata.generation {
             resetAcknowledgedCursor()
         }
-        guard setSnapshot(opened.snapshot) else { throw CancellationError() }
+        guard setSnapshot(opened.snapshot) else {
+            await cleanUpLateOpen(generation: opened.snapshot.metadata.generation)
+            throw CancellationError()
+        }
         _ = try await attachAndReplay()
         startBackgroundPolling()
         return opened
@@ -539,7 +548,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         // guard (see there) already makes any such in-flight response safe
         // to ignore whenever it eventually resolves, so there's nothing to
         // gain from waiting for it — only cancel and move on.
-        markTerminated()
+        markTerminated(request: .close)
         cancelBackgroundPolling()
         if let generation = try? currentGeneration() {
             _ = try? await service.close(ACPBrokerCloseParams(brokerId: brokerId, generation: generation))
@@ -548,7 +557,7 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     }
 
     func detach() async {
-        markTerminated()
+        markTerminated(request: .detach)
         cancelBackgroundPolling()
         if let generation = try? currentGeneration() {
             _ = try? await service.detach(ACPBrokerDetachParams(brokerId: brokerId, generation: generation))
@@ -567,11 +576,36 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
     /// fresh poller for the already-dead connection, since the exit
     /// handler's own `cancelBackgroundPolling()` call has nothing to cancel
     /// yet at that point. Idempotent — safe to call more than once.
-    private func markTerminated() {
+    private func markTerminated(request: TerminationRequest? = nil) {
         stateLock.lock()
         isTerminated = true
+        if request == .close || terminationRequest == nil {
+            terminationRequest = request
+        }
         pendingDurableStates.removeAll()
         stateLock.unlock()
+    }
+
+    private func checkTermination(afterOpening opened: ACPBrokerOpenResult) async throws {
+        guard isConnectionTerminated() else { return }
+        await cleanUpLateOpen(generation: opened.snapshot.metadata.generation)
+        throw CancellationError()
+    }
+
+    private func cleanUpLateOpen(generation: ACPBrokerGeneration) async {
+        let request = currentTerminationRequest()
+        switch request {
+        case .close:
+            _ = try? await service.close(ACPBrokerCloseParams(brokerId: brokerId, generation: generation))
+        case .detach, nil:
+            _ = try? await service.detach(ACPBrokerDetachParams(brokerId: brokerId, generation: generation))
+        }
+    }
+
+    private func currentTerminationRequest() -> TerminationRequest? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return terminationRequest
     }
 
     private func finishStreams() {

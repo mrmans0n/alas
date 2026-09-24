@@ -72,6 +72,7 @@ struct ACPBrokerClientTests {
             // Expected: no late snapshot or callback may revive a detached client.
         }
 
+        #expect(await service.detached.map(\.generation) == [ACPBrokerGeneration(rawValue: 7)])
         #expect(durableStates.records().isEmpty)
         #expect(turnStates.records().isEmpty)
     }
@@ -2160,6 +2161,7 @@ private actor BrokerTestGate {
 private actor GatedOpenBrokerService: ACPBrokerServicing {
     let openGate = BrokerTestGate()
     let base = MockBrokerService()
+    private(set) var detached: [ACPBrokerDetachParams] = []
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
         await openGate.wait()
@@ -2187,7 +2189,8 @@ private actor GatedOpenBrokerService: ACPBrokerServicing {
     }
 
     func detach(_ params: ACPBrokerDetachParams) async throws -> ACPBrokerSimpleOK {
-        try await base.detach(params)
+        detached.append(params)
+        return try await base.detach(params)
     }
 
     func close(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {

@@ -4259,6 +4259,11 @@ extension ACPSessionManager {
             await attach(to: sessionId, freshlyCreated: freshlyCreated)
             return
         }
+        if let session = sessions[sessionId],
+           case .ready = session.agentState,
+           runners[sessionId] != nil {
+            return
+        }
         let attempt = AttachmentAttempt()
         attachmentAttempts[sessionId] = attempt
         connectionOwnerIDs[sessionId] = attempt.id
