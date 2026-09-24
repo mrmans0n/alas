@@ -464,6 +464,77 @@ struct ACPSessionRunnerQueueTests {
         #expect(try store.loadQueue(sessionId: "s") == originalQueue)
     }
 
+    @Test("a superseded queue persistence write does not claim broker dispatch")
+    func supersededQueuePersistenceDoesNotClaimBrokerDispatch() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-q-superseded-dispatch-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let mock = ACPMockClient()
+        mock.brokerGenerationForTesting = ACPBrokerGeneration(rawValue: 7)
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.enqueue(blocks: [.text("not sent")])
+        try store.upsertQueue(sessionId: "s", items: session.queue)
+        let current = ConnectionCurrentFlag(true)
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            isConnectionCurrent: { current.isCurrent }
+        )
+
+        try store.db.exec("BEGIN IMMEDIATE")
+        runner.flushQueueIfIdle()
+        #expect(session.queue.first?.status == .sending)
+        #expect(session.queue.first?.dispatchedBrokerGeneration == nil)
+
+        current.set(false)
+        runner.stop()
+        try store.db.exec("ROLLBACK")
+        await runner.flushPersistence()
+
+        let persisted = try store.loadQueue(sessionId: "s")
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+        #expect(persisted.first?.dispatchedBrokerGeneration == nil)
+        session.restoreQueue(persisted)
+        #expect(!session.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8)))
+        #expect(session.queue.first?.deliveryUncertain == false)
+    }
+
+    @Test("queue dispatch provenance is durable before broker handoff")
+    func queueDispatchProvenanceIsPersistedBeforeHandoff() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        let generation = ACPBrokerGeneration(rawValue: 7)
+        mock.brokerGenerationForTesting = generation
+        let requestStarted = QueueTestGate()
+        let responseRelease = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await requestStarted.open()
+            await responseRelease.wait()
+            return Data("null".utf8)
+        }
+        session.enqueue(blocks: [.text("queued")])
+
+        runner.flushQueueIfIdle()
+        await requestStarted.wait()
+
+        #expect(session.queue.first?.dispatchedBrokerGeneration == generation)
+        #expect(try store.loadQueue(sessionId: "s").first?.dispatchedBrokerGeneration == generation)
+
+        await responseRelease.open()
+        for _ in 0 ..< 100 where !session.queue.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await runner.flushPersistence()
+        #expect(session.queue.isEmpty)
+    }
+
     @Test("stale queue persistence failure does not mutate a replacement queue head")
     func staleQueuePersistenceFailureDoesNotMutateReplacementHead() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-q-stale-failure-\(UUID()).sqlite")

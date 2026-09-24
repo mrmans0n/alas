@@ -242,6 +242,34 @@ struct ACPBrokerClientTests {
         ]))
     }
 
+    @Test func sendWaitsForDispatchProvenanceBeforeBrokerHandoff() async throws {
+        let service = MockBrokerService()
+        await service.enqueueAttach(events: [])
+        let client = makeClient(service: service)
+        try await client.start()
+
+        let provenanceWrite = BrokerTestGate()
+        let sendTask = Task {
+            try await client.send(
+                ACPRequest(method: "session/prompt", params: ACPSessionPromptParams(
+                    sessionId: "remote-1", prompt: [.text("queued")]
+                )),
+                beforeRequestHandoff: { generation in
+                    #expect(generation == ACPBrokerGeneration(rawValue: 7))
+                    await provenanceWrite.wait()
+                },
+                onRequestHandoff: {}
+            )
+        }
+
+        try await waitUntil { await provenanceWrite.hasEntered }
+        #expect(await service.sent.isEmpty)
+        await provenanceWrite.release()
+        _ = try await sendTask.value
+
+        #expect(await service.sent.count == 1)
+    }
+
     @Test func sendUsesExplicitBrokerOperationKeyWhenProvided() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])

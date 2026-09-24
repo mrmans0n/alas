@@ -59,7 +59,7 @@ struct ACPBrokerReplayedOperationCompletion {
     }
 }
 
-final class ACPBrokerClient: ACPClient, @unchecked Sendable {
+final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Sendable {
     private enum TerminationRequest {
         case detach
         case close
@@ -374,7 +374,20 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         _ request: ACPRequest,
         onRequestHandoff: @Sendable () -> Void
     ) async throws -> ACPResponse {
+        try await send(
+            request,
+            beforeRequestHandoff: { _ in },
+            onRequestHandoff: onRequestHandoff
+        )
+    }
+
+    func send(
+        _ request: ACPRequest,
+        beforeRequestHandoff: @Sendable (ACPBrokerGeneration?) async throws -> Void,
+        onRequestHandoff: @Sendable () -> Void
+    ) async throws -> ACPResponse {
         if let replayed = cachedResponse(for: request.method) {
+            try await beforeRequestHandoff(currentBrokerGeneration)
             onRequestHandoff()
             return ACPResponse(body: try replayed.data)
         }
@@ -418,6 +431,10 @@ final class ACPBrokerClient: ACPClient, @unchecked Sendable {
         beginAwaitingOperationCompletion(operationKey)
         defer {
             endAwaitingOperationCompletion(operationKey)
+        }
+        try await beforeRequestHandoff(generation)
+        guard !isConnectionTerminated(), currentBrokerGeneration == generation else {
+            throw CancellationError()
         }
         onRequestHandoff()
         while true {

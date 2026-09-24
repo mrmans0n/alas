@@ -2336,12 +2336,26 @@ final class ACPSession: ObservableObject, Identifiable {
     /// it spawns the prompt RPC. Clears any previous `lastError` so a
     /// retried item displays cleanly while in-flight.
     @discardableResult
-    func markQueueHeadSending(brokerGeneration: ACPBrokerGeneration? = nil) -> String? {
+    func markQueueHeadSending() -> String? {
         guard !queue.isEmpty, queue[0].status == .pending else { return nil }
         queue[0].status = .sending
         queue[0].lastError = nil
-        queue[0].dispatchedBrokerGeneration = brokerGeneration
+        queue[0].dispatchedBrokerGeneration = nil
         return queue[0].brokerOperationKey
+    }
+
+    /// Record broker provenance only after the queued prompt's request is
+    /// ready to cross the transport boundary.
+    @discardableResult
+    func markQueueHeadDispatched(
+        id: UUID,
+        brokerGeneration: ACPBrokerGeneration
+    ) -> Bool {
+        guard let index = queue.firstIndex(where: { $0.id == id }),
+              queue[index].status == .sending
+        else { return false }
+        queue[index].dispatchedBrokerGeneration = brokerGeneration
+        return true
     }
 
     /// Pop the head only if it's currently `.sending`. Returns it. Used by

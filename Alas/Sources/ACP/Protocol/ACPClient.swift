@@ -125,6 +125,16 @@ protocol ACPClient: AnyObject {
     func shutdown() async
 }
 
+/// Clients with a durable broker boundary can pause a request immediately
+/// before transport handoff so queue dispatch provenance is persisted first.
+protocol ACPRequestHandoffPreparing: ACPClient {
+    func send(
+        _ request: ACPRequest,
+        beforeRequestHandoff: @Sendable (ACPBrokerGeneration?) async throws -> Void,
+        onRequestHandoff: @Sendable () -> Void
+    ) async throws -> ACPResponse
+}
+
 extension ACPClient {
     var providesDurableOperationKeyDeduplication: Bool { false }
 

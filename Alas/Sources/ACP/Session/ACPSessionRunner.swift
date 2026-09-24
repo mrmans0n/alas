@@ -8,6 +8,12 @@ typealias ACPRemoteFileWriteForTesting = @MainActor (
 ) async throws -> ACPFileWriter.Result
 #endif
 
+private struct QueueDispatchProvenancePersistenceError: LocalizedError {
+    var errorDescription: String? {
+        "Could not save queued message dispatch state."
+    }
+}
+
 @MainActor
 final class ACPSessionRunner {
     let session: ACPSession
@@ -2423,8 +2429,7 @@ extension ACPSessionRunner {
         }
         scheduledQueueWakeTask?.cancel()
         scheduledQueueWakeTask = nil
-        let brokerGeneration = (connection.client as? ACPBrokerClient)?.currentBrokerGeneration
-        guard let brokerOperationKey = session.markQueueHeadSending(brokerGeneration: brokerGeneration) else {
+        guard let brokerOperationKey = session.markQueueHeadSending() else {
             return
         }
         persistQueue(completion: { [weak self] persisted in
@@ -2460,12 +2465,67 @@ extension ACPSessionRunner {
                 // offset instead of leaving `textOffset` nil as documented on
                 // `ACPMessage.Attachment.textOffset`.
                 draft: head.draft,
-                onDispatchRegistered: self.queuedPromptDispatchRegistration(for: head.id)
+                onDispatchRegistered: self.queuedPromptDispatchRegistration(for: head.id),
+                beforeRequestHandoff: self.queuedPromptRequestHandoff(for: head.id)
             )
         })
     }
+
     private func queuedPromptDispatchRegistration(for itemId: UUID) -> (@Sendable () -> Void)? {
         onQueuedPromptDispatchRegistration?(itemId)
+    }
+
+    private func queuedPromptRequestHandoff(
+        for itemId: UUID
+    ) -> (@Sendable (ACPBrokerGeneration?) async throws -> Void)? {
+        guard connection.client is ACPRequestHandoffPreparing else { return nil }
+        return { [weak self] brokerGeneration in
+            guard let brokerGeneration else { return }
+            guard let self else { throw CancellationError() }
+            try await self.persistQueueDispatchProvenance(
+                itemId: itemId,
+                brokerGeneration: brokerGeneration
+            )
+        }
+    }
+
+    private func persistQueueDispatchProvenance(
+        itemId: UUID,
+        brokerGeneration: ACPBrokerGeneration
+    ) async throws {
+        guard !stopped, isConnectionCurrent(),
+              session.queue.contains(where: { $0.id == itemId && $0.status == .sending }),
+              session.markQueueHeadDispatched(id: itemId, brokerGeneration: brokerGeneration)
+        else { throw CancellationError() }
+
+        let persisted = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            persistQueue(completion: { didPersist in
+                continuation.resume(returning: didPersist)
+            })
+        }
+        guard persisted else {
+            clearQueueDispatchProvenance(itemId: itemId, brokerGeneration: brokerGeneration)
+            throw QueueDispatchProvenancePersistenceError()
+        }
+        guard !stopped, isConnectionCurrent(),
+              session.queue.contains(where: {
+                  $0.id == itemId && $0.status == .sending && $0.dispatchedBrokerGeneration == brokerGeneration
+              })
+        else {
+            clearQueueDispatchProvenance(itemId: itemId, brokerGeneration: brokerGeneration)
+            persistQueue()
+            throw CancellationError()
+        }
+    }
+
+    private func clearQueueDispatchProvenance(
+        itemId: UUID,
+        brokerGeneration: ACPBrokerGeneration
+    ) {
+        guard let index = session.queue.firstIndex(where: {
+            $0.id == itemId && $0.status == .sending && $0.dispatchedBrokerGeneration == brokerGeneration
+        }) else { return }
+        session.queue[index].dispatchedBrokerGeneration = nil
     }
 
     private func scheduleQueueWake(at date: Date) {
@@ -2704,6 +2764,7 @@ extension ACPSessionRunner {
         recordUserPrompt: Bool = true,
         draft: ACPComposerDraft? = nil,
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
+        beforeRequestHandoff: (@Sendable (ACPBrokerGeneration?) async throws -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         flushPendingIncomingUpdates()
@@ -2719,7 +2780,8 @@ extension ACPSessionRunner {
         // detach-clears-cleanly fix from the previous commit.
         activePromptID = promptID
         let connectionIsCurrent = isConnectionCurrent
-        latestPromptTask = Task { [weak self, onDispatchRegistered, onPromptFinished, connectionIsCurrent] in
+        latestPromptTask = Task {
+            [weak self, onDispatchRegistered, beforeRequestHandoff, onPromptFinished, connectionIsCurrent] in
             guard let self else {
                 await MainActor.run {
                     onDispatchRegistered?()
@@ -2876,7 +2938,8 @@ extension ACPSessionRunner {
                     blocks: wireBlocks,
                     brokerOperationKey: brokerOperationKey,
                     acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil,
-                    onRequestHandoff: onDispatchRegistered
+                    onRequestHandoff: onDispatchRegistered,
+                    beforeRequestHandoff: beforeRequestHandoff
                 )
                 let promptAcknowledgement = promptOutcome.acknowledgement
                 await MainActor.run {

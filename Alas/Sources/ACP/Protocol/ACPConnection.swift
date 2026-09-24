@@ -283,7 +283,8 @@ final class ACPConnection: @unchecked Sendable {
         blocks: [ACPContentBlock],
         brokerOperationKey: String? = nil,
         acknowledgeDurableConsumption: Bool = true,
-        onRequestHandoff: (@Sendable () -> Void)? = nil
+        onRequestHandoff: (@Sendable () -> Void)? = nil,
+        beforeRequestHandoff: (@Sendable (ACPBrokerGeneration?) async throws -> Void)? = nil
     ) async throws -> ACPPromptOutcome {
         let request = ACPRequest(
             method: "session/prompt",
@@ -291,16 +292,23 @@ final class ACPConnection: @unchecked Sendable {
             brokerOperationKey: brokerOperationKey
         )
         let resp: ACPResponse
-        if let onRequestHandoff {
-            let handoff = ACPRequestHandoff(onRequestHandoff)
-            do {
+        let handoff = onRequestHandoff.map(ACPRequestHandoff.init)
+        do {
+            if let beforeRequestHandoff,
+               let preparingClient = client as? ACPRequestHandoffPreparing {
+                resp = try await preparingClient.send(
+                    request,
+                    beforeRequestHandoff: beforeRequestHandoff,
+                    onRequestHandoff: { handoff?.fire() }
+                )
+            } else if let handoff {
                 resp = try await client.send(request, onRequestHandoff: { handoff.fire() })
-            } catch {
-                handoff.fire()
-                throw error
+            } else {
+                resp = try await client.send(request)
             }
-        } else {
-            resp = try await client.send(request)
+        } catch {
+            handoff?.fire()
+            throw error
         }
         let quota = (try? JSONDecoder().decode(ACPSessionPromptResult.self, from: resp.body))?.quota
         if acknowledgeDurableConsumption {

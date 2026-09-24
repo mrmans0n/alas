@@ -1,7 +1,8 @@
 import Foundation
 
-final class ACPMockClient: ACPClient, @unchecked Sendable {
+final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendable {
     var advertisesTerminalCapability = true
+    var brokerGenerationForTesting: ACPBrokerGeneration?
     let providesDurableOperationKeyDeduplication: Bool
 
     private(set) var sent: [ACPRequest] = []
@@ -96,6 +97,15 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
             throw ACPClientError.noScript(method: request.method)
         }
         return ACPResponse(body: try script(request))
+    }
+
+    func send(
+        _ request: ACPRequest,
+        beforeRequestHandoff: @Sendable (ACPBrokerGeneration?) async throws -> Void,
+        onRequestHandoff: @Sendable () -> Void
+    ) async throws -> ACPResponse {
+        try await beforeRequestHandoff(brokerGenerationForTesting)
+        return try await send(request, onRequestHandoff: onRequestHandoff)
     }
 
     /// Mock notifications just record the call. Tests can inspect
