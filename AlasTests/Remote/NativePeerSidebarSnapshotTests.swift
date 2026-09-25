@@ -119,9 +119,9 @@ struct NativePeerSidebarSnapshotTests {
         // into two. Input is in the recency order `build` always receives
         // (most recent session first), so the rename's newer label wins.
         let sessions = [
-            worktreeRow("s3", project: "renamed-alas", worktreeId: "w1", projectId: "proj-a", updatedAt: 30),
-            worktreeRow("s1", project: "alas", worktreeId: "w1", projectId: "proj-a", updatedAt: 20),
-            worktreeRow("s2", project: "alas", worktreeId: "w1", projectId: "proj-b", updatedAt: 10)
+            worktreeRow("s3", project: "renamed-alas", worktreeId: "w1", updatedAt: 30, projectId: "proj-a"),
+            worktreeRow("s1", project: "alas", worktreeId: "w1", updatedAt: 20, projectId: "proj-a"),
+            worktreeRow("s2", project: "alas", worktreeId: "w1", updatedAt: 10, projectId: "proj-b")
         ]
 
         let repos = NativePeerRepoGroup.build(sessions: sessions)
