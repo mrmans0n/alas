@@ -120,6 +120,155 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.detach(sessionId: session.id)
     }
 
+    @Test("a superseded recovery restart cannot exhaust its current replacement")
+    func supersededRecoveryRestartDoesNotExhaustReplacement() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let initialClient = ACPMockClient()
+        let staleClient = ACPMockClient()
+        let currentClient = ACPMockClient()
+        let staleInitializeGate = AttachPhaseGate()
+        let currentInitializeGate = AttachPhaseGate()
+        scriptInitialize(initialClient)
+        scriptSessionResult(initialClient, method: "session/new", sessionId: "remote-initial")
+        staleClient.scriptAsync(method: "initialize") { _ in
+            await staleInitializeGate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(staleClient, method: "session/new", sessionId: "remote-stale")
+        currentClient.scriptAsync(method: "initialize") { _ in
+            await currentInitializeGate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(currentClient, method: "session/new", sessionId: "remote-current")
+        var launchCount = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                launchCount += 1
+                if launchCount == 1 { return ACPConnection(client: initialClient) }
+                if launchCount == 2 { return ACPConnection(client: staleClient) }
+                return ACPConnection(client: currentClient)
+            }
+        )
+        let session = manager.createSession(agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        #expect(session.agentState == .ready)
+        #expect(session.beginConnectionRecovery())
+        defer {
+            Task { await staleInitializeGate.release() }
+            Task { await currentInitializeGate.release() }
+        }
+
+        let staleRestart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await staleInitializeGate.hasEntered
+        }
+        let currentRestart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await currentInitializeGate.hasEntered && session.agentState == .spawning
+        }
+
+        await staleInitializeGate.release()
+        await staleRestart.value
+
+        #expect(session.agentState == .spawning)
+        #expect(session.connectionRecoveryState == .reconnecting(attempt: nil, maxAttempts: nil))
+
+        await currentInitializeGate.release()
+        await currentRestart.value
+
+        #expect(session.agentState == .ready)
+        #expect(session.connectionRecoveryState == nil)
+        #expect(launchCount == 3)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("a superseded automatic reattach cannot exhaust its replacement's recovery")
+    func supersededRecoveryReattachDoesNotExhaustReplacement() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let initialClient = ACPMockClient()
+        let staleClient = ACPMockClient()
+        let currentClient = ACPMockClient()
+        let staleInitializeGate = AttachPhaseGate()
+        let currentInitializeGate = AttachPhaseGate()
+        scriptInitialize(initialClient)
+        scriptSessionResult(initialClient, method: "session/new", sessionId: "remote-initial")
+        staleClient.scriptAsync(method: "initialize") { _ in
+            await staleInitializeGate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(staleClient, method: "session/new", sessionId: "remote-stale")
+        currentClient.scriptAsync(method: "initialize") { _ in
+            await currentInitializeGate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(currentClient, method: "session/new", sessionId: "remote-current")
+        var launchCount = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                launchCount += 1
+                if launchCount == 1 { return ACPConnection(client: initialClient) }
+                if launchCount == 2 { return ACPConnection(client: staleClient) }
+                return ACPConnection(client: currentClient)
+            }
+        )
+        let session = manager.createSession(agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        #expect(session.agentState == .ready)
+        #expect(session.beginConnectionRecovery())
+        session.agentState = .disconnected
+        defer {
+            Task { await staleInitializeGate.release() }
+            Task { await currentInitializeGate.release() }
+        }
+
+        let staleReattach = Task { await manager.reattach(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await staleInitializeGate.hasEntered
+        }
+        let currentRestart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await currentInitializeGate.hasEntered && session.agentState == .spawning
+        }
+
+        await staleInitializeGate.release()
+        await staleReattach.value
+
+        #expect(session.agentState == .spawning)
+        #expect(session.connectionRecoveryState == .reconnecting(attempt: nil, maxAttempts: nil))
+
+        await currentInitializeGate.release()
+        await currentRestart.value
+
+        #expect(session.agentState == .ready)
+        #expect(session.connectionRecoveryState == nil)
+        #expect(launchCount == 3)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("closing a suspended setup attempt clears its attachment marker")
     func closingSuspendedSetupAttemptClearsAttachmentMarker() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -564,6 +713,282 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(manager.runners[session.id] === replacementRunner)
         #expect(session.remoteSessionId == "remote-broker")
         #expect(try store.loadLease(sessionId: session.id)?.token == replacementLease?.token)
+    }
+
+    @Test("a late retiring detach timeout retries the attach in a fresh broker namespace")
+    func lateRetiringDetachTimeoutRetriesAttachInFreshBrokerNamespace() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerServiceProxy(stallDetach: true)
+        let isolatedService = ManagerBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .seconds(10),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "late-detach-fresh-namespace", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+        let originalRunner = try #require(manager.runners[session.id])
+        let originalLease = try store.loadLease(sessionId: session.id)
+        let originalBrokerId = try await #require(sharedService.opened.first?.brokerId)
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        defer {
+            Task {
+                // The retirement detach's cancelled operation task still
+                // waits on the gate; release it so the actor winds down.
+                await sharedService.detachGate.release()
+            }
+        }
+
+        // The replacement initializes on the shared broker namespace while
+        // the retiring connection's detach is still stalled.
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.detachGate.hasEntered
+                && session.agentState != .ready
+                && manager.runners[session.id] == nil
+        }
+        #expect(await sharedService.detached.count == 1)
+
+        // The detach times out without the gate ever being released — the
+        // retry must not wait on the wedged broker. The attach abandons that
+        // connection and re-runs in an isolated namespace.
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            let isolatedOpenCount = await isolatedService.opened.count
+            return session.agentState == .ready && isolatedOpenCount == 1
+        }
+        let isolatedBrokerId = try await #require(isolatedService.opened.first?.brokerId)
+        #expect(isolatedBrokerId.rawValue.hasPrefix("fallback-"))
+        #expect(isolatedBrokerId != originalBrokerId)
+
+        let retriedRunner = try #require(manager.runners[session.id])
+        #expect(retriedRunner !== originalRunner)
+        let retriedLease = try store.loadLease(sessionId: session.id)
+        #expect(retriedLease != nil)
+        #expect(retriedLease?.token != originalLease?.token)
+
+        // The abandoned replacement unwinds: its broker connection is closed.
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.closed.count >= 1
+        }
+        #expect(session.agentState == .ready)
+        await restart.value
+
+        #expect(session.agentState == .ready)
+        #expect(manager.runners[session.id] === retriedRunner)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("a failed attach whose retiring detach times out keeps the fresh-namespace requirement")
+    func failedAttachKeepsFreshNamespaceRequirementForNextAttach() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerServiceProxy(
+            stallDetach: true,
+            failSendMethod: "initialize",
+            failSendAfterOpenCount: 2
+        )
+        let isolatedService = ManagerBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .seconds(10),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "failed-attach-fresh-namespace", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+        let originalRunner = try #require(manager.runners[session.id])
+        let originalBrokerId = try await #require(sharedService.opened.first?.brokerId)
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        defer {
+            Task {
+                // The cleanup detach's cancelled operation task still waits
+                // on the gate; release it so the actor winds down.
+                await sharedService.detachGate.release()
+            }
+        }
+
+        // The replacement's broker opens on the shared namespace, but its
+        // `initialize` fails (the proxy throws after two opens). The attach
+        // fails, and its cleanup then detaches the retiring connection —
+        // which stalls and times out while the attempt is deregistered.
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.detachGate.hasEntered
+                && manager.runners[session.id] == nil
+                && {
+                    if case .failed = session.agentState { return true }
+                    return false
+                }()
+        }
+        #expect(await sharedService.detached.count == 1)
+
+        // Give the stalled detach's bounded wait time to time out so the
+        // pending requirement is recorded before the retry attach starts.
+        try await Task.sleep(for: .milliseconds(150))
+
+        // The restart flow's release evicted the failed session; recreate it
+        // from the store like a reopening tab would.
+        let reopenedSession = try #require(manager.placeholderSession(id: session.id))
+        await manager.hydrateIfNeeded(id: reopenedSession.id)
+
+        // The next attach must not reuse the wedged namespace: the pending
+        // requirement left behind by the deregistered attempt routes it
+        // through the isolated service.
+        let retriedAttach = Task { await manager.attach(to: reopenedSession.id, freshlyCreated: false) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            let isolatedOpenCount = await isolatedService.opened.count
+            return reopenedSession.agentState == .ready && isolatedOpenCount == 1
+        }
+        let isolatedBrokerId = try await #require(isolatedService.opened.first?.brokerId)
+        #expect(isolatedBrokerId.rawValue.hasPrefix("fallback-"))
+        #expect(isolatedBrokerId != originalBrokerId)
+        let retriedRunner = try #require(manager.runners[reopenedSession.id])
+        #expect(retriedRunner !== originalRunner)
+
+        await sharedService.detachGate.release()
+        await restart.value
+
+        #expect(reopenedSession.agentState == .ready)
+        #expect(manager.runners[reopenedSession.id] === retriedRunner)
+        await manager.detach(sessionId: reopenedSession.id)
+    }
+
+    @Test("disposing during a stalled retirement detach still claims the retiring broker")
+    func disposalDuringStalledRetirementDetachClaimsRetiringBroker() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerServiceProxy(stallDetach: true)
+        let isolatedService = ManagerBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .seconds(10),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "disposal-stalled-retire", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.detachGate.hasEntered
+                && session.agentState != .ready
+                && manager.runners[session.id] == nil
+        }
+
+        // The retirement detach is suspended with the retiring connection
+        // still tracked. A disposal landing in that window must find and
+        // claim it instead of leaving it unowned.
+        let disposal = Task { try await manager.disposeSession(id: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.closed.count >= 1
+        }
+
+        await sharedService.detachGate.release()
+        await restart.value
+        try await disposal.value
+
+        #expect(manager.liveSession(for: session.id) == nil)
+        #expect(await sharedService.detached.count == 1)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("restart detaches the retiring broker without closing it before replacement initialization")
+    func restartRetainsRetiringBrokerUntilReplacementInitialization() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let service = ManagerBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { service },
+            isolatedBrokerServiceFactory: { ManagerBrokerService() },
+            attachmentStartupTimeout: .milliseconds(50),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "restart-retiring-broker", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        #expect(session.agentState == .ready)
+
+        await manager.restartConnection(to: session.id)
+
+        #expect(session.agentState == .ready)
+        #expect(await service.closed.isEmpty)
+        #expect(await service.detached.count == 1)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("restart retains a registered runner's broker while attach restoration is in flight")
+    func restartRetainsRegisteredRunnerBrokerDuringAttachRestoration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let retiringService = ManagerBrokerService()
+        let replacementService = ManagerBrokerServiceProxy(stallSendMethod: "initialize")
+        let registrationGate = ManagerBrokerGate()
+        var serviceFactoryCalls = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: {
+                serviceFactoryCalls += 1
+                if serviceFactoryCalls == 1 { return retiringService }
+                return replacementService
+            },
+            isolatedBrokerServiceFactory: { ManagerBrokerService() },
+            attachmentStartupTimeout: .seconds(10),
+            restartTeardownTimeout: .seconds(1)
+        )
+        let session = manager.createSession(id: "restart-registered-runner", agentId: "claude")
+        var registrationCount = 0
+        manager.afterRunnerRegistrationForTesting = { _ in
+            registrationCount += 1
+            guard registrationCount == 1 else { return }
+            await registrationGate.wait()
+        }
+        defer {
+            Task {
+                await registrationGate.release()
+                await replacementService.sendGate.release()
+            }
+        }
+
+        let initialAttach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await registrationGate.hasEntered && manager.runners[session.id] != nil
+        }
+        #expect(session.agentState == .spawning)
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await replacementService.sendGate.hasEntered
+        }
+
+        #expect(await retiringService.closed.isEmpty)
+
+        await registrationGate.release()
+        await replacementService.sendGate.release()
+        await initialAttach.value
+        await restart.value
+
+        #expect(session.agentState == .ready)
+        #expect(await retiringService.closed.isEmpty)
+        #expect(await retiringService.detached.count == 1)
+        await manager.detach(sessionId: session.id)
     }
 
     @Test("disposing during restart does not strand a reopened session attachment")
@@ -6016,6 +6441,8 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
     private let stallDetach: Bool
     private let stallClose: Bool
     private let stallSendMethod: String?
+    private let failSendMethod: String?
+    private let failSendAfterOpenCount: Int
     private var hasStalledSend = false
     private(set) var completedOpenCount = 0
     private(set) var opened: [ACPBrokerOpenParams] = []
@@ -6026,12 +6453,16 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
         stallOpen: Bool = false,
         stallDetach: Bool = false,
         stallClose: Bool = false,
-        stallSendMethod: String? = nil
+        stallSendMethod: String? = nil,
+        failSendMethod: String? = nil,
+        failSendAfterOpenCount: Int = .max
     ) {
         self.stallOpen = stallOpen
         self.stallDetach = stallDetach
         self.stallClose = stallClose
         self.stallSendMethod = stallSendMethod
+        self.failSendMethod = failSendMethod
+        self.failSendAfterOpenCount = failSendAfterOpenCount
     }
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
@@ -6050,6 +6481,13 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
         if !hasStalledSend, params.method == stallSendMethod {
             hasStalledSend = true
             await sendGate.wait()
+        }
+        if params.method == failSendMethod, opened.count >= failSendAfterOpenCount {
+            throw JSONRPCError(
+                code: -32000,
+                message: "initialize rejected after reopen",
+                data: nil
+            )
         }
         return try await base.send(params)
     }

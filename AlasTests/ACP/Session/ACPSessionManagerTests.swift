@@ -523,10 +523,45 @@ struct ACPSessionManagerTests {
         #expect(session.queue[0].status == .pending)
     }
 
-    @Test("attach normalizes an in-flight scheduled row before flushing")
-    func attachNormalizesSendingScheduleBeforeFlush() async throws {
+    @Test("attach keeps a legacy sending schedule uncertain until explicit retry")
+    func attachKeepsLegacySendingScheduleUncertainUntilRetry() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("mgr-attach-sending-schedule-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.enqueueScheduled(blocks: [.text("queued")], scheduledAt: Date().addingTimeInterval(-1))
+        session.markQueueHeadSending()
+        let itemID = try #require(session.queue.first?.id)
+
+        await mgr.attach(to: session.id, freshlyCreated: true)
+        #expect(session.queue.first?.status == .pending)
+        #expect(session.queue.first?.deliveryUncertain == true)
+        #expect(!client.sent.contains { $0.method == "session/prompt" })
+
+        await mgr.queueRetry(for: session.id, itemId: itemID)
+        for _ in 0 ..< 20 where !session.queue.isEmpty {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(session.queue.isEmpty)
+        #expect(client.sent.filter { $0.method == "session/prompt" }.count == 1)
+    }
+
+    @Test("attach replays a provenance-carrying sending row")
+    func attachReplaysProvenanceCarryingSendingRow() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-attach-provenance-send-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         let client = ACPMockClient()
         scriptInitialize(client)

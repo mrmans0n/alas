@@ -104,7 +104,9 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
 
     mutating func markDeliveryUncertain() {
         deliveryUncertain = true
-        lastError = Self.deliveryUncertaintyMessage
+        if lastError == nil {
+            lastError = Self.deliveryUncertaintyMessage
+        }
     }
 
     func isReady(at date: Date = Date()) -> Bool {
