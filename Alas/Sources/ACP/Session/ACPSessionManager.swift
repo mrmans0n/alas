@@ -5451,7 +5451,21 @@ extension ACPSessionManager {
                 result = started.result
                 createdFreshRemoteSession = started.createdFreshRemoteSession
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                    // Teardown fenced this attempt out while the remote
+                    // session was created (dispose closes the session and
+                    // drops the attempt). When the close path is not already
+                    // tracking this creation (`shouldCloseRemoteResultOnCompletion`),
+                    // the agent still created the remote session, so this
+                    // late result is the only handle on it — close it here;
+                    // no later guard will run.
                     if !attempt.shouldCloseRemoteResultOnCompletion {
+                        if disposingAttachments.contains(sessionId) || isDisposed {
+                            try? await closeRemoteSession(
+                                id: result.sessionId,
+                                using: connection,
+                                sessionCapabilities: initialized.sessionCapabilities
+                            )
+                        }
                         await connection.shutdown()
                     }
                     return
@@ -5472,7 +5486,17 @@ extension ACPSessionManager {
                     )
                 }
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                    // Same late-result ownership as the fork guard above:
+                    // the tracked remote-close path closes (and only then
+                    // shuts down) through the disposal machinery.
                     if !attempt.shouldCloseRemoteResultOnCompletion {
+                        if disposingAttachments.contains(sessionId) || isDisposed {
+                            try? await closeRemoteSession(
+                                id: result.sessionId,
+                                using: connection,
+                                sessionCapabilities: initialized.sessionCapabilities
+                            )
+                        }
                         await connection.shutdown()
                     }
                     return

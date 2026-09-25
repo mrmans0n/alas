@@ -52,14 +52,40 @@ struct QueuedPromptTests {
         #expect(prompt.isReady(at: Date(timeIntervalSince1970: 101)))
     }
 
-    @Test("normalizeAfterRestore flips .sending to .pending and clears lastError untouched")
+    @Test("normalizeAfterRestore flips .sending to .pending; legacy sends become delivery-uncertain")
     func normalize() {
         let q = QueuedPrompt(id: UUID(), blocks: [.text("x")],
                              enqueuedAt: .init(), status: .sending, lastError: "boom")
         let n = q.normalizedAfterRestore()
         #expect(n.status == .pending)
-        #expect(n.lastError == "boom") // Existing, specific error survives normalization.
+        // A legacy mid-send row without dispatch provenance may have reached
+        // the agent, so it is marked uncertain — while an existing, specific
+        // error survives normalization.
         #expect(n.deliveryUncertain)
+        #expect(n.lastError == "boom")
+
+        // A legacy row with no prior error takes the uncertainty notice.
+        let errored = QueuedPrompt(id: UUID(), blocks: [.text("x")],
+                                   enqueuedAt: .init(), status: .sending, lastError: nil)
+        let notified = errored.normalizedAfterRestore()
+        #expect(notified.status == .pending)
+        #expect(notified.deliveryUncertain)
+        #expect(notified.lastError == QueuedPrompt.deliveryUncertaintyMessage)
+
+        // Explicit provenance (or an opt-out) keeps the caller's lastError.
+        let provenanced = QueuedPrompt(id: UUID(), blocks: [.text("x")],
+                                       enqueuedAt: .init(), status: .sending, lastError: "boom")
+        var withGeneration = provenanced
+        withGeneration.dispatchedBrokerGeneration = ACPBrokerGeneration(rawValue: 1)
+        let kept = withGeneration.normalizedAfterRestore()
+        #expect(kept.status == .pending)
+        #expect(!kept.deliveryUncertain)
+        #expect(kept.lastError == "boom")
+
+        let optedOut = provenanced.normalizedAfterRestore(markLegacySendingUncertain: false)
+        #expect(optedOut.status == .pending)
+        #expect(!optedOut.deliveryUncertain)
+        #expect(optedOut.lastError == "boom")
     }
 
     @Test("encodes status as raw string")
