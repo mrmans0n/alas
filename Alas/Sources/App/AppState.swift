@@ -238,6 +238,10 @@ final class AppState {
     @ObservationIgnored var scheduledPromptSettlementTasks: [String: Task<ScheduledPromptSettlement, Never>] = [:]
     @ObservationIgnored var scheduledAgentReportsRecoveryTask: Task<Void, Never>?
     var scheduledAgentReportRoute: ScheduledAgentReportRoute?
+    /// Bumped whenever a scheduled agent report is deleted (by this instance)
+    /// so history views holding cached report summaries can invalidate their
+    /// links. Cross-instance deletions are picked up by reconciliation.
+    var scheduledAgentReportDeletionGeneration = 0
     /// Decides when scheduled runs start. Execution is delegated back here so
     /// a scheduled run is a manual run with a different trigger.
     let runScheduler: RunScheduler

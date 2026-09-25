@@ -521,9 +521,13 @@ private struct ScheduleCard: View {
 
     private var reportHistoryToken: String {
         guard isShowingHistory else { return "" }
-        return Array(Set(state.runScheduler.firings(for: schedule.id).flatMap(\.reportIDs)))
+        let reportIDs = Array(Set(state.runScheduler.firings(for: schedule.id).flatMap(\.reportIDs)))
             .sorted()
             .joined(separator: "|")
+        // A deletion keeps the firing history's IDs identical, so the token
+        // needs the deletion generation to re-run `loadReportSummaries` and
+        // flip the affected links to their unavailable rendering.
+        return "\(reportIDs)|gen=\(state.scheduledAgentReportDeletionGeneration)"
     }
 
     private func loadReportSummaries() async {

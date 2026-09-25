@@ -116,6 +116,31 @@ final class ZmxClient: Sendable {
         listSessionsIfAvailable() ?? []
     }
 
+    /// Parses full `zmx ls` key-value rows. Throws when zmx is unavailable or
+    /// enumeration fails: callers that must prove a session stopped (e.g.
+    /// scheduled worktree cleanup) cannot treat "could not enumerate" as
+    /// "nothing to kill".
+    func listSessionInfosThrowing() throws -> [ZmxSessionInfo] {
+        guard env.isAvailable, let binary = env.binaryURL else {
+            throw SessionEnumerationError.unavailable
+        }
+        let result = runner.run(binary, ["ls"], zmxEnv(), 5.0)
+        guard result.exitCode == 0 else {
+            if let code = result.exitCode {
+                logger.warning("zmx ls exited \(code, privacy: .public): \(result.stderr, privacy: .public)")
+            } else {
+                logger.warning("zmx ls timed out")
+            }
+            throw SessionEnumerationError.failed
+        }
+        return Self.parseSessionInfos(result.stdout)
+    }
+
+    enum SessionEnumerationError: Error {
+        case unavailable
+        case failed
+    }
+
     /// Parse full `zmx ls` key-value rows. Used for legacy session migration,
     /// where `start_dir` lets us avoid attaching an old unscoped session from
     /// a different worktree.

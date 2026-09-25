@@ -644,9 +644,15 @@ final class TerminalService {
     func terminateSessionsAndWait(_ sessions: [TerminalSessionIdentity], timeout: TimeInterval) async throws {
         let (localNames, remoteNamesByHost) = Self.partitionedSessionNames(for: sessions)
         let client = zmxClient
-        let localExistingNames = await Task.detached {
-            Set(client.listSessionInfos().map(\.name))
-        }.value
+        // Enumeration failure here is not "nothing to kill": a scheduled
+        // cleanup that cannot prove a session stopped must fail closed so
+        // the worktree is retained rather than removed underneath a shell
+        // whose kill was skipped.
+        let localExistingNames = Set(
+            try await Task.detached {
+                try client.listSessionInfosThrowing().map(\.name)
+            }.value
+        )
         for name in localNames where localExistingNames.contains(name) {
             let killed = await Task.detached { client.killSessionResult(name: name) }.value
             guard killed else { throw SessionTerminationError.failed(name) }

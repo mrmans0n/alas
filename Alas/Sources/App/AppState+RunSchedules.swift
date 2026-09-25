@@ -642,7 +642,11 @@ extension AppState {
         else {
             return false
         }
-        return try await store.delete(id: id)
+        let deleted = try await store.delete(id: id)
+        if deleted {
+            scheduledAgentReportDeletionGeneration += 1
+        }
+        return deleted
     }
 
     func worktreeForScheduledAgentReport(_ report: ScheduledAgentReport) -> Worktree? {

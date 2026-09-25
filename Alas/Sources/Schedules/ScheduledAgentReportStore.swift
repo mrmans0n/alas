@@ -454,6 +454,17 @@ actor ScheduledAgentReportStore {
               timestamp <= Date().timeIntervalSince1970 + 1 else {
             return false
         }
+        // Mirror the ACP lease path: a PID that is alive but whose start-time
+        // inspection fails is still treated as an owner. Treating the
+        // inspection failure as "process gone" would let a second instance
+        // mark a live owner's running report interrupted and then reject its
+        // completion.
+        if ACPProcessLiveness.pidCouldOwnLease(
+            pid,
+            lastHeartbeatAt: Date(timeIntervalSince1970: timestamp)
+        ) {
+            return true
+        }
         return ACPProcessLiveness.pidMatchesLease(
             pid: pid,
             createdAt: Date(timeIntervalSince1970: timestamp)
