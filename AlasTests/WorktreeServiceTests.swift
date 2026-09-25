@@ -941,7 +941,7 @@ extension WorktreeServiceTests {
         ))
     }
 
-    @Test func worktreeDeleteContentFingerprintTracksSubmoduleRemoteRefChanges() async throws {
+    @Test func worktreeDeleteContentFingerprintTracksSubmoduleRefChanges() async throws {
         let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-remote-ref-fingerprint")
         defer { fixture.removeFiles() }
         let submodulePath = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
@@ -969,6 +969,15 @@ extension WorktreeServiceTests {
         )
 
         #expect(after != before)
+        let customRef = try await Process.git(
+            ["update-ref", "refs/archive/cleanup-authorization", "HEAD"],
+            cwd: submodulePath
+        )
+        try #require(customRef.exitCode == 0)
+        let withCustomRef = try await WorktreeService.worktreeDeleteContentFingerprint(
+            worktreePath: fixture.worktree.path
+        )
+        #expect(withCustomRef != after)
     }
     @Test func worktreeDeleteContentFingerprintTracksSuperprojectRemoteRefChanges() async throws {
         let repo = try await makeRepo()
