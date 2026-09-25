@@ -670,7 +670,14 @@ struct ACPBrokerClientTests {
 
         try await client.start()
 
-        try await waitUntil { await service.responded.count >= 3 }
+        // A raw count is a weak proxy for readiness here: it can be
+        // satisfied without every expected id present. Wait for the
+        // specific three instead of just their tally.
+        let expectedIds: [ACPBrokerJSONValue] = [.string("todo-1"), .string("task-1"), .string("image-1")]
+        try await waitUntil {
+            let ids = await service.responded.map(\.requestId)
+            return expectedIds.allSatisfy { ids.contains($0) }
+        }
         let responses = await service.responded
         let todo = try #require(responses.first { $0.requestId == .string("todo-1") })
         #expect(todo.result == .object([
