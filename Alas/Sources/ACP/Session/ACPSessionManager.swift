@@ -219,6 +219,11 @@ final class ACPSessionManager: ObservableObject {
     private let onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)?
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
     private let onQueueChanged: ((ACPSession.ID, Bool) -> Void)?
+    /// Consulted immediately before a writer lease is claimed. Returns
+    /// `false` when scheduled worktree cleanup holds the deletion lock — the
+    /// attach must not become a writer for a worktree that is about to be
+    /// renamed away.
+    private let writerAdmissionProbe: (@Sendable () async -> Bool)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
@@ -1540,6 +1545,7 @@ final class ACPSessionManager: ObservableObject {
          onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)? = nil,
          onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
          onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
+         writerAdmissionProbe: (@Sendable () async -> Bool)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          delegatedMessageNotifier: ACPChangeNotifier? = nil,
@@ -1581,6 +1587,7 @@ final class ACPSessionManager: ObservableObject {
         self.onPlanAwaiting = onPlanAwaiting
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
         self.onQueueChanged = onQueueChanged
+        self.writerAdmissionProbe = writerAdmissionProbe
         self.onCheckpointCapture = onCheckpointCapture
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
@@ -3825,6 +3832,12 @@ extension ACPSessionManager {
     @discardableResult
     func acquireWriterLease(sessionId: ACPSession.ID) async -> Bool {
         await flushPersistence()
+        // Scheduled cleanup holds the deletion lock across its final lease
+        // checks and the staging rename; claiming a writer lease now would
+        // register a writer for a worktree that is about to be renamed away.
+        if let writerAdmissionProbe, !(await writerAdmissionProbe()) {
+            return false
+        }
         let now = Int64(Date().timeIntervalSince1970)
         let requestedToken = ownedLeaseTokens[sessionId] ?? UUID().uuidString
         do {

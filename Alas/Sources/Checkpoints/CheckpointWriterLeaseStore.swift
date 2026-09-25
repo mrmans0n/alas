@@ -27,9 +27,11 @@ struct CheckpointWriterLeaseStore: Sendable {
         self.activePersistentSessionNames = activePersistentSessionNames
     }
 
-    /// Acquires a writer lease. Returns `false` when admission was refused
-    /// because a scheduled cleanup holds the deletion lock — the caller must
-    /// treat that as a failed launch, not a silently unwritten lease.
+    /// Acquires a writer lease. Returns `false` when admission must be
+    /// refused — either a scheduled cleanup holds the deletion lock, or the
+    /// lease could not be persisted (unwritable cache, full disk). Both mean
+    /// cleanup would observe zero writers; the caller treats this as a
+    /// failed launch.
     @discardableResult
     func acquire(
         lineageIDs: Set<String>,
@@ -66,11 +68,25 @@ struct CheckpointWriterLeaseStore: Sendable {
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(record) else { return true }
+        guard let data = try? encoder.encode(record) else { return false }
         for lineageID in validIDs {
             let directory = root.appendingPathComponent(lineageID, isDirectory: true)
-            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try? data.write(to: leaseURL(lineageID: lineageID, sessionID: sessionID, instanceID: instanceID), options: [.atomic])
+            let leaseFile = leaseURL(lineageID: lineageID, sessionID: sessionID, instanceID: instanceID)
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try data.write(to: leaseFile, options: [.atomic])
+            } catch {
+                // An unwritten lease is indistinguishable from no writer:
+                // scheduled cleanup would count zero and remove the
+                // worktree underneath this session. Roll back this lineage
+                // and any earlier ones, then refuse admission.
+                for writtenID in [lineageID] + validIDs.prefix(while: { $0 != lineageID }) {
+                    try? FileManager.default.removeItem(
+                        at: leaseURL(lineageID: writtenID, sessionID: sessionID, instanceID: instanceID)
+                    )
+                }
+                return false
+            }
         }
         return true
     }

@@ -12095,6 +12095,15 @@ final class AppState {
                     retainActivePrompt: retainActivePrompt
                 )
             },
+            writerAdmissionProbe: { [weak self] in
+                guard let self else { return true }
+                return await MainActor.run {
+                    guard let lineageID = self.worktree(withId: worktree.id)?.lineageID else {
+                        return true
+                    }
+                    return self.checkpointWriterLeases.admissionIsAllowed(lineageIDs: [lineageID])
+                }
+            },
             onCheckpointCapture: { [weak self] prompt, hasAttachments in
                 guard let self, let target = self.checkpointTarget(for: worktree) else { return nil }
                 do {
