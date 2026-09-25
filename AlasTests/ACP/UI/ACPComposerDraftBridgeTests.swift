@@ -1601,6 +1601,28 @@ struct ACPComposerDraftBridgeTests {
         #expect((storage.string as NSString).substring(with: textView.selectedRange()) == "some")
     }
 
+    @Test("late chipification preserves the surviving tail of an overlapping selection")
+    func lateChipificationPreservesOverlappingSelectionTail() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions = []
+        textView.insertText("/init some text", replacementRange: textView.selectedRange())
+        // Select the whole message: starts inside the command, extends
+        // into the body.
+        textView.setSelectedRange(NSRange(location: 0, length: 15))
+
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        // The command itself was consumed by the chip; only the body
+        // survives, anchored right after the chip instead of collapsing
+        // to a caret.
+        #expect(textView.selectedRange() == NSRange(location: 1, length: 10))
+        #expect((storage.string as NSString).substring(with: textView.selectedRange()) == " some text")
+    }
+
     @Test("the slash picker stays open for `$`-prefixed skills")
     func slashPickerAcceptsDollarSkills() {
         let (textView, coordinator, window) = makeGhostHintTextView()

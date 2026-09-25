@@ -1022,16 +1022,25 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // typing — or has a selection — past the command
         // (`/init some text I'm still writing`), and forcing their caret
         // or wiping their selection there would yank it out from under
-        // them mid-sentence. A selection entirely past the replaced range
-        // just shifts by the length delta, preserving both its position
-        // AND its length; one still inside (or before) it — the
+        // them mid-sentence. The part of the selection at or after the end
+        // of the replaced range survives the edit (shifted by the length
+        // delta); the part inside it doesn't, since that's the command
+        // text the chip just replaced. A selection that starts inside the
+        // command and extends into the body (or spans the whole thing)
+        // keeps only its surviving tail, anchored at the end of the chip;
+        // one that never reaches past the command at all — the
         // typed-completion path above, where the caret IS the end of the
-        // range — has nowhere sensible to go but a zero-length caret at
-        // the end of the chip.
+        // range — has nothing to preserve and collapses to a caret there.
         let delta = replacement.length - range.length
+        let selectionEnd = NSMaxRange(selectionBefore)
+        let rangeEnd = NSMaxRange(range)
         let newSelection: NSRange
-        if selectionBefore.location >= NSMaxRange(range) {
-            newSelection = NSRange(location: selectionBefore.location + delta, length: selectionBefore.length)
+        if selectionEnd > rangeEnd {
+            let newStart = selectionBefore.location >= rangeEnd
+                ? selectionBefore.location + delta
+                : NSMaxRange(replacedRange)
+            let newEnd = selectionEnd + delta
+            newSelection = NSRange(location: newStart, length: newEnd - newStart)
         } else {
             newSelection = NSRange(location: NSMaxRange(replacedRange), length: 0)
         }
