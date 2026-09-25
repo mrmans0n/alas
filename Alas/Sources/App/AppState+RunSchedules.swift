@@ -1755,6 +1755,7 @@ extension AppState {
             force: false,
             removedIndex: removedIndex,
             promptsForForce: false,
+            authorizedDeleteContentFingerprint: finalFingerprint,
             authorizedWorktreeLineageID: registration.worktreeLineageID,
             authorizedDirtyTabsAtConfirmation: [:],
             authorizedSessionIDs: authorizedSessionIDs

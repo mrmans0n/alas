@@ -11,6 +11,8 @@ enum ScheduledPromptSettlement: Equatable, Sendable {
 
 private struct ScheduledPromptSnapshot: Sendable {
     let targetSending: Bool
+    let dispatchDate: Date?
+    let targetRemovedBeforeDispatch: Bool
     let hasUnrelatedQueuedPrompt: Bool
     let targetPresent: Bool
     let targetError: String?
@@ -37,12 +39,37 @@ private enum ScheduledPromptSignal: Sendable {
 private final class ScheduledPromptQueueObservation: @unchecked Sendable {
     private let lock = NSLock()
     private var observedUnrelatedPrompt = false
+    private var observedTarget = false
+    private var targetDispatchDate: Date?
+    private var targetRemovedBeforeDispatch = false
 
-    func observe(_ queue: [QueuedPrompt], excluding promptID: UUID) {
-        guard queue.contains(where: { $0.id != promptID }) else { return }
+    func observe(_ queue: [QueuedPrompt], promptID: UUID) {
+        let target = queue.first { $0.id == promptID }
         lock.lock()
-        observedUnrelatedPrompt = true
-        lock.unlock()
+        defer { lock.unlock() }
+        if let target {
+            observedTarget = true
+            if target.status == .sending, targetDispatchDate == nil {
+                targetDispatchDate = Date()
+            }
+        } else if observedTarget, targetDispatchDate == nil {
+            targetRemovedBeforeDispatch = true
+        }
+        if queue.contains(where: { $0.id != promptID }) {
+            observedUnrelatedPrompt = true
+        }
+    }
+
+    var dispatchDate: Date? {
+        lock.lock()
+        defer { lock.unlock() }
+        return targetDispatchDate
+    }
+
+    var wasTargetRemovedBeforeDispatch: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return targetRemovedBeforeDispatch
     }
 
     var hasObservedUnrelatedPrompt: Bool {
@@ -420,7 +447,7 @@ final class ACPSessionManager: ObservableObject {
 
         let queueObservation = ScheduledPromptQueueObservation()
         let queueChanges = session.$queue
-            .handleEvents(receiveOutput: { queueObservation.observe($0, excluding: promptID) })
+            .handleEvents(receiveOutput: { queueObservation.observe($0, promptID: promptID) })
             .map { _ in () }
             .eraseToAnyPublisher()
         let publishers: [AnyPublisher<Void, Never>] = [
@@ -462,6 +489,8 @@ final class ACPSessionManager: ObservableObject {
             }
             return ScheduledPromptSnapshot(
                 targetSending: target?.status == .sending,
+                dispatchDate: queueObservation.dispatchDate,
+                targetRemovedBeforeDispatch: queueObservation.wasTargetRemovedBeforeDispatch,
                 hasUnrelatedQueuedPrompt: queueObservation.hasObservedUnrelatedPrompt,
                 targetPresent: target != nil,
                 targetError: target?.lastError,
@@ -514,14 +543,18 @@ final class ACPSessionManager: ObservableObject {
                     if snapshot.builtInMCPUnavailable {
                         return .failed("The ACP agent did not register the built-in Alas MCP server.")
                     }
-                    if snapshot.targetSending, dispatchedAt == nil {
-                        let dispatchDate = Date()
+                    let dispatchDate = snapshot.dispatchDate
+                        ?? (snapshot.targetSending ? Date() : nil)
+                    if dispatchedAt == nil, let dispatchDate {
                         dispatchedAt = dispatchDate
                         timeoutTask = Task { @MainActor in
                             await deadlineWaiter(timeout)
                             guard !Task.isCancelled else { return }
                             continuation.yield(.timedOut)
                         }
+                    }
+                    if dispatchedAt == nil, snapshot.targetRemovedBeforeDispatch {
+                        return .failed("The scheduled ACP prompt was removed before dispatch.")
                     }
                     if let dispatchedAt,
                        !snapshot.targetPresent,
