@@ -299,6 +299,64 @@ struct NextPromptCoordinatorTests {
         #expect(snapshot.turns == [.init(user: "Explain this", assistant: "Here is the answer.")])
     }
 
+    @Test func parentCompletionWithRunningChildConsumesOpportunityWithoutGeneration() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.registerSubagent(.init(subagentSessionId: "child"))
+        let (_, turn, environment) = readySession(session)
+        let generator = Generator()
+        let coordinator = NextPromptCoordinator(engine: generator) {
+            .live(session: session, turn: turn, environment: environment)
+        }
+        let observation = session.nextPromptActivity.sink { coordinator.invalidate() }
+        coordinator.completed(turn)
+        #expect(coordinator.generationTask == nil)
+        if let unexpected = coordinator.generationTask {
+            await generator.waitForStart()
+            generator.finish()
+            await unexpected.value
+        }
+        session.applySubagentState(.init(subagentSessionId: "child", state: .completed))
+        coordinator.completed(turn)
+        #expect(coordinator.generationTask == nil)
+        #expect(coordinator.offer == nil)
+        #expect(generator.requests.isEmpty)
+        await coordinator.shutdown()
+        withExtendedLifetime(observation) {}
+    }
+
+    @Test(arguments: ["content", "state", "replay"])
+    func childActivityInvalidatesBeforeChildObserversCanAccept(_ activity: String) async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.registerSubagent(.init(subagentSessionId: "child"))
+        session.applySubagentState(.init(subagentSessionId: "child", state: .completed))
+        let (_, turn, environment) = readySession(session)
+        let generator = Generator()
+        let coordinator = NextPromptCoordinator(engine: generator) {
+            .live(session: session, turn: turn, environment: environment)
+        }
+        let observation = session.nextPromptActivity.sink { coordinator.invalidate() }
+        coordinator.completed(turn)
+        await generator.waitForStart()
+        let task = coordinator.generationTask
+        generator.finish()
+        await task?.value
+        #expect(coordinator.offer != nil)
+        let child = try #require(session.subagentRun("child"))
+        var accepted: String?
+        let childObservation = child.objectWillChange.sink { accepted = coordinator.takeOffer() }
+        switch activity {
+        case "state": session.applySubagentState(.init(subagentSessionId: "child", state: .running))
+        case "replay": session.applySubagentReplayedUpdate(.agentMessageChunk(.text("late output")), subagentSessionId: "child")
+        default: session.applySubagentUpdate(.agentMessageChunk(.text("late output")), subagentSessionId: "child")
+        }
+        #expect(accepted == nil)
+        #expect(coordinator.offer == nil)
+        coordinator.completed(turn)
+        #expect(coordinator.generationTask == nil)
+        await coordinator.shutdown()
+        withExtendedLifetime((observation, childObservation)) {}
+    }
+
     @Test(arguments: ["enabled", "verified", "runtime", "app", "writer", "focus", "paste/drop/image", "selection",
                       "IME", "dictation", "picker", "prompt", "fork/delegation"])
     func liveProjectionRejectsExternalBlockers(_ blocker: String) {
@@ -322,7 +380,7 @@ struct NextPromptCoordinatorTests {
         #expect(NextPromptEligibilitySnapshot.live(session: session, turn: turn, environment: environment)?.isEligible != true)
     }
 
-    @Test(arguments: ["whitespace", "mention", "image", "stream", "queue", "auto-run", "recovery", "agent", "hydration", "fork", "pending work", "retry", "connection recovery"])
+    @Test(arguments: ["whitespace", "mention", "image", "stream", "queue", "auto-run", "recovery", "agent", "hydration", "fork", "pending work", "delegated message", "retry", "connection recovery"])
     func liveProjectionRejectsSessionBlockers(_ blocker: String) {
         let (session, turn, environment) = readySession()
         switch blocker {
@@ -336,6 +394,7 @@ struct NextPromptCoordinatorTests {
         case "agent": session.agentState = .disconnected
         case "hydration": session.hydrationState = .loading
         case "pending work": session.nextPromptWorkCount = 1
+        case "delegated message": session.hasPendingDelegatedMessages = true
         case "retry": session.apply(.sessionInfoUpdate(.init(title: nil, metadata: AnyCodable([
             "codex": AnyCodable(["error": AnyCodable(["willRetry": AnyCodable(true)])])
         ]))))

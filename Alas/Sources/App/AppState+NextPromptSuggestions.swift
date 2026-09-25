@@ -37,7 +37,7 @@ extension AppState {
             for await value in await runtime.states() {
                 guard !Task.isCancelled else { return }
                 guard let self else { return }
-                if value == .unavailable || value == .retryRequired || value == .failed {
+                if value == .unavailable || value == .retryRequired {
                     self.nextPromptCoordinator.invalidate()
                 }
                 self.nextPromptInferenceState = value
@@ -189,9 +189,13 @@ extension AppState {
             guard let self else { return }
             for session in sessions.values where self.nextPromptObservers.sessions[session.incarnation] == nil {
                 let incarnation = session.incarnation
+                let sessionID = session.id
                 self.nextPromptObservers.sessions[incarnation] = [
                     session.nextPromptActivity.sink { [weak self] in
-                        guard let self, self.nextPromptActiveIncarnation == incarnation else { return }
+                        guard let self,
+                              self.nextPromptActiveIncarnation == incarnation ||
+                              self.delegatedSessionParents[sessionID].map({ $0 == self.nextPromptSessionID }) == true
+                        else { return }
                         self.nextPromptCoordinator.invalidate()
                     },
                     session.nextPromptTeardown.sink { [weak self] in
@@ -261,11 +265,19 @@ extension AppState {
               !nextPromptInputBlocked(owner: owner, sessionID: id),
               let native = NSApp.keyWindow?.firstResponder as? ACPNSTextView else { return nil }
         var environment = native.nextPromptInputState
-        environment.isEnabled = nextPromptRuntimeEnabled && config.nextPromptSuggestionsEnabled
-        environment.hasVerifiedModel = nextPromptModelState == .ready
-        environment.isRuntimeAvailable = nextPromptInferenceState == .ready || nextPromptInferenceState == .running
         environment.isAppActive = NSApp.isActive
         environment.isActiveVisibleWriter = environment.hasKeyWindow
+        return nextPromptSnapshot(session: session, turn: turn, environment: environment)
+    }
+
+    func nextPromptSnapshot(session: ACPSession, turn: NextPromptCompletedTurn,
+                            environment: NextPromptEligibilitySnapshot.Environment) -> NextPromptEligibilitySnapshot? {
+        var environment = environment
+        environment.isEnabled = nextPromptRuntimeEnabled && config.nextPromptSuggestionsEnabled
+        environment.hasVerifiedModel = nextPromptModelState == .ready
+        environment.isRuntimeAvailable = nextPromptInferenceState == .ready ||
+            nextPromptInferenceState == .running || nextPromptInferenceState == .failed
+        environment.hasForkOrDelegationWork = environment.hasForkOrDelegationWork || nextPromptHasDelegatedWork(parentID: session.id)
         environment.composerEpoch = nextPromptComposerEpoch
         environment.settingsGeneration = nextPromptSettingsGeneration
         environment.modelGeneration = nextPromptModelGeneration

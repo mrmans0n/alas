@@ -206,10 +206,12 @@ final class ACPSessionRunner {
     private var turnPublicationGeneration = 0
 #if DEBUG
     var onPromptResponseProcessedForTesting: ((Int) -> Void)?
-    private var turnPublicationTasksForTesting: [Int: Task<Void, Never>] = [:]
+    // Tests opt in with an empty dictionary; ordinary Debug runners retain no handles.
+    var turnPublicationTasksForTesting: [Int: Task<Void, Never>]?
 
     func waitForTurnPublicationForTesting(promptID: Int) async {
-        await turnPublicationTasksForTesting[promptID]?.value
+        await turnPublicationTasksForTesting?[promptID]?.value
+        turnPublicationTasksForTesting?[promptID] = nil
     }
 #endif
     private var pendingStreamingPersistIndices: Set<Int> = []
@@ -3424,7 +3426,7 @@ extension ACPSessionRunner {
             ))
         }
 #if DEBUG
-        turnPublicationTasksForTesting[turn.promptID] = publicationTask
+        turnPublicationTasksForTesting?[turn.promptID] = publicationTask
 #endif
     }
 

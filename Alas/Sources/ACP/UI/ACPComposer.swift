@@ -809,8 +809,18 @@ final class ACPNSTextView: PairedDelimiterTextView {
         return nextPromptOffer
     }
 
-    private var nextPromptAttributes: [NSAttributedString.Key: Any] {
-        [.font: font ?? chatTypography.appKitFont(), .foregroundColor: NSColor.secondaryLabelColor]
+    var nextPromptPresentation: NSAttributedString? {
+        guard let text = nextPromptGhostText else { return nil }
+        let baseFont = font ?? chatTypography.appKitFont()
+        let presentation = NSMutableAttributedString(string: text, attributes: [
+            .font: NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        presentation.append(NSAttributedString(string: "\nTab to accept", attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]))
+        return presentation
     }
 
     private var ghostHorizontalInset: CGFloat {
@@ -818,10 +828,10 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     func nextPromptHeight(for width: CGFloat) -> CGFloat {
-        guard let text = nextPromptGhostText else { return 0 }
-        let bounds = (text as NSString).boundingRect(
+        guard let presentation = nextPromptPresentation else { return 0 }
+        let bounds = presentation.boundingRect(
             with: NSSize(width: max(1, width - 2 * ghostHorizontalInset), height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: nextPromptAttributes
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
         )
         return ceil(bounds.height) + 2 * textContainerInset.height
     }
@@ -998,12 +1008,12 @@ final class ACPNSTextView: PairedDelimiterTextView {
         super.draw(dirtyRect)
         let font = font ?? chatTypography.appKitFont()
         if string.isEmpty {
-            if let ghost = nextPromptGhostText {
-                (ghost as NSString).draw(
+            if let presentation = nextPromptPresentation {
+                presentation.draw(
                     with: NSRect(x: ghostHorizontalInset, y: textContainerInset.height,
                                  width: max(1, bounds.width - 2 * ghostHorizontalInset),
                                  height: nextPromptHeight(for: bounds.width)),
-                    options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: nextPromptAttributes
+                    options: [.usesLineFragmentOrigin, .usesFontLeading]
                 )
                 return
             }

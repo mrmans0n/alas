@@ -5,6 +5,65 @@ import Testing
 @MainActor
 @Suite("ACP session orchestration coordinator")
 struct ACPSessionOrchestrationCoordinatorTests {
+    @Test("pending delegated message delivery suppresses a parent completion before queue insertion")
+    func pendingMessageDeliveryBlocksNextPromptOpportunity() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let persistence = ACPOrchestrationPersistence(path: root.appendingPathComponent("delegations.sqlite").path)
+        let manager = ACPSessionManager(worktreeId: "w", worktreePath: root.path,
+            store: try ACPSessionStore(path: root.appendingPathComponent("sessions.sqlite").path),
+            setupEvaluator: { _ in .missing(reason: "Test delivery remains local") })
+        defer { manager.shutdownBackgroundTasks() }
+        let parent = manager.createSession(id: "parent", agentId: "codex", autoRunDefault: false)
+        _ = manager.createSession(id: "child", agentId: "codex", autoRunDefault: false)
+        await manager.flushPersistence()
+        parent.agentState = .ready
+        let userID = parent.recordUserPrompt(text: "Explain the parser.", attachments: [])
+        parent.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))
+        let turn = NextPromptCompletedTurn(sessionID: parent.id, incarnation: parent.incarnation,
+            promptID: parent.allocatePromptID(), userMessageID: userID,
+            transcriptRevision: parent.transcript.messagesGeneration)
+        var facts = NextPromptEligibilitySnapshot.Environment()
+        facts.isEnabled = true
+        facts.hasVerifiedModel = true
+        facts.isRuntimeAvailable = true
+        facts.isAppActive = true
+        facts.isActiveVisibleWriter = true
+        facts.hasComposerFocus = true
+        let environment = facts
+        #expect(NextPromptEligibilitySnapshot.live(session: parent, turn: turn, environment: environment) != nil)
+        try await persistence.insert(.init(childSessionId: "child", parentSessionId: "parent", projectId: "p",
+            parentWorktreeId: "w", childWorktreeId: "w", agentId: "codex", worktreeRequest: .current(worktreeId: "w"),
+            phase: .ready, failureMessage: nil, createdAt: 1, updatedAt: 1))
+        var observedPendingDelivery = false
+        let coordinator = ACPSessionOrchestrationCoordinator(environment: .init(
+            persistence: persistence, instanceId: "test", now: { 2 }, makeID: { UUID().uuidString },
+            worktree: { _ in nil }, existingWorktree: { _, _ in nil }, configuredAgents: { [] },
+            availableAgents: { _, _ in [] }, sessionLocation: { id in
+                guard manager.liveSession(for: id) != nil else { return nil }
+                return .init(origin: .init(sessionId: id, projectId: "p", worktreeId: "w"), manager: manager)
+            }, manager: { _ in manager }, newWorktreeDestination: { _, _ in nil },
+            createWorktree: { _, _, _ in .failure(.init(message: "unused")) }, rememberParent: { _, _ in },
+            autoRunDefault: { false }, notifyChanged: {
+                observedPendingDelivery = true
+                #expect(parent.queue.isEmpty)
+                #expect(parent.nextPromptWorkCount > 0)
+                #expect(parent.hasPendingDelegatedMessages)
+                #expect(NextPromptEligibilitySnapshot.live(session: parent, turn: turn, environment: environment) == nil)
+            }))
+        let response = await coordinator.send(origin: .init(sessionId: "child", projectId: "p", worktreeId: "w"),
+                                              request: .init(targetSessionId: "parent", prompt: "Check the edge case."))
+        guard case .text = response else { Issue.record("Expected queued delegated message"); return }
+        #expect(observedPendingDelivery)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while parent.nextPromptWorkCount != 0 {
+            try #require(ContinuousClock.now < deadline)
+            await Task.yield()
+        }
+        #expect(parent.hasPendingDelegatedMessages)
+    }
+
     @Test("child remains failed when initial attach needs setup")
     func childStartPersistsAttachSetupFailure() async throws {
         let orchestrationPath = FileManager.default.temporaryDirectory

@@ -253,6 +253,7 @@ struct ACPSessionRunnerTests {
     func failedAndRecoveryPromptsDoNotPublishTurns() async throws {
         var turns: [NextPromptCompletedTurn] = []
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
         runner.session.agentState = .ready
         let recoveryProcessed = AsyncGate()
         runner.onPromptResponseProcessedForTesting = { promptID in
@@ -285,12 +286,14 @@ struct ACPSessionRunnerTests {
         runner.send(text: "ordinary", attachments: [])
         try await waitUntil { turns.count == 1 }
         #expect(turns[0].promptID == 0)
+        #expect(runner.turnPublicationTasksForTesting?.count == nil)
     }
 
     @Test("automated prompt success does not publish a user turn")
     func automatedPromptDoesNotPublishTurn() async throws {
         var turns: [NextPromptCompletedTurn] = []
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
         runner.session.agentState = .ready
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
         let automatedProcessed = AsyncGate()
@@ -313,6 +316,7 @@ struct ACPSessionRunnerTests {
     func delegatedPromptDoesNotPublishTurn() async throws {
         var turns: [NextPromptCompletedTurn] = []
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
         runner.session.agentState = .ready
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
         let delegatedProcessed = AsyncGate()
@@ -632,6 +636,7 @@ struct ACPSessionRunnerTests {
         // way no matter what the field says.
         var turns: [NextPromptCompletedTurn] = []
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
         runner.session.agentState = .ready
         let cancelledProcessed = AsyncGate()
         runner.onPromptResponseProcessedForTesting = { promptID in
@@ -729,6 +734,7 @@ struct ACPSessionRunnerTests {
     func cancelledPromptSuccessDoesNotCompleteOverNewerPrompt() async throws {
         var turns: [NextPromptCompletedTurn] = []
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
         runner.session.agentState = .ready
         let staleProcessed = AsyncGate()
         let successorProcessed = AsyncGate()
@@ -776,6 +782,7 @@ struct ACPSessionRunnerTests {
         await finishSecond.open()
         await successorProcessed.wait()
         await runner.waitForTurnPublicationForTesting(promptID: 1)
+        #expect(runner.turnPublicationTasksForTesting?.isEmpty == true)
         #expect(secondCompletion == true)
         #expect(runner.session.transcript.streamingState == .idle)
         #expect(turns.map(\.promptID) == [1])

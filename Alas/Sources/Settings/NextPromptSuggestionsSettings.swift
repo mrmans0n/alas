@@ -51,7 +51,10 @@ struct NextPromptSuggestionsSettings: View {
         case .verifying:
             ProgressView("Verifying model…")
         case .ready:
-            if state.nextPromptInferenceState == .retryRequired || state.nextPromptInferenceState == .failed {
+            if state.nextPromptInferenceState == .failed && state.nextPromptRuntimeEnabled {
+                Text("The last suggestion failed. We'll try again after the next assistant reply.")
+                if state.config.nextPromptSuggestionsEnabled { retryButton }
+            } else if state.nextPromptInferenceState == .retryRequired || state.nextPromptInferenceState == .failed {
                 Text("Local inference paused after a failure. Retry to use suggestions again.")
                 if state.config.nextPromptSuggestionsEnabled { retryButton }
             } else if state.config.nextPromptSuggestionsEnabled && !state.nextPromptRuntimeEnabled {

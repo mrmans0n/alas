@@ -58,6 +58,7 @@ final class ACPSession: ObservableObject, Identifiable {
     let nextPromptTeardown = PassthroughSubject<Void, Never>()
     /// Manager work may await before it reaches the runner or queue.
     var nextPromptWorkCount = 0 { willSet { nextPromptActivity.send() } }
+    var hasPendingDelegatedMessages = false { willSet { nextPromptActivity.send() } }
     /// Runner replacements share this counter while this session object lives.
     /// A consumed turn ID must not be reused after reconnect.
     private(set) var nextPromptID = 0
@@ -1860,6 +1861,7 @@ final class ACPSession: ObservableObject, Identifiable {
     ) -> Set<Int> {
         let id = spawn.subagentSessionId
         guard !id.isEmpty else { return [] }
+        nextPromptActivity.send()
         if let existing = subagents[id] {
             let before = descriptor(for: existing)
             existing.merge(spawn: spawn)
@@ -1923,6 +1925,7 @@ final class ACPSession: ObservableObject, Identifiable {
         replaying: Bool = false
     ) -> Set<Int> {
         guard let run = subagents[update.subagentSessionId] else { return [] }
+        nextPromptActivity.send()
         run.apply(state: update.state, error: update.error, at: timestamp, replaying: replaying)
         return refreshSubagentRow(for: run, at: timestamp)
     }
@@ -1936,6 +1939,7 @@ final class ACPSession: ObservableObject, Identifiable {
         at timestamp: Date = Date()
     ) -> Set<Int> {
         guard let run = subagents[subagentSessionId] else { return [] }
+        nextPromptActivity.send()
         let dirty = run.apply(update, at: timestamp)
         applySubagentToolCallMetadataSideEffects(update, dirty: dirty)
         return dirty
@@ -1959,6 +1963,7 @@ final class ACPSession: ObservableObject, Identifiable {
         at timestamp: Date = Date()
     ) -> Set<Int> {
         guard let run = subagents[subagentSessionId] else { return [] }
+        nextPromptActivity.send()
         let dirty = run.applyReplayed(update, at: timestamp)
         applySubagentToolCallMetadataSideEffects(update, dirty: dirty, replaying: true)
         return dirty
@@ -2005,6 +2010,7 @@ final class ACPSession: ObservableObject, Identifiable {
         rows: [ACPMessage.ToolCall],
         messages restored: [String: [(message: ACPMessage, createdAt: Date, seq: Int64)]]
     ) {
+        nextPromptActivity.send()
         var rebuilt: [String: ACPSubagentRun] = [:]
         var order: [String] = []
         for toolCall in rows {
@@ -2040,6 +2046,7 @@ final class ACPSession: ObservableObject, Identifiable {
     func markSubagentsDisconnected(at timestamp: Date = Date()) -> Set<Int> {
         var dirty: Set<Int> = []
         for run in orderedSubagents where run.isRunning {
+            nextPromptActivity.send()
             run.apply(state: .disconnected, at: timestamp)
             dirty.formUnion(refreshSubagentRow(for: run, at: timestamp))
         }

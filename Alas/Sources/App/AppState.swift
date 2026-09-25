@@ -1588,7 +1588,7 @@ final class AppState {
                     updatedAt: Int64(Date().timeIntervalSince1970)
                 )
             }
-            delegatedSessionParents[record.childSessionId] = record.parentSessionId
+            rememberDelegatedSessionParent(childID: record.childSessionId, parentID: record.parentSessionId)
             let sessionAlreadyPersisted = await manager.persistedSessionRow(id: record.childSessionId) != nil
             if sessionAlreadyPersisted {
                 _ = manager.placeholderSession(id: record.childSessionId)
@@ -1680,7 +1680,7 @@ final class AppState {
         for sessionId in targetSessionIds {
             let childRecord = try? await acpOrchestrationPersistence.parent(childSessionId: sessionId)
             if let childRecord {
-                delegatedSessionParents[childRecord.childSessionId] = childRecord.parentSessionId
+                rememberDelegatedSessionParent(childID: childRecord.childSessionId, parentID: childRecord.parentSessionId)
             }
             guard let manager = await acpManagerForPersistedSession(
                 sessionId: sessionId,
@@ -6595,7 +6595,7 @@ final class AppState {
                     return await self.createDelegatedWorktree(projectId: projectId, branch: branch, base: base)
                 },
                 rememberParent: { [weak self] childID, parentID in
-                    self?.delegatedSessionParents[childID] = parentID
+                    self?.rememberDelegatedSessionParent(childID: childID, parentID: parentID)
                 },
                 autoRunDefault: { [weak self] in
                     self?.config.harness.acpAutoRunByDefault ?? false
@@ -11589,7 +11589,26 @@ final class AppState {
     /// Observed, not `@ObservationIgnored`: the agent sidebar reads this to
     /// draw delegated children under their parent, so a newly recorded link
     /// has to invalidate the view.
-    private(set) var delegatedSessionParents: [String: String] = [:]
+    private(set) var delegatedSessionParents: [String: String] = [:] {
+        willSet {
+            if newValue != delegatedSessionParents { nextPromptCoordinator.invalidate() }
+        }
+    }
+
+    func rememberDelegatedSessionParent(childID: String, parentID: String) {
+        delegatedSessionParents[childID] = parentID
+    }
+
+    func nextPromptHasDelegatedWork(parentID: String) -> Bool {
+        acpManagers.values.contains { manager in
+            manager.sessions.values.contains { child in
+                delegatedSessionParents[child.id] == parentID &&
+                (child.agentState == .spawning || child.transcript.streamingState != .idle ||
+                 child.nextPromptWorkCount > 0 || child.hasPendingDelegatedMessages || !child.queue.isEmpty ||
+                 child.pendingQueuePersistenceCount > 0 || child.subagents.values.contains { $0.isRunning })
+            }
+        }
+    }
 
     /// Backfills the links completed in earlier runs. Without this the map only
     /// ever holds delegations this launch created or recovered, and restored
@@ -11936,8 +11955,12 @@ final class AppState {
                 )
             },
             onDelegatedMessageAvailable: { [weak self] sessionId in
+                guard let self, let manager = self.acpManagers[owner] else { return }
+                let session = manager.liveSession(for: sessionId)
+                session?.nextPromptWorkCount += 1
                 Task { @MainActor [weak self] in
-                    guard let self, let manager = self.acpManagers[owner] else { return }
+                    defer { session?.nextPromptWorkCount -= 1 }
+                    guard let self else { return }
                     await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
                 }
             },
@@ -12016,7 +12039,7 @@ final class AppState {
                 let parentSessionId = self.delegatedSessionParents[sessionId]
                     ?? persistedParent?.parentSessionId
                 if let parentSessionId {
-                    self.delegatedSessionParents[sessionId] = parentSessionId
+                    self.rememberDelegatedSessionParent(childID: sessionId, parentID: parentSessionId)
                 }
                 let configuredServers: [ProjectMCPServer] = {
                     guard let project = self.projects.first(where: { $0.id == worktree.projectId }) else {
@@ -13191,9 +13214,13 @@ final class AppState {
     }
 
     private func deliverPendingDelegatedMessages(to sessionId: String, manager: ACPSessionManager) async {
+        let session = manager.liveSession(for: sessionId)
+        session?.nextPromptWorkCount += 1
+        defer { session?.nextPromptWorkCount -= 1 }
         guard let messages = try? await acpOrchestrationPersistence.pendingMessages(targetSessionId: sessionId) else {
             return
         }
+        session?.hasPendingDelegatedMessages = !messages.isEmpty
         await manager.attach(to: sessionId, freshlyCreated: false)
         guard manager.isWriter(for: sessionId) else {
             manager.notifyDelegatedMessagesAvailable()
@@ -13227,6 +13254,9 @@ final class AppState {
                 )
                 manager.notifyDelegatedMessagesAvailable()
             }
+        }
+        if let remaining = try? await acpOrchestrationPersistence.pendingMessages(targetSessionId: sessionId) {
+            session?.hasPendingDelegatedMessages = !remaining.isEmpty
         }
     }
 
