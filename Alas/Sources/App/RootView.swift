@@ -22,9 +22,11 @@ enum RootWorkspaceVisibilityPolicy {
         workspacesEnabled: Bool = false,
         hasWorkspaceContent: Bool = false,
         hasAttentionHistory: Bool = false,
-        hasAttentionHistoryLoadError: Bool = false
+        hasAttentionHistoryLoadError: Bool = false,
+        hasPeerGroups: Bool = false
     ) -> Bool {
-        hasProjects || hasAttentionHistory || hasAttentionHistoryLoadError || (workspacesEnabled && hasWorkspaceContent)
+        hasProjects || hasAttentionHistory || hasAttentionHistoryLoadError || hasPeerGroups
+            || (workspacesEnabled && hasWorkspaceContent)
     }
 }
 
@@ -172,7 +174,8 @@ struct RootView: View {
             workspacesEnabled: state.config.workspacesEnabled,
             hasWorkspaceContent: !state.workspacesManager.workspaces.isEmpty || !state.workspacesManager.checkouts.isEmpty,
             hasAttentionHistory: !state.attentionStore.events.isEmpty,
-            hasAttentionHistoryLoadError: state.attentionStore.loadError != nil
+            hasAttentionHistoryLoadError: state.attentionStore.loadError != nil,
+            hasPeerGroups: state.nativePeerSessions?.snapshot.groups.isEmpty == false
         ) {
             EmptyState(
                 canCreateWorktree: false,
@@ -303,11 +306,16 @@ struct RootView: View {
         hasRightPaneRail: Bool,
         rightPaneStartupSuppressed: Bool
     ) -> some View {
-        worktreeCenterContent(
-            effectiveRightPaneVisible: effectiveRightPaneVisible,
-            hasRightPaneRail: hasRightPaneRail,
-            rightPaneStartupSuppressed: rightPaneStartupSuppressed
-        )
+        if let client = state.nativePeerSessions, client.selectedSessionId != nil {
+            NativePeerSessionView(client: client)
+                .id(client.selectedSessionId)
+        } else {
+            worktreeCenterContent(
+                effectiveRightPaneVisible: effectiveRightPaneVisible,
+                hasRightPaneRail: hasRightPaneRail,
+                rightPaneStartupSuppressed: rightPaneStartupSuppressed
+            )
+        }
     }
 
     @ViewBuilder
@@ -432,17 +440,17 @@ struct RootView: View {
             if case .commit(let s) = tab { return s.fixedSHA == commit.sha } else { return false }
         }
         if let existing {
-            state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+            state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: existing.id)
         } else {
             let title = "\(commit.shortSha) \(commit.subject)"
             let tab = state.tabs.appendCommit(worktreeId: worktree.id, sha: commit.sha, title: title)
-            state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+            state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
         }
     }
 
     private func openOrFocusCommitEditor(worktree: Worktree, commit: CommitInfo, baseRef: String) {
         if let existing = state.tabs.commitEditorTab(worktreeId: worktree.id, currentSha: commit.sha) {
-            state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+            state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: existing.id)
             return
         }
 
@@ -454,7 +462,7 @@ struct RootView: View {
             currentSha: commit.sha,
             title: title
         )
-        state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+        state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
     }
 
     static func commitReviewSessionTarget(worktree: Worktree, commit: CommitInfo) -> ReviewSessionTarget {
@@ -476,7 +484,8 @@ struct RootView: View {
             save: { try store.save($0) },
             open: { record in
                 commitReviewSessionLaunchError = nil
-                state.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
+                let tab = state.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
+                state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
             },
             onFailure: { error in
                 commitReviewSessionLaunchError = CommitReviewSessionLaunchError(

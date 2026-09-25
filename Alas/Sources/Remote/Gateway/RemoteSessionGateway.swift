@@ -769,7 +769,11 @@ final class RemoteSessionGateway {
                 title: presentation?.title,
                 reason: presentation?.description,
                 defaultToNo: presentation?.defaultToNo ?? false,
-                mcpServerName: tc.mcpServerName)
+                mcpServerName: tc.mcpServerName,
+                commandSummary: tc.content?.compactMap { block -> String? in
+                    guard case .content(.text(let text)) = block else { return nil }
+                    return text
+                }.first)
             send(.permissionRequest(sessionId: id, payload: payload))
         } else if let rid = lastPermissionReq.removeValue(forKey: id) {
             // A prompt we surfaced was resolved elsewhere (the Mac or another
@@ -867,6 +871,7 @@ final class RemoteSessionGateway {
                     maxItems: field.schema.maxItems,
                     format: field.schema.format,
                     pattern: field.schema.pattern,
+                    isSecret: field.schema.isSecret,
                     options: field.schema.options.map {
                         .init(value: $0.const, title: $0.title, description: $0.description)
                     },

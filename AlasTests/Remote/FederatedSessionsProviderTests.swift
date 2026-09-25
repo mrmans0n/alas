@@ -178,6 +178,126 @@ struct FederatedSessionsProviderTests {
         #expect(links.sent(to: "srv-b").contains(.unsubscribe(sessionId: "s1")))
     }
 
+    @Test func aNewSubscriberReceivesActivePlanAndElicitationRequestsWithoutDuplicatingThem() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let first = Client()
+        let newcomer = Client()
+        provider.attach(first.downstream)
+        provider.attach(newcomer.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: first.downstream)
+
+        let plan = RemotePlanPayload(
+            requestId: .string("plan-1"), toolCallId: "tool-1", name: "Plan", overview: "Overview",
+            plan: "Do the work", todos: [], isProject: false, phases: [])
+        let elicitation = RemoteElicitationPayload(
+            requestId: "elicitation-1", title: "Input", message: "Provide input", mode: "form",
+            fields: [], elicitationId: nil, url: nil)
+        links.receive(.planRequest(sessionId: "s1", payload: plan), from: "srv-b")
+        links.receive(.elicitationRequest(sessionId: "s1", payload: elicitation), from: "srv-b")
+
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: newcomer.downstream)
+
+        #expect(newcomer.received == [
+            .planRequest(sessionId: "srv-b:s1", payload: plan),
+            .elicitationRequest(sessionId: "srv-b:s1", payload: elicitation),
+        ])
+        #expect(first.received == [
+            .planRequest(sessionId: "srv-b:s1", payload: plan),
+            .elicitationRequest(sessionId: "srv-b:s1", payload: elicitation),
+        ])
+    }
+
+    @Test func resolvedRequestsAreNotReplayedToLaterSubscribers() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let first = Client()
+        let newcomer = Client()
+        provider.attach(first.downstream)
+        provider.attach(newcomer.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: first.downstream)
+        let plan = RemotePlanPayload(
+            requestId: .string("plan-1"), toolCallId: "tool-1", name: "Plan", overview: "Overview",
+            plan: "Do the work", todos: [], isProject: false, phases: [])
+        let elicitation = RemoteElicitationPayload(
+            requestId: "elicitation-1", title: "Input", message: "Provide input", mode: "form",
+            fields: [], elicitationId: nil, url: nil)
+        links.receive(.planRequest(sessionId: "s1", payload: plan), from: "srv-b")
+        links.receive(.elicitationRequest(sessionId: "s1", payload: elicitation), from: "srv-b")
+        links.receive(.planResolved(sessionId: "s1", requestId: .string("plan-1")), from: "srv-b")
+        links.receive(.elicitationResolved(sessionId: "s1", requestId: "elicitation-1"), from: "srv-b")
+
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: newcomer.downstream)
+
+        #expect(newcomer.received.isEmpty)
+    }
+
+    @Test func aClosedSessionDoesNotReplayItsPendingRequests() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let first = Client()
+        let newcomer = Client()
+        provider.attach(first.downstream)
+        provider.attach(newcomer.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: first.downstream)
+        let plan = RemotePlanPayload(
+            requestId: .string("plan-1"), toolCallId: "tool-1", name: "Plan", overview: "Overview",
+            plan: "Do the work", todos: [], isProject: false, phases: [])
+        links.receive(.planRequest(sessionId: "s1", payload: plan), from: "srv-b")
+        links.receive(.sessionClosed(sessionId: "s1"), from: "srv-b")
+
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: newcomer.downstream)
+
+        #expect(newcomer.received.isEmpty)
+    }
+
+    @Test func aPeerGoingOfflineDoesNotReplayItsOldPendingRequestsAfterReturning() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let first = Client()
+        let newcomer = Client()
+        provider.attach(first.downstream)
+        provider.attach(newcomer.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: first.downstream)
+        let plan = RemotePlanPayload(
+            requestId: .string("plan-1"), toolCallId: "tool-1", name: "Plan", overview: "Overview",
+            plan: "Do the work", todos: [], isProject: false, phases: [])
+        links.receive(.planRequest(sessionId: "s1", payload: plan), from: "srv-b")
+        links.goOffline("srv-b")
+        links.goOnline("srv-b", name: "Mac B")
+
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: newcomer.downstream)
+
+        #expect(newcomer.received.isEmpty)
+    }
+
+    @Test func aLastUnsubscribeClearsPendingRequestsUntilThePeerReemitsThem() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let first = Client()
+        let newcomer = Client()
+        provider.attach(first.downstream)
+        provider.attach(newcomer.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: first.downstream)
+        let plan = RemotePlanPayload(
+            requestId: .string("plan-1"), toolCallId: "tool-1", name: "Plan", overview: "Overview",
+            plan: "Do the work", todos: [], isProject: false, phases: [])
+        let request = RemoteServerMessage.planRequest(sessionId: "srv-b:s1", payload: plan)
+        links.receive(.planRequest(sessionId: "s1", payload: plan), from: "srv-b")
+        _ = provider.route(.unsubscribe(sessionId: "srv-b:s1"), from: first.downstream)
+
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: newcomer.downstream)
+        #expect(newcomer.received.isEmpty)
+        links.receive(.planRequest(sessionId: "s1", payload: plan), from: "srv-b")
+
+        #expect(newcomer.received == [request])
+    }
+
     @Test func aPeerGoingOfflineClosesItsSessionsAndDropsItsRows() {
         let links = FakeLinks()
         let provider = FederatedSessionsProvider(links: links)

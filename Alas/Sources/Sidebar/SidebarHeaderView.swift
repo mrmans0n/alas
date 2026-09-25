@@ -12,11 +12,13 @@ struct SidebarHeaderView: View {
     var showsAttentionInbox = true
     @Binding var attentionInboxOpen: Bool
     var attentionAggregation: AttentionAggregation = AttentionAggregation(items: [], history: [], unresolvedCount: 0, unresolvedCountByProject: [:])
+    var peerAttentionRows: [RemoteSessionSummary] = []
     var attentionLoadError: String? = nil
     var attentionWriteError: String? = nil
     var attentionNavigationErrors: [UUID: String] = [:]
     var onDismissAttentionItem: (AttentionItem) -> Void = { _ in }
     var onOpenAttentionItem: (AttentionItem) async -> Void = { _ in }
+    var onOpenPeerSession: (RemoteSessionSummary) -> Void = { _ in }
     init(worktreeSortMode: AppConfig.WorktreeSortMode,
          onSetWorktreeSortMode: @escaping (AppConfig.WorktreeSortMode) -> Void,
          onSettings: @escaping () -> Void,
@@ -28,11 +30,13 @@ struct SidebarHeaderView: View {
          showsAttentionInbox: Bool = true,
          attentionInboxOpen: Binding<Bool> = .constant(false),
          attentionAggregation: AttentionAggregation = AttentionAggregation(items: [], history: [], unresolvedCount: 0, unresolvedCountByProject: [:]),
+         peerAttentionRows: [RemoteSessionSummary] = [],
          attentionLoadError: String? = nil,
          attentionWriteError: String? = nil,
          attentionNavigationErrors: [UUID: String] = [:],
          onDismissAttentionItem: @escaping (AttentionItem) -> Void = { _ in },
-         onOpenAttentionItem: @escaping (AttentionItem) async -> Void = { _ in }) {
+         onOpenAttentionItem: @escaping (AttentionItem) async -> Void = { _ in },
+         onOpenPeerSession: @escaping (RemoteSessionSummary) -> Void = { _ in }) {
         self.worktreeSortMode = worktreeSortMode
         self.onSetWorktreeSortMode = onSetWorktreeSortMode
         self.onSettings = onSettings
@@ -44,11 +48,13 @@ struct SidebarHeaderView: View {
         self.showsAttentionInbox = showsAttentionInbox
         self._attentionInboxOpen = attentionInboxOpen
         self.attentionAggregation = attentionAggregation
+        self.peerAttentionRows = peerAttentionRows
         self.attentionLoadError = attentionLoadError
         self.attentionWriteError = attentionWriteError
         self.attentionNavigationErrors = attentionNavigationErrors
         self.onDismissAttentionItem = onDismissAttentionItem
         self.onOpenAttentionItem = onOpenAttentionItem
+        self.onOpenPeerSession = onOpenPeerSession
     }
     @Environment(\.theme) private var theme
     @State private var hovering = false
@@ -80,11 +86,13 @@ struct SidebarHeaderView: View {
         AttentionToolbarButton(count: attentionCount, isOpen: $attentionInboxOpen, metrics: metrics) {
             AttentionInboxView(
                 aggregation: attentionAggregation,
+                peerRows: peerAttentionRows,
                 loadError: attentionLoadError,
                 writeError: attentionWriteError,
                 navigationErrors: attentionNavigationErrors,
                 onDismiss: onDismissAttentionItem,
-                onOpen: onOpenAttentionItem
+                onOpen: onOpenAttentionItem,
+                onOpenPeer: onOpenPeerSession
             )
         }
     }
