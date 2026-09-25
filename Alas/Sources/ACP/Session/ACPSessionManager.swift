@@ -1264,6 +1264,7 @@ final class ACPSessionManager: ObservableObject {
         var isolatedBrokerStartupIDs = Set<UUID>()
         var connection: ACPConnection?
         var shutdownRequestedBrokerStartupIDs = Set<UUID>()
+        var shouldCloseRemoteResultOnCompletion = false
     }
     private var attachmentAttempts: [ACPSession.ID: AttachmentAttempt] = [:]
     /// Invalidates takeover work suspended while mirroring the final writer snapshot.
@@ -5337,6 +5338,16 @@ extension ACPSessionManager {
                 )
                 result = started.result
                 createdFreshRemoteSession = started.createdFreshRemoteSession
+                guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                    await closeDisposedRemoteResultIfNeeded(
+                        result,
+                        attempt: attempt,
+                        using: connection,
+                        sessionCapabilities: initialized.sessionCapabilities
+                    )
+                    await connection.shutdown()
+                    return
+                }
             } else if freshlyCreated {
                 result = try await connection.newSession(
                     cwd: worktreePath,
@@ -5347,6 +5358,12 @@ extension ACPSessionManager {
                     )
                 )
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                    await closeDisposedRemoteResultIfNeeded(
+                        result,
+                        attempt: attempt,
+                        using: connection,
+                        sessionCapabilities: initialized.sessionCapabilities
+                    )
                     await connection.shutdown()
                     return
                 }
@@ -5404,6 +5421,12 @@ extension ACPSessionManager {
                             )
                         )
                         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                            await closeDisposedRemoteResultIfNeeded(
+                                result,
+                                attempt: attempt,
+                                using: connection,
+                                sessionCapabilities: initialized.sessionCapabilities
+                            )
                             await connection.shutdown()
                             return
                         }
@@ -5565,6 +5588,12 @@ extension ACPSessionManager {
                             )
                         )
                         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                            await closeDisposedRemoteResultIfNeeded(
+                                result,
+                                attempt: attempt,
+                                using: connection,
+                                sessionCapabilities: initialized.sessionCapabilities
+                            )
                             await connection.shutdown()
                             return
                         }
@@ -5602,6 +5631,12 @@ extension ACPSessionManager {
                     )
                 )
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                    await closeDisposedRemoteResultIfNeeded(
+                        result,
+                        attempt: attempt,
+                        using: connection,
+                        sessionCapabilities: initialized.sessionCapabilities
+                    )
                     await connection.shutdown()
                     return
                 }
@@ -6979,7 +7014,9 @@ extension ACPSessionManager {
     }
 
     func disposeAllLiveSessions() async {
-        let ids = Set(runners.keys).union(attachingSessions.keys)
+        let ids = Set(runners.keys)
+            .union(attachingSessions.keys)
+            .union(attachmentAttempts.keys)
         for id in ids {
             try? await disposeSession(id: id)
         }
@@ -6987,6 +7024,20 @@ extension ACPSessionManager {
 
     func detach(sessionId: ACPSession.ID) async {
         try? await tearDownSession(sessionId: sessionId, closeRemote: false)
+    }
+
+    private func closeDisposedRemoteResultIfNeeded(
+        _ result: ACPSessionNewResult,
+        attempt: AttachmentAttempt,
+        using connection: ACPConnection,
+        sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
+    ) async {
+        guard attempt.shouldCloseRemoteResultOnCompletion else { return }
+        try? await closeRemoteSession(
+            id: result.sessionId,
+            using: connection,
+            sessionCapabilities: sessionCapabilities
+        )
     }
 
     private func closeRemoteSession(
@@ -7083,6 +7134,9 @@ extension ACPSessionManager {
         let remoteSessionId = session?.remoteSessionId
         let sessionCapabilities = session?.sessionCapabilities
         let attempt = attachmentAttempts[sessionId]
+        if closeRemote {
+            attempt?.shouldCloseRemoteResultOnCompletion = true
+        }
         if attempt != nil {
             disposingAttachments.insert(sessionId)
             if !closeRemote {

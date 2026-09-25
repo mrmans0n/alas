@@ -253,6 +253,32 @@ struct ACPSessionManagerDisposalTests {
         #expect(manager.runners[session.id] == nil)
     }
 
+    @Test("disposing all live sessions includes a restart waiting between runners")
+    func disposeAllLiveSessionsIncludesRestartAttempt() async throws {
+        let client = ACPMockClient()
+        let (manager, _, session) = try await attachedManager(client: client, supportsClose: true)
+        let restartPaused = AsyncStream<Void>.makeStream()
+        let resumeRestart = AsyncStream<Void>.makeStream()
+        manager.beforeRestartRunnerStopForTesting = { _ in
+            restartPaused.continuation.yield()
+            for await _ in resumeRestart.stream { break }
+        }
+        defer { resumeRestart.continuation.yield() }
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        for await _ in restartPaused.stream { break }
+
+        await manager.disposeAllLiveSessions()
+
+        #expect(manager.liveSession(for: session.id) == nil)
+        #expect(manager.runners[session.id] == nil)
+
+        resumeRestart.continuation.yield()
+        await restart.value
+        #expect(manager.liveSession(for: session.id) == nil)
+        #expect(manager.runners[session.id] == nil)
+    }
+
     private func attachedManager(
         client: ACPMockClient,
         supportsClose: Bool,
