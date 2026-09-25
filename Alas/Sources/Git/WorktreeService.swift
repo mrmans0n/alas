@@ -1313,11 +1313,11 @@ struct WorktreeService {
             git for-each-ref --format='ref=%(refname)=%(objectname)'
             git rev-list --max-count=50 --reflog --not --remotes 2>/dev/null | while IFS= read -r oid; do printf 'reflog=%s\\n' "$oid"; done
             fsck_output=$(mktemp)
-            commit_inventory=$(mktemp)
-            trap 'rm -f "$fsck_output" "$commit_inventory"' EXIT
+            unreachable_object_inventory=$(mktemp)
+            trap 'rm -f "$fsck_output" "$unreachable_object_inventory"' EXIT
             git fsck --no-reflogs --unreachable --no-progress >"$fsck_output" 2>/dev/null
-            awk '$2 == "commit" { print "unreachable-commit=" $3 }' "$fsck_output" >"$commit_inventory"
-            LC_ALL=C sort -u "$commit_inventory"
+            awk '$2 == "commit" { print "unreachable-commit=" $3 } $2 == "tag" { print "unreachable-tag=" $3 }' "$fsck_output" >"$unreachable_object_inventory"
+            LC_ALL=C sort -u "$unreachable_object_inventory"
             """
         ], cwd: worktreePath)
         guard submodules.exitCode == 0 else { throw WorktreeError.gitFailed(submodules.stderr) }
@@ -1399,10 +1399,10 @@ struct WorktreeService {
 
     /// A scheduled run may discard its checkout only when its original base is
     /// an ancestor of the current tip and the tip is remotely reachable. Every
-    /// commit object in each initialized submodule must also be remotely
-    /// reachable, and no deinitialized submodule repository may remain under
-    /// the worktree Git directory. Local-only commits remain available for
-    /// review in the worktree.
+    /// initialized submodule commit must be remotely reachable. Annotated tag
+    /// refs block cleanup because remote-tracking refs cannot prove the tag
+    /// object itself is published. No deinitialized submodule repository may
+    /// remain under the worktree Git directory.
     static func scheduledCleanupHistoryIsSafe(
         baseCommit: String,
         expectedBranch: String,
@@ -1455,9 +1455,11 @@ struct WorktreeService {
                 test -n "$refs"
                 local_only=$(git rev-list --max-count=1 --all --reflog --not --remotes 2>/dev/null)
                 test -z "$local_only"
+                annotated_tags=$(git for-each-ref --format='%(objecttype)' refs/tags/ | awk '$1 == "tag" { print "annotated" }')
+                test -z "$annotated_tags"
                 unreachable=$(git fsck --no-reflogs --unreachable --no-progress 2>/dev/null)
                 case "$unreachable" in
-                    *"unreachable commit "*|*"dangling commit "*) exit 1 ;;
+                    *"unreachable commit "*|*"dangling commit "*|*"unreachable tag "*|*"dangling tag "*) exit 1 ;;
                 esac
                 """
             ],
