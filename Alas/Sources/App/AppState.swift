@@ -11076,7 +11076,8 @@ final class AppState {
         authorizedWorktreeLineageID: String? = nil,
         authorizedDirtyTabsAtConfirmation: [TabID: Int]? = nil,
         authorizedSessionIDs: Set<String>? = nil,
-        verifiedMergedBranchSHA: String? = nil
+        verifiedMergedBranchSHA: String? = nil,
+        scheduledCleanupLeaseCheck: (@MainActor @Sendable () -> Bool)? = nil
     ) async -> WorktreeBatchOutcome {
         guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
             projectsManager.setOperationState(
@@ -11138,11 +11139,15 @@ final class AppState {
                     force: force,
                     verifiedMergedBranchSHA: verifiedMergedBranchSHA,
                     authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint,
-                    authorizedWorktreeLineageID: authorizedWorktreeLineageID
+                    authorizedWorktreeLineageID: authorizedWorktreeLineageID,
+                    scheduledCleanupLeaseCheck: scheduledCleanupLeaseCheck
                 )
             }
         } catch is WorktreeRemovalOwnershipChanged {
             return .skipped(reason: "Worktree changed since confirmation")
+        } catch is WorktreeRemovalWriterLeaseChanged {
+            projectsManager.setOperationState(for: worktree, state: nil)
+            return .skipped(reason: "Another Alas instance has an active writer for this worktree.")
         } catch is WorktreeDeleteContentFingerprintMismatch {
             projectsManager.setOperationState(for: worktree, state: nil)
             return .skipped(reason: Self.changedDeleteRisksMessage)
@@ -11307,9 +11312,18 @@ final class AppState {
         force: Bool,
         verifiedMergedBranchSHA: String? = nil,
         authorizedDeleteContentFingerprint: String? = nil,
-        authorizedWorktreeLineageID: String? = nil
+        authorizedWorktreeLineageID: String? = nil,
+        scheduledCleanupLeaseCheck: (@MainActor @Sendable () -> Bool)? = nil
     ) async throws -> WorktreeRemovalOutcome {
         try await Task.detached {
+            let beforeRemoval: (@Sendable () async -> Bool)?
+            if let scheduledCleanupLeaseCheck {
+                beforeRemoval = {
+                    await scheduledCleanupLeaseCheck()
+                }
+            } else {
+                beforeRemoval = nil
+            }
             if let authorizedDeleteContentFingerprint {
                 let currentFingerprint = try await WorktreeService.worktreeDeleteContentFingerprint(
                     worktreePath: worktree.path
@@ -11324,6 +11338,9 @@ final class AppState {
             }
 
             if worktree.path.isRemoteAlasPath {
+                if let beforeRemoval, !(await beforeRemoval()) {
+                    throw WorktreeRemovalWriterLeaseChanged()
+                }
                 try await WorktreeService().remove(
                     repoPath: repoPath,
                     worktree: worktree,
@@ -11340,7 +11357,8 @@ final class AppState {
                 force: force,
                 verifiedMergedBranchSHA: verifiedMergedBranchSHA,
                 authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint,
-                expectedWorktreeLineageID: authorizedWorktreeLineageID
+                expectedWorktreeLineageID: authorizedWorktreeLineageID,
+                beforeRemoval: beforeRemoval
             )
         }.value
     }

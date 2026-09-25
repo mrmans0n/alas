@@ -140,6 +140,10 @@ struct ScheduledAgentReport: Codable, Equatable, Identifiable, Sendable {
     var cleanupState: ScheduledAgentCleanupState
     var cleanupReason: String?
 
+    var hasPendingWork: Bool {
+        taskState == .running || cleanupState == .pending
+    }
+
     init(
         id: String,
         occurrenceID: String,

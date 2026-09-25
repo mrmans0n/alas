@@ -991,6 +991,27 @@ extension WorktreeServiceTests {
         #expect(try await fixture.service.list(repoPath: fixture.repo, projectId: "p").count == 1)
     }
 
+    @Test func fastLocalRemoveRechecksWriterLeaseBeforeStaging() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "writer-lease-before-stage")
+        defer { fixture.removeFiles() }
+
+        await #expect(throws: WorktreeRemovalWriterLeaseChanged.self) {
+            try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                beforeRemoval: { false }
+            )
+        }
+
+        #expect(FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+        let registrations = try await Process.git(
+            ["worktree", "list", "--porcelain"],
+            cwd: fixture.repo
+        )
+        #expect(registrations.stdout.contains(fixture.worktree.path.path))
+    }
+
     @Test func fastLocalRemoveStillRefusesDirtySubmoduleWithoutForce() async throws {
         let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-dirty-no-force")
         defer { fixture.removeFiles() }

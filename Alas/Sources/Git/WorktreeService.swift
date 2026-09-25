@@ -12,6 +12,8 @@ enum WorktreeDeletePreflightReason: Equatable, Hashable {
     case locked
 }
 
+struct WorktreeRemovalWriterLeaseChanged: Error {}
+
 struct WorktreeService {
     enum WorktreeError: Error, LocalizedError {
         case gitFailed(String)
@@ -884,6 +886,7 @@ struct WorktreeService {
         verifiedMergedBranchSHA: String? = nil,
         authorizedDeleteContentFingerprint: String? = nil,
         expectedWorktreeLineageID: String? = nil,
+        beforeRemoval: (@Sendable () async -> Bool)? = nil,
         moveItem: @Sendable (URL, URL) throws -> Void = {
             try WorktreeService.renameAtomically(from: $0, to: $1)
         }
@@ -897,7 +900,15 @@ struct WorktreeService {
             }
         }
         try requireExpectedLineage(at: worktree.path)
+
+        func requireRemovalAuthorization() async throws {
+            guard let beforeRemoval else { return }
+            guard await beforeRemoval() else {
+                throw WorktreeRemovalWriterLeaseChanged()
+            }
+        }
         if repoPath.isRemoteAlasPath || worktree.path.isRemoteAlasPath {
+            try await requireRemovalAuthorization()
             try await remove(
                 repoPath: repoPath,
                 worktree: worktree,
@@ -1014,6 +1025,7 @@ struct WorktreeService {
                 }
             }
             try requireExpectedLineage(at: worktree.path)
+            try await requireRemovalAuthorization()
             try await remove(
                 repoPath: repoPath,
                 worktree: worktree,
@@ -1049,7 +1061,13 @@ struct WorktreeService {
             )
             hasActivePendingRemoval = true
             try requireExpectedLineage(at: worktree.path)
+            try await requireRemovalAuthorization()
             try moveItem(worktree.path, ticket.stagedPath)
+        } catch is WorktreeRemovalWriterLeaseChanged {
+            if hasActivePendingRemoval {
+                WorktreeTrash.finishActivePendingRemoval(ticket)
+            }
+            throw WorktreeRemovalWriterLeaseChanged()
         } catch {
             if hasActivePendingRemoval {
                 WorktreeTrash.finishActivePendingRemoval(ticket)
@@ -1063,6 +1081,7 @@ struct WorktreeService {
                 }
             }
             try requireExpectedLineage(at: worktree.path)
+            try await requireRemovalAuthorization()
             try await remove(
                 repoPath: repoPath,
                 worktree: worktree,

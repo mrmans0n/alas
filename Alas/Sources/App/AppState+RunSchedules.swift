@@ -1758,7 +1758,18 @@ extension AppState {
             authorizedDeleteContentFingerprint: finalFingerprint,
             authorizedWorktreeLineageID: registration.worktreeLineageID,
             authorizedDirtyTabsAtConfirmation: [:],
-            authorizedSessionIDs: authorizedSessionIDs
+            authorizedSessionIDs: authorizedSessionIDs,
+            scheduledCleanupLeaseCheck: { [weak self] in
+                guard let self,
+                      let lineageID = registration.worktreeLineageID
+                else {
+                    return false
+                }
+                return self.scheduledCleanupHasNoOtherWriterLeases(
+                    for: worktree,
+                    lineageID: lineageID
+                )
+            }
         )
         switch outcome {
         case .deleted:

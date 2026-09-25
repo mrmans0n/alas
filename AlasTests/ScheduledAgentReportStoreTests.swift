@@ -92,6 +92,7 @@ struct ScheduledAgentReportStoreTests {
 
         let pending = try #require(try await store.report(id: "target-run"))
         #expect(pending.taskState == .running)
+        #expect(pending.hasPendingWork)
         #expect(pending.finishedAt == nil)
         #expect(pending.completion == completion)
 
@@ -136,13 +137,16 @@ struct ScheduledAgentReportStoreTests {
             authenticatedSessionID: "session-1",
             completion: completion
         )
+        #expect(try await store.report(id: "target-run")?.hasPendingWork == true)
         #expect(finished.cleanupState == .pending)
+        #expect(finished.hasPendingWork)
         let retained = try await store.updateCleanup(
             reportID: "target-run",
             state: .retained,
             reason: "The worktree contains local changes."
         )
         #expect(retained.cleanupState == .retained)
+        #expect(!retained.hasPendingWork)
         #expect(retained.cleanupReason == "The worktree contains local changes.")
 
         await #expect(throws: ScheduledAgentReportStoreError.invalidTransition("target-run")) {

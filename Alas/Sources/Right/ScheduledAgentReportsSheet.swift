@@ -22,6 +22,16 @@ struct ScheduledAgentReportsSheet: View {
 
     private let pageSize = 40
 
+    private var selectedReportNeedsRefresh: Bool {
+        guard let selectedReportID,
+              let selectedReport,
+              selectedReport.id == selectedReportID
+        else {
+            return false
+        }
+        return selectedReport.hasPendingWork
+    }
+
     init(state: AppState, projectID: String, initialReportID: String? = nil) {
         _state = Bindable(wrappedValue: state)
         self.projectID = projectID
@@ -48,6 +58,11 @@ struct ScheduledAgentReportsSheet: View {
         }
         .task(id: selectedReportID) {
             await loadSelectedReport()
+            while !Task.isCancelled, selectedReportNeedsRefresh {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { break }
+                await refreshSelectedReport()
+            }
         }
         .confirmationDialog(
             "Delete this scheduled report?",
@@ -499,6 +514,21 @@ struct ScheduledAgentReportsSheet: View {
             }
         } catch {
             guard !Task.isCancelled else { return }
+            detailError = error.localizedDescription
+        }
+    }
+
+    private func refreshSelectedReport() async {
+        guard let selectedReportID else { return }
+        do {
+            let report = try await state.scheduledAgentReport(id: selectedReportID, projectID: projectID)
+            guard !Task.isCancelled else { return }
+            selectedReport = report
+            detailError = report == nil
+                ? "This report was deleted or is no longer available in this project."
+                : nil
+        } catch {
+            guard !Task.isCancelled, selectedReport == nil else { return }
             detailError = error.localizedDescription
         }
     }
