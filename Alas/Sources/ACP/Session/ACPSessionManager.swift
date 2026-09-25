@@ -1195,6 +1195,7 @@ final class ACPSessionManager: ObservableObject {
     var beforeRestartRunnerStopForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var afterRestartRetiringConnectionDetachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var beforeTakeoverAttachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
+    var afterRunnerRegistrationForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
 #endif
     private var resolvedRemoteAdapters: [String: ACPResolvedRemoteAdapter] = [:]
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
@@ -5930,6 +5931,10 @@ extension ACPSessionManager {
             runners[sessionId] = runner
             keepElicitationCoordinator = true
             attachSucceeded = true
+#if DEBUG
+            await afterRunnerRegistrationForTesting?(sessionId)
+#endif
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
             // Drain a pending model/mode picked during the post-takeover window.
             // The load result just above overwrote `currentModel`/`currentMode`
             // with the agent's restored values. Reapply + persist the user's
@@ -6300,7 +6305,11 @@ extension ACPSessionManager {
         let inheritedRetiringConnection = oldAttempt?.retiringConnection
         oldAttempt?.retiringConnection = nil
         let retiringConnection = inheritedRetiringConnection
-            ?? (oldRunner != nil && oldAttemptConnection == nil ? oldConnection : nil)
+            // Runner registration precedes completion of model/mode/config
+            // restoration, so the active attach attempt may still reference
+            // this same connection. Once a runner owns it, keep it alive
+            // until the replacement initializes regardless of that attempt.
+            ?? oldRunner?.connection
         replacementAttempt.retiringConnection = retiringConnection
         replacementAttempt.connection = oldConnection === retiringConnection ? nil : oldConnection
 #if DEBUG

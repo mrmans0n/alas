@@ -741,6 +741,65 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.detach(sessionId: session.id)
     }
 
+    @Test("restart retains a registered runner's broker while attach restoration is in flight")
+    func restartRetainsRegisteredRunnerBrokerDuringAttachRestoration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let retiringService = ManagerBrokerService()
+        let replacementService = ManagerBrokerServiceProxy(stallSendMethod: "initialize")
+        let registrationGate = ManagerBrokerGate()
+        var serviceFactoryCalls = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: {
+                serviceFactoryCalls += 1
+                if serviceFactoryCalls == 1 { return retiringService }
+                return replacementService
+            },
+            isolatedBrokerServiceFactory: { ManagerBrokerService() },
+            attachmentStartupTimeout: .seconds(10),
+            restartTeardownTimeout: .seconds(1)
+        )
+        let session = manager.createSession(id: "restart-registered-runner", agentId: "claude")
+        var registrationCount = 0
+        manager.afterRunnerRegistrationForTesting = { _ in
+            registrationCount += 1
+            guard registrationCount == 1 else { return }
+            await registrationGate.wait()
+        }
+        defer {
+            Task {
+                await registrationGate.release()
+                await replacementService.sendGate.release()
+            }
+        }
+
+        let initialAttach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await registrationGate.hasEntered && manager.runners[session.id] != nil
+        }
+        #expect(session.agentState == .spawning)
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await replacementService.sendGate.hasEntered
+        }
+
+        #expect(await retiringService.closed.isEmpty)
+
+        await registrationGate.release()
+        await replacementService.sendGate.release()
+        await initialAttach.value
+        await restart.value
+
+        #expect(session.agentState == .ready)
+        #expect(await retiringService.closed.isEmpty)
+        #expect(await retiringService.detached.count == 1)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("disposing during restart does not strand a reopened session attachment")
     func disposingDuringRestartDoesNotStrandReopenedAttachment() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
