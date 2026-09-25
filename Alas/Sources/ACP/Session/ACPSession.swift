@@ -6,10 +6,12 @@ import Combine
 /// pane is not invalidated while the user types in long sessions.
 @MainActor
 final class ACPComposerState: ObservableObject {
+    var onNextPromptActivity: (() -> Void)?
     private(set) var draft: ACPComposerDraft = .empty
     private(set) var revision: Int = 0
 
     func replaceDraft(_ draft: ACPComposerDraft) {
+        onNextPromptActivity?()
         objectWillChange.send()
         self.draft = draft
         revision += 1
@@ -51,6 +53,11 @@ final class ACPSession: ObservableObject, Identifiable {
 
     let id: ID
     let incarnation = UUID()
+    /// Synchronous runtime invalidation, independent of persistence and UI observation.
+    let nextPromptActivity = PassthroughSubject<Void, Never>()
+    let nextPromptTeardown = PassthroughSubject<Void, Never>()
+    /// Manager work may await before it reaches the runner or queue.
+    var nextPromptWorkCount = 0 { willSet { nextPromptActivity.send() } }
     /// Runner replacements share this counter while this session object lives.
     /// A consumed turn ID must not be reused after reconnect.
     private(set) var nextPromptID = 0
@@ -61,6 +68,7 @@ final class ACPSession: ObservableObject, Identifiable {
     var normalQueuedTurnUserMessageIDs: [UUID: UUID] = [:]
 
     func allocatePromptID() -> Int {
+        nextPromptActivity.send()
         defer { nextPromptID += 1 }
         return nextPromptID
     }
@@ -156,13 +164,13 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var currentMode: String?
     @Published var currentGoal: ACPGoalState?
     @Published var promptSuggestions: [ACPPromptSuggestion] = []
-    @Published var autoRunEnabled: Bool = false
-    @Published var setupState: SetupState = .checking
+    @Published var autoRunEnabled: Bool = false { willSet { nextPromptActivity.send() } }
+    @Published var setupState: SetupState = .checking { willSet { nextPromptActivity.send() } }
     @Published var lastError: String?
     /// Runtime-only state reported by Codex while its current turn retries.
-    @Published private(set) var retryStatus: ACPRetryStatus?
-    @Published var contextRestoreWarning: ContextRestoreWarning?
-    @Published var contextRecoveryStatus: ContextRecoveryStatus?
+    @Published private(set) var retryStatus: ACPRetryStatus? { willSet { nextPromptActivity.send() } }
+    @Published var contextRestoreWarning: ContextRestoreWarning? { willSet { nextPromptActivity.send() } }
+    @Published var contextRecoveryStatus: ContextRecoveryStatus? { willSet { nextPromptActivity.send() } }
     /// Runtime-only ACP `notice` update — a fire-and-forget out-of-band
     /// event (MCP server dropped, rate limit, model fallback…). Live state
     /// only: never written into the persisted transcript, never restored
@@ -180,6 +188,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// lifecycle), distinct from `StreamingState.idle` which means
     /// "runner is attached but not currently mid-prompt" (turn lifecycle).
     @Published var agentState: AgentState = .idle {
+        willSet { nextPromptActivity.send() }
         didSet {
             if agentState == .spawning {
                 if oldValue != .spawning {
@@ -197,7 +206,7 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var connectionRestartInProgress = false
     /// Runtime-only state for the current unexpected connection loss.
     /// Nil outside a recovery incident.
-    @Published private(set) var connectionRecoveryState: ACPConnectionRecoveryState?
+    @Published private(set) var connectionRecoveryState: ACPConnectionRecoveryState? { willSet { nextPromptActivity.send() } }
     /// Prompt content capabilities learned from ACP `initialize`.
     /// Runtime-only: re-learned on each attach, never persisted. Drives
     /// send-time hydration in `ACPSessionRunner.hydrate`.
@@ -208,7 +217,7 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
     /// Persisted fork lineage hydrated with the session. A nil value means
     /// this session was not created as a fork.
-    @Published var forkRecord: ACPSessionForkRecord?
+    @Published var forkRecord: ACPSessionForkRecord? { willSet { nextPromptActivity.send() } }
     /// Auth methods learned from ACP `initialize`.
     /// Runtime-only: re-learned on each attach and used when an agent asks
     /// the client to authenticate before ACP can continue.
@@ -364,7 +373,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// state for sessions returned by `placeholderSession`; `.ready` is the
     /// initial state for sessions returned by `createSession`. `.failed`
     /// surfaces a hydration error to the view.
-    @Published var hydrationState: HydrationState
+    @Published var hydrationState: HydrationState { willSet { nextPromptActivity.send() } }
     /// ACP session id assigned by the agent on `session/new` (or the
     /// id we passed to `session/load`). Used for every subsequent
     /// protocol call (`session/prompt`, `session/cancel`, etc).
@@ -373,8 +382,8 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Persisted in `ACPSessionStore` and refreshed on each successful
     /// `session/new` or `session/load`.
     var remoteSessionId: String?
-    @Published var queue: [QueuedPrompt] = []
-    var pendingQueuePersistenceCount = 0
+    @Published var queue: [QueuedPrompt] = [] { willSet { nextPromptActivity.send() } }
+    var pendingQueuePersistenceCount = 0 { willSet { nextPromptActivity.send() } }
 
     struct ContextRestoreWarning: Equatable {
         var message: String
@@ -467,6 +476,8 @@ final class ACPSession: ObservableObject, Identifiable {
         self.createdAt = createdAt
         self.hydrationState = hydrationState
         self.restoredFromPersistence = restoredFromPersistence
+        composer.onNextPromptActivity = { [weak self] in self?.nextPromptActivity.send() }
+        transcript.onNextPromptActivity = { [weak self] in self?.nextPromptActivity.send() }
     }
 
     deinit {
@@ -566,6 +577,8 @@ final class ACPSession: ObservableObject, Identifiable {
         at timestamp: Date = Date(),
         worktreeRoot: String? = nil
     ) -> Set<Int> {
+        // Streaming buffers can publish before noteStreamingChange records their revision.
+        nextPromptActivity.send()
         if tracksRetryStatus {
             switch update {
             case .agentMessageChunk, .agentThoughtChunk, .toolCall, .toolCallUpdate, .plan:

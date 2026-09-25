@@ -766,6 +766,7 @@
 		5BB2FF7F9DFFFEF75CA508A2 /* RemoteLSPLauncherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D89D9FFAC80BDE46A651A0F /* RemoteLSPLauncherTests.swift */; };
 		5C15CCD6E7D896DEFA533C82 /* BuiltInAlasMCP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B7BEEA16E15CB254BD84F5F /* BuiltInAlasMCP.swift */; };
 		5C6F0DC6F76FC0B55F2F4051 /* DiffPaneTextDocumentBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52E5D3E9FAA7B6B251C3883D /* DiffPaneTextDocumentBuilder.swift */; };
+		5C7C4C080A08997C37F1803F /* NextPromptCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACED038CDBC11C1494A54818 /* NextPromptCoordinator.swift */; };
 		5C7FB63AAB19810C0756CD6C /* WebPreviewFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3814D85F14155E3A80BA3DC4 /* WebPreviewFeedback.swift */; };
 		5C86AEAEA5497DBF5FD7D604 /* initialize-response.json in Resources */ = {isa = PBXBuildFile; fileRef = 2463B784210156F489A13FAC /* initialize-response.json */; };
 		5C9791E96E80858B5A037941 /* session-update-agent-chunk.json in Resources */ = {isa = PBXBuildFile; fileRef = 4D63B166AF2C533BE6E59365 /* session-update-agent-chunk.json */; };
@@ -1179,6 +1180,7 @@
 		9491BBE9C9921D1FC4080750 /* OwnerTabsManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAD77E2C08E07CF82BAB51B /* OwnerTabsManagerTests.swift */; };
 		94B884D1DB09DB562A0DCC20 /* DiffInlineCommentModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22CF502ECFD2763E52CB022F /* DiffInlineCommentModel.swift */; };
 		94FE17D9014F666C293EEFBE /* GitService+Stash.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F3F67549BDACF73DFC2E477 /* GitService+Stash.swift */; };
+		9504517F125178E7A7CB1B4F /* NextPromptCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DA65F2D978D8BDA2AB928C4 /* NextPromptCoordinatorTests.swift */; };
 		950C937884477417569DC20B /* EmptyTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 008E982C8526670670425AB8 /* EmptyTabView.swift */; };
 		9547580C9DFECD838C120B90 /* DiffReviewRenderEligibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 389D0EB957CCC8447DB9C4FE /* DiffReviewRenderEligibility.swift */; };
 		955012C67C92F58BD629056F /* RenameFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45C396FB8AB5484B472DB7AE /* RenameFeature.swift */; };
@@ -2184,6 +2186,7 @@
 		0D4901C499EFE969EC36D116 /* MarkdownPreviewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewController.swift; sourceTree = "<group>"; };
 		0D536FED92C1F59BDA8924C3 /* ACPTranscriptTilingControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptTilingControllerTests.swift; sourceTree = "<group>"; };
 		0D8D902B9FF4F44E5C2C7F03 /* MergeOperationStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeOperationStateTests.swift; sourceTree = "<group>"; };
+		0DA65F2D978D8BDA2AB928C4 /* NextPromptCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NextPromptCoordinatorTests.swift; sourceTree = "<group>"; };
 		0DDCB33A74DC088022E5BD5F /* SymbolsFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SymbolsFeature.swift; sourceTree = "<group>"; };
 		0E1B5714AB51C0D1E7B6DB66 /* GGWorktreeContextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGWorktreeContextTests.swift; sourceTree = "<group>"; };
 		0E2A10683D1B7D0258F28E5F /* IssueResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssueResolverTests.swift; sourceTree = "<group>"; };
@@ -3424,6 +3427,7 @@
 		ACA21FC597E6EC3ABEB2F7E2 /* WorkspaceCheckoutCreationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceCheckoutCreationModelTests.swift; sourceTree = "<group>"; };
 		ACAF0D9BAB4658B356FBBBAA /* RunScriptPaletteModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScriptPaletteModelTests.swift; sourceTree = "<group>"; };
 		ACCA6B39E2B172FADFD9E0E6 /* DiffPaneTextDocumentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPaneTextDocumentView.swift; sourceTree = "<group>"; };
+		ACED038CDBC11C1494A54818 /* NextPromptCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NextPromptCoordinator.swift; sourceTree = "<group>"; };
 		ACFF914E16884DAC97F11C76 /* SearchEmptyState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchEmptyState.swift; sourceTree = "<group>"; };
 		AD08CC47344CBCA5FC635822 /* IssuePromptBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IssuePromptBuilder.swift; sourceTree = "<group>"; };
 		AD131F54E97843AF6A417F0B /* WorkspaceCheckoutBoundary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceCheckoutBoundary.swift; sourceTree = "<group>"; };
@@ -4994,6 +4998,7 @@
 			isa = PBXGroup;
 			children = (
 				332ECD18C5EC56195D662FB8 /* NextPromptContext.swift */,
+				ACED038CDBC11C1494A54818 /* NextPromptCoordinator.swift */,
 				7BBAC811184FEB2F4577014A /* NextPromptInference.swift */,
 				54624656B3B8840BB9282480 /* NextPromptModelDownload.swift */,
 				CCCF8D8A753E293D9E033710 /* NextPromptModelLease.swift */,
@@ -6238,6 +6243,7 @@
 			isa = PBXGroup;
 			children = (
 				2D032B8DBF054E2E659A7FDB /* NextPromptContextTests.swift */,
+				0DA65F2D978D8BDA2AB928C4 /* NextPromptCoordinatorTests.swift */,
 				99ADB2CF3D4BF7E1BFC5ADC5 /* NextPromptInferenceTests.swift */,
 				89ABF997018CFF8654AF045C /* NextPromptModelLeaseTests.swift */,
 				18E42BF4852159E7E9DFDFAB /* NextPromptModelStoreTests.swift */,
@@ -8403,6 +8409,7 @@
 				11BA08BA4E2FE30CD6D4DA87 /* NewWorktreeDialog.swift in Sources */,
 				CFA6B63752FF405E2BABDB48 /* NewWorktreeIssueState.swift in Sources */,
 				5A192E49D2739D2D8CDA38CE /* NextPromptContext.swift in Sources */,
+				5C7C4C080A08997C37F1803F /* NextPromptCoordinator.swift in Sources */,
 				AF8176129CC52CFEC3D99F42 /* NextPromptInference.swift in Sources */,
 				C00184244AA6E0D16BF66FD2 /* NextPromptModelDownload.swift in Sources */,
 				10D62A1BBCAD4D8A7240147E /* NextPromptModelLease.swift in Sources */,
@@ -9389,6 +9396,7 @@
 				1201C8A30A1A932311FA2156 /* NewWorktreeDialogTests.swift in Sources */,
 				1240D4046831ECB9ED93AD03 /* NewWorktreeIssueStateTests.swift in Sources */,
 				59E638C5601E88B41FBB5BF8 /* NextPromptContextTests.swift in Sources */,
+				9504517F125178E7A7CB1B4F /* NextPromptCoordinatorTests.swift in Sources */,
 				7E3FC231CA6865CF6F172F26 /* NextPromptInferenceTests.swift in Sources */,
 				52555BBEEDFF9625FBBFBF39 /* NextPromptModelLeaseTests.swift in Sources */,
 				A47EABB092B0E1C9F347B69B /* NextPromptModelStoreTests.swift in Sources */,
