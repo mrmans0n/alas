@@ -7091,7 +7091,9 @@ extension ACPSessionManager {
                     closeError = error
                 }
             }
-            if closeRemote {
+            if let attempt, let isolatedStartupID {
+                await shutdownBrokerClient(for: attempt, startupID: isolatedStartupID, isolated: true)
+            } else if closeRemote {
                 let shutdownOutcome = await runBounded(timeout: .seconds(2)) {
                     await attaching.connection.shutdown()
                 }

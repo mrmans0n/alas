@@ -303,6 +303,40 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(await sharedService.detached.isEmpty)
     }
 
+    @Test("detaching during isolated broker initialization closes the fallback broker")
+    func detachingDuringIsolatedBrokerInitializationClosesFallbackBroker() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerServiceProxy(stallOpen: true)
+        let isolatedService = ManagerBrokerServiceProxy(stallSendMethod: "initialize")
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .milliseconds(50),
+            restartTeardownTimeout: .seconds(1)
+        )
+        let session = manager.createSession(agentId: "claude")
+        let attach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.openGate.hasEntered
+        }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await isolatedService.sendGate.hasEntered
+        }
+
+        await manager.detach(sessionId: session.id)
+
+        #expect(await isolatedService.closed.count == 1)
+        #expect(await isolatedService.detached.isEmpty)
+
+        await isolatedService.sendGate.release()
+        await sharedService.openGate.release()
+        await attach.value
+    }
+
     @Test("a timed-out primary broker is closed if its open completes late")
     func latePrimaryBrokerOpenIsClosedAfterTimeout() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
