@@ -1315,6 +1315,7 @@ struct WorktreeService {
             """
         ], cwd: worktreePath)
         guard submodules.exitCode == 0 else { throw WorktreeError.gitFailed(submodules.stderr) }
+        let submoduleGitDirectories = try await Self.submoduleGitDirectoryInventory(worktreePath: worktreePath)
 
         var payload = Data()
         func append(_ label: String, _ data: Data) {
@@ -1331,6 +1332,8 @@ struct WorktreeService {
         append("cachedDiff", cachedDiff.stdout)
         append("untracked", untracked.stdout)
         append("submodules", submodules.stdout)
+        append("submoduleGitDirectories", Data(submoduleGitDirectories.stored.joined(separator: "\n").utf8))
+        append("activeSubmoduleGitDirectories", Data(submoduleGitDirectories.active.sorted().joined(separator: "\n").utf8))
         return SHA256.hash(data: payload)
             .map { String(format: "%02x", $0) }
             .joined()
@@ -1389,10 +1392,10 @@ struct WorktreeService {
     }
 
     /// A scheduled run may discard its checkout only when its original base is
-    /// an ancestor of the current tip, that tip is remotely reachable, and every
-    /// initialized submodule HEAD and commit reachable from local refs or reflogs
-    /// is also remotely reachable. Local-only commits remain available for review
-    /// in the worktree.
+    /// an ancestor of the current tip, that tip is remotely reachable, every
+    /// initialized submodule HEAD and local commit is remotely reachable, and no
+    /// deinitialized submodule repository remains under the worktree Git directory.
+    /// Local-only commits remain available for review in the worktree.
     static func scheduledCleanupHistoryIsSafe(
         baseCommit: String,
         expectedBranch: String,
@@ -1431,6 +1434,11 @@ struct WorktreeService {
         guard !remoteRefs.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return false
         }
+        let moduleDirectories = try await Self.submoduleGitDirectoryInventory(worktreePath: worktreePath)
+        guard moduleDirectories.stored.allSatisfy({ moduleDirectories.active.contains($0) }) else {
+            return false
+        }
+
         let submoduleRemoteRefs = try await Process.git(
             [
                 "submodule", "foreach", "--quiet", "--recursive",
@@ -1445,10 +1453,80 @@ struct WorktreeService {
             cwd: worktreePath,
             usesRemoteHostRegistry: false
         )
-        // foreach visits only initialized submodules. A missing remote ref,
-        // nested command failure, or inability to inspect one must all refuse
-        // scheduled deletion.
+        // foreach visits only initialized submodules. The inventory above also
+        // refuses repositories left behind after deinitialization.
         return submoduleRemoteRefs.exitCode == 0
+    }
+
+    private static func submoduleGitDirectoryInventory(
+        worktreePath: URL
+    ) async throws -> (stored: [String], active: Set<String>) {
+        let modulesDirectoryResult = try await Process.git(
+            ["rev-parse", "--git-path", "modules"],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        guard modulesDirectoryResult.exitCode == 0 else {
+            throw WorktreeError.gitFailed(modulesDirectoryResult.stderr)
+        }
+        let modulesDirectoryPath = modulesDirectoryResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !modulesDirectoryPath.isEmpty else {
+            throw WorktreeError.gitFailed("Git returned an empty submodule repository path.")
+        }
+        let modulesDirectory = URL(
+            fileURLWithPath: modulesDirectoryPath,
+            relativeTo: worktreePath
+        ).standardizedFileURL
+
+        let activeResult = try await Process.git(
+            ["submodule", "foreach", "--quiet", "--recursive", "git rev-parse --absolute-git-dir"],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        guard activeResult.exitCode == 0 else { throw WorktreeError.gitFailed(activeResult.stderr) }
+        let active = Set(activeResult.stdout.split(whereSeparator: \.isNewline).map {
+            Self.resolvedFileSystemPath(URL(fileURLWithPath: String($0)))
+        })
+        return (
+            stored: try Self.submoduleGitDirectories(in: modulesDirectory),
+            active: active
+        )
+    }
+
+    private static func submoduleGitDirectories(in modulesDirectory: URL) throws -> [String] {
+        var gitDirectories = Set<String>()
+        func visit(_ directory: URL) throws {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory) else { return }
+            guard isDirectory.boolValue else {
+                throw WorktreeError.gitFailed("The submodule repository path is not a directory.")
+            }
+
+            let children = try FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                options: []
+            )
+            for child in children {
+                let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                if values.isSymbolicLink == true {
+                    throw WorktreeError.gitFailed("A symbolic link prevents submodule repository verification.")
+                }
+                guard values.isDirectory == true else { continue }
+
+                let hasGitMetadata = ["HEAD", "objects", "refs"].contains {
+                    FileManager.default.fileExists(atPath: child.appendingPathComponent($0).path)
+                }
+                if hasGitMetadata {
+                    gitDirectories.insert(Self.resolvedFileSystemPath(child))
+                    try visit(child.appendingPathComponent("modules", isDirectory: true))
+                } else {
+                    try visit(child)
+                }
+            }
+        }
+        try visit(modulesDirectory)
+        return gitDirectories.sorted()
     }
 
     static func porcelainMarksWorktreeLocked(_ porcelain: String, worktreePath: URL) -> Bool {

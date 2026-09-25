@@ -1,5 +1,43 @@
 import SwiftUI
 
+struct ScheduledAgentReportPageRefresh {
+    let reports: [ScheduledAgentReport]
+    let pageOffset: Int
+    let hasMore: Bool
+
+    static func mergingFirstPage(
+        _ firstPage: [ScheduledAgentReport],
+        into reports: [ScheduledAgentReport],
+        pageOffset: Int,
+        hasMore: Bool,
+        pageSize: Int
+    ) -> Self {
+        let existingIDs = Set(reports.map(\.id))
+        let newReports = firstPage.filter { !existingIDs.contains($0.id) }
+
+        if firstPage.count == pageSize, newReports.count == pageSize {
+            // The first page is entirely new; continue from its boundary, not
+            // the old offset, or intervening reports will be skipped.
+            return Self(reports: firstPage, pageOffset: firstPage.count, hasMore: true)
+        }
+
+        var refreshedReports = reports
+        if !newReports.isEmpty {
+            refreshedReports.insert(contentsOf: newReports, at: 0)
+        }
+        for report in firstPage {
+            guard let index = refreshedReports.firstIndex(where: { $0.id == report.id }) else { continue }
+            refreshedReports[index] = report
+        }
+
+        return Self(
+            reports: refreshedReports,
+            pageOffset: pageOffset + newReports.count,
+            hasMore: pageOffset > pageSize ? hasMore : firstPage.count == pageSize
+        )
+    }
+}
+
 struct ScheduledAgentReportsSheet: View {
     @Bindable var state: AppState
     let projectID: String
@@ -515,19 +553,16 @@ struct ScheduledAgentReportsSheet: View {
                 limit: pageSize
             )
             guard !Task.isCancelled, selectedReportID == nil else { return }
-            let hadLoadedOlderPages = pageOffset > pageSize
-            let existingIDs = Set(reports.map(\.id))
-            let newReports = firstPage.filter { !existingIDs.contains($0.id) }
-            if !newReports.isEmpty {
-                reports.insert(contentsOf: newReports, at: 0)
-                pageOffset += newReports.count
-            }
-            for report in firstPage {
-                updateReportInList(report)
-            }
-            if !hadLoadedOlderPages {
-                hasMore = firstPage.count == pageSize
-            }
+            let refreshedPage = ScheduledAgentReportPageRefresh.mergingFirstPage(
+                firstPage,
+                into: reports,
+                pageOffset: pageOffset,
+                hasMore: hasMore,
+                pageSize: pageSize
+            )
+            reports = refreshedPage.reports
+            pageOffset = refreshedPage.pageOffset
+            hasMore = refreshedPage.hasMore
             pageError = nil
             await refreshPendingReports(excluding: Set(firstPage.map(\.id)))
         } catch {

@@ -78,6 +78,50 @@ struct ScheduledAgentReportStoreTests {
         #expect(try await reopened.page(projectID: "project", offset: 0, limit: 10) == [finished])
     }
 
+    @Test func reportPageRefreshResetsPaginationWhenFirstPageIsEntirelyNew() {
+        let firstPage = [
+            report(id: "new-1", occurrenceID: "new-1"),
+            report(id: "new-2", occurrenceID: "new-2")
+        ]
+        let existingReports = (0..<6).map { index in
+            report(id: "old-\(index)", occurrenceID: "old-\(index)")
+        }
+
+        let refreshed = ScheduledAgentReportPageRefresh.mergingFirstPage(
+            firstPage,
+            into: existingReports,
+            pageOffset: existingReports.count,
+            hasMore: false,
+            pageSize: firstPage.count
+        )
+
+        #expect(refreshed.reports.map(\.id) == ["new-1", "new-2"])
+        #expect(refreshed.pageOffset == 2)
+        #expect(refreshed.hasMore)
+    }
+
+    @Test func reportPageRefreshMergesSmallInsertionsWithoutResettingOlderPages() {
+        let existingReports = (0..<4).map { index in
+            report(id: "old-\(index)", occurrenceID: "old-\(index)")
+        }
+        let firstPage = [
+            report(id: "new", occurrenceID: "new"),
+            existingReports[0]
+        ]
+
+        let refreshed = ScheduledAgentReportPageRefresh.mergingFirstPage(
+            firstPage,
+            into: existingReports,
+            pageOffset: existingReports.count,
+            hasMore: true,
+            pageSize: firstPage.count
+        )
+
+        #expect(refreshed.reports.map(\.id) == ["new", "old-0", "old-1", "old-2", "old-3"])
+        #expect(refreshed.pageOffset == 5)
+        #expect(refreshed.hasMore)
+    }
+
     @Test func acceptedCompletionStaysRunningUntilThePromptSettlesAndRejectsDuplicates() async throws {
         let path = temporaryPath()
         defer { try? FileManager.default.removeItem(atPath: path) }
