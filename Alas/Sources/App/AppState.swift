@@ -7037,6 +7037,11 @@ final class AppState {
         forcedCwd: URL?,
         repoStartupScript: String?
     ) throws -> OpenedTerminalSession {
+        if let lineageID = worktree.lineageID {
+            guard checkpointWriterLeases.admissionIsAllowed(lineageIDs: [lineageID]) else {
+                throw TerminalLaunchError.worktreeOperationInProgress
+            }
+        }
         guard !Self.blocksWorktreeSessionAdmission(
             projectsManager.operationState(for: worktree)
         ) else {
@@ -7088,6 +7093,15 @@ final class AppState {
     ) throws -> Tab {
         guard !checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
+        }
+        // Scheduled cleanup holds the deletion lock across its final lease
+        // checks and the staging rename; a shell admitted in that window
+        // would keep writing into a worktree that is about to be renamed
+        // away.
+        if let lineageID = worktree.lineageID {
+            guard checkpointWriterLeases.admissionIsAllowed(lineageIDs: [lineageID]) else {
+                throw TerminalLaunchError.worktreeOperationInProgress
+            }
         }
         guard !Self.blocksWorktreeSessionAdmission(
             projectsManager.operationState(for: worktree)
@@ -11795,13 +11809,21 @@ final class AppState {
 
     private func acquireCheckpointTerminalLease(for session: TerminalSession) {
         let lineageIDs = checkpointTerminalLeaseLineageIDs(for: session)
-        checkpointWriterLeases.acquire(
+        let acquired = checkpointWriterLeases.acquire(
             lineageIDs: lineageIDs,
             sessionID: session.id,
             instanceID: instanceId,
             zmxSessionName: session.zmxSessionName,
             remoteHost: session.remoteHost
         )
+        guard acquired else {
+            // A scheduled cleanup holds the deletion lock: the shell was
+            // admitted before the lock was taken, so the lease probe passed
+            // but the write was refused. The session must not survive —
+            // it has no lease and its worktree is about to be renamed away.
+            closeTerminalSession(id: session.id, worktreeId: session.worktreeId, projectPath: nil)
+            return
+        }
     }
 
     private func checkpointTerminalLeaseLineageIDs(for session: TerminalSession) -> Set<String> {

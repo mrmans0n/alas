@@ -27,6 +27,10 @@ struct CheckpointWriterLeaseStore: Sendable {
         self.activePersistentSessionNames = activePersistentSessionNames
     }
 
+    /// Acquires a writer lease. Returns `false` when admission was refused
+    /// because a scheduled cleanup holds the deletion lock — the caller must
+    /// treat that as a failed launch, not a silently unwritten lease.
+    @discardableResult
     func acquire(
         lineageIDs: Set<String>,
         sessionID: String,
@@ -34,13 +38,23 @@ struct CheckpointWriterLeaseStore: Sendable {
         zmxSessionName: String?,
         remoteHost: String?,
         pid: Int64 = Int64(ProcessInfo.processInfo.processIdentifier)
-    ) {
-        guard !lineageIDs.isEmpty else { return }
+    ) -> Bool {
+        guard !lineageIDs.isEmpty else { return true }
+        let validIDs = lineageIDs.filter(validLineageID)
+        guard !validIDs.isEmpty else { return true }
         // Scheduled cleanup holds the per-lineage deletion lock across its
-        // final lease checks and the staging rename. Refusing to write a
-        // lease file while it is held keeps a new writer from attaching to a
-        // worktree that cleanup is about to rename away.
-        guard admissionIsAllowed(lineageIDs: lineageIDs) else { return }
+        // final lease checks and the staging rename. The lock is held from
+        // the admission probe through the lease write so a cleanup racing
+        // after the probe cannot rename the worktree while a lease-less
+        // writer is launching; without it cleanup would observe zero
+        // writers and destroy the checkout underneath the new session.
+        let admissionLease = holdDeletionLock(
+            lineageIDs: validIDs,
+            instanceID: instanceID,
+            sessionID: sessionID
+        )
+        guard admissionLease != nil else { return false }
+        defer { _ = admissionLease }
         let record = CheckpointWriterLeaseRecord(
             schemaVersion: CheckpointWriterLeaseRecord.schemaVersion,
             instanceID: instanceID,
@@ -52,12 +66,13 @@ struct CheckpointWriterLeaseStore: Sendable {
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(record) else { return }
-        for lineageID in lineageIDs where validLineageID(lineageID) {
+        guard let data = try? encoder.encode(record) else { return true }
+        for lineageID in validIDs {
             let directory = root.appendingPathComponent(lineageID, isDirectory: true)
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try? data.write(to: leaseURL(lineageID: lineageID, sessionID: sessionID, instanceID: instanceID), options: [.atomic])
         }
+        return true
     }
 
     func release(sessionID: String, instanceID: String) {

@@ -355,6 +355,18 @@ private struct ScheduleCard: View {
         .task(id: reportHistoryToken) {
             await loadReportSummaries()
         }
+        .task(id: isShowingHistory ? schedule.id : "") {
+            // Deletions by another Alas process never touch the firing IDs
+            // or this process's deletion generation, so poll while the
+            // history is open: the shared store is the only cross-instance
+            // signal for a report that vanished.
+            guard isShowingHistory else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled, isShowingHistory else { return }
+                await refreshReportSummaries()
+            }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("schedule-card-\(schedule.id)")
         .confirmationDialog(
@@ -537,25 +549,60 @@ private struct ScheduleCard: View {
             return
         }
         let ids = Array(Set(state.runScheduler.firings(for: schedule.id).flatMap(\.reportIDs))).sorted()
-        var loaded: [String: ScheduledAgentReport] = [:]
-        var sawReadError = false
+        // A thrown lookup (e.g. the SQLite write lock held by another
+        // process) is not proof the report is gone. `.task(id:)` re-runs
+        // only when the token changes, so retry here with a short backoff
+        // instead of leaving stale or generic links displayed indefinitely.
+        for attempt in 0..<3 {
+            if attempt > 0 {
+                try? await Task.sleep(for: .seconds(1))
+            }
+            var loaded: [String: ScheduledAgentReport] = [:]
+            var sawReadError = false
+            for id in ids {
+                guard !Task.isCancelled else { return }
+                do {
+                    if let report = try await state.scheduledAgentReport(id: id) {
+                        loaded[id] = report
+                    }
+                } catch {
+                    sawReadError = true
+                }
+            }
+            guard !Task.isCancelled else { return }
+            if sawReadError { continue }
+            reportSummaries = loaded
+            hasLoadedReportSummaries = true
+            return
+        }
+    }
+
+    /// Lighter pass for the cross-instance poll: only downgrades a link when
+    /// the shared store confirms the row is gone (a successful nil lookup),
+    /// never on read errors — those leave the current rendering in place.
+    private func refreshReportSummaries() async {
+        guard isShowingHistory, hasLoadedReportSummaries else { return }
+        let ids = Array(Set(state.runScheduler.firings(for: schedule.id).flatMap(\.reportIDs))).sorted()
+        var summaries = reportSummaries
+        var changed = false
         for id in ids {
             guard !Task.isCancelled else { return }
             do {
                 if let report = try await state.scheduledAgentReport(id: id) {
-                    loaded[id] = report
+                    if summaries[id]?.id != report.id {
+                        summaries[id] = report
+                        changed = true
+                    }
+                } else if summaries[id] != nil {
+                    summaries[id] = nil
+                    changed = true
                 }
             } catch {
-                // A thrown lookup (e.g. the database write lock held by
-                // another process) is not proof the report is gone: keep
-                // the previous summaries and let the task re-run instead
-                // of rendering a live report as deleted.
-                sawReadError = true
+                continue
             }
         }
-        guard !Task.isCancelled, !sawReadError else { return }
-        reportSummaries = loaded
-        hasLoadedReportSummaries = true
+        guard !Task.isCancelled, changed else { return }
+        reportSummaries = summaries
     }
 
     private var actionLabel: String {
