@@ -235,7 +235,10 @@ struct NextPromptSettingsTests {
         case "cancel": await state.cancelNextPromptDownload()
         case "disable": await state.disableNextPromptSuggestions()
         case "modelChange":
-            try await fixture.store.remove()
+            // The store's own exclusive-lock guard is advisory and, like the product's
+            // own "retry when it finishes" UI for .busy, expected to be momentarily
+            // contended right after a concurrent inspection — retry rather than fail.
+            try await waitUntilRemoved(fixture)
             await state.inspectNextPromptModel()
         default: await state.shutdownNextPromptSuggestions()
         }
@@ -435,8 +438,28 @@ struct NextPromptSettingsTests {
                  nextPromptSupported: supported)
     }
 
+    /// Removal races benignly with a concurrent inspection's advisory lock; retry
+    /// like the product's own "retry when it finishes" .busy handling does.
+    private func waitUntilRemoved(_ fixture: ModelStoreFixture) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+        while true {
+            do {
+                try await fixture.store.remove()
+                return
+            } catch NextPromptModelFailure.busy {
+                try #require(ContinuousClock.now < deadline)
+                await Task.yield()
+            }
+        }
+    }
+
     private func waitUntil(_ condition: () async -> Bool) async throws {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        // 5s was too tight on loaded CI runners: the tasks under test are real actor
+        // hops competing with ~1300 other tests' work on the same cooperative pool,
+        // and have been observed missing that deadline by microseconds. 20s stays
+        // safely under the harness's per-test 60s execution allowance, including the
+        // one test above that calls this twice.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
         while !(await condition()) {
             try #require(ContinuousClock.now < deadline)
             await Task.yield()
