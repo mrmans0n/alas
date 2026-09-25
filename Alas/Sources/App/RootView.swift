@@ -1063,7 +1063,7 @@ private struct RootBaseHandlers: ViewModifier {
         let h = g
             .onReceive(NotificationCenter.default.publisher(for: .alasSaveActiveTab)) { _ in
                 if let wt = selectedWorktree() {
-                    state.saveActiveTab(worktreeId: wt.id)
+                    state.saveActiveTab(worktreeId: wt.id, projectId: wt.projectId)
                 }
             }
         let i = h

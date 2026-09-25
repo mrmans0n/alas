@@ -353,28 +353,30 @@ final class AppState {
         (centerGitMutationCounts[worktreeId] ?? 0) > 0 || tabs.hasRunningCommitPublish(worktreeId: worktreeId)
     }
 
-    func checkpointFileWritesDisabled(worktreeId: String) -> Bool {
-        rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled ?? true
+    func checkpointFileWritesDisabled(worktreeId: String, projectId: String? = nil) -> Bool {
+        rightPaneStore.activeState(worktreeId: worktreeId, projectId: projectId)?
+            .checkpointMutationsDisabled ?? true
     }
 
     func checkpointFileWritesDisabledAfterDiscovery(worktreeId: String, projectId: String? = nil) async -> Bool {
         guard let projectId else {
-            return await checkpointMutationsDisabledAfterDiscovery(worktreeId: worktreeId)
+            return await checkpointMutationsDisabledAfterDiscovery(worktreeId: worktreeId, projectId: nil)
         }
         guard let worktree = worktree(withId: worktreeId, inProjectId: projectId) else { return true }
         return await checkpointMutationsDisabledAfterDiscovery(for: worktree)
     }
 
-    func checkpointTerminalAdmissionDisabled(worktreeId: String) -> Bool {
-        rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointRestoreBlocksWriters ?? false
+    func checkpointTerminalAdmissionDisabled(worktreeId: String, projectId: String? = nil) -> Bool {
+        rightPaneStore.activeState(worktreeId: worktreeId, projectId: projectId)?
+            .checkpointRestoreBlocksWriters ?? false
     }
 
-    func checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: String) async -> Bool {
-        await checkpointRestoreBlocksWritersAfterDiscovery(worktreeId: worktreeId)
+    func checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: String, projectId: String? = nil) async -> Bool {
+        await checkpointRestoreBlocksWritersAfterDiscovery(worktreeId: worktreeId, projectId: projectId)
     }
 
-    func checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: String) async -> Bool {
-        await checkpointMutationsDisabledAfterDiscovery(worktreeId: worktreeId)
+    func checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: String, projectId: String? = nil) async -> Bool {
+        await checkpointMutationsDisabledAfterDiscovery(worktreeId: worktreeId, projectId: projectId)
     }
 
     func checkpointACPAdmissionDisabledAfterDiscovery(owner: SessionOwnerID?, fallbackWorktree: Worktree?) async -> Bool {
@@ -383,7 +385,7 @@ final class AppState {
             if let fallbackWorktree, fallbackWorktree.id == worktreeID {
                 return await checkpointMutationsDisabledAfterDiscovery(for: fallbackWorktree)
             }
-            return await checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktreeID)
+            return await checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktreeID, projectId: nil)
         case .projectWorktree(let projectId, let worktreeID):
             guard let worktree = worktree(withId: worktreeID, inProjectId: projectId) else { return true }
             return await checkpointMutationsDisabledAfterDiscovery(for: worktree)
@@ -401,15 +403,15 @@ final class AppState {
         await checkpointMutationsDisabledAfterDiscovery(for: worktree)
     }
 
-    private func checkpointMutationsDisabledAfterDiscovery(worktreeId: String) async -> Bool {
-        guard let (_, worktree) = projectAndWorktree(withWorktreeId: worktreeId) else {
+    private func checkpointMutationsDisabledAfterDiscovery(worktreeId: String, projectId: String?) async -> Bool {
+        guard let (_, worktree) = projectAndWorktree(withWorktreeId: worktreeId, inProjectId: projectId) else {
             return true
         }
         return await checkpointMutationsDisabledAfterDiscovery(for: worktree)
     }
 
-    private func checkpointRestoreBlocksWritersAfterDiscovery(worktreeId: String) async -> Bool {
-        guard let (_, worktree) = projectAndWorktree(withWorktreeId: worktreeId) else {
+    private func checkpointRestoreBlocksWritersAfterDiscovery(worktreeId: String, projectId: String?) async -> Bool {
+        guard let (_, worktree) = projectAndWorktree(withWorktreeId: worktreeId, inProjectId: projectId) else {
             return false
         }
         return await checkpointRestoreBlocksWritersAfterDiscovery(for: worktree)
@@ -1771,12 +1773,14 @@ final class AppState {
 
     /// Tear down tabs, terminals, harness state, and editor buffers for any
     /// worktree IDs that existed in `beforeIds` but are absent after a refresh.
-    /// Also re-points selection if the selected worktree was removed.
-    func cleanupMissingWorktrees(beforeIds: Set<String>) async {
-        cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: allWorktreeIds())
+    /// Also re-points selection if the selected worktree was removed. The
+    /// refreshed project scopes project-owned runtime disposal; shared ids
+    /// keep their surviving project's managers alive.
+    func cleanupMissingWorktrees(beforeIds: Set<String>, projectId: String? = nil) async {
+        cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: allWorktreeIds(), projectId: projectId)
     }
 
-    private func cleanupMissingWorktreeState(beforeIds: Set<String>, afterIds: Set<String>) {
+    private func cleanupMissingWorktreeState(beforeIds: Set<String>, afterIds: Set<String>, projectId: String? = nil) {
         let disappeared = beforeIds.subtracting(afterIds)
         let landingProjectsToMigrate = Set(disappeared.flatMap { id in
             tabs.tabs(forWorktree: id).compactMap { tab -> String? in
@@ -1787,7 +1791,7 @@ final class AppState {
             }
         })
         for id in disappeared {
-            cleanupWorktreeState(worktreeId: id)
+            cleanupWorktreeState(worktreeId: id, projectId: projectId)
         }
         // Stack badges are keyed by worktree path; drop entries for
         // worktrees that no longer exist so deleted stacks don't keep a
@@ -3719,7 +3723,7 @@ final class AppState {
     }
 
     private func cleanupDeletedWorkspaceMemberRuntime(_ worktree: Worktree) async {
-        cleanupWorktreeState(worktreeId: worktree.id)
+        cleanupWorktreeState(worktreeId: worktree.id, projectId: worktree.projectId)
         projectsManager.setOperationState(for: worktree, state: nil)
         removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
         _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
@@ -5084,7 +5088,7 @@ final class AppState {
     }
 
     func removeFailedOptimisticWorktree(id: String, projectId: String) {
-        cleanupWorktreeState(worktreeId: id)
+        cleanupWorktreeState(worktreeId: id, projectId: projectId)
         removeUnpersistedGGWorktreeMode(projectId: projectId, worktreeId: id)
         projectsManager.removeGGWorktreeMode(projectId: projectId, worktreeId: id)
         projectsManager.removeOptimisticWorktree(id: id, projectId: projectId)
@@ -6241,7 +6245,7 @@ final class AppState {
         if !addedIds.isEmpty {
             tabs.loadAll(worktreeIds: Array(addedIds))
         }
-        await cleanupMissingWorktrees(beforeIds: beforeIds)
+        await cleanupMissingWorktrees(beforeIds: beforeIds, projectId: projectId)
     }
 
     /// Refresh every project, persist any reconciled configuration, and move
@@ -6404,7 +6408,7 @@ final class AppState {
         guard projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else {
             return
         }
-        cleanupWorktreeState(worktreeId: worktree.id, purgeRunHistory: false)
+        cleanupWorktreeState(worktreeId: worktree.id, projectId: worktree.projectId, purgeRunHistory: false)
 
         refreshGGSidebar()
         if selectedWorktreeId == worktree.id {
@@ -7326,7 +7330,7 @@ final class AppState {
         titleOverride: String? = nil,
         runScriptKey: String? = nil
     ) async throws -> Tab {
-        guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
+        guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id, projectId: worktree.projectId) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
@@ -7415,7 +7419,7 @@ final class AppState {
         titleOverride: String? = nil,
         runScriptKey: String? = nil
     ) throws -> Tab {
-        guard !checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) else {
+        guard !checkpointTerminalAdmissionDisabled(worktreeId: worktree.id, projectId: worktree.projectId) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
         guard !Self.blocksWorktreeSessionAdmission(
@@ -8350,9 +8354,9 @@ final class AppState {
         return tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId })
     }
 
-    func saveActiveTab(worktreeId: String) {
+    func saveActiveTab(worktreeId: String, projectId: String? = nil) {
         Task {
-            guard await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else { return }
+            guard await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId, projectId: projectId ?? self.selectedWorktreeProjectId) else { return }
             _ = await tabs.saveActiveAsync(worktreeId: worktreeId, config: config.code)
         }
     }
@@ -8366,7 +8370,10 @@ final class AppState {
                     projectHosts[project.id] = host
                 }
                 for worktree in projectsManager.worktrees(projectId: project.id) {
-                    guard await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktree.id) else { continue }
+                    guard await !self.checkpointFileWritesDisabledAfterDiscovery(
+                        worktreeId: worktree.id,
+                        projectId: project.id
+                    ) else { continue }
                     roots[worktree.id] = roots[worktree.id] ?? worktree.path
                 }
             }
@@ -8632,10 +8639,10 @@ final class AppState {
     }
 
     func saveActiveTabAs(worktreeId: String) {
-        guard !checkpointFileWritesDisabled(worktreeId: worktreeId) else { return }
         let projectId = selectedWorktreeId == worktreeId ? selectedWorktreeProjectId : nil
         guard let worktree = worktree(withId: worktreeId, inProjectId: projectId),
               let context = tabs.activeEditorContext(worktreeId: worktreeId, projectId: projectId) else { return }
+        guard !checkpointFileWritesDisabled(worktreeId: worktreeId, projectId: worktree.projectId) else { return }
         let currentURL = worktree.path.appendingPathComponent(context.tab.relativePath)
         if context.buffer.isRemote {
             guard let relativePath = promptForRemoteRelativePath(
@@ -8657,7 +8664,10 @@ final class AppState {
             Task { @MainActor [weak self] in
                 do {
                     guard let self,
-                          await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                          await !self.checkpointFileWritesDisabledAfterDiscovery(
+                            worktreeId: worktreeId,
+                            projectId: worktree.projectId
+                          )
                     else { return }
                     try await context.buffer.saveAsRemote(relativePath: relativePath)
                     _ = self.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
@@ -8677,7 +8687,10 @@ final class AppState {
 
         Task { @MainActor [weak self] in
             guard let self,
-                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                  await !self.checkpointFileWritesDisabledAfterDiscovery(
+                    worktreeId: worktreeId,
+                    projectId: worktree.projectId
+                  )
             else { return }
             do {
                 let relativePath = try self.relativePath(for: url, in: worktree.path)
@@ -8756,7 +8769,10 @@ final class AppState {
             guard relativePath != context.tab.relativePath else { return }
             Task { @MainActor [weak self] in
                 guard let self,
-                      await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                      await !self.checkpointFileWritesDisabledAfterDiscovery(
+                        worktreeId: worktreeId,
+                        projectId: worktree.projectId
+                      )
                 else { return }
                 do {
                     try await context.buffer.moveToRemote(relativePath: relativePath)
@@ -8777,7 +8793,10 @@ final class AppState {
 
         Task { @MainActor [weak self] in
             guard let self,
-                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                  await !self.checkpointFileWritesDisabledAfterDiscovery(
+                    worktreeId: worktreeId,
+                    projectId: worktree.projectId
+                  )
             else { return }
             do {
                 let relativePath = try self.relativePath(for: url, in: worktree.path)
@@ -9601,10 +9620,13 @@ final class AppState {
 
     /// Tear down every tab/terminal/harness reference for a worktree id without
     /// touching git. Shared between Close-All, archive, and delete so the
-    /// bookkeeping stays in one place.
+    /// bookkeeping stays in one place. `projectId` scopes project-owned
+    /// runtime (ACP managers) to the removed owner; nil means the caller
+    /// cannot know a surviving owner and disposes every matching manager.
     @discardableResult
     private func cleanupWorktreeState(
         worktreeId: String,
+        projectId: String? = nil,
         purgeRunScriptFailures: Bool = true,
         purgeRunHistory: Bool = true
     ) -> Task<Void, Never>? {
@@ -9622,7 +9644,7 @@ final class AppState {
         invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
-        disposeACPManager(for: worktreeId)
+        disposeACPManager(for: worktreeId, projectId: projectId)
         if purgeRunScriptFailures {
             // Coordinators are keyed by host (shared paths may be owned by
             // several projects), so dispose every host bucket for this id.
@@ -12028,7 +12050,7 @@ final class AppState {
                 purgeHistory: true
             )
         } else {
-            runHistoryPurgeTask = cleanupWorktreeState(worktreeId: worktree.id)
+            runHistoryPurgeTask = cleanupWorktreeState(worktreeId: worktree.id, projectId: worktree.projectId)
         }
         await runHistoryPurgeTask?.value
         if case .staged(let ticket) = outcome {
@@ -12689,7 +12711,7 @@ final class AppState {
     private func checkpointTerminalAdmissionDisabled(for checkout: WorkspaceCheckout) -> Bool {
         for member in checkout.members where member.availability == .available {
             guard let worktree = checkpointMemberWorktree(for: member) else { continue }
-            if checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) { return true }
+            if checkpointTerminalAdmissionDisabled(worktreeId: worktree.id, projectId: worktree.projectId) { return true }
         }
         return false
     }
@@ -12697,7 +12719,7 @@ final class AppState {
     private func checkpointTerminalAdmissionDisabledAfterDiscovery(for checkout: WorkspaceCheckout) async -> Bool {
         for member in checkout.members where member.availability == .available {
             guard let worktree = checkpointMemberWorktree(for: member) else { continue }
-            if await checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) { return true }
+            if await checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id, projectId: worktree.projectId) { return true }
         }
         return false
     }
@@ -13689,8 +13711,14 @@ final class AppState {
     /// the manager is dropped — otherwise the runner's `for await`
     /// loops would keep the agent + permission / file handlers alive
     /// after the UI was torn down.
-    func disposeACPManager(for worktreeId: String) {
-        let owners = acpManagers.keys.filter { $0.worktreeID == worktreeId }
+    /// Disposes every manager owned by the worktree id. Only callers that
+    /// cannot know a surviving project owner (delete-all, archive-all) may
+    /// omit `projectId`; a shared path-derived id must scope disposal to the
+    /// removed project so the other project's live runners survive.
+    func disposeACPManager(for worktreeId: String, projectId: String? = nil) {
+        let owners = acpManagers.keys.filter { owner in
+            owner.worktreeID == worktreeId && (projectId == nil || owner.projectID == projectId)
+        }
         for owner in owners {
             disposeACPManager(owner: owner)
         }

@@ -51,7 +51,7 @@ struct CommitEditorTabView: View {
 
     private static let minPaneWidth: CGFloat = 140
     private var checkpointLeaseActive: Bool {
-        appState.checkpointFileWritesDisabled(worktreeId: worktreeId)
+        appState.checkpointFileWritesDisabled(worktreeId: worktreeId, projectId: projectId)
     }
 
     private var diffPreferences: DiffPreferenceBindings {
@@ -143,7 +143,7 @@ struct CommitEditorTabView: View {
             await loadDetails()
         }
         .task(id: worktreeId) {
-            _ = await appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+            _ = await appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId, projectId: projectId)
         }
         .task(id: agentAvailabilityTaskKey) {
             await appState.loadAgentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
@@ -428,7 +428,7 @@ struct CommitEditorTabView: View {
                 busy = false
             }
             do {
-                guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else {
+                guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId, projectId: projectId) else {
                     error = "Recover the interrupted checkpoint restore before editing commits."
                     return
                 }
