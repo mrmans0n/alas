@@ -897,15 +897,17 @@ final class ACPNSTextView: PairedDelimiterTextView {
         }
     }
 
-    /// A restored draft can already contain an active "/" token before
-    /// this view is attached to a window — `positionAndShow` needs the
-    /// window to place the panel, so `reconcileSlashPanel` is a no-op
-    /// until attachment. Retry once a window exists.
+    /// Retry-once-on-attach: a restored draft can already contain an active
+    /// "/" token before this view is attached to a window — `positionAndShow`
+    /// needs the window to place the panel, so `reconcileSlashPanel` is a
+    /// no-op until attachment. Also (re)installs the scroll bounds observer
+    /// used by the image chip hover preview.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil {
             reconcileSlashPanel()
         }
+        refreshScrollBoundsObserver()
     }
 
     /// Dismiss any floating picker panel owned by this text view. The
@@ -1198,6 +1200,50 @@ final class ACPNSTextView: PairedDelimiterTextView {
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         imageChipHoverController().hide()
+    }
+
+    /// Observes the enclosing scroll view's clip view while the composer is
+    /// in a window. A scroll moves content under a stationary pointer without
+    /// any `mouseMoved`/`mouseExited`, so without this a pending or visible
+    /// hover preview could anchor to (or show) content that is no longer
+    /// under the pointer. The dismiss re-checks the pointer position so
+    /// hovering a chip across a scroll tick re-schedules instead of flickering.
+    private var scrollBoundsObserver: (any NSObjectProtocol)?
+
+    private func refreshScrollBoundsObserver() {
+        if let scrollBoundsObserver {
+            NotificationCenter.default.removeObserver(scrollBoundsObserver)
+            self.scrollBoundsObserver = nil
+        }
+        guard let clipView = enclosingScrollView?.contentView else { return }
+        clipView.postsBoundsChangedNotifications = true
+        scrollBoundsObserver = NotificationCenter.default.addMainActorObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: clipView
+        ) { [weak self] in
+            guard let self, self.window != nil else { return }
+            // The pointer's current position decides the post-scroll state:
+            // still over a chip re-schedules (no-op while it stays there);
+            // anywhere else hides. `window.mouseLocationOutsideOfEventStream`
+            // is valid without an in-flight mouse event.
+            let point = self.convert(self.window!.mouseLocationOutsideOfEventStream, from: nil)
+            if let chip = self.imageChipRange(at: point) {
+                self.imageChipHoverController().scheduleShow(range: chip.range, fileURL: chip.fileURL, in: self)
+            } else {
+                self.imageChipHoverController().hide()
+            }
+        }
+    }
+
+    private func teardownScrollBoundsObserver() {
+        if let scrollBoundsObserver {
+            NotificationCenter.default.removeObserver(scrollBoundsObserver)
+            self.scrollBoundsObserver = nil
+        }
+    }
+
+    isolated deinit {
+        teardownScrollBoundsObserver()
     }
 
     private func imageChipHoverController() -> ACPImageChipHoverController {
