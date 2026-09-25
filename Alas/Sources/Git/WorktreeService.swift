@@ -1542,15 +1542,37 @@ struct WorktreeService {
         )
         guard ancestry.exitCode == 0 else { return false }
 
+        // A local remote-tracking ref can outlive the remote branch it once
+        // represented. Require an advertised branch from origin, then use
+        // the local object graph only to verify that its advertised tip
+        // contains HEAD.
         let remoteRefs = try await Process.git(
-            ["for-each-ref", "--contains=\(head)", "--format=%(refname)", "refs/remotes/"],
+            ["-c", "protocol.file.allow=always", "ls-remote", "--heads", "origin"],
             cwd: worktreePath,
             usesRemoteHostRegistry: false
         )
-        guard remoteRefs.exitCode == 0 else { throw WorktreeError.gitFailed(remoteRefs.stderr) }
-        guard !remoteRefs.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return false
+        guard remoteRefs.exitCode == 0 else { return false }
+        var headIsRemotelyReachable = false
+        for line in remoteRefs.stdout.split(whereSeparator: \.isNewline) {
+            let fields = line.split(whereSeparator: \.isWhitespace)
+            guard fields.count == 2 else { continue }
+            let remoteTip = String(fields[0])
+            guard (remoteTip.count == 40 || remoteTip.count == 64),
+                  remoteTip.allSatisfy(\.isHexDigit)
+            else {
+                continue
+            }
+            let ancestry = try await Process.git(
+                ["merge-base", "--is-ancestor", head, remoteTip],
+                cwd: worktreePath,
+                usesRemoteHostRegistry: false
+            )
+            if ancestry.exitCode == 0 {
+                headIsRemotelyReachable = true
+                break
+            }
         }
+        guard headIsRemotelyReachable else { return false }
         let moduleDirectories = try await Self.submoduleGitDirectoryInventory(worktreePath: worktreePath)
         guard moduleDirectories.stored.allSatisfy({ moduleDirectories.active.contains($0) }) else {
             return false

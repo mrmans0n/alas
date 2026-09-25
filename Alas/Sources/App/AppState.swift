@@ -7436,11 +7436,21 @@ final class AppState {
         }
     }
 
-    private func closeTerminalSession(id: String, worktreeId: String, projectPath: String?) {
+    private func closeTerminalSession(
+        id: String,
+        worktreeId: String,
+        projectPath: String?,
+        alreadyTerminated: Bool = false
+    ) {
         acpAuthTerminalExitHandlers.removeValue(forKey: id)
         harness.detector.unregister(sessionId: id)
         harness.forgetSession(id)
-        terminal.closeSession(id: id, worktreeId: worktreeId, projectPath: projectPath)
+        terminal.closeSession(
+            id: id,
+            worktreeId: worktreeId,
+            projectPath: projectPath,
+            alreadyTerminated: alreadyTerminated
+        )
     }
 
     /// Close the focused pane. If it was the last leaf, also closes the tab
@@ -8593,7 +8603,12 @@ final class AppState {
         body(session)
     }
 
-    func closeTab(worktreeId: String, tabId: TabID, cancelRunScriptMonitors: Bool = true) {
+    func closeTab(
+        worktreeId: String,
+        tabId: TabID,
+        cancelRunScriptMonitors: Bool = true,
+        terminalSessionAlreadyTerminated: String? = nil
+    ) {
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let projectPath = projectPath(forWorktreeId: worktreeId)
         if let tab = allTabs.first(where: { $0.id == tabId }) {
@@ -8602,7 +8617,12 @@ final class AppState {
                     if cancelRunScriptMonitors {
                         scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
                     }
-                    closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
+                    closeTerminalSession(
+                        id: leaf.id,
+                        worktreeId: worktreeId,
+                        projectPath: projectPath,
+                        alreadyTerminated: leaf.id == terminalSessionAlreadyTerminated
+                    )
                 }
             }
             if case .editor = tab {

@@ -156,6 +156,28 @@ struct TerminalServiceZmxTests {
         ])
     }
 
+    @Test func closingAnAlreadyTerminatedSessionDoesNotDispatchAnotherKill() {
+        let recorder = RecordingRunner()
+        let service = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(), runner: recorder.runner())
+        )
+        let session = TerminalSession(
+            id: "already-terminated",
+            worktreeId: "wt-1",
+            projectId: "proj-1",
+            surface: AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO()),
+            executable: "/bin/zsh",
+            args: [],
+            zmxSessionName: ZmxSessionName.derive(worktreeId: "wt-1", leafId: "already-terminated")
+        )
+        service.registry.register(session)
+
+        service.closeSession(id: session.id, worktreeId: "wt-1", alreadyTerminated: true)
+
+        #expect(service.registry.session(for: session.id) == nil)
+        #expect(recorder.calls.isEmpty)
+        #expect(service.pendingKillSessionIDs(restrictToWorktree: "wt-1").isEmpty)
+    }
     @Test func closeSessionIsNoOpForZmxKillWhenUnavailable() {
         let recorder = RecordingRunner()
         let svc = TerminalService(

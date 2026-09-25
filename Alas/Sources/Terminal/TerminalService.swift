@@ -538,7 +538,8 @@ final class TerminalService {
     func closeSession(
         id: String,
         worktreeId explicitWorktreeId: String? = nil,
-        projectPath: String? = nil
+        projectPath: String? = nil,
+        alreadyTerminated: Bool = false
     ) {
         let existing = registry.session(for: id)
         if let s = existing {
@@ -546,14 +547,15 @@ final class TerminalService {
             onSessionUnregistered?(s)
         }
         registry.unregister(id: id)
+        let killWorktreeID = explicitWorktreeId ?? existing?.worktreeId
+        var killDispatched = false
         // `zmxClient.killSession` blocks up to ~5s on a hung daemon. We're
         // on @MainActor here, so dispatch it off-main, tracked so
         // `waitForPendingKills` can drain it before the app exits —
         // otherwise a quick close+Cmd-Q race would leak the daemon-side
-        // session, and the next launch would carry forward the orphan.
-        let killDispatched: Bool
-        let killWorktreeID = explicitWorktreeId ?? existing?.worktreeId
-        if let host = existing?.remoteHost, let existingName = existing?.zmxSessionName {
+        if alreadyTerminated {
+            killDispatched = false
+        } else if let host = existing?.remoteHost, let existingName = existing?.zmxSessionName {
             killDispatched = true
             pendingKillOutcomes[id] = .init(startedAt: Date(), succeeded: nil, worktreeID: killWorktreeID)
             dispatchTrackedKill {

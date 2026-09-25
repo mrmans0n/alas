@@ -1536,108 +1536,31 @@ extension AppState {
                 )
                 return .launchFailed(outcomeReason)
             }
+            var completedReport: ScheduledAgentReport?
+            var lastError: Error?
             do {
-                let report = try await store.finishRecordedCompletion(
+                completedReport = try await store.finishRecordedCompletion(
                     reportID: reportID,
                     authenticatedSessionID: prepared.sessionID
                 )
-                guard report.taskState == .succeeded else {
-                    let reason = "The ACP agent reported \(completion.outcome.rawValue); the worktree was retained."
-                    reportScheduleFailure(
-                        schedule,
-                        reason: "\(reason) Report: \(reportID).",
-                        project: project,
-                        worktree: worktree,
-                        reportID: reportID
-                    )
-                    return .launchFailed(reason)
-                }
-                var notificationText = "\(schedule.name): agent task completed. Report: \(reportID)."
-                var notificationSeverity = InAppNotificationSeverity.success
-                if report.cleanupRequested {
-                    let cleanupResult: ScheduledWorktreeCleanupResult
-                    if case .settledWithUnrelatedPrompt = settlement {
-                        let reason = "A non-scheduled ACP prompt was queued during the scheduled turn."
-                        cleanupResult = await retainScheduledWorktree(
-                            reportID: reportID,
-                            reason: reason,
-                            store: store
-                        )
-                    } else if let registration = activeScheduledAgentRunsBySession[prepared.sessionID],
-                              registration.reportID == reportID {
-                        cleanupResult = await cleanupScheduledAgentWorktree(
-                            report: report,
-                            registration: registration,
-                            project: project,
-                            worktree: worktree,
-                            store: store
-                        )
-                    } else {
-                        let reason = "The scheduled ACP session is no longer active."
-                        cleanupResult = await persistScheduledCleanupState(
-                            reportID: reportID,
-                            state: .retained,
-                            reason: reason,
-                            store: store
-                        ) ? .retained(reason) : .failed(
-                            reason: "The worktree was retained, but its cleanup status could not be saved.",
-                            worktreeRemoved: false
-                        )
-                    }
-                    switch cleanupResult {
-                    case .removed:
-                        notificationText = "\(schedule.name): agent task completed and its worktree was removed. Report: \(reportID)."
-                    case .retained(let reason):
-                        notificationText = "\(schedule.name): agent task completed; worktree retained. \(reason) Report: \(reportID)."
-                        notificationSeverity = .information
-                    case .failed(let reason, _):
-                        notificationText = "\(schedule.name): agent task completed, but worktree cleanup failed. \(reason) Report: \(reportID)."
-                        notificationSeverity = .information
-                    }
-                }
-                let notificationWorktreeID = selectedWorktreeId
-                    ?? projectsManager.visibleMainWorktree(projectId: project.id)?.id
-                    ?? worktree.id
-                inAppNotifications.post(
-                    notificationText,
-                    severity: notificationSeverity,
-                    worktreeID: notificationWorktreeID,
-                    actionTitle: "Open report",
-                    action: scheduledAgentReportOpenAction(reportID)
-                )
-                return .succeeded
             } catch {
-                // A transient throw (e.g. the shared SQLite write lock held
-                // by another process past its busy timeout) must not leave
-                // the row `running` with the only registration torn down:
-                // retry the final write with backoff. The completion is
-                // already recorded, so this converges once the store frees.
-                var lastError: Error?
+                lastError = error
                 for attempt in 0..<5 {
                     if attempt > 0 {
                         try? await Task.sleep(for: .seconds(1 << min(attempt - 1, 3)))
                     }
                     do {
-                        let report = try await store.finishRecordedCompletion(
+                        completedReport = try await store.finishRecordedCompletion(
                             reportID: reportID,
                             authenticatedSessionID: prepared.sessionID
                         )
-                        guard report.taskState == .succeeded else {
-                            let retryReason = "The ACP agent reported \(completion.outcome.rawValue); the worktree was retained."
-                            reportScheduleFailure(
-                                schedule,
-                                reason: "\(retryReason) Report: \(reportID).",
-                                project: project,
-                                worktree: worktree,
-                                reportID: reportID
-                            )
-                            return .launchFailed(retryReason)
-                        }
-                        return .succeeded
+                        break
                     } catch {
                         lastError = error
                     }
                 }
+            }
+            guard let report = completedReport else {
                 let reason = "Could not finalize the scheduled-agent report; the report was not committed and the worktree was retained."
                 reportScheduleFailure(
                     schedule,
@@ -1648,6 +1571,71 @@ extension AppState {
                 )
                 return .launchFailed(reason)
             }
+            guard report.taskState == .succeeded else {
+                let reason = "The ACP agent reported \(completion.outcome.rawValue); the worktree was retained."
+                reportScheduleFailure(
+                    schedule,
+                    reason: "\(reason) Report: \(reportID).",
+                    project: project,
+                    worktree: worktree,
+                    reportID: reportID
+                )
+                return .launchFailed(reason)
+            }
+            var notificationText = "\(schedule.name): agent task completed. Report: \(reportID)."
+            var notificationSeverity = InAppNotificationSeverity.success
+            if report.cleanupRequested {
+                let cleanupResult: ScheduledWorktreeCleanupResult
+                if case .settledWithUnrelatedPrompt = settlement {
+                    let reason = "A non-scheduled ACP prompt was queued during the scheduled turn."
+                    cleanupResult = await retainScheduledWorktree(
+                        reportID: reportID,
+                        reason: reason,
+                        store: store
+                    )
+                } else if let registration = activeScheduledAgentRunsBySession[prepared.sessionID],
+                          registration.reportID == reportID {
+                    cleanupResult = await cleanupScheduledAgentWorktree(
+                        report: report,
+                        registration: registration,
+                        project: project,
+                        worktree: worktree,
+                        store: store
+                    )
+                } else {
+                    let reason = "The scheduled ACP session is no longer active."
+                    cleanupResult = await persistScheduledCleanupState(
+                        reportID: reportID,
+                        state: .retained,
+                        reason: reason,
+                        store: store
+                    ) ? .retained(reason) : .failed(
+                        reason: "The worktree was retained, but its cleanup status could not be saved.",
+                        worktreeRemoved: false
+                    )
+                }
+                switch cleanupResult {
+                case .removed:
+                    notificationText = "\(schedule.name): agent task completed and its worktree was removed. Report: \(reportID)."
+                case .retained(let reason):
+                    notificationText = "\(schedule.name): agent task completed; worktree retained. \(reason) Report: \(reportID)."
+                    notificationSeverity = .information
+                case .failed(let reason, _):
+                    notificationText = "\(schedule.name): agent task completed, but worktree cleanup failed. \(reason) Report: \(reportID)."
+                    notificationSeverity = .information
+                }
+            }
+            let notificationWorktreeID = selectedWorktreeId
+                ?? projectsManager.visibleMainWorktree(projectId: project.id)?.id
+                ?? worktree.id
+            inAppNotifications.post(
+                notificationText,
+                severity: notificationSeverity,
+                worktreeID: notificationWorktreeID,
+                actionTitle: "Open report",
+                action: scheduledAgentReportOpenAction(reportID)
+            )
+            return .succeeded
         }
     }
 
@@ -1789,7 +1777,11 @@ extension AppState {
                     store: store
                 )
             }
-            closeTab(worktreeId: worktree.id, tabId: scheduledScriptTerminal.tabID)
+            closeTab(
+                worktreeId: worktree.id,
+                tabId: scheduledScriptTerminal.tabID,
+                terminalSessionAlreadyTerminated: scheduledScriptTerminal.sessionID
+            )
         } else if report.scriptRun != nil {
             // The tab is gone (the user closed it), but the run record's
             // shell may still be alive: `closeSession` released the lease
