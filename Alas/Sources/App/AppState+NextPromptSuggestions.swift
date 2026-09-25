@@ -67,7 +67,7 @@ extension AppState {
 
     func inspectNextPromptModel() async {
         await nextPromptModelStore.inspect() // Relaunch never resumes a missing/interrupted install.
-        updateNextPromptModelState(await nextPromptModelStore.state)
+        updateNextPromptModelState(await nextPromptReadModelState())
     }
 
     private func updateNextPromptModelState(_ value: NextPromptModelState) {
@@ -109,9 +109,10 @@ extension AppState {
             guard generation == nextPromptSettingsGeneration, !nextPromptShuttingDown else { return }
             nextPromptInstallation = nil
             let modelGeneration = nextPromptModelGeneration
-            let modelState = await nextPromptModelStore.state
-            guard generation == nextPromptSettingsGeneration,
-                  modelGeneration == nextPromptModelGeneration, !nextPromptShuttingDown else { return }
+            let modelState = await nextPromptReadModelState()
+            guard generation == nextPromptSettingsGeneration, !nextPromptShuttingDown else { return }
+            // The installation's own notification may have already delivered this state.
+            guard modelGeneration == nextPromptModelGeneration || modelState == nextPromptModelState else { return }
             updateNextPromptModelState(modelState)
         }
         guard generation == nextPromptSettingsGeneration, !nextPromptShuttingDown,
@@ -130,7 +131,7 @@ extension AppState {
     func cancelNextPromptDownload() async {
         beginNextPromptSettingsChange()
         await drainNextPromptWork()
-        updateNextPromptModelState(await nextPromptModelStore.state)
+        updateNextPromptModelState(await nextPromptReadModelState())
     }
 
     func disableNextPromptSuggestions() async {
@@ -138,7 +139,7 @@ extension AppState {
         config.nextPromptSuggestionsEnabled = false
         if !saveConfig() { nextPromptSettingsError = "Could not save next-prompt settings. Suggestions remain off." }
         await drainNextPromptWork()
-        updateNextPromptModelState(await nextPromptModelStore.state)
+        updateNextPromptModelState(await nextPromptReadModelState())
     }
 
     func removeNextPromptModel() async {
@@ -149,7 +150,7 @@ extension AppState {
             try await nextPromptModelStore.remove()
             guard generation == nextPromptSettingsGeneration else { return }
             nextPromptRemovalFailure = nil
-            updateNextPromptModelState(await nextPromptModelStore.state)
+            updateNextPromptModelState(await nextPromptReadModelState())
         } catch {
             guard generation == nextPromptSettingsGeneration else { return }
             let failure = NextPromptModelFailure.safe(error)
