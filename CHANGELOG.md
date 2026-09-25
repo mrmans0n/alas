@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.11] - 2026-09-25
+
+### ✨ Features
+
+- Add an opt-in, Debug-only experiment that suggests the next ACP prompt on-device and lets the user accept it with Tab (#1476).
+
+### 🐛 Fixes
+
+- Move the agent-hook socket accept loop off Swift's cooperative pool so long-lived listeners cannot starve async work or tests (#1473).
+
+### 🏗️ Internal
+
+- Wait for runs to reach the running state in tests instead of relying on a fixed delay (#1475).
+- Update SwiftTransformers from 1.3.0 to 1.3.4 (#1478).
+
 ## [0.19.10] - 2026-09-25
 
 ### ✨ Features
