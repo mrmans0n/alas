@@ -933,11 +933,6 @@ final class ACPNSTextView: PairedDelimiterTextView {
         }]
     }
 
-    override func insertText(_ insertString: Any, replacementRange: NSRange) {
-        invalidateNextPromptSuggestion()
-        super.insertText(insertString, replacementRange: replacementRange)
-    }
-
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         invalidateNextPromptSuggestion()
         super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
@@ -1172,7 +1167,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
         }
     }
 
-    /// Intercepts the single whitespace character that completes a
+    /// Any edit invalidates a pending next-prompt ghost-text offer, then
+    /// intercepts the single whitespace character that completes a
     /// hand-typed leading command, turning it into a pill in the SAME edit
     /// as the keystroke instead of a follow-up one — see
     /// `ACPLeadingCommand.chipTarget(completingWith:at:in:suggestions:)` for
@@ -1180,6 +1176,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// pairing, IME composition, plain typing) still goes through
     /// `PairedDelimiterTextView`'s own `insertText`.
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        invalidateNextPromptSuggestion()
         let range = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
         if let text = insertString as? String,
            let textStorage, let coordinator,
