@@ -75,7 +75,7 @@ struct NativePeerSidebarSnapshotTests {
 
     private func worktreeRow(
         _ id: String, project: String?, worktreeId: String?, branch: String = "main",
-        status: String = "idle", updatedAt: Int64 = 0
+        status: String = "idle", updatedAt: Int64 = 0, projectId: String? = nil
     ) -> RemoteSessionSummary {
         let worktree = project.map {
             RemoteWorktreeSummary(
@@ -87,8 +87,8 @@ struct NativePeerSidebarSnapshotTests {
         }
         return RemoteSessionSummary(
             id: "b:\(id)", title: id, agentId: "claude", status: status, canDrive: false,
-            worktreeId: worktreeId, updatedAt: updatedAt, worktree: worktree,
-            serverId: "b", serverName: "Mac B"
+            projectId: projectId ?? project, worktreeId: worktreeId, updatedAt: updatedAt,
+            worktree: worktree, serverId: "b", serverName: "Mac B"
         )
     }
 
@@ -104,13 +104,33 @@ struct NativePeerSidebarSnapshotTests {
         let repos = NativePeerRepoGroup.build(sessions: sessions)
 
         #expect(repos.map(\.name) == ["alas", "cpcl", NativePeerRepoGroup.unassignedName])
-        #expect(repos[0].worktrees.map(\.id) == ["id:w1", "id:w3"])
+        #expect(repos[0].worktrees.count == 2)
         #expect(repos[0].worktrees[0].sessions.map(\.id) == ["b:s1", "b:s3"])
         #expect(repos[0].worktrees[0].primarySession.id == "b:s1")
         #expect(repos[0].worktrees[0].title == "feat")
         #expect(repos[0].worktrees[0].updatedAt == 30)
         #expect(repos[0].attentionCount == 1)
         #expect(repos[2].worktrees.map(\.title) == ["s5"])
+    }
+
+    @Test func peerReposGroupByProjectIdentityNotDisplayName() {
+        // Two distinct projects that happen to share a display name must not
+        // merge into one repo group, and a rename must not split one project
+        // into two. Input is in the recency order `build` always receives
+        // (most recent session first), so the rename's newer label wins.
+        let sessions = [
+            worktreeRow("s3", project: "renamed-alas", worktreeId: "w1", projectId: "proj-a", updatedAt: 30),
+            worktreeRow("s1", project: "alas", worktreeId: "w1", projectId: "proj-a", updatedAt: 20),
+            worktreeRow("s2", project: "alas", worktreeId: "w1", projectId: "proj-b", updatedAt: 10)
+        ]
+
+        let repos = NativePeerRepoGroup.build(sessions: sessions)
+
+        #expect(repos.count == 2)
+        #expect(repos[0].name == "renamed-alas", "the most recent session's label wins on rename")
+        #expect(repos[0].worktrees.flatMap(\.sessions).map(\.id) == ["b:s3", "b:s1"])
+        #expect(repos[1].name == "alas")
+        #expect(repos[1].worktrees.flatMap(\.sessions).map(\.id) == ["b:s2"])
     }
 
     @Test func peerWorktreeStatusRanksWaitingOverRunningAndHidesIdle() {

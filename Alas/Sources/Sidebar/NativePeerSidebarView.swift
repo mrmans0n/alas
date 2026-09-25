@@ -37,16 +37,18 @@ struct NativePeerSidebarView: View {
     @State private var plusHovering = false
 
     var body: some View {
-        if !client.snapshot.groups.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                sectionHeader
-                ForEach(client.snapshot.groups) { group in
-                    peerGroup(group)
-                }
+        // The section header — and its "pair a peer" affordance — stays
+        // visible even with zero peers: that empty state is exactly when a
+        // way to add one is needed. Only the peer rows below it depend on
+        // there being any groups to show.
+        VStack(alignment: .leading, spacing: 0) {
+            sectionHeader
+            ForEach(client.snapshot.groups) { group in
+                peerGroup(group)
             }
-            .onAppear {
-                expandedPeerIDs.formUnion(client.snapshot.groups.map(\.id))
-            }
+        }
+        .onAppear {
+            expandedPeerIDs.formUnion(client.snapshot.groups.map(\.id))
         }
     }
 

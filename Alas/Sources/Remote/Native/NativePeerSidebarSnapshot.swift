@@ -60,26 +60,41 @@ struct NativePeerGroup: Identifiable, Equatable {
 struct NativePeerRepoGroup: Identifiable, Equatable {
     /// Rows the peer sent without worktree metadata land here.
     static let unassignedName = "Other sessions"
+    private static let unassignedKey = "unassigned"
 
+    let id: String
     let name: String
     let worktrees: [NativePeerWorktreeGroup]
 
-    var id: String { name }
     var attentionCount: Int { worktrees.reduce(0) { $0 + $1.attentionCount } }
+
+    /// The project identity to group on. `projectName` is a display label a
+    /// peer could reuse across two distinct projects (or after a rename), so
+    /// grouping on it merges unrelated repos — group on `projectId` instead,
+    /// falling back to a shared sentinel only for sessions with no project
+    /// metadata at all.
+    private static func repoKey(for session: RemoteSessionSummary) -> String {
+        session.projectId.map { "id:\($0)" } ?? unassignedKey
+    }
 
     /// Groups sessions by project, then by worktree. Repos and worktrees keep
     /// the order of their most recently updated session, which is the order
     /// `sessions` already arrives in.
     static func build(sessions: [RemoteSessionSummary]) -> [NativePeerRepoGroup] {
         var repoOrder: [String] = []
+        var repoNames: [String: String] = [:]
         var worktreeOrder: [String: [String]] = [:]
         var buckets: [String: [String: [RemoteSessionSummary]]] = [:]
         for session in sessions {
-            let repo = session.worktree?.projectName ?? unassignedName
-            let key = NativePeerWorktreeGroup.key(for: session)
+            let repo = repoKey(for: session)
+            // Worktree keys are namespaced by repo identity too, so a
+            // worktree id or path that happens to repeat across two
+            // differently-identified projects still can't merge sessions.
+            let key = "\(repo)\u{1F}\(NativePeerWorktreeGroup.key(for: session))"
             if buckets[repo] == nil {
                 repoOrder.append(repo)
                 buckets[repo] = [:]
+                repoNames[repo] = session.worktree?.projectName ?? unassignedName
             }
             if buckets[repo]?[key] == nil {
                 worktreeOrder[repo, default: []].append(key)
@@ -88,7 +103,8 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
         }
         return repoOrder.map { repo in
             NativePeerRepoGroup(
-                name: repo,
+                id: repo,
+                name: repoNames[repo] ?? unassignedName,
                 worktrees: (worktreeOrder[repo] ?? []).compactMap { key in
                     guard let rows = buckets[repo]?[key], !rows.isEmpty else { return nil }
                     return NativePeerWorktreeGroup(id: key, sessions: rows)
