@@ -784,6 +784,85 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.detach(sessionId: session.id)
     }
 
+    @Test("a failed attach whose retiring detach times out keeps the fresh-namespace requirement")
+    func failedAttachKeepsFreshNamespaceRequirementForNextAttach() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerServiceProxy(
+            stallDetach: true,
+            failSendMethod: "initialize",
+            failSendAfterOpenCount: 2
+        )
+        let isolatedService = ManagerBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .seconds(10),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "failed-attach-fresh-namespace", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+        let originalRunner = try #require(manager.runners[session.id])
+        let originalBrokerId = try await #require(sharedService.opened.first?.brokerId)
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        defer {
+            Task {
+                // The cleanup detach's cancelled operation task still waits
+                // on the gate; release it so the actor winds down.
+                await sharedService.detachGate.release()
+            }
+        }
+
+        // The replacement's broker opens on the shared namespace, but its
+        // `initialize` fails (the proxy throws after two opens). The attach
+        // fails, and its cleanup then detaches the retiring connection —
+        // which stalls and times out while the attempt is deregistered.
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.detachGate.hasEntered
+                && manager.runners[session.id] == nil
+                && {
+                    if case .failed = session.agentState { return true }
+                    return false
+                }()
+        }
+        #expect(await sharedService.detached.count == 1)
+
+        // Give the stalled detach's bounded wait time to time out so the
+        // pending requirement is recorded before the retry attach starts.
+        try await Task.sleep(for: .milliseconds(150))
+
+        // The restart flow's release evicted the failed session; recreate it
+        // from the store like a reopening tab would.
+        let reopenedSession = try #require(manager.placeholderSession(id: session.id))
+        await manager.hydrateIfNeeded(id: reopenedSession.id)
+
+        // The next attach must not reuse the wedged namespace: the pending
+        // requirement left behind by the deregistered attempt routes it
+        // through the isolated service.
+        let retriedAttach = Task { await manager.attach(to: reopenedSession.id, freshlyCreated: false) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            let isolatedOpenCount = await isolatedService.opened.count
+            return reopenedSession.agentState == .ready && isolatedOpenCount == 1
+        }
+        let isolatedBrokerId = try await #require(isolatedService.opened.first?.brokerId)
+        #expect(isolatedBrokerId.rawValue.hasPrefix("fallback-"))
+        #expect(isolatedBrokerId != originalBrokerId)
+        let retriedRunner = try #require(manager.runners[reopenedSession.id])
+        #expect(retriedRunner !== originalRunner)
+
+        await sharedService.detachGate.release()
+        await restart.value
+
+        #expect(reopenedSession.agentState == .ready)
+        #expect(manager.runners[reopenedSession.id] === retriedRunner)
+        await manager.detach(sessionId: reopenedSession.id)
+    }
+
     @Test("restart detaches the retiring broker without closing it before replacement initialization")
     func restartRetainsRetiringBrokerUntilReplacementInitialization() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -6319,6 +6398,8 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
     private let stallDetach: Bool
     private let stallClose: Bool
     private let stallSendMethod: String?
+    private let failSendMethod: String?
+    private let failSendAfterOpenCount: Int
     private var hasStalledSend = false
     private(set) var completedOpenCount = 0
     private(set) var opened: [ACPBrokerOpenParams] = []
@@ -6329,12 +6410,16 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
         stallOpen: Bool = false,
         stallDetach: Bool = false,
         stallClose: Bool = false,
-        stallSendMethod: String? = nil
+        stallSendMethod: String? = nil,
+        failSendMethod: String? = nil,
+        failSendAfterOpenCount: Int = .max
     ) {
         self.stallOpen = stallOpen
         self.stallDetach = stallDetach
         self.stallClose = stallClose
         self.stallSendMethod = stallSendMethod
+        self.failSendMethod = failSendMethod
+        self.failSendAfterOpenCount = failSendAfterOpenCount
     }
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
@@ -6353,6 +6438,13 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
         if !hasStalledSend, params.method == stallSendMethod {
             hasStalledSend = true
             await sendGate.wait()
+        }
+        if params.method == failSendMethod, opened.count >= failSendAfterOpenCount {
+            throw JSONRPCError(
+                code: -32000,
+                message: "initialize rejected after reopen",
+                data: nil
+            )
         }
         return try await base.send(params)
     }

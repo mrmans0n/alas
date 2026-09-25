@@ -1196,6 +1196,9 @@ final class ACPSessionManager: ObservableObject {
     var afterRestartRetiringConnectionDetachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var beforeTakeoverAttachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var afterRunnerRegistrationForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
+    var pendingFreshBrokerNamespacesForTesting: Set<ACPSession.ID> {
+        pendingFreshBrokerNamespaces
+    }
 #endif
     private var resolvedRemoteAdapters: [String: ACPResolvedRemoteAdapter] = [:]
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
@@ -1255,6 +1258,11 @@ final class ACPSessionManager: ObservableObject {
         let sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
     }
     private var attachingConnections: [ACPSession.ID: AttachingConnection] = [:]
+    /// Sessions whose default broker namespace a recent teardown timeout
+    /// flagged as potentially wedged, but whose owning attach attempt has
+    /// since been deregistered without consuming the requirement. The next
+    /// attach routes through the isolated namespace until one succeeds.
+    private var pendingFreshBrokerNamespaces: Set<ACPSession.ID> = []
     private struct AttachmentWaiter {
         let continuation: CheckedContinuation<Bool, Never>
         let arrivedAfterTemporaryDetach: Bool
@@ -4421,6 +4429,10 @@ extension ACPSessionManager {
             return nil
         }
         let attempt = AttachmentAttempt()
+        // A prior attempt may have flagged the default namespace as wedged
+        // after it was already deregistered (see
+        // `pendingFreshBrokerNamespaces`); carry the requirement forward.
+        attempt.requiresFreshBrokerNamespace = pendingFreshBrokerNamespaces.contains(sessionId)
         attachmentAttempts[sessionId] = attempt
         connectionOwnerIDs[sessionId] = attempt.id
         brokerCallbackOwnerIDs[sessionId] = nil
@@ -4452,11 +4464,11 @@ extension ACPSessionManager {
         guard let session = sessions[sessionId],
               isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
         else {
-            await detachRetiringConnectionIfNeeded(for: attempt)
+            await detachRetiringConnectionIfNeeded(for: attempt, sessionId: sessionId)
             return
         }
         await performAttach(to: sessionId, freshlyCreated: freshlyCreated, attempt: attempt)
-        await detachRetiringConnectionIfNeeded(for: attempt)
+        await detachRetiringConnectionIfNeeded(for: attempt, sessionId: sessionId)
     }
 
     private func isCurrentAttachment(
@@ -4467,7 +4479,10 @@ extension ACPSessionManager {
         attachmentAttempts[sessionId] === attempt && sessions[sessionId] === session
     }
 
-    private func detachRetiringConnectionIfNeeded(for attempt: AttachmentAttempt) async {
+    private func detachRetiringConnectionIfNeeded(
+        for attempt: AttachmentAttempt,
+        sessionId: ACPSession.ID
+    ) async {
         guard let connection = attempt.retiringConnection else { return }
         attempt.retiringConnection = nil
         let outcome = await runBounded(timeout: restartTeardownTimeout) {
@@ -4479,6 +4494,9 @@ extension ACPSessionManager {
         }
         if connection.client is ACPBrokerClient, case .timedOut = outcome {
             attempt.requiresFreshBrokerNamespace = true
+            // This attempt may be deregistered before anything consumes the
+            // requirement; keep it alive for the next attach.
+            pendingFreshBrokerNamespaces.insert(sessionId)
         }
     }
 
@@ -5008,6 +5026,7 @@ extension ACPSessionManager {
                 if retiringConnection.client is ACPBrokerClient,
                    case .timedOut = detachOutcome {
                     attempt.requiresFreshBrokerNamespace = true
+                    pendingFreshBrokerNamespaces.insert(sessionId)
                 }
 #if DEBUG
                 await afterRestartRetiringConnectionDetachForTesting?(sessionId)
@@ -5981,6 +6000,9 @@ extension ACPSessionManager {
             runners[sessionId] = runner
             keepElicitationCoordinator = true
             attachSucceeded = true
+            // The attach survived on whatever namespace it used; the pending
+            // fresh-namespace requirement is satisfied.
+            pendingFreshBrokerNamespaces.remove(sessionId)
 #if DEBUG
             await afterRunnerRegistrationForTesting?(sessionId)
 #endif
@@ -6364,8 +6386,11 @@ extension ACPSessionManager {
         replacementAttempt.connection = oldConnection === retiringConnection ? nil : oldConnection
         // A previous attempt may have discovered a wedged broker after its
         // own replacement connection was already attached; that attach then
-        // delegated here. Honor the flag it could not consume itself.
-        replacementAttempt.requiresFreshBrokerNamespace = oldAttempt?.requiresFreshBrokerNamespace ?? false
+        // delegated here. Honor the flag it could not consume itself, and a
+        // pending requirement left behind by an already-deregistered attempt.
+        replacementAttempt.requiresFreshBrokerNamespace =
+            (oldAttempt?.requiresFreshBrokerNamespace ?? false)
+            || pendingFreshBrokerNamespaces.contains(sessionId)
 #if DEBUG
         await beforeRestartRunnerStopForTesting?(sessionId)
 #endif
@@ -6423,6 +6448,7 @@ extension ACPSessionManager {
                 }
                 if oldBrokerClient != nil, case .timedOut = shutdownOutcome {
                     replacementAttempt.requiresFreshBrokerNamespace = true
+                    pendingFreshBrokerNamespaces.insert(sessionId)
                 }
             }
         } else if let oldBrokerClient {
@@ -6431,6 +6457,7 @@ extension ACPSessionManager {
             }
             if case .timedOut = shutdownOutcome {
                 replacementAttempt.requiresFreshBrokerNamespace = true
+                pendingFreshBrokerNamespaces.insert(sessionId)
             }
         }
         guard sessions[sessionId] === session,
