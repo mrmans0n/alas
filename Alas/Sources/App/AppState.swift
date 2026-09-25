@@ -5519,12 +5519,7 @@ final class AppState {
 
     func promptFollowRevision(worktreeID: String, tabID: TabID, prefill: TrackedRevisionTarget? = nil) {
         let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID })
-        let projectId: String?
-        if case .commit(let state) = tab {
-            projectId = state.projectId ?? legacyEditorOwnerProjectId(forWorktreeId: worktreeID)
-        } else {
-            projectId = nil
-        }
+        let projectId = tab.flatMap { followRevisionProjectId(for: $0) }
         switch FollowRevisionPromptRoute.route(
             prefill: prefill,
             stackEntrySupported: ggFollowSupported(worktreeID: worktreeID, projectId: projectId)
@@ -5710,14 +5705,30 @@ final class AppState {
         return FollowRevisionPrefill.expression(displayedSHA: displayedSHA, firstParentSHAs: firstParentSHAs)
     }
 
-    private func worktree(forFollowRevisionTab tab: Tab) -> Worktree? {
+    private func followRevisionProjectId(for tab: Tab) -> String? {
         switch tab {
         case .commit(let state):
-            let projectId = state.projectId ?? legacyEditorOwnerProjectId(forWorktreeId: state.worktreeId)
-            guard let projectId else { return worktree(withId: state.worktreeId) }
+            return state.projectId ?? legacyEditorOwnerProjectId(forWorktreeId: state.worktreeId)
+        case .reviewSession(let state):
+            return state.projectId ?? legacyEditorOwnerProjectId(forWorktreeId: state.worktreeId)
+        default:
+            return nil
+        }
+    }
+
+    func worktree(forFollowRevisionTab tab: Tab) -> Worktree? {
+        guard let projectId = followRevisionProjectId(for: tab) else {
+            switch tab {
+            case .commit(let state): return worktree(withId: state.worktreeId)
+            case .reviewSession(let state): return worktree(withId: state.worktreeId)
+            default: return nil
+            }
+        }
+        switch tab {
+        case .commit(let state):
             return worktree(withId: state.worktreeId, inProjectId: projectId)
         case .reviewSession(let state):
-            return worktree(withId: state.worktreeId)
+            return worktree(withId: state.worktreeId, inProjectId: projectId)
         default:
             return nil
         }
@@ -10114,8 +10125,8 @@ final class AppState {
         )
     }
 
-    func revealInFiles(worktreeId: String, path: String, opensPane: Bool) {
-        guard let worktree = worktree(withId: worktreeId) else { return }
+    func revealInFiles(worktreeId: String, projectId: String? = nil, path: String, opensPane: Bool) {
+        guard let worktree = worktree(withId: worktreeId, inProjectId: projectId) else { return }
         config.rightPaneVisible = true
         _ = saveConfig()
         let rps = rightPaneStore.state(

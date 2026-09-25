@@ -39,7 +39,8 @@ struct AppStateCLIRoutingTests {
 
     private func makeStateWithSharedPathWorktrees(
         id: String,
-        orchestrationPersistence: ACPOrchestrationPersistence
+        orchestrationPersistence: ACPOrchestrationPersistence,
+        projectBHost: String? = "project-b-host"
     ) -> (AppState, ProjectConfig, ProjectConfig, Worktree, Worktree) {
         let projectA = ProjectConfig(
             id: "recovery-a-\(UUID().uuidString)", name: "A", path: "/repos/recovery-a",
@@ -47,7 +48,7 @@ struct AppStateCLIRoutingTests {
         )
         let projectB = ProjectConfig(
             id: "recovery-b-\(UUID().uuidString)", name: "B", path: "/repos/recovery-b",
-            color: "green", addedAt: .distantPast, host: "project-b-host"
+            color: "green", addedAt: .distantPast, host: projectBHost
         )
         let state = AppState(
             store: MemoryStore(projectsFile: ProjectsFile(projects: [projectA, projectB])),
@@ -556,6 +557,49 @@ struct AppStateCLIRoutingTests {
 
         #expect(state.selectedWorktreeProjectId == projectB.id)
         #expect(state.projectsManager.worktrees(projectId: projectB.id).contains(worktreeB))
+    }
+
+    @Test func reviewSessionFollowResolvesWorktreeFromItsStoredProject() throws {
+        let sharedID = "/tmp/alas-review-follow-shared-\(UUID().uuidString)"
+        let orchestrationPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-review-follow-orchestration-\(UUID().uuidString).sqlite")
+        let (state, projectA, projectB, _, worktreeB) = makeStateWithSharedPathWorktrees(
+            id: sharedID,
+            orchestrationPersistence: ACPOrchestrationPersistence(path: orchestrationPath.path)
+        )
+        state.focusGlobalWorktree(id: sharedID, projectId: projectA.id)
+        let target = ReviewSessionTarget.commit(
+            worktreeID: sharedID,
+            repositoryPath: worktreeB.path,
+            sha: "deadbeef",
+            title: "Review deadbeef"
+        )
+        let record = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let tabState = ReviewSessionTabState(worktreeId: sharedID, projectId: projectB.id, record: record)
+
+        #expect(state.worktree(forFollowRevisionTab: .reviewSession(tabState)) == worktreeB)
+    }
+
+    @Test func revealInFilesUsesTheProjectOfTheCenterWorktree() {
+        let sharedID = "/tmp/alas-reveal-shared-\(UUID().uuidString)"
+        let orchestrationPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-reveal-orchestration-\(UUID().uuidString).sqlite")
+        let (state, projectA, projectB, worktreeA, worktreeB) = makeStateWithSharedPathWorktrees(
+            id: sharedID,
+            orchestrationPersistence: ACPOrchestrationPersistence(path: orchestrationPath.path),
+            projectBHost: nil
+        )
+        state.focusGlobalWorktree(id: sharedID, projectId: projectA.id)
+
+        state.revealInFiles(worktreeId: sharedID, projectId: projectB.id, path: "README.md", opensPane: true)
+
+        #expect(state.rightPaneStore.activeState(for: worktreeB)?.revealPath == "README.md")
+        #expect(state.rightPaneStore.activeState(for: worktreeA) == nil)
     }
 
     @Test func defaultACPSessionLaunchUsesSelectedSamePathProject() async throws {

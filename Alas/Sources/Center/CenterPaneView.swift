@@ -477,6 +477,7 @@ struct CenterPaneView: View {
                                             onRevealInFiles: { path in
                                                 state.revealInFiles(
                                                     worktreeId: worktree.id,
+                                                    projectId: worktree.projectId,
                                                     path: path,
                                                     opensPane: !effectiveRightPaneVisible
                                                 )
@@ -499,6 +500,7 @@ struct CenterPaneView: View {
                                           onRevealInFiles: { path in
                                               state.revealInFiles(
                                                   worktreeId: worktree.id,
+                                                  projectId: worktree.projectId,
                                                   path: path,
                                                   opensPane: !effectiveRightPaneVisible
                                               )
@@ -644,6 +646,7 @@ struct CenterPaneView: View {
                                              onRevealInFiles: { path in
                                                  state.revealInFiles(
                                                      worktreeId: worktree.id,
+                                                     projectId: worktree.projectId,
                                                      path: path,
                                                      opensPane: !effectiveRightPaneVisible
                                                  )
@@ -655,6 +658,7 @@ struct CenterPaneView: View {
                                              onRevealInFiles: { path in
                                                  state.revealInFiles(
                                                      worktreeId: worktree.id,
+                                                     projectId: worktree.projectId,
                                                      path: path,
                                                      opensPane: !effectiveRightPaneVisible
                                                  )
