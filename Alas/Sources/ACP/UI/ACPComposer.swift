@@ -1016,21 +1016,26 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // bypasses `NSTextView`'s own selection bookkeeping, so the
         // selection must be clamped back into range explicitly here too.
         didChangeText()
-        // Preserve the caret's position in the REST of the message rather
-        // than always snapping it to right after the chip: a late
+        // Preserve the selection in the REST of the message rather than
+        // always collapsing it to a caret right after the chip: a late
         // `available_commands_update` can land while the user has kept
-        // typing past the command (`/init some text I'm still writing`),
-        // and forcing their caret back to position 6 there would yank it
-        // out from under them mid-sentence. A caret already past the
-        // replaced range just shifts by the length delta, staying exactly
-        // where the user left it; one still inside (or before) it — the
+        // typing — or has a selection — past the command
+        // (`/init some text I'm still writing`), and forcing their caret
+        // or wiping their selection there would yank it out from under
+        // them mid-sentence. A selection entirely past the replaced range
+        // just shifts by the length delta, preserving both its position
+        // AND its length; one still inside (or before) it — the
         // typed-completion path above, where the caret IS the end of the
-        // range — has nowhere sensible to go but the end of the chip.
+        // range — has nowhere sensible to go but a zero-length caret at
+        // the end of the chip.
         let delta = replacement.length - range.length
-        let newLocation = selectionBefore.location >= NSMaxRange(range)
-            ? selectionBefore.location + delta
-            : NSMaxRange(replacedRange)
-        setSelectedRange(NSRange(location: newLocation, length: 0))
+        let newSelection: NSRange
+        if selectionBefore.location >= NSMaxRange(range) {
+            newSelection = NSRange(location: selectionBefore.location + delta, length: selectionBefore.length)
+        } else {
+            newSelection = NSRange(location: NSMaxRange(replacedRange), length: 0)
+        }
+        setSelectedRange(newSelection)
     }
 
     /// Retry-once-on-attach: a restored draft can already contain an active
@@ -1836,7 +1841,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
             replaceClearingUndo(range: range, with: chip)
         } else {
             ts.replaceCharacters(in: range, with: NSAttributedString(string: replacement, attributes: baseTypingAttributes))
-            setSelectedRange(NSRange(location: slashStart + (replacement as NSString).length, length: 0))
+            // `range.location`, not `slashStart` — `closeSlashPanel()` above
+            // already reset `slashStart` to -1.
+            setSelectedRange(NSRange(location: range.location + (replacement as NSString).length, length: 0))
             didChangeText()
         }
     }

@@ -1559,6 +1559,48 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.selectedRange() == NSRange(location: fullLength - 4, length: 0))
     }
 
+    @Test("accepting a mid-message slash suggestion places the caret after it")
+    func midMessageSlashAcceptPlacesCaretCorrectly() throws {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        // Not a leading command (there's a word before the `/`), so this
+        // exercises `insertSlash`'s plain-text branch, which — like the
+        // leading branch above — reads `range.location` for the caret
+        // rather than `slashStart`, since `closeSlashPanel()` already
+        // reset `slashStart` to -1 by the time either branch runs.
+        textView.string = "please /rev"
+        textView.setSelectedRange(NSRange(location: 11, length: 0))
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+
+        textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
+
+        #expect(textView.string == "please /review ")
+        #expect(textView.selectedRange() == NSRange(location: (textView.string as NSString).length, length: 0))
+    }
+
+    @Test("late chipification preserves a selection past the command")
+    func lateChipificationPreservesSelectionPastCommand() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions = []
+        textView.insertText("/init some text", replacementRange: textView.selectedRange())
+        // Select "some", entirely past the leading command.
+        textView.setSelectedRange(NSRange(location: 6, length: 4))
+
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        // The command shrank from 5 characters to a 1-character chip (a
+        // delta of -4); the selection shifts by that same delta, keeping
+        // both its position AND its length — "some" stays selected
+        // instead of collapsing to a caret.
+        #expect(textView.selectedRange() == NSRange(location: 2, length: 4))
+        #expect((storage.string as NSString).substring(with: textView.selectedRange()) == "some")
+    }
+
     @Test("the slash picker stays open for `$`-prefixed skills")
     func slashPickerAcceptsDollarSkills() {
         let (textView, coordinator, window) = makeGhostHintTextView()
