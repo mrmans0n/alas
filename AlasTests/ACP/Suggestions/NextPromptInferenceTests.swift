@@ -265,10 +265,10 @@ private final class LeaseFixture: Sendable {
         path = directory.appendingPathComponent("lock").path
         FileManager.default.createFile(atPath: path, contents: Data())
     }
-    func acquire() throws -> NextPromptModelLease {
+    func acquire() throws -> LocalTextModelLease {
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
         guard flock(handle.fileDescriptor, LOCK_SH | LOCK_NB) == 0 else { throw POSIXError(.EWOULDBLOCK) }
-        return NextPromptModelLease(directory: directory, generation: 1, handle: handle)
+        return LocalTextModelLease(directory: directory, generation: 1, handle: handle)
     }
     func canLockExclusively() -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path)) else { return false }

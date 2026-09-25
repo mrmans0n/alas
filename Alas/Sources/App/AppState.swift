@@ -172,8 +172,8 @@ final class AppState {
     /// session-lease layer so two running Alas builds don't fight over a
     /// shared per-worktree database.
     let instanceId: String = UUID().uuidString
-    @ObservationIgnored let nextPromptModelStore: NextPromptModelStore
-    @ObservationIgnored let nextPromptReadModelState: @Sendable () async -> NextPromptModelState
+    @ObservationIgnored let nextPromptModelStore: LocalTextModelStore
+    @ObservationIgnored let nextPromptReadModelState: @Sendable () async -> LocalTextModelState
     @ObservationIgnored let nextPromptInference: any NextPromptRuntime
     @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] in
         self?.nextPromptSnapshot()
@@ -181,12 +181,12 @@ final class AppState {
     @ObservationIgnored let nextPromptObservers = NextPromptObservers()
     @ObservationIgnored var nextPromptInstallation: Task<Void, Never>?
     let nextPromptSupported: Bool
-    var nextPromptModelState: NextPromptModelState = .notInstalled
+    var nextPromptModelState: LocalTextModelState = .notInstalled
     var nextPromptInferenceState: NextPromptInferenceState = .ready
     var nextPromptRuntimeEnabled = false
     var nextPromptDisableSavePending = false
     var nextPromptSettingsError: String?
-    var nextPromptRemovalFailure: NextPromptModelFailure?
+    var nextPromptRemovalFailure: LocalTextModelFailure?
     var nextPromptOffer: String?
     @ObservationIgnored var nextPromptSettingsGeneration: UInt64 = 0
     @ObservationIgnored var nextPromptModelGeneration: UInt64 = 0
@@ -1359,13 +1359,13 @@ final class AppState {
         attentionStore: AttentionStore? = nil,
         attentionNavigationEnvironment: AttentionNavigationEnvironment? = nil,
         harnessAttentionSettleInterval: TimeInterval = 1.5,
-        nextPromptModelStore: NextPromptModelStore? = nil,
-        nextPromptReadModelState: (@Sendable () async -> NextPromptModelState)? = nil,
+        nextPromptModelStore: LocalTextModelStore? = nil,
+        nextPromptReadModelState: (@Sendable () async -> LocalTextModelState)? = nil,
         nextPromptInference: (any NextPromptRuntime)? = nil,
         nextPromptSupported: Bool = NextPromptInference.isSupported()
     ) {
         self.store = store
-        let suggestionStore = nextPromptModelStore ?? NextPromptModelStore()
+        let suggestionStore = nextPromptModelStore ?? LocalTextModelStore()
         self.nextPromptModelStore = suggestionStore
         self.nextPromptReadModelState = nextPromptReadModelState ?? { await suggestionStore.state }
         self.nextPromptInference = nextPromptInference ?? NextPromptInference(store: suggestionStore)

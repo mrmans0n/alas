@@ -32,11 +32,11 @@ actor NextPromptInference: NextPromptRuntime {
     }
 
     private(set) var state: NextPromptInferenceState = .ready
-    private let acquireLease: @Sendable () async throws -> NextPromptModelLease
+    private let acquireLease: @Sendable () async throws -> LocalTextModelLease
     private let load: @Sendable (URL) async throws -> Evaluation
     private let supported: @Sendable () -> Bool
     private let clock: Clock
-    private var lease: NextPromptModelLease?
+    private var lease: LocalTextModelLease?
     private var evaluation: Evaluation?
     private var operation: Task<String?, Never>?
     private var generation: UInt64 = 0
@@ -45,14 +45,14 @@ actor NextPromptInference: NextPromptRuntime {
     private var idleTask: Task<Void, Never>?
     private var observers: [UUID: AsyncStream<NextPromptInferenceState>.Continuation] = [:]
 
-    init(store: NextPromptModelStore) {
+    init(store: LocalTextModelStore) {
         acquireLease = { try await store.acquireVerifiedLease() }
         load = Self.loadNative
         supported = Self.isSupported
         clock = Clock()
     }
 
-    init(acquireLease: @escaping @Sendable () async throws -> NextPromptModelLease,
+    init(acquireLease: @escaping @Sendable () async throws -> LocalTextModelLease,
          load: @escaping @Sendable (URL) async throws -> Evaluation,
          supported: @escaping @Sendable () -> Bool = { true }, clock: Clock = Clock()) {
         self.acquireLease = acquireLease

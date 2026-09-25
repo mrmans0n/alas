@@ -174,7 +174,7 @@ struct AppStatePersistenceTests {
     }
 
     @Test func nextPromptOptInAndDisablePersistThroughTheConfigStore() async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }

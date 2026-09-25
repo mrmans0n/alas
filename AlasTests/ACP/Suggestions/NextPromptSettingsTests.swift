@@ -10,7 +10,7 @@ import Testing
 struct NextPromptSettingsTests {
     @Test(arguments: [false, true])
     func startupInspectsInstalledModelOnlyWhenSupported(_ supported: Bool) async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
@@ -27,7 +27,7 @@ struct NextPromptSettingsTests {
 
     @Test(arguments: ["stream", "delivery", "pending message"])
     func delegatedChildWorkBlocksAndInvalidatesParentSuggestions(_ work: String) async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
@@ -91,7 +91,7 @@ struct NextPromptSettingsTests {
 
     @Test(arguments: [false, true])
     func normalCompletionRetriesOnceAfterTransientFailure(secondAttemptFails: Bool) async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
@@ -160,7 +160,7 @@ struct NextPromptSettingsTests {
     }
 
     @Test func freshInstallEnablesRuntimeWhenReadyArrivesDuringStateRead() async throws {
-        let fixture = try ModelStoreFixture()
+        let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
@@ -188,7 +188,7 @@ struct NextPromptSettingsTests {
 
     @Test(arguments: ["cancel", "disable", "remove", "modelChange", "shutdown"])
     func staleCompletedInstallationReadCannotResumeSuggestions(_ interruption: String) async throws {
-        let fixture = try ModelStoreFixture()
+        let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
@@ -222,7 +222,7 @@ struct NextPromptSettingsTests {
 
     @Test(arguments: ["cancel", "disable", "modelChange", "shutdown"])
     func staleRuntimeStateReadCannotResumeSuggestions(_ interruption: String) async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
@@ -253,7 +253,7 @@ struct NextPromptSettingsTests {
     }
 
     @Test func consentCancellationAndEnabledRelaunchNeverInstall() async throws {
-        let fixture = try ModelStoreFixture()
+        let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
@@ -274,7 +274,7 @@ struct NextPromptSettingsTests {
     }
 
     @Test func failedEnableSaveRestoresPreferenceWithoutInstallation() async throws {
-        let fixture = try ModelStoreFixture()
+        let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
@@ -289,7 +289,7 @@ struct NextPromptSettingsTests {
     }
 
     @Test func cancelledInstallRemainsEnabledUntilExplicitRetry() async throws {
-        let fixture = try ModelStoreFixture()
+        let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
@@ -313,7 +313,7 @@ struct NextPromptSettingsTests {
     }
 
     @Test func failedDisableRemainsRetryableAndStaysOffAfterRelaunch() async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
@@ -354,7 +354,7 @@ struct NextPromptSettingsTests {
     }
 
     @Test func peerLeaseBlocksRemovalAndExplicitRetryRemovesOnlyOwnedRevision() async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
@@ -375,7 +375,7 @@ struct NextPromptSettingsTests {
     }
 
     @Test func terminationWaitsForEvaluationDrain() async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
@@ -409,7 +409,7 @@ struct NextPromptSettingsTests {
     }
 
     @Test func explicitRetryResetsSuppressedInference() async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
@@ -427,9 +427,9 @@ struct NextPromptSettingsTests {
         await state.shutdownNextPromptSuggestions()
     }
 
-    private func makeState(_ fixture: ModelStoreFixture, _ persistence: SettingsStore,
+    private func makeState(_ fixture: LocalTextModelFixture, _ persistence: SettingsStore,
                            inference: (any NextPromptRuntime)? = nil,
-                           readModelState: (@Sendable () async -> NextPromptModelState)? = nil,
+                           readModelState: (@Sendable () async -> LocalTextModelState)? = nil,
                            supported: Bool = true) -> AppState {
         AppState(store: persistence, persistenceErrorHandler: { _, _ in },
                  nextPromptModelStore: fixture.store,
@@ -440,13 +440,13 @@ struct NextPromptSettingsTests {
 
     /// Removal races benignly with a concurrent inspection's advisory lock; retry
     /// like the product's own "retry when it finishes" .busy handling does.
-    private func waitUntilRemoved(_ fixture: ModelStoreFixture) async throws {
+    private func waitUntilRemoved(_ fixture: LocalTextModelFixture) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(20))
         while true {
             do {
                 try await fixture.store.remove()
                 return
-            } catch NextPromptModelFailure.busy {
+            } catch LocalTextModelFailure.busy {
                 try #require(ContinuousClock.now < deadline)
                 await Task.yield()
             }
@@ -517,7 +517,7 @@ private actor SettingsModelStateReadGate {
     private var continuation: CheckedContinuation<Void, Never>?
     private(set) var entered = false
 
-    func read(_ store: NextPromptModelStore) async -> NextPromptModelState {
+    func read(_ store: LocalTextModelStore) async -> LocalTextModelState {
         let value = await store.state
         if value == .ready, !entered {
             entered = true

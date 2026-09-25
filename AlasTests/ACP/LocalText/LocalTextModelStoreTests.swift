@@ -5,9 +5,28 @@ import Synchronization
 import Testing
 @testable import Alas
 
-struct NextPromptModelStoreTests {
+@Suite(.serialized)
+struct LocalTextModelStoreTests {
+    @Test func verifiedInstallCanBeLeasedAndRemoved() async throws {
+        let fixture = try LocalTextModelFixture()
+        defer { fixture.removeTemporaryRoot() }
+        let store = LocalTextModelStore(
+            root: fixture.root,
+            manifest: fixture.manifest,
+            transport: fixture.transport,
+            capacity: { _ in Int64.max }
+        )
+
+        await store.install()
+        let lease = try await store.acquireVerifiedLease()
+        #expect(lease.directory.lastPathComponent == fixture.manifest.revision)
+        lease.close()
+        try await store.remove()
+        #expect(await store.state == .notInstalled)
+    }
+
     @Test func verifiedInstallAvoidsReplacementDownload() async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         await fixture.store.install()
         let lease = try await fixture.store.acquireVerifiedLease()
@@ -17,12 +36,12 @@ struct NextPromptModelStoreTests {
     }
 
     @Test func corruptFreshInstallIsNotLoadableAndRetrySucceeds() async throws {
-        let fixture = try ModelStoreFixture()
+        let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         fixture.transport.mode.withLock { $0 = .corrupt }
         await fixture.store.install()
         #expect(await fixture.store.state == .failed(.integrity))
-        await #expect(throws: NextPromptModelFailure.self) { try await fixture.store.acquireVerifiedLease() }
+        await #expect(throws: LocalTextModelFailure.self) { try await fixture.store.acquireVerifiedLease() }
         fixture.transport.mode.withLock { $0 = .valid }
         await fixture.store.install()
         let lease = try await fixture.store.acquireVerifiedLease()
@@ -31,11 +50,11 @@ struct NextPromptModelStoreTests {
     }
 
     @Test func corruptOrMissingInstalledAssetsAreRejected() async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let file = fixture.directory.appendingPathComponent("weights")
         try Data("bad".utf8).write(to: file)
-        await #expect(throws: NextPromptModelFailure.self) { try await fixture.store.acquireVerifiedLease() }
+        await #expect(throws: LocalTextModelFailure.self) { try await fixture.store.acquireVerifiedLease() }
         try FileManager.default.removeItem(at: file)
         await fixture.store.inspect()
         #expect(await fixture.store.state == .failed(.integrity))
@@ -47,10 +66,10 @@ struct NextPromptModelStoreTests {
     }
 
     @Test func unsafeManifestNeverWrites() async throws {
-        for asset in [NextPromptModelAsset(path: "../outside", bytes: 1, sha256: String(repeating: "a", count: 64)),
-                      NextPromptModelAsset(path: "weights", bytes: -1, sha256: String(repeating: "a", count: 64)),
-                      NextPromptModelAsset(path: "weights", bytes: 1, sha256: String(repeating: "A", count: 64))] {
-            let fixture = try ModelStoreFixture(assets: [asset])
+        for asset in [LocalTextModelAsset(path: "../outside", bytes: 1, sha256: String(repeating: "a", count: 64)),
+                      LocalTextModelAsset(path: "weights", bytes: -1, sha256: String(repeating: "a", count: 64)),
+                      LocalTextModelAsset(path: "weights", bytes: 1, sha256: String(repeating: "A", count: 64))] {
+            let fixture = try LocalTextModelFixture(assets: [asset])
             defer { fixture.removeTemporaryRoot() }
             await fixture.store.install()
             #expect(await fixture.store.state == .failed(.invalidManifest))
@@ -59,34 +78,34 @@ struct NextPromptModelStoreTests {
     }
 
     @Test func symlinkRootAndLeafAreRejected() async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let link = fixture.root.appendingPathComponent("link")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: fixture.root)
-        let store = NextPromptModelStore(root: link, manifest: fixture.manifest, transport: fixture.transport)
+        let store = LocalTextModelStore(root: link, manifest: fixture.manifest, transport: fixture.transport)
         await store.install()
         #expect(await store.state == .failed(.invalidPath))
         let file = fixture.directory.appendingPathComponent("weights")
         try FileManager.default.removeItem(at: file)
         try FileManager.default.createSymbolicLink(at: file, withDestinationURL: fixture.root.appendingPathComponent("unrelated"))
-        await #expect(throws: NextPromptModelFailure.self) { try await fixture.store.acquireVerifiedLease() }
+        await #expect(throws: LocalTextModelFailure.self) { try await fixture.store.acquireVerifiedLease() }
         #expect(try String(contentsOf: fixture.root.appendingPathComponent("unrelated"), encoding: .utf8) == "keep")
     }
 
     @Test func oversizedInterruptedAndDiskFullTransfersNeverPublish() async throws {
         for mode in [FixtureTransport.Mode.oversized, .interrupted, .diskFull] {
-            let fixture = try ModelStoreFixture()
+            let fixture = try LocalTextModelFixture()
             defer { fixture.removeTemporaryRoot() }
             fixture.transport.mode.withLock { $0 = mode }
             await fixture.store.install()
-            let expected: NextPromptModelFailure = mode == .oversized ? .integrity : mode == .diskFull ? .insufficientSpace : .network
+            let expected: LocalTextModelFailure = mode == .oversized ? .integrity : mode == .diskFull ? .insufficientSpace : .network
             #expect(await fixture.store.state == .failed(expected))
             #expect(!FileManager.default.fileExists(atPath: fixture.directory.path))
         }
     }
 
     @Test func cancellationDrainsBeforeCleanupAndExplicitRetryWorks() async throws {
-        let fixture = try ModelStoreFixture()
+        let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         fixture.transport.mode.withLock { $0 = .waitForCancellation }
         let installation = Task { await fixture.store.install() }
@@ -104,7 +123,7 @@ struct NextPromptModelStoreTests {
     }
 
     @Test func cancelledReuseReportsRetainedVerifiedRevision() async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         var states = await fixture.store.states().makeAsyncIterator()
         _ = await states.next()
@@ -122,7 +141,7 @@ struct NextPromptModelStoreTests {
     }
 
     @Test func cancelledReplacementReportsRetainedCorruptRevision() async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let retained = Data("corrupt".utf8)
         let file = fixture.directory.appendingPathComponent("weights")
@@ -141,11 +160,11 @@ struct NextPromptModelStoreTests {
         #expect(await states.next() == .failed(.integrity))
         #expect(try Data(contentsOf: file) == retained)
         #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path).allSatisfy { !$0.hasPrefix(".staging-") })
-        await #expect(throws: NextPromptModelFailure.integrity) { try await fixture.store.acquireVerifiedLease() }
+        await #expect(throws: LocalTextModelFailure.integrity) { try await fixture.store.acquireVerifiedLease() }
     }
 
     @Test func capacityPreflightAvoidsTransfer() async throws {
-        let fixture = try ModelStoreFixture(capacity: { _ in 0 })
+        let fixture = try LocalTextModelFixture(capacity: { _ in 0 })
         defer { fixture.removeTemporaryRoot() }
         await fixture.store.install()
         #expect(await fixture.store.state == .failed(.insufficientSpace))
@@ -154,21 +173,21 @@ struct NextPromptModelStoreTests {
 
     @Test func downloaderRejectsUntrustedRedirectsAndPartialResponses() throws {
         for url in ["http://huggingface.co/file", "https://evil.huggingface.co/file", "https://huggingface.co.evil.test/file", "https://user@huggingface.co/file", "https://us.aws.cdn.hf.co:444/file"] {
-            #expect(throws: NextPromptModelFailure.self) { try NextPromptModelDownload.validate(URL(string: url)!) }
+            #expect(throws: LocalTextModelFailure.self) { try LocalTextModelDownload.validate(URL(string: url)!) }
         }
-        try NextPromptModelDownload.validate(URL(string: "https://us.aws.cdn.hf.co/xet-bridge-us/68939c367fb5d97aea556aa6/4ae82815c30780b930535c80899215a15651b182544ed87eda312d596abd6983?signature=secret")!)
+        try LocalTextModelDownload.validate(URL(string: "https://us.aws.cdn.hf.co/xet-bridge-us/68939c367fb5d97aea556aa6/4ae82815c30780b930535c80899215a15651b182544ed87eda312d596abd6983?signature=secret")!)
         for url in ["https://huggingface.co/unrelated/repository", "https://us.aws.cdn.hf.co/other-model"] {
-            #expect(throws: NextPromptModelFailure.self) { try NextPromptModelDownload.validate(URL(string: url)!) }
+            #expect(throws: LocalTextModelFailure.self) { try LocalTextModelDownload.validate(URL(string: url)!) }
         }
-        #expect(throws: NextPromptModelFailure.self) { try NextPromptModelDownload.validateStatus(206) }
+        #expect(throws: LocalTextModelFailure.self) { try LocalTextModelDownload.validateStatus(206) }
     }
     @Test func manifestRejectsDuplicateAssetsAndWrongPins() async throws {
-        let fixture = try ModelStoreFixture()
+        let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
-        for manifest in [NextPromptModelManifest(model: "other/model", revision: fixture.manifest.revision, assets: fixture.manifest.assets),
-                         NextPromptModelManifest(model: fixture.manifest.model, revision: "main", assets: fixture.manifest.assets),
-                         NextPromptModelManifest(model: fixture.manifest.model, revision: fixture.manifest.revision, assets: fixture.manifest.assets + fixture.manifest.assets)] {
-            let store = NextPromptModelStore(root: fixture.root, manifest: manifest, transport: fixture.transport)
+        for manifest in [LocalTextModelManifest(model: "other/model", revision: fixture.manifest.revision, assets: fixture.manifest.assets),
+                         LocalTextModelManifest(model: fixture.manifest.model, revision: "main", assets: fixture.manifest.assets),
+                         LocalTextModelManifest(model: fixture.manifest.model, revision: fixture.manifest.revision, assets: fixture.manifest.assets + fixture.manifest.assets)] {
+            let store = LocalTextModelStore(root: fixture.root, manifest: manifest, transport: fixture.transport)
             await store.install()
             #expect(await store.state == .failed(.invalidManifest))
         }
@@ -176,7 +195,7 @@ struct NextPromptModelStoreTests {
     }
 
     @Test func retryCleansOnlyOwnedStagingAndKeepsCorruptRevisionUntilReplacement() async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let before = try FileManager.default.attributesOfItem(atPath: fixture.directory.path)[.systemFileNumber] as? NSNumber
         let owned = fixture.root.appendingPathComponent(".staging-\(fixture.manifest.revision)-\(UUID().uuidString)")
@@ -200,11 +219,11 @@ struct NextPromptModelStoreTests {
     }
 
     @Test func symlinkParentAndLockCannotEscapeRoot() async throws {
-        let fixture = try ModelStoreFixture()
+        let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         let link = fixture.root.appendingPathComponent("link")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: fixture.root)
-        let store = NextPromptModelStore(root: link.appendingPathComponent("nested"), manifest: fixture.manifest, transport: fixture.transport)
+        let store = LocalTextModelStore(root: link.appendingPathComponent("nested"), manifest: fixture.manifest, transport: fixture.transport)
         await store.install()
         #expect(await store.state == .failed(.invalidPath))
         #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("nested").path))
@@ -215,7 +234,7 @@ struct NextPromptModelStoreTests {
     }
 
     @Test func inspectionAndStateStreamDoNotDownload() async throws {
-        let fixture = try ModelStoreFixture()
+        let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         var states = await fixture.store.states().makeAsyncIterator()
         #expect(await states.next() == .notInstalled)
@@ -230,13 +249,13 @@ struct NextPromptModelStoreTests {
 
     @Test func nativeSessionBoundsResponsesAndDrainsCancellation() async throws {
         for mode in [ModelURLProtocol.Mode.valid, .partial, .oversized, .interrupted, .redirect, .cancel] {
-            let fixture = try ModelStoreFixture()
+            let fixture = try LocalTextModelFixture()
             defer { fixture.removeTemporaryRoot() }
             ModelURLProtocol.control.withLock { $0 = .init(mode: mode) }
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [ModelURLProtocol.self]
-            let store = NextPromptModelStore(root: fixture.root, manifest: fixture.manifest,
-                                             transport: NextPromptModelDownload(configuration: configuration))
+            let store = LocalTextModelStore(root: fixture.root, manifest: fixture.manifest,
+                                             transport: LocalTextModelDownload(configuration: configuration))
             let installation = Task { await store.install() }
             if mode == .cancel {
                 let deadline = ContinuousClock.now.advanced(by: .seconds(3))
@@ -262,16 +281,16 @@ struct NextPromptModelStoreTests {
     }
 
     @Test func progressIsBoundedAcrossSmallNetworkChunks() throws {
-        let fixture = try ModelStoreFixture()
+        let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
         let url = fixture.root.appendingPathComponent("progress")
         FileManager.default.createFile(atPath: url.path, contents: nil)
         let handle = try FileHandle(forWritingTo: url)
         defer { try? handle.close() }
         let data = Data(repeating: 1, count: 2 * 1024 * 1024)
-        let asset = NextPromptModelAsset(path: "weights", bytes: Int64(data.count), sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
+        let asset = LocalTextModelAsset(path: "weights", bytes: Int64(data.count), sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
         let progress = Mutex<[Int64]>([])
-        let sink = NextPromptModelSink(handle: handle, asset: asset) { received in progress.withLock { $0.append(received) } }
+        let sink = LocalTextModelSink(handle: handle, asset: asset) { received in progress.withLock { $0.append(received) } }
         for _ in 0..<2048 { try sink.receive(Data(repeating: 1, count: 1024)) }
         try sink.finish()
         let updates = progress.withLock { $0 }
@@ -279,22 +298,22 @@ struct NextPromptModelStoreTests {
     }
 }
 
-struct ModelStoreFixture {
+struct LocalTextModelFixture {
     let root: URL
     let originalWeights = Data("original weights".utf8)
-    let manifest: NextPromptModelManifest
+    let manifest: LocalTextModelManifest
     let transport: FixtureTransport
-    let store: NextPromptModelStore
+    let store: LocalTextModelStore
     var directory: URL { root.appendingPathComponent(manifest.revision) }
 
-    init(assets: [NextPromptModelAsset]? = nil, capacity: @escaping @Sendable (Int32) throws -> Int64 = { try NextPromptModelStore.availableCapacity($0) }) throws {
+    init(assets: [LocalTextModelAsset]? = nil, capacity: @escaping @Sendable (Int32) throws -> Int64 = { try LocalTextModelStore.availableCapacity($0) }) throws {
         root = URL(fileURLWithPath: "/private/tmp/alas-model-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         try Data("keep".utf8).write(to: root.appendingPathComponent("unrelated"))
-        manifest = NextPromptModelManifest(model: NextPromptModelManifest.pinnedModel, revision: NextPromptModelManifest.pinnedRevision,
+        manifest = LocalTextModelManifest(model: LocalTextModelManifest.pinnedModel, revision: LocalTextModelManifest.pinnedRevision,
             assets: assets ?? [.init(path: "weights", bytes: Int64(originalWeights.count), sha256: SHA256.hash(data: originalWeights).map { String(format: "%02x", $0) }.joined())])
         transport = FixtureTransport(bytes: originalWeights)
-        store = NextPromptModelStore(root: root, manifest: manifest, transport: transport, capacity: capacity)
+        store = LocalTextModelStore(root: root, manifest: manifest, transport: transport, capacity: capacity)
     }
 
     static func verifiedInstall() throws -> Self {
@@ -308,7 +327,7 @@ struct ModelStoreFixture {
     func removeTemporaryRoot() { try? FileManager.default.removeItem(at: root) }
 }
 
-final class FixtureTransport: NextPromptModelTransport, Sendable {
+final class FixtureTransport: LocalTextModelTransport, Sendable {
     enum Mode: Sendable { case valid, corrupt, oversized, interrupted, diskFull, waitForCancellation }
     let mode = Mutex(Mode.valid)
     let started = Mutex(false)
@@ -317,7 +336,7 @@ final class FixtureTransport: NextPromptModelTransport, Sendable {
     let bytes: Data
     var requestCount: Int { requests.withLock { $0 } }
     init(bytes: Data) { self.bytes = bytes }
-    func download(_ url: URL, into sink: NextPromptModelSink) async throws {
+    func download(_ url: URL, into sink: LocalTextModelSink) async throws {
         requests.withLock { $0 += 1 }
         started.withLock { $0 = true }
         defer { drained.withLock { $0 = true } }

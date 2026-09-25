@@ -78,7 +78,7 @@ struct NextPromptSuggestionsSettings: View {
     }
 }
 
-extension NextPromptModelFailure {
+extension LocalTextModelFailure {
     var settingsMessage: String {
         switch self {
         case .busy: "A model operation is already in progress. Retry when it finishes."

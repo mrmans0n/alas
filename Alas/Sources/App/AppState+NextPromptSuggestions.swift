@@ -71,7 +71,7 @@ extension AppState {
         updateNextPromptModelState(await nextPromptReadModelState())
     }
 
-    private func updateNextPromptModelState(_ value: NextPromptModelState) {
+    private func updateNextPromptModelState(_ value: LocalTextModelState) {
         guard value != nextPromptModelState else { return }
         nextPromptCoordinator.invalidate()
         nextPromptModelGeneration &+= 1
@@ -161,7 +161,7 @@ extension AppState {
             updateNextPromptModelState(await nextPromptReadModelState())
         } catch {
             guard generation == nextPromptSettingsGeneration else { return }
-            let failure = NextPromptModelFailure.safe(error)
+            let failure = LocalTextModelFailure.safe(error)
             nextPromptRemovalFailure = failure == .busy ? .inUse : failure
         }
     }
