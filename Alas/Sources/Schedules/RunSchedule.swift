@@ -326,7 +326,6 @@ struct RunScheduleRunReport: Equatable, Sendable {
     }
 }
 
-
 struct RunScheduleState: Codable, Equatable, Hashable, Sendable {
     /// How many firings one schedule remembers. A short history, not an audit
     /// log: this file is rewritten whole on every persist, and the durable

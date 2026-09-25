@@ -887,8 +887,6 @@ extension WorktreeServiceTests {
         #expect(WorktreeService.existingLocalLineageID(forWorktreeAt: fixture.worktree.path) == currentLineageID)
     }
 
-
-
     @Test func lockedDeletePreflightReasonIsParsedFromPorcelain() {
         let path = URL(fileURLWithPath: "/repos/app-worktree")
         let porcelain = """

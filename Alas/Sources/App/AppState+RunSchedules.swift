@@ -602,7 +602,6 @@ extension AppState {
         )
     }
 
-
     func scheduledAgentReport(id: String) async throws -> ScheduledAgentReport? {
         await scheduledAgentReportsRecoveryTask?.value
         return try await scheduledAgentReportsStore().report(id: id)
@@ -786,7 +785,6 @@ extension AppState {
         if case .skipped = outcome { return true }
         return false
     }
-
 
     func recordScheduledAgentCompletion(
         origin: ACPOrchestrationSessionOrigin,
@@ -2027,7 +2025,6 @@ extension AppState {
             return .refused("Git could not verify the worktree safety checks.")
         }
     }
-
 
     private func retainScheduledWorktree(
         reportID: String,

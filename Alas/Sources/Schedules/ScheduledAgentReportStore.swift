@@ -232,7 +232,6 @@ actor ScheduledAgentReportStore {
         )
     }
 
-
     func associateSession(reportID: String, sessionID: String) throws {
         let report = try requireRunning(reportID)
         guard report.sessionID == nil else {
@@ -242,7 +241,6 @@ actor ScheduledAgentReportStore {
         updated.sessionID = sessionID
         try persist(updated, requireCurrentState: .running)
     }
-
 
     @discardableResult
     func finishWithoutCompletion(
@@ -498,7 +496,6 @@ actor ScheduledAgentReportStore {
             throw ScheduledAgentReportStoreError.payloadTooLarge(text.utf8.count)
         }
     }
-
 }
 
 enum ScheduledAgentReportStoreError: Error, Equatable, Sendable {

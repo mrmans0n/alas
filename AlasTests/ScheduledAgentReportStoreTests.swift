@@ -639,4 +639,3 @@ struct ScheduledAgentReportIntegrationTests {
         #expect(durableReport.cleanupState == (dirty ? .retained : .removed))
     }
 }
-

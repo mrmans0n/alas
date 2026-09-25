@@ -201,7 +201,6 @@ struct ACPSessionManagerTests {
         #expect(result == .failed("The scheduled ACP prompt was removed before dispatch."))
     }
 
-
     @Test("scheduled settlement distinguishes unrelated queued prompts")
     func scheduledPromptSettlementTracksUnrelatedQueuedPrompts() async throws {
         let url = FileManager.default.temporaryDirectory

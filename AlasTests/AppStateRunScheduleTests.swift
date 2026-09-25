@@ -907,7 +907,6 @@ struct AppStateRunScheduleTests {
         })
     }
 
-
     @Test func compositionCreatesAWorktreeRunsTheScriptThereAndLaunchesTheAgent() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
