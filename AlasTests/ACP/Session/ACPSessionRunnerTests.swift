@@ -193,12 +193,19 @@ struct ACPSessionRunnerTests {
         let client = BoundaryRaceClient()
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
         session.agentState = .ready
+        var turns: [NextPromptCompletedTurn] = []
+        var observedQueueWasEmpty = false
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: client),
             store: store,
             sessionId: "s",
-            worktreePath: FileManager.default.temporaryDirectory.path
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onSuccessfulTurn: {
+                turns.append($0)
+                observedQueueWasEmpty = session.queue.isEmpty
+                    && session.transcript.streamingState == .idle
+            }
         )
         runner.start()
 
@@ -209,6 +216,7 @@ struct ACPSessionRunnerTests {
 
         try await waitUntil { completion == true }
         #expect(session.transcript.completedOutputBoundaryMessageIds.isEmpty)
+        #expect(turns.isEmpty)
 
         client.emitReserved(.agentMessageChunk(.text(" second")))
         try await waitUntil {
@@ -217,6 +225,17 @@ struct ACPSessionRunnerTests {
             else { return false }
             return buffer.value == "first second"
                 && session.transcript.completedOutputBoundaryMessageIds == [session.transcript.messages[1].stableId]
+        }
+        try await waitUntil { turns.count == 1 }
+        #expect(observedQueueWasEmpty)
+        if case .user(let userID, _, _, _, _) = session.transcript.messages[0] {
+            #expect(turns[0].sessionID == "s")
+            #expect(turns[0].incarnation == session.incarnation)
+            #expect(turns[0].promptID == 0)
+            #expect(turns[0].userMessageID == userID)
+            #expect(turns[0].transcriptRevision == session.transcript.messagesGeneration)
+        } else {
+            Issue.record("expected recorded user row")
         }
 
         client.emitFresh(.agentMessageChunk(.text("next task")))
@@ -230,6 +249,127 @@ struct ACPSessionRunnerTests {
         }
     }
 
+    @Test("failed and recovery prompts do not publish successful user turns")
+    func failedAndRecoveryPromptsDoNotPublishTurns() async throws {
+        var turns: [NextPromptCompletedTurn] = []
+        let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
+        runner.session.agentState = .ready
+        let recoveryProcessed = AsyncGate()
+        runner.onPromptResponseProcessedForTesting = { promptID in
+            if promptID == 1 { Task { await recoveryProcessed.open() } }
+        }
+        runner.send(text: "fails", attachments: [])
+        try await waitUntil { runner.session.lastError != nil }
+        #expect(turns.isEmpty)
+
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        var recoveryDelivered: Bool?
+        let accepted = runner.sendRecoveryContext("restore", onCompleted: { recoveryDelivered = $0 })
+        #expect(accepted)
+        await recoveryProcessed.wait()
+        #expect(recoveryDelivered == true)
+        await runner.waitForTurnPublicationForTesting(promptID: 1)
+        #expect(turns.isEmpty)
+
+        runner.send(text: "ordinary", attachments: [])
+        try await waitUntil { turns.count == 1 }
+        #expect(turns.map(\.promptID) == [2])
+    }
+
+    @Test("ordinary success publishes through the shared runner helper")
+    func ordinarySuccessPublishesThroughHelper() async throws {
+        var turns: [NextPromptCompletedTurn] = []
+        let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.session.agentState = .ready
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        runner.send(text: "ordinary", attachments: [])
+        try await waitUntil { turns.count == 1 }
+        #expect(turns[0].promptID == 0)
+        #expect(runner.turnPublicationTasksForTesting?.count == nil)
+    }
+
+    @Test("automated prompt success does not publish a user turn")
+    func automatedPromptDoesNotPublishTurn() async throws {
+        var turns: [NextPromptCompletedTurn] = []
+        let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
+        runner.session.agentState = .ready
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let automatedProcessed = AsyncGate()
+        runner.onPromptResponseProcessedForTesting = { promptID in
+            if promptID == 0 { Task { await automatedProcessed.open() } }
+        }
+        var automatedFinished: Bool?
+        runner.sendNow(blocks: [.text("automation")], queuedItemId: nil,
+            normalUserTurn: false, onPromptFinished: { automatedFinished = $0 })
+        await automatedProcessed.wait()
+        #expect(automatedFinished == true)
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        #expect(turns.isEmpty)
+        runner.send(text: "ordinary", attachments: [])
+        try await waitUntil { turns.count == 1 }
+        #expect(turns.map(\.promptID) == [1])
+    }
+
+    @Test("delegated success does not publish a normal user turn")
+    func delegatedPromptDoesNotPublishTurn() async throws {
+        var turns: [NextPromptCompletedTurn] = []
+        let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
+        runner.session.agentState = .ready
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let delegatedProcessed = AsyncGate()
+        runner.onPromptResponseProcessedForTesting = { promptID in
+            if promptID == 0 { Task { await delegatedProcessed.open() } }
+        }
+        var delegatedFinished: Bool?
+        runner.sendNow(
+            blocks: [.text("delegated")],
+            queuedItemId: nil,
+            delegatedSource: ACPDelegatedPromptSource(sessionId: "parent", messageId: "message"),
+            onPromptFinished: { delegatedFinished = $0 }
+        )
+        await delegatedProcessed.wait()
+        #expect(delegatedFinished == true)
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        #expect(turns.isEmpty)
+        runner.send(text: "ordinary", attachments: [])
+        try await waitUntil { turns.count == 1 }
+        #expect(turns.map(\.promptID) == [1])
+    }
+
+    @Test("prompt IDs continue across runner reattach for the same session incarnation")
+    func promptIDsContinueAcrossRunnerReattach() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-runner-turn-id-\(UUID().uuidString).sqlite").path
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(id: "s", agentId: "codex", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        var turns: [NextPromptCompletedTurn] = []
+        let firstClient = ACPMockClient()
+        firstClient.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let first = ACPSessionRunner(session: session, connection: ACPConnection(client: firstClient),
+            store: store, sessionId: "s", worktreePath: FileManager.default.temporaryDirectory.path,
+            onSuccessfulTurn: { turns.append($0) })
+        first.send(text: "first", attachments: [])
+        try await waitUntil { turns.count == 1 }
+        first.stop()
+
+        let secondClient = ACPMockClient()
+        secondClient.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let second = ACPSessionRunner(session: session, connection: ACPConnection(client: secondClient),
+            store: store, sessionId: "s", worktreePath: FileManager.default.temporaryDirectory.path,
+            onSuccessfulTurn: { turns.append($0) })
+        second.send(text: "second", attachments: [])
+        try await waitUntil { turns.count == 2 }
+        #expect(turns.map(\.promptID) == [0, 1])
+        #expect(turns[0].incarnation == turns[1].incarnation)
+    }
+
     @Test("submits queue while completed output boundary is waiting for updates")
     func submitQueuesWhileCompletedBoundaryWaitsForUpdates() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -241,12 +381,14 @@ struct ACPSessionRunnerTests {
         let client = BoundaryRaceClient()
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
         session.agentState = .ready
+        var turns: [NextPromptCompletedTurn] = []
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: client),
             store: store,
             sessionId: "s",
-            worktreePath: FileManager.default.temporaryDirectory.path
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onSuccessfulTurn: { turns.append($0) }
         )
         runner.start()
 
@@ -256,6 +398,7 @@ struct ACPSessionRunnerTests {
         }
         try await waitUntil { firstCompletion == true }
         #expect(session.transcript.streamingState == .sending)
+        #expect(turns.isEmpty)
 
         var secondAccepted: Bool?
         runner.send(blocks: [.text("next")], intent: .auto) { succeeded in
@@ -270,6 +413,7 @@ struct ACPSessionRunnerTests {
             client.sent.filter { $0.method == "session/prompt" }.count == 2
                 && session.transcript.messages.count >= 3
         }
+        #expect(turns.isEmpty)
 
         if case .user(_, _, let firstUser, _, _) = session.transcript.messages[0],
            case .agent(_, _, let firstAnswer) = session.transcript.messages[1],
@@ -293,12 +437,14 @@ struct ACPSessionRunnerTests {
         let client = BoundaryRaceClient()
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
         session.agentState = .ready
+        var turns: [NextPromptCompletedTurn] = []
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: client),
             store: store,
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
+            onSuccessfulTurn: { turns.append($0) },
             incomingUpdateCoalesceNanos: 500_000_000
         )
         runner.start()
@@ -330,6 +476,7 @@ struct ACPSessionRunnerTests {
         #expect(client.sent.filter { $0.method == "session/prompt" }.count == 1)
         #expect(session.queue.count == 1)
         #expect(session.queue.first?.status == .pending)
+        #expect(turns.isEmpty)
         if case .agent(_, _, let answer) = session.transcript.messages[1],
            case .systemNotice(_, let text) = session.transcript.messages[2] {
             #expect(answer.value == "first second")
@@ -350,12 +497,14 @@ struct ACPSessionRunnerTests {
         let client = BoundaryRaceClient()
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
         session.agentState = .ready
+        var turns: [NextPromptCompletedTurn] = []
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: client),
             store: store,
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
+            onSuccessfulTurn: { turns.append($0) },
             incomingUpdateCoalesceNanos: 500_000_000
         )
         runner.start()
@@ -382,6 +531,7 @@ struct ACPSessionRunnerTests {
         #expect(client.sent.filter { $0.method == "session/prompt" }.count == 1)
         #expect(session.queue.count == 1)
         #expect(session.queue.first?.status == .pending)
+        #expect(turns.isEmpty)
         if case .agent(_, _, let answer) = session.transcript.messages[1] {
             #expect(answer.value == "first second")
         } else {
@@ -402,12 +552,14 @@ struct ACPSessionRunnerTests {
         client.holdSecondPrompt(until: replacementGate)
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
         session.agentState = .ready
+        var turns: [NextPromptCompletedTurn] = []
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: client),
             store: store,
             sessionId: "s",
-            worktreePath: FileManager.default.temporaryDirectory.path
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onSuccessfulTurn: { turns.append($0) }
         )
         runner.start()
 
@@ -417,20 +569,33 @@ struct ACPSessionRunnerTests {
         }
         try await waitUntil { firstCompletion == true }
         #expect(session.transcript.streamingState == .sending)
+        #expect(turns.isEmpty)
 
-        runner.send(blocks: [.text("replacement")], intent: .steer)
+        var replacementCompletion: Bool?
+        runner.send(blocks: [.text("replacement")], intent: .steer) { succeeded in
+            replacementCompletion = succeeded
+        }
         try await waitUntil {
             client.sent.filter { $0.method == "session/prompt" }.count == 2
                 && session.transcript.streamingState == .sending
         }
 
         client.emitReserved(.agentMessageChunk(.text(" old-tail")))
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitUntil {
+            session.transcript.messages.contains {
+                if case .agent(_, _, let buffer) = $0 { return buffer.value.contains("old-tail") }
+                return false
+            }
+        }
         #expect(session.transcript.streamingState == .sending)
+        #expect(turns.isEmpty)
 
         await replacementGate.open()
+        try await waitUntil { replacementCompletion == true }
+        #expect(turns.isEmpty)
         client.emitReserved(.agentMessageChunk(.text(" replacement-tail")))
-        try await waitUntil { session.transcript.streamingState == .idle }
+        try await waitUntil { turns.count == 1 }
+        #expect(turns.map(\.promptID) == [1])
     }
 
     @Test("send treats user-cancelled prompt errors as accepted completion")
@@ -469,10 +634,19 @@ struct ACPSessionRunnerTests {
         // ACPConnection.prompt(...) never decodes stopReason at all — the
         // completion callback and transcript state must settle the same
         // way no matter what the field says.
-        let (runner, mock) = try makeRunner()
+        var turns: [NextPromptCompletedTurn] = []
+        let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
+        runner.session.agentState = .ready
+        let cancelledProcessed = AsyncGate()
+        runner.onPromptResponseProcessedForTesting = { promptID in
+            if promptID == 0 { Task { await cancelledProcessed.open() } }
+        }
         let promptStarted = AsyncGate()
+        let finishPrompt = AsyncGate()
         mock.scriptAsync(method: "session/prompt") { _ in
             await promptStarted.open()
+            await finishPrompt.wait()
             return try JSONEncoder().encode(["stopReason": "end_turn"])
         }
 
@@ -482,13 +656,17 @@ struct ACPSessionRunnerTests {
         }
         await promptStarted.wait()
         await runner.userCancel()
-
-        for _ in 0..<20 where completion == nil {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await finishPrompt.open()
+        await cancelledProcessed.wait()
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
         #expect(completion == true)
         #expect(runner.session.lastError == nil)
         #expect(runner.session.transcript.streamingState == .idle)
+        #expect(turns.isEmpty)
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        runner.send(text: "after cancel", attachments: [])
+        try await waitUntil { turns.count == 1 }
+        #expect(turns.map(\.promptID) == [1])
     }
 
     @Test("user cancel invokes the pending input cancellation hook")
@@ -554,7 +732,16 @@ struct ACPSessionRunnerTests {
 
     @Test("cancelled prompt success does not complete over a newer prompt")
     func cancelledPromptSuccessDoesNotCompleteOverNewerPrompt() async throws {
-        let (runner, mock) = try makeRunner()
+        var turns: [NextPromptCompletedTurn] = []
+        let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
+        runner.session.agentState = .ready
+        let staleProcessed = AsyncGate()
+        let successorProcessed = AsyncGate()
+        runner.onPromptResponseProcessedForTesting = { promptID in
+            if promptID == 0 { Task { await staleProcessed.open() } }
+            if promptID == 1 { Task { await successorProcessed.open() } }
+        }
         let promptCounter = AsyncCounter()
         let firstStarted = AsyncGate()
         let finishFirst = AsyncGate()
@@ -585,20 +772,20 @@ struct ACPSessionRunnerTests {
         }
         await secondStarted.wait()
         await finishFirst.open()
-
-        for _ in 0..<20 where runner.session.transcript.streamingState != .sending {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await staleProcessed.wait()
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
         #expect(firstCompletion == nil)
         #expect(secondCompletion == nil)
         #expect(runner.session.transcript.streamingState == .sending)
+        #expect(turns.isEmpty)
 
         await finishSecond.open()
-        for _ in 0..<20 where secondCompletion == nil {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await successorProcessed.wait()
+        await runner.waitForTurnPublicationForTesting(promptID: 1)
+        #expect(runner.turnPublicationTasksForTesting?.isEmpty == true)
         #expect(secondCompletion == true)
         #expect(runner.session.transcript.streamingState == .idle)
+        #expect(turns.map(\.promptID) == [1])
     }
 
     @Test("emitted session/update lands on the session and persists a message row")
@@ -3944,7 +4131,8 @@ struct ACPSessionRunnerTests {
         session suppliedSession: ACPSession? = nil,
         isConnectionCurrent: @escaping () -> Bool = { true },
         canWrite: (() -> Bool)? = nil,
-        validateLease: (() async -> Bool)? = nil
+        validateLease: (() async -> Bool)? = nil,
+        onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in }
     ) throws -> (ACPSessionRunner, ACPMockClient) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -3962,6 +4150,7 @@ struct ACPSessionRunnerTests {
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
             onUserCancel: onUserCancel,
+            onSuccessfulTurn: onSuccessfulTurn,
             onCheckpointCapture: onCheckpointCapture,
             isConnectionCurrent: isConnectionCurrent,
             canWrite: canWrite,

@@ -172,6 +172,31 @@ final class AppState {
     /// session-lease layer so two running Alas builds don't fight over a
     /// shared per-worktree database.
     let instanceId: String = UUID().uuidString
+    @ObservationIgnored let nextPromptModelStore: NextPromptModelStore
+    @ObservationIgnored let nextPromptReadModelState: @Sendable () async -> NextPromptModelState
+    @ObservationIgnored let nextPromptInference: any NextPromptRuntime
+    @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] in
+        self?.nextPromptSnapshot()
+    }
+    @ObservationIgnored let nextPromptObservers = NextPromptObservers()
+    @ObservationIgnored var nextPromptInstallation: Task<Void, Never>?
+    let nextPromptSupported: Bool
+    var nextPromptModelState: NextPromptModelState = .notInstalled
+    var nextPromptInferenceState: NextPromptInferenceState = .ready
+    var nextPromptRuntimeEnabled = false
+    var nextPromptDisableSavePending = false
+    var nextPromptSettingsError: String?
+    var nextPromptRemovalFailure: NextPromptModelFailure?
+    var nextPromptOffer: String?
+    @ObservationIgnored var nextPromptSettingsGeneration: UInt64 = 0
+    @ObservationIgnored var nextPromptModelGeneration: UInt64 = 0
+    @ObservationIgnored var nextPromptComposerEpoch: UInt64 = 0
+    @ObservationIgnored var nextPromptShuttingDown = false
+    @ObservationIgnored var nextPromptOwner: SessionOwnerID?
+    @ObservationIgnored var nextPromptSessionID: String?
+    @ObservationIgnored var nextPromptActiveIncarnation: UUID?
+    @ObservationIgnored var nextPromptCompletedTurn: NextPromptCompletedTurn?
+    @ObservationIgnored var nextPromptComposerEnvironment = NextPromptEligibilitySnapshot.Environment()
     var config: AppConfig
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
@@ -1333,9 +1358,18 @@ final class AppState {
         },
         attentionStore: AttentionStore? = nil,
         attentionNavigationEnvironment: AttentionNavigationEnvironment? = nil,
-        harnessAttentionSettleInterval: TimeInterval = 1.5
+        harnessAttentionSettleInterval: TimeInterval = 1.5,
+        nextPromptModelStore: NextPromptModelStore? = nil,
+        nextPromptReadModelState: (@Sendable () async -> NextPromptModelState)? = nil,
+        nextPromptInference: (any NextPromptRuntime)? = nil,
+        nextPromptSupported: Bool = NextPromptInference.isSupported()
     ) {
         self.store = store
+        let suggestionStore = nextPromptModelStore ?? NextPromptModelStore()
+        self.nextPromptModelStore = suggestionStore
+        self.nextPromptReadModelState = nextPromptReadModelState ?? { await suggestionStore.state }
+        self.nextPromptInference = nextPromptInference ?? NextPromptInference(store: suggestionStore)
+        self.nextPromptSupported = nextPromptSupported
         self.workspaceStore = workspaceStore
         self.workspaceRemoteTransport = workspaceRemoteTransport
         self.attentionStore = attentionStore ?? AttentionStore()
@@ -1453,7 +1487,9 @@ final class AppState {
             self?.persistenceErrorHandler("Schedules Save Failed", message)
         }
         installRunScheduleRunner()
+        startNextPromptObservers()
         AlasTerminationCoordinator.shared.flush = { [weak self] in
+            await self?.shutdownNextPromptSuggestions()
             self?.runScheduler.stop()
             await GGLandingStore.shared.cancelAllAndWait()
             self?.cancelPendingRunScriptLaunches()
@@ -1553,7 +1589,7 @@ final class AppState {
                     updatedAt: Int64(Date().timeIntervalSince1970)
                 )
             }
-            delegatedSessionParents[record.childSessionId] = record.parentSessionId
+            rememberDelegatedSessionParent(childID: record.childSessionId, parentID: record.parentSessionId)
             let sessionAlreadyPersisted = await manager.persistedSessionRow(id: record.childSessionId) != nil
             if sessionAlreadyPersisted {
                 _ = manager.placeholderSession(id: record.childSessionId)
@@ -1645,7 +1681,7 @@ final class AppState {
         for sessionId in targetSessionIds {
             let childRecord = try? await acpOrchestrationPersistence.parent(childSessionId: sessionId)
             if let childRecord {
-                delegatedSessionParents[childRecord.childSessionId] = childRecord.parentSessionId
+                rememberDelegatedSessionParent(childID: childRecord.childSessionId, parentID: childRecord.parentSessionId)
             }
             guard let manager = await acpManagerForPersistedSession(
                 sessionId: sessionId,
@@ -6560,7 +6596,7 @@ final class AppState {
                     return await self.createDelegatedWorktree(projectId: projectId, branch: branch, base: base)
                 },
                 rememberParent: { [weak self] childID, parentID in
-                    self?.delegatedSessionParents[childID] = parentID
+                    self?.rememberDelegatedSessionParent(childID: childID, parentID: parentID)
                 },
                 autoRunDefault: { [weak self] in
                     self?.config.harness.acpAutoRunByDefault ?? false
@@ -11554,7 +11590,26 @@ final class AppState {
     /// Observed, not `@ObservationIgnored`: the agent sidebar reads this to
     /// draw delegated children under their parent, so a newly recorded link
     /// has to invalidate the view.
-    private(set) var delegatedSessionParents: [String: String] = [:]
+    private(set) var delegatedSessionParents: [String: String] = [:] {
+        willSet {
+            if newValue != delegatedSessionParents { nextPromptCoordinator.invalidate() }
+        }
+    }
+
+    func rememberDelegatedSessionParent(childID: String, parentID: String) {
+        delegatedSessionParents[childID] = parentID
+    }
+
+    func nextPromptHasDelegatedWork(parentID: String) -> Bool {
+        acpManagers.values.contains { manager in
+            manager.sessions.values.contains { child in
+                delegatedSessionParents[child.id] == parentID &&
+                (child.agentState == .spawning || child.transcript.streamingState != .idle ||
+                 child.nextPromptWorkCount > 0 || child.hasPendingDelegatedMessages || !child.queue.isEmpty ||
+                 child.pendingQueuePersistenceCount > 0 || child.subagents.values.contains { $0.isRunning })
+            }
+        }
+    }
 
     /// Backfills the links completed in earlier runs. Without this the map only
     /// ever holds delegations this launch created or recovered, and restored
@@ -11901,10 +11956,17 @@ final class AppState {
                 )
             },
             onDelegatedMessageAvailable: { [weak self] sessionId in
+                guard let self, let manager = self.acpManagers[owner] else { return }
+                let session = manager.liveSession(for: sessionId)
+                session?.nextPromptWorkCount += 1
                 Task { @MainActor [weak self] in
-                    guard let self, let manager = self.acpManagers[owner] else { return }
+                    defer { session?.nextPromptWorkCount -= 1 }
+                    guard let self else { return }
                     await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
                 }
+            },
+            onSuccessfulTurn: { [weak self] turn in
+                self?.nextPromptCompleted(turn, owner: owner)
             },
             onQueueChanged: { [weak self] sessionId, retainActivePrompt in
                 self?.restartRetainedACPSessionCleanupIfNeeded(
@@ -11978,7 +12040,7 @@ final class AppState {
                 let parentSessionId = self.delegatedSessionParents[sessionId]
                     ?? persistedParent?.parentSessionId
                 if let parentSessionId {
-                    self.delegatedSessionParents[sessionId] = parentSessionId
+                    self.rememberDelegatedSessionParent(childID: sessionId, parentID: parentSessionId)
                 }
                 let configuredServers: [ProjectMCPServer] = {
                     guard let project = self.projects.first(where: { $0.id == worktree.projectId }) else {
@@ -12193,6 +12255,7 @@ final class AppState {
             return (adapterState, configOutcome, userServerNames, skippedServerStatuses, requestedServerStatuses)
         }
         acpManagers[owner] = mgr
+        observeNextPromptSessions(mgr, owner: owner)
         acpHarnessBridge.attach(manager: mgr)
         #if DEBUG
         memoryDiagnostics.attach(manager: mgr)
@@ -12327,6 +12390,9 @@ final class AppState {
                     requestId: self.notificationRequestId(for: request.id),
                     owner: owner
                 )
+            },
+            onSuccessfulTurn: { [weak self] turn in
+                self?.nextPromptCompleted(turn, owner: owner)
             },
             onQueueChanged: { [weak self] sessionId, retainActivePrompt in
                 self?.restartRetainedACPSessionCleanupIfNeeded(
@@ -12478,6 +12544,7 @@ final class AppState {
             return (adapterState, configOutcome, userServerNames, skippedServerStatuses, requestedServerStatuses)
         }
         acpManagers[owner] = manager
+        observeNextPromptSessions(manager, owner: owner)
         acpHarnessBridge.attach(manager: manager)
         #if DEBUG
         memoryDiagnostics.attach(manager: manager)
@@ -12650,6 +12717,7 @@ final class AppState {
         // must be torn down explicitly to stop the 2.5s backstop polls and
         // notifier subscriptions from outliving the manager.
         manager.shutdownBackgroundTasks()
+        nextPromptObservers.managers[owner] = nil
     }
 
     private func finishDisposingACPManager(_ manager: ACPSessionManager) async {
@@ -13147,9 +13215,13 @@ final class AppState {
     }
 
     private func deliverPendingDelegatedMessages(to sessionId: String, manager: ACPSessionManager) async {
+        let session = manager.liveSession(for: sessionId)
+        session?.nextPromptWorkCount += 1
+        defer { session?.nextPromptWorkCount -= 1 }
         guard let messages = try? await acpOrchestrationPersistence.pendingMessages(targetSessionId: sessionId) else {
             return
         }
+        session?.hasPendingDelegatedMessages = !messages.isEmpty
         await manager.attach(to: sessionId, freshlyCreated: false)
         guard manager.isWriter(for: sessionId) else {
             manager.notifyDelegatedMessagesAvailable()
@@ -13183,6 +13255,9 @@ final class AppState {
                 )
                 manager.notifyDelegatedMessagesAvailable()
             }
+        }
+        if let remaining = try? await acpOrchestrationPersistence.pendingMessages(targetSessionId: sessionId) {
+            session?.hasPendingDelegatedMessages = !remaining.isEmpty
         }
     }
 
@@ -14299,8 +14374,14 @@ extension AppState: RemoteSessionsProvider {
     /// `onResult` fires once (false when no manager owns the id, the manager
     /// refuses, or delivery later fails) so the gateway can restore the text.
     func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
+        await sendPrompt(for: id, text: text, attachments: attachments,
+                         normalUserTurn: true, onResult: onResult)
+    }
+
+    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], normalUserTurn: Bool, onResult: @escaping @MainActor (Bool) -> Void) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.sendPrompt(for: id, text: text, attachments: attachments, onResult: onResult)
+            await mgr.sendPrompt(for: id, text: text, attachments: attachments,
+                                 normalUserTurn: normalUserTurn, onResult: onResult)
             return
         }
         onResult(false)

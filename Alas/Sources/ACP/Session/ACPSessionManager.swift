@@ -140,6 +140,7 @@ final class ACPSessionManager: ObservableObject {
     private let onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)?
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
     private let onQueueChanged: ((ACPSession.ID, Bool) -> Void)?
+    private let onSuccessfulTurn: @MainActor (NextPromptCompletedTurn) -> Void
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
@@ -184,7 +185,14 @@ final class ACPSessionManager: ObservableObject {
     /// `alasCLIEnvProvider`, so AppState can wire it without threading it
     /// through every manager construction call site.
     var externalMCPStatusProvider: ExternalMCPStatusProvider?
-    @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
+    @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:] {
+        willSet {
+            for (id, session) in sessions where newValue[id] !== session {
+                session.nextPromptActivity.send()
+                session.nextPromptTeardown.send()
+            }
+        }
+    }
     @Published private(set) var recent: [ACPSessionRow] = []
     @Published private(set) var persistenceError: String?
     @Published private var persistedRows: [ACPSession.ID: ACPSessionRow] = [:]
@@ -341,12 +349,17 @@ final class ACPSessionManager: ObservableObject {
     /// land between the gateway's `isWriter` gate and here, and `submit`'s
     /// `.idle`/`.disconnected` path would otherwise enqueue + persist the prompt
     /// as a mirror — injecting it into a session another instance now drives.
-    func sendPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
+    func sendPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], normalUserTurn: Bool = true, onResult: @escaping @MainActor (Bool) -> Void) async {
+        let suggestionSession = sessions[id]
+        suggestionSession?.nextPromptWorkCount += 1
+        defer { suggestionSession?.nextPromptWorkCount -= 1 }
         guard await confirmedWriterLease(for: id) else {
             onResult(false)
             return
         }
         let accepted = submit(sessionId: id, text: text, attachments: attachments, intent: .auto,
+                              draft: nil, waitForModelModeSelections: true,
+                              normalUserTurn: normalUserTurn,
                               onCompleted: { ok in onResult(ok) })
         if !accepted { onResult(false) }   // submit refused synchronously; onCompleted won't fire
     }
@@ -501,6 +514,9 @@ final class ACPSessionManager: ObservableObject {
     /// `ACPSubmitRoute.resolve` handles the degenerate idle+empty case by
     /// falling back to a plain send.
     func steerPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
+        let suggestionSession = sessions[id]
+        suggestionSession?.nextPromptWorkCount += 1
+        defer { suggestionSession?.nextPromptWorkCount -= 1 }
         guard await confirmedWriterLease(for: id) else {
             onResult(false)
             return
@@ -614,11 +630,14 @@ final class ACPSessionManager: ObservableObject {
         onInvalidated: @escaping @MainActor () -> Void,
         operation: @escaping @MainActor () async -> Void
     ) {
+        let suggestionSession = sessions[id]
+        suggestionSession?.nextPromptWorkCount += 1
         let generation = modelModeSelectionGenerations[id] ?? UUID()
         modelModeSelectionGenerations[id] = generation
         let previousTask = modelModeSelectionTails[id]?.task
         let token = UUID()
         let task = Task { @MainActor [weak self] in
+            defer { suggestionSession?.nextPromptWorkCount -= 1 }
             await previousTask?.value
             guard let self,
                   self.modelModeSelectionGenerations[id] == generation
@@ -1164,9 +1183,21 @@ final class ACPSessionManager: ObservableObject {
     }
 
     /// Sessions for which THIS instance holds the writer lease (backing store).
-    var _ownedLeases: Set<ACPSession.ID> = []
+    var _ownedLeases: Set<ACPSession.ID> = [] {
+        willSet {
+            for id in _ownedLeases.subtracting(newValue) { sessions[id]?.nextPromptActivity.send() }
+        }
+    }
     private var ownedLeaseTokens: [ACPSession.ID: String] = [:]
-    private var observedLeases: [ACPSession.ID: ACPSessionLease?] = [:]
+    private var observedLeases: [ACPSession.ID: ACPSessionLease?] = [:] {
+        willSet {
+            let previous = observedLeases
+            for id in _ownedLeases where newValue[id] != previous[id] {
+                let lease = newValue[id] ?? nil
+                if lease?.ownerInstance != instanceId { sessions[id]?.nextPromptActivity.send() }
+            }
+        }
+    }
     /// Per-session periodic heartbeat tasks (backing store).
     var _heartbeatTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Per-session debounced write tasks for `composer_drafts`. The
@@ -1334,6 +1365,7 @@ final class ACPSessionManager: ObservableObject {
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)? = nil,
          onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
+         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
          onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
@@ -1376,6 +1408,7 @@ final class ACPSessionManager: ObservableObject {
         self.onPlanAwaiting = onPlanAwaiting
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
         self.onQueueChanged = onQueueChanged
+        self.onSuccessfulTurn = onSuccessfulTurn
         self.onCheckpointCapture = onCheckpointCapture
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
@@ -1511,6 +1544,8 @@ final class ACPSessionManager: ObservableObject {
         guard let source = sessions[sourceSessionID], source.hydrationState == .ready else {
             throw ACPSessionForkCreationError.sourceUnavailable
         }
+        source.nextPromptWorkCount += 1
+        defer { source.nextPromptWorkCount -= 1 }
         let acquiredSnapshotLease: Bool
         if !_ownedLeases.contains(sourceSessionID) {
             guard await acquireWriterLease(sessionId: sourceSessionID) else {
@@ -2102,6 +2137,7 @@ final class ACPSessionManager: ObservableObject {
         guard let current = visibleSessionCounts[id], current > 0 else { return }
         let next = current - 1
         if next == 0 {
+            sessions[id]?.nextPromptActivity.send()
             visibleSessionCounts.removeValue(forKey: id)
         } else {
             visibleSessionCounts[id] = next
@@ -4142,6 +4178,10 @@ extension ACPSessionManager {
     /// old agent process is still alive.
     func shutdownBackgroundTasks() {
         isDisposed = true   // must be first: in-flight attach resumes after this and checks the flag
+        for session in sessions.values {
+            session.nextPromptActivity.send()
+            session.nextPromptTeardown.send()
+        }
         for sid in Array(mirrorTokens.keys) { endMirroring(sessionId: sid) }
         for sid in Array(writerWatchTokens.keys) { stopWriterWatch(sessionId: sid) }
         for (_, task) in _heartbeatTasks { task.cancel() }
@@ -5340,6 +5380,9 @@ extension ACPSessionManager {
                                                     self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
                                               else { return }
                                               self.onQueueChanged?(sessionId, self.retainedCleanupHasActivePromptWork(for: sessionId))
+                                          },
+                                          onSuccessfulTurn: { [weak self] turn in
+                                              self?.onSuccessfulTurn(turn)
                                           },
                                           onQueuedPromptDispatchRegistration: { [weak self] itemId in
                                               guard let self,
@@ -6745,6 +6788,7 @@ extension ACPSessionManager {
         attachments: [ACPMessage.Attachment],
         draft: ACPComposerDraft? = nil,
         scheduledAt: Date? = nil,
+        normalUserTurn: Bool = false,
         into sessionId: ACPSession.ID,
         onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
         onPersisted: (@MainActor (_ persisted: Bool) -> Void)? = nil
@@ -6757,9 +6801,11 @@ extension ACPSessionManager {
         let scheduledId: UUID?
         if let scheduledAt {
             scheduledId = session.enqueueScheduled(blocks: blocks, scheduledAt: scheduledAt, draft: draft)
+            if normalUserTurn, let scheduledId { session.normalQueuedTurnIDs.insert(scheduledId) }
         } else {
             let queuedPromptId = UUID()
             session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft)
+            if normalUserTurn { session.normalQueuedTurnIDs.insert(queuedPromptId) }
             onQueuedPromptEnqueued?(queuedPromptId)
             scheduledId = nil
         }
@@ -6817,6 +6863,9 @@ extension ACPSessionManager {
         into sessionId: ACPSession.ID
     ) async -> Bool {
         guard var session = sessions[sessionId] else { return false }
+        let suggestionSession = session
+        suggestionSession.nextPromptWorkCount += 1
+        defer { suggestionSession.nextPromptWorkCount -= 1 }
         guard !session.queue.contains(where: { $0.delegatedSource?.messageId == source.messageId }) else {
             return true
         }
@@ -6860,6 +6909,9 @@ extension ACPSessionManager {
         into sessionId: ACPSession.ID
     ) async -> Bool {
         guard var session = sessions[sessionId] else { return false }
+        let suggestionSession = session
+        suggestionSession.nextPromptWorkCount += 1
+        defer { suggestionSession.nextPromptWorkCount -= 1 }
         let source = ACPDelegatedPromptSource(
             sessionId: "mission:\(sessionId)",
             messageId: id.uuidString
@@ -6944,10 +6996,12 @@ extension ACPSessionManager {
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft?,
         waitForModelModeSelections: Bool,
+        normalUserTurn: Bool = true,
         onCompleted: @escaping @MainActor (Bool) -> Void,
         onDispatchRegistered: (@Sendable () -> Void)? = nil
     ) -> Bool {
         guard let session = sessions[sessionId] else { return false }
+        session.nextPromptActivity.send()
         if case .needsAuth = session.setupState {
             return false
         }
@@ -7010,6 +7064,7 @@ extension ACPSessionManager {
                             intent: intent,
                             draft: draft,
                             waitForModelModeSelections: false,
+                            normalUserTurn: normalUserTurn,
                             onCompleted: onCompleted,
                             onDispatchRegistered: { continuation.resume() }
                         )
@@ -7036,6 +7091,7 @@ extension ACPSessionManager {
                     attachments: attachments,
                     draft: draft,
                     scheduledAt: scheduledAt,
+                    normalUserTurn: normalUserTurn,
                     into: sessionId,
                     onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                     onPersisted: onScheduledPersisted
@@ -7054,6 +7110,7 @@ extension ACPSessionManager {
                 attachments: attachments,
                 intent: intent,
                 draft: draft,
+                normalUserTurn: normalUserTurn,
                 onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onDispatchRegistered: { onDispatchRegistered?() },
                 onPromptFinished: { succeeded in onCompleted(succeeded) }
@@ -7068,6 +7125,7 @@ extension ACPSessionManager {
                 attachments: attachments,
                 draft: draft,
                 scheduledAt: scheduledAt,
+                normalUserTurn: normalUserTurn,
                 into: sessionId,
                 onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onPersisted: onScheduledPersisted
@@ -7089,6 +7147,7 @@ extension ACPSessionManager {
                 attachments: attachments,
                 draft: draft,
                 scheduledAt: scheduledAt,
+                normalUserTurn: normalUserTurn,
                 into: sessionId,
                 onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onPersisted: onScheduledPersisted
@@ -7202,6 +7261,7 @@ extension ACPSessionManager {
     }
 
     func disposeSession(id: ACPSession.ID) async throws {
+        sessions[id]?.nextPromptActivity.send()
         if let task = disposalTasks[id] {
             try await task.value
             return
@@ -7431,6 +7491,7 @@ extension ACPSessionManager {
     }
 
     private func tearDownSession(sessionId: ACPSession.ID, closeRemote: Bool) async throws {
+        sessions[sessionId]?.nextPromptActivity.send()
         teardownCounts[sessionId, default: 0] += 1
         takeoverAttemptIDs.removeValue(forKey: sessionId)
         defer {

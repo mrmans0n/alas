@@ -43,6 +43,13 @@ struct ACPInputField: NSViewRepresentable {
     /// falls back to a synchronous `FileManager` enumerator.
     let filesProvider: (@Sendable () async -> [URL])?
 
+    var nextPromptOffer: String? = nil
+    var takeNextPromptOffer: () -> String? = { nil }
+    var dismissNextPromptOffer: () -> Void = {}
+    var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
+    var nextPromptInputBlocked: () -> Bool = { false }
+    var nextPromptIsDictating: () -> Bool = { false }
+
     func makeNSView(context: Context) -> NSScrollView {
         let textView = ACPNSTextView()
         textView.delegate = context.coordinator
@@ -61,6 +68,8 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.onImageError = onImageError
         textView.registerForDraggedTypes([.fileURL, .png, .tiff])
         context.coordinator.restoreInitialDraft(into: textView)
+        configureNextPrompt(textView)
+        textView.invalidateNextPromptSuggestion()
         // Publish the submit closure so the SwiftUI send button can fire
         // the same code path as ⏎.
         let coord = context.coordinator
@@ -85,6 +94,10 @@ struct ACPInputField: NSViewRepresentable {
             coord.insertQuote(message, into: textView)
         }
         let scroll = NSScrollView()
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         scroll.backgroundColor = .clear
@@ -120,6 +133,7 @@ struct ACPInputField: NSViewRepresentable {
             }
         }
         if let tv = nsView.documentView as? ACPNSTextView {
+            configureNextPrompt(tv)
             let baseFont = typography.appKitFont()
             let style = Self.codeBlockStyle(
                 theme: context.environment.theme,
@@ -136,7 +150,25 @@ struct ACPInputField: NSViewRepresentable {
             if suggestionsChanged {
                 tv.reconcileSlashPanel()
             }
+            tv.nextPromptOffer = nextPromptOffer
+            if tv.nextPromptGhostText == nil, nextPromptOffer != nil { tv.invalidateNextPromptSuggestion() }
+            tv.onNextPromptStateChange(tv.nextPromptInputState)
+            tv.refreshNextPromptLayout()
         }
+    }
+
+    private func configureNextPrompt(_ textView: ACPNSTextView) {
+        textView.takeNextPromptOffer = takeNextPromptOffer
+        textView.dismissNextPromptOffer = dismissNextPromptOffer
+        textView.onNextPromptStateChange = onNextPromptStateChange
+        textView.nextPromptDraftIsEmpty = { composer.draft.isEmpty }
+        textView.nextPromptInputBlocked = nextPromptInputBlocked
+        textView.nextPromptIsDictating = nextPromptIsDictating
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        guard let width = proposal.width, let textView = nsView.documentView as? ACPNSTextView else { return nil }
+        return CGSize(width: width, height: min(140, textView.composerContentHeight(for: width)))
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
@@ -144,6 +176,9 @@ struct ACPInputField: NSViewRepresentable {
         coordinator.flushPendingRestyleNow()
         coordinator.onStopDictation()
         if let tv = nsView.documentView as? ACPNSTextView {
+            tv.invalidateNextPromptSuggestion()
+            tv.onNextPromptStateChange(.init())
+            tv.onNextPromptStateChange = { _ in }
             coordinator.dropRouter.detach(tv)
             tv.dismissFloatingPanels()
             coordinator.editorUndoManager.removeAllActions()
@@ -236,6 +271,10 @@ struct ACPInputField: NSViewRepresentable {
         private var nextSubmitID = 0
         private var pendingSubmitID: Int?
         private var pendingScheduledSubmitIDs: Set<Int> = []
+        var hasPendingNextPromptInput: Bool {
+            pendingImageFileInsertions > 0 || pendingSubmitID != nil || !pendingScheduledSubmitIDs.isEmpty
+        }
+        var hasEmptyNextPromptDraft: Bool { lastSyncedDraft.isEmpty }
         private var pendingImageFileInsertions = 0
         private var imageFileInsertionGeneration = 0
         private var pendingRestyleWork: DispatchWorkItem?
@@ -482,13 +521,16 @@ struct ACPInputField: NSViewRepresentable {
         }
 
         func beginPendingImageFileInsertion() -> Int {
+            (textView as? ACPNSTextView)?.invalidateNextPromptSuggestion()
             pendingImageFileInsertions += 1
+            if let tv = textView as? ACPNSTextView { tv.onNextPromptStateChange(tv.nextPromptInputState) }
             return imageFileInsertionGeneration
         }
 
         func finishPendingImageFileInsertion(generation: Int) {
             if generation == imageFileInsertionGeneration {
                 pendingImageFileInsertions = max(0, pendingImageFileInsertions - 1)
+                if let tv = textView as? ACPNSTextView { tv.onNextPromptStateChange(tv.nextPromptInputState) }
             }
         }
 
@@ -519,6 +561,7 @@ struct ACPInputField: NSViewRepresentable {
         private func restore(_ draft: ACPComposerDraft, into textView: NSTextView) {
             guard let storage = textView.textStorage else { return }
             if let tv = textView as? ACPNSTextView {
+                tv.invalidateNextPromptSuggestion()
                 tv.dismissSlashPanel()
                 // Direct storage replacement below never routes through
                 // `didChangeText`, so dismiss the hover preview here.
@@ -722,6 +765,180 @@ extension NSAttributedString.Key {
 }
 
 final class ACPNSTextView: PairedDelimiterTextView {
+    // Transient presentation only. The owner consumes the opportunity before insertion.
+    var nextPromptOffer: String? {
+        didSet {
+            guard nextPromptOffer != oldValue else { return }
+            refreshNextPromptLayout()
+        }
+    }
+    var takeNextPromptOffer: () -> String? = { nil }
+    var dismissNextPromptOffer: () -> Void = {}
+    var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
+    var nextPromptDraftIsEmpty: () -> Bool = { true }
+    var nextPromptInputBlocked: () -> Bool = { false }
+    var nextPromptIsDictating: () -> Bool = { false }
+    private var nextPromptInvalidationGeneration: UInt64 = 0
+    private var insertingAcceptedNextPrompt = false
+    private var imagePickerPresented = false
+    private var dropPending = false
+
+    var nextPromptInputState: NextPromptEligibilitySnapshot.Environment {
+        var state = NextPromptEligibilitySnapshot.Environment()
+        state.hasComposerFocus = window != nil && window?.firstResponder === self
+        state.hasKeyWindow = window?.isKeyWindow == true
+        state.hasSelection = selectedRanges.count != 1 || selectedRange() != NSRange(location: 0, length: 0)
+        state.hasMarkedText = hasMarkedText()
+        state.isDictating = nextPromptIsDictating() || dictationRange != nil || isApplyingDictationUpdate
+        state.isPickerPresented = slashPanel != nil || mentionPanel != nil || imagePickerPresented
+        state.hasPendingInput = dropPending || nextPromptInputBlocked() || coordinator?.hasPendingNextPromptInput == true
+        return state
+    }
+
+    private var canShowNextPrompt: Bool {
+        let state = nextPromptInputState
+        guard isEditable, state.hasComposerFocus, state.hasKeyWindow, string.isEmpty, nextPromptDraftIsEmpty(),
+              coordinator?.hasEmptyNextPromptDraft == true,
+              !state.hasSelection, !state.hasMarkedText, !state.isDictating,
+              !state.isPickerPresented, !state.hasPendingInput else { return false }
+        return true
+    }
+
+    var nextPromptGhostText: String? {
+        guard canShowNextPrompt, let nextPromptOffer, !nextPromptOffer.isEmpty else { return nil }
+        return nextPromptOffer
+    }
+
+    var nextPromptPresentation: NSAttributedString? {
+        guard let text = nextPromptGhostText else { return nil }
+        let baseFont = font ?? chatTypography.appKitFont()
+        let presentation = NSMutableAttributedString(string: text, attributes: [
+            .font: NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        presentation.append(NSAttributedString(string: "\nTab to accept", attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]))
+        return presentation
+    }
+
+    private var ghostHorizontalInset: CGFloat {
+        textContainerInset.width + (textContainer?.lineFragmentPadding ?? 0) + 1
+    }
+
+    func nextPromptHeight(for width: CGFloat) -> CGFloat {
+        guard let presentation = nextPromptPresentation else { return 0 }
+        let bounds = presentation.boundingRect(
+            with: NSSize(width: max(1, width - 2 * ghostHorizontalInset), height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        return ceil(bounds.height) + 2 * textContainerInset.height
+    }
+
+    func composerContentHeight(for width: CGFloat) -> CGFloat {
+        if let textContainer, let layoutManager {
+            textContainer.containerSize.width = max(1, width - 2 * textContainerInset.width)
+            layoutManager.ensureLayout(for: textContainer)
+        }
+        let editorHeight = textContainer.flatMap { layoutManager?.usedRect(for: $0).height } ?? 0
+        return max(44, editorHeight + 2 * textContainerInset.height, nextPromptHeight(for: width))
+    }
+
+    func refreshNextPromptLayout() {
+        needsDisplay = true
+        invalidateIntrinsicContentSize()
+        enclosingScrollView?.invalidateIntrinsicContentSize()
+        if let scroll = enclosingScrollView {
+            let width = scroll.contentSize.width
+            super.setFrameSize(NSSize(width: width, height: max(scroll.contentSize.height, composerContentHeight(for: width))))
+        }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = newSize.width != frame.width
+        super.setFrameSize(NSSize(width: newSize.width, height: max(newSize.height, nextPromptHeight(for: newSize.width))))
+        if widthChanged { invalidateIntrinsicContentSize() }
+        needsDisplay = true
+    }
+
+    @discardableResult
+    func acceptNextPromptSuggestion() -> Bool {
+        onNextPromptStateChange(nextPromptInputState)
+        guard let displayed = nextPromptGhostText else { return false }
+        let generation = nextPromptInvalidationGeneration
+        guard let accepted = takeNextPromptOffer(), accepted == displayed else {
+            invalidateNextPromptSuggestion()
+            return false
+        }
+        nextPromptOffer = nil
+        guard nextPromptInvalidationGeneration == generation, canShowNextPrompt else {
+            invalidateNextPromptSuggestion()
+            return false
+        }
+        insertingAcceptedNextPrompt = true
+        defer { insertingAcceptedNextPrompt = false }
+        breakUndoCoalescing()
+        undoManager?.beginUndoGrouping()
+        typingAttributes = baseTypingAttributes
+        performNativeTextInsertion {
+            insertText(accepted, replacementRange: selectedRange())
+        }
+        setSelectedRange(NSRange(location: accepted.utf16.count, length: 0))
+        undoManager?.endUndoGrouping()
+        breakUndoCoalescing()
+        return true
+    }
+
+    func invalidateNextPromptSuggestion() {
+        nextPromptInvalidationGeneration &+= 1
+        nextPromptOffer = nil
+        if !insertingAcceptedNextPrompt { dismissNextPromptOffer() }
+    }
+
+    override func accessibilityHelp() -> String? {
+        guard let text = nextPromptGhostText else { return super.accessibilityHelp() }
+        return "Suggestion: \(text) Press Tab or use Accept Suggestion to insert it."
+    }
+
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        guard nextPromptGhostText != nil else { return super.accessibilityCustomActions() }
+        return [NSAccessibilityCustomAction(name: "Accept Suggestion") { [weak self] in
+            self?.acceptNextPromptSuggestion() ?? false
+        }]
+    }
+
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        invalidateNextPromptSuggestion()
+        super.insertText(insertString, replacementRange: replacementRange)
+    }
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        invalidateNextPromptSuggestion()
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        onNextPromptStateChange(nextPromptInputState)
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        onNextPromptStateChange(nextPromptInputState)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        onNextPromptStateChange(nextPromptInputState)
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        invalidateNextPromptSuggestion()
+        let result = super.resignFirstResponder()
+        var state = nextPromptInputState
+        state.hasComposerFocus = false
+        onNextPromptStateChange(state)
+        return result
+    }
+
     weak var coordinator: ACPInputField.Coordinator?
     private var chatTypography: ACPChatTypography = .default
 
@@ -784,13 +1001,22 @@ final class ACPNSTextView: PairedDelimiterTextView {
                 excluding: blockRanges
             )
         }
-        needsDisplay = true
+        refreshNextPromptLayout()
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let font = font ?? chatTypography.appKitFont()
         if string.isEmpty {
+            if let presentation = nextPromptPresentation {
+                presentation.draw(
+                    with: NSRect(x: ghostHorizontalInset, y: textContainerInset.height,
+                                 width: max(1, bounds.width - 2 * ghostHorizontalInset),
+                                 height: nextPromptHeight(for: bounds.width)),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading]
+                )
+                return
+            }
             guard !placeholderText.isEmpty else { return }
             let origin = NSPoint(
                 x: textContainerInset.width + textContainer!.lineFragmentPadding + 1,
@@ -865,12 +1091,16 @@ final class ACPNSTextView: PairedDelimiterTextView {
         affinity: NSSelectionAffinity,
         stillSelecting stillSelectingFlag: Bool
     ) {
+        invalidateNextPromptSuggestion()
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelectingFlag)
+        onNextPromptStateChange(nextPromptInputState)
         needsDisplay = true
     }
 
     override func didChangeText() {
+        invalidateNextPromptSuggestion()
         super.didChangeText()
+        onNextPromptStateChange(nextPromptInputState)
         // Trigger placeholder redraw when text becomes (non-)empty.
         needsDisplay = true
         // An edit moves or destroys the chip under the cursor — close the
@@ -904,6 +1134,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// used by the image chip hover preview.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        invalidateNextPromptSuggestion()
+        onNextPromptStateChange(nextPromptInputState)
         if window != nil {
             reconcileSlashPanel()
         }
@@ -966,6 +1198,16 @@ final class ACPNSTextView: PairedDelimiterTextView {
             }
         }
 
+        if !hasMarkedText(), mentionPanel == nil,
+           event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty {
+            if event.keyCode == 48, acceptNextPromptSuggestion() { return }
+            if event.keyCode == 53, nextPromptGhostText != nil {
+                invalidateNextPromptSuggestion()
+                return
+            }
+        }
+        invalidateNextPromptSuggestion()
+
         // ⌘⏎ always sends, including from inside a code box where bare ⏎ is a
         // newline. Handled here rather than in `doCommandBy` because AppKit
         // does not reliably route Command-Return to `insertNewline:`.
@@ -994,11 +1236,13 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        invalidateNextPromptSuggestion()
         super.mouseDown(with: event)
         reconcileSlashPanel()
     }
 
     private func presentMentionPopover() {
+        invalidateNextPromptSuggestion()
         guard let coord = coordinator else { return }
         closeMentionPanel()
         let panel = ACPMentionPanel(
@@ -1012,6 +1256,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             }
         )
         mentionPanel = panel
+        onNextPromptStateChange(nextPromptInputState)
         positionAndShow(panel)
     }
 
@@ -1019,6 +1264,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         mentionPanel?.close()
         mentionPanel = nil
         mentionStart = -1
+        onNextPromptStateChange(nextPromptInputState)
     }
 
     /// Locate an active `/<word>` token at the caret. Active means: the
@@ -1071,6 +1317,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     private func presentSlashPanel() {
+        invalidateNextPromptSuggestion()
         // `positionAndShow` needs `window` to place the panel; bail out
         // rather than recording a `slashPanel` that was never actually
         // shown — reconcileSlashPanel would then skip re-presenting it
@@ -1082,6 +1329,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             theme: theme
         ) { [weak self] s in self?.insertSlash(s) }
         slashPanel = panel
+        onNextPromptStateChange(nextPromptInputState)
         positionAndShow(panel, makeKey: false)
     }
 
@@ -1089,6 +1337,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         slashPanel?.close()
         slashPanel = nil
         slashStart = -1
+        onNextPromptStateChange(nextPromptInputState)
     }
 
     /// Public hooks used by the coordinator's `doCommandBy:` fallback so
@@ -1305,6 +1554,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     @discardableResult
     private func insertImage(data: Data, worktreeId: String, replacementRange: NSRange) -> Bool {
+        invalidateNextPromptSuggestion()
         guard currentImageChipCount() < Self.maxImagesPerMessage else {
             coordinator?.reportImageError(.tooManyImages)
             return false
@@ -1341,12 +1591,18 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     func presentImagePicker() {
+        invalidateNextPromptSuggestion()
+        imagePickerPresented = true
+        onNextPromptStateChange(nextPromptInputState)
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.png, .jpeg, .gif, .webP]
         panel.begin { [weak self] response in
-            guard let self, response == .OK else { return }
+            guard let self else { return }
+            self.imagePickerPresented = false
+            self.onNextPromptStateChange(self.nextPromptInputState)
+            guard response == .OK else { return }
             self.insertImageFiles(
                 panel.urls,
                 worktreeId: self.worktreeIdForStaging,
@@ -1510,6 +1766,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     private var pasteboardHasImage: Bool { hasImage(in: NSPasteboard.general) }
 
     override func paste(_ sender: Any?) {
+        invalidateNextPromptSuggestion()
         if insertImages(from: NSPasteboard.general) { return }
         if let text = NSPasteboard.general.string(forType: .string) {
             insertPlainText(text)
@@ -1553,6 +1810,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// than overwriting it.
     @discardableResult
     func replaceDictationRegion(_ text: String, isFinal: Bool) -> Bool {
+        invalidateNextPromptSuggestion()
         guard let textStorage else { return false }
         let target: NSRange
         if let existing = dictationRange {
@@ -1578,6 +1836,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         } else {
             dictationRange = inserted
         }
+        onNextPromptStateChange(nextPromptInputState)
         return true
     }
 
@@ -1585,19 +1844,35 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// committed text — used when dictation is toggled off mid-utterance.
     func cancelDictationRegion() {
         dictationRange = nil
+        onNextPromptStateChange(nextPromptInputState)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        hasImage(in: sender.draggingPasteboard) ? .copy : super.draggingEntered(sender)
+        invalidateNextPromptSuggestion()
+        dropPending = true
+        onNextPromptStateChange(nextPromptInputState)
+        return hasImage(in: sender.draggingPasteboard) ? .copy : super.draggingEntered(sender)
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        super.draggingExited(sender)
+        dropPending = false
+        onNextPromptStateChange(nextPromptInputState)
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        invalidateNextPromptSuggestion()
+        defer {
+            dropPending = false
+            onNextPromptStateChange(nextPromptInputState)
+        }
         if insertImages(from: sender.draggingPasteboard) { return true }
         return super.performDragOperation(sender)
     }
 
     @discardableResult
     func insertMention(_ url: URL) -> Bool {
+        invalidateNextPromptSuggestion()
         guard let textStorage else { return false }
         let name = url.lastPathComponent
         let attachment = ACPMentionChipAttachment(displayName: name, uri: url.absoluteString)

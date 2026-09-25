@@ -160,6 +160,13 @@
 8. Restart Alas and confirm the chat returns.
 9. Confirm the composer is enabled only if ACP resume succeeds; otherwise the transcript is read-only.
 
+### Successful turn completion boundary
+
+1. Start a temporary scripted ACP session whose `session/prompt` response arrives before its final `session/update` notification. Send an ordinary user prompt.
+2. Confirm the successful-turn observer receives no event at the RPC response. Release the final update and confirm it receives exactly one event for the recorded user row after the transcript output boundary closes.
+3. Repeat with a pending ordinary prompt in the queue. Confirm queue dispatch takes precedence and no event is offered for the preceding turn.
+4. Repeat with a user cancellation whose prompt response says `end_turn`. Confirm no successful-turn event is emitted.
+
 ## ACP Provider Auto-Discovery
 
 1. Ensure `opencode` is installed and available on `PATH`.
@@ -455,3 +462,87 @@ Prerequisite: use the paired native-client GG build with `sc --staged-only` and 
 3. Run Sync and confirm only committed stack content is published.
 4. Confirm both local files remain unchanged under Changes after the stack and provider state refresh.
 5. If GG refuses because the stack base became stale, confirm Alas refreshes and presents Rebase without automatically retrying Sync.
+
+### Next-prompt model provisioning
+
+In a Debug build with the `~/.alas/.debug` marker, the controls are in Settings → Debug → Experimental → Next-prompt suggestions. For a provisioning exercise, host the actual `AdvancedPane` with an injected AppState, persistence store and model store. Use an isolated root such as `/private/tmp/alas-model-check/Application Support/Alas/Models/NextPromptSuggestions` when testing it. Pass that root explicitly to `NextPromptModelStore`; leave the normal Application Support directory alone.
+
+1. Load `NextPromptModelManifest.json` and provide a `NextPromptModelTransport` that reads the already verified local snapshot in chunks and sends them to `NextPromptModelSink.receive`. Keep the snapshot read-only. This exercises installation without downloading another copy from the network.
+2. Start `install()`, pause the transport after the first weights chunk, and call `cancelDownload()`. Await both calls. Confirm the transfer has stopped, the revision was not published, and its staging directory was removed.
+3. Retry explicitly with the transport unpaused. Confirm `.ready`, then acquire a verified lease and compare every installed file's byte count and SHA-256 with the bundled manifest. Close the lease after reading the files.
+4. Call `install()` again. Confirm it reuses the verified revision without invoking the transport.
+5. In a second process, open another store for the same root, acquire a verified lease, and retain it. The first process must receive `.busy` from removal and installation. Release the second process's lease, then remove the model successfully.
+6. Confirm `.lock` still has its original inode and an unrelated file beside the revision survived. A further installation must use that same lock file.
+
+Observed on 2026-09-25: cancellation after the first 1 MiB of weights drained before cleanup; retry installed and verified all 12 assets totaling 2,278,970,666 bytes. A second process held a verified lease, excluded both writers, and allowed removal after releasing it. The lock inode and unrelated file survived. The source snapshot still matched upstream metadata afterward.
+
+The live network check used HEAD requests against the exact pinned revision. The weights and tokenizer redirected from `huggingface.co` to `us.aws.cdn.hf.co`; `config.json` redirected within `huggingface.co`. No model response bodies were downloaded. The focused `NextPromptModelStoreTests` suite covers native URLSession response handling and cancellation with a local URL protocol, including oversized data, unexpected partial responses, interrupted transfers, and rejected redirects.
+
+## ACP next-prompt ghost text
+
+Run this with a verified model enabled in Advanced settings.
+
+1. Finish a native ACP turn with the empty composer focused. When a suggestion appears, verify that copying, the draft restored after a tab switch, and the transcript do not contain it.
+2. Narrow the window and increase the chat font size. The complete candidate wraps within the composer and reserves enough height. Check light and dark themes and Increase Contrast.
+3. Press Tab. The candidate becomes ordinary editable draft text with the caret at its end. Nothing is sent or queued. Undo removes the complete insertion; redo restores it. Undo must not bring the ghost back. Send only with the ordinary send action.
+4. Repeat with emoji and combined Unicode characters. Verify caret placement and one-step undo.
+5. Press Escape on a new suggestion. The draft stays empty. Shift-Tab retains ordinary backwards focus navigation and does not accept it.
+6. Start typing, select or move the caret, start IME composition or dictation, open slash/mention/image pickers, paste, or drop a file. The suggestion disappears immediately and cannot be accepted while work is pending. Switching tabs, windows, or writer ownership also removes it.
+7. With VoiceOver, inspect the empty composer. Its value stays empty; its separate help contains the full suggestion and its actions include Accept Suggestion. Invoke that action and verify the same insertion and undo behavior as Tab. After dismissal, the action and suggestion help disappear.
+
+
+### Next-prompt settings and lifecycle
+
+Use an injected temporary model root and config store; do not change the normal Application Support directory.
+
+1. Click Enable, read the disk, memory and local-processing notice, then Cancel. Confirm the preference remains off and no transfer starts.
+2. Confirm Enable. During a transfer, confirm byte progress and Cancel Download. Cancelling retains the enabled preference, removes staging after drain, and exposes Retry without restarting on its own.
+3. Retry explicitly. Confirm verification ends at Model ready. Disable, then enable again; verified files should be reused without transfer.
+4. Hold the temporary root's `.lock` with a shared reader lease in a second process. Remove Model must turn suggestions off and show Model in use with Retry Removal while leaving files intact. Release the peer and retry; the pinned revision disappears, but `.lock`, other revisions and unrelated files remain.
+5. Relaunch with the enabled preference and no complete model. Confirm no download resumes and no earlier turn is replayed.
+6. While generation is active, switch tabs, deactivate the app, move focus to another window, or lose the writer lease. Confirm ghost text clears immediately and cannot be accepted from a non-key window. Quit during generation or download and confirm termination waits for the work to drain.
+7. Force a settings write failure. Enabling must restore the old preference without installing. Disabling must leave inference off and show the save error.
+
+Memory-pressure handling cancels evaluation and releases this feature's container and reader lease after drain. It does not clear MLX's process-wide allocator cache or promise that process RSS returns to baseline.
+
+Observed on 2026-09-25 in the actual `AdvancedPane` hosted with temporary stores: cancelling consent left the preference off and transport request count at zero. Cancelling the first transfer left enablement on and only `.lock` in the model root. Retry installed all 12 manifest assets from the read-only local snapshot. Disable/re-enable retained the files and kept the transport count at 13 (one cancelled transfer plus 12 assets), including while a second process held a verified shared lease. Removal displayed Model in use and left the revision intact; Retry Removal after releasing the peer removed it. The stable lock inode and unrelated sentinel file survived. This exercise did not run native inference or measure memory reclamation.
+
+### Next-prompt verification record, 2026-09-25
+
+A temporary driver launched the actual Alas executable through Xcode's app host,
+using an isolated profile and a local synthetic ACP client. The production session
+runner emitted a successful turn after update/persistence drain. The production
+context, native inference, coordinator and `ACPNSTextView` handled the suggestion.
+This exercised a native composer window, not the complete workspace/mirror UI.
+The temporary driver was removed afterward.
+
+| Area | Evidence and limits |
+| --- | --- |
+| Clean app launch | The unmodified Debug executable launched with an empty temporary Foundation profile, network denied and original Alas state unreadable. After adding the temporary profile’s `.alas/.debug` marker, Settings showed Enable and Model not installed. No model assets appeared. |
+| Release access | A disposable locally re-signed Release copy omitted the controls even with a valid enabled preference and `.alas/.debug` marker. It created no model files. The untouched local Release copy failed before startup because of a `libfff_c.dylib` Team-ID/library-validation mismatch; this check does not establish distributable signing. |
+| Eligible presentation | Directly observed a native model offer in the empty, focused key-window composer after a synthetic ACP completion. |
+| Before acceptance | The native draft and serialized draft stayed empty, the accessibility value was empty, the queue stayed empty and the clipboard change count stayed unchanged. Transcript preservation is covered by automated checks; the manual driver's baseline preceded additional synthetic turns. |
+| Tab | Directly observed one insertion, caret at the end, no send or queue operation, and removal of the accessibility action. |
+| Undo/redo | Directly observed one undo remove the insertion without reviving the ghost, then redo restore ordinary draft text. |
+| Accessibility | Directly invoked the exposed Accept Suggestion action through the accessibility API. It inserted draft text with zero submits. This is not a VoiceOver screen-reader session. |
+| Escape | Directly observed dismissal of a fresh offer with the composer still empty. |
+| Typing | Directly observed ordinary typing and clearing remain responsive. A first attempt lost eligibility while incidental typing/focus changes occurred; it produced no candidate. |
+| Model removal | A separate Python process held a real shared `.lock`. Production removal returned busy and retained the revision. After peer release, removal deleted the revision while preserving the lock inode and an unrelated sentinel. Settings maps this failure to Model in use. |
+| Unicode, wrapping, Shift-Tab, marked text, picker and pending-input guards | Covered by production-hosted automated composer tests. Actual IME, dictation, OS image/paste/drop workflows, narrow-width visual layout and theme/Increase Contrast review remain manual gates. |
+| Stale completion, queue/permission/disconnect, writer/mirror and shutdown races | Covered by the focused coordinator, runner, manager and settings regression selection. Full workspace tab-switch/back and two-window mirror interaction were not manually exercised. |
+| Memory pressure | Native cancellation/drain and lease release were measured. A real OS memory-pressure notification and resulting composer behavior were not manually induced. |
+
+The native development evaluation found two severe destructive-consent suggestions
+that passed the policy. Keep the feature default-off in Debug. Thirty untouched
+real turns and actual user review remain unavailable; no general-availability
+claim follows from this record. Raw model output is retained only under
+`/private/tmp`, and aggregate results are in
+[`THREE-MODEL-RESULTS.md`](../scripts/prototype-next-prompt/THREE-MODEL-RESULTS.md#native-production-verification-2026-09-25).
+
+Local automated verification passed 359 selected test cases after probe removal,
+plus 22 inference/settings cases after the Debug-only guard correction, with no
+failures or skips. No complete test plan or CI run was performed.
+
+Final local arm64 and x86_64 builds passed in both Debug and Release after the
+Debug-only correction. The local Release signing limitation above is separate
+from these compilation results.

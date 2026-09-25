@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import SwiftUI
 import Testing
@@ -1115,7 +1116,7 @@ struct ACPComposerDraftBridgeTests {
         // presentSlashPanel() needs a window to position the panel against.
         // `textView.window` is unowned, so the caller must keep the returned
         // window alive for as long as the text view is used.
-        let window = NSWindow(contentRect: textView.frame, styleMask: [], backing: .buffered, defer: false)
+        let window = NextPromptTestWindow(contentRect: textView.frame, styleMask: [], backing: .buffered, defer: false)
         window.contentView?.addSubview(textView)
         let coordinator = makeCoordinator(sendOnEnter: true, onSubmit: onSubmit)
         coordinator.promptSuggestions = [
@@ -1133,6 +1134,9 @@ struct ACPComposerDraftBridgeTests {
         )
         coordinator.textView = textView
         textView.coordinator = coordinator
+        textView.delegate = coordinator
+        textView.allowsUndo = true
+        window.makeFirstResponder(textView)
         return (textView, coordinator, window)
     }
 
@@ -1344,6 +1348,281 @@ struct ACPComposerDraftBridgeTests {
         #expect(received == nil)
         #expect(textView.string == "/init ")
         #expect(!textView.isSlashPanelOpen)
+    }
+
+    @MainActor
+    private final class NextPromptGenerator: NextPromptGenerating {
+        var pending: CheckedContinuation<String?, Never>?
+        var started: CheckedContinuation<Void, Never>?
+        func generate(_ request: NextPromptRequest) async throws -> String? {
+            await withCheckedContinuation {
+                pending = $0
+                started?.resume()
+                started = nil
+            }
+        }
+        func waitForStart() async {
+            if pending != nil { return }
+            await withCheckedContinuation { started = $0 }
+        }
+        func cancelAndUnload() async {}
+        func retryAfterFailure() async {}
+    }
+
+    @MainActor
+    private final class NextPromptFixture {
+        let generator = NextPromptGenerator()
+        var eligible = true
+        let id = NextPromptRequestID(sessionID: "s", incarnation: UUID(), promptID: 1,
+                                     transcriptRevision: 1, draftRevision: 0, composerEpoch: 0,
+                                     settingsGeneration: 0, modelGeneration: 0)
+        lazy var suggestionCoordinator = NextPromptCoordinator(engine: generator) { [weak self] in
+            guard let self else { return nil }
+            return .init(id: id, turns: [.init(user: "Compare", assistant: "A tradeoff")], isEligible: eligible)
+        }
+        func offer(_ text: String, in textView: ACPNSTextView) async {
+            let coordinator = suggestionCoordinator
+            coordinator.completed(.init(sessionID: id.sessionID, incarnation: id.incarnation,
+                                        promptID: id.promptID, userMessageID: UUID(), transcriptRevision: 1))
+            await generator.waitForStart()
+            let task = coordinator.generationTask
+            generator.pending?.resume(returning: text)
+            generator.pending = nil
+            await task?.value
+            textView.takeNextPromptOffer = { coordinator.takeOffer() }
+            textView.dismissNextPromptOffer = { coordinator.invalidate() }
+            textView.nextPromptOffer = coordinator.offer
+        }
+    }
+
+    @Test("Tab accepts next prompt once without submitting, with complete undo and redo")
+    func nextPromptTabUndo() async throws {
+        var submitCount = 0
+        let (textView, coordinator, window) = makeSlashTextView { _, _, _, _, _ in
+            submitCount += 1
+            return true
+        }
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        #expect(textView.nextPromptGhostText == "Explain the tradeoff.")
+        #expect(textView.nextPromptPresentation?.string == "Explain the tradeoff.\nTab to accept")
+        #expect(textView.string.isEmpty)
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()).isEmpty)
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0.isEmpty)
+        #expect(textView.accessibilityValue() == "")
+        #expect(textView.accessibilityHelp()?.contains("Explain the tradeoff.") == true)
+        #expect(textView.accessibilityCustomActions()?.map(\.name) == ["Accept Suggestion"])
+        textView.keyDown(with: try keyEvent(keyCode: 48, modifiers: [], characters: "\t"))
+        #expect(textView.string == "Explain the tradeoff.")
+        #expect(submitCount == 0)
+        textView.undoManager?.undo()
+        #expect(textView.string.isEmpty)
+        #expect(fixture.suggestionCoordinator.offer == nil)
+        #expect(textView.nextPromptGhostText == nil)
+        #expect(textView.nextPromptPresentation == nil)
+        textView.undoManager?.redo()
+        #expect(textView.string == "Explain the tradeoff.")
+        #expect(submitCount == 0)
+    }
+
+    @Test("accessibility acceptance uses UTF-16 caret and one complete undo")
+    func nextPromptUnicodeAccessibilityUndo() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let candidate = String(repeating: "👩🏽‍💻", count: 30)
+        #expect(candidate.count <= 160)
+        #expect(candidate.utf16.count > 160)
+        let fixture = NextPromptFixture()
+        await fixture.offer(candidate, in: textView)
+        let action = try #require(textView.accessibilityCustomActions()?.first)
+        #expect(action.handler?() == true)
+        #expect(textView.string == candidate)
+        #expect(textView.selectedRange() == NSRange(location: candidate.utf16.count, length: 0))
+        #expect(textView.accessibilityCustomActions()?.isEmpty != false)
+        textView.undoManager?.undo()
+        #expect(textView.string.isEmpty)
+        #expect(fixture.suggestionCoordinator.offer == nil)
+    }
+
+    @Test("stale next prompt acceptance rechecks takeOffer")
+    func nextPromptStaleAcceptance() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        fixture.eligible = false
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(textView.string.isEmpty)
+        #expect(textView.nextPromptGhostText == nil)
+        #expect(fixture.suggestionCoordinator.offer == nil)
+    }
+
+    @Test(arguments: ["typing", "selection", "marked", "image", "slash", "mention", "focus", "dictation", "remount"])
+    func nextPromptActivitySuppressesSynchronously(_ activity: String) async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        switch activity {
+        case "typing": textView.insertText("x", replacementRange: textView.selectedRange())
+        case "selection": textView.setSelectedRange(NSRange(location: 0, length: 0))
+        case "marked": textView.setMarkedText("", selectedRange: .init(location: 0, length: 0), replacementRange: .init(location: NSNotFound, length: 0))
+        case "image": _ = coordinator.beginPendingImageFileInsertion()
+        case "slash":
+            textView.string = "/i"
+            textView.setSelectedRange(NSRange(location: 2, length: 0))
+            textView.reconcileSlashPanel()
+            #expect(textView.isSlashPanelOpen)
+        case "mention": textView.keyDown(with: try keyEvent(keyCode: 19, modifiers: [], characters: "@"))
+        case "focus": window.makeFirstResponder(nil)
+        case "dictation": textView.replaceDictationRegion("", isFinal: false)
+        default: textView.removeFromSuperview()
+        }
+        #expect(textView.nextPromptGhostText == nil)
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(fixture.suggestionCoordinator.offer == nil)
+        #expect(textView.accessibilityCustomActions()?.isEmpty != false)
+    }
+
+    @Test("next prompt state reports native focus and pending image work synchronously")
+    func nextPromptReportsNativeInputState() {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        var states: [NextPromptEligibilitySnapshot.Environment] = []
+        textView.onNextPromptStateChange = { states.append($0) }
+        window.makeFirstResponder(nil)
+        #expect(states.last?.hasComposerFocus == false)
+        window.makeFirstResponder(textView)
+        #expect(states.last?.hasComposerFocus == true)
+        let generation = coordinator.beginPendingImageFileInsertion()
+        #expect(states.last?.hasPendingInput == true)
+        coordinator.finishPendingImageFileInsertion(generation: generation)
+        #expect(states.last?.hasPendingInput == false)
+    }
+
+    @Test("offer consumption cannot overwrite a draft changed by a synchronous observer")
+    func nextPromptConsumptionRechecksDraft() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        var inserted = false
+        let observation = fixture.suggestionCoordinator.$offer.dropFirst().sink { value in
+            guard value == nil, !inserted else { return }
+            inserted = true
+            textView.insertText("typed", replacementRange: textView.selectedRange())
+        }
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(textView.string == "typed")
+        #expect(fixture.suggestionCoordinator.offer == nil)
+        withExtendedLifetime(observation) {}
+    }
+
+    @Test("offer consumption cannot accept after a synchronous empty-editor selection invalidates it")
+    func nextPromptConsumptionRechecksInvalidation() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        var changedSelection = false
+        let observation = fixture.suggestionCoordinator.$offer.dropFirst().sink { value in
+            guard value == nil, !changedSelection else { return }
+            changedSelection = true
+            textView.setSelectedRange(NSRange(location: 0, length: 0))
+        }
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(changedSelection)
+        #expect(textView.string.isEmpty)
+        #expect(fixture.suggestionCoordinator.offer == nil)
+        withExtendedLifetime(observation) {}
+    }
+
+    @Test("accepted insertion does not dismiss the consumed offer a second time")
+    func nextPromptAcceptanceDoesNotRepublishNil() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        var nilPublications = 0
+        let observation = fixture.suggestionCoordinator.$offer.dropFirst().sink { value in
+            guard value == nil else { return }
+            nilPublications += 1
+            if nilPublications == 2 {
+                textView.insertText("intruder", replacementRange: textView.selectedRange())
+            }
+        }
+        #expect(textView.acceptNextPromptSuggestion())
+        #expect(nilPublications == 1)
+        #expect(textView.string == "Explain the tradeoff.")
+        observation.cancel()
+        textView.undoManager?.undo()
+        #expect(textView.string.isEmpty)
+    }
+
+    @Test("Escape dismisses next prompt without changing draft or undo")
+    func nextPromptEscape() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        textView.keyDown(with: try keyEvent(keyCode: 53, modifiers: [], characters: "\u{1b}"))
+        #expect(textView.string.isEmpty)
+        #expect(textView.undoManager?.canUndo == false)
+        #expect(fixture.suggestionCoordinator.offer == nil)
+    }
+
+    @Test("Shift-Tab never accepts next prompt")
+    func nextPromptShiftTab() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        textView.keyDown(with: try keyEvent(keyCode: 48, modifiers: .shift, characters: "\t"))
+        #expect(textView.string != "Explain the tradeoff.")
+        #expect(fixture.suggestionCoordinator.offer == nil)
+    }
+
+    @Test(arguments: ["draft", "pending", "dictation"])
+    func nextPromptLiveGuardsRejectWithoutSwiftUIRefresh(_ blocker: String) async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        switch blocker {
+        case "draft": textView.nextPromptDraftIsEmpty = { false }
+        case "pending": textView.nextPromptInputBlocked = { true }
+        default: textView.nextPromptIsDictating = { true }
+        }
+        #expect(textView.nextPromptGhostText == nil)
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(textView.string.isEmpty)
+        #expect(textView.accessibilityCustomActions()?.isEmpty != false)
+    }
+
+    @Test("a first responder in a non-key window cannot display or accept next prompt")
+    func nextPromptRequiresKeyWindow() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain this tradeoff.", in: textView)
+        window.resignKey()
+        #expect(window.firstResponder === textView)
+        #expect(textView.nextPromptGhostText == nil)
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(textView.string.isEmpty)
+    }
+
+    @Test("next prompt wraps at narrow widths and releases reserved height on dismissal")
+    func nextPromptWrappedHeight() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer(String(repeating: "Explain this tradeoff. ", count: 6), in: textView)
+        let wide = textView.nextPromptHeight(for: 300)
+        #expect(textView.nextPromptHeight(for: 100) > wide)
+        textView.invalidateNextPromptSuggestion()
+        #expect(textView.nextPromptHeight(for: 100) == 0)
     }
 
     // MARK: - Argument hint ghost text
@@ -1696,5 +1975,15 @@ struct ACPComposerDraftBridgeTests {
             .text("\n"),
             .text("queued"),
         ]))
+    }
+}
+
+// These tests run concurrently; OS key-window ownership belongs to the whole process.
+private final class NextPromptTestWindow: NSWindow {
+    private var keyForTest = true
+    override var isKeyWindow: Bool { keyForTest }
+    override func resignKey() {
+        keyForTest = false
+        super.resignKey()
     }
 }

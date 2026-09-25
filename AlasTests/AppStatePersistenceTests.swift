@@ -173,6 +173,23 @@ struct AppStatePersistenceTests {
         #expect(store.writtenProjectsFile == nil)
     }
 
+    @Test func nextPromptOptInAndDisablePersistThroughTheConfigStore() async throws {
+        let fixture = try ModelStoreFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let store = RecordingStore(initialProjectsFile: .init(projects: []))
+        let state = AppState(store: store, nextPromptModelStore: fixture.store,
+                             nextPromptInference: NextPromptInference(acquireLease: { try await fixture.store.acquireVerifiedLease() }, load: { _ in { _ in nil } }),
+                             nextPromptSupported: true)
+        await state.enableNextPromptSuggestions()
+        #expect(store.writtenConfig?.nextPromptSuggestionsEnabled == true)
+        await state.disableNextPromptSuggestions()
+        #expect(store.writtenConfig?.nextPromptSuggestionsEnabled == false)
+        #expect(fixture.transport.requestCount == 0)
+        await state.shutdownNextPromptSuggestions()
+    }
+
     @Test func saveConfigReportsWriteFailure() {
         var reports: [(title: String, message: String)] = []
         let state = AppState(store: FailingStore()) { title, message in

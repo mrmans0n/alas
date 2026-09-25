@@ -113,6 +113,32 @@ respond when it needs you.
 Install and authenticate the agents you want to use. GitHub and GitLab features
 use the `gh` and `glab` CLIs respectively, with their existing authentication.
 
+## Experimental next-prompt suggestions
+
+In Debug builds with the `~/.alas/.debug` marker, enable
+**Settings → Debug → Experimental → Next-prompt suggestions** to install
+an optional local model. This requires Apple silicon with a supported Metal GPU,
+about 2.3 GB of disk space, and several GB of working memory. The confirmation
+explains these costs before installation. Process memory may remain elevated after
+the model is unloaded.
+
+After a successful native ACP turn, an eligible empty, focused composer may show
+a suggestion. Tab inserts it for editing; Escape dismisses it. Suggestions can
+be wrong or absent and never send or queue themselves. Recent chat text stays
+on this Mac for suggestion inference. Installing the model contacts Hugging Face;
+verified installed files are reused without another download.
+
+Suggestions are off by default. Native synthetic evaluation still found destructive
+consent that passed the policy, so this experiment is not ready for general rollout.
+The required fresh-turn evaluation and actual user review remain incomplete.
+See [native verification results](scripts/prototype-next-prompt/THREE-MODEL-RESULTS.md#native-production-verification-2026-09-25).
+
+Disable cancels download and inference while retaining verified files. Remove
+Model disables suggestions, waits for local work to stop, and removes only this
+feature's pinned model revision. If another Alas process is using it, removal
+reports model-in-use and requires an explicit retry. Shared Hugging Face caches and research files are
+left alone. Cancelled downloads require Retry and do not resume on launch.
+
 ## Repo-local configuration (`.alas/`)
 
 A repository can ship shared Alas configuration in `.alas/`. Only **local**

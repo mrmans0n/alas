@@ -99,7 +99,7 @@ struct ReviewFeedbackAgentSender {
                         )
                     }
                     Task { @MainActor in
-                        await appState.sendPrompt(for: sessionID, text: prompt, attachments: []) { accepted in
+                        await appState.sendPrompt(for: sessionID, text: prompt, attachments: [], normalUserTurn: false) { accepted in
                             completion(accepted ? .success(()) : .failure(ReviewFeedbackAgentSendError.rejected))
                         }
                     }

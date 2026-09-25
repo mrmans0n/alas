@@ -151,6 +151,26 @@ import Foundation
         #expect(try store.loadLease(sessionId: session.id) == nil)
     }
 
+    @Test("writer authority rejects observed takeover before the cached claim is cleared")
+    func writerAuthorityRejectsObservedTakeoverBeforeStandDown() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("next-prompt-takeover-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try ACPSessionStore(path: root.appendingPathComponent("sessions.sqlite").path)
+        let manager = tempManager(instanceId: "A", store: store)
+        defer { manager.shutdownBackgroundTasks() }
+        let session = manager.createSession(agentId: "claude")
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+        #expect(manager.isWriter(for: session.id))
+        try store.seizeLease(sessionId: session.id, instanceId: "B", pid: Int64(getpid()), now: Int64(Date().timeIntervalSince1970))
+        #expect(await manager.heartbeatTick(sessionId: session.id))
+        // The observation has arrived, but asynchronous stand-down has not removed the local claim.
+        #expect(manager._ownedLeases.contains(session.id))
+        #expect(!manager.isMirror(sessionId: session.id))
+        #expect(!manager.isWriter(for: session.id))
+        await manager.releaseWriterLease(sessionId: session.id)
+    }
+
     @Test("heartbeat signals stand-down when another instance owns the lease")
     func heartbeatStandsDownOnTakeover() async throws {
         let url = FileManager.default.temporaryDirectory

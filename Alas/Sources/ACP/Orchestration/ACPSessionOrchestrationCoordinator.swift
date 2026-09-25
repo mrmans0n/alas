@@ -220,8 +220,10 @@ final class ACPSessionOrchestrationCoordinator {
             } catch {
                 return .error("Could not persist delegated session.")
             }
+            parentSession.nextPromptWorkCount += 1
             environment.notifyChanged()
             Task { @MainActor in
+                defer { parentSession.nextPromptWorkCount -= 1 }
                 let result = await self.environment.createWorktree(origin.projectId, branch, base)
                 switch result {
                 case .success(let worktree):
@@ -296,6 +298,10 @@ final class ACPSessionOrchestrationCoordinator {
             return .error("Could not verify session delegation.")
         }
 
+        let targetSession = environment.sessionLocation(request.targetSessionId)?.manager.liveSession(for: request.targetSessionId)
+        targetSession?.nextPromptWorkCount += 1
+        var deliveryScheduled = false
+        defer { if !deliveryScheduled { targetSession?.nextPromptWorkCount -= 1 } }
         let message = ACPDelegatedMessage(
             id: environment.makeID(),
             sourceSessionId: origin.sessionId,
@@ -308,8 +314,11 @@ final class ACPSessionOrchestrationCoordinator {
         } catch {
             return .error("Could not queue delegated message.")
         }
+        targetSession?.hasPendingDelegatedMessages = true
         environment.notifyChanged()
+        deliveryScheduled = true
         Task { @MainActor in
+            defer { targetSession?.nextPromptWorkCount -= 1 }
             await self.deliverPendingMessages(
                 to: request.targetSessionId,
                 callerParent: callerParent,
@@ -350,8 +359,11 @@ final class ACPSessionOrchestrationCoordinator {
         } catch {
             return .error("Could not persist delegated session.")
         }
+        let parentSession = environment.sessionLocation(origin.sessionId)?.manager.liveSession(for: origin.sessionId)
+        parentSession?.nextPromptWorkCount += 1
         environment.notifyChanged()
         Task { @MainActor in
+            defer { parentSession?.nextPromptWorkCount -= 1 }
             await self.startPersistedChild(childID: childID, prompt: prompt, worktree: worktree)
         }
         return json(ACPOrchestrationNewResponse(sessionId: childID, state: "starting", worktreeId: worktree.id))
@@ -471,14 +483,22 @@ final class ACPSessionOrchestrationCoordinator {
         callerParent: ACPDelegationRecord?,
         targetParent: ACPDelegationRecord?
     ) async {
+        let session = environment.sessionLocation(sessionID)?.manager.liveSession(for: sessionID)
+        session?.nextPromptWorkCount += 1
+        defer { session?.nextPromptWorkCount -= 1 }
         guard let target = await resolveDeliveryTarget(
             sessionID: sessionID,
             callerParent: callerParent,
             targetParent: targetParent
         ), let messages = try? await environment.persistence.pendingMessages(targetSessionId: sessionID)
         else { return }
+        let targetSession = target.manager.liveSession(for: sessionID)
+        targetSession?.hasPendingDelegatedMessages = !messages.isEmpty
         for message in messages {
             await deliver(message.id, to: target)
+        }
+        if let remaining = try? await environment.persistence.pendingMessages(targetSessionId: sessionID) {
+            targetSession?.hasPendingDelegatedMessages = !remaining.isEmpty
         }
     }
 
