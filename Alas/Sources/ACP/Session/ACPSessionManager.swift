@@ -6288,7 +6288,9 @@ extension ACPSessionManager {
             to: sessionId,
             freshlyCreated: freshlyCreated
         )
-        if wasRecovering, session.agentState != .ready {
+        if wasRecovering,
+           connectionOwnerIDs[sessionId] == replacementAttempt.id,
+           session.agentState != .ready {
             session.exhaustConnectionRecovery()
         }
     }
