@@ -11,6 +11,10 @@ enum ACPFirstRunConnectingViewCopy {
 struct ACPFirstRunConnectingView: View {
     let agentDisplayName: String
     let phase: ACPFirstRunConnectingPhase
+    let connectionStartedAt: Date?
+    let reconnectAvailable: Bool
+    let restartInProgress: Bool
+    let onRestart: () -> Void
     /// Extra bottom padding when this view is hosted without an in-flow
     /// composer.
     let bottomInset: CGFloat
@@ -35,6 +39,12 @@ struct ACPFirstRunConnectingView: View {
                     .truncationMode(.middle)
             }
             phaseChips
+            ACPStalledConnectionButton(
+                startedAt: connectionStartedAt,
+                reconnectAvailable: reconnectAvailable,
+                restartInProgress: restartInProgress,
+                onRestart: onRestart
+            )
         }
         .frame(maxWidth: 640)
         .padding(.horizontal, 28)

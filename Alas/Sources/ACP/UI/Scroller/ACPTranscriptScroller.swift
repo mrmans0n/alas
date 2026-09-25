@@ -451,8 +451,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         private struct ConnectionRecoveryTokenInputs: Equatable {
             let state: ACPConnectionRecoveryState
+            let agentState: ACPSession.AgentState
+            let startedAt: Date?
             let queuedMessageCount: Int
+            let uncertainQueuedMessageCount: Int
             let reconnectAvailable: Bool
+            let restartInProgress: Bool
+        }
+
+        private struct StalledConnectionTokenInputs: Equatable {
+            let startedAt: Date?
+            let reconnectAvailable: Bool
+            let restartInProgress: Bool
         }
 
         /// Message rows from the render window + synthetic tail rows, in the
@@ -1109,13 +1119,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
             if let recoveryState = session.connectionRecoveryState {
                 let queuedMessageCount = session.visibleQueueCount
+                let uncertainQueuedMessageCount = session.queue.filter(\.deliveryUncertain).count
                 specs.append(ACPTranscriptRowSpec(
                     id: "__connection_recovery__",
                     equalityToken: token(
                         ConnectionRecoveryTokenInputs(
                             state: recoveryState,
+                            agentState: session.agentState,
+                            startedAt: session.connectionAttemptStartedAt,
                             queuedMessageCount: queuedMessageCount,
-                            reconnectAvailable: host.reconnectAvailable
+                            uncertainQueuedMessageCount: uncertainQueuedMessageCount,
+                            reconnectAvailable: host.reconnectAvailable,
+                            restartInProgress: session.connectionRestartInProgress
                         ),
                         host: host
                     ),
@@ -1123,9 +1138,37 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         wrapRow(host: host) {
                             ACPConnectionRecoveryCard(
                                 state: recoveryState,
+                                agentState: session.agentState,
+                                startedAt: session.connectionAttemptStartedAt,
                                 queuedMessageCount: queuedMessageCount,
+                                uncertainQueuedMessageCount: uncertainQueuedMessageCount,
                                 reconnectAvailable: host.reconnectAvailable,
+                                restartInProgress: session.connectionRestartInProgress,
                                 onReconnect: host.onReconnect
+                            )
+                        }
+                    }
+                ))
+            } else if session.agentState == .spawning, !session.transcript.messages.isEmpty {
+                let startedAt = session.connectionAttemptStartedAt
+                let restartInProgress = session.connectionRestartInProgress
+                specs.append(ACPTranscriptRowSpec(
+                    id: "__stalled_connection__",
+                    equalityToken: token(
+                        StalledConnectionTokenInputs(
+                            startedAt: startedAt,
+                            reconnectAvailable: host.reconnectAvailable,
+                            restartInProgress: restartInProgress
+                        ),
+                        host: host
+                    ),
+                    build: {
+                        wrapRow(host: host) {
+                            ACPStalledConnectionButton(
+                                startedAt: startedAt,
+                                reconnectAvailable: host.reconnectAvailable,
+                                restartInProgress: restartInProgress,
+                                onRestart: host.onReconnect
                             )
                         }
                     }

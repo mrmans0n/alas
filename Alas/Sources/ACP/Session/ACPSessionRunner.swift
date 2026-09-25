@@ -1,5 +1,68 @@
 import Foundation
 
+#if DEBUG
+typealias ACPRemoteFileWriteForTesting = @MainActor (
+    _ path: String,
+    _ content: String,
+    _ beforeRemoteWrite: @MainActor @Sendable () async throws -> Void
+) async throws -> ACPFileWriter.Result
+#endif
+
+private struct QueueDispatchProvenancePersistenceError: LocalizedError {
+    var errorDescription: String? {
+        "Could not save queued message dispatch state."
+    }
+}
+
+private final class QueueDispatchHandoffTracker: @unchecked Sendable {
+    private enum State: Equatable {
+        case provenancePending
+        case handedOff
+        case cancelled
+    }
+
+    private let lock = NSLock()
+    private var states: [UUID: State] = [:]
+
+    func markProvenancePending(_ itemId: UUID) {
+        lock.lock()
+        states[itemId] = .provenancePending
+        lock.unlock()
+    }
+
+    func markHandedOff(_ itemId: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        switch states[itemId] {
+        case .provenancePending:
+            states[itemId] = .handedOff
+            return true
+        case .cancelled:
+            return false
+        case .handedOff, nil:
+            return true
+        }
+    }
+
+    func takeUnhandedItemIDs() -> Set<UUID> {
+        lock.lock()
+        defer { lock.unlock() }
+        let unhanded = Set(states.compactMap { itemId, state in
+            state == .provenancePending ? itemId : nil
+        })
+        for itemId in unhanded {
+            states[itemId] = .cancelled
+        }
+        return unhanded
+    }
+
+    func finish(_ itemId: UUID) {
+        lock.lock()
+        states[itemId] = nil
+        lock.unlock()
+    }
+}
+
 @MainActor
 final class ACPSessionRunner {
     let session: ACPSession
@@ -72,6 +135,11 @@ final class ACPSessionRunner {
     private let onModelsObserved: ((_ agentId: String, _ models: [ChipSpec.Item]) -> Void)?
     private let onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
+    private let isConnectionCurrent: () -> Bool
+#if DEBUG
+    var remoteFileWriteForTesting: ACPRemoteFileWriteForTesting?
+    var queueDispatchProvenancePersistedForTesting: (@MainActor @Sendable (UUID) async -> Void)?
+#endif
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
     private var cancelRequestsTask: Task<Void, Never>?
@@ -87,6 +155,7 @@ final class ACPSessionRunner {
     private var authStatusTask: Task<Void, Never>?
     private var seq: Int64 = 0
     private var scheduledQueueWakeTask: Task<Void, Never>?
+    private let queueDispatchHandoffTracker = QueueDispatchHandoffTracker()
     /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
     /// from main / PR #338). Reused by the queue's sendNow path:
     /// `activePromptID` identifies the task that currently owns
@@ -211,6 +280,7 @@ final class ACPSessionRunner {
          onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
+         isConnectionCurrent: @escaping () -> Bool = { true },
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
          incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
          ownerInstanceId: String? = nil,
@@ -252,6 +322,7 @@ final class ACPSessionRunner {
         self.onUserCancel = onUserCancel
         self.onResumeTranscriptTail = onResumeTranscriptTail
         self.onCheckpointCapture = onCheckpointCapture
+        self.isConnectionCurrent = isConnectionCurrent
         let initialPersistedMessageCount = persistedMessageCount
             ?? store.flatMap { try? $0.messageCount(sessionId: sessionId) }
             ?? 0
@@ -330,6 +401,7 @@ final class ACPSessionRunner {
         updatesTask = Task { [weak self] in
             guard let self else { return }
             for await u in self.connection.client.incomingUpdates {
+                guard self.isConnectionCurrent() else { continue }
                 self.enqueueIncomingUpdate(u)
             }
             // The for-await also exits when the task gets cancelled —
@@ -337,7 +409,7 @@ final class ACPSessionRunner {
             // teardown). Don't pollute the persisted transcript with
             // an "Agent disconnected" notice in that case; only flag
             // the unexpected stream-end.
-            if Task.isCancelled { return }
+            if Task.isCancelled || !self.isConnectionCurrent() { return }
             self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
             await MainActor.run {
                 self.session.clearRetryStatus()
@@ -360,6 +432,7 @@ final class ACPSessionRunner {
         permissionsTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await (id, params) in self.connection.client.permissionRequests {
+                guard self.isConnectionCurrent() else { continue }
                 self.flushPendingIncomingUpdates()
                 if self.pendingCancelledRequestIDs.remove(id) != nil {
                     let response = ACPPermissionResponse(outcome: .cancelled)
@@ -374,6 +447,7 @@ final class ACPSessionRunner {
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
                 let response = await self.policy.evaluate(
                     scopeKey: scopeKey, options: params.options, params: params, requestID: id)
+                guard self.isConnectionCurrent() else { continue }
                 self.connection.client.respondToPermission(id: id, response: response)
                 await self.persistPermissionDecision(params: params, response: response)
             }
@@ -382,6 +456,7 @@ final class ACPSessionRunner {
         cancelRequestsTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await id in self.connection.client.cancelRequests {
+                guard self.isConnectionCurrent() else { continue }
                 if self.policy.cancelRequest(id: id) { continue }
                 self.pendingCancelledRequestIDs.insert(id)
             }
@@ -407,6 +482,7 @@ final class ACPSessionRunner {
                 ACPRemoteFileServer(host: $0, worktreeRoot: self.worktreePath)
             }
             for await req in self.connection.client.fileRequests {
+                guard self.isConnectionCurrent() else { continue }
                 self.flushPendingIncomingUpdates()
                 switch req {
                 case .read(let id, let params):
@@ -510,11 +586,9 @@ final class ACPSessionRunner {
                     // the session lease (takeover), deny the request rather
                     // than modifying the working tree on behalf of a session
                     // another instance now owns.
-                    // Note: terminal execution is also covered — Fix 1's
-                    // prompt stand-down tears the runner down within ~100 ms
-                    // of a takeover ping, and runner.stop() calls
-                    // terminalHost.killAll(), so in-flight terminal commands
-                    // are already gated by that path.
+                    // Terminal side effects also revalidate ownership after
+                    // their lease await, so a superseded request cannot resume
+                    // and execute after stop()'s killAll().
                     //
                     // Unlike the read path, the write stays fully on the main
                     // actor. An in-app editor save also runs on the main actor,
@@ -531,19 +605,70 @@ final class ACPSessionRunner {
                             result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
                         break
                     }
-                    if self.onDirtyCheck?(params.path) == true {
-                        self.appendAndPersistSystemNotice("Agent wrote to \(URL(fileURLWithPath: params.path).lastPathComponent) — you have unsaved changes in this file.")
+                    guard !Task.isCancelled, self.isConnectionCurrent() else {
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
+                        continue
                     }
+                    let editorHasUnsavedChanges = self.onDirtyCheck?(params.path) == true
                     do {
                         let res: ACPFileWriter.Result
                         if let remoteServer {
-                            res = try await remoteServer.write(path: params.path, content: params.content) {
-                                guard self.holdsLeaseForWrite() else {
+                            let beforeRemoteWrite: @MainActor @Sendable () async throws -> Void = {
+                                guard !Task.isCancelled, self.isConnectionCurrent() else {
+                                    throw CancellationError()
+                                }
+                                guard await self.hasConfirmedLeaseForSideEffect() else {
                                     throw ACPRemoteFileServer.ServerError.leaseLost
                                 }
+                                guard !Task.isCancelled, self.isConnectionCurrent() else {
+                                    throw CancellationError()
+                                }
+                            }
+#if DEBUG
+                            if let remoteFileWriteForTesting {
+                                res = try await remoteFileWriteForTesting(
+                                    params.path,
+                                    params.content,
+                                    beforeRemoteWrite
+                                )
+                            } else {
+                                res = try await remoteServer.write(
+                                    path: params.path,
+                                    content: params.content,
+                                    beforeRemoteWrite: beforeRemoteWrite
+                                )
+                            }
+#else
+                            res = try await remoteServer.write(
+                                path: params.path,
+                                content: params.content,
+                                beforeRemoteWrite: beforeRemoteWrite
+                            )
+#endif
+                            guard await self.hasConfirmedLeaseForSideEffect() else {
+                                self.connection.client.respondToFileRequest(
+                                    id: id,
+                                    result: .failure(.init(
+                                        code: -32003,
+                                        message: "lease lost to another instance",
+                                        data: nil
+                                    ))
+                                )
+                                continue
                             }
                         } else {
                             res = try writer.write(path: params.path, content: params.content)
+                        }
+                        guard !Task.isCancelled, self.isConnectionCurrent() else {
+                            self.connection.client.respondToFileRequest(
+                                id: id,
+                                result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
+                            continue
+                        }
+                        if editorHasUnsavedChanges {
+                            self.appendAndPersistSystemNotice("Agent wrote to \(URL(fileURLWithPath: params.path).lastPathComponent) — you have unsaved changes in this file.")
                         }
                         // Persist the worktree-relative path so the
                         // "Open diff" button can pass it straight to
@@ -559,12 +684,18 @@ final class ACPSessionRunner {
                         // the write succeeded.
                         let body = Data("null".utf8)
                         self.connection.client.respondToFileRequest(id: id, result: .success(body))
+                    } catch is CancellationError {
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
                     } catch ACPFileWriter.Error.outsideWorktree(let p) {
+                        guard !Task.isCancelled, self.isConnectionCurrent() else { continue }
                         self.appendAndPersistSystemNotice("Blocked write outside worktree: \(p)")
                         self.connection.client.respondToFileRequest(
                             id: id,
                             result: .failure(.init(code: -32001, message: "path outside worktree", data: nil)))
                     } catch ACPRemoteFileServer.ServerError.outsideWorktree(let p) {
+                        guard !Task.isCancelled, self.isConnectionCurrent() else { continue }
                         self.appendAndPersistSystemNotice("Blocked write outside worktree: \(p)")
                         self.connection.client.respondToFileRequest(
                             id: id,
@@ -585,6 +716,7 @@ final class ACPSessionRunner {
         terminalsTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await req in self.connection.client.terminalRequests {
+                guard self.isConnectionCurrent() else { continue }
                 await self.handleTerminalRequest(req)
             }
         }
@@ -609,6 +741,7 @@ final class ACPSessionRunner {
         authStatusTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await event in self.connection.client.authStatusUpdates {
+                guard self.isConnectionCurrent() else { continue }
                 self.applyAuthStatus(
                     event.status,
                     acknowledging: event.durableConsumptionAcknowledgement
@@ -649,6 +782,7 @@ final class ACPSessionRunner {
         _ status: ACPAuthStatus,
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil
     ) {
+        guard isConnectionCurrent() else { return }
         session.authStatus = status
         if status.kind == .none {
             session.setupState = .needsAuth(methods: session.authMethods, reason: nil)
@@ -766,6 +900,7 @@ final class ACPSessionRunner {
     }
 
     private func enqueueIncomingUpdate(_ update: ACPSessionUpdateParams) {
+        guard isConnectionCurrent() else { return }
         let receivedWhileHoldingLease = holdsLeaseForWrite()
         // A child session's update never touches a parent row, so it must
         // not capture a compare-and-swap base for one (its tool-call ids
@@ -782,6 +917,7 @@ final class ACPSessionRunner {
             guard let self else { return }
             try? await Task.sleep(nanoseconds: self.incomingUpdateCoalesceNanos)
             guard !Task.isCancelled else { return }
+            guard self.isConnectionCurrent() else { return }
             self.flushPendingIncomingUpdates()
         }
     }
@@ -838,6 +974,10 @@ final class ACPSessionRunner {
     ) {
         incomingUpdateFlushTask?.cancel()
         incomingUpdateFlushTask = nil
+        guard isConnectionCurrent() else {
+            pendingIncomingUpdates.removeAll()
+            return
+        }
         guard !pendingIncomingUpdates.isEmpty else { return }
         let updates = pendingIncomingUpdates
         pendingIncomingUpdates.removeAll(keepingCapacity: true)
@@ -857,6 +997,7 @@ final class ACPSessionRunner {
         flushQueueWhenBoundaryReady: Bool = true,
         treatBufferedUpdatesAsPromptOwned: Bool = false
     ) {
+        guard isConnectionCurrent() else { return }
         let durableConsumptionAcknowledgement = params.durableConsumptionAcknowledgement
         observedUpdateCount += 1
         appliedUpdateCount += 1
@@ -1357,6 +1498,11 @@ final class ACPSessionRunner {
                     id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
                 break
             }
+            guard !Task.isCancelled, isConnectionCurrent() else {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
+                break
+            }
             do {
                 let res = try host.create(p)
                 self.connection.client.respondToTerminalRequest(
@@ -1415,6 +1561,11 @@ final class ACPSessionRunner {
                     id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
                 break
             }
+            guard !Task.isCancelled, isConnectionCurrent() else {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
+                break
+            }
             do {
                 try host.kill(p)
                 self.connection.client.respondToTerminalRequest(
@@ -1435,6 +1586,11 @@ final class ACPSessionRunner {
             guard await hasConfirmedLeaseForSideEffect() else {
                 self.connection.client.respondToTerminalRequest(
                     id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
+                break
+            }
+            guard !Task.isCancelled, isConnectionCurrent() else {
+                self.connection.client.respondToTerminalRequest(
+                    id: id, result: .failure(.init(code: -32800, message: "cancelled", data: nil)))
                 break
             }
             do {
@@ -1775,6 +1931,7 @@ final class ACPSessionRunner {
     /// canceled, posts a system notice, and flips `streamingState` back
     /// to `.idle`. Persists all mutations so they survive a reload.
     func userCancel(confirmingLease: Bool = true) async {
+        guard isConnectionCurrent() else { return }
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
         session.clearRetryStatus()
         // Capture the prompt + queue head the user INTENDED to stop
@@ -1805,6 +1962,7 @@ final class ACPSessionRunner {
             }
             return snapshot
         }
+        guard isConnectionCurrent() else { return }
         if confirmingLease {
             // A former writer that lost the lease must not send a cancel RPC to
             // the agent for a session another instance now owns. The local
@@ -1813,10 +1971,13 @@ final class ACPSessionRunner {
             // cross-instance side effects.
             guard await hasConfirmedLeaseForSideEffect() else { return }
         }
+        guard isConnectionCurrent() else { return }
         onUserCancel?()
         let remoteId = session.remoteSessionId ?? sessionId
         try? await connection.cancel(sessionId: remoteId)
+        guard isConnectionCurrent() else { return }
         await MainActor.run {
+            guard self.isConnectionCurrent() else { return }
             flushStreamingPersist()
             if let promptID = intended.promptID {
                 // Only clear activePromptID if it's still ours — a
@@ -1871,11 +2032,13 @@ extension ACPSessionRunner {
     /// nothing is assumed locally, because an agent may finish the child
     /// normally in the window before the cancel lands.
     func cancelSubagent(subagentSessionId: String) async {
+        guard isConnectionCurrent() else { return }
         guard let run = session.subagentRun(subagentSessionId),
               run.capabilities.supportsCancel,
               run.isRunning
         else { return }
         guard await hasConfirmedLeaseForSideEffect() else { return }
+        guard isConnectionCurrent() else { return }
         try? await connection.cancel(sessionId: subagentSessionId)
     }
 
@@ -2170,10 +2333,10 @@ extension ACPSessionRunner {
     }
 
     /// Persist the current queue snapshot. Called after every mutation:
-    /// enqueue, edit, remove, reorder, head-status flip. Failures are
-    /// swallowed — the same pattern as transcript persistence; surfacing
-    /// would block the UI for a transient SQLite error and we'd rather
-    /// lose a queue snapshot than the user's draft.
+    /// enqueue, edit, remove, reorder, head-status flip. Fire-and-forget
+    /// snapshots swallow write failures, matching transcript persistence.
+    /// Callers that gate an external side effect pass a completion and must
+    /// honor its result before proceeding.
     func persistQueue(
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil,
         completion: (@MainActor (_ persisted: Bool) -> Void)? = nil
@@ -2295,6 +2458,7 @@ extension ACPSessionRunner {
     /// Chained drain is implicit: sendNow's completion sets state to
     /// `.idle` and calls back here.
     func flushQueueIfIdle() {
+        guard isConnectionCurrent() else { return }
         guard !stopped else { return }
         guard holdsLeaseForWrite() else { return }
         guard !nativeForkBarrierActive,
@@ -2306,7 +2470,8 @@ extension ACPSessionRunner {
               session.transcript.pendingUserInputs.isEmpty,
               let head = session.queue.first,
               head.status == .pending,
-              head.lastError == nil
+              head.lastError == nil,
+              !head.deliveryUncertain
         else { return }
         if case .needsAuth = session.setupState { return }
         guard head.isReady() else {
@@ -2315,25 +2480,124 @@ extension ACPSessionRunner {
         }
         scheduledQueueWakeTask?.cancel()
         scheduledQueueWakeTask = nil
-        let brokerOperationKey = session.markQueueHeadSending()
-        persistQueue()
-        sendNow(
-            blocks: head.blocks,
-            queuedItemId: head.id,
-            delegatedSource: head.delegatedSource,
-            brokerOperationKey: brokerOperationKey,
-            // The raw optional, not `restorableDraft`: that heuristically
-            // fabricates a draft from `blocks` when none was captured, and
-            // `blocks` has already flattened every image to the end of the
-            // text — annotating from it would invent a wrong end-of-message
-            // offset instead of leaving `textOffset` nil as documented on
-            // `ACPMessage.Attachment.textOffset`.
-            draft: head.draft,
-            onDispatchRegistered: queuedPromptDispatchRegistration(for: head.id)
-        )
+        guard let brokerOperationKey = session.markQueueHeadSending() else {
+            return
+        }
+        persistQueue(completion: { [weak self] persisted in
+            guard let self else { return }
+            guard persisted else {
+                guard self.isConnectionCurrent(),
+                      !self.stopped,
+                      self.session.queue.first?.id == head.id,
+                      self.session.queue.first?.status == .sending
+                else { return }
+                self.session.setQueueHeadError(
+                    "Could not save queued message; it was not sent.",
+                    clearDispatchProvenance: true
+                )
+                self.persistQueue()
+                self.onPromptWorkChanged?()
+                return
+            }
+            guard self.isConnectionCurrent(),
+                  !self.stopped,
+                  self.session.queue.first?.id == head.id,
+                  self.session.queue.first?.status == .sending
+            else { return }
+            self.sendNow(
+                blocks: head.blocks,
+                queuedItemId: head.id,
+                delegatedSource: head.delegatedSource,
+                brokerOperationKey: brokerOperationKey,
+                // The raw optional, not `restorableDraft`: that heuristically
+                // fabricates a draft from `blocks` when none was captured, and
+                // `blocks` has already flattened every image to the end of the
+                // text — annotating from it would invent a wrong end-of-message
+                // offset instead of leaving `textOffset` nil as documented on
+                // `ACPMessage.Attachment.textOffset`.
+                draft: head.draft,
+                onDispatchRegistered: self.queuedPromptDispatchRegistration(for: head.id),
+                beforeRequestHandoff: self.queuedPromptRequestHandoff(for: head.id),
+                onRequestHandoffDidOccur: self.queuedPromptHandoffDidOccur(for: head.id)
+            )
+        })
     }
+
     private func queuedPromptDispatchRegistration(for itemId: UUID) -> (@Sendable () -> Void)? {
         onQueuedPromptDispatchRegistration?(itemId)
+    }
+
+    private func queuedPromptRequestHandoff(
+        for itemId: UUID
+    ) -> (@Sendable (ACPBrokerGeneration?) async throws -> Void)? {
+        guard connection.client is ACPRequestHandoffPreparing else { return nil }
+        return { [weak self] brokerGeneration in
+            guard let brokerGeneration else { return }
+            guard let self else { throw CancellationError() }
+            try await self.persistQueueDispatchProvenance(
+                itemId: itemId,
+                brokerGeneration: brokerGeneration
+            )
+        }
+    }
+
+    private func queuedPromptHandoffDidOccur(for itemId: UUID) -> (@Sendable () throws -> Void)? {
+        guard connection.client is ACPRequestHandoffPreparing else { return nil }
+        return { [queueDispatchHandoffTracker] in
+            guard queueDispatchHandoffTracker.markHandedOff(itemId) else {
+                throw CancellationError()
+            }
+        }
+    }
+
+    /// Invalidates every provenance write that has not crossed the transport
+    /// handoff boundary. The broker callback checks the same tracker
+    /// synchronously before sending, so a racing teardown either preserves an
+    /// actually-handed-off marker or prevents the superseded request.
+    func takeUnhandedQueueDispatchesForTeardown() -> Set<UUID> {
+        queueDispatchHandoffTracker.takeUnhandedItemIDs()
+    }
+
+    private func persistQueueDispatchProvenance(
+        itemId: UUID,
+        brokerGeneration: ACPBrokerGeneration
+    ) async throws {
+        guard !stopped, isConnectionCurrent(),
+              session.queue.contains(where: { $0.id == itemId && $0.status == .sending }),
+              session.markQueueHeadDispatched(id: itemId, brokerGeneration: brokerGeneration)
+        else { throw CancellationError() }
+        queueDispatchHandoffTracker.markProvenancePending(itemId)
+
+        let persisted = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            persistQueue(completion: { didPersist in
+                continuation.resume(returning: didPersist)
+            })
+        }
+        guard persisted else {
+            guard !stopped, isConnectionCurrent() else { throw CancellationError() }
+            clearQueueDispatchProvenance(itemId: itemId, brokerGeneration: brokerGeneration)
+            throw QueueDispatchProvenancePersistenceError()
+        }
+#if DEBUG
+        await queueDispatchProvenancePersistedForTesting?(itemId)
+#endif
+        guard !stopped, isConnectionCurrent(),
+              session.queue.contains(where: {
+                  $0.id == itemId && $0.status == .sending && $0.dispatchedBrokerGeneration == brokerGeneration
+              })
+        else {
+            throw CancellationError()
+        }
+    }
+
+    private func clearQueueDispatchProvenance(
+        itemId: UUID,
+        brokerGeneration: ACPBrokerGeneration
+    ) {
+        guard let index = session.queue.firstIndex(where: {
+            $0.id == itemId && $0.status == .sending && $0.dispatchedBrokerGeneration == brokerGeneration
+        }) else { return }
+        session.queue[index].dispatchedBrokerGeneration = nil
     }
 
     private func scheduleQueueWake(at date: Date) {
@@ -2388,6 +2652,10 @@ extension ACPSessionRunner {
               session.queue[idx].status == .pending
         else { return }
         guard session.agentState == .ready else { return }
+        if session.queue[idx].deliveryUncertain {
+            guard session.retryQueueItem(id: id) else { return }
+            persistQueue()
+        }
         guard session.pendingQueuePersistenceCount == 0 else {
             if !pendingQueueForceSendsAfterPersistence.contains(id) {
                 pendingQueueForceSendsAfterPersistence.append(id)
@@ -2437,6 +2705,9 @@ extension ACPSessionRunner {
         pendingQueueForceSendsAfterPersistence.removeAll()
         var forced = false
         for itemId in itemIds.reversed() {
+            if session.queue.first(where: { $0.id == itemId })?.deliveryUncertain == true {
+                _ = session.retryQueueItem(id: itemId)
+            }
             forced = session.forceQueueItem(id: itemId) || forced
         }
         guard forced else { return false }
@@ -2489,17 +2760,28 @@ extension ACPSessionRunner {
                 return
             }
             await self.userCancel()
+            guard !self.stopped, self.isConnectionCurrent() else {
+                await MainActor.run {
+                    self.steerInProgress = false
+                    self.pendingForceSendQueuedItemID = nil
+                    onDispatchRegistered?()
+                    onPromptFinished?(false)
+                }
+                return
+            }
+            // The redirect still owns prompt work while the cancelled RPC
+            // settles. Keep cleanup observers informed before waiting on it.
+            self.onPromptWorkChanged?()
             await interruptedPromptTask?.value
             await MainActor.run {
-                // If the session was detached while we were awaiting
-                // `userCancel` (tab closed, worktree torn down), the
-                // runner has been removed from `ACPSessionManager` and
-                // the connection shut down. Firing `sendNow` now would
-                // append the redirect to a detached session and persist
-                // a `lastError` against the dead connection. Bail out
-                // and tell the composer the submit didn't land so its
-                // draft stays put.
-                guard self.session.agentState == .ready else {
+                // Detach and restart both invalidate this runner, but a
+                // replacement may already have put the shared session back
+                // in `.ready`. Check runner identity as well as visible
+                // state before sending through the old connection.
+                guard !self.stopped,
+                      self.isConnectionCurrent(),
+                      self.session.agentState == .ready
+                else {
                     self.steerInProgress = false
                     self.pendingForceSendQueuedItemID = nil
                     onDispatchRegistered?()
@@ -2554,6 +2836,8 @@ extension ACPSessionRunner {
         recordUserPrompt: Bool = true,
         draft: ACPComposerDraft? = nil,
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
+        beforeRequestHandoff: (@Sendable (ACPBrokerGeneration?) async throws -> Void)? = nil,
+        onRequestHandoffDidOccur: (@Sendable () throws -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         flushPendingIncomingUpdates()
@@ -2568,22 +2852,38 @@ extension ACPSessionRunner {
         // and persist `lastError` on the queue head — defeating the
         // detach-clears-cleanly fix from the previous commit.
         activePromptID = promptID
-        latestPromptTask = Task { [weak self, onDispatchRegistered, onPromptFinished] in
+        let connectionIsCurrent = isConnectionCurrent
+        let queueDispatchHandoffTracker = self.queueDispatchHandoffTracker
+        latestPromptTask = Task {
+            [weak self, onDispatchRegistered, beforeRequestHandoff, onRequestHandoffDidOccur,
+             onPromptFinished, connectionIsCurrent, queuedItemId, queueDispatchHandoffTracker] in
             guard let self else {
                 await MainActor.run {
                     onDispatchRegistered?()
-                    onPromptFinished?(false)
+                    if connectionIsCurrent() {
+                        onPromptFinished?(false)
+                    }
                 }
                 return
             }
+            defer {
+                if let queuedItemId {
+                    queueDispatchHandoffTracker.finish(queuedItemId)
+                }
+            }
             guard await self.hasConfirmedLeaseForSideEffect() else {
                 await MainActor.run {
+                    let canFinishPrompt = self.isConnectionCurrent() && !self.stopped &&
+                        !self.steerInProgress &&
+                        (self.activePromptID == nil || self.activePromptID == promptID)
                     if self.activePromptID == promptID {
                         self.activePromptID = nil
                     }
                     self.cancelledPromptIDs.remove(promptID)
                     onDispatchRegistered?()
-                    onPromptFinished?(false)
+                    if canFinishPrompt {
+                        onPromptFinished?(false)
+                    }
                 }
                 return
             }
@@ -2597,6 +2897,11 @@ extension ACPSessionRunner {
                 // detached session.
                 if self.activePromptID != promptID {
                     self.cancelledPromptIDs.remove(promptID)
+                    onDispatchRegistered?()
+                    if self.isConnectionCurrent(), !self.stopped,
+                       !self.steerInProgress, self.activePromptID == nil {
+                        onPromptFinished?(false)
+                    }
                     return (false, nil)
                 }
                 // Re-allow streaming boundary crossings now that we are inside
@@ -2657,13 +2962,7 @@ extension ACPSessionRunner {
                 self.session.transcript.streamingState = .sending
                 return (true, nil)
             }
-            guard promptRecording.proceeded else {
-                await MainActor.run {
-                    onDispatchRegistered?()
-                    onPromptFinished?(false)
-                }
-                return
-            }
+            guard promptRecording.proceeded else { return }
             if let messageID = promptRecording.messageID,
                let checkpointID = await self.onCheckpointCapture?(checkpointPrompt, checkpointHasAttachments) {
                 await MainActor.run {
@@ -2719,10 +3018,13 @@ extension ACPSessionRunner {
                     blocks: wireBlocks,
                     brokerOperationKey: brokerOperationKey,
                     acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil,
-                    onRequestHandoff: onDispatchRegistered
+                    onRequestHandoff: onDispatchRegistered,
+                    beforeRequestHandoff: beforeRequestHandoff,
+                    onRequestHandoffDidOccur: onRequestHandoffDidOccur
                 )
                 let promptAcknowledgement = promptOutcome.acknowledgement
                 await MainActor.run {
+                    guard self.isConnectionCurrent() else { return }
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     // A cancelled/superseded prompt's response can still
@@ -2782,6 +3084,7 @@ extension ACPSessionRunner {
                 }
             } catch {
                 await MainActor.run {
+                    guard self.isConnectionCurrent() else { return }
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
@@ -2848,13 +3151,22 @@ extension ACPSessionRunner {
         let promptID = nextPromptID
         nextPromptID += 1
         activePromptID = promptID
-        latestPromptTask = Task { [weak self, onCompleted] in
+        let connectionIsCurrent = isConnectionCurrent
+        latestPromptTask = Task { [weak self, onCompleted, connectionIsCurrent] in
             guard let self else {
-                await MainActor.run { onCompleted?(false) }
+                await MainActor.run {
+                    if connectionIsCurrent() {
+                        onCompleted?(false)
+                    }
+                }
                 return
             }
             let proceeded = await MainActor.run { () -> Bool in
                 if self.activePromptID != promptID {
+                    self.cancelledPromptIDs.remove(promptID)
+                    return false
+                }
+                guard connectionIsCurrent(), !self.stopped else {
                     self.cancelledPromptIDs.remove(promptID)
                     return false
                 }
@@ -2864,13 +3176,18 @@ extension ACPSessionRunner {
                 return true
             }
             guard proceeded else {
-                await MainActor.run { onCompleted?(false) }
+                await MainActor.run {
+                    if connectionIsCurrent() {
+                        onCompleted?(false)
+                    }
+                }
                 return
             }
             do {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
                 let promptOutcome = try await self.connection.prompt(sessionId: remoteId, blocks: [.text(prompt)])
                 await MainActor.run {
+                    guard connectionIsCurrent() else { return }
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
                     // See the matching comment in sendNow: always accumulate
@@ -2895,6 +3212,7 @@ extension ACPSessionRunner {
                 }
             } catch {
                 await MainActor.run {
+                    guard connectionIsCurrent() else { return }
                     _ = self.cancelledPromptIDs.remove(promptID)
                     let isActivePrompt = self.activePromptID == promptID
                     if isActivePrompt {

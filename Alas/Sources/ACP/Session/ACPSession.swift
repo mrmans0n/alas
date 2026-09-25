@@ -165,7 +165,22 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Note: `AgentState.idle` means "no runner spawned yet" (process
     /// lifecycle), distinct from `StreamingState.idle` which means
     /// "runner is attached but not currently mid-prompt" (turn lifecycle).
-    @Published var agentState: AgentState = .idle
+    @Published var agentState: AgentState = .idle {
+        didSet {
+            if agentState == .spawning {
+                if oldValue != .spawning {
+                    connectionAttemptStartedAt = Date()
+                }
+            } else {
+                connectionAttemptStartedAt = nil
+            }
+        }
+    }
+    @Published private(set) var connectionAttemptStartedAt: Date?
+    /// True while a user-triggered restart or retry is replacing the active
+    /// connection. Views use it to keep recovery visible without offering a
+    /// second action against the same session.
+    @Published var connectionRestartInProgress = false
     /// Runtime-only state for the current unexpected connection loss.
     /// Nil outside a recovery incident.
     @Published private(set) var connectionRecoveryState: ACPConnectionRecoveryState?
@@ -2232,9 +2247,10 @@ final class ACPSession: ObservableObject, Identifiable {
         queue.insert(item, at: min(dst, queue.count))
     }
 
-    /// Promote a pending queued item to the next drainable position and clear
-    /// any previous send error. If a `.sending` head is already in-flight, the
-    /// forced item is placed immediately behind it so completion can pop the
+    /// Promote a pending queued item to the next drainable position. Clear
+    /// ordinary send errors, but preserve uncertain-delivery state until the
+    /// user explicitly retries. If a `.sending` head is already in-flight,
+    /// place the forced item immediately behind it so completion can pop the
     /// current head safely.
     @discardableResult
     func forceQueueItem(id: UUID) -> Bool {
@@ -2251,7 +2267,9 @@ final class ACPSession: ObservableObject, Identifiable {
 
         var item = queue.remove(at: idx)
         item.status = .pending
-        item.lastError = nil
+        if !item.deliveryUncertain {
+            item.lastError = nil
+        }
         item.scheduledAt = nil
 
         let insertAt = protectedPrefixCount
@@ -2274,6 +2292,27 @@ final class ACPSession: ObservableObject, Identifiable {
         queue[idx].blocks = blocks
         queue[idx].draft = nil
         queue[idx].advanceBrokerOperationAttempt()
+        queue[idx].dispatchedBrokerGeneration = nil
+        queue[idx].deliveryUncertain = false
+        queue[idx].lastError = nil
+    }
+
+    /// Explicitly retry a failed queued item. Uncertain delivery gets a new
+    /// operation key so a user's decision to resend cannot be deduplicated
+    /// against the operation from the abandoned broker generation.
+    @discardableResult
+    func retryQueueItem(id: UUID) -> Bool {
+        guard let idx = queue.firstIndex(where: { $0.id == id }),
+              queue[idx].status == .pending,
+              queue[idx].lastError != nil || queue[idx].deliveryUncertain
+        else { return false }
+        if queue[idx].deliveryUncertain {
+            queue[idx].advanceBrokerOperationAttempt()
+            queue[idx].dispatchedBrokerGeneration = nil
+            queue[idx].deliveryUncertain = false
+        }
+        queue[idx].lastError = nil
+        return true
     }
 
     /// Remove all `.pending` items. A `.sending` item is left in place —
@@ -2301,7 +2340,22 @@ final class ACPSession: ObservableObject, Identifiable {
         guard !queue.isEmpty, queue[0].status == .pending else { return nil }
         queue[0].status = .sending
         queue[0].lastError = nil
+        queue[0].dispatchedBrokerGeneration = nil
         return queue[0].brokerOperationKey
+    }
+
+    /// Record broker provenance only after the queued prompt's request is
+    /// ready to cross the transport boundary.
+    @discardableResult
+    func markQueueHeadDispatched(
+        id: UUID,
+        brokerGeneration: ACPBrokerGeneration
+    ) -> Bool {
+        guard let index = queue.firstIndex(where: { $0.id == id }),
+              queue[index].status == .sending
+        else { return false }
+        queue[index].dispatchedBrokerGeneration = brokerGeneration
+        return true
     }
 
     /// Pop the head only if it's currently `.sending`. Returns it. Used by
@@ -2319,10 +2373,18 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Roll the `.sending` head back to `.pending` with an error message.
     /// Used by the flusher's failure path. Keeps the item at the head so
     /// the user sees "Retry" on the bubble.
-    func setQueueHeadError(_ message: String, advancesBrokerOperationAttempt: Bool = false) {
+    func setQueueHeadError(
+        _ message: String,
+        advancesBrokerOperationAttempt: Bool = false,
+        clearDispatchProvenance: Bool = false
+    ) {
         guard !queue.isEmpty else { return }
         var item = queue.removeFirst()
         item.status = .pending
+        if clearDispatchProvenance || advancesBrokerOperationAttempt {
+            item.dispatchedBrokerGeneration = nil
+            item.deliveryUncertain = false
+        }
         if advancesBrokerOperationAttempt {
             item.advanceBrokerOperationAttempt()
         }
@@ -2341,9 +2403,36 @@ final class ACPSession: ObservableObject, Identifiable {
     /// from `ACPSessionManager.openSession` after pulling rows from the
     /// store. `.sending` items get flipped to `.pending` here so the
     /// flusher re-attempts on next idle.
-    func restoreQueue(_ items: [QueuedPrompt]) {
+    func restoreQueue(
+        _ items: [QueuedPrompt],
+        markLegacySendingUncertain: Bool = false,
+        knownUnsentDispatches: Set<UUID> = []
+    ) {
         forceSendAfterSendingHeadId = nil
-        queue = items.map { $0.normalizedAfterRestore() }
+        queue = items.map { item in
+            guard knownUnsentDispatches.contains(item.id) else {
+                return item.normalizedAfterRestore(markLegacySendingUncertain: markLegacySendingUncertain)
+            }
+            var restored = item.normalizedAfterRestore(markLegacySendingUncertain: false)
+            restored.dispatchedBrokerGeneration = nil
+            return restored
+        }
+    }
+
+    /// Holds prompts dispatched on a broker generation that this connection
+    /// cannot adopt. Queue items with no dispatch provenance remain eligible.
+    @discardableResult
+    func markQueuedPromptsUncertain(afterBrokerGeneration generation: ACPBrokerGeneration) -> Bool {
+        var changed = false
+        for index in queue.indices {
+            guard let dispatchedGeneration = queue[index].dispatchedBrokerGeneration,
+                  dispatchedGeneration != generation,
+                  !queue[index].deliveryUncertain
+            else { continue }
+            queue[index].markDeliveryUncertain()
+            changed = true
+        }
+        return changed
     }
 
     /// Mark any pending/in_progress tool calls as canceled. Called when
