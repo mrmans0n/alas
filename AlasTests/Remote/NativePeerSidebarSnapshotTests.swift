@@ -72,4 +72,64 @@ struct NativePeerSidebarSnapshotTests {
         #expect(NativePeerState(wireState: "unverified").label == "Identity unproven")
         #expect(NativePeerState(wireState: "offline").label == "Offline")
     }
+
+    private func worktreeRow(
+        _ id: String, project: String?, worktreeId: String?, branch: String = "main",
+        status: String = "idle", updatedAt: Int64 = 0
+    ) -> RemoteSessionSummary {
+        let worktree = project.map {
+            RemoteWorktreeSummary(
+                projectName: $0, worktreeName: branch, branch: branch,
+                path: "/\($0)/\(branch)", metricsAvailable: false, comparisonRef: nil,
+                commitCount: 0, changedFileCount: 0, addedLines: 0, deletedLines: 0,
+                conflictCount: 0
+            )
+        }
+        return RemoteSessionSummary(
+            id: "b:\(id)", title: id, agentId: "claude", status: status, canDrive: false,
+            worktreeId: worktreeId, updatedAt: updatedAt, worktree: worktree,
+            serverId: "b", serverName: "Mac B"
+        )
+    }
+
+    @Test func peerSessionsFoldIntoReposAndWorktreesInRecencyOrder() {
+        let sessions = [
+            worktreeRow("s1", project: "alas", worktreeId: "w1", branch: "feat", status: "awaitingInput", updatedAt: 30),
+            worktreeRow("s2", project: "cpcl", worktreeId: "w2", updatedAt: 20),
+            worktreeRow("s3", project: "alas", worktreeId: "w1", branch: "feat", status: "streaming", updatedAt: 10),
+            worktreeRow("s4", project: "alas", worktreeId: "w3", updatedAt: 5),
+            worktreeRow("s5", project: nil, worktreeId: nil, updatedAt: 1)
+        ]
+
+        let repos = NativePeerRepoGroup.build(sessions: sessions)
+
+        #expect(repos.map(\.name) == ["alas", "cpcl", NativePeerRepoGroup.unassignedName])
+        #expect(repos[0].worktrees.map(\.id) == ["id:w1", "id:w3"])
+        #expect(repos[0].worktrees[0].sessions.map(\.id) == ["b:s1", "b:s3"])
+        #expect(repos[0].worktrees[0].primarySession.id == "b:s1")
+        #expect(repos[0].worktrees[0].title == "feat")
+        #expect(repos[0].worktrees[0].updatedAt == 30)
+        #expect(repos[0].attentionCount == 1)
+        #expect(repos[2].worktrees.map(\.title) == ["s5"])
+    }
+
+    @Test func peerWorktreeStatusRanksWaitingOverRunningAndHidesIdle() {
+        let waiting = NativePeerWorktreeGroup(id: "w", sessions: [
+            worktreeRow("a", project: "alas", worktreeId: "w", status: "streaming"),
+            worktreeRow("b", project: "alas", worktreeId: "w", status: "awaitingPermission")
+        ])
+        #expect(waiting.status?.note == "needs permission")
+        #expect(waiting.status?.pulses == false)
+
+        let running = NativePeerWorktreeGroup(id: "w", sessions: [
+            worktreeRow("a", project: "alas", worktreeId: "w", status: "streaming")
+        ])
+        #expect(running.status?.note == "running")
+        #expect(running.status?.pulses == true)
+
+        let idle = NativePeerWorktreeGroup(id: "w", sessions: [
+            worktreeRow("a", project: "alas", worktreeId: "w")
+        ])
+        #expect(idle.status == nil)
+    }
 }
