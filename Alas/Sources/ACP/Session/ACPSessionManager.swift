@@ -5019,10 +5019,15 @@ extension ACPSessionManager {
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods
             if let retiringConnection = attempt.retiringConnection {
-                attempt.retiringConnection = nil
+                // Keep the field set while the bounded detach is suspended:
+                // a nested restart or disposal landing during that window is
+                // the only other teardown-visible reader
+                // (`restartConnection` / `tearDownSession`), and it must be
+                // able to claim the connection if the detach wedges.
                 let detachOutcome = await runBounded(timeout: restartTeardownTimeout) {
                     await retiringConnection.detach()
                 }
+                attempt.retiringConnection = nil
                 if retiringConnection.client is ACPBrokerClient,
                    case .timedOut = detachOutcome {
                     attempt.requiresFreshBrokerNamespace = true

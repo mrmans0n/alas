@@ -863,6 +863,49 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.detach(sessionId: reopenedSession.id)
     }
 
+    @Test("disposing during a stalled retirement detach still claims the retiring broker")
+    func disposalDuringStalledRetirementDetachClaimsRetiringBroker() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerServiceProxy(stallDetach: true)
+        let isolatedService = ManagerBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .seconds(10),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "disposal-stalled-retire", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.detachGate.hasEntered
+                && session.agentState != .ready
+                && manager.runners[session.id] == nil
+        }
+
+        // The retirement detach is suspended with the retiring connection
+        // still tracked. A disposal landing in that window must find and
+        // claim it instead of leaving it unowned.
+        let disposal = Task { try await manager.disposeSession(id: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.closed.count >= 1
+        }
+
+        await sharedService.detachGate.release()
+        await restart.value
+        try await disposal.value
+
+        #expect(manager.liveSession(for: session.id) == nil)
+        #expect(await sharedService.detached.count == 1)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("restart detaches the retiring broker without closing it before replacement initialization")
     func restartRetainsRetiringBrokerUntilReplacementInitialization() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
