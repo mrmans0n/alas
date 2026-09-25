@@ -21,7 +21,7 @@ packages:
     exactVersion: 3.31.4
   MLXSwift:
     url: https://github.com/ml-explore/mlx-swift
-    exactVersion: 0.31.4
+    exactVersion: 0.31.6
   SwiftTransformers:
     url: https://github.com/huggingface/swift-transformers
     exactVersion: 1.3.4
