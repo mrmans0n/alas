@@ -1519,6 +1519,34 @@ struct AppStateRunScheduleTests {
         let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
         #expect(state.tabs.tabs(forWorktree: created.id).isEmpty)
     }
+
+    @Test func awaitedManagerDisposalAlsoDisposesReplacementManager() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-manager-disposal-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let state = AppState(store: MemoryStore())
+        let worktree = Worktree(
+            id: "disposal-\(UUID().uuidString)",
+            projectId: "project",
+            name: "main",
+            branch: "main",
+            path: root,
+            isMainWorktree: true,
+            status: .clean,
+            lastActivity: Date()
+        )
+        let owner = SessionOwnerID.worktree(worktree.id)
+        let firstManager = try #require(state.acpManager(for: worktree))
+        state.disposeACPManager(for: worktree.id)
+        let replacementManager = try #require(state.acpManager(for: worktree))
+        #expect(replacementManager !== firstManager)
+
+        await state.disposeACPManagerAndWait(owner: owner)
+        #expect(state.acpManager(forWorktreeId: worktree.id) == nil)
+        await state.disposeACPManagerAndWait(owner: owner)
+    }
 }
 
 // Helpers live at file scope: a global actor attribute on the suite would

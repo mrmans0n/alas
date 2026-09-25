@@ -13,6 +13,7 @@ struct ScheduledAgentReportsSheet: View {
     @State private var pageOffset = 0
     @State private var hasMore = true
     @State private var isLoadingPage = false
+    @State private var loadedPageProjectID: String?
     @State private var isLoadingReport = false
     @State private var isDeletingReport = false
     @State private var isConfirmingDelete = false
@@ -53,15 +54,24 @@ struct ScheduledAgentReportsSheet: View {
             }
         }
         .frame(minWidth: 640, minHeight: 480)
-        .task(id: "\(projectID)|\(initialReportID ?? "")") {
-            await loadFirstPage()
-        }
-        .task(id: selectedReportID) {
+        .task(id: "\(projectID)|\(selectedReportID ?? "")") {
+            if loadedPageProjectID != projectID {
+                await loadFirstPage()
+            }
             await loadSelectedReport()
-            while !Task.isCancelled, selectedReportNeedsRefresh {
+            while !Task.isCancelled {
+                if selectedReportID == nil {
+                    guard reports.contains(where: { $0.hasPendingWork }) else { break }
+                } else {
+                    guard selectedReportNeedsRefresh else { break }
+                }
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled else { break }
-                await refreshSelectedReport()
+                if selectedReportID == nil {
+                    await refreshPendingReports()
+                } else {
+                    await refreshSelectedReport()
+                }
             }
         }
         .confirmationDialog(
@@ -460,7 +470,12 @@ struct ScheduledAgentReportsSheet: View {
     private func loadFirstPage() async {
         isLoadingPage = true
         pageError = nil
-        defer { if !Task.isCancelled { isLoadingPage = false } }
+        defer {
+            if !Task.isCancelled {
+                isLoadingPage = false
+                loadedPageProjectID = projectID
+            }
+        }
         do {
             let firstPage = try await state.scheduledAgentReportPage(projectID: projectID, offset: 0, limit: pageSize)
             guard !Task.isCancelled else { return }
@@ -492,6 +507,27 @@ struct ScheduledAgentReportsSheet: View {
         } catch {
             guard !Task.isCancelled else { return }
             pageError = error.localizedDescription
+        }
+    }
+
+    private func refreshPendingReports() async {
+        let pendingReportIDs = reports.filter(\.hasPendingWork).map(\.id)
+        for reportID in pendingReportIDs {
+            guard !Task.isCancelled, selectedReportID == nil else { return }
+            do {
+                let report = try await state.scheduledAgentReport(id: reportID, projectID: projectID)
+                guard !Task.isCancelled, selectedReportID == nil else { return }
+                if let report {
+                    updateReportInList(report)
+                } else {
+                    reports.removeAll { $0.id == reportID }
+                    pageOffset = reports.count
+                }
+            } catch {
+                guard !Task.isCancelled, selectedReportID == nil else { return }
+                pageError = error.localizedDescription
+                return
+            }
         }
     }
 
@@ -540,7 +576,9 @@ struct ScheduledAgentReportsSheet: View {
     }
 
     private func updateReportInList(_ report: ScheduledAgentReport) {
-        guard let index = reports.firstIndex(where: { $0.id == report.id }) else { return }
+        guard let index = reports.firstIndex(where: { $0.id == report.id }),
+              reports[index] != report
+        else { return }
         reports[index] = report
     }
 

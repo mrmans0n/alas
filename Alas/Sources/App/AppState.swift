@@ -11771,10 +11771,11 @@ final class AppState {
         lineageID: String
     ) -> Bool {
         guard UUID(uuidString: lineageID)?.uuidString.lowercased() == lineageID,
-              checkpointWriterLeases.activeLeaseCount(
+              let terminalLeaseCount = checkpointWriterLeases.activeLeaseCountIfReadable(
                   lineageID: lineageID,
                   excludingInstanceID: instanceId
-              ) == 0
+              ),
+              terminalLeaseCount == 0
         else {
             return false
         }
@@ -12702,14 +12703,16 @@ final class AppState {
     }
 
     func disposeACPManagerAndWait(owner: SessionOwnerID) async {
-        if let task = acpManagerDisposalTasksByOwner[owner] {
+        while true {
+            if let task = acpManagerDisposalTasksByOwner[owner] {
+                await task.value
+                continue
+            }
+            guard let manager = acpManagers.removeValue(forKey: owner) else { return }
+            prepareACPManagerForDisposal(manager, owner: owner)
+            let task = startACPManagerDisposal(manager, owner: owner)
             await task.value
-            return
         }
-        guard let manager = acpManagers.removeValue(forKey: owner) else { return }
-        prepareACPManagerForDisposal(manager, owner: owner)
-        let task = startACPManagerDisposal(manager, owner: owner)
-        await task.value
     }
 
     private func startACPManagerDisposal(

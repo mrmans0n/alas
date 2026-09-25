@@ -92,6 +92,53 @@ struct CheckpointWriterLeaseStoreTests {
         #expect(store.activeLeaseCount(lineageID: lineageID, excludingInstanceID: "new-instance") == 0)
     }
 
+    @Test func checkedLeaseCountTreatsMissingLineageDirectoryAsEmpty() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { [] })
+        let lineageID = UUID().uuidString.lowercased()
+
+        #expect(store.activeLeaseCountIfReadable(
+            lineageID: lineageID,
+            excludingInstanceID: "current-instance"
+        ) == 0)
+    }
+
+    @Test func checkedLeaseCountFailsClosedOnMalformedLeaseRecord() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lineageID = UUID().uuidString.lowercased()
+        let directory = root.appendingPathComponent(lineageID, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("not json".utf8).write(to: directory.appendingPathComponent("malformed.json"))
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { [] })
+
+        #expect(store.activeLeaseCount(lineageID: lineageID, excludingInstanceID: "current-instance") == 0)
+        #expect(store.activeLeaseCountIfReadable(
+            lineageID: lineageID,
+            excludingInstanceID: "current-instance"
+        ) == nil)
+    }
+
+    @Test func checkedLeaseCountFailsClosedOnUnreadableLineageDirectory() throws {
+        guard getuid() != 0 else { return }
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lineageID = UUID().uuidString.lowercased()
+        let directory = root.appendingPathComponent(lineageID, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: directory.path)
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { [] })
+
+        #expect(store.activeLeaseCountIfReadable(
+            lineageID: lineageID,
+            excludingInstanceID: "current-instance"
+        ) == nil)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let root = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("checkpoint-writer-leases-\(UUID().uuidString)", isDirectory: true)

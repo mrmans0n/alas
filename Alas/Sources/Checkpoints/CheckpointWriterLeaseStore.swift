@@ -90,6 +90,40 @@ struct CheckpointWriterLeaseStore: Sendable {
         return count
     }
 
+    /// Returns nil when cleanup cannot reliably inspect every terminal lease.
+    /// Missing lineage directories are safe: no writer has created a lease there.
+    func activeLeaseCountIfReadable(lineageID: String, excludingInstanceID: String) -> Int? {
+        guard validLineageID(lineageID) else { return nil }
+        let directory = root.appendingPathComponent(lineageID, isDirectory: true)
+        let files: [URL]
+        do {
+            files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return 0
+        } catch {
+            return nil
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let persistentSessionNames = activePersistentSessionNames()
+        var count = 0
+        for file in files where file.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: file),
+                  let record = try? decoder.decode(CheckpointWriterLeaseRecord.self, from: data),
+                  record.schemaVersion == CheckpointWriterLeaseRecord.schemaVersion
+            else {
+                return nil
+            }
+            guard recordIsActive(record, persistentSessionNames: persistentSessionNames) else {
+                try? FileManager.default.removeItem(at: file)
+                continue
+            }
+            if record.instanceID != excludingInstanceID { count += 1 }
+        }
+        return count
+    }
+
     private func recordIsActive(_ record: CheckpointWriterLeaseRecord, persistentSessionNames: Set<String>) -> Bool {
         if ACPProcessLiveness.pidMatchesLease(pid: record.pid, createdAt: record.createdAt) { return true }
         guard let zmxSessionName = record.zmxSessionName else { return false }
