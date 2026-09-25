@@ -40,7 +40,18 @@ enum ACPLeadingCommand {
         guard text.hasPrefix("/") else { return nil }
         let token = text.prefix { !$0.isWhitespace }
         guard let suggestion = suggestions.first(where: { $0.command == token }) else { return nil }
-        return (suggestion, text.dropFirst(token.count).drop(while: \.isWhitespace))
+        var rest = text.dropFirst(token.count)
+        // Only the single space that separates the command from its
+        // argument (the same one the pill and the composer's own
+        // hand-typed-command detection insert) is command syntax. A
+        // newline right after the command is message structure — a blank
+        // line, a new paragraph — and must stay in `rest` so multi-line
+        // replies keep rendering below the pill instead of squeezed
+        // beside it in the same row.
+        if rest.first == " " {
+            rest = rest.dropFirst()
+        }
+        return (suggestion, rest)
     }
 
     /// Whether inserting a single whitespace character at `range` would
@@ -359,13 +370,27 @@ struct ACPUserMessageText: View {
     @ViewBuilder
     private var content: some View {
         if let match = ACPLeadingCommand.match(in: text, suggestions: suggestions) {
-            HStack(alignment: .top, spacing: 6) {
-                ACPCommandPill(suggestion: match.suggestion)
-                    .padding(.top, ACPCommandPillStyle.topInset(
-                        forLineFont: typography.appKitFont(size: typography.paragraphSize)
-                    ))
-                if !match.rest.isEmpty {
-                    ACPMarkdownText(raw: String(match.rest), typography: typography)
+            // Multi-line content (a blank line, a following paragraph) goes
+            // below the pill in its own row instead of the same HStack —
+            // squeezing a whole markdown block into the row beside the pill
+            // would turn the message into a two-column layout and swallow
+            // its line breaks.
+            if match.rest.contains(where: \.isNewline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    ACPCommandPill(suggestion: match.suggestion)
+                    if !match.rest.isEmpty {
+                        ACPMarkdownText(raw: String(match.rest), typography: typography)
+                    }
+                }
+            } else {
+                HStack(alignment: .top, spacing: 6) {
+                    ACPCommandPill(suggestion: match.suggestion)
+                        .padding(.top, ACPCommandPillStyle.topInset(
+                            forLineFont: typography.appKitFont(size: typography.paragraphSize)
+                        ))
+                    if !match.rest.isEmpty {
+                        ACPMarkdownText(raw: String(match.rest), typography: typography)
+                    }
                 }
             }
         } else {

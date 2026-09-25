@@ -83,4 +83,16 @@ struct ACPCommandPillTests {
         let end = NSRange(location: storage.length, length: 0)
         #expect(ACPNSTextView.argumentGhostHint(storage: storage, selection: end, suggestions: suggestions) == "[topic]")
     }
+
+    @Test("a leading command keeps a newline-delimited body intact in rest")
+    func matchPreservesNewlinesAfterCommand() {
+        let match = ACPLeadingCommand.match(in: "/review\n\n# Results", suggestions: suggestions)
+        #expect(match?.rest == "\n\n# Results")
+    }
+
+    @Test("only the single separating space is stripped, not repeated whitespace")
+    func matchStripsExactlyOneSeparatingSpace() {
+        #expect(ACPLeadingCommand.match(in: "/review the parser", suggestions: suggestions)?.rest == "the parser")
+        #expect(ACPLeadingCommand.match(in: "/review\tthe parser", suggestions: suggestions)?.rest == "\tthe parser")
+    }
 }

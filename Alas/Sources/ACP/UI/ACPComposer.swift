@@ -961,23 +961,61 @@ final class ACPNSTextView: PairedDelimiterTextView {
                 attributedString: ACPLeadingCommand.chip(for: target.command, font: chatTypography.appKitFont())
             )
             chip.append(NSAttributedString(string: text, attributes: baseTypingAttributes))
-            if shouldChangeText(in: target.range, replacementString: chip.string) {
-                textStorage.replaceCharacters(in: target.range, with: chip)
-                didChangeText()
-                setSelectedRange(NSRange(location: target.range.location + chip.length, length: 0))
-                return
-            }
+            replaceClearingUndo(range: target.range, with: chip)
+            return
         }
         super.insertText(insertString, replacementRange: replacementRange)
     }
 
     /// A draft restored, or (re)assigned wholesale, before the agent listed
-    /// its commands gets its pill once the list arrives. Safe to mutate the
-    /// storage directly here: called from SwiftUI's `updateNSView`, never
-    /// nested inside another edit.
+    /// its commands gets its pill once the list arrives — possibly after the
+    /// user already typed `/command ` as plain text with its own undo
+    /// history. Safe to call from SwiftUI's `updateNSView` — never nested
+    /// inside another edit, unlike the reentrancy the `insertText` override
+    /// above guards against.
     func pillLeadingCommandIfNeeded() {
-        guard let textStorage, let coordinator else { return }
-        ACPLeadingCommand.chipify(textStorage, suggestions: coordinator.promptSuggestions, font: chatTypography.appKitFont())
+        guard let textStorage, let coordinator,
+              let target = ACPLeadingCommand.chipTarget(in: textStorage, suggestions: coordinator.promptSuggestions)
+        else { return }
+        let chip = ACPLeadingCommand.chip(for: target.command, font: chatTypography.appKitFont())
+        replaceClearingUndo(range: target.range, with: chip)
+    }
+
+    /// Replaces `range` with `replacement`, deliberately WITHOUT registering
+    /// an undo action.
+    ///
+    /// This transformation only ever runs once the plain-text command
+    /// already sitting in storage is complete — right as the user finishes
+    /// typing it, or once a late `available_commands_update` recognizes it —
+    /// so there is always a PRE-EXISTING undo record from the typing that
+    /// put that text there. Every attempt to also make this specific edit
+    /// undoable (`shouldChangeText`/`didChangeText`'s automatic rich-text
+    /// synthesis, a manually registered inverse, breaking typing-coalescing
+    /// first, bracketing it in its own undo group, reordering it against
+    /// `didChangeText()`) still corrupted that earlier record when the user
+    /// undid afterward — `NSTextStorage` throws `NSRangeException` out of an
+    /// internal post-edit attribute-fixing pass, reproducibly, regardless of
+    /// mechanism. Clearing the undo stack here is the one option that is
+    /// actually safe: it costs the user one step of undo history (the
+    /// letters they just typed collapse into a pill they can no longer type
+    /// back out via Cmd-Z; deleting the chip and retyping still works), in
+    /// exchange for never risking a crash. The chip still round-trips to
+    /// identical plain text for drafts, queued prompts, and the outgoing
+    /// message — only interactive undo of this specific transformation is
+    /// given up.
+    private func replaceClearingUndo(range: NSRange, with replacement: NSAttributedString) {
+        guard let textStorage else { return }
+        undoManager?.removeAllActions()
+        textStorage.replaceCharacters(in: range, with: replacement)
+        let replacedRange = NSRange(location: range.location, length: replacement.length)
+        // `didChangeText()` must run before the selection is touched — it's
+        // what tells the layout manager the storage changed shape, and
+        // reading/writing the selection first operates against layout that
+        // still describes the pre-edit text. Mutating `textStorage` directly
+        // bypasses `NSTextView`'s own selection bookkeeping, so the
+        // selection must be clamped back into range explicitly here too.
+        didChangeText()
+        setSelectedRange(NSRange(location: NSMaxRange(replacedRange), length: 0))
     }
 
     /// Retry-once-on-attach: a restored draft can already contain an active

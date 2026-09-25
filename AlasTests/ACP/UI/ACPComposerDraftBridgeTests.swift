@@ -1455,7 +1455,7 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.argumentGhostHint == "<CPCL-XXXX>")
     }
 
-    @Test("typing whitespace after a hand-typed skill turns it into a pill, undoably")
+    @Test("typing whitespace after a hand-typed skill turns it into a pill")
     func handTypedSkillBecomesPill() {
         let (textView, coordinator, window) = makeGhostHintTextView()
         _ = window
@@ -1463,21 +1463,50 @@ struct ACPComposerDraftBridgeTests {
             ACPPromptSuggestion(command: "/$brainstorming:ideas", description: "Ideas")
         )
         textView.allowsUndo = true
-        textView.string = "/$brainstorming:ideas"
-        textView.setSelectedRange(NSRange(location: 21, length: 0))
-
+        // A real insertText call (not `.string =`) leaves its own undo
+        // record behind, matching production: the pill-forming edit
+        // deliberately clears the undo stack rather than risk corrupting
+        // that record — see `replaceClearingUndo`.
+        textView.insertText("/$brainstorming:ideas", replacementRange: textView.selectedRange())
         textView.insertText(" ", replacementRange: textView.selectedRange())
 
         let storage = textView.attributedString()
         #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/$brainstorming:ideas")
         #expect(ACPInputField.Coordinator.extract(storage).0 == "/$brainstorming:ideas ")
         #expect(textView.selectedRange() == NSRange(location: storage.length, length: 0))
+        #expect(textView.undoManager?.canUndo == false)
+    }
 
-        // Undo restores the plain text (grouping with the typed space is
-        // up to the undo manager).
-        textView.undoManager?.undo()
+    @Test("late-arriving suggestions pill a hand-typed command without corrupting undo")
+    func lateSuggestionsPillWithoutCorruptingUndo() throws {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        // The suggestion list is not known yet at typing time — exactly
+        // when `available_commands_update` arrives after the user already
+        // typed the command, the scenario `pillLeadingCommandIfNeeded` (and
+        // the late-arrival call in `updateNSView`) exists for.
+        coordinator.promptSuggestions = []
+        textView.allowsUndo = true
+        textView.insertText("/init ", replacementRange: textView.selectedRange())
+        #expect(textView.string == "/init ")
         #expect(textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) == nil)
-        #expect(textView.string.hasPrefix("/$brainstorming:ideas"))
+        // The typing above left its own undo record. Confirm it exists
+        // before the pill-forming edit clears it below.
+        #expect(textView.undoManager?.canUndo == true)
+
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        #expect(ACPInputField.Coordinator.extract(storage).0 == "/init ")
+
+        // The prior typing's undo record targeted the pre-chip character
+        // range, which this edit just shrank — replaying it (via undo)
+        // reproducibly crashed `NSTextStorage` regardless of mechanism
+        // (see `replaceClearingUndo`'s doc comment), so it's cleared
+        // instead of preserved.
+        #expect(textView.undoManager?.canUndo == false)
     }
 
     @Test("the slash picker stays open for `$`-prefixed skills")
