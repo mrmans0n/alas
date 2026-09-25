@@ -210,6 +210,7 @@ struct ACPSessionManagerDisposalTests {
     @Test("disposing while session creation is in flight closes its late result")
     func disposalClosesLateRemoteSessionResult() async throws {
         let client = ACPMockClient()
+        client.rejectsRequestsAfterShutdown = true
         let newStarted = AsyncStream<Void>.makeStream()
         let releaseNew = AsyncStream<Void>.makeStream()
         client.script(method: "initialize") { _ in
@@ -245,17 +246,198 @@ struct ACPSessionManagerDisposalTests {
         let attach = Task { @MainActor in await manager.attach(to: session.id, freshlyCreated: true) }
         for await _ in newStarted.stream { break }
 
-        try await manager.disposeSession(id: session.id)
+        let disposal = Task { @MainActor in try await manager.disposeSession(id: session.id) }
+        try await waitUntil { session.agentState == .idle }
+        #expect(client.shutdownCount == 0)
         releaseNew.continuation.yield()
+        try await disposal.value
         await attach.value
 
         #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        #expect(client.shutdownCount == 1)
+        #expect(client.requestsAfterShutdownCount == 0)
         #expect(manager.runners[session.id] == nil)
+    }
+
+    @Test("late session close failures are reported after creation completes")
+    func disposalReportsLateSessionCloseFailure() async throws {
+        let client = ACPMockClient()
+        client.rejectsRequestsAfterShutdown = true
+        let newStarted = AsyncStream<Void>.makeStream()
+        let releaseNew = AsyncStream<Void>.makeStream()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(sessionCapabilities: .init(close: .init())),
+                authMethods: []
+            ))
+        }
+        client.scriptAsync(method: "session/new") { _ in
+            newStarted.continuation.yield()
+            for await _ in releaseNew.stream { break }
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/close") { _ in throw TestError.closeFailed }
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-disposal-late-close-error-\(UUID()).sqlite")
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: try ACPSessionStore(path: path.path),
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = manager.createSession(agentId: "claude")
+        let attach = Task { @MainActor in await manager.attach(to: session.id, freshlyCreated: true) }
+        for await _ in newStarted.stream { break }
+
+        let disposal = Task { @MainActor in try await manager.disposeSession(id: session.id) }
+        try await waitUntil { session.agentState == .idle }
+        releaseNew.continuation.yield()
+        await #expect(throws: TestError.closeFailed) { try await disposal.value }
+        await attach.value
+
+        #expect(client.sent.filter { $0.method == "session/close" }.count == 1)
+        #expect(client.shutdownCount == 1)
+        #expect(client.requestsAfterShutdownCount == 0)
+    }
+
+    @Test("a late creation after the disposal wait bound retains its cleanup connection")
+    func disposalKeepsConnectionForLateResultAfterTimeout() async throws {
+        let client = ACPMockClient()
+        client.rejectsRequestsAfterShutdown = true
+        let newStarted = AsyncStream<Void>.makeStream()
+        let releaseNew = AsyncStream<Void>.makeStream()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(sessionCapabilities: .init(close: .init())),
+                authMethods: []
+            ))
+        }
+        client.scriptAsync(method: "session/new") { _ in
+            newStarted.continuation.yield()
+            for await _ in releaseNew.stream { break }
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/close") { _ in Data("{}".utf8) }
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-disposal-late-timeout-\(UUID()).sqlite")
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: try ACPSessionStore(path: path.path),
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = manager.createSession(agentId: "claude")
+        let attach = Task { @MainActor in await manager.attach(to: session.id, freshlyCreated: true) }
+        for await _ in newStarted.stream { break }
+
+        let disposal = Task { @MainActor in try await manager.disposeSession(id: session.id) }
+        try await waitUntil { session.agentState == .idle }
+        await #expect(throws: (any Error).self) { try await disposal.value }
+        #expect(client.shutdownCount == 0)
+
+        releaseNew.continuation.yield()
+        await attach.value
+        try await waitUntil { client.shutdownCount == 1 }
+        #expect(client.sent.filter { $0.method == "session/close" }.count == 1)
+        #expect(client.requestsAfterShutdownCount == 0)
+    }
+
+    @Test("a superseded startup result is not closed when its replacement replays it")
+    func supersededStartupResultDoesNotCloseReplayedSession() async throws {
+        let oldClient = ACPMockClient(providesDurableOperationKeyDeduplication: true)
+        let replacementClient = ACPMockClient(providesDurableOperationKeyDeduplication: true)
+        let newStarted = AsyncStream<Void>.makeStream()
+        let releaseNew = AsyncStream<Void>.makeStream()
+        for client in [oldClient, replacementClient] {
+            client.script(method: "initialize") { _ in
+                try JSONEncoder().encode(ACPInitializeResult(
+                    protocolVersion: 1,
+                    agentCapabilities: .init(sessionCapabilities: .init(close: .init())),
+                    authMethods: []
+                ))
+            }
+            client.script(method: "session/close") { _ in Data("{}".utf8) }
+        }
+        oldClient.scriptAsync(method: "session/new") { _ in
+            newStarted.continuation.yield()
+            for await _ in releaseNew.stream { break }
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "replayed",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        replacementClient.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "replayed",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        var connectionIndex = 0
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-disposal-replayed-new-\(UUID()).sqlite")
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: try ACPSessionStore(path: path.path),
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                defer { connectionIndex += 1 }
+                return ACPConnection(client: [oldClient, replacementClient][connectionIndex])
+            }
+        )
+        let session = manager.createSession(agentId: "claude")
+        let oldAttach = Task { @MainActor in await manager.attach(to: session.id, freshlyCreated: true) }
+        for await _ in newStarted.stream { break }
+
+        let restart = Task { @MainActor in await manager.restartConnection(to: session.id) }
+        try await waitUntil {
+            session.agentState == .ready
+                && replacementClient.sent.contains { $0.method == "session/new" }
+        }
+        releaseNew.continuation.yield()
+        await oldAttach.value
+        await restart.value
+
+        let oldStartupKey = oldClient.sent.first { $0.method == "session/new" }?.brokerOperationKey
+        let replacementStartupKey = replacementClient.sent.first { $0.method == "session/new" }?.brokerOperationKey
+        #expect(oldStartupKey != nil)
+        #expect(oldStartupKey == replacementStartupKey)
+        #expect(!oldClient.sent.contains { $0.method == "session/close" })
+        #expect(!replacementClient.sent.contains { $0.method == "session/close" })
+        #expect(manager.runners[session.id] != nil)
+        await manager.detach(sessionId: session.id)
     }
 
     @Test("disposing all live sessions includes a restart waiting between runners")
     func disposeAllLiveSessionsIncludesRestartAttempt() async throws {
         let client = ACPMockClient()
+        client.rejectsRequestsAfterShutdown = true
         let (manager, _, session) = try await attachedManager(client: client, supportsClose: true)
         let restartPaused = AsyncStream<Void>.makeStream()
         let resumeRestart = AsyncStream<Void>.makeStream()
@@ -272,11 +454,104 @@ struct ACPSessionManagerDisposalTests {
 
         #expect(manager.liveSession(for: session.id) == nil)
         #expect(manager.runners[session.id] == nil)
+        #expect(client.sent.filter { $0.method == "session/close" }.count == 1)
+        #expect(client.shutdownCount == 1)
+        #expect(client.requestsAfterShutdownCount == 0)
 
         resumeRestart.continuation.yield()
         await restart.value
         #expect(manager.liveSession(for: session.id) == nil)
         #expect(manager.runners[session.id] == nil)
+        #expect(client.shutdownCount == 1)
+        #expect(client.requestsAfterShutdownCount == 0)
+    }
+
+    @Test("disposing during replacement initialization closes through the retiring connection")
+    func disposalDuringRestartInitializationUsesRetiringConnection() async throws {
+        let retiringClient = ACPMockClient()
+        retiringClient.rejectsRequestsAfterShutdown = true
+        let replacementClient = ACPMockClient()
+        replacementClient.rejectsRequestsAfterShutdown = true
+        let initializeStarted = AsyncStream<Void>.makeStream()
+        let releaseInitialize = AsyncStream<Void>.makeStream()
+        let (manager, _, session) = try await attachedManager(
+            client: retiringClient,
+            supportsClose: true,
+            resumeClient: replacementClient
+        )
+        retiringClient.script(method: "session/close") { _ in Data("{}".utf8) }
+        replacementClient.script(method: "session/close") { _ in Data("{}".utf8) }
+        replacementClient.scriptAsync(method: "initialize") { _ in
+            initializeStarted.continuation.yield()
+            for await _ in releaseInitialize.stream { break }
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(sessionCapabilities: .init(
+                    resume: .init(),
+                    close: .init()
+                )),
+                authMethods: []
+            ))
+        }
+        defer { releaseInitialize.continuation.yield() }
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        for await _ in initializeStarted.stream { break }
+
+        try await manager.disposeSession(id: session.id)
+
+        #expect(retiringClient.sent.filter { $0.method == "session/close" }.count == 1)
+        #expect(retiringClient.requestsAfterShutdownCount == 0)
+        #expect(replacementClient.sent.filter { $0.method == "session/close" }.isEmpty)
+        #expect(manager.liveSession(for: session.id) == nil)
+
+        releaseInitialize.continuation.yield()
+        await restart.value
+
+        #expect(retiringClient.shutdownCount == 1)
+        #expect(replacementClient.shutdownCount == 1)
+        #expect(retiringClient.requestsAfterShutdownCount == 0)
+        #expect(replacementClient.requestsAfterShutdownCount == 0)
+    }
+
+    @Test("disposing after replacement initialization closes through the replacement connection")
+    func disposalAfterRestartInitializationUsesReplacementConnection() async throws {
+        let retiringClient = ACPMockClient()
+        retiringClient.rejectsRequestsAfterShutdown = true
+        let replacementClient = ACPMockClient()
+        replacementClient.rejectsRequestsAfterShutdown = true
+        let detachPaused = AsyncStream<Void>.makeStream()
+        let resumeDetach = AsyncStream<Void>.makeStream()
+        let (manager, _, session) = try await attachedManager(
+            client: retiringClient,
+            supportsClose: true,
+            resumeClient: replacementClient
+        )
+        retiringClient.script(method: "session/close") { _ in Data("{}".utf8) }
+        replacementClient.script(method: "session/close") { _ in Data("{}".utf8) }
+        manager.afterRestartRetiringConnectionDetachForTesting = { _ in
+            detachPaused.continuation.yield()
+            for await _ in resumeDetach.stream { break }
+        }
+        defer { resumeDetach.continuation.yield() }
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        for await _ in detachPaused.stream { break }
+
+        try await manager.disposeSession(id: session.id)
+
+        #expect(retiringClient.sent.filter { $0.method == "session/close" }.isEmpty)
+        #expect(retiringClient.shutdownCount == 1)
+        #expect(replacementClient.sent.filter { $0.method == "session/close" }.count == 1)
+        #expect(replacementClient.requestsAfterShutdownCount == 0)
+        #expect(manager.liveSession(for: session.id) == nil)
+
+        resumeDetach.continuation.yield()
+        await restart.value
+
+        #expect(replacementClient.shutdownCount == 1)
+        #expect(retiringClient.requestsAfterShutdownCount == 0)
+        #expect(replacementClient.requestsAfterShutdownCount == 0)
     }
 
     private func attachedManager(
@@ -335,5 +610,19 @@ struct ACPSessionManagerDisposalTests {
         await manager.attach(to: session.id, freshlyCreated: true)
         _ = try #require(manager.runners[session.id])
         return (manager, store, session)
+    }
+
+    private func waitUntil(
+        timeoutNanos: UInt64 = 1_000_000_000,
+        condition: @escaping @MainActor () -> Bool
+    ) async throws {
+        let start = DispatchTime.now().uptimeNanoseconds
+        while !condition() {
+            if DispatchTime.now().uptimeNanoseconds - start >= timeoutNanos {
+                Issue.record("Timed out waiting for condition")
+                return
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
     }
 }
