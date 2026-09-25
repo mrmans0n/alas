@@ -110,21 +110,29 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(await service.closed.count == 1)
     }
 
-    @Test("restarting during a stalled initialize shuts down the old broker")
-    func restartDuringStalledInitializeShutsDownOldBroker() async throws {
+    @Test("restart uses a fresh broker when the old shutdown times out")
+    func restartUsesFreshBrokerWhenOldShutdownTimesOut() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         let service = ManagerBrokerServiceProxy(stallClose: true, stallSendMethod: "initialize")
+        let isolatedService = ManagerBrokerService(generation: 8, supportsPromptResponses: true)
         let manager = ACPSessionManager(
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
             setupEvaluator: { _ in .ready },
             brokerServiceFactory: { service },
+            isolatedBrokerServiceFactory: { isolatedService },
             attachmentStartupTimeout: .seconds(10),
-            restartTeardownTimeout: .seconds(5)
+            restartTeardownTimeout: .milliseconds(50)
         )
         let session = manager.createSession(agentId: "claude")
         let originalAttach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        defer {
+            Task {
+                await service.closeGate.release()
+                await service.sendGate.release()
+            }
+        }
         try await waitUntilAsync { await service.sendGate.hasEntered }
 
         let restart = Task { await manager.restartConnection(to: session.id) }
@@ -133,10 +141,18 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(await service.opened.count == 1)
         #expect(session.agentState != .ready)
 
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            let isolatedOpenCount = await isolatedService.opened.count
+            return session.agentState == .ready && isolatedOpenCount == 1
+        }
+        #expect(await service.opened.count == 1)
+        let oldBrokerId = await service.opened.first?.brokerId
+        let replacementBrokerId = await isolatedService.opened.first?.brokerId
+        #expect(oldBrokerId != replacementBrokerId)
+
         await service.closeGate.release()
         try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
-            let openCount = await service.opened.count
-            return session.agentState == .ready && openCount == 2
+            await service.closed.count == 1
         }
 
         #expect(await service.closed.count > 0)
@@ -148,6 +164,47 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.agentState == .ready)
         #expect(manager.runners[session.id] === replacementRunner)
         #expect(await service.closed.count > 0)
+    }
+
+    @Test("old runner queue persistence stays fenced after restart changes owners")
+    func oldRunnerQueuePersistenceStaysFencedAfterRestartChangesOwners() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-restart-fence")
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+
+        let oldRunner = try #require(manager.runners[session.id])
+        let replacementQueue = QueuedPrompt(blocks: [.text("new owner queue")])
+        let staleQueue = QueuedPrompt(blocks: [.text("old runner queue")])
+        var queueAfterOldRunnerWrite: [QueuedPrompt] = []
+        manager.beforeRestartRunnerStopForTesting = { sessionId in
+            do {
+                let oldLease = try #require(try store.loadLease(sessionId: sessionId))
+                try store.seizeLease(
+                    sessionId: sessionId,
+                    instanceId: "replacement-owner",
+                    pid: Int64(getpid()),
+                    now: oldLease.heartbeatAt + 1,
+                    leaseToken: "replacement-token"
+                )
+                try store.upsertQueue(sessionId: sessionId, items: [replacementQueue])
+                session.queue = [staleQueue]
+                oldRunner.persistQueue()
+                await oldRunner.flushPersistence()
+                queueAfterOldRunnerWrite = try store.loadQueue(sessionId: sessionId)
+            } catch {
+                Issue.record("Could not stage the replacement lease: \(error)")
+            }
+        }
+
+        await manager.restartConnection(to: session.id)
+
+        #expect(queueAfterOldRunnerWrite == [replacementQueue])
+        #expect(try store.loadQueue(sessionId: session.id) == [replacementQueue])
     }
 
     @Test("attaching an already-ready session preserves its live update callback")

@@ -1192,6 +1192,7 @@ final class ACPSessionManager: ObservableObject {
 #if DEBUG
     var beforeBrokerClientRegistrationForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
     var afterBrokerClientShutdownRequestedForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
+    var beforeRestartRunnerStopForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
 #endif
     private var resolvedRemoteAdapters: [String: ACPResolvedRemoteAdapter] = [:]
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
@@ -1256,6 +1257,7 @@ final class ACPSessionManager: ObservableObject {
         let id = UUID()
         var waiters: [AttachmentWaiter] = []
         var leaseToken: String?
+        var requiresFreshBrokerNamespace = false
         var brokerClient: ACPBrokerClient?
         var brokerClientStartupID: UUID?
         var isolatedBrokerStartupIDs = Set<UUID>()
@@ -2971,6 +2973,19 @@ final class ACPSessionManager: ObservableObject {
         environment: [String: String],
         attempt: AttachmentAttempt
     ) async throws -> ACPConnection {
+        if attempt.requiresFreshBrokerNamespace {
+            guard let serviceFactory = isolatedBrokerServiceFactory ?? brokerServiceFactory else {
+                throw ACPBrokerStartupTimedOutError()
+            }
+            return try await makeIsolatedBrokerConnection(
+                launchSpec: launchSpec,
+                sessionId: sessionId,
+                session: session,
+                environment: environment,
+                attempt: attempt,
+                serviceFactory: serviceFactory
+            )
+        }
         guard let brokerServiceFactory else { throw ACPBrokerStartupTimedOutError() }
         let serviceOutcome = await runBoundedValue(timeout: attachmentStartupTimeout) {
             try await brokerServiceFactory()
@@ -3028,11 +3043,14 @@ final class ACPSessionManager: ObservableObject {
         sessionId: ACPSession.ID,
         session: ACPSession,
         environment: [String: String],
-        attempt: AttachmentAttempt
+        attempt: AttachmentAttempt,
+        serviceFactory: ACPBrokerServiceFactory? = nil
     ) async throws -> ACPConnection {
-        guard let isolatedBrokerServiceFactory else { throw ACPBrokerStartupTimedOutError() }
+        guard let serviceFactory = serviceFactory ?? isolatedBrokerServiceFactory else {
+            throw ACPBrokerStartupTimedOutError()
+        }
         let serviceOutcome = await runBoundedValue(timeout: attachmentStartupTimeout) {
-            try await isolatedBrokerServiceFactory()
+            try await serviceFactory()
         }
         let service: ACPBrokerServicing
         switch serviceOutcome {
@@ -5121,6 +5139,7 @@ extension ACPSessionManager {
                 && !session.transcript.messages.isEmpty
                 && !(session.remoteSessionId ?? "").isEmpty
             let runnerConnectionOwnerID = attempt.id
+            let runnerLeaseFence = leaseFence(sessionId: sessionId)
             let runner = ACPSessionRunner(session: session, connection: connection,
                                           sessionId: sessionId,
                                           worktreePath: worktreePath,
@@ -5224,12 +5243,7 @@ extension ACPSessionManager {
                                           validateLease: { [weak self] in
                                               await self?.confirmedWriterLease(for: sessionId) == true
                                           },
-                                          leaseFenceProvider: { [weak self] in
-                                              guard let self,
-                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
-                                              else { return nil }
-                                              return self.leaseFence(sessionId: sessionId)
-                                          })
+                                          leaseFenceProvider: { runnerLeaseFence })
             runner.onUnexpectedDisconnect = { [weak self] in
                 Task { @MainActor in
                     guard let self,
@@ -6126,7 +6140,10 @@ extension ACPSessionManager {
         let unhandedQueueDispatches = oldRunner?.takeUnhandedQueueDispatchesForRestart() ?? []
         let oldAttemptConnection = oldAttempt?.connection
         let oldConnection = oldAttemptConnection ?? oldAttachingConnection ?? oldRunner?.connection
-        let oldBrokerClient = oldAttempt?.brokerClient
+        let oldBrokerClient = oldAttempt?.brokerClient ?? (oldConnection?.client as? ACPBrokerClient)
+#if DEBUG
+        await beforeRestartRunnerStopForTesting?(sessionId)
+#endif
         oldRunner?.invalidateActivePrompt()
         oldRunner?.stop()
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
@@ -6164,7 +6181,7 @@ extension ACPSessionManager {
             else { return }
         }
         if let oldConnection {
-            _ = await runBounded(timeout: restartTeardownTimeout) {
+            let shutdownOutcome = await runBounded(timeout: restartTeardownTimeout) {
                 if oldAttemptConnection != nil {
                     // A startup RPC may still be pending in the broker. Detach
                     // leaves that process alive, so close this attempt's
@@ -6174,9 +6191,15 @@ extension ACPSessionManager {
                     await oldConnection.detach()
                 }
             }
+            if oldBrokerClient != nil, case .timedOut = shutdownOutcome {
+                replacementAttempt.requiresFreshBrokerNamespace = true
+            }
         } else if let oldBrokerClient {
-            _ = await runBounded(timeout: restartTeardownTimeout) {
+            let shutdownOutcome = await runBounded(timeout: restartTeardownTimeout) {
                 await oldBrokerClient.shutdown()
+            }
+            if case .timedOut = shutdownOutcome {
+                replacementAttempt.requiresFreshBrokerNamespace = true
             }
         }
         guard sessions[sessionId] === session,
