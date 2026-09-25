@@ -1258,6 +1258,7 @@ final class ACPSessionManager: ObservableObject {
         var leaseToken: String?
         var brokerClient: ACPBrokerClient?
         var brokerClientStartupID: UUID?
+        var isolatedBrokerStartupIDs = Set<UUID>()
         var connection: ACPConnection?
         var shutdownRequestedBrokerStartupIDs = Set<UUID>()
     }
@@ -2867,6 +2868,9 @@ final class ACPSessionManager: ObservableObject {
             throw CancellationError()
         }
         attempt.brokerClientStartupID = startupID
+        if brokerIdOverride != nil {
+            attempt.isolatedBrokerStartupIDs.insert(startupID)
+        }
         attempt.brokerClient = client
         attempt.connection = connection
         // The restored queue may still hold a `.pending` item that was
@@ -6997,13 +7001,27 @@ extension ACPSessionManager {
         let shouldCloseRemote = closeRemote && session?.agentState != .disconnected
         let remoteSessionId = session?.remoteSessionId
         let sessionCapabilities = session?.sessionCapabilities
-        if attachmentAttempts[sessionId] != nil {
+        let attempt = attachmentAttempts[sessionId]
+        if attempt != nil {
             disposingAttachments.insert(sessionId)
             if !closeRemote {
                 cancelledInFlightAttachments.insert(sessionId)
             }
         }
-        let attemptConnection = attachmentAttempts[sessionId]?.connection
+        let attemptConnection = attempt?.connection
+        let isolatedStartupID: UUID?
+        if let attempt,
+           let startupID = attempt.brokerClientStartupID,
+           attempt.isolatedBrokerStartupIDs.contains(startupID)
+        {
+            // Record shutdown before any await below. The isolated open can
+            // finish while remote-session teardown is suspended; its late
+            // completion must not fall back to detach and orphan the broker.
+            attempt.shutdownRequestedBrokerStartupIDs.insert(startupID)
+            isolatedStartupID = startupID
+        } else {
+            isolatedStartupID = nil
+        }
         connectionOwnerIDs[sessionId] = nil
         brokerCallbackOwnerIDs[sessionId] = nil
         let attaching = attachingConnections.removeValue(forKey: sessionId)
@@ -7095,7 +7113,9 @@ extension ACPSessionManager {
                     closeError = error
                 }
             }
-            if closeRemote {
+            if let attempt, let isolatedStartupID {
+                await shutdownBrokerClient(for: attempt, startupID: isolatedStartupID, isolated: true)
+            } else if closeRemote {
                 let shutdownOutcome = await runBounded(timeout: .seconds(2)) {
                     await attemptConnection.shutdown()
                 }

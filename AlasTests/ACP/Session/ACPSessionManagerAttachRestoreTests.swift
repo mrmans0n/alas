@@ -265,6 +265,44 @@ struct ACPSessionManagerAttachRestoreTests {
         await originalAttach.value
     }
 
+    @Test("closing during isolated broker startup shuts down the attempt-owned broker")
+    func closingDuringIsolatedBrokerStartupShutsDownAttemptOwnedBroker() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerServiceProxy(stallOpen: true)
+        let isolatedService = ManagerBrokerServiceProxy(stallOpen: true)
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .milliseconds(500),
+            restartTeardownTimeout: .seconds(1)
+        )
+        let session = manager.createSession(agentId: "claude")
+        let attach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.openGate.hasEntered
+        }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await isolatedService.openGate.hasEntered
+        }
+
+        await manager.detach(sessionId: session.id)
+        await isolatedService.openGate.release()
+        await sharedService.openGate.release()
+        await attach.value
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            let isolatedClosedCount = await isolatedService.closed.count
+            let sharedClosedCount = await sharedService.closed.count
+            return isolatedClosedCount == 1 && sharedClosedCount == 1
+        }
+
+        #expect(await isolatedService.detached.isEmpty)
+        #expect(await sharedService.detached.isEmpty)
+    }
+
     @Test("a timed-out primary broker is closed if its open completes late")
     func latePrimaryBrokerOpenIsClosedAfterTimeout() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -5027,6 +5065,65 @@ struct ACPSessionManagerAttachRestoreTests {
         try await waitUntil { session.contextRecoveryStatus != .sendingTranscript }
 
         await newerPromptGate.release()
+    }
+
+    @Test("replaced runner recovery completion cannot overwrite current recovery status", arguments: [false, true])
+    func replacedRunnerRecoveryCompletionCannotOverwriteCurrentStatus(shouldFail: Bool) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-new"))
+        try appendMessage(
+            .user(id: UUID(), text: "What changed?", attachments: []),
+            to: store,
+            seq: 0
+        )
+        let originalClient = ACPMockClient()
+        let replacementClient = ACPMockClient()
+        let recoveryGate = PromptGate()
+        scriptInitialize(originalClient)
+        scriptSessionResult(originalClient, method: "session/load", sessionId: "remote-new")
+        originalClient.scriptAsync(method: "session/prompt") { _ in
+            await recoveryGate.waitInPrompt()
+            if shouldFail {
+                throw JSONRPCError(code: -32000, message: "late recovery failure", data: nil)
+            }
+            return Data("null".utf8)
+        }
+        scriptInitialize(replacementClient)
+        scriptSessionResult(replacementClient, method: "session/load", sessionId: "remote-new")
+        var connectionCount = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                connectionCount += 1
+                return ACPConnection(client: connectionCount == 1 ? originalClient : replacementClient)
+            }
+        )
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        let originalRunner = try #require(manager.runners[session.id])
+        session.contextRestoreWarning = .init(
+            message: "Agent context could not be restored.",
+            canSendTranscript: true
+        )
+
+        #expect(manager.sendTranscriptAsContext(sessionId: session.id, agentName: "Agent"))
+        try await waitUntilAsync { await recoveryGate.hasEntered }
+
+        await manager.restartConnection(to: session.id)
+        #expect(manager.runners[session.id] !== originalRunner)
+        #expect(session.agentState == .ready)
+        session.contextRecoveryStatus = .restored
+
+        await recoveryGate.release()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(session.contextRecoveryStatus == .restored)
+        await manager.detach(sessionId: session.id)
     }
 
     @Test("transcript context prompt requires conversation")

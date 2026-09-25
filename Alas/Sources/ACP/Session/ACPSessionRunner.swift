@@ -3070,13 +3070,22 @@ extension ACPSessionRunner {
         let promptID = nextPromptID
         nextPromptID += 1
         activePromptID = promptID
-        latestPromptTask = Task { [weak self, onCompleted] in
+        let connectionIsCurrent = isConnectionCurrent
+        latestPromptTask = Task { [weak self, onCompleted, connectionIsCurrent] in
             guard let self else {
-                await MainActor.run { onCompleted?(false) }
+                await MainActor.run {
+                    if connectionIsCurrent() {
+                        onCompleted?(false)
+                    }
+                }
                 return
             }
             let proceeded = await MainActor.run { () -> Bool in
                 if self.activePromptID != promptID {
+                    self.cancelledPromptIDs.remove(promptID)
+                    return false
+                }
+                guard connectionIsCurrent(), !self.stopped else {
                     self.cancelledPromptIDs.remove(promptID)
                     return false
                 }
@@ -3086,13 +3095,18 @@ extension ACPSessionRunner {
                 return true
             }
             guard proceeded else {
-                await MainActor.run { onCompleted?(false) }
+                await MainActor.run {
+                    if connectionIsCurrent() {
+                        onCompleted?(false)
+                    }
+                }
                 return
             }
             do {
                 let remoteId = self.session.remoteSessionId ?? self.sessionId
                 let promptOutcome = try await self.connection.prompt(sessionId: remoteId, blocks: [.text(prompt)])
                 await MainActor.run {
+                    guard connectionIsCurrent() else { return }
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
                     // See the matching comment in sendNow: always accumulate
@@ -3117,6 +3131,7 @@ extension ACPSessionRunner {
                 }
             } catch {
                 await MainActor.run {
+                    guard connectionIsCurrent() else { return }
                     _ = self.cancelledPromptIDs.remove(promptID)
                     let isActivePrompt = self.activePromptID == promptID
                     if isActivePrompt {
