@@ -107,7 +107,7 @@ struct ScheduledAgentReportStoreTests {
         #expect(try await store.delete(id: "report-0"))
 
         let refreshedFirstPage = try await store.page(projectID: "project", offset: 0, limit: 2)
-        #expect(ScheduledAgentReportPageRefresh.firstPageHasChanged(
+        #expect(ScheduledAgentReportPageRefresh.loadedPrefixHasChanged(
             refreshedFirstPage,
             from: loadedReports,
             pageSize: 2
@@ -127,6 +127,64 @@ struct ScheduledAgentReportStoreTests {
 
         let nextPage = try await store.page(projectID: "project", offset: refreshed.pageOffset, limit: 2)
         #expect(nextPage.map(\.id) == ["report-5"])
+    }
+
+    @Test func reportPageRefreshDetectsDeletionBelowTheLoadedRange() async throws {
+        let path = temporaryPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = try ScheduledAgentReportStore(path: path)
+
+        for index in 0..<8 {
+            let reportID = "report-\(index)"
+            try await store.create(report(
+                id: reportID,
+                occurrenceID: reportID,
+                cleanupRequested: false,
+                startedAt: epoch.addingTimeInterval(-TimeInterval(index))
+            ))
+            let sessionID = "session-\(index)"
+            try await store.associateSession(reportID: reportID, sessionID: sessionID)
+            try await store.finish(
+                reportID: reportID,
+                authenticatedSessionID: sessionID,
+                completion: completion,
+                at: epoch.addingTimeInterval(10)
+            )
+        }
+
+        // Two pages of 2 are loaded (pageSize stays 2 here so the beyond-page
+        // deletion lands in the loaded window while the first page is stable).
+        let loadedReports = try await store.page(projectID: "project", offset: 0, limit: 4)
+        #expect(loadedReports.map(\.id) == ["report-0", "report-1", "report-2", "report-3"])
+
+        // Another instance deletes a report *past the first page*.
+        #expect(try await store.delete(id: "report-3"))
+
+        let refreshedFirstPage = try await store.page(projectID: "project", offset: 0, limit: 2)
+        // First-page IDs are unchanged, so the old first-page-only predicate
+        // kept stale rows; the loaded-range check must catch the shift.
+        #expect(refreshedFirstPage.map(\.id) == ["report-0", "report-1"])
+        #expect(ScheduledAgentReportPageRefresh.loadedPrefixHasChanged(
+            refreshedFirstPage,
+            from: loadedReports,
+            pageSize: 2
+        ))
+
+        let refreshedPrefix = try await store.page(
+            projectID: "project",
+            offset: 0,
+            limit: loadedReports.count
+        )
+        let refreshed = ScheduledAgentReportPageRefresh.replacingLoadedPrefix(
+            refreshedPrefix,
+            requestedLimit: loadedReports.count
+        )
+        #expect(refreshed.reports.map(\.id) == ["report-0", "report-1", "report-2", "report-4"])
+        #expect(refreshed.pageOffset == 4)
+        #expect(refreshed.hasMore)
+
+        let nextPage = try await store.page(projectID: "project", offset: refreshed.pageOffset, limit: 2)
+        #expect(nextPage.map(\.id) == ["report-5", "report-6"])
     }
     @Test func acceptedCompletionStaysRunningUntilThePromptSettlesAndRejectsDuplicates() async throws {
         let path = temporaryPath()

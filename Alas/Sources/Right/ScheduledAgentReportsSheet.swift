@@ -5,12 +5,21 @@ struct ScheduledAgentReportPageRefresh {
     let pageOffset: Int
     let hasMore: Bool
 
-    static func firstPageHasChanged(
+    static func loadedPrefixHasChanged(
         _ firstPage: [ScheduledAgentReport],
         from reports: [ScheduledAgentReport],
         pageSize: Int
     ) -> Bool {
-        firstPage.map(\.id) != reports.prefix(pageSize).map(\.id)
+        let prefix = reports.prefix(pageSize)
+        if firstPage.map(\.id) != prefix.map(\.id) {
+            return true
+        }
+        // A deletion below the loaded prefix shifts every later row up, so a
+        // stable first page does not prove the loaded range is intact: the
+        // whole loaded window has to be positionally consistent with a
+        // re-read of its offset, otherwise `loadMore` reads a shifted page.
+        let firstPageIDs = Set(firstPage.map(\.id))
+        return reports.dropFirst(prefix.count).contains { !firstPageIDs.contains($0.id) }
     }
 
     static func replacingLoadedPrefix(
@@ -561,7 +570,7 @@ struct ScheduledAgentReportsSheet: View {
             )
             guard !Task.isCancelled, selectedReportID == nil else { return }
 
-            let mustReplaceLoadedPrefix = ScheduledAgentReportPageRefresh.firstPageHasChanged(
+            let mustReplaceLoadedPrefix = ScheduledAgentReportPageRefresh.loadedPrefixHasChanged(
                 firstPage,
                 from: reports,
                 pageSize: pageSize

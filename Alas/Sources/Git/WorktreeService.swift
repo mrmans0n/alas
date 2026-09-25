@@ -1164,6 +1164,29 @@ struct WorktreeService {
             guard WorktreeTrash.matchesDirectoryIdentity(ticket) else {
                 try failAfterRollingBack("Worktree changed while its contents were audited.")
             }
+
+            // Cleanliness is not the only thing the pre-stage audit checked.
+            // A concurrent process can add a ref or object to a submodule's
+            // repository after the pre-stage fingerprint and before the
+            // rename above; the scheduled-cleanup reachability audit ran
+            // against the live path, so re-run it against the staged
+            // submodule Git directories before deletion destroys them.
+            do {
+                let stagedModulesDirectory = try Self.stagedModulesDirectory(
+                    expectedRegistration.gitDirectory
+                )
+                let stored = try Self.submoduleGitDirectories(in: stagedModulesDirectory)
+                guard try await Self.stagedSubmoduleHistoryIsSafe(
+                    stored,
+                    worktreeGitDirectory: expectedRegistration.gitDirectory
+                ) else {
+                    try failAfterRollingBack(
+                        "A submodule of this worktree holds unpublished Git state that cleanup would destroy."
+                    )
+                }
+            } catch {
+                try failAfterRollingBack(error.localizedDescription)
+            }
         }
 
         let commonGitArguments = ["--git-dir", expectedCommonDirectory.path]
@@ -1399,9 +1422,10 @@ struct WorktreeService {
 
     /// A scheduled run may discard its checkout only when its original base is
     /// an ancestor of the current tip and the tip is remotely reachable. Every
-    /// initialized submodule commit must be remotely reachable. Annotated tag
-    /// refs block cleanup because remote-tracking refs cannot prove the tag
-    /// object itself is published. No deinitialized submodule repository may
+    /// initialized submodule commit must be remotely reachable. Every local
+    /// tag name must also exist on the submodule's remote, because the
+    /// worktree-specific repository is destroyed with the checkout and takes
+    /// unpushed tag names with it. No deinitialized submodule repository may
     /// remain under the worktree Git directory.
     static func scheduledCleanupHistoryIsSafe(
         baseCommit: String,
@@ -1455,8 +1479,22 @@ struct WorktreeService {
                 test -n "$refs"
                 local_only=$(git rev-list --max-count=1 --all --reflog --not --remotes 2>/dev/null)
                 test -z "$local_only"
-                annotated_tags=$(git for-each-ref --format='%(objecttype)' refs/tags/ | awk '$1 == "tag" { print "annotated" }')
-                test -z "$annotated_tags"
+                # Every local tag name must also exist on a remote. The commit
+                # behind a tag is already covered by the rev-list/fsck checks
+                # above, but the ref *name* itself is destroyed with the
+                # worktree-specific repository, so its publication on a
+                # remote has to be verified per name (not per object). The
+                # protocol override keeps file:// remotes (local test
+                # fixtures) working; network remotes ignore it.
+                tags_failed=0
+                tags_list=$(git for-each-ref --format='%(refname)' refs/tags/)
+                while IFS= read -r tag_ref; do
+                    test -n "$tag_ref" || continue
+                    git -c protocol.file.allow=always ls-remote --exit-code --tags --refs origin "${tag_ref#refs/tags/}" >/dev/null 2>&1 || tags_failed=1
+                done <<TAGS_EOF
+                $tags_list
+                TAGS_EOF
+                test "$tags_failed" -eq 0
                 unreachable=$(git fsck --no-reflogs --unreachable --no-progress 2>/dev/null)
                 test -z "$unreachable"
                 """
@@ -1467,6 +1505,100 @@ struct WorktreeService {
         // foreach visits only initialized submodules. The inventory above also
         // refuses repositories left behind after deinitialization.
         return submoduleRemoteRefs.exitCode == 0
+    }
+
+    /// Resolves the `modules` directory of a *staged* (renamed) worktree from
+    /// its own Git directory. The relative `gitdir:` pointers inside the
+    /// staged tree are dangling, so this recomputes the path instead of
+    /// shelling out from the staged path.
+    private static func stagedModulesDirectory(_ worktreeGitDirectory: URL) throws -> URL {
+        let marker = worktreeGitDirectory.appendingPathComponent("commondir")
+        let commonDirectory: URL
+        if let raw = try? String(contentsOf: marker, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !raw.isEmpty
+        {
+            commonDirectory = (raw as NSString).isAbsolutePath
+                ? URL(fileURLWithPath: raw).standardizedFileURL
+                : worktreeGitDirectory.appendingPathComponent(raw).standardizedFileURL
+        } else {
+            commonDirectory = worktreeGitDirectory.standardizedFileURL
+        }
+        return commonDirectory.appendingPathComponent("modules", isDirectory: true)
+    }
+
+    /// Post-rename counterpart of `scheduledCleanupHistoryIsSafe`'s submodule
+    /// audit. Runs the reachability checks directly against each staged
+    /// submodule Git directory (their relative `gitdir:` pointers are
+    /// dangling after the rename, so `submodule foreach` cannot be used) and
+    /// returns `false` when any stored repository holds commits, refs, or
+    /// objects that deletion would destroy without a remote copy.
+    private static func stagedSubmoduleHistoryIsSafe(
+        _ moduleDirectories: [String],
+        worktreeGitDirectory: URL
+    ) async throws -> Bool {
+        for moduleDirectory in moduleDirectories {
+            let gitDirectory = URL(fileURLWithPath: moduleDirectory)
+            let gitArguments = ["--git-dir", gitDirectory.path]
+            let headResult = try await Process.git(
+                gitArguments + ["rev-parse", "HEAD"],
+                cwd: worktreeGitDirectory
+            )
+            guard headResult.exitCode == 0 else { return false }
+            let head = headResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !head.isEmpty else { return false }
+
+            let auditResult = try await Process.git(
+                gitArguments
+                    + [
+                        "for-each-ref", "--contains=\(head)", "--format=%(refname)", "refs/remotes/",
+                    ],
+                cwd: worktreeGitDirectory
+            )
+            guard auditResult.exitCode == 0,
+                  !auditResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return false }
+
+            let localOnly = try await Process.git(
+                gitArguments + ["rev-list", "--max-count=1", "--all", "--reflog", "--not", "--remotes"],
+                cwd: worktreeGitDirectory
+            )
+            guard localOnly.exitCode == 0,
+                  localOnly.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return false }
+
+            let tagsResult = try await Process.git(
+                gitArguments + ["for-each-ref", "--format=%(refname)", "refs/tags/"],
+                cwd: worktreeGitDirectory
+            )
+            guard tagsResult.exitCode == 0 else { return false }
+            for tagRef in tagsResult.stdout.split(whereSeparator: \.isNewline) {
+                let tagName = tagRef.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .dropFirst("refs/tags/".count)
+                guard !tagName.isEmpty else { continue }
+                // The ref *name* is destroyed with the repository, so each
+                // one has to be published on the remote, regardless of the
+                // object it points at. The protocol override keeps file://
+                // remotes (local test fixtures) working; network remotes
+                // ignore it.
+                let published = try await Process.git(
+                    ["-c", "protocol.file.allow=always"]
+                        + gitArguments
+                        + ["ls-remote", "--exit-code", "--tags", "--refs", "origin", String(tagName)],
+                    cwd: worktreeGitDirectory
+                )
+                guard published.exitCode == 0 else { return false }
+            }
+
+            let unreachable = try await Process.git(
+                gitArguments + ["fsck", "--no-reflogs", "--unreachable", "--no-progress"],
+                cwd: worktreeGitDirectory
+            )
+            guard unreachable.exitCode == 0,
+                  unreachable.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return false }
+        }
+        return true
     }
 
     private static func submoduleGitDirectoryInventory(

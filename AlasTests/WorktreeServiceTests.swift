@@ -705,6 +705,73 @@ extension WorktreeServiceTests {
         )))
     }
 
+    @Test func scheduledCleanupRejectsUnpublishedLightweightSubmoduleTags() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "scheduled-submodule-local-lightweight-tag")
+        defer { fixture.removeFiles() }
+
+        let baseResult = try await Process.git(["rev-parse", "HEAD"], cwd: fixture.worktree.path)
+        try #require(baseResult.exitCode == 0)
+        let base = baseResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let superprojectRemote = "refs/remotes/origin/\(fixture.worktree.branch)"
+        let reachableSuperprojectHead = try await Process.git(
+            ["update-ref", superprojectRemote, base],
+            cwd: fixture.worktree.path
+        )
+        try #require(reachableSuperprojectHead.exitCode == 0)
+
+        let submodulePath = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
+        let submoduleHead = try await Process.git(["rev-parse", "HEAD"], cwd: submodulePath)
+        try #require(submoduleHead.exitCode == 0)
+        let submoduleOID = submoduleHead.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reachableSubmoduleHead = try await Process.git(
+            ["update-ref", "refs/remotes/origin/main", submoduleOID],
+            cwd: submodulePath
+        )
+        try #require(reachableSubmoduleHead.exitCode == 0)
+        #expect(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        ))
+
+        let localTag = try await Process.git(
+            ["tag", "local-only", submoduleOID],
+            cwd: submodulePath
+        )
+        try #require(localTag.exitCode == 0)
+        let tagObjectType = try await Process.git(
+            ["cat-file", "-t", "refs/tags/local-only"],
+            cwd: submodulePath
+        )
+        try #require(tagObjectType.exitCode == 0)
+        // Lightweight: the ref points straight at a commit the remote already
+        // has, so neither the rev-list nor the fsck checks can see any risk.
+        #expect(tagObjectType.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "commit")
+        let unpublishedTag = try await Process.git(
+            ["ls-remote", "--tags", "--refs", "--", "origin"],
+            cwd: submodulePath
+        )
+        try #require(unpublishedTag.exitCode == 0)
+        #expect(!unpublishedTag.stdout.contains("refs/tags/local-only"))
+        #expect(!(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        )))
+
+        // Publishing the tag name on the remote clears the objection.
+        let pushTag = try await Process.git(
+            ["push", "-q", "origin", "refs/tags/local-only"],
+            cwd: submodulePath
+        )
+        try #require(pushTag.exitCode == 0)
+        #expect(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        ))
+    }
+
     @Test func scheduledCleanupRejectsResidualDeinitializedSubmoduleRepository() async throws {
         let repo = try await makeRepo()
         let suffix = "scheduled-submodule-deinitialized"
@@ -985,6 +1052,19 @@ extension WorktreeServiceTests {
             cwd: submodulePath
         )
         try #require(publishLocalTagCommit.exitCode == 0)
+        // The tag *name* still exists only locally; publishing the commit is
+        // not enough for the per-name publication check.
+        #expect(!(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        )))
+
+        let pushLocalTag = try await Process.git(
+            ["push", "-q", "origin", "refs/tags/local-only"],
+            cwd: submodulePath
+        )
+        try #require(pushLocalTag.exitCode == 0)
         #expect(try await WorktreeService.scheduledCleanupHistoryIsSafe(
             baseCommit: base,
             expectedBranch: fixture.worktree.branch,
