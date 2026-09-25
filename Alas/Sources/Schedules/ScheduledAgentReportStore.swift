@@ -4,6 +4,8 @@ actor ScheduledAgentReportStore {
     static let maximumPayloadBytes = ScheduledAgentReportLimits.maximumPayloadBytes
 
     private let database: SQLiteDatabase
+    private static let ownerReconciliationInterval: TimeInterval = 15
+    private var lastOwnerReconciliationAt: Date?
 
     private let ownerInstanceID: String
     private let ownerPID: Int64
@@ -300,10 +302,13 @@ actor ScheduledAgentReportStore {
     /// gone. Legacy rows without ownership metadata are treated as orphans.
     @discardableResult
     func reconcileAfterRestart(at now: Date = Date()) throws -> Int {
-        try Self.immediateTransaction(database) {
+        let changed = try Self.immediateTransaction(database) {
             let rows = try database.query("""
             SELECT payload, owner_instance_id, owner_pid, owner_created_at
             FROM scheduled_agent_reports
+            WHERE task_state = 'running'
+                OR cleanup_state = 'pending'
+                OR (task_state = 'interrupted' AND cleanup_state != 'retained')
             """)
             var changed = 0
             for row in rows {
@@ -337,6 +342,17 @@ actor ScheduledAgentReportStore {
             }
             return changed
         }
+        lastOwnerReconciliationAt = now
+        return changed
+    }
+
+    @discardableResult
+    func reconcileAfterRestartIfNeeded(at now: Date = Date()) throws -> Int {
+        if let lastOwnerReconciliationAt,
+           now.timeIntervalSince(lastOwnerReconciliationAt) < Self.ownerReconciliationInterval {
+            return 0
+        }
+        return try reconcileAfterRestart(at: now)
     }
 
     func delete(id: String) throws -> Bool {

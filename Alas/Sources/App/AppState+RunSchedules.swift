@@ -595,7 +595,9 @@ extension AppState {
         limit: Int = 40
     ) async throws -> [ScheduledAgentReport] {
         await scheduledAgentReportsRecoveryTask?.value
-        return try await scheduledAgentReportsStore().page(
+        let store = try scheduledAgentReportsStore()
+        _ = try await store.reconcileAfterRestartIfNeeded()
+        return try await store.page(
             projectID: projectID,
             offset: max(0, offset),
             limit: min(max(1, limit), 100)
@@ -604,7 +606,9 @@ extension AppState {
 
     func scheduledAgentReport(id: String) async throws -> ScheduledAgentReport? {
         await scheduledAgentReportsRecoveryTask?.value
-        return try await scheduledAgentReportsStore().report(id: id)
+        let store = try scheduledAgentReportsStore()
+        _ = try await store.reconcileAfterRestartIfNeeded()
+        return try await store.report(id: id)
     }
     func scheduledAgentReport(id: String, projectID: String) async throws -> ScheduledAgentReport? {
         guard let report = try await scheduledAgentReport(id: id),
@@ -618,6 +622,7 @@ extension AppState {
     func deleteScheduledAgentReport(id: String, projectID: String) async throws -> Bool {
         await scheduledAgentReportsRecoveryTask?.value
         let store = try scheduledAgentReportsStore()
+        _ = try await store.reconcileAfterRestartIfNeeded()
         guard let report = try await store.report(id: id),
               report.projectID == projectID
         else {

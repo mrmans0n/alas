@@ -242,6 +242,30 @@ struct ScheduledAgentReportStoreTests {
         #expect(pendingCleanup.cleanupState == .pending)
     }
 
+    @Test func reportReadReconciliationRecoversOwnerThatExitsAfterStartup() async throws {
+        let path = temporaryPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let now = Date()
+        let pid = Int64(ProcessInfo.processInfo.processIdentifier)
+        let owner = try ScheduledAgentReportStore(path: path, instanceID: "first-store", pid: pid)
+        try await owner.create(report(id: "running"))
+
+        let reader = try ScheduledAgentReportStore(path: path, instanceID: "second-store", pid: pid)
+        #expect(try await reader.reconcileAfterRestart(at: now) == 0)
+
+        let database = try SQLiteDatabase(path: path)
+        try database.exec(
+            "UPDATE scheduled_agent_reports SET owner_pid = ? WHERE id = ?",
+            bindings: [Int64.max, "running"]
+        )
+        #expect(try await reader.reconcileAfterRestartIfNeeded(at: now.addingTimeInterval(14)) == 0)
+        #expect(try #require(try await reader.report(id: "running")).taskState == .running)
+
+        #expect(try await reader.reconcileAfterRestartIfNeeded(at: now.addingTimeInterval(15)) == 1)
+        let recovered = try #require(try await reader.report(id: "running"))
+        #expect(recovered.taskState == .interrupted)
+    }
+
     @Test func legacyRowsWithoutOwnerColumnsAreMigratedAndReconciledAsOrphans() async throws {
         let path = temporaryPath()
         defer { try? FileManager.default.removeItem(atPath: path) }

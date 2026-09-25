@@ -60,15 +60,11 @@ struct ScheduledAgentReportsSheet: View {
             }
             await loadSelectedReport()
             while !Task.isCancelled {
-                if selectedReportID == nil {
-                    guard reports.contains(where: { $0.hasPendingWork }) else { break }
-                } else {
-                    guard selectedReportNeedsRefresh else { break }
-                }
+                if selectedReportID != nil, !selectedReportNeedsRefresh { break }
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled else { break }
                 if selectedReportID == nil {
-                    await refreshPendingReports()
+                    await refreshReportList()
                 } else {
                     await refreshSelectedReport()
                 }
@@ -510,8 +506,40 @@ struct ScheduledAgentReportsSheet: View {
         }
     }
 
-    private func refreshPendingReports() async {
-        let pendingReportIDs = reports.filter(\.hasPendingWork).map(\.id)
+    private func refreshReportList() async {
+        guard !isLoadingPage, selectedReportID == nil else { return }
+        do {
+            let firstPage = try await state.scheduledAgentReportPage(
+                projectID: projectID,
+                offset: 0,
+                limit: pageSize
+            )
+            guard !Task.isCancelled, selectedReportID == nil else { return }
+            let hadLoadedOlderPages = pageOffset > pageSize
+            let existingIDs = Set(reports.map(\.id))
+            let newReports = firstPage.filter { !existingIDs.contains($0.id) }
+            if !newReports.isEmpty {
+                reports.insert(contentsOf: newReports, at: 0)
+                pageOffset += newReports.count
+            }
+            for report in firstPage {
+                updateReportInList(report)
+            }
+            if !hadLoadedOlderPages {
+                hasMore = firstPage.count == pageSize
+            }
+            pageError = nil
+            await refreshPendingReports(excluding: Set(firstPage.map(\.id)))
+        } catch {
+            guard !Task.isCancelled, selectedReportID == nil else { return }
+            pageError = error.localizedDescription
+        }
+    }
+
+    private func refreshPendingReports(excluding excludedIDs: Set<String>) async {
+        let pendingReportIDs = reports
+            .filter { $0.hasPendingWork && !excludedIDs.contains($0.id) }
+            .map(\.id)
         for reportID in pendingReportIDs {
             guard !Task.isCancelled, selectedReportID == nil else { return }
             do {
