@@ -4324,9 +4324,10 @@ final class AppState {
         Task { @MainActor in
             do {
                 if self.config.worktrees.fetchRemoteBeforeCreate {
-                    if let fetchInfo = try? await GitService().remoteForFetch(worktreePath: repoPath, ref: base) {
+                    let git = GitService(hostResolution: .project(project.host))
+                    if let fetchInfo = try? await git.remoteForFetch(worktreePath: repoPath, ref: base) {
                         do {
-                            _ = try await GitService().fetchRef(
+                            _ = try await git.fetchRef(
                                 worktreePath: repoPath,
                                 remote: fetchInfo.remote,
                                 branch: fetchInfo.branch
@@ -9110,24 +9111,27 @@ final class AppState {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    private func cleanupTerminals(worktreeId: String, allTabs: [Tab], tabIds: [TabID]) {
-        let projectPath = projectPath(forWorktreeId: worktreeId)
+    private func cleanupTerminals(worktreeId: String, allTabs: [Tab], tabIds: [TabID], projectId: String? = nil) {
+        let projectPath = projectPath(forWorktreeId: worktreeId, projectId: projectId)
         for id in tabIds {
-            if let tab = allTabs.first(where: { $0.id == id }),
-               case .terminal(let s) = tab {
-                for leaf in s.root.leaves() {
-                    scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
-                    closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
-                }
+            guard let tab = allTabs.first(where: { $0.id == id }),
+                  case .terminal(let s) = tab,
+                  projectId == nil || s.projectId == projectId || (projectId != nil && s.projectId == nil)
+            else { continue }
+            for leaf in s.root.leaves() {
+                scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
+                closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
             }
         }
     }
 
-    private func cleanupClosedEditorBuffers(worktreeId: String, allTabs: [Tab], closedIds: [TabID]) {
+    private func cleanupClosedEditorBuffers(worktreeId: String, allTabs: [Tab], closedIds: [TabID], projectId: String? = nil) {
         for id in closedIds {
-            if let tab = allTabs.first(where: { $0.id == id }), case .editor = tab {
-                tabs.discardBuffer(worktreeId: worktreeId, tabId: id)
-            }
+            guard let tab = allTabs.first(where: { $0.id == id }),
+                  case .editor(let editor) = tab,
+                  projectId == nil || editor.projectId == projectId || (projectId != nil && editor.projectId == nil)
+            else { continue }
+            tabs.discardBuffer(worktreeId: worktreeId, tabId: id)
         }
     }
 
@@ -9620,9 +9624,11 @@ final class AppState {
 
     /// Tear down every tab/terminal/harness reference for a worktree id without
     /// touching git. Shared between Close-All, archive, and delete so the
-    /// bookkeeping stays in one place. `projectId` scopes project-owned
-    /// runtime (ACP managers) to the removed owner; nil means the caller
-    /// cannot know a surviving owner and disposes every matching manager.
+    /// bookkeeping stays in one place. `projectId` scopes the whole teardown —
+    /// tabs, terminals, buffers, notifications, run scripts, and ACP managers —
+    /// to the removed owner so sibling projects on a shared path keep their
+    /// runtime. nil means the caller cannot know a surviving owner (or the id
+    /// is unshared) and tears down every matching item.
     @discardableResult
     private func cleanupWorktreeState(
         worktreeId: String,
@@ -9630,20 +9636,41 @@ final class AppState {
         purgeRunScriptFailures: Bool = true,
         purgeRunHistory: Bool = true
     ) -> Task<Void, Never>? {
-        inAppNotifications.remove(worktreeID: worktreeId)
+        if projectId == nil {
+            inAppNotifications.remove(worktreeID: worktreeId)
+        }
         let runHistoryPurgeTask: Task<Void, Never>?
         if purgeRunScriptFailures {
-            runHistoryPurgeTask = cleanupRunScriptState(worktreeID: worktreeId, purgeFailures: true, purgeHistory: purgeRunHistory)
+            runHistoryPurgeTask = cleanupRunScriptState(
+                worktreeID: worktreeId,
+                projectId: projectId,
+                purgeFailures: true,
+                purgeHistory: purgeRunHistory
+            )
         } else {
-            cancelPendingRunScriptLaunches(worktreeID: worktreeId)
+            cancelPendingRunScriptLaunches(worktreeID: worktreeId, projectId: projectId)
             runHistoryPurgeTask = nil
         }
-        closedTabHistory.purge(worktreeID: worktreeId)
-        let allTabs = tabs.tabs(forWorktree: worktreeId)
-        let closed = tabs.closeAll(worktreeId: worktreeId)
-        invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
-        cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
-        cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+        if let projectId {
+            let includesLegacyUnownedProjectTabs = legacyEditorOwnerProjectId(forWorktreeId: worktreeId) == projectId
+            let sharedTabs = tabs.tabs(forWorktree: worktreeId)
+            let closed = tabs.closeAll(
+                worktreeId: worktreeId,
+                projectId: projectId,
+                includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
+            )
+            invalidateFollowRevisionRequests(allTabs: sharedTabs, closedIds: closed)
+            cleanupTerminals(worktreeId: worktreeId, allTabs: sharedTabs, tabIds: closed, projectId: projectId)
+            cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: sharedTabs, closedIds: closed, projectId: projectId)
+            closedTabHistory.purge(worktreeID: worktreeId, projectId: projectId)
+        } else {
+            closedTabHistory.purge(worktreeID: worktreeId)
+            let allTabs = tabs.tabs(forWorktree: worktreeId)
+            let closed = tabs.closeAll(worktreeId: worktreeId)
+            invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
+            cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
+            cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
+        }
         disposeACPManager(for: worktreeId, projectId: projectId)
         if purgeRunScriptFailures {
             // Coordinators are keyed by host (shared paths may be owned by

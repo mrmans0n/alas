@@ -94,6 +94,15 @@ struct ClosedTabHistory: Equatable {
         entries.removeAll { $0.snapshot.worktreeID == worktreeID }
     }
 
+    /// Removes entries recorded by `projectId` and its legacy unowned tabs.
+    /// A shared worktree id keeps the surviving project's reopen history.
+    mutating func purge(worktreeID: String, projectId: String) {
+        entries.removeAll { entry in
+            entry.snapshot.worktreeID == worktreeID
+                && (entry.snapshot.projectID == projectId || entry.snapshot.projectID == nil)
+        }
+    }
+
     mutating func purgeCommitPublishDraft(worktreeID: String, tabID: TabID) {
         entries.removeAll { entry in
             guard case .worktree(let entryWorktreeID, _, .draftCommit(let state)) = entry.snapshot else {

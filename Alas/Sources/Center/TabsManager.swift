@@ -2472,6 +2472,41 @@ final class TabsManager {
         return closed
     }
 
+    /// Closes only the tabs owned by `projectId` (plus legacy unowned tabs
+    /// when the caller is that project's legacy owner) and drops the
+    /// project's remembered active tab, drafts, and run reports. A shared
+    /// path-derived worktree id keeps sibling projects' tabs and drafts.
+    func closeAll(worktreeId: String, projectId: String, includesLegacyUnownedProjectTabs: Bool = false) -> [TabID] {
+        guard var file = byWorktree[worktreeId] else { return [] }
+        var closedTabs: [Tab] = []
+        var remaining: [Tab] = []
+        for tab in file.tabs {
+            if projectLocalTabBelongs(
+                tab,
+                projectId: projectId,
+                includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
+            ) == true {
+                closedTabs.append(tab)
+            } else {
+                remaining.append(tab)
+            }
+        }
+        guard !closedTabs.isEmpty else { return [] }
+        let closed = closedTabs.map(\.id)
+        for id in closed {
+            captureDraftIfNeeded(&file, removingTabId: id)
+            ggSplitCommitDrafts.removeValue(forKey: id)
+        }
+        clearWebPreviewBrowsers(for: closedTabs)
+        file.tabs = remaining
+        if let active = file.activeTabId, closedTabs.contains(where: { $0.id == active }) {
+            file.activeTabId = remaining.first?.id
+        }
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return closed
+    }
+
     func closeToLeft(worktreeId: String, of tabId: TabID) -> [TabID] {
         guard var file = byWorktree[worktreeId],
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }) else { return [] }

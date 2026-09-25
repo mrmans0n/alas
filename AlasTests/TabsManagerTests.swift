@@ -1332,6 +1332,26 @@ struct TabsManagerTests {
         #expect(manager.activeTabId(forWorktree: worktreeId, projectId: "project-b") == onlyB.id)
     }
 
+    /// Archiving one project of a shared path must not close the surviving
+    /// project's tabs or drop its remembered active tab.
+    @Test func closeAllIsScopedToTheProjectForSharedWorktreeIds() {
+        let worktreeId = "tabs-manager-project-close-all"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+
+        let diffA = manager.appendDiff(worktreeId: worktreeId, projectId: "project-a", title: "Shared.swift", relativePath: "Shared.swift")
+        let terminalA = manager.appendTerminal(worktreeId: worktreeId, projectId: "project-a", title: "A", sessionId: "a")
+        let editorB = manager.appendEditor(worktreeId: worktreeId, projectId: "project-b", title: "Shared.swift", relativePath: "Shared.swift")
+        let terminalB = manager.appendTerminal(worktreeId: worktreeId, projectId: "project-b", title: "B", sessionId: "b")
+        manager.activate(worktreeId: worktreeId, tabId: editorB.id)
+
+        let closed = manager.closeAll(worktreeId: worktreeId, projectId: "project-a")
+
+        #expect(Set(closed) == [diffA.id, terminalA.id])
+        #expect(manager.tabs(forWorktree: worktreeId).map(\.id) == [editorB.id, terminalB.id])
+        #expect(manager.activeTabId(forWorktree: worktreeId) == editorB.id)
+    }
+
     @Test func openingSamePathReviewTabsKeepsEachProjectOwnerSeparate() throws {
         let worktreeId = "tabs-manager-shared-review-tabs-\(UUID().uuidString)"
         let tabsDirectory = FileManager.default.temporaryDirectory
