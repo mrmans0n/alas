@@ -51,8 +51,13 @@ class ACPImageChipHoverController {
     func scheduleShow(range: NSRange, fileURL: URL, in textView: ACPNSTextView) {
         cancelPendingShow()
         let target = ChipTarget(range: range, fileURL: fileURL)
-        // Moving onto a different chip while another popover is up closes it
-        // right away — the debounced show below will open the new one.
+        // Moving onto a different chip while another preview is displayed or
+        // still loading closes/cancels it right away — the debounced show
+        // below will open the new one. (A load for the same chip completes
+        // harmlessly; the presented content is identical.)
+        if inFlightTarget != target {
+            inFlightTarget = nil
+        }
         if shownTarget != target {
             popover?.performClose(nil)
             popover = nil
@@ -107,7 +112,9 @@ class ACPImageChipHoverController {
             guard let self, let textView else { return }
             guard let image = await ACPThumbnailImageCache.shared.image(for: cacheKey, load: load)
             else {
-                self.inFlightTarget = nil
+                // Clear the token only if it still belongs to this request —
+                // a newer load may have replaced it while this one ran.
+                if self.inFlightTarget == target { self.inFlightTarget = nil }
                 return
             }
             // The load is obsolete if the user left the chip (hide cleared
