@@ -100,8 +100,9 @@ final class NextPromptCoordinator: ObservableObject {
         consumedPromptIDs[turn.incarnation] = turn.promptID
         let current = snapshot()
         guard current?.id.incarnation == turn.incarnation || requestID?.incarnation == turn.incarnation else { return }
+        let nextEpoch = epoch &+ 1
         invalidate()
-        guard let current, current.isEligible,
+        guard epoch == nextEpoch, let current, current.isEligible,
               current.id.sessionID == turn.sessionID,
               current.id.incarnation == turn.incarnation,
               current.id.promptID == turn.promptID,
@@ -126,6 +127,8 @@ final class NextPromptCoordinator: ObservableObject {
                 return
             }
             self.offer = text
+            // @Published stores after notifying; a subscriber may have invalidated this value.
+            if self.epoch != capturedEpoch { self.offer = nil }
         }
         deadlineTask = Task { [weak self, clock] in
             do {
@@ -138,21 +141,24 @@ final class NextPromptCoordinator: ObservableObject {
     }
 
     func invalidate() {
-        // Clear identity before publishing so synchronous observers cannot accept the old offer.
+        // Detach old work before publishing; an observer may start a newer completion.
         requestID = nil
         epoch &+= 1
-        offer = nil
-        deadlineTask?.cancel()
+        let oldDeadline = deadlineTask
+        let oldGeneration = generationTask
         deadlineTask = nil
-        generationTask?.cancel()
         generationTask = nil
-        guard hasUsedEngine else { return }
-        hasUsedEngine = false
-        let previous = drainTask
-        drainTask = Task { [engine] in
-            await previous?.value
-            await engine.cancelAndUnload()
+        if hasUsedEngine {
+            hasUsedEngine = false
+            let previous = drainTask
+            drainTask = Task { [engine] in
+                await previous?.value
+                await engine.cancelAndUnload()
+            }
         }
+        offer = nil
+        oldDeadline?.cancel()
+        oldGeneration?.cancel()
     }
 
     /// Called when the live session object is removed, not when its tab loses focus.

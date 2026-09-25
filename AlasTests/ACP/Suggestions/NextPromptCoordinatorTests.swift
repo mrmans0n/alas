@@ -222,6 +222,57 @@ struct NextPromptCoordinatorTests {
         withExtendedLifetime(observation) {}
     }
 
+    @Test func invalidationDuringCandidatePublicationCannotRestoreTheCandidate() async {
+        let fixture = Fixture()
+        await fixture.start()
+        var invalidated = false
+        let observation = fixture.coordinator.$offer.sink { value in
+            if value != nil {
+                invalidated = true
+                fixture.coordinator.invalidate()
+            }
+        }
+        await fixture.finish()
+        #expect(invalidated)
+        #expect(fixture.coordinator.offer == nil)
+        #expect(fixture.coordinator.takeOffer() == nil)
+        fixture.coordinator.completed(fixture.turn)
+        #expect(fixture.coordinator.generationTask == nil)
+        #expect(fixture.generator.requests.count == 1)
+        withExtendedLifetime(observation) {}
+    }
+
+    @Test(arguments: [false, true])
+    func newerCompletionStartedByNilObserverSurvivesOuterTransition(duringCompletion: Bool) async throws {
+        let fixture = Fixture()
+        await fixture.start()
+        await fixture.finish()
+        var replaced = false
+        let observation = fixture.coordinator.$offer.dropFirst().sink { value in
+            if value == nil && !replaced {
+                replaced = true
+                fixture.promptID += 1
+                fixture.coordinator.completed(fixture.turn)
+            }
+        }
+        if duringCompletion {
+            fixture.promptID += 1
+            fixture.coordinator.completed(fixture.turn)
+        } else {
+            fixture.coordinator.invalidate()
+        }
+        #expect(replaced)
+        let replacement = try #require(fixture.coordinator.generationTask)
+        #expect(!replacement.isCancelled)
+        await fixture.generator.waitForStart()
+        #expect(fixture.generator.requests.last?.id.promptID == fixture.promptID)
+        fixture.generator.finish("Show an example.")
+        await replacement.value
+        #expect(fixture.coordinator.offer == "Show an example.")
+        #expect(fixture.coordinator.takeOffer() == "Show an example.")
+        withExtendedLifetime(observation) {}
+    }
+
     private func readySession(_ session: ACPSession = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")) -> (ACPSession, NextPromptCompletedTurn, NextPromptEligibilitySnapshot.Environment) {
         session.agentState = .ready
         let userID = session.recordUserPrompt(text: "Explain this", attachments: [])
