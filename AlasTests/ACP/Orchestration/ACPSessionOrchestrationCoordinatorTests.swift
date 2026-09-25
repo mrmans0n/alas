@@ -54,7 +54,10 @@ struct ACPSessionOrchestrationCoordinatorTests {
             }))
         let response = await coordinator.send(origin: .init(sessionId: "child", projectId: "p", worktreeId: "w"),
                                               request: .init(targetSessionId: "parent", prompt: "Check the edge case."))
-        guard case .text = response else { Issue.record("Expected queued delegated message"); return }
+        guard case .text = response else {
+            Issue.record("Expected queued delegated message")
+            return
+        }
         #expect(observedPendingDelivery)
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while parent.nextPromptWorkCount != 0 {

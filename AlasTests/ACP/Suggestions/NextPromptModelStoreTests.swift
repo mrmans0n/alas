@@ -261,7 +261,6 @@ struct NextPromptModelStoreTests {
         }
     }
 
-
     @Test func progressIsBoundedAcrossSmallNetworkChunks() throws {
         let fixture = try ModelStoreFixture()
         defer { fixture.removeTemporaryRoot() }
@@ -278,7 +277,6 @@ struct NextPromptModelStoreTests {
         let updates = progress.withLock { $0 }
         #expect(updates == [1_048_576, 2_097_152])
     }
-
 }
 
 struct ModelStoreFixture {
@@ -327,9 +325,13 @@ final class FixtureTransport: NextPromptModelTransport, Sendable {
         case .valid: try sink.receive(bytes)
         case .corrupt: try sink.receive(Data(repeating: 0, count: bytes.count))
         case .oversized: try sink.receive(bytes + Data([0]))
-        case .interrupted: try sink.receive(Data(bytes.prefix(1))); throw URLError(.networkConnectionLost)
+        case .interrupted:
+            try sink.receive(Data(bytes.prefix(1)))
+            throw URLError(.networkConnectionLost)
         case .diskFull: throw POSIXError(.ENOSPC)
-        case .waitForCancellation: try sink.receive(Data(bytes.prefix(1))); try await Task.sleep(for: .seconds(60))
+        case .waitForCancellation:
+            try sink.receive(Data(bytes.prefix(1)))
+            try await Task.sleep(for: .seconds(60))
         }
     }
 }
@@ -346,7 +348,11 @@ private final class ModelURLProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        let mode = Self.control.withLock { value in value.requests += 1; value.started = true; return value.mode }
+        let mode = Self.control.withLock { value in
+            value.requests += 1
+            value.started = true
+            return value.mode
+        }
         let url = request.url!
         if mode == .redirect {
             let response = HTTPURLResponse(url: url, statusCode: 302, httpVersion: nil, headerFields: nil)!

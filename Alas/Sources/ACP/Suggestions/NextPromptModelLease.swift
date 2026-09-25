@@ -98,7 +98,10 @@ enum NextPromptModelFiles {
         // Open a new description so readdir does not change the caller's directory offset.
         let copy = openat(fd, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard copy >= 0 else { throw posix() }
-        guard let stream = fdopendir(copy) else { Darwin.close(copy); throw posix() }
+        guard let stream = fdopendir(copy) else {
+            Darwin.close(copy)
+            throw posix()
+        }
         defer { closedir(stream) }
         var result: [String] = []
         while true {

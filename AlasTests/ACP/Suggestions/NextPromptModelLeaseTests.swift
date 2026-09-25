@@ -47,7 +47,10 @@ struct NextPromptModelLeaseTests {
         process.standardInput = input
         process.standardOutput = output
         try process.run()
-        defer { if process.isRunning { process.terminate() }; process.waitUntilExit() }
+        defer {
+            if process.isRunning { process.terminate() }
+            process.waitUntilExit()
+        }
         func response() throws -> String {
             String(data: try output.fileHandleForReading.read(upToCount: 2) ?? Data(), encoding: .utf8) ?? ""
         }

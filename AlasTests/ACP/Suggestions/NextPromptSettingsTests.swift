@@ -80,7 +80,10 @@ struct NextPromptSettingsTests {
         defer { AlasTerminationCoordinator.shared.flush = previous }
         let loads = Mutex(0)
         let inference = NextPromptInference(acquireLease: { try await fixture.store.acquireVerifiedLease() }, load: { _ in
-            let attempt = loads.withLock { $0 += 1; return $0 }
+            let attempt = loads.withLock {
+                $0 += 1
+                return $0
+            }
             if attempt == 1 || secondAttemptFails { throw POSIXError(.ENOMEM) }
             return { _ in #"{"suggestion":"Show an example."}"# }
         })
@@ -339,7 +342,10 @@ struct NextPromptSettingsTests {
         defer { AlasTerminationCoordinator.shared.flush = previous }
         let gate = SettingsGate()
         let inference = NextPromptInference(acquireLease: { try await fixture.store.acquireVerifiedLease() }, load: { _ in
-            return { _ in await gate.wait(); return nil }
+            return { _ in
+                await gate.wait()
+                return nil
+            }
         })
         let state = makeState(fixture, SettingsStore(), inference: inference)
         let flush = AlasTerminationCoordinator.shared.flush!
@@ -350,7 +356,10 @@ struct NextPromptSettingsTests {
         let generation = Task { try? await inference.generate(request) }
         try await waitUntil { await gate.entered }
         var finished = false
-        let termination = Task { await flush(); finished = true }
+        let termination = Task {
+            await flush()
+            finished = true
+        }
         try await waitUntil { await inference.state == .unloading }
         #expect(!finished)
         await gate.open()
@@ -411,8 +420,14 @@ private final class SettingsStore: PersistenceStoreProtocol, @unchecked Sendable
 private actor SettingsGate {
     private var continuation: CheckedContinuation<Void, Never>?
     private(set) var entered = false
-    func wait() async { entered = true; await withCheckedContinuation { continuation = $0 } }
-    func open() { continuation?.resume(); continuation = nil }
+    func wait() async {
+        entered = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func open() {
+        continuation?.resume()
+        continuation = nil
+    }
 }
 
 private actor SuspendedSettingsRuntime: NextPromptRuntime {
@@ -428,7 +443,10 @@ private actor SuspendedSettingsRuntime: NextPromptRuntime {
         }
     }
 
-    func releaseStateRead() { stateContinuation?.resume(); stateContinuation = nil }
+    func releaseStateRead() {
+        stateContinuation?.resume()
+        stateContinuation = nil
+    }
     func states() -> AsyncStream<NextPromptInferenceState> { AsyncStream { $0.yield(.ready) } }
     func generate(_ request: NextPromptRequest) async throws -> String? { nil }
     func cancelAndUnload() async {}
@@ -448,5 +466,8 @@ private actor SettingsModelStateReadGate {
         return value
     }
 
-    func open() { continuation?.resume(); continuation = nil }
+    func open() {
+        continuation?.resume()
+        continuation = nil
+    }
 }

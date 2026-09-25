@@ -135,9 +135,15 @@ actor NextPromptInference: NextPromptRuntime {
             return nil
         }
         guard failures < 2 else { return nil }
-        guard supported() else { publish(.unavailable); return nil }
+        guard supported() else {
+            publish(.unavailable)
+            return nil
+        }
         guard request.turns.reduce(0, { $0 + $1.user.utf8.count + $1.assistant.utf8.count }) <= NextPromptContext.sourceLimit,
-              NextPromptPolicy.permitsInput(request.turns) else { publish(.ready); return nil }
+              NextPromptPolicy.permitsInput(request.turns) else {
+            publish(.ready)
+            return nil
+        }
         publish(.running)
         do {
             try Task.checkCancellation()
@@ -216,7 +222,10 @@ actor NextPromptInference: NextPromptRuntime {
         guard generation == id else { return }
         if retry {
             failures = 0
-            guard supported() else { publish(.unavailable); return }
+            guard supported() else {
+                publish(.unavailable)
+                return
+            }
             do {
                 let verified = try await acquireLease()
                 verified.close()

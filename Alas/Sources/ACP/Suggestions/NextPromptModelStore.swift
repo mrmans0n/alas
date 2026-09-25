@@ -47,7 +47,10 @@ actor NextPromptModelStore {
 
     func install() async {
         guard worker == nil else { return }
-        guard let manifest else { publish(.unavailable); return }
+        guard let manifest else {
+            publish(.unavailable)
+            return
+        }
         let id = UUID()
         installationID = id
         let task = Task.detached { [root, transport, capacity] in

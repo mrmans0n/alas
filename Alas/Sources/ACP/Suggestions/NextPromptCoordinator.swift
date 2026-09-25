@@ -93,7 +93,10 @@ final class NextPromptCoordinator: ObservableObject {
         deadlineTask?.cancel()
         if hasUsedEngine {
             let engine = engine, previous = drainTask
-            Task { await previous?.value; await engine.cancelAndUnload() }
+            Task {
+                await previous?.value
+                await engine.cancelAndUnload()
+            }
         }
     }
 

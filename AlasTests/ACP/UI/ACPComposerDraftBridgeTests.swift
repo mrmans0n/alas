@@ -1982,5 +1982,8 @@ struct ACPComposerDraftBridgeTests {
 private final class NextPromptTestWindow: NSWindow {
     private var keyForTest = true
     override var isKeyWindow: Bool { keyForTest }
-    override func resignKey() { keyForTest = false; super.resignKey() }
+    override func resignKey() {
+        keyForTest = false
+        super.resignKey()
+    }
 }

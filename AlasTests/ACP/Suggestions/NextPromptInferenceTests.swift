@@ -29,7 +29,10 @@ struct NextPromptInferenceTests {
         let calls = Mutex(0)
         let inference = NextPromptInference(acquireLease: { try fixture.acquire() }, load: { _ in
             return { _ in
-                let first = calls.withLock { $0 += 1; return $0 == 1 }
+                let first = calls.withLock {
+                    $0 += 1
+                    return $0 == 1
+                }
                 if first {
                     events.withLock { $0.append("first started") }
                     await entered.open()
@@ -172,7 +175,11 @@ struct NextPromptInferenceTests {
         await entered.wait()
         task.cancel()
         do { try await eventually { await inference.state == .unloading } }
-        catch { await finish.open(); _ = try await task.value; throw error }
+        catch {
+            await finish.open()
+            _ = try await task.value
+            throw error
+        }
         #expect(!fixture.canLockExclusively())
         await finish.open()
         #expect(try await task.value == nil)
@@ -321,7 +328,10 @@ private final class ManualClock: Sendable {
             $0.now = $0.now.advanced(by: duration)
             let now = $0.now
             let ready = $0.waiters.filter { $0.value.0 <= now }
-            for (id, waiter) in ready { $0.waiters[id] = nil; waiter.1.resume() }
+            for (id, waiter) in ready {
+                $0.waiters[id] = nil
+                waiter.1.resume()
+            }
         }
     }
 }

@@ -173,7 +173,10 @@ struct NextPromptModelDownload: NextPromptModelTransport {
         func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
             guard failure == nil, accepted else { return }
             do { try sink.receive(data) }
-            catch { failure = error; dataTask.cancel() }
+            catch {
+                failure = error
+                dataTask.cancel()
+            }
         }
 
         func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
