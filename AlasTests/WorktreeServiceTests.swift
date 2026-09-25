@@ -833,6 +833,78 @@ extension WorktreeServiceTests {
         ))
     }
 
+    @Test func scheduledCleanupRejectsCrossNamespaceAndMismatchedRemoteRefs() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "scheduled-submodule-cross-namespace")
+        defer { fixture.removeFiles() }
+
+        let baseResult = try await Process.git(["rev-parse", "HEAD"], cwd: fixture.worktree.path)
+        try #require(baseResult.exitCode == 0)
+        let base = baseResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let superprojectRemote = "refs/remotes/origin/\(fixture.worktree.branch)"
+        let reachableSuperprojectHead = try await Process.git(
+            ["update-ref", superprojectRemote, base],
+            cwd: fixture.worktree.path
+        )
+        try #require(reachableSuperprojectHead.exitCode == 0)
+
+        let submodulePath = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
+        let submoduleHead = try await Process.git(["rev-parse", "HEAD"], cwd: submodulePath)
+        try #require(submoduleHead.exitCode == 0)
+        let submoduleOID = submoduleHead.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reachableSubmoduleHead = try await Process.git(
+            ["update-ref", "refs/remotes/origin/main", submoduleOID],
+            cwd: submodulePath
+        )
+        try #require(reachableSubmoduleHead.exitCode == 0)
+        #expect(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        ))
+
+        // A remote *tag* shares the local branch's short name but points at
+        // the same object: a heads-union-tags lookup would pass, but the
+        // branch name was never published under refs/heads.
+        let remoteTag = try await Process.git(
+            ["push", "-q", "origin", "\(submoduleOID):refs/tags/dup-name"],
+            cwd: submodulePath
+        )
+        try #require(remoteTag.exitCode == 0)
+        let localBranch = try await Process.git(
+            ["branch", "dup-name", submoduleOID],
+            cwd: submodulePath
+        )
+        try #require(localBranch.exitCode == 0)
+        #expect(!(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        )))
+
+        // A remote ref with the same name pointing at a different object
+        // must also be rejected.
+        try "mismatch content".write(
+            to: submodulePath.appendingPathComponent("tracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let mismatchCommit = try await Process.git(
+            ["commit", "-q", "-am", "mismatched remote object"],
+            cwd: submodulePath
+        )
+        try #require(mismatchCommit.exitCode == 0)
+        let pushMismatch = try await Process.git(
+            ["push", "-q", "origin", "refs/heads/dup-name"],
+            cwd: submodulePath
+        )
+        try #require(pushMismatch.exitCode == 0, "push failed: \(pushMismatch.stderr)")
+        #expect(!(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        )))
+    }
+
     @Test func scheduledCleanupRejectsResidualDeinitializedSubmoduleRepository() async throws {
         let repo = try await makeRepo()
         let suffix = "scheduled-submodule-deinitialized"

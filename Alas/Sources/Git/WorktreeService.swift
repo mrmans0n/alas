@@ -1479,19 +1479,23 @@ struct WorktreeService {
                 test -n "$refs"
                 local_only=$(git rev-list --max-count=1 --all --reflog --not --remotes 2>/dev/null)
                 test -z "$local_only"
-                # Every local tag *name* must also exist on a remote, and the
-                # same holds for every local branch name. The commits behind
-                # them are already covered by the rev-list/fsck checks above,
-                # but the ref *names* themselves are destroyed with the
-                # worktree-specific repository, so their publication on a
-                # remote has to be verified per name (not per object). The
-                # protocol override keeps file:// remotes (local test
-                # fixtures) working; network remotes ignore it.
+                # Every local tag or branch *name* must exist on a remote
+                # under the same namespace AND point at the same object. The
+                # commits behind them are already covered by the
+                # rev-list/fsck checks above, but the ref *names* themselves
+                # are destroyed with the worktree-specific repository, so a
+                # same-short-name remote ref in the other namespace — or one
+                # pointing at a different object — does not preserve the
+                # association. The protocol override keeps file:// remotes
+                # (local test fixtures) working; network remotes ignore it.
                 names_failed=0
-                for name in $(git for-each-ref --format='%(refname)' refs/tags/ refs/heads/ | sed 's|^refs/tags/||; s|^refs/heads/||'); do
-                    test -n "$name" || continue
-                    git -c protocol.file.allow=always ls-remote --exit-code --tags --refs --heads origin "$name" >/dev/null 2>&1 || names_failed=1
-                done
+                while IFS=' ' read -r ref_oid ref_name; do
+                    test -n "$ref_name" || continue
+                    remote_oid=$(git -c protocol.file.allow=always ls-remote origin "$ref_name" | awk '$2 == ref { print $1; exit }' ref="$ref_name")
+                    test "$remote_oid" = "$ref_oid" || names_failed=1
+                done <<REFS_EOF
+                $(git for-each-ref --format='%(objectname) %(refname)' refs/tags/ refs/heads/)
+                REFS_EOF
                 test "$names_failed" -eq 0
                 unreachable=$(git fsck --no-reflogs --unreachable --no-progress 2>/dev/null)
                 test -z "$unreachable"
@@ -1566,27 +1570,40 @@ struct WorktreeService {
             else { return false }
 
             let namesResult = try await Process.git(
-                gitArguments + ["for-each-ref", "--format=%(refname)", "refs/tags/", "refs/heads/"],
+                gitArguments + ["for-each-ref", "--format=%(objectname) %(refname)", "refs/tags/", "refs/heads/"],
                 cwd: worktreeGitDirectory
             )
             guard namesResult.exitCode == 0 else { return false }
             for nameRef in namesResult.stdout.split(whereSeparator: \.isNewline) {
-                let name = nameRef.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard name.hasPrefix("refs/tags/") || name.hasPrefix("refs/heads/") else { continue }
-                let shortName = String(name.dropFirst("refs/".count).split(separator: "/", maxSplits: 1).last ?? Substring())
-                guard !shortName.isEmpty else { continue }
+                let parts = nameRef.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .split(maxSplits: 1, omittingEmptySubsequences: true) { $0 == " " }
+                guard parts.count == 2 else { return false }
+                let oid = String(parts[0])
+                let fullName = String(parts[1])
+                guard fullName.hasPrefix("refs/tags/") || fullName.hasPrefix("refs/heads/") else { continue }
                 // The ref *name* is destroyed with the repository, so each
-                // one has to be published on the remote, regardless of the
-                // object it points at. The protocol override keeps file://
-                // remotes (local test fixtures) working; network remotes
-                // ignore it.
+                // one has to exist on the remote under the same namespace
+                // AND point at the same object — a same-short-name remote
+                // ref in the other namespace, or one pointing at a different
+                // object, does not preserve the association. The protocol
+                // override keeps file:// remotes (local test fixtures)
+                // working; network remotes ignore it.
                 let published = try await Process.git(
                     ["-c", "protocol.file.allow=always"]
                         + gitArguments
-                        + ["ls-remote", "--exit-code", "--tags", "--refs", "--heads", "origin", shortName],
+                        + ["ls-remote", "origin", fullName],
                     cwd: worktreeGitDirectory
                 )
                 guard published.exitCode == 0 else { return false }
+                let remoteOID = published.stdout
+                    .split(whereSeparator: \.isNewline)
+                    .compactMap { line -> String? in
+                        let columns = line.trimmingCharacters(in: .whitespaces)
+                            .split(maxSplits: 1, omittingEmptySubsequences: true) { $0 == "\t" || $0 == " " }
+                        return columns.count == 2 && columns[1] == fullName ? String(columns[0]) : nil
+                    }
+                    .first
+                guard remoteOID == oid else { return false }
             }
 
             let unreachable = try await Process.git(

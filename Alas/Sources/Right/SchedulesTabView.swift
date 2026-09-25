@@ -260,6 +260,9 @@ private struct ScheduleCard: View {
 
     @Environment(\.theme) private var theme
     @State private var reportSummaries: [String: ScheduledAgentReport] = [:]
+    /// Whether a `loadReportSummaries()` pass has completed: without it, a
+    /// nil `reportSummaries[id]` means "still fetching", not "deleted".
+    @State private var hasLoadedReportSummaries = false
     @State private var hovering = false
     @State private var menuHovered = false
     @State private var isConfirmingDelete = false
@@ -435,29 +438,52 @@ private struct ScheduleCard: View {
                 runLink(run)
             }
             ForEach(firing.reportIDs, id: \.self) { reportID in
-                Button {
-                    onOpenReport(reportID)
-                } label: {
-                    HStack(spacing: 3) {
-                        Icon(name: "doc.text", size: 8, color: theme.color("accent"))
-                        Text(reportSummaries[reportID].map(RunSchedulePresentation.scheduledAgentReportHistoryLabel) ?? "Scheduled agent report")
-                            .font(.system(size: 9.5))
-                            .foregroundColor(theme.color("accent"))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Open the scheduled agent report")
-                .accessibilityLabel(reportSummaries[reportID].map(RunSchedulePresentation.scheduledAgentReportHistoryLabel) ?? "Open scheduled agent report")
-                .accessibilityIdentifier("schedule-firing-report-\(reportID)")
+                scheduledReportLink(reportID)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, 8)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("schedule-firing-\(firing.id)")
+    }
+
+    /// A report link becomes inert once its report is known to be gone:
+    /// `reportSummaries` only holds loaded reports, so a missing entry after
+    /// loading means the report was deleted (or purged) — the history still
+    /// names it, but it is no longer something to open.
+    @ViewBuilder
+    private func scheduledReportLink(_ reportID: String) -> some View {
+        let isMissing = hasLoadedReportSummaries && reportSummaries[reportID] == nil
+        let label = reportSummaries[reportID]
+            .map(RunSchedulePresentation.scheduledAgentReportHistoryLabel)
+            ?? (isMissing ? "Deleted scheduled report" : "Scheduled agent report")
+        if isMissing {
+            Text(label)
+                .font(.system(size: 9.5))
+                .foregroundColor(theme.color("fg-faint"))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .accessibilityLabel(label)
+                .accessibilityIdentifier("schedule-firing-report-\(reportID)")
+        } else {
+            Button {
+                onOpenReport(reportID)
+            } label: {
+                HStack(spacing: 3) {
+                    Icon(name: "doc.text", size: 8, color: theme.color("accent"))
+                    Text(label)
+                        .font(.system(size: 9.5))
+                        .foregroundColor(theme.color("accent"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Open the scheduled agent report")
+            .accessibilityLabel(label)
+            .accessibilityIdentifier("schedule-firing-report-\(reportID)")
+        }
     }
 
     /// A run whose report has been purged, or whose worktree has since been
@@ -503,6 +529,7 @@ private struct ScheduleCard: View {
     private func loadReportSummaries() async {
         guard isShowingHistory else {
             reportSummaries = [:]
+            hasLoadedReportSummaries = false
             return
         }
         let ids = Array(Set(state.runScheduler.firings(for: schedule.id).flatMap(\.reportIDs))).sorted()
@@ -515,6 +542,7 @@ private struct ScheduleCard: View {
         }
         guard !Task.isCancelled else { return }
         reportSummaries = loaded
+        hasLoadedReportSummaries = true
     }
 
     private var actionLabel: String {
