@@ -122,6 +122,24 @@ struct ACPNewChatEmptyStateTests {
         #expect(!ACPNewChatEmptyStatePolicy.isVisible(for: disconnectedAgent))
     }
 
+    @Test("queued or scheduled prompts suppress the new empty state")
+    func queuedPromptsSuppressEmptyState() {
+        let queued = ACPSession(id: "queued", agentId: "codex", worktreeId: "wt", title: "Queued")
+        queued.setupState = .ready
+        queued.agentState = .ready
+        queued.enqueue(blocks: [.text("busy")])
+        #expect(!ACPNewChatEmptyStatePolicy.isVisible(for: queued))
+
+        let scheduled = ACPSession(id: "scheduled", agentId: "codex", worktreeId: "wt", title: "Scheduled")
+        scheduled.setupState = .ready
+        scheduled.agentState = .ready
+        scheduled.enqueueScheduled(
+            blocks: [.text("tomorrow")],
+            scheduledAt: Date(timeIntervalSince1970: 200)
+        )
+        #expect(!ACPNewChatEmptyStatePolicy.isVisible(for: scheduled))
+    }
+
     @Test("fresh attached sessions remain empty even after receiving a remote session id")
     func remoteSessionIdDoesNotSuppressFreshEmptyState() {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "New session")
