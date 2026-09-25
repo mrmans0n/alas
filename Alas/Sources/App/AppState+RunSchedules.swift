@@ -1713,6 +1713,41 @@ extension AppState {
             tabIds: sessionTabIDs
         )
         if let scheduledScriptTerminal {
+            // `TerminalService.closeSession` dispatches the zmx kill
+            // asynchronously and `onSessionUnregistered` releases the
+            // terminal's writer lease immediately, so a plain `closeTab`
+            // would let the final lease and fingerprint checks pass while
+            // the script shell (or work it spawned) is still writing into
+            // the worktree. Terminate first — waiting for the daemon-side
+            // kill — and only then close the tab, mirroring
+            // `stopWorkspaceCheckoutSessions`.
+            let projectPath = project.path
+            do {
+                try await terminal.terminateSessionsAndWait(
+                    [
+                        TerminalSessionIdentity(
+                            worktreeId: worktree.id,
+                            projectPath: projectPath,
+                            leafId: scheduledScriptTerminal.sessionID
+                        )
+                    ],
+                    timeout: 5
+                )
+            } catch is TerminalService.SessionTerminationError {
+                projectsManager.setOperationState(for: worktree, state: nil)
+                return await retainScheduledWorktree(
+                    reportID: report.id,
+                    reason: "The scheduled script terminal did not terminate.",
+                    store: store
+                )
+            } catch {
+                projectsManager.setOperationState(for: worktree, state: nil)
+                return await retainScheduledWorktree(
+                    reportID: report.id,
+                    reason: "The scheduled script terminal could not be terminated.",
+                    store: store
+                )
+            }
             closeTab(worktreeId: worktree.id, tabId: scheduledScriptTerminal.tabID)
         }
         await disposeACPManagerAndWait(owner: .worktree(worktree.id))

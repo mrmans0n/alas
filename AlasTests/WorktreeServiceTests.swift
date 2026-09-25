@@ -772,6 +772,67 @@ extension WorktreeServiceTests {
         ))
     }
 
+    @Test func scheduledCleanupRejectsUnpublishedSubmoduleBranchNames() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "scheduled-submodule-local-branch-name")
+        defer { fixture.removeFiles() }
+
+        let baseResult = try await Process.git(["rev-parse", "HEAD"], cwd: fixture.worktree.path)
+        try #require(baseResult.exitCode == 0)
+        let base = baseResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let superprojectRemote = "refs/remotes/origin/\(fixture.worktree.branch)"
+        let reachableSuperprojectHead = try await Process.git(
+            ["update-ref", superprojectRemote, base],
+            cwd: fixture.worktree.path
+        )
+        try #require(reachableSuperprojectHead.exitCode == 0)
+
+        let submodulePath = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
+        let submoduleHead = try await Process.git(["rev-parse", "HEAD"], cwd: submodulePath)
+        try #require(submoduleHead.exitCode == 0)
+        let submoduleOID = submoduleHead.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reachableSubmoduleHead = try await Process.git(
+            ["update-ref", "refs/remotes/origin/main", submoduleOID],
+            cwd: submodulePath
+        )
+        try #require(reachableSubmoduleHead.exitCode == 0)
+        #expect(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        ))
+
+        // A local branch whose tip is already reachable from a remote-tracking
+        // ref, but whose branch *name* was never published. Neither the
+        // rev-list nor the fsck checks can see any risk; the name check must.
+        let localBranch = try await Process.git(
+            ["branch", "local-name-only", submoduleOID],
+            cwd: submodulePath
+        )
+        try #require(localBranch.exitCode == 0)
+        let branchTipPublished = try await Process.git(
+            ["merge-base", "--is-ancestor", submoduleOID, "refs/remotes/origin/main"],
+            cwd: submodulePath
+        )
+        try #require(branchTipPublished.exitCode == 0)
+        #expect(!(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        )))
+
+        // Publishing the branch name on the remote clears the objection.
+        let pushBranch = try await Process.git(
+            ["push", "-q", "-u", "origin", "refs/heads/local-name-only:refs/heads/local-name-only"],
+            cwd: submodulePath
+        )
+        try #require(pushBranch.exitCode == 0, "push failed: \(pushBranch.stderr)")
+        #expect(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        ))
+    }
+
     @Test func scheduledCleanupRejectsResidualDeinitializedSubmoduleRepository() async throws {
         let repo = try await makeRepo()
         let suffix = "scheduled-submodule-deinitialized"

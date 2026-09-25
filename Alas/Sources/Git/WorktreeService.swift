@@ -1479,22 +1479,20 @@ struct WorktreeService {
                 test -n "$refs"
                 local_only=$(git rev-list --max-count=1 --all --reflog --not --remotes 2>/dev/null)
                 test -z "$local_only"
-                # Every local tag name must also exist on a remote. The commit
-                # behind a tag is already covered by the rev-list/fsck checks
-                # above, but the ref *name* itself is destroyed with the
-                # worktree-specific repository, so its publication on a
+                # Every local tag *name* must also exist on a remote, and the
+                # same holds for every local branch name. The commits behind
+                # them are already covered by the rev-list/fsck checks above,
+                # but the ref *names* themselves are destroyed with the
+                # worktree-specific repository, so their publication on a
                 # remote has to be verified per name (not per object). The
                 # protocol override keeps file:// remotes (local test
                 # fixtures) working; network remotes ignore it.
-                tags_failed=0
-                tags_list=$(git for-each-ref --format='%(refname)' refs/tags/)
-                while IFS= read -r tag_ref; do
-                    test -n "$tag_ref" || continue
-                    git -c protocol.file.allow=always ls-remote --exit-code --tags --refs origin "${tag_ref#refs/tags/}" >/dev/null 2>&1 || tags_failed=1
-                done <<TAGS_EOF
-                $tags_list
-                TAGS_EOF
-                test "$tags_failed" -eq 0
+                names_failed=0
+                for name in $(git for-each-ref --format='%(refname)' refs/tags/ refs/heads/ | sed 's|^refs/tags/||; s|^refs/heads/||'); do
+                    test -n "$name" || continue
+                    git -c protocol.file.allow=always ls-remote --exit-code --tags --refs --heads origin "$name" >/dev/null 2>&1 || names_failed=1
+                done
+                test "$names_failed" -eq 0
                 unreachable=$(git fsck --no-reflogs --unreachable --no-progress 2>/dev/null)
                 test -z "$unreachable"
                 """
@@ -1567,15 +1565,16 @@ struct WorktreeService {
                   localOnly.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { return false }
 
-            let tagsResult = try await Process.git(
-                gitArguments + ["for-each-ref", "--format=%(refname)", "refs/tags/"],
+            let namesResult = try await Process.git(
+                gitArguments + ["for-each-ref", "--format=%(refname)", "refs/tags/", "refs/heads/"],
                 cwd: worktreeGitDirectory
             )
-            guard tagsResult.exitCode == 0 else { return false }
-            for tagRef in tagsResult.stdout.split(whereSeparator: \.isNewline) {
-                let tagName = tagRef.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .dropFirst("refs/tags/".count)
-                guard !tagName.isEmpty else { continue }
+            guard namesResult.exitCode == 0 else { return false }
+            for nameRef in namesResult.stdout.split(whereSeparator: \.isNewline) {
+                let name = nameRef.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard name.hasPrefix("refs/tags/") || name.hasPrefix("refs/heads/") else { continue }
+                let shortName = String(name.dropFirst("refs/".count).split(separator: "/", maxSplits: 1).last ?? Substring())
+                guard !shortName.isEmpty else { continue }
                 // The ref *name* is destroyed with the repository, so each
                 // one has to be published on the remote, regardless of the
                 // object it points at. The protocol override keeps file://
@@ -1584,7 +1583,7 @@ struct WorktreeService {
                 let published = try await Process.git(
                     ["-c", "protocol.file.allow=always"]
                         + gitArguments
-                        + ["ls-remote", "--exit-code", "--tags", "--refs", "origin", String(tagName)],
+                        + ["ls-remote", "--exit-code", "--tags", "--refs", "--heads", "origin", shortName],
                     cwd: worktreeGitDirectory
                 )
                 guard published.exitCode == 0 else { return false }
