@@ -1248,7 +1248,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     private func imageChipHoverController() -> ACPImageChipHoverController {
         if let imageChipHover { return imageChipHover }
+        #if DEBUG
         let controller = imageChipHoverSpy ?? ACPImageChipHoverController()
+        #else
+        let controller = ACPImageChipHoverController()
+        #endif
         imageChipHover = controller
         return controller
     }
