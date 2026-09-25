@@ -126,7 +126,8 @@ Alas's `ACP/Orchestration/` layer is a *cross-harness delegation system that alr
 - `subagent_spawned` / `subagent_state_update` per ACP RFD 1992, normalized across dialects (incl. OpenCode).
 - Rendered inline in the parent transcript as collapsible rows with live child transcripts: `ACPSubagentRowView.swift:40`, `ACPSubagentRun.swift:16`, `ACPSession.swift:1829` (`registerSubagent`; `applySubagentState`/`applySubagentUpdate` follow at :1893/:1906; the `.subagentSpawned` update is handled at :584 and :752).
 - Capability negotiated per connection: `supportsSubagents` at `ACPConnection.swift:55` (defaults to `false` at :66).
-- There is currently **no** `disallowedTools`/`allowedTools` plumbing anywhere in `Alas/Sources` or `AlasCLI` — so a "force Alas delegation" toggle has no existing hook to attach to and would need whatever per-harness config surface ACP exposes.
+- There is currently **no** `disallowedTools`/`allowedTools` plumbing anywhere in `Alas/Sources` or `AlasCLI`, and Alas sends no `_meta` on `session/new`. A "force Alas delegation" toggle therefore needs per-harness wiring; Appendix C records which harnesses expose a switch and where it would attach.
+- Alas already opts into RFD 1992 subagent updates: `ACPClientCapabilities` defaults `subagents` to an empty object (`ACPMessages.swift:55–76`) and `ACPConnection.swift:103` sends it.
 
 ### Side-by-side with bb
 
@@ -213,3 +214,26 @@ Trust-but-verify pass over the claims above.
 - That bb exposes delegation over **MCP**. Neither the public site, `system-overview.md`, the agent guides, nor the Claude Code provider's `server.ts` (no `mcpServers` registration) mention it; GitHub code search requires sign-in. The earlier "via CLI, MCP, SDK, or HTTP API" wording was softened accordingly.
 - The exact `PreToolUse` hook source and denial string; issue #3959 describes the hook, but the provider file fetched only shows the setting → `providerSubagentsEnabled` mapping.
 - The `--send-at`, `--machine`, `--reasoning-level` flag list in Part 2 comes from the earlier pass and was not re-fetched today.
+
+## Appendix C — Phase 0 spike: can each harness hide its native subagent tool? (2026-09-25)
+
+Question per adapter Alas launches (`ACPLaunchCatalog.swift`): does it have native subagents, can they be **hidden from the model** (not merely denied at call time), where would Alas attach the switch, and does it emit RFD 1992 `subagent_spawned` / `subagent_state_update`?
+
+| Adapter | Native subagents | Disable switch | Hidden or denied? | Emits RFD 1992 updates | Confidence |
+|---|---|---|---|---|---|
+| `claude-agent-acp` | Yes (`Agent`/`Task`) | (i) `session/new` `_meta.claudeCode.options.disallowedTools: ["Agent","Task"]`, merged into SDK `disallowedTools`; (ii) `.claude/settings.json` `permissions.deny: ["Agent"]` (adapter loads user/project/local settings); (iii) `_meta.claudeCode.options.tools` custom list. No CLI flag or env var. | **Hidden**: a bare tool name in deny/`disallowedTools` removes the tool from context; scoped rules like `Agent(Explore)` only block calls | Yes, gated on client `subagents: {}` (Alas sends it) | High |
+| `codex-acp` | Yes (`spawn_agent`, `send_input`, `wait_agent`, …; on by default) | `agents.enabled = false` (or `features.multi_agent = false`) in `config.toml`. Adapter forwards overrides only via env `CODEX_CONFIG` JSON, e.g. `{"agents":{"enabled":false}}`, spread into `thread/start` | Docs say "disable multi-agent tools"; tool omission not confirmed in `codex-rs` source | Yes, gated on `subagents: {}`; otherwise flattened to `tool_call` | High for switch and updates; low for hidden-vs-denied; medium for `CODEX_CONFIG` merge semantics |
+| `gemini --acp` | Yes (`invoke_agent` wrapper over `codebase_investigator`, `generalist`, …) | `settings.json` `experimental.enableAgents: false` (master), per-agent `agents.overrides.<name>.enabled`, or `tools.exclude: ["invoke_agent"]` | **Hidden**: excluded tools are dropped from function declarations | **No**: ACP code emits only message/thought/tool_call updates | High |
+| `opencode acp` | Yes (`task` tool) | `opencode.json` `tools` / `permission` map — **not verified** | — | Not the RFD spelling: emits `opencode/session/child_update`, opted in via `_meta["opencode/child-session-updates"]`; Alas already re-prefixes it into a synthetic `subagent_spawned` (`ACPOpenCodeChildUpdate.swift`) | Medium on updates, low on switch |
+| `agent acp` (Cursor) | Unknown | Unknown | — | Unknown | Low |
+| `copilot --acp` | Unknown | Unknown | — | Unknown | Low |
+| `pi-acp` | Unknown | Unknown | — | Unknown | Low |
+| `omp acp` | Unknown | Unknown | — | Unknown | Low |
+
+**Consequences for Phase 3 (the toggle):**
+
+- The three harnesses that matter most each have a real hide switch, but through three different channels: ACP `session/new` `_meta` (Claude), a process env var (Codex), and a settings file on disk (Gemini). `ACPLaunchSpec` already carries `extraEnv`, so Codex is one line; Claude needs `_meta` support in `session/new` (new, small); Gemini would require Alas to write into the user's Gemini settings, which is invasive and should probably be a documented manual step instead.
+- For harnesses with no known switch, the toggle degrades to the preamble instruction plus the existing policy backstop, exactly bb's fallback posture.
+- Any per-harness toggle should be modelled as a capability on the launch spec (`nativeSubagentSwitch: .sessionMeta | .env | .userSettings | .none`) rather than a global boolean, so the settings UI can say honestly what will happen.
+
+**Sources:** claude-agent-acp `src/acp-agent.ts`, `src/native-subagents.ts`, `src/acp-subagents.ts`, README "Subagent sessions"; Claude Code permissions and CLI reference docs; codex-acp README "Runtime options", `src/index.ts`, `src/CodexAcpClient.ts`, `docs/subagent-sessions.md`; Codex config reference and subagents guide on learn.chatgpt.com; gemini-cli `docs/core/subagents.md`, `packages/core/src/tools/tool-registry.ts`, `packages/core/src/agents/registry.ts`, `packages/cli/src/acp/`; RFD 1992 (agent-client-protocol PR 1992).
