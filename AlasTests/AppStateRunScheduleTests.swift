@@ -359,7 +359,7 @@ struct AppStateRunScheduleTests {
             .appendingPathComponent("scheduled-report-recovery-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let databasePath = directory.appendingPathComponent("reports.sqlite").path
-        let initialStore = try ScheduledAgentReportStore(path: databasePath)
+        let initialStore = try ScheduledAgentReportStore(path: databasePath, pid: Int64.max)
         try await initialStore.create(ScheduledAgentReport(
             id: "interrupted",
             occurrenceID: "occurrence",

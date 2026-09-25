@@ -9,8 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixes
 
 - Preserve ACP tail scrolling when activity folds during scroll settling, retaining any bottom elastic overscroll without jumping back to the activity header. Layout corrections no longer count as user scrolling or resume paused tail-follow; downward scrollbar-track clicks continue paging into hidden newer messages.
-- Bind scheduled cleanup authorization to verified HEAD, retain worktrees after unrelated ACP prompts, and write reports to their configured database path (#1465).
-- Refuse scheduled worktree cleanup unless initialized submodule HEADs and reflog-only commits are remotely reachable, bind worktree lineage and superproject/submodule remote refs to deletion authorization, fail settlement when a queued prompt is removed before dispatch, finalize reports promptly after schedule cancellation, retain worktrees when report finalization fails, and reject completions whose serialized request exceeds the socket payload limit (#1465).
+- Bind scheduled cleanup authorization to verified HEAD, retain worktrees after unrelated ACP prompts, write reports to their configured database path, and preserve reports owned by live app processes during startup reconciliation (#1465).
+- Refuse scheduled worktree cleanup unless initialized submodule HEADs and all commits reachable from submodule refs or reflogs are remote-reachable, bind worktree lineage and superproject/submodule remote refs to deletion authorization, fail settlement when a queued prompt is removed before dispatch, finalize reports promptly after schedule cancellation, retain worktrees when report finalization fails, and reject completions whose serialized request exceeds the socket payload limit (#1465).
 
 ## [0.19.7] - 2026-09-24
 

@@ -4,31 +4,61 @@ actor ScheduledAgentReportStore {
     static let maximumPayloadBytes = ScheduledAgentReportLimits.maximumPayloadBytes
 
     private let database: SQLiteDatabase
+
+    private let ownerInstanceID: String
+    private let ownerPID: Int64
+    private let ownerCreatedAt: Date
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    init(path: String = Paths.scheduledAgentReportsDB.path) throws {
+    init(
+        path: String = Paths.scheduledAgentReportsDB.path,
+        instanceID: String = UUID().uuidString,
+        pid: Int64 = Int64(ProcessInfo.processInfo.processIdentifier),
+        ownerCreatedAt: Date = Date()
+    ) throws {
+        self.ownerInstanceID = instanceID
+        self.ownerPID = pid
+        self.ownerCreatedAt = ownerCreatedAt
+
         try FileManager.default.createDirectory(
             at: URL(fileURLWithPath: path).deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        database = try SQLiteDatabase(path: path)
-        try database.exec("""
-        CREATE TABLE IF NOT EXISTS scheduled_agent_reports (
-            id TEXT PRIMARY KEY NOT NULL,
-            occurrence_id TEXT NOT NULL,
-            schedule_id TEXT NOT NULL,
-            project_id TEXT NOT NULL,
-            started_at REAL NOT NULL,
-            session_id TEXT,
-            task_state TEXT NOT NULL,
-            cleanup_state TEXT NOT NULL,
-            payload BLOB NOT NULL
-        )
-        """)
-        try database.exec("CREATE INDEX IF NOT EXISTS scheduled_agent_reports_project_date ON scheduled_agent_reports(project_id, started_at DESC)")
-        try database.exec("CREATE INDEX IF NOT EXISTS scheduled_agent_reports_schedule_date ON scheduled_agent_reports(schedule_id, started_at DESC)")
-        try database.exec("CREATE INDEX IF NOT EXISTS scheduled_agent_reports_occurrence ON scheduled_agent_reports(occurrence_id)")
+        let database = try SQLiteDatabase(path: path)
+        try Self.immediateTransaction(database) {
+            try database.exec("""
+            CREATE TABLE IF NOT EXISTS scheduled_agent_reports (
+                id TEXT PRIMARY KEY NOT NULL,
+                occurrence_id TEXT NOT NULL,
+                schedule_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                started_at REAL NOT NULL,
+                session_id TEXT,
+                task_state TEXT NOT NULL,
+                cleanup_state TEXT NOT NULL,
+                payload BLOB NOT NULL,
+                owner_instance_id TEXT,
+                owner_pid INTEGER,
+                owner_created_at REAL
+            )
+            """)
+            let columns = try database.query("PRAGMA table_info(scheduled_agent_reports)")
+            let names = Set(columns.compactMap { $0["name"] as? String })
+            if !names.contains("owner_instance_id") {
+                try database.exec("ALTER TABLE scheduled_agent_reports ADD COLUMN owner_instance_id TEXT")
+            }
+            if !names.contains("owner_pid") {
+                try database.exec("ALTER TABLE scheduled_agent_reports ADD COLUMN owner_pid INTEGER")
+            }
+            if !names.contains("owner_created_at") {
+                try database.exec("ALTER TABLE scheduled_agent_reports ADD COLUMN owner_created_at REAL")
+            }
+            try database.exec("CREATE INDEX IF NOT EXISTS scheduled_agent_reports_project_date ON scheduled_agent_reports(project_id, started_at DESC)")
+            try database.exec("CREATE INDEX IF NOT EXISTS scheduled_agent_reports_schedule_date ON scheduled_agent_reports(schedule_id, started_at DESC)")
+            try database.exec("CREATE INDEX IF NOT EXISTS scheduled_agent_reports_occurrence ON scheduled_agent_reports(occurrence_id)")
+        }
+        self.database = database
     }
 
     func create(_ report: ScheduledAgentReport) throws {
@@ -40,9 +70,12 @@ actor ScheduledAgentReportStore {
         let changes = try database.execChanges("""
         INSERT OR IGNORE INTO scheduled_agent_reports (
             id, occurrence_id, schedule_id, project_id, started_at,
-            session_id, task_state, cleanup_state, payload
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, bindings: bindings(for: report, payload: payload))
+            session_id, task_state, cleanup_state, payload,
+            owner_instance_id, owner_pid, owner_created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, bindings: bindings(for: report, payload: payload) + [
+            ownerInstanceID, ownerPID, ownerCreatedAt.timeIntervalSince1970,
+        ])
         guard changes == 1 else { throw ScheduledAgentReportStoreError.duplicateReport(report.id) }
     }
 
@@ -265,15 +298,24 @@ actor ScheduledAgentReportStore {
         return report
     }
 
-    /// A restart is never evidence that an agent finished or that deletion is
-    /// still safe. Convert every unfinished transition to a retained record.
+    /// Recover incomplete reports only after their recorded owner process is
+    /// gone. Legacy rows without ownership metadata are treated as orphans.
     @discardableResult
     func reconcileAfterRestart(at now: Date = Date()) throws -> Int {
-        try database.transaction {
-            let rows = try database.query("SELECT payload FROM scheduled_agent_reports")
+        try Self.immediateTransaction(database) {
+            let rows = try database.query("""
+            SELECT payload, owner_instance_id, owner_pid, owner_created_at
+            FROM scheduled_agent_reports
+            """)
             var changed = 0
             for row in rows {
                 var report = try decodeReport(row)
+                let needsRecovery = report.taskState == .running
+                    || report.cleanupState == .pending
+                    || (report.cleanupRequested
+                        && report.taskState == .interrupted
+                        && report.cleanupState != .retained)
+                guard needsRecovery, !Self.rowHasLiveOwner(row) else { continue }
                 var needsWrite = false
                 if report.taskState == .running {
                     report.taskState = .interrupted
@@ -368,6 +410,40 @@ actor ScheduledAgentReportStore {
             throw ScheduledAgentReportStoreError.invalidRow
         }
         return try decoder.decode(ScheduledAgentReport.self, from: payload)
+    }
+
+    /// Serialize schema upgrades and recovery scans across app processes.
+    /// A reserved write lock prevents two readers from racing into DDL or updates.
+    private static func immediateTransaction<T>(
+        _ database: SQLiteDatabase,
+        _ work: () throws -> T
+    ) throws -> T {
+        try database.exec("BEGIN IMMEDIATE")
+        do {
+            let result = try work()
+            try database.exec("COMMIT")
+            return result
+        } catch {
+            try? database.exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    private static func rowHasLiveOwner(_ row: [String: Any?]) -> Bool {
+        guard let instanceID = row["owner_instance_id"] as? String,
+              !instanceID.isEmpty,
+              let pid = row["owner_pid"] as? Int64,
+              pid > 0,
+              let timestamp = row["owner_created_at"] as? Double,
+              timestamp.isFinite,
+              timestamp >= 0,
+              timestamp <= Date().timeIntervalSince1970 + 1 else {
+            return false
+        }
+        return ACPProcessLiveness.pidMatchesLease(
+            pid: pid,
+            createdAt: Date(timeIntervalSince1970: timestamp)
+        )
     }
 
     private func validate(_ report: ScheduledAgentReport) throws {

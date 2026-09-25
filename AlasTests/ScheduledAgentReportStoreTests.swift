@@ -182,7 +182,7 @@ struct ScheduledAgentReportStoreTests {
     @Test func restartRetainsCompletedAndAcceptedReportsWithoutStartingCleanup() async throws {
         let path = temporaryPath()
         defer { try? FileManager.default.removeItem(atPath: path) }
-        let first = try ScheduledAgentReportStore(path: path)
+        let first = try ScheduledAgentReportStore(path: path, pid: Int64.max)
         try await first.create(report(id: "running"))
         try await first.create(report(id: "cleanup"))
         try await first.associateSession(reportID: "cleanup", sessionID: "session-2")
@@ -213,6 +213,66 @@ struct ScheduledAgentReportStoreTests {
         #expect(accepted.completion == completion)
         #expect(accepted.cleanupState == .retained)
         #expect(try await relaunched.reconcileAfterRestart(at: epoch.addingTimeInterval(120)) == 0)
+    }
+
+    @Test func restartReconciliationLeavesReportsOwnedByAnotherLiveStoreAlone() async throws {
+        let path = temporaryPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let pid = Int64(ProcessInfo.processInfo.processIdentifier)
+        let first = try ScheduledAgentReportStore(path: path, instanceID: "first-store", pid: pid)
+        try await first.create(report(id: "running"))
+        try await first.create(report(id: "cleanup"))
+        try await first.associateSession(reportID: "cleanup", sessionID: "session-2")
+        _ = try await first.finish(
+            reportID: "cleanup",
+            authenticatedSessionID: "session-2",
+            completion: completion
+        )
+
+        let second = try ScheduledAgentReportStore(path: path, instanceID: "second-store", pid: pid)
+        #expect(try await second.reconcileAfterRestart(at: epoch.addingTimeInterval(60)) == 0)
+        let running = try #require(try await second.report(id: "running"))
+        #expect(running.taskState == .running)
+        let pendingCleanup = try #require(try await second.report(id: "cleanup"))
+        #expect(pendingCleanup.taskState == .succeeded)
+        #expect(pendingCleanup.cleanupState == .pending)
+    }
+
+    @Test func legacyRowsWithoutOwnerColumnsAreMigratedAndReconciledAsOrphans() async throws {
+        let path = temporaryPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let legacyDatabase = try SQLiteDatabase(path: path)
+        try legacyDatabase.exec("""
+        CREATE TABLE scheduled_agent_reports (
+            id TEXT PRIMARY KEY NOT NULL,
+            occurrence_id TEXT NOT NULL,
+            schedule_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            started_at REAL NOT NULL,
+            session_id TEXT,
+            task_state TEXT NOT NULL,
+            cleanup_state TEXT NOT NULL,
+            payload BLOB NOT NULL
+        )
+        """)
+        let oldReport = report(id: "legacy")
+        try legacyDatabase.exec("""
+        INSERT INTO scheduled_agent_reports (
+            id, occurrence_id, schedule_id, project_id, started_at,
+            session_id, task_state, cleanup_state, payload
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, bindings: [
+            oldReport.id, oldReport.occurrenceID, oldReport.scheduleID, oldReport.projectID,
+            oldReport.startedAt.timeIntervalSince1970, oldReport.sessionID,
+            oldReport.taskState.rawValue, oldReport.cleanupState.rawValue,
+            try JSONEncoder().encode(oldReport),
+        ])
+
+        let migratedStore = try ScheduledAgentReportStore(path: path)
+        #expect(try await migratedStore.reconcileAfterRestart(at: epoch.addingTimeInterval(60)) == 1)
+        let recovered = try #require(try await migratedStore.report(id: "legacy"))
+        #expect(recovered.taskState == .interrupted)
+        #expect(recovered.cleanupState == .retained)
     }
 
     @Test func reportBodyHasABoundedSizeAndOnlyCompletedReportsAreDeletable() async throws {
