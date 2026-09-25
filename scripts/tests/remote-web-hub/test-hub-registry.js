@@ -382,4 +382,49 @@ assert.deepEqual([...registry.peerSessionCounts(undefined).entries()], []);
   );
 }
 
+// --- hello.peers persistence ---------------------------------------------------
+
+{
+  const doc = { version: 1, activeId: null, servers: [] };
+  const { server } = registry.upsertPaired(doc, { origins: ["http://10.0.0.3:8765"], token: "t1", now: 1 });
+  registry.applyHello(doc, server.id, {
+    type: "hello", protocolVersion: 1, serverId: "srv-GW", name: "Gateway", federationEnabled: true,
+    peers: [{ serverId: "srv-B", name: "Peer B", state: "online" }, { serverId: "srv-C", name: "Peer C", state: "online" }, { serverId: null, name: "bad", state: "online" }],
+  });
+  assert.deepEqual(server.peers, ["srv-B", "srv-C"], "peer serverIds are extracted; malformed entries are dropped");
+}
+
+{
+  const doc = { version: 1, activeId: null, servers: [] };
+  const { server } = registry.upsertPaired(doc, { origins: ["http://10.0.0.4:8765"], token: "t1", now: 1 });
+  registry.applyHello(doc, server.id, { type: "hello", protocolVersion: 1, serverId: "srv-GW2", name: "Gateway2" });
+  assert.deepEqual(server.peers, [], "hello with no peers field means an empty roster, not a crash");
+}
+
+// peerSessionCounts seeds a zero entry for every known peer so an emptied-out
+// gateway peer reads as authoritative zero, not "ungatewayed" (serverBadgeCounts
+// only trusts gatewayCounts when it `has` an entry for that serverId).
+assert.deepEqual(
+  [...registry.peerSessionCounts(
+    [{ id: "1", serverId: "srv-B", status: "awaitingPermission" }],
+    ["srv-B", "srv-C"]
+  ).entries()],
+  [["srv-B", { attention: 1, running: 0 }], ["srv-C", { attention: 0, running: 0 }]],
+  "srv-C is a known peer with no rows in this sessionList -> seeded zero, not absent"
+);
+assert.deepEqual(
+  [...registry.peerSessionCounts([{ id: "1", serverId: "srv-B", status: "awaitingPermission" }]).entries()],
+  [["srv-B", { attention: 1, running: 0 }]],
+  "no knownServerIds argument behaves exactly as before (rows-only)"
+);
+
+{
+  const gatewayCounts = registry.peerSessionCounts([], ["srv-B"]);
+  assert.deepEqual(
+    registry.serverBadgeCounts({ serverId: "srv-B" }, { attention: 3, running: 0 }, { federationEnabled: true }, gatewayCounts),
+    { attention: 0, running: 0 },
+    "a known peer with zero current rows overrides a stale nonzero idle-polled count"
+  );
+}
+
 console.log("hub-registry tests passed");

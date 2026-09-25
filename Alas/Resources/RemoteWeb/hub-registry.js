@@ -240,6 +240,13 @@ function applyHello(doc, clientId, hello) {
   const name = helloName || server.name;
   const protocolVersion = Number.isInteger(hello.protocolVersion) ? hello.protocolVersion : null;
   const federationEnabled = hello.federationEnabled === true;
+  // The gateway's own peer roster, independent of whichever peers currently
+  // happen to have rows in the last sessionList — see peerSessionCounts,
+  // which seeds a zero entry for each so an emptied-out peer reads as "0",
+  // not "not gatewayed, fall back to idle polling".
+  const peers = Array.isArray(hello.peers)
+    ? hello.peers.map((p) => (p && typeof p.serverId === "string") ? p.serverId : null).filter(Boolean)
+    : [];
   const twin = serverId ? doc.servers.find((s) => s.id !== clientId && s.serverId === serverId) : null;
   if (twin) {
     twin.token = server.token;
@@ -248,6 +255,7 @@ function applyHello(doc, clientId, hello) {
     twin.name = name;
     twin.protocolVersion = protocolVersion;
     twin.federationEnabled = federationEnabled;
+    twin.peers = peers;
     doc.servers = doc.servers.filter((s) => s.id !== clientId);
     if (doc.activeId === clientId) doc.activeId = twin.id;
     return { server: twin, mergedFromId: clientId };
@@ -256,6 +264,7 @@ function applyHello(doc, clientId, hello) {
   server.name = name;
   server.protocolVersion = protocolVersion;
   server.federationEnabled = federationEnabled;
+  server.peers = peers;
   return { server, mergedFromId: null };
 }
 
@@ -299,8 +308,15 @@ function attentionCounts(sessions) {
 // sessionList — only rows carrying a serverId (forwarded from a peer)
 // contribute. Local rows (no serverId) are the gateway's own sessions,
 // already counted toward that gateway's own idle-poll-derived link.counts.
-function peerSessionCounts(sessions) {
+// `knownServerIds` (the gateway's own peer roster, from hello.peers) seeds
+// a zero entry for each first, so a peer the gateway reports but currently
+// has no rows for (no sessions, or its last attention session just closed)
+// reads as an authoritative "0" rather than "not gatewayed" — without this,
+// serverBadgeCounts would fall back to that peer's stale idle-polled count
+// until the next 30s poll.
+function peerSessionCounts(sessions, knownServerIds) {
   const byServer = new Map();
+  for (const id of knownServerIds || []) byServer.set(id, { attention: 0, running: 0 });
   for (const session of sessions || []) {
     if (!session || !session.serverId) continue;
     const counts = byServer.get(session.serverId) || { attention: 0, running: 0 };

@@ -1527,4 +1527,19 @@ struct RemoteWebAssetTests {
         #expect(picked.contains("const generation = composerGeneration;"))
         #expect(picked.contains("if (generation !== composerGeneration) return;"))
     }
+
+    // Regression (Codex review, PR #1470): a peer section's own inner
+    // "Other" bucket (orphan sessions the gateway forwards with no
+    // project/worktree info) sits inside a section whose isOther is false —
+    // only the top-level local "Other" section has that flag set. Gating
+    // worktreeRow1's summary-free rendering path on section.isOther alone
+    // sent that bucket through the branch-reading path instead, which reads
+    // summary.branch off a worktree that never has a summary and throws,
+    // aborting the entire session-list render.
+    @Test func worktreeRow1SkipsBranchRenderingForAnySummaryFreeWorktree() throws {
+        let js = try asset("app.js")
+        let body = try #require(js.range(of: "function worktreeRow1(section, worktree, singleSession, expanded) {").map { js[$0.lowerBound...].prefix(900) })
+        #expect(body.contains("if (section.isOther || !worktree.summary) {"))
+        #expect(!body.contains("if (section.isOther) {"))
+    }
 }

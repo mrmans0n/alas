@@ -352,7 +352,7 @@ function switchServer(id) {
 function handle(msg) {
   switch (msg.type) {
     case "sessionList":
-      gatewayCounts = RemoteHubRegistry.peerSessionCounts(msg.sessions);
+      gatewayCounts = RemoteHubRegistry.peerSessionCounts(msg.sessions, (activeServer() || {}).peers);
       renderSessions(msg.sessions);
       worktreeCreation.markRecoveryListLoaded("sessions");
       refreshHubViews();
@@ -707,8 +707,13 @@ function worktreeRow1(section, worktree, singleSession, expanded) {
   const row = el("div", "r1");
   // The "Other" group has no real worktree — no branch to show, so the
   // session's own title (or the group label, once it holds several) stands
-  // in as the identity instead.
-  if (section.isOther) {
+  // in as the identity instead. A peer section's own inner "Other" bucket
+  // (orphan sessions forwarded with no project/worktree info) is the same
+  // shape even though the section itself isn't the top-level "Other"
+  // section, so gate on the worktree actually carrying a summary rather
+  // than on the section flag alone — otherwise this reads summary.branch
+  // off a bucket that never has one and throws.
+  if (section.isOther || !worktree.summary) {
     const title = singleSession ? (sessionTitles.get(singleSession.id) || singleSession.title) : "Other";
     row.append(el("span", "wt-title", title));
     if (!singleSession) appendSessionDisclosure(row, worktree, expanded);
