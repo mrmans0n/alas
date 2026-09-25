@@ -4,7 +4,11 @@ import Testing
 
 /// End-to-end coverage of the Run tab's state: launching, completion versus
 /// shell lifetime, worktree isolation, and interrupted execution.
+/// Serialized: the fixtures share process-wide registries (terminal sessions,
+/// pending-launch bookkeeping) and parallel same-path project tests race on
+/// them.
 @MainActor
+@Suite(.serialized)
 struct AppStateRunRecordTests {
     @Test func previewAutomationResolvesConfiguredRunHost() async throws {
         let fixture = try makeFixture()
@@ -263,13 +267,28 @@ struct AppStateRunRecordTests {
             )
         }
         let errors = ErrorBox()
-        // Session IDs derive from the worktree identity, not a call counter:
-        // the two async launches of `eachWorktreeKeepsItsOwnRun` can open in
-        // either order, so a counter can hand the two worktrees swapped IDs.
+        // Session IDs derive from the worktree identity, not a bare call
+        // counter: the two async launches of `eachWorktreeKeepsItsOwnRun` can
+        // open in either order, so a counter can hand the two worktrees
+        // swapped IDs. Same-path projects share a worktree id, so the index
+        // is keyed by (worktree id, project id) — deterministic per project
+        // and unique across the same-path launches. The opener runs on the
+        // MainActor, so the map needs no locking.
+        var sessionIndicesByWorktreeProject: [String: Int] = [:]
         let opener = terminalSessionOpener ?? { worktree, _, _, _, _, _, _, _, _ in
-            let index = worktree.id.hasPrefix("wt-") ? Int(worktree.id.dropFirst(3)) : nil
+            let key = "\(worktree.id)\u{0}\(worktree.projectId)"
+            let index: Int
+            if let existing = sessionIndicesByWorktreeProject[key] {
+                index = existing
+            } else if worktree.id.hasPrefix("wt-"), let suffix = Int(worktree.id.dropFirst(3)),
+                      suffix != 0, sessionIndicesByWorktreeProject.values.allSatisfy({ $0 != suffix }) {
+                index = suffix
+            } else {
+                index = (sessionIndicesByWorktreeProject.values.max() ?? 0) + 1
+            }
+            sessionIndicesByWorktreeProject[key] = index
             return AppState.OpenedTerminalSession(
-                id: "session-\(index ?? 1)",
+                id: "session-\(index)",
                 foregroundPid: { 123 }
             )
         }
