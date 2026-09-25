@@ -59,7 +59,8 @@ final class EditorLSPBinding {
             forFile: fileURL,
             worktreeRoot: holderRoot,
             worktreeID: worktreeID,
-            range: lspRange
+            range: lspRange,
+            hostResolution: buffer.hostResolution
         ) else {
             throw Error.documentNotOpen
         }
@@ -76,7 +77,7 @@ final class EditorLSPBinding {
             && context.sourceGeneration == buffer.editGeneration
             && context.document.worktreeID == worktreeID
             && context.document.uri == buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI
-            && context.document.host == RemoteHostRegistry.shared.host(forPath: holderRoot.path)
+            && context.document.host == buffer.hostResolution.remoteHost(forPath: holderRoot.path)
             && manager.isCurrent(context)
     }
 
@@ -94,6 +95,11 @@ final class EditorLSPBinding {
     func openedClient(language: String) -> LSPClient? {
         guard active, let buffer else { return nil }
         let fileURL = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath)
-        return manager.openedClient(forFile: fileURL, worktreeRoot: holderRoot, language: language)
+        return manager.openedClient(
+            forFile: fileURL,
+            worktreeRoot: holderRoot,
+            language: language,
+            hostResolution: buffer.hostResolution
+        )
     }
 }

@@ -96,7 +96,7 @@ struct BranchOpsMenu: View {
     private func loadBranches() async {
         branchesLoading = true
         defer { branchesLoading = false }
-        let svc = GitService()
+        let svc = rps.gitService
         if let list = try? await svc.branches(at: rps.worktree.path) {
             branchesForPicker = list
         }

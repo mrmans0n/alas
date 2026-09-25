@@ -21,7 +21,7 @@ extension GitService {
     func stackCommitInfos(at worktree: URL, shas: [String]) async throws -> [String: CommitInfo] {
         guard !shas.isEmpty else { return [:] }
         let format = "%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%b%x1d"
-        let result = try await Process.git(
+        let result = try await runGit(
             ["log", "--no-walk=unsorted", "--stdin", "--pretty=tformat:\(format)", "--numstat"],
             cwd: worktree,
             stdin: shas.joined(separator: "\n") + "\n"

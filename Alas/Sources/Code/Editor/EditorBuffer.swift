@@ -2,9 +2,28 @@ import AppKit
 import Foundation
 import Observation
 
-enum EditorBufferHostResolution {
+enum EditorBufferHostResolution: Equatable, Sendable {
     case pathRegistry
     case project(String?)
+
+    func remoteHost(forPath path: String?) -> String? {
+        switch self {
+        case .pathRegistry:
+            guard let path else { return nil }
+            return RemoteHostRegistry.shared.host(forPath: path)
+        case .project(let host):
+            return host
+        }
+    }
+
+    func processOptions(forPath path: String?, pathRegistryEnabled: Bool = true) -> (remoteHost: String?, usesRemoteHostRegistry: Bool) {
+        switch self {
+        case .pathRegistry:
+            return (nil, pathRegistryEnabled)
+        case .project(let host):
+            return (host, false)
+        }
+    }
 }
 
 struct EditorSourceScrollAnchor {
@@ -342,7 +361,7 @@ final class EditorBuffer {
         if let lsp, let language = openedLanguage, !workspaceEditDeleted, !wasDeleted {
             let url = absoluteFileURL
             let text = storage.string
-            Task { await lsp.didChange(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language, text: text, edits: nil) }
+            Task { await lsp.didChange(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: language, text: text, edits: nil, hostResolution: self.hostResolution) }
         }
     }
 
@@ -377,7 +396,7 @@ final class EditorBuffer {
             await pendingOpen?.value
             guard let self else { return }
             if let lsp, let oldLanguage {
-                await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: oldURL, languageId: oldLanguage)
+                await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: oldURL, languageId: oldLanguage, hostResolution: hostResolution)
             }
             guard !Task.isCancelled, relativePath == path, !workspaceEditDeleted else { return }
             if remoteHost != nil { openRemoteLSPIfNeeded() } else { openLSPDocumentIfReady() }
@@ -420,6 +439,7 @@ final class EditorBuffer {
     private var watcherFD: Int32 = -1
     private var watcherDeliveryGeneration = 0
     @ObservationIgnored
+    let hostResolution: EditorBufferHostResolution
     private let remoteHost: String?
     var isRemote: Bool { remoteHost != nil }
     @ObservationIgnored
@@ -598,7 +618,8 @@ final class EditorBuffer {
         editable: Bool = false,
         store: EditorBufferStore? = nil,
         worktreeId: String? = nil,
-        tabId: String? = nil
+        tabId: String? = nil,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
     ) {
         let worktreeRoot = externalAbsoluteURL.deletingLastPathComponent()
         let relativePath = externalAbsoluteURL.lastPathComponent
@@ -611,7 +632,8 @@ final class EditorBuffer {
             tabId: editable ? tabId : nil,
             restoreEnabled: editable,
             lsp: nil,
-            externalEditable: editable
+            externalEditable: editable,
+            hostResolution: hostResolution
         )
     }
 
@@ -620,15 +642,8 @@ final class EditorBuffer {
         self.relativePath = relativePath
         self.isExternal = isExternal
         self.externalEditable = externalEditable
-        let remoteHost: String?
-        switch hostResolution {
-        case .pathRegistry:
-            remoteHost = RemoteHostRegistry.shared.host(
-                forPath: worktreeRoot.appendingPathComponent(relativePath).path
-            )
-        case .project(let host):
-            remoteHost = host
-        }
+        self.hostResolution = hostResolution
+        let remoteHost = hostResolution.remoteHost(forPath: worktreeRoot.appendingPathComponent(relativePath).path)
         self.remoteHost = remoteHost
         self.navigationResolvedRoot = remoteHost == nil ? navigationResolvedRoot : nil
         self.localSaveRoot = remoteHost == nil ? navigationResolvedRoot ?? worktreeRoot.resolvingSymlinksInPath().standardizedFileURL : nil
@@ -763,20 +778,22 @@ final class EditorBuffer {
               let effective = effectiveLanguage else { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let worktreeRoot = self.worktreeRoot
-        guard !lsp.isDocumentOpen(fileURL: url, worktreeRoot: worktreeRoot) else { return }
+        guard !lsp.isDocumentOpen(fileURL: url, worktreeRoot: worktreeRoot, hostResolution: hostResolution) else { return }
         let text = storage.string
         lspOpenGeneration &+= 1
         let generation = lspOpenGeneration
+        let hostResolution = self.hostResolution
         lspOpenTask = Task { [weak self] in
             let opened = await lsp.openDocument(
                 worktreeRoot: worktreeRoot,
                 fileURL: url,
                 languageId: effective,
-                text: text
+                text: text,
+                hostResolution: hostResolution
             ) != nil
             guard let self else {
                 if opened {
-                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: effective)
+                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: effective, hostResolution: hostResolution)
                 }
                 return
             }
@@ -785,7 +802,7 @@ final class EditorBuffer {
                   self.initialLoadFinished,
                   self.effectiveLanguage == effective else {
                 if opened {
-                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: effective)
+                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: effective, hostResolution: hostResolution)
                 }
                 return
             }
@@ -1925,7 +1942,7 @@ final class EditorBuffer {
             let url = self.worktreeRoot.appendingPathComponent(self.relativePath)
             let worktreeRootCapture = self.worktreeRoot
             if let previous {
-                await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: previous)
+                await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: previous, hostResolution: self.hostResolution)
                 if Task.isCancelled { return }
                 self.openedLanguage = nil
             }
@@ -1935,7 +1952,8 @@ final class EditorBuffer {
                     worktreeRoot: worktreeRootCapture,
                     fileURL: url,
                     languageId: target,
-                    text: text
+                    text: text,
+                    hostResolution: self.hostResolution
                 ) != nil
                 if Task.isCancelled {
                     // openDocument has already bumped refs on the server
@@ -1945,7 +1963,7 @@ final class EditorBuffer {
                     // didClose, so without this compensation the doc
                     // would be left referenced with no owning buffer.
                     if opened {
-                        await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: target)
+                        await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: target, hostResolution: self.hostResolution)
                     }
                     return
                 }
@@ -1958,14 +1976,14 @@ final class EditorBuffer {
 
     private func notifyDidSave(url: URL) {
         if let lsp, let opened = openedLanguage {
-            Task { await lsp.didSave(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened) }
+            Task { await lsp.didSave(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened, hostResolution: self.hostResolution) }
         }
     }
 
     private func notifyDidClose(url: URL) {
         cancelPendingLSPOpen()
         if let lsp, let opened = openedLanguage {
-            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened) }
+            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened, hostResolution: self.hostResolution) }
             openedLanguage = nil
         }
     }
@@ -2056,7 +2074,7 @@ final class EditorBuffer {
         let generation = editGeneration
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let text = storage.string
-        await lsp.didChange(worktreeRoot: worktreeRoot, fileURL: url, languageId: resolvedLanguage, text: text, edits: nil)
+        await lsp.didChange(worktreeRoot: worktreeRoot, fileURL: url, languageId: resolvedLanguage, text: text, edits: nil, hostResolution: hostResolution)
         let options = RenameFeature.formattingOptions(text: text)
         let edits: [LSPTextEdit]? = await requestFormatting(lsp: lsp, url: url, language: resolvedLanguage, options: options, timeoutNanoseconds: formattingTimeoutNanoseconds)
         guard editGeneration == generation else {
@@ -2072,14 +2090,20 @@ final class EditorBuffer {
             return
         }
         let formattedText = storage.string
-        await lsp.didChange(worktreeRoot: worktreeRoot, fileURL: url, languageId: resolvedLanguage, text: formattedText, edits: nil)
+        await lsp.didChange(worktreeRoot: worktreeRoot, fileURL: url, languageId: resolvedLanguage, text: formattedText, edits: nil, hostResolution: hostResolution)
         try await saveAwaitingRemote()
     }
 
     private func requestFormatting(lsp: DocumentFormatter, url: URL, language: String, options: LSPFormattingOptions, timeoutNanoseconds: UInt64) async -> [LSPTextEdit]? {
         let formatTask: Task<[LSPTextEdit]?, Never> = Task { [weak self] in
             guard self != nil else { return nil }
-            return await lsp.formatting(for: url, languageId: language, options: options)
+            return await lsp.formatting(
+                for: url,
+                worktreeRoot: self?.worktreeRoot ?? url.deletingLastPathComponent(),
+                languageId: language,
+                options: options,
+                hostResolution: self?.hostResolution ?? .pathRegistry
+            )
         }
         let timeoutTask = Task { try? await Task.sleep(nanoseconds: timeoutNanoseconds) }
         return await withCheckedContinuation { (cont: CheckedContinuation<[LSPTextEdit]?, Never>) in
@@ -2251,7 +2275,7 @@ final class EditorBuffer {
         stopWatching()
         if let lsp, let opened = openedLanguage {
             let url = worktreeRoot.appendingPathComponent(relativePath)
-            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened) }
+            Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened, hostResolution: self.hostResolution) }
             openedLanguage = nil
         }
     }
@@ -2427,16 +2451,18 @@ final class EditorBuffer {
         // Hoisted so the `[weak self]` below is not defeated by an implicit
         // `self` capture when the task reads the worktree root.
         let worktreeRoot = self.worktreeRoot
+        let hostResolution = self.hostResolution
         lspOpenTask = Task { [weak self] in
             let opened = await lsp.openDocument(
                 worktreeRoot: worktreeRoot,
                 fileURL: url,
                 languageId: language,
-                text: documentText
+                text: documentText,
+                hostResolution: hostResolution
             ) != nil
             guard let self else {
                 if opened {
-                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language)
+                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, hostResolution: hostResolution)
                 }
                 return
             }
@@ -2445,7 +2471,7 @@ final class EditorBuffer {
                   self.remoteHost != nil,
                   self.effectiveLanguage == language else {
                 if opened {
-                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language)
+                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, hostResolution: hostResolution)
                 }
                 return
             }

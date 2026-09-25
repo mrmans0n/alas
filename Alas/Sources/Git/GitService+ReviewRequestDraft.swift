@@ -31,31 +31,31 @@ struct ReviewRequestDraftContext: Equatable {
 extension GitService {
     func reviewRequestDraftContext(worktreePath: URL, baseRef: String) async throws -> ReviewRequestDraftContext {
         let diffRange = "\(baseRef)...HEAD"
-        async let subjectsResult = Process.git(
+        async let subjectsResult = runGit(
             ["log", "\(baseRef)..HEAD", "--pretty=format:%s"],
             cwd: worktreePath
         )
-        async let commitsResult = Process.git(
+        async let commitsResult = runGit(
             ["log", "\(baseRef)..HEAD", "--pretty=tformat:%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s", "--numstat"],
             cwd: worktreePath
         )
-        async let diffResult = Process.git(
+        async let diffResult = runGit(
             ["-c", "core.quotePath=false", "diff", "--no-color", "-M", diffRange],
             cwd: worktreePath
         )
-        async let filesResult = Process.git(
+        async let filesResult = runGit(
             ["-c", "core.quotePath=false", "diff", "--no-color", "-M", "--numstat", diffRange],
             cwd: worktreePath
         )
-        async let namesResult = Process.git(
+        async let namesResult = runGit(
             ["-c", "core.quotePath=false", "diff", "--no-color", "-M", "--name-status", diffRange],
             cwd: worktreePath
         )
-        async let statusResult = Process.git(
+        async let statusResult = runGit(
             ["status", "--porcelain"],
             cwd: worktreePath
         )
-        async let commitBodyResult = Process.git(
+        async let commitBodyResult = runGit(
             ["log", "\(baseRef)..HEAD", "--pretty=format:%b"],
             cwd: worktreePath
         )
@@ -87,7 +87,7 @@ extension GitService {
         let changedFiles = Self.reviewRequestChangedFiles(numstat: files.stdout, nameStatus: names.stdout)
         var fileDiffsByPath: [String: String] = [:]
         for file in changedFiles {
-            let fileDiff = try await Process.git(
+            let fileDiff = try await runGit(
                 [
                     "-c",
                     "core.quotePath=false",

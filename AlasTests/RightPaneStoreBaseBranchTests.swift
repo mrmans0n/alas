@@ -5,6 +5,18 @@ import Foundation
 @MainActor
 @Suite(.serialized)
 struct RightPaneStoreBaseBranchTests {
+    private struct ProjectMemoryStore: PersistenceStoreProtocol {
+        var projectsFile: ProjectsFile
+
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            if type == ProjectsFile.self { return projectsFile as? T }
+            if type == AppConfig.self { return AppConfig.defaults as? T }
+            return nil
+        }
+    }
+
     private func makeWorktree(at path: URL, branch: String, projectId: String = "test-project") -> Worktree {
         Worktree(
             id: Worktree.makeId(path: path),
@@ -125,6 +137,33 @@ struct RightPaneStoreBaseBranchTests {
         #expect(secondState !== firstState)
         #expect(secondState.worktree.projectId == second.projectId)
         #expect(store.activeState(for: second) === secondState)
+    }
+
+    @Test func paneUsesItsProjectHostInsteadOfTheConflictingPathRegistry() async throws {
+        let repo = try await makeRepoOnMain()
+        defer {
+            RemoteHostRegistry.shared.unregister(root: repo.path)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        let projectA = ProjectConfig(
+            id: "project-a", name: "A", path: repo.path, color: "blue", addedAt: .distantPast, host: "localhost"
+        )
+        let projectB = ProjectConfig(
+            id: "project-b", name: "B", path: repo.path, color: "green", addedAt: .distantPast
+        )
+        let appState = AppState(
+            store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [projectA, projectB])),
+            runHistoryStore: nil,
+            restoreActiveTabsOnStartup: false
+        )
+        // The path registry is path-only and can only point at one project.
+        RemoteHostRegistry.shared.register(root: repo.path, host: "localhost")
+
+        let worktree = makeWorktree(at: repo, branch: "main", projectId: projectB.id)
+        let pane = appState.rightPaneStore.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+        defer { appState.rightPaneStore.deactivate() }
+
+        #expect(pane.hostResolution == .project(nil))
     }
 
     @Test func pendingFileRevealKeepsFilesTabWhenPaneAppears() async throws {

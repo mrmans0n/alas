@@ -104,11 +104,12 @@ final class RightPaneStore {
     /// do not accidentally resolve to the local branch of the same name.
     private func resolveEffectiveBaseBranch(
         worktreePath: URL,
-        baseBranch: String
+        baseBranch: String,
+        hostResolution: EditorBufferHostResolution
     ) async -> String {
         guard !baseBranch.isEmpty else { return baseBranch }
         do {
-            let result = try await git.resolveRevision(
+            let result = try await git.scoped(to: hostResolution).resolveRevision(
                 at: worktreePath,
                 ref: "refs/remotes/origin/\(baseBranch)"
             )
@@ -125,6 +126,11 @@ final class RightPaneStore {
     func state(for worktree: Worktree, baseBranch: String, comparisonMode: AppConfig.Changes.ChangesComparisonMode) -> RightPaneState {
         let key = WorktreeKey(worktree)
         let id = worktree.id
+        let hostResolution = appState.map { EditorBufferHostResolution.project($0.remoteHost(for: worktree)) } ?? .pathRegistry
+        if let existing = states[key], existing.hostResolution != hostResolution {
+            existing.stop()
+            states.removeValue(forKey: key)
+        }
         let wasCached = states[key] != nil
         let result: RightPaneState
         let rawDefault = Self.effectiveBaseBranch(worktree: worktree, baseBranch: baseBranch)
@@ -154,7 +160,8 @@ final class RightPaneStore {
                     scheduleBaseBranchProbe(
                         for: existing,
                         worktreePath: worktree.path,
-                        rawBaseBranch: baseBranch
+                        rawBaseBranch: baseBranch,
+                        hostResolution: hostResolution
                     )
                 }
             } else if !existing.userOverrodeBaseBranch && existing.lastEffectiveBaseBranch != rawDefault {
@@ -176,7 +183,8 @@ final class RightPaneStore {
                     scheduleBaseBranchProbe(
                         for: existing,
                         worktreePath: worktree.path,
-                        rawBaseBranch: baseBranch
+                        rawBaseBranch: baseBranch,
+                        hostResolution: hostResolution
                     )
                 }
             }
@@ -191,7 +199,7 @@ final class RightPaneStore {
             // probe either confirms it or falls back. That avoids racing two
             // refreshes with different base refs.
             let shouldDeferInitialRefresh = rawDefault != baseBranch
-            let new = RightPaneState(worktree: worktree, baseBranch: baseBranch)
+            let new = RightPaneState(worktree: worktree, baseBranch: baseBranch, hostResolution: hostResolution)
             // The commits comparison starts from the effective default, while
             // the review loop keeps the configured base branch for PR actions.
             new.baseBranch = rawDefault
@@ -266,7 +274,8 @@ final class RightPaneStore {
                     defer { state.isAwaitingBaseBranchProbe = false }
                     let confirmed = await self?.resolveEffectiveBaseBranch(
                         worktreePath: worktree.path,
-                        baseBranch: baseBranch
+                        baseBranch: baseBranch,
+                        hostResolution: hostResolution
                     ) ?? baseBranch
                     guard !Task.isCancelled,
                           !state.userOverrodeBaseBranch,
@@ -325,7 +334,8 @@ final class RightPaneStore {
     private func scheduleBaseBranchProbe(
         for state: RightPaneState,
         worktreePath: URL,
-        rawBaseBranch: String
+        rawBaseBranch: String,
+        hostResolution: EditorBufferHostResolution
     ) {
         state.baseBranchProbeTask?.cancel()
         state.baseBranchProbeTask = Task { @MainActor [weak state] in
@@ -333,7 +343,8 @@ final class RightPaneStore {
             defer { state.baseBranchProbeTask = nil }
             let confirmed = await self.resolveEffectiveBaseBranch(
                 worktreePath: worktreePath,
-                baseBranch: rawBaseBranch
+                baseBranch: rawBaseBranch,
+                hostResolution: hostResolution
             )
             guard !Task.isCancelled,
                   !state.userOverrodeBaseBranch,

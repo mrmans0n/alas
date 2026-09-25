@@ -19,11 +19,13 @@ final class EditorBufferStore {
     private let decoder: JSONDecoder
 
     /// External (out-of-worktree) buffer cache keyed by
-    /// `(worktreeId, absolute path)`. Distinct from the in-worktree cache
-    /// so absolute paths never collide with relative ones.
+    /// `(worktreeId, absolute path, remote host)`. Distinct from the
+    /// in-worktree cache so absolute paths never collide with relative ones,
+    /// and same-path worktrees on different hosts do not share contents.
     private struct ExternalKey: Hashable {
         let worktreeId: String
         let path: String
+        let host: String?
     }
 
     private var externalBuffers: [ExternalKey: EditorBuffer] = [:]
@@ -96,16 +98,21 @@ final class EditorBufferStore {
         worktreeId: String,
         absoluteURL: URL,
         editable: Bool = false,
-        tabId: String? = nil
+        tabId: String? = nil,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
     ) -> EditorBuffer {
-        let key = ExternalKey(worktreeId: worktreeId, path: absoluteURL.path)
+        let key = ExternalKey(
+            worktreeId: worktreeId,
+            path: absoluteURL.path,
+            host: hostResolution.remoteHost(forPath: absoluteURL.path)
+        )
         if let cached = externalBuffers[key] {
             // Upgrade a previously read-only external buffer to an editable one
             // when an editable open is requested (e.g. a run-script edit reuses
             // a URL first opened via ⌘-click). Recreate so the buffer's
             // `externalEditable` flag and readOnly state match the request.
             if editable, !cached.externalEditable {
-                discardExternalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL)
+                discardExternalBuffer(worktreeId: worktreeId, absoluteURL: absoluteURL, hostResolution: hostResolution)
             } else {
                 if editable, let tabId {
                     cached.adoptPersistenceTabId(tabId)
@@ -118,7 +125,8 @@ final class EditorBufferStore {
             editable: editable,
             store: self,
             worktreeId: worktreeId,
-            tabId: tabId
+            tabId: tabId,
+            hostResolution: hostResolution
         )
         externalBuffers[key] = buffer
         return buffer
@@ -128,15 +136,31 @@ final class EditorBufferStore {
     /// has been created yet for this `(worktreeId, absoluteURL)` pair. Used
     /// by read-only checks (e.g. `EditorTabView.isBinary`) to avoid the
     /// side-effecting creation in `externalBuffer`.
-    func peekExternalBuffer(worktreeId: String, absoluteURL: URL) -> EditorBuffer? {
-        let key = ExternalKey(worktreeId: worktreeId, path: absoluteURL.path)
+    func peekExternalBuffer(
+        worktreeId: String,
+        absoluteURL: URL,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
+    ) -> EditorBuffer? {
+        let key = ExternalKey(
+            worktreeId: worktreeId,
+            path: absoluteURL.path,
+            host: hostResolution.remoteHost(forPath: absoluteURL.path)
+        )
         return externalBuffers[key]
     }
 
     /// Remove an external buffer from the cache and stop its watcher.
     /// A no-op if no buffer for this URL exists in `worktreeId`.
-    func discardExternalBuffer(worktreeId: String, absoluteURL: URL) {
-        let key = ExternalKey(worktreeId: worktreeId, path: absoluteURL.path)
+    func discardExternalBuffer(
+        worktreeId: String,
+        absoluteURL: URL,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
+    ) {
+        let key = ExternalKey(
+            worktreeId: worktreeId,
+            path: absoluteURL.path,
+            host: hostResolution.remoteHost(forPath: absoluteURL.path)
+        )
         guard let buffer = externalBuffers.removeValue(forKey: key) else { return }
         buffer.close(persistDirtySnapshot: false)
     }

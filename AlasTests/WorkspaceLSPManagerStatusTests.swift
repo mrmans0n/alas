@@ -2,6 +2,23 @@ import Testing
 import Foundation
 @testable import Alas
 
+private final class LSPHostProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var hostStorage: String?
+
+    func record(_ host: String) {
+        lock.lock()
+        hostStorage = host
+        lock.unlock()
+    }
+
+    var host: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return hostStorage
+    }
+}
+
 @MainActor
 @Suite("WorkspaceLSPManager.documentStatus")
 struct WorkspaceLSPManagerStatusTests {
@@ -17,6 +34,7 @@ struct WorkspaceLSPManagerStatusTests {
 
     private func manager(
         withFakeEntry language: String = "swift",
+        remoteLSPAvailable: @escaping (_ command: String, _ host: String, _ environment: [String: String]) async -> Bool = { _, _, _ in true },
         makeClient: ((_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String) -> LSPClient)? = nil
     ) -> WorkspaceLSPManager {
         let makeClient = makeClient ?? { _, _, _, language, rootURI in
@@ -43,6 +61,7 @@ struct WorkspaceLSPManagerStatusTests {
                     gatekeeperAssessor: { _ in .allowed }
                 )
             },
+            remoteLSPAvailable: remoteLSPAvailable,
             makeClient: makeClient
         )
     }
@@ -99,6 +118,28 @@ struct WorkspaceLSPManagerStatusTests {
         let before = mgr.stateTick
         _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
         #expect(mgr.stateTick > before)
+    }
+
+    @Test func explicitProjectHostOwnsDocumentIdentityDespitePathRegistryConflict() async {
+        RemoteHostRegistry.shared.register(root: root.path, host: "host-a")
+        defer { RemoteHostRegistry.shared.unregister(root: root.path) }
+        let probe = LSPHostProbe()
+        let mgr = manager(remoteLSPAvailable: { _, host, _ in
+            probe.record(host)
+            return true
+        })
+
+        _ = await mgr.openDocument(
+            worktreeRoot: root,
+            fileURL: fileURL,
+            languageId: "swift",
+            text: "",
+            hostResolution: .project("host-b")
+        )
+
+        #expect(probe.host == "host-b")
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root, hostResolution: .project("host-b")) == .ready)
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root, hostResolution: .pathRegistry) == .none)
     }
 
     @Test func restartHolderReopensPreviouslyOpenURIs() async {

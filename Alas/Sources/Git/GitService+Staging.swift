@@ -7,7 +7,7 @@ extension GitService {
     /// surfaces.
     func stage(worktreePath: URL, files: [String]) async throws {
         guard !files.isEmpty else { return }
-        let result = try await Process.git(["add", "--"] + files, cwd: worktreePath)
+        let result = try await runGit(["add", "--"] + files, cwd: worktreePath)
         try Self.assertSuccess(result, op: "stage")
     }
 
@@ -27,7 +27,7 @@ extension GitService {
         let args: [String] = head
             ? ["restore", "--staged", "--"] + files
             : ["reset", "-q", "--"] + files
-        let result = try await Process.git(args, cwd: worktreePath)
+        let result = try await runGit(args, cwd: worktreePath)
         try Self.assertSuccess(result, op: "unstage")
     }
 
@@ -44,7 +44,7 @@ extension GitService {
     func unstageHunk(worktreePath: URL, path: String, hunk: ParsedDiff.Hunk) async throws {
         let patch = HunkPatchBuilder.patch(file: path, hunk: hunk, tracked: true)
         // --cached touches the index only; --index (used by CommitEditing.dropHunk) also reverts the worktree.
-        let result = try await Process.git(["apply", "--cached", "--reverse", "-"], cwd: worktreePath, stdin: patch)
+        let result = try await runGit(["apply", "--cached", "--reverse", "-"], cwd: worktreePath, stdin: patch)
         guard result.exitCode == 0 else {
             let msg = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             throw NSError(
@@ -74,9 +74,9 @@ extension GitService {
             args.append("-m")
             args.append(trimmedBody)
         }
-        let result = try await Process.git(args, cwd: worktreePath)
+        let result = try await runGit(args, cwd: worktreePath)
         try Self.assertSuccess(result, op: amend ? "amend" : "commit")
-        let shaResult = try await Process.git(["rev-parse", "HEAD"], cwd: worktreePath)
+        let shaResult = try await runGit(["rev-parse", "HEAD"], cwd: worktreePath)
         guard shaResult.exitCode == 0 else {
             throw NSError(
                 domain: "GitService.commit",
@@ -97,7 +97,7 @@ extension GitService {
         guard try await hasHead(worktreePath: worktreePath) else { return nil }
         // %s + \u{1e} + %b ensures subject can't bleed into the body even
         // when the subject contains odd characters.
-        let result = try await Process.git(
+        let result = try await runGit(
             ["log", "-1", "--pretty=format:%s%x1e%b", "HEAD"],
             cwd: worktreePath
         )

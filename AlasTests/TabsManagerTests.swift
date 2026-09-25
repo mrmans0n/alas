@@ -781,6 +781,42 @@ struct TabsManagerTests {
         #expect(tab.revealCharacter == 3)
     }
 
+    @Test func navigationTargetUsesTheProjectHostInsteadOfThePathRegistry() {
+        let root = URL(fileURLWithPath: "/srv/navigation-project-host-\(UUID().uuidString)")
+        let worktreeID = "navigation-project-host-worktree"
+        RemoteHostRegistry.shared.register(root: root.path, host: "host-a")
+        defer {
+            RemoteHostRegistry.shared.unregister(root: root.path)
+            try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeID))
+        }
+        let manager = TabsManager(store: RestoreMemoryStore())
+        let target = EditorNavigationTarget(
+            document: EditorDocumentID(
+                host: "host-b",
+                worktreeID: worktreeID,
+                uri: root.appendingPathComponent("Sources/Remote.swift").lspURI
+            ),
+            position: LSPPosition(line: 3, character: 2)
+        )
+
+        let opened = manager.openNavigationTarget(
+            target,
+            projectId: "project-b",
+            worktreeRoot: root,
+            originatingRelativePath: "Sources/Caller.swift",
+            language: "swift",
+            hostResolution: .project("host-b")
+        )
+
+        #expect(opened)
+        guard case .editor(let tab)? = manager.tabs(forWorktree: worktreeID).first else {
+            Issue.record("expected project-scoped remote navigation to open an editor tab")
+            return
+        }
+        #expect(tab.projectId == "project-b")
+        #expect(tab.relativePath == "Sources/Remote.swift")
+    }
+
     @Test func activeEditorContextExcludesExternalTabs() {
         let worktreeId = "tabs-manager-active-context-external"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

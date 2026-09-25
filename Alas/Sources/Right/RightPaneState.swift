@@ -526,7 +526,9 @@ final class RightPaneState: GGSplitCommitServicing {
     /// picker to include the upstream in the smart shortlist.
     private(set) var upstreamRef: String? = nil
 
-    private let git = GitService()
+    let hostResolution: EditorBufferHostResolution
+    private let git: GitService
+    var gitService: GitService { git }
     private let watcher: WorktreeWatcher
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "right-pane-state")
 
@@ -596,17 +598,24 @@ final class RightPaneState: GGSplitCommitServicing {
     init(
         worktree: Worktree,
         baseBranch: String,
+        hostResolution: EditorBufferHostResolution = .pathRegistry,
         ggLandingStore: GGLandingStore = .shared,
         checkpointService: any WorktreeCheckpointServicing = WorktreeCheckpointService()
     ) {
         self.worktree = worktree
+        self.hostResolution = hostResolution
+        self.git = GitService(hostResolution: hostResolution)
         self.checkpointService = checkpointService
         self.ggLandingStore = ggLandingStore
         self.baseBranch = baseBranch
         self.currentBranch = worktree.branch
         self.reviewLoop = ReviewLoopState(worktreePath: worktree.path, baseBranch: baseBranch)
-        self.mergeOp = MergeOperationState(worktreePath: worktree.path, gitService: GitService())
+        self.mergeOp = MergeOperationState(worktreePath: worktree.path, gitService: GitService(hostResolution: hostResolution))
         self.watcher = WorktreeWatcher(path: worktree.path)
+        let scopedGit = self.git
+        self.ggStackCommitLoader = { worktree, shas in
+            try await scopedGit.stackCommitInfos(at: worktree, shas: shas)
+        }
         watcher.onChange = { [weak self] in
             Task { @MainActor in
                 self?.worktreeDidChange?()
@@ -675,7 +684,7 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     func start() {
-        if !worktree.path.isRemoteAlasPath {
+        if !git.isRemoteWorktreePath(worktree.path) {
             watcher.start()
         } else {
             startRemoteHelperWatching()
@@ -713,7 +722,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     private var checkpointTarget: CheckpointWorktreeTarget? {
         if let provided = checkpointTargetProvider?() { return provided }
-        guard !worktree.path.isRemoteAlasPath,
+        guard !git.isRemoteWorktreePath(worktree.path),
               let lineageID = worktree.lineageID ?? WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path)
         else { return nil }
         return .init(
@@ -756,8 +765,8 @@ final class RightPaneState: GGSplitCommitServicing {
             checkpointSummaries = []
             checkpointStorageUsage = 0
             nonterminalCheckpointJournals = []
-            checkpointJournalDiscoverySucceeded = worktree.path.isRemoteAlasPath
-            checkpointLoadError = worktree.path.isRemoteAlasPath ? CheckpointRestoreBlocker.remoteTarget.description : nil
+            checkpointJournalDiscoverySucceeded = git.isRemoteWorktreePath(worktree.path)
+            checkpointLoadError = git.isRemoteWorktreePath(worktree.path) ? CheckpointRestoreBlocker.remoteTarget.description : nil
             return
         }
         switch result {
@@ -797,8 +806,8 @@ final class RightPaneState: GGSplitCommitServicing {
         guard checkpointOperationInFlight == nil else { return true }
         guard let target = checkpointTarget else {
             nonterminalCheckpointJournals = []
-            checkpointJournalDiscoverySucceeded = worktree.path.isRemoteAlasPath
-            checkpointLoadError = worktree.path.isRemoteAlasPath ? CheckpointRestoreBlocker.remoteTarget.description : nil
+            checkpointJournalDiscoverySucceeded = git.isRemoteWorktreePath(worktree.path)
+            checkpointLoadError = git.isRemoteWorktreePath(worktree.path) ? CheckpointRestoreBlocker.remoteTarget.description : nil
             return checkpointMutationsDisabled
         }
         do {
@@ -1077,7 +1086,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     private func startRemoteHelperWatching() {
         guard remoteHelperSession == nil,
-              let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path)
+              let host = git.remoteHost(forWorktreePath: worktree.path)
         else { return }
         let session = RemoteHelperWatchSession(
             host: host,
@@ -1114,17 +1123,17 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     private func remotePollTick() async {
-        let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path)
-        let status = try? await Process.git(["status", "--porcelain=v2", "-z", "--untracked-files=all"], cwd: worktree.path)
+        let host = git.remoteHost(forWorktreePath: worktree.path)
+        let status = try? await git.runGit(["status", "--porcelain=v2", "-z", "--untracked-files=all"], cwd: worktree.path)
         guard let status, !RemoteExec.isConnectionFailure(exitCode: status.exitCode) else {
             if let host { RemoteHostStatusStore.shared.reportConnectionFailure(host: host) }
             return
         }
         if let host { RemoteHostStatusStore.shared.reportSuccess(host: host) }
         guard status.exitCode == 0 else { return }
-        let head = try? await Process.git(["rev-parse", "HEAD"], cwd: worktree.path)
-        let unstagedDiff = try? await Process.git(["diff", "--no-ext-diff", "--binary"], cwd: worktree.path)
-        let stagedDiff = try? await Process.git(["diff", "--cached", "--no-ext-diff", "--binary"], cwd: worktree.path)
+        let head = try? await git.runGit(["rev-parse", "HEAD"], cwd: worktree.path)
+        let unstagedDiff = try? await git.runGit(["diff", "--no-ext-diff", "--binary"], cwd: worktree.path)
+        let stagedDiff = try? await git.runGit(["diff", "--cached", "--no-ext-diff", "--binary"], cwd: worktree.path)
         let untrackedContent: ProcessResult?
         if let host {
             untrackedContent = try? await RemoteExec.run(
@@ -1211,7 +1220,7 @@ final class RightPaneState: GGSplitCommitServicing {
             Task { @MainActor in
                 defer { reviewLoop.endAction(action) }
                 do {
-                    let result = try await Process.git(
+                    let result = try await git.runGit(
                         Self.reviewLoopPushArguments(
                             snapshot: snapshot,
                             forceWithLease: action == .forcePushBranch
@@ -1229,7 +1238,11 @@ final class RightPaneState: GGSplitCommitServicing {
             }
         case .createReviewRequest:
             guard let snapshot = reviewLoop.snapshot else { return }
-            appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktree.id, snapshot: snapshot)
+            appState.tabs.openOrFocusDraftReviewRequest(
+                worktreeId: worktree.id,
+                projectId: worktree.projectId,
+                snapshot: snapshot
+            )
         case .rerunFailedChecks:
             guard let snapshot = reviewLoop.snapshot else { return }
             guard reviewLoop.beginAction(action) else { return }
@@ -1352,7 +1365,7 @@ final class RightPaneState: GGSplitCommitServicing {
         let reviewLoopInspection = reviewLoop.beginLocalInspection()
         let snapshotGeneration = snapshotInvalidationGeneration
         let checkpointTarget = checkpointTarget
-        checkpointJournalDiscoverySucceeded = checkpointTarget?.path.isRemoteAlasPath == true
+        checkpointJournalDiscoverySucceeded = checkpointTarget.map { git.isRemoteWorktreePath($0.path) } == true
         checkpointLoadGeneration &+= 1
         let checkpointGeneration = checkpointLoadGeneration
         async let checkpointLoad = loadCheckpointSnapshot(target: checkpointTarget)
@@ -1373,7 +1386,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 mode: comparisonMode, userOverrodeBaseBranch: userOverrodeBaseBranch
             )
             async let s = git.status(worktreePath: worktree.path)
-            async let statusRaw = Process.git(
+            async let statusRaw = git.runGit(
                 ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
                 cwd: worktree.path
             )
@@ -1402,7 +1415,7 @@ final class RightPaneState: GGSplitCommitServicing {
             // main-actor isolated and cannot leave that context.
             await mergeOp.refresh()
             let indexFingerprint: String
-            if let lsResult = try? await Process.git(
+            if let lsResult = try? await git.runGit(
                 ["ls-files", "-s", "-z"],
                 cwd: worktree.path
             ), lsResult.exitCode == 0 {
@@ -1417,11 +1430,18 @@ final class RightPaneState: GGSplitCommitServicing {
             } else {
                 indexFingerprint = ""
             }
-            async let trackedContentFingerprintTask = Self.trackedContentFingerprint(worktreePath: worktree.path)
+            async let trackedContentFingerprintTask = Self.trackedContentFingerprint(
+                worktreePath: worktree.path,
+                hostResolution: hostResolution
+            )
             let statusRawResult = try? await statusRaw
             let checkpointResult = await checkpointLoad
             let untrackedPaths = Self.untrackedPaths(from: statusRawResult?.stdout ?? "")
-            async let untrackedContentFingerprintTask = Self.untrackedContentFingerprint(paths: untrackedPaths, worktreePath: worktree.path)
+            async let untrackedContentFingerprintTask = Self.untrackedContentFingerprint(
+                paths: untrackedPaths,
+                worktreePath: worktree.path,
+                hostResolution: hostResolution
+            )
             let previousBranch = self.currentBranch
             let previousHeadSHA = self.currentHeadSHA
             let currentBranch = (try? await br) ?? self.currentBranch
@@ -2869,48 +2889,65 @@ final class RightPaneState: GGSplitCommitServicing {
     /// destination object when the filesystem copy is out of sync with the
     /// index, but full binary patches can be very large. Keep the cheap raw
     /// metadata and add path-scoped worktree blob hashes instead.
-    nonisolated static func trackedContentFingerprint(worktreePath: URL) async -> String {
+    nonisolated static func trackedContentFingerprint(
+        worktreePath: URL,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
+    ) async -> String {
         if let raw = try? await Process.git(
             ["diff", "--raw", "-z", "--no-renames", "HEAD"],
-            cwd: worktreePath
+            cwd: worktreePath,
+            hostResolution: hostResolution
         ), raw.exitCode == 0 {
             let paths = await gitChangedPaths(
                 ["diff", "--name-only", "-z", "--no-renames", "HEAD"],
-                worktreePath: worktreePath
+                worktreePath: worktreePath,
+                hostResolution: hostResolution
             )
-            let content = await pathContentFingerprint(paths: paths, worktreePath: worktreePath)
+            let content = await pathContentFingerprint(paths: paths, worktreePath: worktreePath, hostResolution: hostResolution)
             return "\(raw.stdout)\u{0000}\(content)"
         }
 
         let cachedRaw = (try? await Process.git(
             ["diff", "--raw", "-z", "--no-renames", "--cached"],
-            cwd: worktreePath
+            cwd: worktreePath,
+            hostResolution: hostResolution
         )).flatMap { $0.exitCode == 0 ? $0.stdout : nil } ?? ""
         let unstagedRaw = (try? await Process.git(
             ["diff", "--raw", "-z", "--no-renames"],
-            cwd: worktreePath
+            cwd: worktreePath,
+            hostResolution: hostResolution
         )).flatMap { $0.exitCode == 0 ? $0.stdout : nil } ?? ""
         let cachedPaths = await gitChangedPaths(
             ["diff", "--name-only", "-z", "--no-renames", "--cached"],
-            worktreePath: worktreePath
+            worktreePath: worktreePath,
+            hostResolution: hostResolution
         )
         let unstagedPaths = await gitChangedPaths(
             ["diff", "--name-only", "-z", "--no-renames"],
-            worktreePath: worktreePath
+            worktreePath: worktreePath,
+            hostResolution: hostResolution
         )
         let paths = cachedPaths + unstagedPaths
-        let content = await pathContentFingerprint(paths: paths, worktreePath: worktreePath)
+        let content = await pathContentFingerprint(paths: paths, worktreePath: worktreePath, hostResolution: hostResolution)
         return "\(cachedRaw)\u{0000}\(unstagedRaw)\u{0000}\(content)"
     }
 
     /// Hashes the contents of untracked files so content edits that leave the
     /// status line unchanged still invalidate the change fingerprint.
-    nonisolated static func untrackedContentFingerprint(paths: [String], worktreePath: URL) async -> String {
-        await pathContentFingerprint(paths: paths, worktreePath: worktreePath)
+    nonisolated static func untrackedContentFingerprint(
+        paths: [String],
+        worktreePath: URL,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
+    ) async -> String {
+        await pathContentFingerprint(paths: paths, worktreePath: worktreePath, hostResolution: hostResolution)
     }
 
-    nonisolated private static func gitChangedPaths(_ args: [String], worktreePath: URL) async -> [String] {
-        guard let result = try? await Process.git(args, cwd: worktreePath), result.exitCode == 0 else {
+    nonisolated private static func gitChangedPaths(
+        _ args: [String],
+        worktreePath: URL,
+        hostResolution: EditorBufferHostResolution
+    ) async -> [String] {
+        guard let result = try? await Process.git(args, cwd: worktreePath, hostResolution: hostResolution), result.exitCode == 0 else {
             return []
         }
         return result.stdout
@@ -2918,7 +2955,11 @@ final class RightPaneState: GGSplitCommitServicing {
             .map(String.init)
     }
 
-    nonisolated private static func pathContentFingerprint(paths: [String], worktreePath: URL) async -> String {
+    nonisolated private static func pathContentFingerprint(
+        paths: [String],
+        worktreePath: URL,
+        hostResolution: EditorBufferHostResolution
+    ) async -> String {
         let sortedPaths = Array(Set(paths)).sorted()
         guard !sortedPaths.isEmpty else { return "" }
 
@@ -2954,21 +2995,25 @@ final class RightPaneState: GGSplitCommitServicing {
             }
         }
 
-        let hashes = await hashObjects(paths: filePaths, worktreePath: worktreePath)
+        let hashes = await hashObjects(paths: filePaths, worktreePath: worktreePath, hostResolution: hostResolution)
         return sortedPaths.map { path in
             let value = pathKinds[path] ?? hashes[path] ?? "hash-error"
             return "\(path)\u{0000}\(value)"
         }.joined(separator: "\u{0000}")
     }
 
-    nonisolated private static func hashObjects(paths: [String], worktreePath: URL) async -> [String: String] {
+    nonisolated private static func hashObjects(
+        paths: [String],
+        worktreePath: URL,
+        hostResolution: EditorBufferHostResolution
+    ) async -> [String: String] {
         guard !paths.isEmpty else { return [:] }
 
         var hashes: [String: String] = [:]
         for startIndex in stride(from: 0, to: paths.count, by: hashObjectBatchSize) {
             let endIndex = min(startIndex + hashObjectBatchSize, paths.count)
             let batch = Array(paths[startIndex..<endIndex])
-            if let result = try? await Process.git(["hash-object", "--"] + batch, cwd: worktreePath),
+            if let result = try? await Process.git(["hash-object", "--"] + batch, cwd: worktreePath, hostResolution: hostResolution),
                result.exitCode == 0 {
                 let batchHashes = result.stdout.split(whereSeparator: \.isNewline).map(String.init)
                 if batchHashes.count == batch.count {
@@ -2980,7 +3025,7 @@ final class RightPaneState: GGSplitCommitServicing {
             }
 
             for path in batch {
-                guard let result = try? await Process.git(["hash-object", "--", path], cwd: worktreePath),
+                guard let result = try? await Process.git(["hash-object", "--", path], cwd: worktreePath, hostResolution: hostResolution),
                       result.exitCode == 0 else {
                     continue
                 }
@@ -3723,11 +3768,11 @@ final class RightPaneState: GGSplitCommitServicing {
     /// review-loop refresh (whose generation guard lets a concurrent watcher
     /// refresh supersede the merge-triggered one without publishing).
     private func localHeadIsCleanlyAt(_ reviewedHeadSHA: String) async -> Bool {
-        guard let head = try? await Process.git(["rev-parse", "HEAD"], cwd: worktree.path),
+        guard let head = try? await git.runGit(["rev-parse", "HEAD"], cwd: worktree.path),
               head.exitCode == 0,
               head.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == reviewedHeadSHA
         else { return false }
-        guard let status = try? await Process.git(["status", "--porcelain"], cwd: worktree.path),
+        guard let status = try? await git.runGit(["status", "--porcelain"], cwd: worktree.path),
               status.exitCode == 0
         else { return false }
         return status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -3948,14 +3993,14 @@ final class RightPaneState: GGSplitCommitServicing {
                 // non-zero) but IS in HEAD — falling back to `--no-index` for
                 // that case yields an empty patch. Probe HEAD via `cat-file`
                 // so staged D entries still route through HEAD-based diff.
-                let inIndex = (try? await Process.git(
+                let inIndex = (try? await self.git.runGit(
                     ["ls-files", "--error-unmatch", "--", path],
                     cwd: wt
                 ))?.exitCode == 0
                 let head = (try? await self.git.hasHead(worktreePath: wt)) ?? true
                 let inHead: Bool
                 if head {
-                    inHead = (try? await Process.git(
+                    inHead = (try? await self.git.runGit(
                         ["cat-file", "-e", "HEAD:\(path)"],
                         cwd: wt
                     ))?.exitCode == 0
@@ -3980,7 +4025,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 } else {
                     args = ["diff", "--no-color", "--no-index", "--", "/dev/null", path]
                 }
-                let result = try await Process.git(args, cwd: wt)
+                let result = try await self.git.runGit(args, cwd: wt)
                 // `--no-index` exits 1 when there ARE differences (the expected
                 // case for an untracked file).
                 if result.exitCode > 1 {
@@ -4032,7 +4077,7 @@ final class RightPaneState: GGSplitCommitServicing {
     /// `git rev-parse --git-path info/exclude`. Output is relative to the
     /// worktree path unless git emits an absolute path.
     private func resolveInfoExcludeURL(worktreePath: URL) async throws -> URL {
-        let result = try await Process.git(
+        let result = try await git.runGit(
             ["rev-parse", "--git-path", "info/exclude"],
             cwd: worktreePath
         )

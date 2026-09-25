@@ -135,7 +135,7 @@ struct ChangesTabView: View {
             let key = amendProbeKey
             guard currentDraft?.amend == true, !isGGDrawerActive else { return }
             await amendProbe.load(key: key) {
-                try await GitService().headPublicationState(worktreePath: rps.worktree.path)
+                try await rps.gitService.headPublicationState(worktreePath: rps.worktree.path)
             }
         }
     }
@@ -456,7 +456,7 @@ struct ChangesTabView: View {
 
     private func appendCheckpointRows(to rows: inout [AppKitDiffRowSpec]) {
         let summaries = rps.checkpointSummaries
-        let hasVisibleLoadError = rps.checkpointLoadError != nil && !rps.worktree.path.isRemoteAlasPath
+        let hasVisibleLoadError = rps.checkpointLoadError != nil && !rps.gitService.isRemoteWorktreePath(rps.worktree.path)
         guard Self.shouldShowCheckpointsSection(
             summaryCount: summaries.count,
             nonterminalJournalCount: rps.nonterminalCheckpointJournals.count,

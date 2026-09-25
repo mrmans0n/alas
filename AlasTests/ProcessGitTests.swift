@@ -285,7 +285,8 @@ struct ProcessGitTests {
         let result = try await Process.git(
             ["rev-parse", "--show-toplevel"],
             cwd: directory,
-            usesRemoteHostRegistry: false
+            usesRemoteHostRegistry: false,
+            hostResolution: .project(nil)
         )
 
         #expect(result.exitCode == 0)

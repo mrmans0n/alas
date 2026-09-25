@@ -2,6 +2,24 @@ import Testing
 import Foundation
 @testable import Alas
 
+private final class GitHostProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var captured: (String?, Bool)?
+
+    func record(remoteHost: String?, usesRegistry: Bool) {
+        lock.lock()
+        captured = (remoteHost, usesRegistry)
+        lock.unlock()
+    }
+
+    var invocation: (remoteHost: String?, usesRegistry: Bool)? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let captured else { return nil }
+        return (captured.0, captured.1)
+    }
+}
+
 // Serialize: each test creates an ephemeral repo and shells out to git.
 // Concurrent git invocations on macos-26 CI have produced flaky hangs.
 @Suite(.serialized)
@@ -68,6 +86,26 @@ struct GitServiceTests {
         let svc = GitService()
         let valid = try await svc.isGitRepository(repo)
         #expect(valid == true)
+    }
+
+    @Test func explicitProjectHostOverridesThePathRegistryForGitOperations() async throws {
+        let worktreePath = URL(fileURLWithPath: "/tmp/shared-path-host-routing")
+        RemoteHostRegistry.shared.register(root: worktreePath.path, host: "host-a")
+        defer { RemoteHostRegistry.shared.unregister(root: worktreePath.path) }
+        let probe = GitHostProbe()
+        let service = GitService(
+            hostResolution: .project("host-b"),
+            processRunner: { _, _, _, remoteHost, usesRegistry, _ in
+                probe.record(remoteHost: remoteHost, usesRegistry: usesRegistry)
+                return ProcessResult(exitCode: 0, stdout: "project-b\n", stderr: "")
+            }
+        )
+
+        let branch = try await service.currentBranch(worktreePath: worktreePath)
+
+        #expect(branch == "project-b")
+        #expect(probe.invocation?.remoteHost == "host-b")
+        #expect(probe.invocation?.usesRegistry == false)
     }
 
     @Test func validateRejectsNonRepo() async throws {

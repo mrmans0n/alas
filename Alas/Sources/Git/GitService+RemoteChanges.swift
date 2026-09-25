@@ -10,9 +10,12 @@ extension GitService {
         usesRemoteHostRegistry: Bool = true
     ) async throws -> WorktreeDiffStats {
         func git(_ args: [String]) async throws -> ProcessResult {
-            try await Process.git(args, cwd: worktreePath,
-                                  usesRemoteHostRegistry: usesRemoteHostRegistry,
-                                  timeout: WorktreeStatusScanner.perScanTimeout)
+            try await runGit(
+                args,
+                cwd: worktreePath,
+                timeout: WorktreeStatusScanner.perScanTimeout,
+                usesRemoteHostRegistry: usesRemoteHostRegistry
+            )
         }
         let head = try await git(["rev-parse", "--verify", "--quiet", "HEAD"])
         let base = head.exitCode == 0 ? "HEAD" : "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
@@ -27,8 +30,7 @@ extension GitService {
         }
         let paths = untracked.stdout.split(separator: "\0").map(String.init)
         let untrackedAdditions: Int
-        if usesRemoteHostRegistry,
-           let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+        if let host = remoteHost(forWorktreePath: worktreePath, pathRegistryEnabled: usesRemoteHostRegistry) {
             let remoteCounts = try await RemoteFileStats.lineCounts(host: host, cwd: worktreePath.path, paths: paths)
             untrackedAdditions = remoteCounts.values.reduce(0, +)
         } else {
@@ -61,7 +63,7 @@ extension GitService {
         // tab/newline-containing) filenames intact instead of git's default
         // octal-escaped, quoted rendering — mirrors `stagedChangedFiles`,
         // whose NUL-token parsers this reuses.
-        let numstat = try await Process.git(
+        let numstat = try await runGit(
             ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "-M", "-C", ref, "--"], cwd: worktreePath)
         // Unlike the guard at the top of this function, `ref` here is
         // already resolved and non-empty — this is NOT the "no base to
@@ -75,7 +77,7 @@ extension GitService {
         }
         let counts = GitService.parseNumstatZOutput(numstat.stdout)
 
-        let nameStatus = try await Process.git(
+        let nameStatus = try await runGit(
             ["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", "-C", ref, "--"], cwd: worktreePath)
         // A dropped SSH connection (or any other fatal exit) between the
         // numstat call above and this one must propagate, not be parsed as
@@ -114,7 +116,7 @@ extension GitService {
                 conflict: conflicts[path]))
         }
 
-        let untracked = try await Process.git(
+        let untracked = try await runGit(
             ["ls-files", "--others", "--exclude-standard", "-z"], cwd: worktreePath)
         guard untracked.exitCode == 0 else {
             throw ProcessError.nonZeroExit(untracked.exitCode, untracked.stderr)
@@ -128,14 +130,14 @@ extension GitService {
         // `status(worktreePath:)`'s identical remote/local split for
         // untracked line counts.
         let remoteCounts: [String: Int]
-        if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+        if isRemoteWorktreePath(worktreePath), let host = remoteHost(forWorktreePath: worktreePath) {
             remoteCounts = try await RemoteFileStats.lineCounts(host: host, cwd: worktreePath.path, paths: untrackedPaths)
         } else {
             remoteCounts = [:]
         }
 
         for path in untrackedPaths {
-            let add = worktreePath.isRemoteAlasPath
+            let add = isRemoteWorktreePath(worktreePath)
                 ? (remoteCounts[path] ?? 0)
                 : Self.addedLineCount(worktreePath: worktreePath, path: path)
             files.append(ChangedFile(
@@ -175,7 +177,7 @@ extension GitService {
             // `listFiles` request. `StatusParser.parse` alone gives
             // path/status/stage/renameFrom/conflict with add/del left at
             // their 0 default — exactly what a badge needs.
-            let s = try await Process.git(
+            let s = try await runGit(
                 ["status", "--porcelain=v2", "-z", "--untracked-files=all"], cwd: worktreePath)
             guard s.exitCode == 0 else {
                 throw ProcessError.nonZeroExit(s.exitCode, s.stderr)
@@ -184,7 +186,7 @@ extension GitService {
             return Self.collapsingStagedAndUnstagedEntries(entries)
         }
 
-        let nameStatus = try await Process.git(
+        let nameStatus = try await runGit(
             ["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", "-C", ref, "--"], cwd: worktreePath)
         guard nameStatus.exitCode == 0 else {
             throw ProcessError.nonZeroExit(nameStatus.exitCode, nameStatus.stderr)
@@ -206,7 +208,7 @@ extension GitService {
                 conflict: nil))
         }
 
-        let untracked = try await Process.git(
+        let untracked = try await runGit(
             ["ls-files", "--others", "--exclude-standard", "-z"], cwd: worktreePath)
         guard untracked.exitCode == 0 else {
             throw ProcessError.nonZeroExit(untracked.exitCode, untracked.stderr)
@@ -296,7 +298,7 @@ extension GitService {
         }
 
         // Check if file exists at ref (not just in current index) to handle deleted files correctly.
-        let existsAtRef = try await Process.git(
+        let existsAtRef = try await runGit(
             ["cat-file", "-e", "\(ref):\(file)"], cwd: worktreePath)
         if existsAtRef.exitCode != 0 {
             // `cat-file -e` exits with the SAME code (128, empirically, on
@@ -369,7 +371,7 @@ extension GitService {
     /// through to being treated as brand new (all-add against
     /// `/dev/null`) instead of a proper diff against its copy source.
     private func renameSource(worktreePath: URL, ref: String, file: String) async throws -> String? {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", "-C", ref], cwd: worktreePath)
         guard result.exitCode == 0 else { return nil }
         let parsed = GitService.parseNameStatusZOutput(result.stdout)
@@ -387,19 +389,19 @@ extension GitService {
     /// entire historical blob — a large deleted file no longer forces a
     /// full `git show` read (unnecessary network transfer too, over SSH).
     func looksBinaryAtRef(worktreePath: URL, ref: String, file: String) async throws -> Bool? {
-        let existsAtRef = try await Process.git(
+        let existsAtRef = try await runGit(
             ["cat-file", "-e", "\(ref):\(file)"], cwd: worktreePath)
         guard existsAtRef.exitCode == 0 else { return nil }
-        let prefix = try await Process.gitDataPrefix(
+        let prefix = try await runGitDataPrefix(
             ["show", "\(ref):\(file)"], cwd: worktreePath, maxBytes: 8192)
         return Self.looksBinary(prefix)
     }
 
     func looksBinaryAtIndex(worktreePath: URL, file: String) async throws -> Bool? {
-        let existsAtIndex = try await Process.git(
+        let existsAtIndex = try await runGit(
             ["cat-file", "-e", ":\(file)"], cwd: worktreePath)
         guard existsAtIndex.exitCode == 0 else { return nil }
-        let prefix = try await Process.gitDataPrefix(
+        let prefix = try await runGitDataPrefix(
             ["show", ":\(file)"], cwd: worktreePath, maxBytes: 8192)
         return Self.looksBinary(prefix)
     }

@@ -5,8 +5,12 @@ private struct LSPStatusProbes {
     struct Manager: EditorLSPStatusResolver.ManagerProbe {
         let inner: WorkspaceLSPManager
         @MainActor
-        func documentStatus(forFile fileURL: URL, worktreeRoot: URL) -> WorkspaceLSPManager.DocumentStatus {
-            inner.documentStatus(forFile: fileURL, worktreeRoot: worktreeRoot)
+        func documentStatus(
+            forFile fileURL: URL,
+            worktreeRoot: URL,
+            hostResolution: EditorBufferHostResolution
+        ) -> WorkspaceLSPManager.DocumentStatus {
+            inner.documentStatus(forFile: fileURL, worktreeRoot: worktreeRoot, hostResolution: hostResolution)
         }
     }
 
@@ -79,7 +83,7 @@ struct EditorTabView: View {
                 onRevealInFiles: onRevealInFiles,
                 menuItems: { index, pathPrefix in
                     let isLast = index == breadcrumbRelativePath.split(separator: "/").count - 1
-                    let isRemote = worktreePath.isRemoteAlasPath
+                    let isRemote = EditorBufferHostResolution.project(projectHost).remoteHost(forPath: worktreePath.path) != nil
                     if isLast {
                         return .file(BreadcrumbFileMenu(
                             onViewAtHEAD: externalAbsolutePath == nil
@@ -218,7 +222,7 @@ struct EditorTabView: View {
                         } ?? LSPPosition(line: 0, character: 0)
                         let source = EditorNavigationTarget(
                             document: EditorDocumentID(
-                                host: RemoteHostRegistry.shared.host(forPath: worktreePath.path),
+                                host: projectHost,
                                 worktreeID: worktreeId,
                                 uri: sourceURI
                             ),
@@ -233,7 +237,8 @@ struct EditorTabView: View {
                             originatingRelativePath: externalAbsolutePath == nil ? relativePath : originatingRelativePath,
                             language: appState.lsp.language(
                                 forFileExtension: LanguageServerRegistry.extensionKey(forPath: relativePath)
-                            )
+                            ),
+                            hostResolution: .project(projectHost)
                         ) {
                             appState.tabs.navigationStore(forWorktreeId: worktreeId).recordJump(
                                 from: source,
@@ -549,7 +554,7 @@ struct EditorTabView: View {
     }
 
     private var runScriptScope: RunScriptScope? {
-        guard !worktreePath.isRemoteAlasPath,
+        guard EditorBufferHostResolution.project(projectHost).remoteHost(forPath: worktreePath.path) == nil,
               externalAbsolutePath == nil || externalEditable,
               !isBinary else { return nil }
         return RunScriptWritingHelp.scope(for: absoluteFileURL, worktreeRoot: worktreePath)
@@ -571,6 +576,7 @@ struct EditorTabView: View {
                 absoluteURL: URL(fileURLWithPath: externalAbsolutePath),
                 worktreeRoot: worktreePath,
                 originatingFileURL: originatingRelativePath.map { worktreePath.appendingPathComponent($0) },
+                hostResolution: externalEditable ? .pathRegistry : .project(projectHost),
                 editable: externalEditable
             )
         }
@@ -615,7 +621,7 @@ struct EditorTabView: View {
             Text("Binary file")
                 .font(.system(size: 12))
                 .foregroundColor(theme.color("fg-dim"))
-            if !worktreePath.isRemoteAlasPath {
+            if EditorBufferHostResolution.project(projectHost).remoteHost(forPath: worktreePath.path) == nil {
                 HStack(spacing: 10) {
                     Button("Open with System") { FileSystemOpen.open(url: absoluteFileURL) }
                     Button("Reveal in Finder") { FileSystemOpen.reveal(url: absoluteFileURL) }
@@ -659,7 +665,8 @@ struct EditorTabView: View {
         let status = resolver.resolve(
             absolutePath: absolutePath,
             override: buffer?.languageOverride,
-            worktreeRoot: worktreePath
+            worktreeRoot: worktreePath,
+            hostResolution: .project(projectHost)
         )
 
         // Compute the override picker's language list only when the popover
@@ -677,7 +684,11 @@ struct EditorTabView: View {
 
         let openFilesUsingLanguage: Int = status.language == nil
             ? 0
-            : appState.lsp.openFilesUsing(forFile: URL(fileURLWithPath: absolutePath), worktreeRoot: worktreePath)
+            : appState.lsp.openFilesUsing(
+                forFile: URL(fileURLWithPath: absolutePath),
+                worktreeRoot: worktreePath,
+                hostResolution: .project(projectHost)
+            )
 
         return EditorLSPStatusBadge(
             status: status,
@@ -691,7 +702,8 @@ struct EditorTabView: View {
                     await appState.lsp.restartHolder(
                         forFile: fileURL,
                         worktreeRoot: worktreePath,
-                        languageId: lang
+                        languageId: lang,
+                        hostResolution: .project(projectHost)
                     )
                 }
             },

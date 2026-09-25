@@ -63,6 +63,41 @@ struct TabsManagerReviewRequestDraftTests {
         #expect(manager.activeTabId(forWorktree: worktreeId) == second.id)
     }
 
+    @Test func samePathDraftRequestsStayScopedToTheirProject() {
+        let worktreeId = "review-request-draft-shared-path"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let snapshot = Self.snapshot()
+
+        let draftA = manager.openOrFocusDraftReviewRequest(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            snapshot: snapshot
+        )
+        _ = manager.updateDraftReviewRequest(worktreeId: worktreeId, tabId: draftA.id) {
+            $0.title = "Project A title"
+            $0.body = "Project A body"
+        }
+        let draftB = manager.openOrFocusDraftReviewRequest(
+            worktreeId: worktreeId,
+            projectId: "project-b",
+            snapshot: snapshot
+        )
+
+        #expect(draftA.id != draftB.id)
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-a").map(\.id) == [draftA.id])
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-b").map(\.id) == [draftB.id])
+        guard case .draftReviewRequest(let stateA) = manager.tabs(forWorktree: worktreeId, projectId: "project-a").first,
+              case .draftReviewRequest(let stateB) = manager.tabs(forWorktree: worktreeId, projectId: "project-b").first else {
+            Issue.record("Expected one project-owned draft review request per project")
+            return
+        }
+        #expect(stateA.title == "Project A title")
+        #expect(stateA.body == "Project A body")
+        #expect(stateB.title.isEmpty)
+        #expect(stateB.body.isEmpty)
+    }
+
     @Test func sameDraftTargetRefreshesHeadSHAPreservingEdits() {
         let worktreeId = "review-request-draft-refresh-head-sha"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
@@ -158,6 +193,7 @@ struct TabsManagerReviewRequestDraftTests {
         #expect(decoded.createAsDraft)
         #expect(decoded.selectedPath == "Alas/Sources/Center/Tab.swift")
         #expect(decoded.createdURL == URL(string: "https://github.com/mrmans0n/alas/pull/42")!)
+        #expect(decoded.projectId == nil)
     }
 
     @Test func draftReviewRequestTargetRequiresSameBranchBaseProviderRepoAndHead() {

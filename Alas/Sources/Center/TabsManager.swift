@@ -63,13 +63,14 @@ final class TabsManager {
     private var tabBuffers: [TabID: EditorBuffer] = [:]
     /// Tracks the absolute URL for external (out-of-worktree) tabs so that
     /// `discardBuffer(worktreeId:tabId:)` can tear them down too.
-    private var externalTabURLs: [TabID: (worktreeId: String, url: URL)] = [:]
+    private var externalTabURLs: [TabID: (worktreeId: String, url: URL, hostResolution: EditorBufferHostResolution)] = [:]
     /// LSP parameters recorded when `externalBuffer` fires `openExternalDocument`
     /// so that `discardBuffer` can issue the matching `closeExternalDocument`.
     private struct ExternalLSPInfo: Equatable {
         var worktreeRoot: URL
         var originatingFileURL: URL?
         var language: String?
+        var hostResolution: EditorBufferHostResolution
     }
     private var externalLSPInfo: [TabID: ExternalLSPInfo] = [:]
     /// Session-only split drafts survive view recreation when the user switches
@@ -152,6 +153,8 @@ final class TabsManager {
             inbox.projectId == projectId
         case .ggLanding(let landing):
             landing.projectId == projectId
+        case .draftReviewRequest(let draft):
+            draft.projectId == projectId || (includesLegacyUnownedProjectTabs && draft.projectId == nil)
         default:
             nil
         }
@@ -190,9 +193,10 @@ final class TabsManager {
         adoptUnownedEditor: Bool = false,
         worktreeRoot: URL,
         originatingRelativePath: String?,
-        language: String?
+        language: String?,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
     ) -> Bool {
-        guard target.document.host == RemoteHostRegistry.shared.host(forPath: worktreeRoot.path),
+        guard target.document.host == hostResolution.remoteHost(forPath: worktreeRoot.path),
               let url = URL(string: target.document.uri)
         else { return false }
         let normalizedURL = url.standardizedFileURL
@@ -233,7 +237,8 @@ final class TabsManager {
                 revealCharacter: target.position.character,
                 originatingRelativePath: originatingRelativePath,
                 originatingWorktreeRoot: worktreeRoot,
-                language: language
+                language: language,
+                hostResolution: hostResolution
             )
         }
         return true
@@ -888,6 +893,7 @@ final class TabsManager {
         originatingRelativePath: String? = nil,
         originatingWorktreeRoot: URL? = nil,
         language: String? = nil,
+        hostResolution: EditorBufferHostResolution = .pathRegistry,
         editable: Bool = false
     ) -> Tab {
         let absPath = absoluteURL.path
@@ -922,7 +928,8 @@ final class TabsManager {
                 if let projectId { file.activeEditorTabIds[projectId] = s.id }
                 byWorktree[worktreeId] = file
                 persist(worktreeId)
-                if originChanged, let originatingWorktreeRoot {
+                if (originChanged || externalLSPInfo[s.id]?.hostResolution != hostResolution),
+                   let originatingWorktreeRoot {
                     let originatingFileURL = originatingRelativePath.flatMap {
                         originatingWorktreeRoot.appendingPathComponent($0)
                     }
@@ -932,13 +939,15 @@ final class TabsManager {
                             absoluteURL: absoluteURL,
                             worktreeRoot: originatingWorktreeRoot,
                             originatingFileURL: originatingFileURL,
-                            language: language
+                            language: language,
+                            hostResolution: hostResolution
                         )
                     } else if externalLSPInfo[s.id]?.language == nil {
                         externalLSPInfo[s.id] = ExternalLSPInfo(
                             worktreeRoot: originatingWorktreeRoot,
                             originatingFileURL: originatingFileURL,
-                            language: nil
+                            language: nil,
+                            hostResolution: hostResolution
                         )
                     }
                 }
@@ -976,13 +985,15 @@ final class TabsManager {
         absoluteURL: URL,
         worktreeRoot: URL,
         originatingFileURL: URL?,
-        language: String
+        language: String,
+        hostResolution: EditorBufferHostResolution
     ) {
         let oldInfo = externalLSPInfo[tabId]
         let newInfo = ExternalLSPInfo(
             worktreeRoot: worktreeRoot,
             originatingFileURL: originatingFileURL,
-            language: language
+            language: language,
+            hostResolution: hostResolution
         )
         externalLSPInfo[tabId] = newInfo
 
@@ -1000,7 +1011,8 @@ final class TabsManager {
                     absoluteURL: absoluteURL,
                     originatingWorktreeRoot: old.worktreeRoot,
                     originatingFileURL: old.originatingFileURL,
-                    language: oldLanguage
+                    language: oldLanguage,
+                    hostResolution: old.hostResolution
                 )
             }
         }
@@ -1648,7 +1660,16 @@ final class TabsManager {
 
     @discardableResult
     func openOrFocusDraftReviewRequest(worktreeId: String, snapshot: ReviewLoopSnapshot) -> Tab {
-        let baseState = DraftReviewRequestTabState(worktreeId: worktreeId, snapshot: snapshot)
+        openOrFocusDraftReviewRequest(worktreeId: worktreeId, projectId: nil, snapshot: snapshot)
+    }
+
+    @discardableResult
+    func openOrFocusDraftReviewRequest(
+        worktreeId: String,
+        projectId: String?,
+        snapshot: ReviewLoopSnapshot
+    ) -> Tab {
+        let baseState = DraftReviewRequestTabState(worktreeId: worktreeId, projectId: projectId, snapshot: snapshot)
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: { $0.id == baseState.id }),
            case .draftReviewRequest(var existing) = file.tabs[idx] {
@@ -2133,6 +2154,8 @@ final class TabsManager {
                 state.projectId == projectId || (includesLegacyUnownedProjectTabs && state.projectId == nil)
             case .draftCommit(let state):
                 state.projectId == projectId || (includesLegacyUnownedProjectTabs && state.projectId == nil)
+            case .draftReviewRequest(let state):
+                state.projectId == projectId || (includesLegacyUnownedProjectTabs && state.projectId == nil)
             default:
                 false
             }
@@ -2496,17 +2519,19 @@ final class TabsManager {
         worktreeRoot: URL? = nil,
         originatingFileURL: URL? = nil,
         language: String? = nil,
+        hostResolution: EditorBufferHostResolution = .pathRegistry,
         editable: Bool = false
     ) -> EditorBuffer {
         let existingEntry = externalTabURLs[tabId]
-        if existingEntry?.worktreeId != worktreeId || existingEntry?.url != absoluteURL {
-            externalTabURLs[tabId] = (worktreeId: worktreeId, url: absoluteURL)
+        if existingEntry?.worktreeId != worktreeId || existingEntry?.url != absoluteURL || existingEntry?.hostResolution != hostResolution {
+            externalTabURLs[tabId] = (worktreeId: worktreeId, url: absoluteURL, hostResolution: hostResolution)
         }
         let buffer = bufferStore.externalBuffer(
             worktreeId: worktreeId,
             absoluteURL: absoluteURL,
             editable: editable,
-            tabId: editable ? tabId : nil
+            tabId: editable ? tabId : nil,
+            hostResolution: hostResolution
         )
         buffer.startWatchingIfNeeded()
 
@@ -2516,10 +2541,22 @@ final class TabsManager {
             let info = ExternalLSPInfo(
                 worktreeRoot: shouldRefreshOrigin ? root : existing?.worktreeRoot ?? root,
                 originatingFileURL: shouldRefreshOrigin ? originatingFileURL : existing?.originatingFileURL,
-                language: language ?? existing?.language
+                language: language ?? existing?.language,
+                hostResolution: hostResolution
             )
             if info != existing {
-                externalLSPInfo[tabId] = info
+                if let existingLanguage = info.language {
+                    rebindExternalLSPHolder(
+                        tabId: tabId,
+                        absoluteURL: absoluteURL,
+                        worktreeRoot: info.worktreeRoot,
+                        originatingFileURL: info.originatingFileURL,
+                        language: existingLanguage,
+                        hostResolution: info.hostResolution
+                    )
+                } else {
+                    externalLSPInfo[tabId] = info
+                }
             }
         }
 
@@ -2540,7 +2577,11 @@ final class TabsManager {
               let language = info.language,
               let entry = externalTabURLs[tabId] else { return }
         let absoluteURL = entry.url
-        let contents = bufferStore.externalBuffer(worktreeId: entry.worktreeId, absoluteURL: absoluteURL).storage.string
+        let contents = bufferStore.externalBuffer(
+            worktreeId: entry.worktreeId,
+            absoluteURL: absoluteURL,
+            hostResolution: entry.hostResolution
+        ).storage.string
         // Capture the info snapshot this Task is opening against so the completion
         // can detect a mid-flight rebind and undo the open on the old holder.
         let snapshot = info
@@ -2552,7 +2593,8 @@ final class TabsManager {
                 originatingWorktreeRoot: snapshot.worktreeRoot,
                 originatingFileURL: snapshot.originatingFileURL,
                 language: language,
-                contents: contents
+                contents: contents,
+                hostResolution: snapshot.hostResolution
             )
             await MainActor.run { [weak self] in
                 guard let self else { return }
@@ -2571,7 +2613,8 @@ final class TabsManager {
                                     absoluteURL: absoluteURL,
                                     originatingWorktreeRoot: snapshot.worktreeRoot,
                                     originatingFileURL: snapshot.originatingFileURL,
-                                    language: language
+                                    language: language,
+                                    hostResolution: snapshot.hostResolution
                                 )
                             }
                         }
@@ -2590,7 +2633,8 @@ final class TabsManager {
                                     absoluteURL: absoluteURL,
                                     originatingWorktreeRoot: snapshot.worktreeRoot,
                                     originatingFileURL: snapshot.originatingFileURL,
-                                    language: language
+                                    language: language,
+                                    hostResolution: snapshot.hostResolution
                                 )
                             }
                         }
@@ -2651,7 +2695,11 @@ final class TabsManager {
     /// files that went through the editor path (unknown-extension binaries).
     func peekExternalBuffer(tabId: TabID) -> EditorBuffer? {
         guard let entry = externalTabURLs[tabId] else { return nil }
-        return bufferStore.peekExternalBuffer(worktreeId: entry.worktreeId, absoluteURL: entry.url)
+        return bufferStore.peekExternalBuffer(
+            worktreeId: entry.worktreeId,
+            absoluteURL: entry.url,
+            hostResolution: entry.hostResolution
+        )
     }
 
     private func indexRestoredPathBufferIfAvailable(
@@ -2741,15 +2789,24 @@ final class TabsManager {
                         absoluteURL: url,
                         originatingWorktreeRoot: info.worktreeRoot,
                         originatingFileURL: info.originatingFileURL,
-                        language: language
+                        language: language,
+                        hostResolution: info.hostResolution
                     )
                 }
             }
             openedExternalDocs.remove(tabId)
-            if let buffer = bufferStore.peekExternalBuffer(worktreeId: ext.worktreeId, absoluteURL: ext.url) {
+            if let buffer = bufferStore.peekExternalBuffer(
+                worktreeId: ext.worktreeId,
+                absoluteURL: ext.url,
+                hostResolution: ext.hostResolution
+            ) {
                 workspaceUndoCoordinators[ext.worktreeId]?.bufferWillClose(buffer)
             }
-            bufferStore.discardExternalBuffer(worktreeId: ext.worktreeId, absoluteURL: ext.url)
+            bufferStore.discardExternalBuffer(
+                worktreeId: ext.worktreeId,
+                absoluteURL: ext.url,
+                hostResolution: ext.hostResolution
+            )
             return
         }
         // Always discard the persisted snapshot for in-worktree tabs, even

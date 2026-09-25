@@ -7,7 +7,11 @@ import Foundation
 struct EditorLSPStatusResolverTests {
     struct FakeManager: EditorLSPStatusResolver.ManagerProbe {
         var status: WorkspaceLSPManager.DocumentStatus = .none
-        func documentStatus(forFile fileURL: URL, worktreeRoot: URL) -> WorkspaceLSPManager.DocumentStatus {
+        func documentStatus(
+            forFile fileURL: URL,
+            worktreeRoot: URL,
+            hostResolution: EditorBufferHostResolution
+        ) -> WorkspaceLSPManager.DocumentStatus {
             status
         }
     }

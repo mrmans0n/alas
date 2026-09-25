@@ -15,14 +15,14 @@ extension GitService {
         guard !files.isEmpty else { return }
 
         let head = try await hasHead(worktreePath: worktreePath)
-        let remoteHost = RemoteHostRegistry.shared.host(forPath: worktreePath.path)
+        let remoteHost = remoteHost(forWorktreePath: worktreePath)
 
         // Partition by index presence. ls-files --error-unmatch exits 0 iff
         // the path is tracked in the index (includes staged adds and renames).
         var indexTracked: [String] = []
         var notInIndex: [String] = []
         for path in files {
-            let result = try await Process.git(
+            let result = try await runGit(
                 ["ls-files", "--error-unmatch", "--", path],
                 cwd: worktreePath
             )
@@ -39,7 +39,7 @@ extension GitService {
         var trulyUntracked: [String] = []
         if head {
             for path in notInIndex {
-                let result = try await Process.git(
+                let result = try await runGit(
                     ["cat-file", "-e", "HEAD:\(path)"],
                     cwd: worktreePath
                 )
@@ -58,7 +58,7 @@ extension GitService {
         // without it `git restore` leaves them at their current commit.
         if !indexTracked.isEmpty {
             if head {
-                let result = try await Process.git(
+                let result = try await runGit(
                     ["restore", "--staged", "--worktree", "--recurse-submodules", "--source=HEAD", "--"]
                         + indexTracked + headOnlyPaths,
                     cwd: worktreePath
@@ -66,7 +66,7 @@ extension GitService {
                 try Self.assertSuccess(result, op: "discard")
             } else {
                 // Unborn HEAD: every tracked path is a staged add.
-                let rm = try await Process.git(
+                let rm = try await runGit(
                     ["rm", "-f", "--cached", "--"] + indexTracked,
                     cwd: worktreePath
                 )
@@ -77,7 +77,7 @@ extension GitService {
             }
         } else if !headOnlyPaths.isEmpty {
             // No index-tracked paths but we have head-only paths (edge case).
-            let result = try await Process.git(
+            let result = try await runGit(
                 ["restore", "--staged", "--worktree", "--recurse-submodules", "--source=HEAD", "--"] + headOnlyPaths,
                 cwd: worktreePath
             )
@@ -95,7 +95,7 @@ extension GitService {
                     continue
                 }
                 let submoduleURL = worktreePath.appendingPathComponent(path)
-                let clean = try await Process.git(
+                let clean = try await runGit(
                     ["clean", "-fd"],
                     cwd: submoduleURL
                 )
@@ -133,13 +133,13 @@ extension GitService {
     /// the index first (the common case after a restore) and fall back to
     /// HEAD for rename origins that aren't in the current index.
     private func isSubmodule(worktreePath: URL, path: String) async throws -> Bool {
-        if let stage = try? await Process.git(
+        if let stage = try? await runGit(
             ["ls-files", "--stage", "--", path],
             cwd: worktreePath
         ), stage.exitCode == 0, stage.stdout.hasPrefix("160000") {
             return true
         }
-        if let tree = try? await Process.git(
+        if let tree = try? await runGit(
             ["ls-tree", "HEAD", "--", path],
             cwd: worktreePath
         ), tree.exitCode == 0, tree.stdout.hasPrefix("160000") {
@@ -155,7 +155,7 @@ extension GitService {
     /// typically because the patch context no longer matches the working
     /// copy (e.g. the user already discarded it elsewhere).
     func applyPatchReverse(worktreePath: URL, patch: String) async throws {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["apply", "--reverse", "-"],
             cwd: worktreePath,
             stdin: patch

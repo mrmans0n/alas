@@ -689,6 +689,7 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
 struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeId: String
+    let projectId: String?
     let provider: CodeHostKind
     let repositorySlug: String
     let branchName: String
@@ -706,21 +707,27 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
         return "Draft \(provider.reviewRequestLabel)"
     }
 
-    init(worktreeId: String, snapshot: ReviewLoopSnapshot) {
+    init(worktreeId: String, projectId: String? = nil, snapshot: ReviewLoopSnapshot) {
         let provider = snapshot.remote?.kind ?? .github
         self.worktreeId = worktreeId
+        self.projectId = projectId
         self.provider = provider
-        self.repositorySlug = snapshot.remote?.repositorySlug ?? ""
+        let repositorySlug = snapshot.remote?.repositorySlug ?? ""
+        self.repositorySlug = repositorySlug
         self.branchName = snapshot.local.branchName
         self.baseBranch = snapshot.local.baseBranch
-        self.id = [
+        let identity = projectId.map { projectId in
+            ["draft-review-request", projectId, worktreeId, provider.rawValue, repositorySlug,
+             snapshot.local.branchName, snapshot.local.baseBranch]
+        } ?? [
             "draft-review-request",
             worktreeId,
             provider.rawValue,
-            self.repositorySlug,
+            repositorySlug,
             snapshot.local.branchName,
             snapshot.local.baseBranch,
-        ].joined(separator: ":")
+        ]
+        self.id = identity.joined(separator: ":")
         self.headOwner = snapshot.local.headRemoteOwner
         self.headSHA = snapshot.local.headSHA
         self.title = ""

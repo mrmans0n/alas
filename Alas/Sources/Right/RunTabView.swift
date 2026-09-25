@@ -248,7 +248,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
     private func refreshScripts(startedWorktreeID: String? = nil) async -> [RunScript]? {
         let refreshWorktreeID = startedWorktreeID ?? worktree.id
         let worktreePath = worktree.path
-        let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path)
+        let host = state.remoteHost(for: worktree)
         let result = await RunScriptStore.discoverScripts(worktreeRoot: worktreePath, remoteHost: host)
         guard RunTabLoadingPresentation.acceptsRefreshCompletion(
             startedWorktreeID: refreshWorktreeID,

@@ -2,10 +2,109 @@ import Foundation
 import os
 
 struct GitService: Sendable {
+    typealias ProcessRunner = @Sendable (
+        _ args: [String],
+        _ cwd: URL?,
+        _ stdin: String?,
+        _ remoteHost: String?,
+        _ usesRemoteHostRegistry: Bool,
+        _ timeout: TimeInterval
+    ) async throws -> ProcessResult
+
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "git-service")
 
+    let hostResolution: EditorBufferHostResolution
+    private let processRunner: ProcessRunner
+
+    init(
+        hostResolution: EditorBufferHostResolution = .pathRegistry,
+        processRunner: ProcessRunner? = nil
+    ) {
+        self.hostResolution = hostResolution
+        self.processRunner = processRunner ?? { args, cwd, stdin, remoteHost, usesRegistry, timeout in
+            try await Process.git(
+                args,
+                cwd: cwd,
+                stdin: stdin,
+                remoteHost: remoteHost,
+                usesRemoteHostRegistry: usesRegistry,
+                timeout: timeout
+            )
+        }
+    }
+
+    func scoped(to hostResolution: EditorBufferHostResolution) -> GitService {
+        GitService(hostResolution: hostResolution, processRunner: processRunner)
+    }
+
+    func remoteHost(forWorktreePath worktreePath: URL, pathRegistryEnabled: Bool = true) -> String? {
+        switch hostResolution {
+        case .pathRegistry:
+            return pathRegistryEnabled ? RemoteHostRegistry.shared.host(forPath: worktreePath.path) : nil
+        case .project(let host):
+            return host
+        }
+    }
+
+    func isRemoteWorktreePath(_ worktreePath: URL) -> Bool {
+        remoteHost(forWorktreePath: worktreePath) != nil
+    }
+
+    func runGit(
+        _ args: [String],
+        cwd: URL? = nil,
+        stdin: String? = nil,
+        timeout: TimeInterval = Process.defaultTimeout,
+        usesRemoteHostRegistry: Bool? = nil
+    ) async throws -> ProcessResult {
+        let options = hostResolution.processOptions(
+            forPath: cwd?.path,
+            pathRegistryEnabled: usesRemoteHostRegistry ?? true
+        )
+        return try await processRunner(
+            args,
+            cwd,
+            stdin,
+            options.remoteHost,
+            options.usesRemoteHostRegistry,
+            timeout
+        )
+    }
+
+    func runGitData(
+        _ args: [String],
+        cwd: URL? = nil,
+        timeout: TimeInterval = Process.defaultTimeout
+    ) async throws -> ProcessResultData {
+        let options = hostResolution.processOptions(forPath: cwd?.path)
+        return try await Process.gitData(
+            args,
+            cwd: cwd,
+            remoteHost: options.remoteHost,
+            usesRemoteHostRegistry: options.usesRemoteHostRegistry,
+            timeout: timeout
+        )
+    }
+
+    func runGitDataPrefix(
+        _ args: [String],
+        cwd: URL? = nil,
+        maxBytes: Int,
+        timeout: TimeInterval = Process.defaultTimeout
+    ) async throws -> Data {
+        let options = hostResolution.processOptions(forPath: cwd?.path)
+        return try await Process.gitDataPrefix(
+            args,
+            cwd: cwd,
+            maxBytes: maxBytes,
+            remoteHost: options.remoteHost,
+            usesRemoteHostRegistry: options.usesRemoteHostRegistry,
+            timeout: timeout
+        )
+    }
+
     func isGitRepository(_ path: URL) async throws -> Bool {
-        let result = try await Process.git(["rev-parse", "--is-inside-work-tree"], cwd: path)
+        let result = try await runGit(["rev-parse", "--is-inside-work-tree"], cwd: path)
         return result.exitCode == 0 &&
             result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
     }
@@ -18,7 +117,7 @@ struct GitService: Sendable {
     func branches(at repoPath: URL) async throws -> [String] {
         let local = try await localBranches(at: repoPath)
 
-        let remote = try await Process.git(
+        let remote = try await runGit(
             ["branch", "--remotes", "--format=%(refname:short)"],
             cwd: repoPath
         )
@@ -35,7 +134,7 @@ struct GitService: Sendable {
     /// deliberately returns the union of local and remote-tracking branches
     /// for callers (branch pickers) that want to display both.
     func localBranches(at repoPath: URL) async throws -> [String] {
-        let local = try await Process.git(
+        let local = try await runGit(
             ["branch", "--list", "--format=%(refname:short)"],
             cwd: repoPath
         )
@@ -94,7 +193,7 @@ extension GitService {
         guard let base = try await resolveBaseRef(
             worktreePath: worktreePath, baseBranch: baseBranch, preferLocal: preferLocal
         ) else { return nil }
-        let result = try await Process.git(
+        let result = try await runGit(
             ["rev-list", "--count", "\(base.baseRef)..HEAD", "--"],
             cwd: worktreePath
         )
@@ -117,7 +216,7 @@ extension GitService {
     /// fail with `bad revision 'HEAD'` on unborn branches; callers swap to
     /// index-based diffs in that case.
     func hasHead(worktreePath: URL) async throws -> Bool {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["rev-parse", "--verify", "--quiet", "HEAD"],
             cwd: worktreePath
         )
@@ -125,7 +224,7 @@ extension GitService {
     }
 
     func headBlobText(worktreePath: URL, relativePath: String) async throws -> HeadBlobTextResult {
-        let result = try await Process.gitData(["show", "HEAD:\(relativePath)"], cwd: worktreePath)
+        let result = try await runGitData(["show", "HEAD:\(relativePath)"], cwd: worktreePath)
         guard result.exitCode == 0 else {
             return .missing
         }
@@ -157,7 +256,7 @@ extension GitService {
         let workingTreeNumstatArgs: [String] = head
             ? ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "HEAD"]
             : ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]   // canonical empty tree
-        let workingTreeNumstat = try await Process.git(workingTreeNumstatArgs, cwd: worktreePath)
+        let workingTreeNumstat = try await runGit(workingTreeNumstatArgs, cwd: worktreePath)
         guard workingTreeNumstat.exitCode == 0 else {
             throw ProcessError.nonZeroExit(workingTreeNumstat.exitCode, workingTreeNumstat.stderr)
         }
@@ -171,7 +270,7 @@ extension GitService {
         let stagedNumstatArgs: [String] = head
             ? ["-c", "core.quotePath=false", "diff", "--cached", "--numstat", "-z", "HEAD"]
             : ["-c", "core.quotePath=false", "diff", "--cached", "--numstat", "-z", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]
-        let stagedNumstat = try await Process.git(stagedNumstatArgs, cwd: worktreePath)
+        let stagedNumstat = try await runGit(stagedNumstatArgs, cwd: worktreePath)
         guard stagedNumstat.exitCode == 0 else {
             throw ProcessError.nonZeroExit(stagedNumstat.exitCode, stagedNumstat.stderr)
         }
@@ -185,7 +284,7 @@ extension GitService {
         }
         let untrackedPaths = entries.filter { $0.add == 0 && $0.del == 0 }.map(\.path)
         let remoteCounts: [String: Int]
-        if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+        if isRemoteWorktreePath(worktreePath), let host = remoteHost(forWorktreePath: worktreePath) {
             remoteCounts = try await RemoteFileStats.lineCounts(host: host, cwd: worktreePath.path, paths: untrackedPaths)
         } else {
             remoteCounts = [:]
@@ -206,9 +305,9 @@ extension GitService {
                 // show 0/0 in the Changes pane and the totals would
                 // under-report. Count the file's lines as adds when it exists
                 // on disk; deleted files (no longer present) stay at 0/0.
-                if worktreePath.isRemoteAlasPath, let lines = remoteCounts[entries[i].path] {
+                if isRemoteWorktreePath(worktreePath), let lines = remoteCounts[entries[i].path] {
                     entries[i] = ChangedFile(path: entries[i].path, status: entries[i].status, stage: entries[i].stage, add: lines, del: 0, renameFrom: entries[i].renameFrom, conflict: entries[i].conflict)
-                } else if !worktreePath.isRemoteAlasPath {
+                } else if !isRemoteWorktreePath(worktreePath) {
                     // Shares `addedLineCount`'s exact counting logic (also
                     // used by `changedFilesAgainstRef`'s ref-resolved
                     // untracked-file branch) rather than a separately
@@ -232,7 +331,7 @@ extension GitService {
     }
 
     func statusIdentity(worktreePath: URL) async throws -> [ChangedFile] {
-        async let statusResult = Process.git(
+        async let statusResult = runGit(
             ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
             cwd: worktreePath
         )
@@ -260,7 +359,7 @@ extension GitService {
         } else {
             entries = try await status(worktreePath: worktreePath)
         }
-        let numstat = try await Process.git(
+        let numstat = try await runGit(
             ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "-M", "-C"],
             cwd: worktreePath
         )
@@ -272,7 +371,7 @@ extension GitService {
             .filter { $0.stage == .unstaged && $0.status == "A" && counts.add[$0.path] == nil }
             .map(\.path)
         let remoteUntrackedCounts: [String: Int]
-        if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+        if isRemoteWorktreePath(worktreePath), let host = remoteHost(forWorktreePath: worktreePath) {
             remoteUntrackedCounts = try await RemoteFileStats.lineCounts(
                 host: host, cwd: worktreePath.path, paths: untrackedWithoutNumstat)
         } else {
@@ -286,7 +385,7 @@ extension GitService {
                 add = countedAdd
                 del = countedDel
             } else if entries[i].status == "A" {
-                add = worktreePath.isRemoteAlasPath
+                add = isRemoteWorktreePath(worktreePath)
                     ? (remoteUntrackedCounts[entries[i].path] ?? 0)
                     : Self.addedLineCount(worktreePath: worktreePath, path: entries[i].path)
                 del = 0
@@ -314,7 +413,7 @@ extension GitService {
         // returns nothing. Detect via `git ls-files --error-unmatch` (exit 0
         // iff tracked) and fall back to comparing against /dev/null so the
         // user sees the file's contents as a single all-add hunk.
-        let tracked = try await Process.git(
+        let tracked = try await runGit(
             ["--literal-pathspecs", "ls-files", "--error-unmatch", "--", file],
             cwd: worktreePath
         )
@@ -403,7 +502,7 @@ extension GitService {
             // `--no-index` invocation below is still the actual source of
             // truth and fails harmlessly if the file truly isn't there.
             let exists: Bool
-            if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+            if isRemoteWorktreePath(worktreePath), let host = remoteHost(forWorktreePath: worktreePath) {
                 exists = await RemoteFileAccess.existence(host: host, path: fileURL.path) != .missing
             } else {
                 exists = FileManager.default.fileExists(atPath: fileURL.path)
@@ -423,13 +522,13 @@ extension GitService {
                 }
                 return await Self.parseOffMain(result.stdout)
             }
-            let result = try await Process.git(noIndexArgs, cwd: worktreePath)
+            let result = try await runGit(noIndexArgs, cwd: worktreePath)
             guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
             return await Self.parseOffMain(result.stdout)
         }
 
         let headPath = originalPath?.isEmpty == false ? originalPath! : file
-        let headBlob = try await Process.gitData(
+        let headBlob = try await runGitData(
             ["show", "HEAD:\(headPath)"],
             cwd: worktreePath
         )
@@ -446,7 +545,7 @@ extension GitService {
                 }
                 return await Self.parseOffMain(result.stdout)
             }
-            let result = try await Process.git(noIndexArgs, cwd: worktreePath)
+            let result = try await runGit(noIndexArgs, cwd: worktreePath)
             guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
             return await Self.parseOffMain(result.stdout)
         }
@@ -473,7 +572,7 @@ extension GitService {
             }
             return await Self.parseOffMain(result.stdout)
         }
-        let result = try await Process.git(args, cwd: worktreePath)
+        let result = try await runGit(args, cwd: worktreePath)
         return await Self.parseOffMain(result.stdout)
     }
 
@@ -524,7 +623,7 @@ extension GitService {
     /// failure (a stale or invalid base) is thrown, so we never silently diff
     /// against the empty tree and report every file in `head` as newly added.
     func resolveTwoDotLeftTree(worktreePath: URL, base: String) async throws -> String {
-        let result = try await Process.git(["rev-parse", "--verify", "--quiet", base], cwd: worktreePath)
+        let result = try await runGit(["rev-parse", "--verify", "--quiet", base], cwd: worktreePath)
         let resolved = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if result.exitCode == 0, !resolved.isEmpty { return resolved }
 
@@ -533,7 +632,7 @@ extension GitService {
         // and report no parents. Otherwise the base is stale/invalid — throw.
         if base.hasSuffix("^") {
             let commitish = String(base.dropLast())
-            let parents = try await Process.git(["rev-list", "--parents", "-n", "1", commitish], cwd: worktreePath)
+            let parents = try await runGit(["rev-list", "--parents", "-n", "1", commitish], cwd: worktreePath)
             let tokens = parents.stdout
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .split(separator: " ", omittingEmptySubsequences: true)
@@ -550,7 +649,7 @@ extension GitService {
     }
 
     private func mergeBase(worktreePath: URL, baseRef: String, headRef: String) async throws -> String {
-        let result = try await Process.git(["merge-base", baseRef, headRef], cwd: worktreePath)
+        let result = try await runGit(["merge-base", baseRef, headRef], cwd: worktreePath)
         let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard result.exitCode == 0, !stdout.isEmpty else {
             let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -574,7 +673,7 @@ extension GitService {
         let before = threeDot
             ? try await mergeBase(worktreePath: worktreePath, baseRef: base, headRef: head)
             : try await resolveTwoDotLeftTree(worktreePath: worktreePath, base: base)
-        let result = try await Process.git(["rev-parse", "--verify", "--quiet", head], cwd: worktreePath)
+        let result = try await runGit(["rev-parse", "--verify", "--quiet", head], cwd: worktreePath)
         let after = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard result.exitCode == 0, !after.isEmpty else {
             throw NSError(
@@ -587,7 +686,7 @@ extension GitService {
     }
 
     private func firstParentOrEmptyTree(worktreePath: URL, sha: String) async throws -> String {
-        let parentsResult = try await Process.git(
+        let parentsResult = try await runGit(
             ["rev-list", "--parents", "-n", "1", sha],
             cwd: worktreePath
         )
@@ -608,7 +707,7 @@ extension GitService {
 
     private func blobLinesOrUnavailable(worktreePath: URL, ref: String, path: String) async throws -> DiffReviewFileContextLines {
         let blobSpec = ref == ":" ? ":\(path)" : "\(ref):\(path)"
-        let result = try await Process.gitData(["show", blobSpec], cwd: worktreePath)
+        let result = try await runGitData(["show", blobSpec], cwd: worktreePath)
         guard result.exitCode == 0 else {
             return .unavailable
         }
@@ -616,7 +715,7 @@ extension GitService {
     }
 
     private func worktreeLinesOrUnavailable(worktreePath: URL, path: String) async throws -> DiffReviewFileContextLines {
-        if worktreePath.isRemoteAlasPath { return .unavailable }
+        if isRemoteWorktreePath(worktreePath) { return .unavailable }
         let url = worktreePath.appendingPathComponent(path)
         if let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) {
             return .available([destination])
@@ -667,7 +766,7 @@ extension GitService {
         // parent rule as commitDetails. `<sha>^1..<sha>` is the natural
         // range expression for this; equivalently `<sha>^1 <sha>` as the
         // two-tree form. We use the two-tree form for consistency.
-        let parentsResult = try await Process.git(
+        let parentsResult = try await runGit(
             ["rev-list", "--parents", "-n", "1", sha],
             cwd: worktreePath
         )
@@ -700,7 +799,7 @@ extension GitService {
         var args: [String] = ["-c", "core.quotePath=false",
                               "diff", "--no-color", "-M", "-C", parentSha, sha, "--", file]
         if let originalPath { args.append(originalPath) }
-        let result = try await Process.git(args, cwd: worktreePath)
+        let result = try await runGit(args, cwd: worktreePath)
         guard result.exitCode == 0 else {
             throw NSError(
                 domain: "GitService.diff(sha:file:)",
@@ -742,7 +841,7 @@ extension GitService {
         var args: [String] = ["-c", "core.quotePath=false",
                               "diff", "--no-color", "-M", "-C", revisions.before, revisions.after, "--", file]
         if let originalPath { args.append(originalPath) }
-        let result = try await Process.git(args, cwd: worktreePath)
+        let result = try await runGit(args, cwd: worktreePath)
         guard result.exitCode == 0 else {
             throw NSError(
                 domain: "GitService.rangeDiff",
@@ -858,7 +957,7 @@ extension GitService {
             }
         }
 
-        if !worktreePath.isRemoteAlasPath {
+        if !isRemoteWorktreePath(worktreePath) {
             do {
             let rootEntries = try FileManager.default.contentsOfDirectory(
                 at: worktreePath,
@@ -934,7 +1033,7 @@ extension GitService {
     }
 
     func submodulePaths(worktreePath: URL) async throws -> Set<String> {
-        let result = try await Process.git(["ls-files", "--stage", "-z"], cwd: worktreePath)
+        let result = try await runGit(["ls-files", "--stage", "-z"], cwd: worktreePath)
         guard result.exitCode == 0 else { return [] }
         var paths = Set<String>()
         // With -z the format is: "<mode> <sha> <stage>\t<path>\0 ..."
@@ -957,7 +1056,7 @@ extension GitService {
     /// want directory expansion badges to match the root listing should pass a
     /// real map.
     func fileTreeChildren(worktreePath: URL, path: String, badges: [String: String] = [:]) async throws -> [FileTreeNode] {
-        if worktreePath.isRemoteAlasPath {
+        if isRemoteWorktreePath(worktreePath) {
             let prefix = path.isEmpty ? "" : path + "/"
             var paths = try await gitVisibleFilePaths(worktreePath: worktreePath)
                 .filter { path.isEmpty || $0.hasPrefix(prefix) }
@@ -982,7 +1081,7 @@ extension GitService {
             // (`AppState.remoteFileNodes`) instead of leaking their names to
             // the client.
             var ignoreCandidates: [RootIgnoreCandidate] = []
-            if let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+            if let host = remoteHost(forWorktreePath: worktreePath) {
                 let directory = path.isEmpty ? worktreePath.path : worktreePath.appendingPathComponent(path).path
                 for entry in try await RemoteFileStats.directoryEntries(host: host, worktreeRoot: worktreePath.path, path: directory)
                     where entry.name != ".git" {
@@ -1097,7 +1196,7 @@ extension GitService {
         // which needed the same fix for the Changes tab. This feeds the
         // root Files tree, so a quoted name here would show the wrong
         // (escaped) filename and fail to resolve when selected.
-        let result = try await Process.git(
+        let result = try await runGit(
             ["-c", "core.quotePath=false", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
             cwd: worktreePath
         )
@@ -1137,7 +1236,7 @@ extension GitService {
     /// force-added-tracked-file exemption above, extended to a ref instead
     /// of just the current index.
     func isPathIgnored(worktreePath: URL, path: String, comparisonRef: String? = nil) async throws -> Bool {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["check-ignore", "-q", "--", path],
             cwd: worktreePath
         )
@@ -1147,7 +1246,7 @@ extension GitService {
         default: throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
         }
         if let comparisonRef, !comparisonRef.isEmpty {
-            let existedAtRef = try await Process.git(
+            let existedAtRef = try await runGit(
                 ["cat-file", "-e", "\(comparisonRef):\(path)"], cwd: worktreePath)
             if existedAtRef.exitCode == 0 {
                 return false
@@ -1180,7 +1279,7 @@ extension GitService {
             }
         }
 
-        let result = try await Process.git(
+        let result = try await runGit(
             ["check-ignore", "--stdin", "--no-index", "-v", "-z"],
             cwd: worktreePath,
             stdin: inputPaths.joined(separator: "\0") + "\0"
@@ -1257,7 +1356,7 @@ extension GitService {
     private func excludedSourcePaths(worktreePath: URL) async throws -> Set<String> {
         var paths: Set<String> = []
 
-        let infoExclude = try await Process.git(
+        let infoExclude = try await runGit(
             ["rev-parse", "--git-path", "info/exclude"],
             cwd: worktreePath
         )
@@ -1268,7 +1367,7 @@ extension GitService {
             }
         }
 
-        let result = try await Process.git(
+        let result = try await runGit(
             ["config", "--path", "--get", "core.excludesfile"],
             cwd: worktreePath
         )
@@ -1318,7 +1417,7 @@ extension GitService {
         // Body follows on a new line after the RS sentinel \u{1e}.
         // Use the RS as an unambiguous separator since the body may contain blank lines.
         let format = "%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%P%x1f%s%n%x1e%n%b"
-        let header = try await Process.git(
+        let header = try await runGit(
             ["show", "--no-patch", "--pretty=tformat:\(format)", sha],
             cwd: worktree
         )
@@ -1397,12 +1496,12 @@ extension GitService {
     /// (numstat + name-status) merged into ordered `CommitChangedFile`s. Shared
     /// by `commitDetails` and `rangeChangedFiles`.
     private func changedFiles(worktree: URL, leftTree: String, rightTree: String) async throws -> [CommitChangedFile] {
-        async let numstatResult = Process.git(
+        async let numstatResult = runGit(
             ["-c", "core.quotePath=false",
              "diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--numstat", leftTree, rightTree],
             cwd: worktree
         )
-        async let nameStatusResult = Process.git(
+        async let nameStatusResult = runGit(
             ["-c", "core.quotePath=false",
              "diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--name-status", leftTree, rightTree],
             cwd: worktree
@@ -1520,11 +1619,11 @@ extension GitService {
             : ["-c", "core.quotePath=false", "diff", "--cached",
                "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]
 
-        async let nameStatusResult = Process.git(
+        async let nameStatusResult = runGit(
             baseArgs + ["--name-status", "-z"],
             cwd: worktreePath
         )
-        async let numstatResult = Process.git(
+        async let numstatResult = runGit(
             baseArgs + ["--numstat", "-z"],
             cwd: worktreePath
         )
@@ -1692,7 +1791,7 @@ extension GitService {
         // `origin/main`. Use the abbreviated form for display.
         var upstreamName: String? = nil
         if resolution == .upstreamThenBase {
-            let up = try await Process.git(
+            let up = try await runGit(
                 ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
                 cwd: worktree
             )
@@ -1708,7 +1807,7 @@ extension GitService {
         // Slash-named bases are ambiguous, so always resolve local first for
         // them; simple names follow the requested preference.
         func refExists(_ ref: String) async throws -> Bool {
-            let r = try await Process.git(["show-ref", "--verify", "--quiet", ref], cwd: worktree)
+            let r = try await runGit(["show-ref", "--verify", "--quiet", ref], cwd: worktree)
             return r.exitCode == 0
         }
         var baseName: String? = nil
@@ -1758,7 +1857,7 @@ extension GitService {
         //   \n                        ← blank separator between header and numstat
         //   <numstat lines: "A\tD\tpath" each>
         let format = "%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%b%x1d"
-        let log = try await Process.git(
+        let log = try await runGit(
             ["log", "\(comparisonRef)..HEAD", "--pretty=tformat:\(format)", "--numstat"],
             cwd: worktree
         )
@@ -1835,7 +1934,7 @@ extension GitService {
     func commitsOlder(worktreePath: URL, beforeSha: String, count: Int) async throws -> [CommitInfo] {
         let range = "\(beforeSha)^"
         let format = "%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%b%x1d"
-        let log = try await Process.git(
+        let log = try await runGit(
             ["log", range, "-n", String(count), "--first-parent",
              "--pretty=tformat:\(format)", "--numstat"],
             cwd: worktreePath
@@ -1908,7 +2007,7 @@ extension GitService {
     func fileHistory(worktreePath: URL, relativePath: String, limit: Int = 200) async throws -> [CommitInfo] {
         let boundedLimit = max(1, limit)
         let format = "%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s"
-        let log = try await Process.git(
+        let log = try await runGit(
             ["log", "--follow", "-n", String(boundedLimit),
              "--pretty=tformat:\(format)", "--numstat", "--", relativePath],
             cwd: worktreePath
@@ -1997,7 +2096,7 @@ extension GitService {
     /// Reads the current branch name for a worktree. Returns empty string
     /// when HEAD is detached or the branch is unborn (no commits yet).
     func currentBranch(worktreePath: URL) async throws -> String {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["symbolic-ref", "--short", "-q", "HEAD"],
             cwd: worktreePath
         )
@@ -2007,7 +2106,7 @@ extension GitService {
 
     /// Returns the current HEAD SHA for the worktree.
     func revParseHEAD(worktreePath: URL) async throws -> String {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["rev-parse", "HEAD"],
             cwd: worktreePath
         )
@@ -2019,7 +2118,7 @@ extension GitService {
 
     /// Returns the full SHA of the current HEAD commit for the given worktree.
     func headSHA(at worktree: URL) async throws -> String {
-        let result = try await Process.git(["rev-parse", "HEAD"], cwd: worktree)
+        let result = try await runGit(["rev-parse", "HEAD"], cwd: worktree)
         guard result.exitCode == 0 else {
             throw NSError(domain: "GitService.headSHA", code: Int(result.exitCode),
                           userInfo: [NSLocalizedDescriptionKey: result.stderr])
@@ -2031,7 +2130,7 @@ extension GitService {
     /// SHA. Used to pin a branch-comparison base to an immutable revision so a
     /// stored review keeps the same merge base even if the branch advances.
     func resolveRevision(at worktree: URL, ref: String) async throws -> String {
-        let result = try await Process.git(["rev-parse", "--verify", "\(ref)^{commit}"], cwd: worktree)
+        let result = try await runGit(["rev-parse", "--verify", "\(ref)^{commit}"], cwd: worktree)
         let resolved = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard result.exitCode == 0, !resolved.isEmpty else {
             throw NSError(domain: "GitService.resolveRevision", code: Int(result.exitCode),
@@ -2051,7 +2150,7 @@ extension GitService {
         guard !baseBranch.isEmpty else { return nil }
 
         if baseBranch.contains("/") {
-            let localCheck = try await Process.git(
+            let localCheck = try await runGit(
                 ["show-ref", "--verify", "--quiet", "refs/heads/\(baseBranch)"],
                 cwd: worktreePath
             )
@@ -2060,7 +2159,7 @@ extension GitService {
             }
 
             let directRef = "refs/remotes/\(baseBranch)"
-            let directCheck = try await Process.git(
+            let directCheck = try await runGit(
                 ["show-ref", "--verify", "--quiet", directRef],
                 cwd: worktreePath
             )
@@ -2071,7 +2170,7 @@ extension GitService {
         }
 
         if preferLocal {
-            let localCheck = try await Process.git(
+            let localCheck = try await runGit(
                 ["show-ref", "--verify", "--quiet", "refs/heads/\(baseBranch)"],
                 cwd: worktreePath
             )
@@ -2082,7 +2181,7 @@ extension GitService {
 
         // Prefer origin/<base> for configured defaults.
         let originRef = "refs/remotes/origin/\(baseBranch)"
-        let originCheck = try await Process.git(
+        let originCheck = try await runGit(
             ["show-ref", "--verify", "--quiet", originRef],
             cwd: worktreePath
         )
@@ -2091,7 +2190,7 @@ extension GitService {
         }
 
         if !preferLocal {
-            let localCheck = try await Process.git(
+            let localCheck = try await runGit(
                 ["show-ref", "--verify", "--quiet", "refs/heads/\(baseBranch)"],
                 cwd: worktreePath
             )
@@ -2104,7 +2203,7 @@ extension GitService {
     }
 
     private func splitRemoteQualifiedRef(_ ref: String, worktreePath: URL) async throws -> (remote: String?, branch: String?) {
-        let remotesResult = try await Process.git(["remote"], cwd: worktreePath)
+        let remotesResult = try await runGit(["remote"], cwd: worktreePath)
         if remotesResult.exitCode == 0 {
             let remotes = remotesResult.stdout
                 .split(separator: "\n", omittingEmptySubsequences: true)
@@ -2127,7 +2226,7 @@ extension GitService {
     /// the local HEAD is behind a ref that someone else (or another machine)
     /// pushed to.
     func resolveUpstreamRef(worktreePath: URL) async throws -> (remote: String, ref: String)? {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
             cwd: worktreePath
         )
@@ -2138,7 +2237,7 @@ extension GitService {
         // (`foo/bar` is a valid remote name, `release/v1` is a valid branch
         // name), so we can't split on the first slash. Match against the
         // configured remotes and pick the longest one that prefixes `name`.
-        let remotesResult = try await Process.git(["remote"], cwd: worktreePath)
+        let remotesResult = try await runGit(["remote"], cwd: worktreePath)
         guard remotesResult.exitCode == 0 else { return nil }
         let remotes = remotesResult.stdout
             .split(separator: "\n", omittingEmptySubsequences: true)
@@ -2158,7 +2257,7 @@ extension GitService {
         guard let upstream = try await resolveUpstreamRef(worktreePath: worktreePath) else {
             return nil
         }
-        let result = try await Process.git(
+        let result = try await runGit(
             ["rev-list", "--left-right", "--count", "HEAD...\(upstream.ref)"],
             cwd: worktreePath
         )
@@ -2183,7 +2282,7 @@ extension GitService {
         worktreePath: URL,
         ref: String
     ) async throws -> BehindStatus {
-        let shaResult = try await Process.git(
+        let shaResult = try await runGit(
             ["rev-parse", ref],
             cwd: worktreePath
         )
@@ -2192,7 +2291,7 @@ extension GitService {
         }
         let sha = shaResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let countResult = try await Process.git(
+        let countResult = try await runGit(
             ["rev-list", "--count", "HEAD..\(ref)"],
             cwd: worktreePath
         )
@@ -2218,7 +2317,7 @@ extension GitService {
         remote: String,
         branch: String
     ) async throws -> Date {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["fetch", remote, branch],
             cwd: worktreePath
         )
@@ -2239,12 +2338,12 @@ extension GitService {
         guard ref.contains("/") else { return nil }
         // Guard against local branches whose name happens to match a remote
         // prefix (e.g. a local branch literally named "origin/main").
-        let localCheck = try await Process.git(
+        let localCheck = try await runGit(
             ["show-ref", "--verify", "--quiet", "refs/heads/\(ref)"],
             cwd: worktreePath
         )
         if localCheck.exitCode == 0 { return nil }
-        let remotesResult = try await Process.git(["remote"], cwd: worktreePath)
+        let remotesResult = try await runGit(["remote"], cwd: worktreePath)
         guard remotesResult.exitCode == 0 else { return nil }
         let remotes = remotesResult.stdout
             .split(separator: "\n", omittingEmptySubsequences: true)
@@ -2294,7 +2393,7 @@ extension GitService {
         if FileManager.default.fileExists(atPath: cherryHead.path) {
             let sha = (try? String(contentsOf: cherryHead, encoding: .utf8))?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let summary = (try? await Process.git(
+            let summary = (try? await runGit(
                 ["log", "-1", "--pretty=%s", sha],
                 cwd: worktreePath
             ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? sha
@@ -2305,7 +2404,7 @@ extension GitService {
         if FileManager.default.fileExists(atPath: revertHead.path) {
             let sha = (try? String(contentsOf: revertHead, encoding: .utf8))?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let summary = (try? await Process.git(
+            let summary = (try? await runGit(
                 ["log", "-1", "--pretty=%s", sha],
                 cwd: worktreePath
             ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? sha
@@ -2327,7 +2426,7 @@ extension GitService {
     /// (handles linked worktrees, where `.git` is a file pointing into a
     /// subdir of the main repo).
     private func gitDir(worktreePath: URL) async throws -> URL {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["rev-parse", "--absolute-git-dir"],
             cwd: worktreePath
         )
@@ -2502,7 +2601,7 @@ extension GitService {
     /// `git show :N:path` returns the blob at index stage N. Returns nil
     /// when the stage doesn't exist (git exits non-zero in that case).
     private func readStageOrNil(worktreePath: URL, stage: Int, path: String) async throws -> String? {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["show", ":\(stage):\(path)"],
             cwd: worktreePath
         )
@@ -2524,7 +2623,7 @@ extension GitService {
     ///   - .conflict(files)   when the working tree is left in conflict
     ///   - .error(message)    for any other non-zero exit
     func merge(worktreePath: URL, branch: String) async throws -> MergeResult {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["-c", "merge.conflictStyle=zdiff3", "merge", branch, "--no-edit"],
             cwd: worktreePath
         )
@@ -2553,7 +2652,7 @@ extension GitService {
 
 extension GitService {
     func rebase(worktreePath: URL, onto: String) async throws -> MergeResult {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["-c", "merge.conflictStyle=zdiff3", "rebase", onto],
             cwd: worktreePath
         )
@@ -2573,7 +2672,7 @@ extension GitService {
             args.append(contentsOf: ["-m", "1"])
         }
         args.append(sha)
-        let result = try await Process.git(args, cwd: worktreePath)
+        let result = try await runGit(args, cwd: worktreePath)
         return try await classifyOperationResult(
             worktreePath: worktreePath,
             exitCode: result.exitCode,
@@ -2588,7 +2687,7 @@ extension GitService {
             args.append(contentsOf: ["-m", "1"])
         }
         args.append(sha)
-        let result = try await Process.git(args, cwd: worktreePath)
+        let result = try await runGit(args, cwd: worktreePath)
         return try await classifyOperationResult(
             worktreePath: worktreePath,
             exitCode: result.exitCode,
@@ -2598,7 +2697,7 @@ extension GitService {
 
     /// Number of parent commits for `sha`. Returns 1 for a normal commit, 2+ for a merge.
     private func parentCount(worktreePath: URL, sha: String) async throws -> Int {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["rev-list", "--parents", "-n", "1", sha],
             cwd: worktreePath
         )
@@ -2617,7 +2716,7 @@ extension GitService {
     /// Used for `bothDeleted` / `deletedByUs` / `deletedByThem` resolutions
     /// where "keep it deleted" is the user's intent.
     func keepDeleted(worktreePath: URL, relativePath: String) async throws {
-        let result = try await Process.git(["rm", "--", relativePath], cwd: worktreePath)
+        let result = try await runGit(["rm", "--", relativePath], cwd: worktreePath)
         guard result.exitCode == 0 else {
             throw OperationError.gitFailed(command: "rm", stderr: result.stderr)
         }
@@ -2639,7 +2738,7 @@ extension GitService {
     /// Resolves a conflict by accepting LOCAL/HEAD content (`git checkout --ours <path>`).
     /// Caller is responsible for staging via `markResolved` afterwards.
     func useOurs(worktreePath: URL, relativePath: String) async throws {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["checkout", "--ours", "--", relativePath],
             cwd: worktreePath
         )
@@ -2650,7 +2749,7 @@ extension GitService {
 
     /// Resolves a conflict by accepting REMOTE/incoming content (`git checkout --theirs <path>`).
     func useTheirs(worktreePath: URL, relativePath: String) async throws {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["checkout", "--theirs", "--", relativePath],
             cwd: worktreePath
         )
@@ -2662,7 +2761,7 @@ extension GitService {
     /// Stages a file (`git add <path>`). Used after the user marks a
     /// conflict resolution complete.
     func markResolved(worktreePath: URL, relativePath: String) async throws {
-        let result = try await Process.git(["add", "--", relativePath], cwd: worktreePath)
+        let result = try await runGit(["add", "--", relativePath], cwd: worktreePath)
         guard result.exitCode == 0 else {
             throw OperationError.gitFailed(
                 command: "add",
@@ -2683,7 +2782,7 @@ extension GitService {
         case .cherryPick: subcommand = "cherry-pick"
         case .revert:     subcommand = "revert"
         }
-        let result = try await Process.git(
+        let result = try await runGit(
             ["-c", "merge.conflictStyle=zdiff3", "-c", "core.editor=true", subcommand, "--continue"],
             cwd: worktreePath
         )
@@ -2703,7 +2802,7 @@ extension GitService {
         case .cherryPick: subcommand = "cherry-pick"
         case .revert:     subcommand = "revert"
         }
-        let result = try await Process.git([subcommand, "--abort"], cwd: worktreePath)
+        let result = try await runGit([subcommand, "--abort"], cwd: worktreePath)
         guard result.exitCode == 0 else {
             throw OperationError.gitFailed(command: "\(subcommand) --abort", stderr: result.stderr)
         }
@@ -2719,7 +2818,7 @@ extension GitService {
         case .revert:     subcommand = "revert"
         case .merge:      throw OperationError.skipNotSupported
         }
-        let result = try await Process.git(
+        let result = try await runGit(
             ["-c", "merge.conflictStyle=zdiff3", "-c", "core.editor=true", subcommand, "--skip"],
             cwd: worktreePath
         )

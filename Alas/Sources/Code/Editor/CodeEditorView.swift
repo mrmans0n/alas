@@ -172,6 +172,7 @@ struct CodeEditorView: NSViewRepresentable {
                 worktreeRoot: worktreeRoot,
                 originatingFileURL: originatingFileURL,
                 language: language,
+                hostResolution: externalEditable ? .pathRegistry : .project(projectHost),
                 editable: externalEditable
             )
         } else {

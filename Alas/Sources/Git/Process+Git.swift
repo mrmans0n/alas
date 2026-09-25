@@ -14,6 +14,20 @@ enum ProcessError: Error {
 }
 
 extension Process {
+    private static func remoteGitHost(
+        cwd: URL?,
+        remoteHost: String?,
+        usesRemoteHostRegistry: Bool,
+        hostResolution: EditorBufferHostResolution?
+    ) -> String? {
+        if case .project(let projectHost) = hostResolution {
+            return projectHost
+        }
+        if let remoteHost { return remoteHost }
+        guard usesRemoteHostRegistry else { return nil }
+        return RemoteHostRegistry.shared.host(forPath: cwd?.path)
+    }
+
     /// Hard cap on how long a child process may run before we SIGTERM it.
     /// Macos-26 CI exposed several pathological hangs in `git` (credential
     /// helper, pager spawn, etc.) where a normally-millisecond invocation
@@ -191,9 +205,15 @@ extension Process {
         stdin: String? = nil,
         remoteHost: String? = nil,
         usesRemoteHostRegistry: Bool = true,
+        hostResolution: EditorBufferHostResolution? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResult {
-        let host = remoteHost ?? (usesRemoteHostRegistry ? RemoteHostRegistry.shared.host(forPath: cwd?.path) : nil)
+        let host = Self.remoteGitHost(
+            cwd: cwd,
+            remoteHost: remoteHost,
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
+        )
         if host == nil {
             try validateWorkingDirectory(cwd)
         }
@@ -227,9 +247,17 @@ extension Process {
     static func gitData(
         _ args: [String],
         cwd: URL? = nil,
+        remoteHost: String? = nil,
+        usesRemoteHostRegistry: Bool = true,
+        hostResolution: EditorBufferHostResolution? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResultData {
-        let host = RemoteHostRegistry.shared.host(forPath: cwd?.path)
+        let host = Self.remoteGitHost(
+            cwd: cwd,
+            remoteHost: remoteHost,
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
+        )
         if host == nil {
             try validateWorkingDirectory(cwd)
         }
@@ -269,9 +297,17 @@ extension Process {
         _ args: [String],
         cwd: URL? = nil,
         maxBytes: Int,
+        remoteHost: String? = nil,
+        usesRemoteHostRegistry: Bool = true,
+        hostResolution: EditorBufferHostResolution? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> Data {
-        let host = RemoteHostRegistry.shared.host(forPath: cwd?.path)
+        let host = Self.remoteGitHost(
+            cwd: cwd,
+            remoteHost: remoteHost,
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
+        )
         if host == nil {
             try validateWorkingDirectory(cwd)
         }

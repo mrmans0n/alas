@@ -242,7 +242,7 @@ extension GitService {
         let resolution = ImageDiffPairResolver.resolveCommit(entry: file)
 
         // Parent. Empty for initial commits — handled below as no `before`.
-        let parentsResult = try await Process.git(
+        let parentsResult = try await runGit(
             ["rev-list", "--parents", "-n", "1", sha], cwd: worktreePath
         )
         let parts = parentsResult.stdout
@@ -477,7 +477,7 @@ extension GitService {
     ) async -> ImageDiffSide {
         let spec = "\(ref):\(path)"
         do {
-            let result = try await Process.gitData(["show", spec], cwd: worktreePath)
+            let result = try await runGitData(["show", spec], cwd: worktreePath)
             guard result.exitCode == 0 else {
                 let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
                 let isExpectedMissing = stderr.contains("does not exist") ||
@@ -519,7 +519,7 @@ extension GitService {
     /// `StatusParser`, but doesn't enrich with numstat — the loader
     /// only needs `path`/`status`/`stage`/`renameFrom`.
     fileprivate func imageDiffStatus(worktreePath: URL) async throws -> [ChangedFile] {
-        let result = try await Process.git(
+        let result = try await runGit(
             [
                 "status", "--porcelain=v2", "-z",
                 "--untracked-files=all",
@@ -561,7 +561,7 @@ extension GitService {
 
     private func indexObjectID(worktreePath: URL, path: String) async -> String {
         do {
-            let result = try await Process.git(["rev-parse", ":\(path)"], cwd: worktreePath)
+            let result = try await runGit(["rev-parse", ":\(path)"], cwd: worktreePath)
             guard result.exitCode == 0 else { return "missing-index" }
             let objectID = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             return objectID.isEmpty ? "missing-index" : objectID
@@ -576,7 +576,7 @@ extension GitService {
 
     private func exactHeadImageRevision(worktreePath: URL) async -> String {
         do {
-            let result = try await Process.git(
+            let result = try await runGit(
                 ["rev-parse", "--verify", "--quiet", "HEAD"],
                 cwd: worktreePath
             )
@@ -618,7 +618,7 @@ extension GitService {
     private func loadImageBlob(worktreePath: URL, revision: String, path: String) async -> ImageDiffSide {
         let spec = Self.blobObjectID(from: revision) ?? "\(revision):\(path)"
         do {
-            let result = try await Process.gitData(["show", spec], cwd: worktreePath)
+            let result = try await runGitData(["show", spec], cwd: worktreePath)
             guard result.exitCode == 0 else {
                 let diagnostic = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
                 Self.logImageSideFailure(

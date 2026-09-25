@@ -42,7 +42,7 @@ enum CommitEditError: LocalizedError, Equatable {
 
 extension GitService {
     func rawCommitSubject(at worktreePath: URL, sha: String) async throws -> String {
-        let result = try await Process.git(["show", "-s", "--format=%s", sha], cwd: worktreePath)
+        let result = try await runGit(["show", "-s", "--format=%s", sha], cwd: worktreePath, stdin: nil)
         guard result.exitCode == 0 else {
             throw NSError(
                 domain: "GitService.rawCommitSubject",
@@ -54,7 +54,7 @@ extension GitService {
     }
 
     func rawCommitBody(at worktreePath: URL, sha: String) async throws -> String {
-        let result = try await Process.git(["show", "-s", "--format=%b", sha], cwd: worktreePath)
+        let result = try await runGit(["show", "-s", "--format=%b", sha], cwd: worktreePath, stdin: nil)
         guard result.exitCode == 0 else {
             throw NSError(
                 domain: "GitService.rawCommitBody",
@@ -183,10 +183,10 @@ extension GitService {
             shouldDeleteBackup = false
             return CommitEditResult(currentSha: currentSha, shaMap: shaMap)
         } catch {
-            _ = try? await Process.git(["cherry-pick", "--abort"], cwd: worktreePath)
-            _ = try? await Process.git(["reset", "--hard", backupBranch], cwd: worktreePath)
+            _ = try? await runGit(["cherry-pick", "--abort"], cwd: worktreePath)
+            _ = try? await runGit(["reset", "--hard", backupBranch], cwd: worktreePath)
             if shouldDeleteBackup {
-                _ = try? await Process.git(["branch", "-D", backupBranch], cwd: worktreePath)
+                _ = try? await runGit(["branch", "-D", backupBranch], cwd: worktreePath)
             }
             throw error
         }
@@ -282,14 +282,14 @@ private extension GitService {
 
     func isEmptyCommit(_ sha: String, cwd: URL) async throws -> Bool {
         if let parent = try await firstParent(of: sha, cwd: cwd) {
-            let result = try await Process.git(["diff-tree", "--quiet", "--exit-code", parent, sha], cwd: cwd)
+            let result = try await runGit(["diff-tree", "--quiet", "--exit-code", parent, sha], cwd: cwd, stdin: nil)
             guard result.exitCode == 0 || result.exitCode == 1 else {
                 throw CommitEditError.gitFailed(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
             }
             return result.exitCode == 0
         }
 
-        let result = try await Process.git(["diff-tree", "--quiet", "--exit-code", "--root", sha], cwd: cwd)
+        let result = try await runGit(["diff-tree", "--quiet", "--exit-code", "--root", sha], cwd: cwd, stdin: nil)
         guard result.exitCode == 0 || result.exitCode == 1 else {
             throw CommitEditError.gitFailed(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
@@ -302,7 +302,9 @@ private extension GitService {
     }
 
     func dropFileFromStagedCommit(worktreePath: URL, parentSha: String, path: String) async throws {
-        let parentProbe = try await Process.git(["cat-file", "-e", "\(parentSha):\(path)"], cwd: worktreePath)
+        let parentProbe = try await runGit(
+            ["cat-file", "-e", "\(parentSha):\(path)"], cwd: worktreePath, stdin: nil
+        )
         if parentProbe.exitCode == 0 {
             try await runGit(["restore", "--source", parentSha, "--staged", "--worktree", "--", path], cwd: worktreePath)
         } else {
@@ -312,14 +314,14 @@ private extension GitService {
 
     func dropHunkFromStagedCommit(worktreePath: URL, path: String, hunk: ParsedDiff.Hunk) async throws {
         let patch = HunkPatchBuilder.patch(file: path, hunk: hunk, tracked: true)
-        let result = try await Process.git(["apply", "--reverse", "--index", "-"], cwd: worktreePath, stdin: patch)
+        let result = try await runGit(["apply", "--reverse", "--index", "-"], cwd: worktreePath, stdin: patch)
         guard result.exitCode == 0 else {
             throw CommitEditError.gitFailed(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
     }
 
     func commitIfNonEmpty(worktreePath: URL, sourceSha: String) async throws {
-        let diff = try await Process.git(["diff", "--cached", "--quiet"], cwd: worktreePath)
+        let diff = try await runGit(["diff", "--cached", "--quiet"], cwd: worktreePath, stdin: nil)
         if diff.exitCode == 0 {
             throw CommitEditError.gitFailed("This edit would make the commit empty; dropping whole commits is not supported yet.")
         }

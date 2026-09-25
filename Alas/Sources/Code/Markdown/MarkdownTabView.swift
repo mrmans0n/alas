@@ -66,6 +66,7 @@ struct MarkdownTabView: View {
                 worktreeRoot: worktreePath,
                 originatingFileURL: originatingRelativePath.map { worktreePath.appendingPathComponent($0) },
                 language: "markdown",
+                hostResolution: externalEditable ? .pathRegistry : .project(projectHost),
                 editable: externalEditable
             )
         } else {

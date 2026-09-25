@@ -8,20 +8,20 @@ enum HeadPublicationState: Equatable, Sendable {
 
 extension GitService {
     func headPublicationState(worktreePath: URL) async throws -> HeadPublicationState {
-        let head = try await Process.git(["rev-parse", "--verify", "HEAD^{commit}"], cwd: worktreePath)
+        let head = try await runGit(["rev-parse", "--verify", "HEAD^{commit}"], cwd: worktreePath)
         try Self.assertSuccess(head, op: "Resolve HEAD")
-        let branch = try await Process.git(["symbolic-ref", "--quiet", "--short", "HEAD"], cwd: worktreePath)
+        let branch = try await runGit(["symbolic-ref", "--quiet", "--short", "HEAD"], cwd: worktreePath)
         if branch.exitCode == 1 { return .noUpstream }
         try Self.assertSuccess(branch, op: "Resolve branch")
         let branchName = branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         for key in ["remote", "merge"] {
-            let config = try await Process.git(["config", "--get", "branch.\(branchName).\(key)"], cwd: worktreePath)
+            let config = try await runGit(["config", "--get", "branch.\(branchName).\(key)"], cwd: worktreePath)
             if config.exitCode == 1 { return .noUpstream }
             try Self.assertSuccess(config, op: "Read upstream configuration")
         }
-        let upstream = try await Process.git(["rev-parse", "--verify", "@{u}^{commit}"], cwd: worktreePath)
+        let upstream = try await runGit(["rev-parse", "--verify", "@{u}^{commit}"], cwd: worktreePath)
         try Self.assertSuccess(upstream, op: "Resolve upstream")
-        let result = try await Process.git(
+        let result = try await runGit(
             ["merge-base", "--is-ancestor", head.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
              upstream.stdout.trimmingCharacters(in: .whitespacesAndNewlines)], cwd: worktreePath
         )
@@ -39,9 +39,9 @@ extension GitService {
         commitSHA: String
     ) async throws -> Bool {
         let branchRef = "refs/heads/\(branch)"
-        let validation = try await Process.git(["check-ref-format", branchRef], cwd: worktreePath)
+        let validation = try await runGit(["check-ref-format", branchRef], cwd: worktreePath)
         try Self.assertSuccess(validation, op: "Validate remote branch")
-        let advertisement = try await Process.git(
+        let advertisement = try await runGit(
             ["ls-remote", "--exit-code", "--heads", "--", remote, branchRef], cwd: worktreePath
         )
         if advertisement.exitCode == 2 { return false }
@@ -54,12 +54,12 @@ extension GitService {
         let temporaryRef = "refs/alas/publish-check/\(UUID().uuidString)"
         let containsCommit: Bool
         do {
-            let fetch = try await Process.git(
+            let fetch = try await runGit(
                 ["fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--refmap=",
                  "--", remote, "+\(branchRef):\(temporaryRef)"], cwd: worktreePath
             )
             try Self.assertSuccess(fetch, op: "Fetch remote branch")
-            let result = try await Process.git(
+            let result = try await runGit(
                 ["merge-base", "--is-ancestor", commitSHA, temporaryRef], cwd: worktreePath
             )
             if result.exitCode != 1 { try Self.assertSuccess(result, op: "Check remote commit") }
@@ -75,13 +75,13 @@ extension GitService {
     private func removePublicationProbeRef(_ ref: String, worktreePath: URL) async throws {
         // Cleanup must survive caller cancellation, but still finish before the probe returns.
         try await Task.detached {
-            let result = try await Process.git(["update-ref", "-d", ref], cwd: worktreePath)
+            let result = try await runGit(["update-ref", "-d", ref], cwd: worktreePath)
             try Self.assertSuccess(result, op: "Delete publication probe ref")
         }.value
     }
 
     func remotes(worktreePath: URL) async throws -> [GitRemote] {
-        let result = try await Process.git(["remote", "-v"], cwd: worktreePath)
+        let result = try await runGit(["remote", "-v"], cwd: worktreePath)
         guard result.exitCode == 0 else {
             throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
         }
@@ -110,7 +110,7 @@ extension GitService {
     }
 
     func needsPush(worktreePath: URL) async throws -> Bool {
-        let upstream = try await Process.git(
+        let upstream = try await runGit(
             ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
             cwd: worktreePath
         )
@@ -123,7 +123,7 @@ extension GitService {
             return true
         }
 
-        let result = try await Process.git(["rev-list", "--count", "@{u}..HEAD"], cwd: worktreePath)
+        let result = try await runGit(["rev-list", "--count", "@{u}..HEAD"], cwd: worktreePath)
         guard result.exitCode == 0 else {
             return true
         }
@@ -137,7 +137,7 @@ extension GitService {
             return 0
         }
 
-        let result = try await Process.git(["rev-list", "--count", "HEAD..\(upstream.ref)"], cwd: worktreePath)
+        let result = try await runGit(["rev-list", "--count", "HEAD..\(upstream.ref)"], cwd: worktreePath)
         guard result.exitCode == 0 else {
             return 0
         }

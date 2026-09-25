@@ -22,12 +22,17 @@ final class CodeEditorCoordinator {
     private var currentTabId: TabID?
     private var currentWorktreeId: String?
     private var currentProjectId: String?
+    private var currentProjectHost: String?
 
     var tabId: TabID? { currentTabId }
     var currentBufferReadOnly: Bool { buffer?.readOnly ?? true }
     private var adoptsLegacyUnownedEditor: Bool {
         guard let currentWorktreeId, let currentProjectId else { return false }
         return appState.legacyEditorOwnerProjectId(forWorktreeId: currentWorktreeId) == currentProjectId
+    }
+    private var currentHostResolution: EditorBufferHostResolution {
+        if let currentProjectId { return .project(currentProjectHost) }
+        return buffer?.hostResolution ?? .pathRegistry
     }
     private var currentRoot: URL?
     private var currentRelativePath: String?
@@ -102,6 +107,7 @@ final class CodeEditorCoordinator {
         let language: String
         let text: String
         let edits: [EditorTextEdit]?
+        let hostResolution: EditorBufferHostResolution
         let theme: Theme?
     }
 
@@ -118,6 +124,7 @@ final class CodeEditorCoordinator {
         self.layoutManager = layoutManager
         self.currentWorktreeId = worktreeId
         self.currentProjectId = projectId
+        self.currentProjectHost = projectHost
         textView.notificationStore = appState.inAppNotifications
         textView.notificationWorktreeID = worktreeId
         self.currentTabId = tabId
@@ -191,7 +198,7 @@ final class CodeEditorCoordinator {
                 guard let root = anchor else { return }
                 let target = EditorNavigationTarget(
                     document: EditorDocumentID(
-                        host: RemoteHostRegistry.shared.host(forPath: root.path),
+                        host: currentHostResolution.remoteHost(forPath: root.path),
                         worktreeID: wid,
                         uri: url.lspURI
                     ),
@@ -205,7 +212,8 @@ final class CodeEditorCoordinator {
                     originatingRelativePath: self.currentExternalAbsolutePath == nil
                         ? self.currentRelativePath
                         : self.currentOriginatingRelativePath,
-                    language: self.currentLanguage
+                    language: self.currentLanguage,
+                    hostResolution: self.currentHostResolution
                 ) {
                     self.appState.tabs.navigationStore(forWorktreeId: wid).recordJump(from: source, to: target)
                 } else {
@@ -435,6 +443,7 @@ final class CodeEditorCoordinator {
                     worktreeRoot: worktreeRoot,
                     originatingFileURL: originatingFileURL,
                     language: language,
+                    hostResolution: externalEditable ? .pathRegistry : .project(projectHost),
                     editable: externalEditable
                 )
             } else {
@@ -1015,7 +1024,7 @@ final class CodeEditorCoordinator {
         }
         return EditorNavigationTarget(
             document: EditorDocumentID(
-                host: RemoteHostRegistry.shared.host(forPath: root.path),
+                host: currentHostResolution.remoteHost(forPath: root.path),
                 worktreeID: worktreeID,
                 uri: uri
             ),
@@ -1044,7 +1053,8 @@ final class CodeEditorCoordinator {
             originatingRelativePath: currentExternalAbsolutePath == nil
                 ? currentRelativePath
                 : currentOriginatingRelativePath,
-            language: currentLanguage
+            language: currentLanguage,
+            hostResolution: currentHostResolution
         ) {
             store.confirmHistoryActivation()
         } else {
@@ -1086,7 +1096,7 @@ final class CodeEditorCoordinator {
         else { return }
         let target = EditorNavigationTarget(
             document: EditorDocumentID(
-                host: RemoteHostRegistry.shared.host(forPath: root.path),
+                host: currentHostResolution.remoteHost(forPath: root.path),
                 worktreeID: worktreeID,
                 uri: location.uri
             ),
@@ -1100,7 +1110,8 @@ final class CodeEditorCoordinator {
             originatingRelativePath: currentExternalAbsolutePath == nil
                 ? currentRelativePath
                 : currentOriginatingRelativePath,
-            language: currentLanguage
+            language: currentLanguage,
+            hostResolution: currentHostResolution
         ) {
             appState.tabs.navigationStore(forWorktreeId: worktreeID).recordJump(from: source, to: target)
         } else {
@@ -1121,7 +1132,8 @@ final class CodeEditorCoordinator {
         return appState.lsp.openedClient(
             forFile: URL(fileURLWithPath: absolutePath),
             worktreeRoot: originatingRoot,
-            language: language
+            language: language,
+            hostResolution: currentHostResolution
         )
     }
 
@@ -1220,6 +1232,7 @@ final class CodeEditorCoordinator {
             language: language,
             text: buffer.storage.string,
             edits: edits,
+            hostResolution: buffer.hostResolution,
             theme: currentTheme
         )
     }
@@ -1230,13 +1243,19 @@ final class CodeEditorCoordinator {
             fileURL: payload.fileURL,
             languageId: payload.language,
             text: payload.text,
-            edits: payload.edits
+            edits: payload.edits,
+            hostResolution: payload.hostResolution
         )
         guard currentRoot == payload.worktreeRoot,
               currentRelativePath == payload.relativePath,
               currentLanguage == payload.language else { return }
         if let theme = payload.theme,
-           let client = appState.lsp.client(forFile: payload.fileURL, worktreeRoot: payload.worktreeRoot, language: payload.language),
+           let client = appState.lsp.client(
+               forFile: payload.fileURL,
+               worktreeRoot: payload.worktreeRoot,
+               language: payload.language,
+               hostResolution: payload.hostResolution
+           ),
            await client.supportsPullDiagnostics {
             if awaitPullDiagnostics {
                 await performPullDiagnostics(client: client, uri: payload.fileURL.lspURI, theme: theme)
@@ -1367,8 +1386,11 @@ final class CodeEditorCoordinator {
 
     private func updateSemanticClient() {
         let next: LSPClient?
-        if let buffer, appState.lsp.documentStatus(forFile: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath),
-                                                  worktreeRoot: buffer.worktreeRoot) == .ready {
+        if let buffer, appState.lsp.documentStatus(
+            forFile: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath),
+            worktreeRoot: buffer.worktreeRoot,
+            hostResolution: buffer.hostResolution
+        ) == .ready {
             next = currentLSPClient()
         } else { next = nil }
         guard next !== semanticClient else { return }
@@ -1492,7 +1514,11 @@ final class CodeEditorCoordinator {
 
     private func updateInlayClient() {
         let next: LSPClient?
-        if let buffer, appState.lsp.documentStatus(forFile: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath), worktreeRoot: buffer.worktreeRoot) == .ready {
+        if let buffer, appState.lsp.documentStatus(
+            forFile: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath),
+            worktreeRoot: buffer.worktreeRoot,
+            hostResolution: buffer.hostResolution
+        ) == .ready {
             next = currentLSPClient()
         } else { next = nil }
         guard next !== inlayClient else { return }
@@ -1615,11 +1641,17 @@ final class CodeEditorCoordinator {
         guard let language = currentLanguage else { return }
         let url = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath)
         let root = buffer.worktreeRoot
+        let hostResolution = buffer.hostResolution
         let relativePath = buffer.relativePath
         let manager = appState.lsp
         let stableTabId = currentTabId
         diagnosticsSetupTask = Task { [weak self] in
-            let client = await manager.clientWhenReady(forFile: url, worktreeRoot: root, language: language)
+            let client = await manager.clientWhenReady(
+                forFile: url,
+                worktreeRoot: root,
+                language: language,
+                hostResolution: hostResolution
+            )
             guard let self,
                   !Task.isCancelled,
                   self.currentTabId == stableTabId,

@@ -10,7 +10,11 @@ import Foundation
 struct EditorLSPStatusResolver {
     protocol ManagerProbe {
         @MainActor
-        func documentStatus(forFile fileURL: URL, worktreeRoot: URL) -> WorkspaceLSPManager.DocumentStatus
+        func documentStatus(
+            forFile fileURL: URL,
+            worktreeRoot: URL,
+            hostResolution: EditorBufferHostResolution
+        ) -> WorkspaceLSPManager.DocumentStatus
     }
 
     protocol AvailabilityProbe {
@@ -27,7 +31,12 @@ struct EditorLSPStatusResolver {
     let availability: AvailabilityProbe
     let registry: RegistryProbe
 
-    func resolve(absolutePath: String, override: String?, worktreeRoot: URL) -> EditorLSPStatus {
+    func resolve(
+        absolutePath: String,
+        override: String?,
+        worktreeRoot: URL,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
+    ) -> EditorLSPStatus {
         let ext = LanguageServerRegistry.extensionKey(forPath: absolutePath)
         let inferred = registry.language(forFileExtension: ext)
         guard let language = override ?? inferred else {
@@ -48,7 +57,7 @@ struct EditorLSPStatusResolver {
             return .problem(language: language, kind: .disabled, command: command)
         case .available:
             let fileURL = URL(fileURLWithPath: absolutePath)
-            switch manager.documentStatus(forFile: fileURL, worktreeRoot: worktreeRoot) {
+            switch manager.documentStatus(forFile: fileURL, worktreeRoot: worktreeRoot, hostResolution: hostResolution) {
             case .none, .loading:
                 return .loading(language: language)
             case .ready:

@@ -108,7 +108,7 @@ extension GitService {
     }
 
     func stashes(worktreePath: URL) async throws -> [GitStash] {
-        let result = try await Process.git(
+        let result = try await runGit(
             ["stash", "list", "--format=%gd%x1f%gs%x1f%cr%x1f%H"],
             cwd: worktreePath
         )
@@ -127,14 +127,14 @@ extension GitService {
             args.append(contentsOf: ["--message", trimmed])
         }
 
-        let result = try await Process.git(args, cwd: worktreePath)
+        let result = try await runGit(args, cwd: worktreePath)
         return Self.stashOperationResult(result, fallback: "Could not stash changes.")
     }
 
     func stashFiles(worktreePath: URL, stash: GitStash) async throws -> [GitStashFile] {
         try await verifyStashIdentity(worktreePath: worktreePath, stash: stash)
 
-        let numstat = try await Process.git(
+        let numstat = try await runGit(
             ["diff", "--numstat", "--find-renames", "--find-copies", "\(stash.ref)^1", stash.ref],
             cwd: worktreePath
         )
@@ -142,7 +142,7 @@ extension GitService {
             throw GitStashError.stderr(numstat.stderr, fallback: "Could not load stash files.")
         }
 
-        let nameStatus = try await Process.git(
+        let nameStatus = try await runGit(
             ["diff", "--name-status", "--find-renames", "--find-copies", "\(stash.ref)^1", stash.ref],
             cwd: worktreePath
         )
@@ -150,11 +150,11 @@ extension GitService {
             throw GitStashError.stderr(nameStatus.stderr, fallback: "Could not load stash files.")
         }
 
-        async let untrackedNumstatProbe = Process.git(
+        async let untrackedNumstatProbe = runGit(
             ["show", "--format=", "--numstat", "\(stash.ref)^3"],
             cwd: worktreePath
         )
-        async let untrackedNameStatusProbe = Process.git(
+        async let untrackedNameStatusProbe = runGit(
             ["show", "--format=", "--name-status", "\(stash.ref)^3"],
             cwd: worktreePath
         )
@@ -177,12 +177,12 @@ extension GitService {
     func stashDiff(worktreePath: URL, stash: GitStash, file: GitStashFile) async throws -> ParsedDiff {
         let pathspecs = [file.oldPath, file.path].compactMap(\.self)
         let stashRevision = stash.sha
-        var result = try await Process.git(
+        var result = try await runGit(
             ["diff", "--no-ext-diff", "--no-color", "--find-renames", "--find-copies", "\(stashRevision)^1", stashRevision, "--"] + pathspecs,
             cwd: worktreePath
         )
         if result.exitCode == 0, result.stdout.isEmpty {
-            result = try await Process.git(
+            result = try await runGit(
                 ["show", "--format=", "--no-ext-diff", "--no-color", "\(stashRevision)^3", "--", file.path],
                 cwd: worktreePath
             )
@@ -198,19 +198,19 @@ extension GitService {
 
     func applyStash(worktreePath: URL, stash: GitStash) async throws -> StashOperationResult {
         try await verifyStashIdentity(worktreePath: worktreePath, stash: stash)
-        let result = try await Process.git(["stash", "apply", stash.ref], cwd: worktreePath)
+        let result = try await runGit(["stash", "apply", stash.ref], cwd: worktreePath)
         return Self.stashOperationResult(result, fallback: "Could not apply stash.")
     }
 
     func popStash(worktreePath: URL, stash: GitStash) async throws -> StashOperationResult {
         try await verifyStashIdentity(worktreePath: worktreePath, stash: stash)
-        let result = try await Process.git(["stash", "pop", stash.ref], cwd: worktreePath)
+        let result = try await runGit(["stash", "pop", stash.ref], cwd: worktreePath)
         return Self.stashOperationResult(result, fallback: "Could not pop stash.")
     }
 
     func dropStash(worktreePath: URL, stash: GitStash) async throws {
         try await verifyStashIdentity(worktreePath: worktreePath, stash: stash)
-        let result = try await Process.git(["stash", "drop", stash.ref], cwd: worktreePath)
+        let result = try await runGit(["stash", "drop", stash.ref], cwd: worktreePath)
         guard result.exitCode == 0 else {
             throw GitStashError.stderr(result.stderr, fallback: "Could not drop stash.")
         }
@@ -231,7 +231,7 @@ extension GitService {
     }
 
     private func verifyStashIdentity(worktreePath: URL, stash: GitStash) async throws {
-        let result = try await Process.git(["rev-parse", "--verify", stash.ref], cwd: worktreePath)
+        let result = try await runGit(["rev-parse", "--verify", stash.ref], cwd: worktreePath)
         guard result.exitCode == 0 else {
             throw GitStashError.stderr(result.stderr, fallback: "\(stash.ref) is no longer available.")
         }
