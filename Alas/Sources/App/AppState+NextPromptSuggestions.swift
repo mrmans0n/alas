@@ -108,13 +108,23 @@ extension AppState {
             await install.value
             guard generation == nextPromptSettingsGeneration, !nextPromptShuttingDown else { return }
             nextPromptInstallation = nil
-            updateNextPromptModelState(await nextPromptModelStore.state)
+            let modelGeneration = nextPromptModelGeneration
+            let modelState = await nextPromptModelStore.state
+            guard generation == nextPromptSettingsGeneration,
+                  modelGeneration == nextPromptModelGeneration, !nextPromptShuttingDown else { return }
+            updateNextPromptModelState(modelState)
         }
-        guard nextPromptModelState == .ready else { return }
+        guard generation == nextPromptSettingsGeneration, !nextPromptShuttingDown,
+              config.nextPromptSuggestionsEnabled, nextPromptModelState == .ready else { return }
+        let modelGeneration = nextPromptModelGeneration
         await nextPromptInference.retryAfterFailure()
-        guard generation == nextPromptSettingsGeneration, !nextPromptShuttingDown else { return }
-        nextPromptInferenceState = await nextPromptInference.state
-        nextPromptRuntimeEnabled = nextPromptInferenceState == .ready
+        guard generation == nextPromptSettingsGeneration,
+              modelGeneration == nextPromptModelGeneration, !nextPromptShuttingDown else { return }
+        let inferenceState = await nextPromptInference.state
+        guard generation == nextPromptSettingsGeneration,
+              modelGeneration == nextPromptModelGeneration, !nextPromptShuttingDown else { return }
+        nextPromptInferenceState = inferenceState
+        nextPromptRuntimeEnabled = inferenceState == .ready
     }
 
     func cancelNextPromptDownload() async {
@@ -234,8 +244,7 @@ extension AppState {
     func nextPromptInputBlocked(owner: SessionOwnerID, sessionID: String) -> Bool {
         guard !nextPromptShuttingDown, nextPromptRuntimeEnabled, nextPromptSupported,
               config.nextPromptSuggestionsEnabled, NSApp.isActive,
-              let manager = acpManager(for: owner), !manager.isMirror(sessionId: sessionID),
-              manager._ownedLeases.contains(sessionID),
+              let manager = acpManager(for: owner), manager.isWriter(for: sessionID),
               let worktreeID = selectedWorktreeId else { return true }
         let sharedOwner = selectedWorkspaceCheckout.map { SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation) }
         guard case .acpSession(let tab) = centerTabComposition(focusedWorktreeID: worktreeID, sharedSessionOwner: sharedOwner).activeTab,

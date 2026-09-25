@@ -6,6 +6,35 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct NextPromptSettingsTests {
+    @Test(arguments: ["cancel", "disable", "modelChange", "shutdown"])
+    func staleRuntimeStateReadCannotResumeSuggestions(_ interruption: String) async throws {
+        let fixture = try ModelStoreFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let runtime = SuspendedSettingsRuntime()
+        let state = makeState(fixture, SettingsStore(), inference: runtime)
+        let enable = Task { await state.enableNextPromptSuggestions() }
+        try await waitUntil { await runtime.isReadingState }
+        #expect(!state.nextPromptRuntimeEnabled)
+        switch interruption {
+        case "cancel": await state.cancelNextPromptDownload()
+        case "disable": await state.disableNextPromptSuggestions()
+        case "modelChange":
+            try await fixture.store.remove()
+            await state.inspectNextPromptModel()
+        default: await state.shutdownNextPromptSuggestions()
+        }
+        #expect(!state.nextPromptRuntimeEnabled)
+        await runtime.releaseStateRead()
+        await enable.value
+        #expect(!state.nextPromptRuntimeEnabled)
+        #expect(state.config.nextPromptSuggestionsEnabled == (interruption != "disable"))
+        #expect(await runtime.retries == 1)
+        #expect(fixture.transport.requestCount == 0)
+        await state.shutdownNextPromptSuggestions()
+    }
+
     @Test func consentCancellationAndEnabledRelaunchNeverInstall() async throws {
         let fixture = try ModelStoreFixture()
         defer { fixture.removeTemporaryRoot() }
@@ -156,7 +185,7 @@ struct NextPromptSettingsTests {
     }
 
     private func makeState(_ fixture: ModelStoreFixture, _ persistence: SettingsStore,
-                           inference: NextPromptInference? = nil) -> AppState {
+                           inference: (any NextPromptRuntime)? = nil) -> AppState {
         AppState(store: persistence, persistenceErrorHandler: { _, _ in },
                  nextPromptModelStore: fixture.store,
                  nextPromptInference: inference ?? NextPromptInference(acquireLease: { try await fixture.store.acquireVerifiedLease() }, load: { _ in { _ in nil } }),
@@ -187,4 +216,24 @@ private actor SettingsGate {
     private(set) var entered = false
     func wait() async { entered = true; await withCheckedContinuation { continuation = $0 } }
     func open() { continuation?.resume(); continuation = nil }
+}
+
+private actor SuspendedSettingsRuntime: NextPromptRuntime {
+    private var stateContinuation: CheckedContinuation<Void, Never>?
+    private(set) var isReadingState = false
+    private(set) var retries = 0
+
+    var state: NextPromptInferenceState {
+        get async {
+            isReadingState = true
+            await withCheckedContinuation { stateContinuation = $0 }
+            return .ready
+        }
+    }
+
+    func releaseStateRead() { stateContinuation?.resume(); stateContinuation = nil }
+    func states() -> AsyncStream<NextPromptInferenceState> { AsyncStream { $0.yield(.ready) } }
+    func generate(_ request: NextPromptRequest) async throws -> String? { nil }
+    func cancelAndUnload() async {}
+    func retryAfterFailure() async { retries += 1 }
 }

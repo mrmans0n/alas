@@ -173,7 +173,7 @@ final class AppState {
     /// shared per-worktree database.
     let instanceId: String = UUID().uuidString
     @ObservationIgnored let nextPromptModelStore: NextPromptModelStore
-    @ObservationIgnored let nextPromptInference: NextPromptInference
+    @ObservationIgnored let nextPromptInference: any NextPromptRuntime
     @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] in
         self?.nextPromptSnapshot()
     }
@@ -1358,7 +1358,7 @@ final class AppState {
         attentionNavigationEnvironment: AttentionNavigationEnvironment? = nil,
         harnessAttentionSettleInterval: TimeInterval = 1.5,
         nextPromptModelStore: NextPromptModelStore? = nil,
-        nextPromptInference: NextPromptInference? = nil,
+        nextPromptInference: (any NextPromptRuntime)? = nil,
         nextPromptSupported: Bool = NextPromptInference.isSupported()
     ) {
         self.store = store

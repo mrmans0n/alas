@@ -12,11 +12,16 @@ protocol NextPromptGenerating: Sendable {
     func retryAfterFailure() async
 }
 
+protocol NextPromptRuntime: NextPromptGenerating {
+    var state: NextPromptInferenceState { get async }
+    func states() async -> AsyncStream<NextPromptInferenceState>
+}
+
 enum NextPromptInferenceState: Equatable, Sendable {
     case ready, running, unloading, unavailable, failed, retryRequired
 }
 
-actor NextPromptInference: NextPromptGenerating {
+actor NextPromptInference: NextPromptRuntime {
     typealias Evaluation = @Sendable (NextPromptRequest) async throws -> String?
 
     struct Clock: Sendable {
