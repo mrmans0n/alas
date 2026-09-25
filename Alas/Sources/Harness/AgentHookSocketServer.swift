@@ -4,16 +4,16 @@ import Foundation
 /// Unix-socket listener for agent hook events, the Alas CLI, and the MCP
 /// hello handshake.
 ///
-/// `@unchecked Sendable` is unavoidable here: the accept loop runs on a
-/// detached `Task`, every client is served on its own detached `Task`, and
-/// `shutdown()` is driven from the main actor, so the object really is
+/// `@unchecked Sendable` is unavoidable here: the accept loop runs on its own
+/// serial dispatch queue, every client is served on its own detached `Task`,
+/// and `shutdown()` is driven from the main actor, so the object really is
 /// touched from several threads at once. It cannot be `@MainActor` — the
 /// blocking `poll`/`accept`/`read` loop must stay off the main thread.
 ///
 /// Soundness rests on two invariants, both enforced below:
 ///
 /// 1. **All mutable state is lock-confined.** `_socketPath`, `_bindPath`,
-///    `_listenTask` and the three handlers are private and are only read or
+///    `_listenActive` and the three handlers are private and are only read or
 ///    written inside `lock`. Nothing else in the class is mutable:
 ///    `clientTasks` does its own locking, everything else is `let` or
 ///    `static`.
@@ -36,7 +36,15 @@ final class AgentHookSocketServer: @unchecked Sendable {
     private let lock = NSLock()
     private var _socketPath: String?
     private var _bindPath: String?
-    private var _listenTask: Task<Void, Never>?
+    /// Serial queue that owns the blocking accept loop. A forever-loop that
+    /// spends most of its life blocked in `poll` must not run on the Swift
+    /// cooperative pool: a blocked cooperative thread is unavailable to every
+    /// other Swift task in the process, and with one listener per live
+    /// `AppState` (tests create dozens concurrently) the pool — only as wide
+    /// as the machine's core count — saturates and starves all async work,
+    /// including the test bodies themselves.
+    private let listenQueue = DispatchQueue(label: "io.nlopez.alas.agent-hook-listen", qos: .utility)
+    private var _listenActive = false
     private var _onEvent: EventHandler?
     private var _onCLIRequest: CLIRequestHandler?
     private var _onMCPHello: MCPHelloHandler?
@@ -152,15 +160,17 @@ final class AgentHookSocketServer: @unchecked Sendable {
     }
 
     func shutdown() {
-        let (cancelledTask, boundPath) = lock.withLock { () -> (Task<Void, Never>?, String?) in
-            let currentTask = _listenTask
-            let currentBindPath = _bindPath
-            _listenTask = nil
+        let boundPath = lock.withLock { () -> String? in
+            let bindPath = _bindPath
+            // The loop notices `_listenActive == false` at its next `poll`
+            // timeout (≤200ms) and exits; no kernel wake-up is needed. The
+            // loop closure owns the socket fd and closes it on the way out,
+            // so this needs no coordination with it beyond the flag.
+            _listenActive = false
             _socketPath = nil
             _bindPath = nil
-            return (currentTask, currentBindPath)
+            return bindPath
         }
-        cancelledTask?.cancel()
         clientTasks.cancelAll()
         if let boundPath { unlink(boundPath) }
     }
@@ -169,9 +179,13 @@ final class AgentHookSocketServer: @unchecked Sendable {
         let socketFD = Self.createSocket(path: path)
         guard socketFD >= 0 else { return false }
 
-        let task = Task.detached { [weak self] in
+        lock.withLock { _listenActive = true }
+        listenQueue.async { [weak self, socketFD] in
+            // The fd is owned by this closure: closed exactly once on the way
+            // out, whether the loop exits because of `shutdown()` or because
+            // `self` was deallocated while the block was still queued.
             defer { close(socketFD) }
-            while !Task.isCancelled {
+            while self?.listenState() == true {
                 var pollFD = pollfd(fd: socketFD, events: Int16(POLLIN), revents: 0)
                 let ready = poll(&pollFD, 1, 200)
                 if ready < 0 {
@@ -182,8 +196,11 @@ final class AgentHookSocketServer: @unchecked Sendable {
                 self?.acceptAndHandle(socketFD: socketFD)
             }
         }
-        lock.withLock { _listenTask = task }
         return true
+    }
+
+    private func listenState() -> Bool {
+        lock.withLock { _listenActive }
     }
 
     private func acceptAndHandle(socketFD: Int32) {
