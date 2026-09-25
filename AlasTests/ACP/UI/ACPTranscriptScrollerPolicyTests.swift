@@ -284,6 +284,29 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(!before.isEqual(to: after))
     }
 
+    @Test("group row token changes when hidden narration becomes live")
+    func groupTokenChangesOnLiveNarration() throws {
+        let host = makeHost(collapsesFinishedToolCalls: true)
+        let thought = ACPMessage.thought(
+            id: UUID(),
+            messageId: "thinking",
+            StreamingText("Inspecting the transcript")
+        )
+        host.transcript.messages = [tool("a"), thought]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let idle = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+            .first { $0.id == "tcg-tc-a" }?.equalityToken)
+
+        host.transcript.lastContentTouchIndex = 1
+        host.transcript.streamingState = .streaming
+        let live = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
+            .first { $0.id == "tcg-tc-a" }?.equalityToken)
+
+        #expect(!idle.isEqual(to: live))
+    }
+
     @Test("group row token changes when the bundle's expanded state changes")
     func groupTokenChangesOnExpansion() throws {
         let host = makeHost(collapsesFinishedToolCalls: true)
@@ -363,8 +386,8 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(expanded.filter { $0 != "tcg-tc-a" } == ungrouped)
     }
 
-    @Test("a member's content change does not re-render the bundle header")
-    func memberContentChangeLeavesHeaderTokenAlone() throws {
+    @Test("retitling the latest tool refreshes the collapsed activity description")
+    func latestToolTitleChangesHeaderToken() throws {
         let host = makeHost(collapsesFinishedToolCalls: true)
         host.transcript.messages = [tool("a"), tool("b")]
         host.transcript.visibleHead = 0
@@ -372,8 +395,7 @@ struct ACPTranscriptScrollerRowSpecsTests {
         let before = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
             .first { $0.id == "tcg-tc-a" }?.equalityToken)
 
-        // Same count, same failure count — only this member's own title
-        // changed, which the header does not display.
+        // The displayed activity changes even when the counts stay the same.
         host.transcript.messages = [
             tool("a"),
             .toolCall(.init(toolCallId: "b", title: "Read something else", kind: "read", status: "completed")),
@@ -381,7 +403,7 @@ struct ACPTranscriptScrollerRowSpecsTests {
         let after = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
             .first { $0.id == "tcg-tc-a" }?.equalityToken)
 
-        #expect(before.isEqual(to: after))
+        #expect(!before.isEqual(to: after))
     }
 
     @Test("the fork divider follows an expanded bundle's last member, not its header")
@@ -494,6 +516,19 @@ struct ACPTranscriptScrollerRowSpecsTests {
         let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host).map(\.id)
 
         #expect(ids == ["__connection_recovery__", "__composer_spacer__"])
+    }
+
+    @Test("stalled reconnect action is rendered for an existing transcript without recovery state")
+    func stalledReconnectActionAppearsForExistingTranscript() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.transcript.messages = [message()]
+        session.agentState = .spawning
+        let host = makeHost(session: session)
+
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host).map(\.id)
+
+        #expect(ids.contains("__stalled_connection__"))
+        #expect(!ids.contains("__connection_recovery__"))
     }
 }
 

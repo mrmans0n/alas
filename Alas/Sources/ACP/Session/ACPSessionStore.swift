@@ -1196,7 +1196,8 @@ extension ACPSessionStore {
     /// A plain `BEGIN` (WAL) would defer the write lock and still race.
     func claimLease(sessionId: String, instanceId: String, pid: Int64,
                     now: Int64, staleAfter: Int64,
-                    leaseToken: String = UUID().uuidString) throws -> Bool {
+                    leaseToken: String = UUID().uuidString,
+                    replaceOwnedToken: Bool = false) throws -> Bool {
         let staleCutoff = now - staleAfter
         try db.exec("BEGIN IMMEDIATE")
         do {
@@ -1218,13 +1219,13 @@ extension ACPSessionStore {
                 heartbeat_at = excluded.heartbeat_at,
                 status = 'idle',
                 lease_token = CASE
-                    WHEN session_leases.owner_instance = excluded.owner_instance
+                    WHEN session_leases.owner_instance = excluded.owner_instance AND ? = 0
                     THEN session_leases.lease_token
                     ELSE excluded.lease_token
                 END
             WHERE session_leases.owner_instance = excluded.owner_instance
                OR session_leases.heartbeat_at < ?
-            """, bindings: [sessionId, instanceId, pid, now, leaseToken, staleCutoff])
+            """, bindings: [sessionId, instanceId, pid, now, leaseToken, replaceOwnedToken ? 1 : 0, staleCutoff])
             let won = try loadLease(sessionId: sessionId)?.ownerInstance == instanceId
             try db.exec("COMMIT")
             return won

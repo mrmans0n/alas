@@ -380,6 +380,7 @@ extension ACPPermissionRequestParams {
     /// ACPPermissionOption initializers.
     static func stub(
         sessionId: String = "remote", toolTitle: String = "Bash",
+        toolCallContent: [ACPToolCallContent]? = nil,
         metadata: AnyCodable? = nil, toolCallMetadata: AnyCodable? = nil,
         allowOptionMetadata: AnyCodable? = nil
     ) -> ACPPermissionRequestParams {
@@ -390,7 +391,7 @@ extension ACPPermissionRequestParams {
                 title: toolTitle,
                 kind: "execute",
                 status: nil,
-                content: nil,
+                content: toolCallContent,
                 locations: nil,
                 rawInput: nil,
                 rawOutput: nil,
@@ -1027,6 +1028,7 @@ struct RemoteSessionGatewayTests {
         provider.sessions["s1"] = s
         s.transcript.streamingState = .awaitingPermission
         s.transcript.pendingPermission = .init(id: .number(0), params: .stub(
+            toolCallContent: [.content(.text("swift build"))],
             metadata: AnyCodable([
                 "permission": AnyCodable([
                     "version": AnyCodable(1),
@@ -1062,6 +1064,7 @@ struct RemoteSessionGatewayTests {
         #expect(payload.reason == "Reason: needs shell access")
         #expect(payload.defaultToNo == true)
         #expect(payload.mcpServerName == "github")
+        #expect(payload.commandSummary == "swift build")
         #expect(payload.options.first { $0.optionId == "allow_once" }?.description == "Run this command one time")
         #expect(payload.options.first { $0.optionId == "reject_once" }?.description == nil)
     }
@@ -1242,7 +1245,10 @@ struct RemoteSessionGatewayTests {
             ACPElicitationRequestParams.self,
             from: Data(#"""
             {"sessionId":"remote","mode":"form","message":"Pick", "requestedSchema":{
-              "properties":{"strategy":{"type":"string","enum":["safe","fast"]}},
+              "properties":{
+                "strategy":{"type":"string","enum":["safe","fast"]},
+                "token":{"type":"string","_meta":{"codex":{"isSecret":true}}}
+              },
               "required":["strategy"]
             }}
             """#.utf8)
@@ -1258,7 +1264,8 @@ struct RemoteSessionGatewayTests {
             return nil
         }.first)
         #expect(payload.requestId == pending.id.uuidString)
-        #expect(payload.fields.first?.options.map(\.value) == ["safe", "fast"])
+        #expect(payload.fields.first { $0.key == "strategy" }?.options.map(\.value) == ["safe", "fast"])
+        #expect(payload.fields.first { $0.key == "token" }?.isSecret == true)
 
         session.transcript.messages.append(.agent(id: UUID(), StreamingText("still waiting")))
         try await Task.sleep(nanoseconds: 250_000_000)

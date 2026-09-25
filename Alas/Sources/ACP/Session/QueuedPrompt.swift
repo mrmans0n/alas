@@ -26,6 +26,16 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// It is intentionally omitted from ordinary prompt JSON for compatibility.
     let delegatedSource: ACPDelegatedPromptSource?
     var brokerOperationAttempt: Int
+    /// The broker generation on which this prompt crossed the dispatch
+    /// boundary. A later generation cannot tell whether that request
+    /// completed, so replay is held for an explicit user decision.
+    var dispatchedBrokerGeneration: ACPBrokerGeneration?
+    /// True when this prompt may have reached a broker but completion could
+    /// not be confirmed. The queue flusher must not resend it automatically.
+    var deliveryUncertain: Bool
+
+    static let deliveryUncertaintyMessage =
+        "Delivery is uncertain because the previous connection ended before confirming this prompt. Retry to send it again."
 
     init(id: UUID = UUID(),
          blocks: [ACPContentBlock],
@@ -36,7 +46,9 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
          draft: ACPComposerDraft? = nil,
          delegatedSource: ACPDelegatedPromptSource? = nil,
          transcriptRecorded: Bool = false,
-         brokerOperationAttempt: Int = 0)
+         brokerOperationAttempt: Int = 0,
+         dispatchedBrokerGeneration: ACPBrokerGeneration? = nil,
+         deliveryUncertain: Bool = false)
     {
         self.id = id
         self.blocks = blocks
@@ -48,10 +60,13 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         self.delegatedSource = delegatedSource
         self.transcriptRecorded = transcriptRecorded
         self.brokerOperationAttempt = brokerOperationAttempt
+        self.dispatchedBrokerGeneration = dispatchedBrokerGeneration
+        self.deliveryUncertain = deliveryUncertain
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, blocks, enqueuedAt, scheduledAt, status, lastError, draft, delegatedSource, transcriptRecorded, brokerOperationAttempt
+        case id, blocks, enqueuedAt, scheduledAt, status, lastError, draft, delegatedSource
+        case transcriptRecorded, brokerOperationAttempt, dispatchedBrokerGeneration, deliveryUncertain
     }
 
     init(from decoder: Decoder) throws {
@@ -66,17 +81,30 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         delegatedSource = try? c.decode(ACPDelegatedPromptSource.self, forKey: .delegatedSource)
         transcriptRecorded = (try? c.decode(Bool.self, forKey: .transcriptRecorded)) ?? false
         brokerOperationAttempt = (try? c.decode(Int.self, forKey: .brokerOperationAttempt)) ?? 0
+        dispatchedBrokerGeneration = try? c.decode(ACPBrokerGeneration.self, forKey: .dispatchedBrokerGeneration)
+        deliveryUncertain = (try? c.decode(Bool.self, forKey: .deliveryUncertain)) ?? false
+        if deliveryUncertain, lastError == nil {
+            lastError = Self.deliveryUncertaintyMessage
+        }
     }
 
     /// Used by the persistence decoder: any item that was mid-send when
     /// the app exited gets reset to `.pending` so the next flusher run
     /// re-attempts the prompt. `lastError` is preserved so a previously
     /// failed item that the user hasn't acked stays visibly errored.
-    func normalizedAfterRestore() -> QueuedPrompt {
+    func normalizedAfterRestore(markLegacySendingUncertain: Bool = true) -> QueuedPrompt {
         guard status == .sending else { return self }
         var copy = self
         copy.status = .pending
+        if markLegacySendingUncertain, copy.dispatchedBrokerGeneration == nil {
+            copy.markDeliveryUncertain()
+        }
         return copy
+    }
+
+    mutating func markDeliveryUncertain() {
+        deliveryUncertain = true
+        lastError = Self.deliveryUncertaintyMessage
     }
 
     func isReady(at date: Date = Date()) -> Bool {

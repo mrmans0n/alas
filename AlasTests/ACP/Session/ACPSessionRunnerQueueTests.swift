@@ -19,12 +19,34 @@ private final class DispatchRegistrationFlag: @unchecked Sendable {
     }
 }
 
+private final class ConnectionCurrentFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Bool
+
+    init(_ value: Bool) {
+        self.value = value
+    }
+
+    var isCurrent: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func set(_ value: Bool) {
+        lock.lock()
+        self.value = value
+        lock.unlock()
+    }
+}
+
 @MainActor
 @Suite("ACPSessionRunner queue routing")
 struct ACPSessionRunnerQueueTests {
     private func mkRunner(
         validateLease: (() async -> Bool)? = nil,
-        onPromptWorkChanged: (() -> Void)? = nil
+        onPromptWorkChanged: (() -> Void)? = nil,
+        isConnectionCurrent: (() -> Bool)? = nil
     ) throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-q-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -42,6 +64,7 @@ struct ACPSessionRunnerQueueTests {
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
             onPromptWorkChanged: onPromptWorkChanged,
+            isConnectionCurrent: isConnectionCurrent ?? { true },
             validateLease: validateLease)
         return (runner, mock, session, store)
     }
@@ -123,6 +146,32 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue[0].scheduledAt != nil)
         #expect(!mock.sent.contains { $0.method == "session/prompt" })
         #expect(try store.loadQueue(sessionId: "s") == session.queue)
+    }
+
+    @Test("moving an uncertain prompt to the front preserves its retry state")
+    func promotingUncertainQueueItemPreservesRetryState() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        let ordinary = QueuedPrompt(blocks: [.text("ordinary")])
+        let uncertain = QueuedPrompt(
+            blocks: [.text("possibly already delivered")],
+            lastError: QueuedPrompt.deliveryUncertaintyMessage,
+            deliveryUncertain: true
+        )
+        session.restoreQueue([ordinary, uncertain])
+
+        #expect(session.forceQueueItem(id: uncertain.id))
+        #expect(session.queue.first?.id == uncertain.id)
+        #expect(session.queue.first?.lastError == QueuedPrompt.deliveryUncertaintyMessage)
+        #expect(session.queue.first?.deliveryUncertain == true)
+
+        runner.flushQueueIfIdle()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+
+        #expect(session.retryQueueItem(id: uncertain.id))
+        #expect(session.queue.first?.lastError == nil)
+        #expect(session.queue.first?.deliveryUncertain == false)
+        #expect(session.queue.first?.brokerOperationAttempt == 1)
     }
 
     @Test("force send waits for initial scheduled persistence")
@@ -376,6 +425,153 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.contains { $0.method == "session/prompt" })
     }
 
+    @Test("queue head is not sent when dispatch provenance cannot be persisted")
+    func queueHeadIsNotSentWhenProvenancePersistenceFails() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-q-provenance-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let mock = ACPMockClient()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.enqueue(blocks: [.text("must stay unsent")])
+        let originalQueue = session.queue
+        try store.upsertQueue(sessionId: "s", items: originalQueue)
+        let missingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-q-missing-\(UUID())", isDirectory: true)
+        let failingPersistence = ACPSessionPersistence(
+            path: missingDirectory.appendingPathComponent("queue.sqlite").path
+        )
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            persistence: failingPersistence
+        )
+
+        runner.flushQueueIfIdle()
+        await runner.flushPersistence()
+
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+        #expect(session.queue.first?.status == .pending)
+        #expect(session.queue.first?.lastError?.localizedCaseInsensitiveContains("not sent") == true)
+        #expect(try store.loadQueue(sessionId: "s") == originalQueue)
+    }
+
+    @Test("a superseded queue persistence write does not claim broker dispatch")
+    func supersededQueuePersistenceDoesNotClaimBrokerDispatch() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-q-superseded-dispatch-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let mock = ACPMockClient()
+        mock.brokerGenerationForTesting = ACPBrokerGeneration(rawValue: 7)
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.enqueue(blocks: [.text("not sent")])
+        try store.upsertQueue(sessionId: "s", items: session.queue)
+        let current = ConnectionCurrentFlag(true)
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            isConnectionCurrent: { current.isCurrent }
+        )
+
+        try store.db.exec("BEGIN IMMEDIATE")
+        runner.flushQueueIfIdle()
+        #expect(session.queue.first?.status == .sending)
+        #expect(session.queue.first?.dispatchedBrokerGeneration == nil)
+
+        current.set(false)
+        runner.stop()
+        try store.db.exec("ROLLBACK")
+        await runner.flushPersistence()
+
+        let persisted = try store.loadQueue(sessionId: "s")
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+        #expect(persisted.first?.dispatchedBrokerGeneration == nil)
+        session.restoreQueue(persisted)
+        #expect(!session.markQueuedPromptsUncertain(afterBrokerGeneration: ACPBrokerGeneration(rawValue: 8)))
+        #expect(session.queue.first?.deliveryUncertain == false)
+    }
+
+    @Test("queue dispatch provenance is durable before broker handoff")
+    func queueDispatchProvenanceIsPersistedBeforeHandoff() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        let generation = ACPBrokerGeneration(rawValue: 7)
+        mock.brokerGenerationForTesting = generation
+        let requestStarted = QueueTestGate()
+        let responseRelease = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await requestStarted.open()
+            await responseRelease.wait()
+            return Data("null".utf8)
+        }
+        session.enqueue(blocks: [.text("queued")])
+
+        runner.flushQueueIfIdle()
+        await requestStarted.wait()
+
+        #expect(session.queue.first?.dispatchedBrokerGeneration == generation)
+        #expect(try store.loadQueue(sessionId: "s").first?.dispatchedBrokerGeneration == generation)
+
+        await responseRelease.open()
+        for _ in 0 ..< 100 where !session.queue.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await runner.flushPersistence()
+        #expect(session.queue.isEmpty)
+    }
+
+    @Test("stale queue persistence failure does not mutate a replacement queue head")
+    func staleQueuePersistenceFailureDoesNotMutateReplacementHead() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-q-stale-failure-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.enqueue(blocks: [.text("old queue head")])
+        let current = ConnectionCurrentFlag(true)
+        let missingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-q-stale-missing-\(UUID())", isDirectory: true)
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            isConnectionCurrent: { current.isCurrent },
+            persistence: ACPSessionPersistence(path: missingDirectory.appendingPathComponent("queue.sqlite").path)
+        )
+
+        runner.flushQueueIfIdle()
+        current.set(false)
+        runner.stop()
+        session.queue.removeAll()
+        let replacementId = UUID()
+        session.enqueue(id: replacementId, blocks: [.text("replacement queue head")])
+        await runner.flushPersistence()
+
+        #expect(session.queue.first?.id == replacementId)
+        #expect(session.queue.first?.status == .pending)
+        #expect(session.queue.first?.lastError == nil)
+    }
+
     @Test("force send parked by queue persistence is retained")
     func forceSendBlockedByQueuePersistenceIsRetained() async throws {
         let (runner, mock, session, _) = try mkRunner()
@@ -494,6 +690,120 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue[0].status == .pending)
         #expect(session.queue[0].lastError != nil)
         #expect(session.queue[0].brokerOperationKey != operationKey)
+    }
+
+    @Test("superseded prompt success does not consume shared state or finish its callback")
+    func supersededPromptSuccessDoesNotFinish() async throws {
+        let currentConnection = ConnectionCurrentFlag(true)
+        let (runner, mock, session, _) = try mkRunner(
+            isConnectionCurrent: { currentConnection.isCurrent }
+        )
+        let requestStarted = QueueTestGate()
+        let responseRelease = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await requestStarted.open()
+            await responseRelease.wait()
+            return Data("null".utf8)
+        }
+
+        session.pendingMCPPreamble = "keep for the replacement runner"
+        var finished: Bool?
+        runner.sendNow(
+            blocks: [.text("pending")],
+            queuedItemId: nil,
+            onPromptFinished: { finished = $0 }
+        )
+        await requestStarted.wait()
+
+        runner.invalidateActivePrompt()
+        runner.stop()
+        currentConnection.set(false)
+        await responseRelease.open()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(session.pendingMCPPreamble == "keep for the replacement runner")
+        #expect(finished == nil)
+    }
+
+    @Test("superseded prompt failure does not finish its callback")
+    func supersededPromptFailureDoesNotFinish() async throws {
+        let currentConnection = ConnectionCurrentFlag(true)
+        let (runner, mock, _, _) = try mkRunner(
+            isConnectionCurrent: { currentConnection.isCurrent }
+        )
+        let requestStarted = QueueTestGate()
+        let responseRelease = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await requestStarted.open()
+            await responseRelease.wait()
+            throw ACPClientError.jsonrpc(.init(code: -32042, message: "stale failure", data: nil))
+        }
+
+        var finished: Bool?
+        runner.sendNow(
+            blocks: [.text("pending")],
+            queuedItemId: nil,
+            onPromptFinished: { finished = $0 }
+        )
+        await requestStarted.wait()
+
+        runner.invalidateActivePrompt()
+        runner.stop()
+        currentConnection.set(false)
+        await responseRelease.open()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(finished == nil)
+    }
+
+    @Test("superseded prompt lease failure does not finish its callback")
+    func supersededPromptLeaseFailureDoesNotFinish() async throws {
+        let currentConnection = ConnectionCurrentFlag(true)
+        let leaseGate = LeaseValidationGate(result: false)
+        let (runner, _, _, _) = try mkRunner(
+            validateLease: { await leaseGate.validate() },
+            isConnectionCurrent: { currentConnection.isCurrent }
+        )
+
+        var finished: Bool?
+        runner.sendNow(
+            blocks: [.text("pending")],
+            queuedItemId: nil,
+            onPromptFinished: { finished = $0 }
+        )
+        await leaseGate.waitUntilEntered()
+
+        runner.invalidateActivePrompt()
+        currentConnection.set(false)
+        await leaseGate.release()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(finished == nil)
+    }
+
+    @Test("superseded prompt does not finish after its lease check")
+    func supersededPromptDoesNotFinishAfterLeaseCheck() async throws {
+        let currentConnection = ConnectionCurrentFlag(true)
+        let leaseGate = LeaseValidationGate()
+        let (runner, _, _, _) = try mkRunner(
+            validateLease: { await leaseGate.validate() },
+            isConnectionCurrent: { currentConnection.isCurrent }
+        )
+
+        var finished: Bool?
+        runner.sendNow(
+            blocks: [.text("pending")],
+            queuedItemId: nil,
+            onPromptFinished: { finished = $0 }
+        )
+        await leaseGate.waitUntilEntered()
+
+        runner.invalidateActivePrompt()
+        currentConnection.set(false)
+        await leaseGate.release()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(finished == nil)
     }
 
     @Test("queued prompt response ack waits for durable queue pop and resumes draining")
@@ -641,6 +951,113 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.contains { $0.method == "session/cancel" })
         let prompts = mock.sent.filter { $0.method == "session/prompt" }
         #expect(prompts.isEmpty)
+    }
+
+    @Test("steer skips its redirect when the runner is replaced during cancellation")
+    func steerSkipsRedirectAfterRunnerReplacementDuringCancel() async throws {
+        let currentConnection = ConnectionCurrentFlag(true)
+        let (runner, mock, session, _) = try mkRunner(
+            isConnectionCurrent: { currentConnection.isCurrent }
+        )
+        let promptStarted = QueueTestGate()
+        let releasePrompt = QueueTestGate()
+        let cancelStarted = QueueTestGate()
+        let releaseCancel = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await promptStarted.open()
+            await releasePrompt.wait()
+            return Data("null".utf8)
+        }
+        mock.scriptNotifyAsync(method: "session/cancel") { _ in
+            await cancelStarted.open()
+            await releaseCancel.wait()
+        }
+        session.agentState = .ready
+        runner.send(blocks: [.text("running")], intent: .auto)
+        await promptStarted.wait()
+
+        var promptFinished: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { succeeded in
+            promptFinished = succeeded
+        }
+        await cancelStarted.wait()
+
+        currentConnection.set(false)
+        runner.stop()
+        session.agentState = .ready
+        await releaseCancel.open()
+        await releasePrompt.open()
+        for _ in 0 ..< 100 where promptFinished == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(promptFinished == false)
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+        let userMessages = session.transcript.messages.filter {
+            if case .user = $0 { return true }
+            return false
+        }
+        #expect(userMessages.count == 1)
+    }
+
+    @Test("steer skips its redirect when the runner is replaced while awaiting the prompt")
+    func steerSkipsRedirectAfterRunnerReplacementWhilePromptSettles() async throws {
+        let currentConnection = ConnectionCurrentFlag(true)
+        let steerPromptWaitStarted = DispatchRegistrationFlag()
+        let (runner, mock, session, _) = try mkRunner(
+            onPromptWorkChanged: { steerPromptWaitStarted.markRegistered() },
+            isConnectionCurrent: { currentConnection.isCurrent }
+        )
+        let promptStarted = QueueTestGate()
+        let releasePrompt = QueueTestGate()
+        let cancelFinished = QueueTestGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await promptStarted.open()
+            await releasePrompt.wait()
+            return Data("null".utf8)
+        }
+        mock.scriptNotifyAsync(method: "session/cancel") { _ in
+            await cancelFinished.open()
+        }
+        session.agentState = .ready
+        runner.send(blocks: [.text("running")], intent: .auto)
+        await promptStarted.wait()
+
+        var promptFinished: Bool?
+        runner.send(blocks: [.text("redirect")], intent: .steer) { succeeded in
+            promptFinished = succeeded
+        }
+        await cancelFinished.wait()
+        for _ in 0 ..< 100 where !session.transcript.messages.contains(where: {
+            if case .systemNotice(_, let text) = $0 { return text == "Interrupted by user." }
+            return false
+        }) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(session.transcript.messages.contains {
+            if case .systemNotice(_, let text) = $0 { return text == "Interrupted by user." }
+            return false
+        })
+        for _ in 0 ..< 100 where !steerPromptWaitStarted.isRegistered {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(steerPromptWaitStarted.isRegistered)
+
+        currentConnection.set(false)
+        runner.stop()
+        session.agentState = .ready
+        await releasePrompt.open()
+        for _ in 0 ..< 100 where promptFinished == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(promptFinished == false)
+        #expect(mock.sent.filter { $0.method == "session/prompt" }.count == 1)
+        let userMessages = session.transcript.messages.filter {
+            if case .user = $0 { return true }
+            return false
+        }
+        #expect(userMessages.count == 1)
     }
 
     @Test("forceSendQueuedItem while busy preserves and later drains the rest of the queue")
@@ -1001,7 +1418,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.contains { $0.method == "session/prompt" })
     }
 
-    @Test("queue survives runner restart: persist + restart + drain")
+    @Test("uncertain queue head survives restart until explicitly retried")
     func persistenceRoundTrip() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-rt-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -1021,7 +1438,8 @@ struct ACPSessionRunnerQueueTests {
         runner1.send(blocks: [.text("beta")], intent: .auto)
         try await Task.sleep(nanoseconds: 100_000_000)
         // Simulate the "in-flight head when app quit" case by flipping
-        // the head to .sending and persisting.
+        // the head to .sending and persisting. On restore its delivery is
+        // uncertain, so it must not be silently sent again.
         session1.markQueueHeadSending()
         runner1.persistQueue()
         await runner1.flushPersistence()
@@ -1039,11 +1457,17 @@ struct ACPSessionRunnerQueueTests {
         #expect(session2.queue.count == 2)
         // .sending was normalized to .pending on restore.
         #expect(session2.queue[0].status == .pending)
+        #expect(session2.queue[0].deliveryUncertain)
         let runner2 = ACPSessionRunner(
             session: session2, connection: ACPConnection(client: mock2), store: store,
             sessionId: "rt", worktreePath: FileManager.default.temporaryDirectory.path)
         runner2.flushQueueIfIdle()
-        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(mock2.sent.isEmpty)
+
+        runner2.forceSendQueuedItem(id: session2.queue[0].id)
+        for _ in 0 ..< 100 where !session2.queue.isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         #expect(session2.queue.isEmpty)
         let prompts = mock2.sent.filter { $0.method == "session/prompt" }
         #expect(prompts.count == 2)
@@ -1070,14 +1494,19 @@ private actor QueueTestGate {
 private actor LeaseValidationGate {
     private let entered = QueueTestGate()
     private let releaseGate = QueueTestGate()
+    private let result: Bool
     private var blocksFirstValidation = true
+
+    init(result: Bool = true) {
+        self.result = result
+    }
 
     func validate() async -> Bool {
         guard blocksFirstValidation else { return true }
         blocksFirstValidation = false
         await entered.open()
         await releaseGate.wait()
-        return true
+        return result
     }
 
     func waitUntilEntered() async {

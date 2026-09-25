@@ -1879,6 +1879,183 @@ struct ACPSessionRunnerTests {
         #expect(text.value == "before edit")
     }
 
+    @Test("file writes stop when the runner is superseded during lease validation")
+    func fileWriteStopsWhenRunnerIsSupersededDuringLeaseValidation() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let worktree = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-write-race-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        let file = worktree.appendingPathComponent("edited.txt")
+        try "old\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let validationStarted = AsyncGate()
+        let validationCanFinish = AsyncGate()
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        var connectionIsCurrent = true
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: worktree.path,
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: {
+                await validationStarted.open()
+                await validationCanFinish.wait()
+                return true
+            }
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        let requestID = JSONRPCID.number(8)
+        mock.emitFile(.write(id: requestID, params: .init(
+            sessionId: "s", path: file.path, content: "new\n")))
+        await validationStarted.wait()
+
+        connectionIsCurrent = false
+        runner.stop()
+        await validationCanFinish.open()
+
+        try await waitUntil { mock.fileResponses[requestID] != nil }
+        guard case .failure(let error) = mock.fileResponses[requestID] else {
+            Issue.record("expected a superseded file write to be cancelled")
+            return
+        }
+        #expect(error.code == -32800)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "old\n")
+        #expect(!session.transcript.messages.contains {
+            if case .fileEdit = $0 { return true }
+            return false
+        })
+    }
+
+    @Test("remote file writes are not recorded after the lease is taken over")
+    func remoteFileWriteIsNotRecordedAfterLeaseTakeover() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let worktree = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-remote-write-race-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        let file = worktree.appendingPathComponent("edited.txt")
+        try "old\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let remoteWriteStarted = AsyncGate()
+        let remoteWriteCanFinish = AsyncGate()
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        var leaseIsValid = true
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: worktree.path,
+            remoteHost: "buildbox",
+            canWrite: { true },
+            validateLease: { leaseIsValid }
+        )
+        runner.remoteFileWriteForTesting = { path, content, beforeRemoteWrite in
+            try await beforeRemoteWrite()
+            await remoteWriteStarted.open()
+            await remoteWriteCanFinish.wait()
+            return ACPFileWriter.makeResult(oldText: "old\n", newText: content, path: path)
+        }
+        runner.start()
+        defer { runner.stop() }
+
+        let requestID = JSONRPCID.number(9)
+        mock.emitFile(.write(id: requestID, params: .init(
+            sessionId: "s", path: file.path, content: "new\n")))
+        await remoteWriteStarted.wait()
+
+        leaseIsValid = false
+        await remoteWriteCanFinish.open()
+
+        try await waitUntil { mock.fileResponses[requestID] != nil }
+        guard case .failure(let error) = mock.fileResponses[requestID] else {
+            Issue.record("expected the stale remote write to be rejected after lease validation")
+            return
+        }
+        #expect(error.code == -32003)
+        #expect(!session.transcript.messages.contains {
+            if case .fileEdit = $0 { return true }
+            return false
+        })
+    }
+
+    @Test("remote file writes stop if the lease is lost during preflight")
+    func remoteFileWriteStopsIfLeaseIsLostDuringPreflight() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let worktree = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-remote-preflight-race-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        let file = worktree.appendingPathComponent("edited.txt")
+        try "old\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let preflightStarted = AsyncGate()
+        let preflightCanContinue = AsyncGate()
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        var leaseIsValid = true
+        var remoteWriteStarted = false
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: worktree.path,
+            remoteHost: "buildbox",
+            canWrite: { true },
+            validateLease: { leaseIsValid }
+        )
+        runner.remoteFileWriteForTesting = { path, content, beforeRemoteWrite in
+            await preflightStarted.open()
+            await preflightCanContinue.wait()
+            try await beforeRemoteWrite()
+            remoteWriteStarted = true
+            return ACPFileWriter.makeResult(oldText: "old\n", newText: content, path: path)
+        }
+        runner.start()
+        defer { runner.stop() }
+
+        let requestID = JSONRPCID.number(10)
+        mock.emitFile(.write(id: requestID, params: .init(
+            sessionId: "s", path: file.path, content: "new\n")))
+        await preflightStarted.wait()
+
+        leaseIsValid = false
+        await preflightCanContinue.open()
+
+        try await waitUntil { mock.fileResponses[requestID] != nil }
+        guard case .failure(let error) = mock.fileResponses[requestID] else {
+            Issue.record("expected remote file write to stop when the lease was lost")
+            return
+        }
+        #expect(error.code == -32003)
+        #expect(!remoteWriteStarted)
+        #expect(!session.transcript.messages.contains {
+            if case .fileEdit = $0 { return true }
+            return false
+        })
+    }
+
     @Test("permission requests flush buffered updates before responding")
     func permissionRequestsFlushBufferedUpdatesBeforeResponding() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
@@ -3763,7 +3940,11 @@ struct ACPSessionRunnerTests {
 
     private func makeRunner(
         onUserCancel: (() -> Void)? = nil,
-        onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil
+        onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
+        session suppliedSession: ACPSession? = nil,
+        isConnectionCurrent: @escaping () -> Bool = { true },
+        canWrite: (() -> Bool)? = nil,
+        validateLease: (() async -> Bool)? = nil
     ) throws -> (ACPSessionRunner, ACPMockClient) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -3772,7 +3953,8 @@ struct ACPSessionRunnerTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
 
         let mock = ACPMockClient()
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let session = suppliedSession
+            ?? ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: mock),
@@ -3780,9 +3962,25 @@ struct ACPSessionRunnerTests {
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
             onUserCancel: onUserCancel,
-            onCheckpointCapture: onCheckpointCapture
+            onCheckpointCapture: onCheckpointCapture,
+            isConnectionCurrent: isConnectionCurrent,
+            canWrite: canWrite,
+            validateLease: validateLease
         )
         return (runner, mock)
+    }
+
+    private func createLongRunningTerminal(id: JSONRPCID, using mock: ACPMockClient) async throws -> String? {
+        mock.emitTerminal(.create(id: id, params: .init(
+            sessionId: "s", command: "/bin/sleep", args: ["60"],
+            env: nil, cwd: nil, outputByteLimit: nil
+        )))
+        try await waitUntil { mock.terminalResponses[id] != nil }
+        guard case .success(let body)? = mock.terminalResponses[id] else {
+            Issue.record("expected terminal/create to start a live process")
+            return nil
+        }
+        return try JSONDecoder().decode(ACPTerminalCreateResult.self, from: body).terminalId
     }
 
     // MARK: - onPersist callback tests
@@ -4328,6 +4526,132 @@ struct ACPSessionRunnerTests {
                 "no terminal must be created when the lease is held by another instance")
     }
 
+    @Test("terminal create is cancelled when its runner is superseded during lease validation")
+    func terminalCreateStopsWhenRunnerIsSupersededDuringLeaseValidation() async throws {
+        let validationStarted = AsyncGate()
+        let validationCanFinish = AsyncGate()
+        var connectionIsCurrent = true
+        let (runner, mock) = try makeRunner(
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: {
+                await validationStarted.open()
+                await validationCanFinish.wait()
+                return true
+            }
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        let requestID = JSONRPCID.number(100)
+        mock.emitTerminal(.create(id: requestID, params: .init(
+            sessionId: "s", command: "/bin/sleep", args: ["60"],
+            env: nil, cwd: nil, outputByteLimit: nil
+        )))
+        await validationStarted.wait()
+
+        connectionIsCurrent = false
+        runner.stop()
+        await validationCanFinish.open()
+
+        try await waitUntil { mock.terminalResponses[requestID] != nil }
+        guard case .failure(let error)? = mock.terminalResponses[requestID] else {
+            Issue.record("expected a superseded terminal/create request to be cancelled")
+            return
+        }
+        #expect(error.code == -32800)
+        #expect(runner.session.terminalHost.terminals.isEmpty)
+    }
+
+    @Test("terminal kill is cancelled when its runner is superseded during lease validation")
+    func terminalKillStopsWhenRunnerIsSupersededDuringLeaseValidation() async throws {
+        let validationStarted = AsyncGate()
+        let validationCanFinish = AsyncGate()
+        var connectionIsCurrent = true
+        let (runner, mock) = try makeRunner(
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: {
+                await validationStarted.open()
+                await validationCanFinish.wait()
+                return true
+            }
+        )
+        runner.start()
+        let (replacementRunner, replacementMock) = try makeRunner(session: runner.session)
+        replacementRunner.start()
+        defer {
+            runner.stop()
+            replacementRunner.stop()
+        }
+
+        guard let terminalID = try await createLongRunningTerminal(
+            id: .number(101), using: replacementMock
+        ), let terminal = runner.session.terminalHost.terminal(id: terminalID) else { return }
+
+        let requestID = JSONRPCID.number(102)
+        mock.emitTerminal(.kill(id: requestID, params: .init(
+            sessionId: "s", terminalId: terminalID
+        )))
+        await validationStarted.wait()
+
+        connectionIsCurrent = false
+        await validationCanFinish.open()
+
+        try await waitUntil { mock.terminalResponses[requestID] != nil }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        guard case .failure(let error)? = mock.terminalResponses[requestID] else {
+            Issue.record("expected a superseded terminal/kill request to be cancelled")
+            return
+        }
+        #expect(error.code == -32800)
+        #expect(terminal.exitStatus == nil)
+    }
+
+    @Test("terminal release is cancelled when its runner is superseded during lease validation")
+    func terminalReleaseStopsWhenRunnerIsSupersededDuringLeaseValidation() async throws {
+        let validationStarted = AsyncGate()
+        let validationCanFinish = AsyncGate()
+        var connectionIsCurrent = true
+        let (runner, mock) = try makeRunner(
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: {
+                await validationStarted.open()
+                await validationCanFinish.wait()
+                return true
+            }
+        )
+        runner.start()
+        let (replacementRunner, replacementMock) = try makeRunner(session: runner.session)
+        replacementRunner.start()
+        defer {
+            runner.stop()
+            replacementRunner.stop()
+        }
+
+        guard let terminalID = try await createLongRunningTerminal(
+            id: .number(103), using: replacementMock
+        ), let terminal = runner.session.terminalHost.terminal(id: terminalID) else { return }
+
+        let requestID = JSONRPCID.number(104)
+        mock.emitTerminal(.release(id: requestID, params: .init(
+            sessionId: "s", terminalId: terminalID
+        )))
+        await validationStarted.wait()
+
+        connectionIsCurrent = false
+        await validationCanFinish.open()
+
+        try await waitUntil { mock.terminalResponses[requestID] != nil }
+        guard case .failure(let error)? = mock.terminalResponses[requestID] else {
+            Issue.record("expected a superseded terminal/release request to be cancelled")
+            return
+        }
+        #expect(error.code == -32800)
+        #expect(!terminal.released)
+    }
+
     // MARK: - Fix 2 (P2): cancel RPC gated on lease
 
     @Test("userCancel does not send session/cancel when lease is held by another instance")
@@ -4364,6 +4688,120 @@ struct ACPSessionRunnerTests {
         // No session/cancel must have been sent.
         #expect(!mock.sent.contains { $0.method == "session/cancel" },
                 "userCancel must not send session/cancel when the lease is held by another instance")
+    }
+
+    @Test("userCancel stops before sending cancellation when its runner is superseded during lease validation")
+    func userCancelStopsAfterRunnerSupersededDuringLeaseValidation() async throws {
+        let validationStarted = AsyncGate()
+        let validationCanFinish = AsyncGate()
+        var connectionIsCurrent = true
+        let (runner, mock) = try makeRunner(
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: {
+                await validationStarted.open()
+                await validationCanFinish.wait()
+                return true
+            }
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        runner.session.transcript.streamingState = .streaming
+        let userCancelTask = Task { @MainActor in await runner.userCancel() }
+        await validationStarted.wait()
+
+        connectionIsCurrent = false
+        runner.stop()
+        let created = try runner.session.terminalHost.create(.init(
+            sessionId: "s", command: "/bin/sleep", args: ["60"],
+            env: nil, cwd: nil, outputByteLimit: nil
+        ))
+        let terminal = try #require(runner.session.terminalHost.terminal(id: created.terminalId))
+        runner.session.transcript.streamingState = .sending
+
+        await validationCanFinish.open()
+        await userCancelTask.value
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(!mock.sent.contains { $0.method == "session/cancel" })
+        #expect(runner.session.transcript.streamingState == .sending)
+        #expect(terminal.exitStatus == nil)
+    }
+
+    @Test("userCancel ignores completion after its runner is superseded during the cancel RPC")
+    func userCancelIgnoresCompletionAfterRunnerSupersededDuringCancelRPC() async throws {
+        let cancelStarted = AsyncGate()
+        let cancelCanFinish = AsyncGate()
+        var connectionIsCurrent = true
+        let (runner, mock) = try makeRunner(
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: { true }
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        mock.scriptNotifyAsync(method: "session/cancel") { _ in
+            await cancelStarted.open()
+            await cancelCanFinish.wait()
+        }
+        runner.session.transcript.streamingState = .streaming
+        let userCancelTask = Task { @MainActor in await runner.userCancel() }
+        await cancelStarted.wait()
+
+        connectionIsCurrent = false
+        runner.stop()
+        let created = try runner.session.terminalHost.create(.init(
+            sessionId: "s", command: "/bin/sleep", args: ["60"],
+            env: nil, cwd: nil, outputByteLimit: nil
+        ))
+        let terminal = try #require(runner.session.terminalHost.terminal(id: created.terminalId))
+        runner.session.transcript.streamingState = .sending
+
+        await cancelCanFinish.open()
+        await userCancelTask.value
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(mock.sent.contains { $0.method == "session/cancel" })
+        #expect(runner.session.transcript.streamingState == .sending)
+        #expect(terminal.exitStatus == nil)
+    }
+
+    @Test("cancelSubagent stops before notifying when its runner is superseded during lease validation")
+    func cancelSubagentStopsAfterRunnerSupersededDuringLeaseValidation() async throws {
+        let validationStarted = AsyncGate()
+        let validationCanFinish = AsyncGate()
+        var connectionIsCurrent = true
+        let (runner, mock) = try makeRunner(
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: {
+                await validationStarted.open()
+                await validationCanFinish.wait()
+                return true
+            }
+        )
+        runner.start()
+        defer { runner.stop() }
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(
+                subagentSessionId: "child-1", capabilities: .cancellable
+            ))
+        ))
+
+        let cancelTask = Task { @MainActor in
+            await runner.cancelSubagent(subagentSessionId: "child-1")
+        }
+        await validationStarted.wait()
+
+        connectionIsCurrent = false
+        runner.stop()
+        await validationCanFinish.open()
+        await cancelTask.value
+
+        #expect(!mock.sent.contains { $0.method == "session/cancel" })
     }
 
     @Test("persistSessionRow skipped when lease is held by another instance")

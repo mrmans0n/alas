@@ -74,7 +74,8 @@ struct EditorInlayLayoutTests {
         try await eventually("request after source edit") { requests.count >= 2 }
         #expect(view.displayAdapter?.document.map.hintRuns.isEmpty == true)
         try reply(requests[1])
-        try await eventually("apply current response") { view.displayAdapter?.document.map.hintRuns.count == 1 }
+        await coordinator.awaitInlayRequestsForTesting()
+        #expect(view.displayAdapter?.document.map.hintRuns.count == 1)
         let retainedID = try #require(view.displayAdapter?.document.map.hintRuns.first?.hint.id)
         #expect(view.inlayAccessibilityActions?(retainedID).isEmpty == false)
         view.setSourceSelectedRange(NSRange(location: 32, length: 0))
@@ -83,11 +84,10 @@ struct EditorInlayLayoutTests {
         #expect(view.inlayAccessibilityActions?(retainedID).isEmpty == true)
         try await eventually("refresh retained hints") { requests.count >= 3 }
         try reply(requests[2])
+        await coordinator.awaitInlayRequestsForTesting()
         // The response repeats the hint the edit did not disturb, so the
         // retained decoration is adopted as-is and only regains its anchor.
-        try await eventually("fresh hints restore retained visuals") {
-            view.inlayAccessibilityActions?(retainedID).isEmpty == false
-        }
+        #expect(view.inlayAccessibilityActions?(retainedID).isEmpty == false)
         #expect(view.displayAdapter?.document.map.hintRuns.first?.hint.id == retainedID)
         // rust-analyzer sends workspace/inlayHint/refresh after didChange. A
         // refresh invalidates protocol data, but the current decorations must
@@ -105,9 +105,8 @@ struct EditorInlayLayoutTests {
         #expect(view.inlayAccessibilityActions?(retainedID).isEmpty == true)
         #expect(refreshProjections == 0)
         try reply(requests.last!)
-        try await eventually("server refresh response") {
-            view.inlayAccessibilityActions?(retainedID).isEmpty == false
-        }
+        await coordinator.awaitInlayRequestsForTesting()
+        #expect(view.inlayAccessibilityActions?(retainedID).isEmpty == false)
         // Moving through a prefetched chunk and back must not request or
         // recreate the already-visible hints at the beginning of the file.
         let cachedID = try #require(view.displayAdapter?.document.map.hintRuns.first?.hint.id)
@@ -121,7 +120,7 @@ struct EditorInlayLayoutTests {
         }
         scroll.contentView.scroll(to: .zero)
         scroll.reflectScrolledClipView(scroll.contentView)
-        try await Task.sleep(for: .milliseconds(120))
+        await coordinator.awaitScheduledInlayRefreshForTesting()
         #expect(requests.count == beforeScroll)
         #expect(view.displayAdapter?.document.map.hintRuns.first?.hint.id == cachedID)
         typealias Response = (client: LSPClient, context: EditorRequestContext, revision: Int, generations: [EditorDocumentID: WorkspaceEditBufferGeneration])
@@ -141,10 +140,19 @@ struct EditorInlayLayoutTests {
         app.config.code.inlayHintsByLanguage["swift"] = .init()
         try await eventually("settings enable request") { requests.count > beforeSettingsEnable }
         try reply(requests.last!)
-        try await eventually("settings enable response") { view.displayAdapter?.document.map.hintRuns.count == 1 }
+        await coordinator.awaitInlayRequestsForTesting()
+        #expect(view.displayAdapter?.document.map.hintRuns.count == 1)
         let before = requests.count
+        var selectionChanges = 0
+        let selectionObserver = NotificationCenter.default.addMainActorObserver(
+            forName: NSTextView.didChangeSelectionNotification,
+            object: view
+        ) { selectionChanges += 1 }
+        defer { NotificationCenter.default.removeObserver(selectionObserver) }
         for position in 0..<6 { view.setSourceSelectedRange(NSRange(location: position, length: 0)) }
-        try await Task.sleep(for: .milliseconds(200))
+        // Selection notifications and their coordinator handler run inline on
+        // the main actor; unlike viewport changes, they enqueue no inlay work.
+        #expect(selectionChanges == 6)
         #expect(requests.count == before)
         #expect(buffer.editGeneration == revision)
     }

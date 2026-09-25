@@ -46,6 +46,7 @@ final class InlayHintsFeature {
     private var requestedRanges: [NSRange] = []
     private var worker: Task<Void, Never>?
     private var workerID = UUID()
+    private var retiredWorkersForTesting: [Task<Void, Never>] = []
     private var presentationExpiry: Task<Void, Never>?
 
     init(request: @escaping (NSRange) async -> [LSPInlayHint]?, apply: @escaping ([LSPInlayHint], [NSRange]) -> Void, clear: @escaping () -> Void) {
@@ -153,8 +154,21 @@ final class InlayHintsFeature {
     func stop() {
         invalidate()
         workerID = UUID()
-        worker?.cancel()
+        let active = worker
+        active?.cancel()
+        if let active { retiredWorkersForTesting.append(active) }
         worker = nil
+    }
+
+    func awaitRequestsForTesting() async {
+        while true {
+            let active = worker
+            let retired = retiredWorkersForTesting
+            retiredWorkersForTesting.removeAll()
+            guard active != nil || !retired.isEmpty else { return }
+            await active?.value
+            for task in retired { await task.value }
+        }
     }
 
     /// Request the visible 256-line chunks first, then their neighbors. Source

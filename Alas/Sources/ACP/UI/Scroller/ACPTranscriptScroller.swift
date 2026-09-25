@@ -451,8 +451,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         private struct ConnectionRecoveryTokenInputs: Equatable {
             let state: ACPConnectionRecoveryState
+            let agentState: ACPSession.AgentState
+            let startedAt: Date?
             let queuedMessageCount: Int
+            let uncertainQueuedMessageCount: Int
             let reconnectAvailable: Bool
+            let restartInProgress: Bool
+        }
+
+        private struct StalledConnectionTokenInputs: Equatable {
+            let startedAt: Date?
+            let reconnectAvailable: Bool
+            let restartInProgress: Bool
         }
 
         /// Message rows from the render window + synthetic tail rows, in the
@@ -651,7 +661,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         messages: host.transcript.messages,
                         currentTurnUserIndex: host.transcript.latestUserMessageIndex,
                         visibleRange: host.transcript.visibleHead..<host.transcript.visibleTailBound
-                    )
+                    ),
+                currentNarrationIndex: ACPNarrationLiveness.liveIndex(
+                    messages: host.transcript.messages,
+                    isStreaming: host.transcript.streamingState == .streaming,
+                    lastContentTouchIndex: host.transcript.lastContentTouchIndex
+                )
             )
         }
 
@@ -716,19 +731,35 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             ) == row.index
         }
 
+        private static func groupLiveNarration(
+            host: ACPTranscriptScroller,
+            group: ACPTranscriptToolCallGroup
+        ) -> ACPToolCallGroupLiveNarration? {
+            guard let index = group.currentNarrationIndex,
+                  host.transcript.messages.indices.contains(index)
+            else { return nil }
+            switch host.transcript.messages[index] {
+            case .thought(_, _, let buffer):
+                return .init(kind: .thinking, buffer: buffer)
+            case .agent(_, _, let buffer) where buffer.phase == .commentary:
+                return .init(kind: .working, buffer: buffer)
+            default:
+                return nil
+            }
+        }
+
         /// The toggle row for an activity or completed-work run. Collapsed or
         /// expanded, it is the same row
         /// id, so toggling updates it in place while its member rows are
         /// inserted or removed around it.
         ///
-        /// The token includes the summary, expansion state, and member ids.
-        /// It deliberately does not include the members' own row keys: the
-        /// header renders none of their content, and when expanded each
-        /// member is its own row that re-renders itself. A late status or
-        /// output update on one bundled call therefore re-renders that one
-        /// card instead of the whole run. Anything about a member that the
-        /// header DOES show — how many there are, how many failed — is
-        /// already part of `summary`.
+        /// The token includes the summary, expansion state, live narration,
+        /// and member ids.
+        /// It deliberately does not include the members' own row keys. When
+        /// expanded, each member is its own row and re-renders itself. When
+        /// collapsed, the live narration buffer publishes directly to the
+        /// nested preview. Counts, failures, and the latest tool title are
+        /// part of `summary`; hidden tool output does not refresh the header.
         private static func toolCallGroupHeaderSpec(
             host: ACPTranscriptScroller,
             group: ACPTranscriptToolCallGroup,
@@ -750,6 +781,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // `ACPToolCallGroupExpansionSeeds.syncLineage`.
             expansionSeeds.syncLineage(members: memberStableIds)
             let expanded = expansionSeeds.isExpanded(members: memberStableIds)
+            let liveNarration = expanded ? nil : groupLiveNarration(host: host, group: group)
             // The render window is an input to the header's absorb pulse, not
             // to its appearance: a bundle grows both when a call finishes and
             // when the window reveals calls that finished long ago, and only
@@ -771,7 +803,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 id: group.id,
                 equalityToken: token(
                     ToolCallGroupTokenInputs(
-                        summary: summary, expanded: expanded, window: window,
+                        summary: summary,
+                        expanded: expanded,
+                        liveNarration: liveNarration,
+                        window: window,
                         memberStableIds: memberStableIds
                     ),
                     host: host
@@ -781,6 +816,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         ACPToolCallGroupHeaderRow(
                             summary: summary,
                             expanded: expanded,
+                            liveNarration: liveNarration,
                             window: window,
                             onToggle: { expansionSeeds.setExpanded($0, members: memberStableIds) }
                         )
@@ -792,6 +828,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         private struct ToolCallGroupTokenInputs: Equatable {
             let summary: ACPToolCallGroupSummary
             let expanded: Bool
+            /// Buffer equality is reference identity, so streamed text updates
+            /// stay inside the observed preview while replacing its source
+            /// still refreshes the hosted header.
+            let liveNarration: ACPToolCallGroupLiveNarration?
             let window: ACPToolCallGroupHeaderAnimation.Window
             // Thinking can extend a group without changing its tool count.
             // Refresh the toggle closure so expansion includes those members.
@@ -1079,13 +1119,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
             if let recoveryState = session.connectionRecoveryState {
                 let queuedMessageCount = session.visibleQueueCount
+                let uncertainQueuedMessageCount = session.queue.filter(\.deliveryUncertain).count
                 specs.append(ACPTranscriptRowSpec(
                     id: "__connection_recovery__",
                     equalityToken: token(
                         ConnectionRecoveryTokenInputs(
                             state: recoveryState,
+                            agentState: session.agentState,
+                            startedAt: session.connectionAttemptStartedAt,
                             queuedMessageCount: queuedMessageCount,
-                            reconnectAvailable: host.reconnectAvailable
+                            uncertainQueuedMessageCount: uncertainQueuedMessageCount,
+                            reconnectAvailable: host.reconnectAvailable,
+                            restartInProgress: session.connectionRestartInProgress
                         ),
                         host: host
                     ),
@@ -1093,9 +1138,37 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         wrapRow(host: host) {
                             ACPConnectionRecoveryCard(
                                 state: recoveryState,
+                                agentState: session.agentState,
+                                startedAt: session.connectionAttemptStartedAt,
                                 queuedMessageCount: queuedMessageCount,
+                                uncertainQueuedMessageCount: uncertainQueuedMessageCount,
                                 reconnectAvailable: host.reconnectAvailable,
+                                restartInProgress: session.connectionRestartInProgress,
                                 onReconnect: host.onReconnect
+                            )
+                        }
+                    }
+                ))
+            } else if session.agentState == .spawning, !session.transcript.messages.isEmpty {
+                let startedAt = session.connectionAttemptStartedAt
+                let restartInProgress = session.connectionRestartInProgress
+                specs.append(ACPTranscriptRowSpec(
+                    id: "__stalled_connection__",
+                    equalityToken: token(
+                        StalledConnectionTokenInputs(
+                            startedAt: startedAt,
+                            reconnectAvailable: host.reconnectAvailable,
+                            restartInProgress: restartInProgress
+                        ),
+                        host: host
+                    ),
+                    build: {
+                        wrapRow(host: host) {
+                            ACPStalledConnectionButton(
+                                startedAt: startedAt,
+                                reconnectAvailable: host.reconnectAvailable,
+                                restartInProgress: restartInProgress,
+                                onRestart: host.onReconnect
                             )
                         }
                     }
@@ -1463,20 +1536,6 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             scroller.minimap.value = host.session.followsTranscriptTail ? 1 : Double(min(1, topFraction / max(0.000_001, 1 - proportion)))
         }
 
-        /// A whole-number global index representing whichever message
-        /// currently sits at the viewport's top edge. Delegates to the
-        /// span-aware `globalMessagePosition(at:)` and floors it, so
-        /// scrolling deep into an expanded tool-call group (whose row
-        /// stands for many messages) resolves to the member actually under
-        /// the viewport instead of always the group's first member —
-        /// `settleUserScroll`'s window recenter would otherwise trim away
-        /// the later members currently on screen and jump the reader back
-        /// to the group's start.
-        private func currentTopGlobalMessageIndex() -> Int? {
-            guard let scroller else { return nil }
-            return globalMessagePosition(at: scroller.scrollY).map { Int($0) }
-        }
-
         /// Memoized id → transcript-index mapping for the rows currently
         /// tiled — the same `renderRows` the spec list is built from, so
         /// group ids resolve exactly as `rowSpecs` emitted them.
@@ -1687,12 +1746,22 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // ponytail: keep the grow-only window while an input form is open;
             // restore anchor-based compaction if the retained window becomes a memory issue.
             guard host.transcript.pendingUserInputs.isEmpty else { return }
-            guard host.transcript.visibleTailBound - host.transcript.visibleHead
-                    > ACPTranscript.maxVisibleRows,
-                  let globalIndex = currentTopGlobalMessageIndex(),
-                  let localIndex = host.transcript.localIndex(forGlobalIndex: globalIndex)
+            // Compact rendered rows, not raw messages: hundreds of messages
+            // may occupy one disclosure with readable text immediately after it.
+            let rows = currentRenderRows(host: host)
+            guard rows.count > ACPTranscript.maxVisibleRows,
+                  let topId = tiling.nearestNonSyntheticRowId(
+                    to: scroller.scrollY,
+                    syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix
+                  ),
+                  let topIndex = rows.firstIndex(where: { $0.id == topId })
             else { return }
-            host.transcript.setVisibleWindow(around: localIndex)
+            let head = min(max(0, topIndex - ACPTranscript.tailWindow), rows.count - ACPTranscript.maxVisibleRows)
+            let tail = head + ACPTranscript.maxVisibleRows
+            host.transcript.setVisibleWindow(
+                head: Self.firstIndex(of: rows[head]),
+                tail: tail < rows.count ? Self.firstIndex(of: rows[tail]) : host.transcript.visibleTailBound
+            )
             update(host: host)
         }
 

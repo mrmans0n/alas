@@ -16,6 +16,10 @@ import SwiftUI
 struct ACPToolCallGroupHeaderRow: View {
     let summary: ACPToolCallGroupSummary
     let expanded: Bool
+    /// Live narration hidden inside this group. The nested preview observes
+    /// its buffer directly so streamed chunks update without replacing the
+    /// whole AppKit-hosted row through the reconciler.
+    let liveNarration: ACPToolCallGroupLiveNarration?
     /// The transcript slice this header was built from. Carried so the pulse
     /// can tell a tool call finishing apart from the render window revealing
     /// calls that finished long ago — see
@@ -45,11 +49,13 @@ struct ACPToolCallGroupHeaderRow: View {
     init(
         summary: ACPToolCallGroupSummary,
         expanded: Bool = false,
+        liveNarration: ACPToolCallGroupLiveNarration? = nil,
         window: ACPToolCallGroupHeaderAnimation.Window = .init(visibleTail: nil),
         onToggle: @escaping (Bool) -> Void = { _ in }
     ) {
         self.summary = summary
         self.expanded = expanded
+        self.liveNarration = liveNarration
         self.window = window
         self.onToggle = onToggle
     }
@@ -67,26 +73,35 @@ struct ACPToolCallGroupHeaderRow: View {
             Button {
                 onToggle(!expanded)
             } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10))
-                        .foregroundStyle(
-                            theme.color("fg-faint")
-                                .mix(with: theme.color("accent"), by: absorbHighlight)
-                        )
-                    Text(label)
-                        .font(.system(size: 11))
-                        .foregroundStyle(theme.color("fg-faint"))
-                        // Rolls the digits instead of snapping them. Scoped to
-                        // the count so toggling expanded — which rewrites the
-                        // same label from "Ran" to "Hide" — stays instant.
-                        .contentTransition(.numericText(value: Double(summary.count)))
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: summary.count)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 7) {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 10))
+                            .foregroundStyle(
+                                theme.color("fg-faint")
+                                    .mix(with: theme.color("accent"), by: absorbHighlight)
+                            )
+                            .accessibilityHidden(true)
+                        Text(label)
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.color("fg-faint"))
+                            // Rolls the digits instead of snapping them. Scoped to
+                            // the count so toggling expanded — which rewrites the
+                            // same label from "Ran" to "Hide" — stays instant.
+                            .contentTransition(.numericText(value: Double(summary.count)))
+                            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: summary.count)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    if !expanded, let liveNarration {
+                        ACPToolCallGroupLiveNarrationPreview(narration: liveNarration)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(label)
+            .accessibilityElement(children: .combine)
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         }
         .onChange(of: snapshot) { previous, current in
@@ -119,6 +134,70 @@ struct ACPToolCallGroupHeaderRow: View {
         } completion: {
             withAnimation(.easeOut(duration: 0.5)) { absorbHighlight = 0 }
         }
+    }
+}
+
+struct ACPToolCallGroupLiveNarration: Equatable {
+    enum Kind: Equatable {
+        case thinking
+        case working
+
+        var label: String {
+            switch self {
+            case .thinking: "Thinking…"
+            case .working: "Working…"
+            }
+        }
+    }
+
+    static let previewCharacterLimit = 480
+
+    let kind: Kind
+    let buffer: StreamingText
+
+    /// Bound work per chunk while retaining context across streamed line breaks.
+    static func previewText(in value: String) -> String {
+        let suffix = value.suffix(previewCharacterLimit)
+        guard let lastContent = suffix.lastIndex(where: { !$0.isWhitespace }) else { return "" }
+        let end = value.index(after: lastContent)
+        let start = value.index(end, offsetBy: -previewCharacterLimit, limitedBy: value.startIndex)
+            ?? value.startIndex
+        return String(value[start..<end])
+    }
+}
+/// Bounded live narration below a collapsed activity disclosure. Observing
+/// the shared buffer here keeps streamed updates inside the preview instead
+/// of replacing the AppKit-hosted row through the reconciler.
+private struct ACPToolCallGroupLiveNarrationPreview: View {
+    let kind: ACPToolCallGroupLiveNarration.Kind
+    @ObservedObject var buffer: StreamingText
+    @Environment(\.theme) private var theme
+
+    init(narration: ACPToolCallGroupLiveNarration) {
+        kind = narration.kind
+        buffer = narration.buffer
+    }
+
+    var body: some View {
+        let previewText = ACPToolCallGroupLiveNarration.previewText(in: buffer.value)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(kind.label)
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg-faint"))
+                .acpNarrationShimmer(isActive: true)
+            Text(verbatim: previewText)
+                .font(.system(size: 12))
+                .foregroundStyle(theme.color("fg-dim"))
+                .lineLimit(3, reservesSpace: true)
+                .truncationMode(.head)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel(previewText: previewText))
+    }
+
+    private func accessibilityLabel(previewText: String) -> String {
+        previewText.isEmpty ? kind.label : "\(kind.label) \(previewText)"
     }
 }
 

@@ -122,6 +122,24 @@ struct ACPTranscriptWindowTests {
         #expect(t.visibleHead == 0)
     }
 
+    @Test("mixed folded activity does not evict the prompt from a short conversation")
+    func mixedActivityKeepsPrompt() {
+        let transcript = ACPTranscript()
+        transcript.messages = [.user(id: UUID(), text: "Investigate", attachments: [])]
+        for index in 0..<60 {
+            transcript.messages += [
+                .thought(id: UUID(), StreamingText("Reasoning about step \(index)")),
+                .toolCall(.init(toolCallId: "read-\(index)", title: "Read source", status: "completed")),
+                .agent(id: UUID(), StreamingText("Checking step \(index)", phase: .commentary)),
+            ]
+            transcript.resetWindowToTail()
+            #expect(transcript.visibleHead == 0)
+        }
+        transcript.messages.append(.agent(id: UUID(), StreamingText("Done", phase: .finalAnswer)))
+        transcript.resetWindowToTail()
+        #expect(transcript.visibleHead == 0)
+    }
+
     /// A tool-call run that exceeds `tailWindow` still only counts as ONE
     /// unit, but the messages before it are budgeted normally — a run long
     /// enough, preceded by enough OTHER distinct messages, still trims once
@@ -167,11 +185,15 @@ struct ACPTranscriptWindowTests {
     /// `trimHiddenMessages`'s off-window content truncation. A single run
     /// must therefore only ever absorb up to `tailWindow * maxVisibleRows`
     /// raw messages for free.
-    @Test("a pathologically long tool-call run is still bounded by tailWindow * maxVisibleRows")
-    func tailWindowHeadCapsAPathologicallyLongRun() {
+    @Test("a long activity run is still bounded by tailWindow * maxVisibleRows", arguments: [false, true])
+    func tailWindowHeadCapsAPathologicallyLongRun(mixed: Bool) {
         let runLength = ACPTranscript.tailWindow * ACPTranscript.maxVisibleRows + 300
         let messages: [ACPMessage] = (0..<runLength).map { i in
-            .toolCall(.init(toolCallId: "tc-\(i)", title: "Tool \(i)", kind: "read", status: "completed"))
+            if mixed && i.isMultiple(of: 2) {
+                .thought(id: UUID(), StreamingText("Reasoning"))
+            } else {
+                .toolCall(.init(toolCallId: "tc-\(i)", title: "Tool \(i)", kind: "read", status: "completed"))
+            }
         }
 
         let head = ACPTranscript.tailWindowHead(messages: messages)

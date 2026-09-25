@@ -579,9 +579,18 @@ final class AppState {
         // refreshed `hello` (its `peers` list, Task 8).
         federation.onPeerAvailabilityChanged = { [weak self] in
             self?.remoteServer?.broadcastHello()
+            self?.nativePeerSessions?.refresh()
         }
         return federation
     }()
+    /// Native sidebar consumer, present only while Remote and federation run.
+    private(set) var nativePeerSessions: NativePeerSessions?
+
+    #if DEBUG
+    func installNativePeerSessionsForTesting(_ client: NativePeerSessions) {
+        nativePeerSessions = client
+    }
+    #endif
     /// The live server, or nil when remote control is disabled. Mutated only
     /// by `syncRemoteServer()`.
     @ObservationIgnored
@@ -791,6 +800,8 @@ final class AppState {
             // `remote-devices.json` on every launch with both flags off.
             // Links only exist while the server is up, so there is nothing to
             // tear down otherwise. Safe here because the nil-out is below.
+            nativePeerSessions?.stop()
+            nativePeerSessions = nil
             if remoteServer != nil { remotePeers.disconnectAll() }
             remoteServer?.stop()
             remoteServer = nil
@@ -808,7 +819,17 @@ final class AppState {
         syncPairingApprovalState()
         if config.remote.enabled, config.remote.federationEnabled, remoteServer != nil {
             remotePeers.connectAll()
+            if nativePeerSessions == nil {
+                let client = NativePeerSessions(federation: remoteFederation,
+                                                peers: { [weak self] in self?.remotePeers.helloPeers ?? [] })
+                nativePeerSessions = client
+                client.start()
+            } else {
+                nativePeerSessions?.refresh()
+            }
         } else if remoteServer != nil {
+            nativePeerSessions?.stop()
+            nativePeerSessions = nil
             // Same reason as `syncRemoteServer`'s disabled branch: without a
             // server no link was ever opened, and reaching for `remotePeers`
             // would force the lazy manager and its stores into existence.
@@ -2302,6 +2323,7 @@ final class AppState {
 
     func selectWorkspace(id: UUID) {
         guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        nativePeerSessions?.clearSelection()
         workspaceNavigationState.selectWorkspace(id)
         selectedWorktreeId = nil
     }
@@ -2309,6 +2331,7 @@ final class AppState {
     func selectWorkspaceCheckout(id: UUID) {
         guard config.workspacesEnabled, workspacesManager.canMutate else { return }
         guard let checkout = workspacesManager.checkout(id: id) else { return }
+        nativePeerSessions?.clearSelection()
         workspaceNavigationState.selectCheckout(checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
         selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
         if let selectedWorktreeId {
@@ -2319,6 +2342,7 @@ final class AppState {
     func focusWorkspaceCheckoutMember(id: UUID) {
         guard config.workspacesEnabled, workspacesManager.canMutate else { return }
         guard let checkout = selectedWorkspaceCheckout else { return }
+        nativePeerSessions?.clearSelection()
         workspaceNavigationState.selectMember(id, in: checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
         selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
         if let selectedWorktreeId {
@@ -2589,6 +2613,7 @@ final class AppState {
     }
 
     func selectWorktree(id: String?, includeRemoteStatus: Bool = true) {
+        nativePeerSessions?.clearSelection()
         workspaceNavigationState.clearCheckoutSelection()
         guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id
@@ -2641,6 +2666,7 @@ final class AppState {
     }
 
     func activateWorktreeCenterTab(worktreeId: String, tabId: TabID) {
+        nativePeerSessions?.clearSelection()
         if let pending = attentionPendingReviewReveal,
            pending.worktreeID != worktreeId || pending.tabID != tabId {
             attentionPendingReviewReveal = nil
@@ -3619,18 +3645,20 @@ final class AppState {
     func openWorkspaceReview(_ action: WorkspaceReviewAction) {
         guard workspaceMutationAvailable else { return }
         WorkspaceReviewActionHandler(open: { [weak self] worktreeID, record in
-            _ = self?.tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: record)
-            self?.selectedWorktreeId = worktreeID
-            if let checkoutID = self?.workspaceNavigationState.selectedCheckoutID,
-               let checkout = self?.workspacesManager.checkout(id: checkoutID),
+            guard let self else { return }
+            let tab = self.tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: record)
+            self.activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
+            self.selectedWorktreeId = worktreeID
+            if let checkoutID = self.workspaceNavigationState.selectedCheckoutID,
+               let checkout = self.workspacesManager.checkout(id: checkoutID),
                checkout.members.contains(where: { $0.id == action.memberID }) {
-                self?.workspaceNavigationState.selectMember(
+                self.workspaceNavigationState.selectMember(
                     action.memberID,
                     in: checkout,
-                    resolvedWorktreeIDs: self?.workspaceMemberWorktreeIDs(checkout) ?? [:]
+                    resolvedWorktreeIDs: self.workspaceMemberWorktreeIDs(checkout)
                 )
-                self?.selectedWorktreeId = self?.workspaceNavigationState.repositoryFocusWorktreeID
-                self?.tabs.clearActiveTab(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
+                self.selectedWorktreeId = self.workspaceNavigationState.repositoryFocusWorktreeID
+                self.tabs.clearActiveTab(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
             }
         }).open(action)
     }
@@ -3874,6 +3902,7 @@ final class AppState {
         sharedSessionOwner: SessionOwnerID?,
         tabID: TabID
     ) {
+        nativePeerSessions?.clearSelection()
         if let sharedSessionOwner,
            tabs.tabs(for: sharedSessionOwner).contains(where: { $0.id == tabID }) {
             tabs.activate(owner: sharedSessionOwner, tabId: tabID)
@@ -3968,6 +3997,7 @@ final class AppState {
     func synchronizeVisibleWorktreeCenterTabIfNeeded(worktreeId: String, activeTabId: TabID?) {
         guard let activeTabId else { return }
         guard tabs.tabs(forWorktree: worktreeId).contains(where: { $0.id == activeTabId }) else { return }
+        nativePeerSessions?.clearSelection()
         tabs.activate(worktreeId: worktreeId, tabId: activeTabId)
     }
 
@@ -9435,6 +9465,7 @@ final class AppState {
         // `selectedWorktreeId` to a hidden id that `RootView.selectedWorktree()`
         // (now visibility-aware) would reject anyway, leaving an empty pane.
         guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
+        nativePeerSessions?.clearSelection()
         if selectedWorktreeId != worktree.id {
             focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
         }
@@ -12034,6 +12065,10 @@ final class AppState {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
                 return try await LocalACPBrokerServicePool.shared.service(resourceURL: resourceURL)
             },
+            isolatedBrokerServiceFactory: {
+                let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
+                return try LocalACPBrokerService(resourceURL: resourceURL)
+            },
             mcpProjectContextProvider: { [weak self] in
                 guard let project = self?.projects.first(where: { $0.id == worktree.projectId }) else {
                     return nil
@@ -12434,6 +12469,10 @@ final class AppState {
             brokerServiceFactory: {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
                 return try await LocalACPBrokerServicePool.shared.service(resourceURL: resourceURL)
+            },
+            isolatedBrokerServiceFactory: {
+                let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
+                return try LocalACPBrokerService(resourceURL: resourceURL)
             },
             builtInMCPProvider: { [weak self] worktreePath, sessionId, adapterSupportsHTTP in
                 guard let self,

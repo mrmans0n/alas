@@ -1,6 +1,48 @@
 import SwiftUI
 
-private struct ACPConnectionRecoveryPresentation {
+enum ACPConnectionRecoveryActionPolicy {
+    enum Action: Equatable {
+        case reconnect
+        case reconnectNow
+        case restart
+        case retry
+
+        var title: String {
+            switch self {
+            case .reconnect: "Reconnect"
+            case .reconnectNow: "Reconnect now"
+            case .restart: "Restart connection"
+            case .retry: "Try again"
+            }
+        }
+    }
+
+    static func action(
+        recoveryState: ACPConnectionRecoveryState?,
+        agentState: ACPSession.AgentState,
+        startedAt: Date?,
+        now: Date,
+        restartInProgress: Bool = false
+    ) -> Action? {
+        guard !restartInProgress else { return nil }
+        switch recoveryState {
+        case .disconnected: return .reconnect
+        case .waiting: return .reconnectNow
+        case .exhausted: return .retry
+        case .reconnecting, nil:
+            switch agentState {
+            case .spawning:
+                guard let startedAt, now.timeIntervalSince(startedAt) >= 30 else { return nil }
+                return .restart
+            case .failed: return .retry
+            case .disconnected: return .reconnect
+            case .idle, .ready: return nil
+            }
+        }
+    }
+}
+
+struct ACPConnectionRecoveryPresentation {
     let title: String
     let detail: String
     let actionTitle: String?
@@ -8,16 +50,33 @@ private struct ACPConnectionRecoveryPresentation {
 
     static func make(
         state: ACPConnectionRecoveryState,
+        agentState: ACPSession.AgentState,
+        startedAt: Date?,
         queuedMessageCount: Int,
+        uncertainQueuedMessageCount: Int = 0,
+        reconnectAvailable: Bool = true,
+        restartInProgress: Bool = false,
         now: Date
     ) -> Self {
-        let queuedDetail = queueDetail(count: queuedMessageCount)
+        let queuedDetail = queueDetail(
+            count: queuedMessageCount,
+            uncertainCount: uncertainQueuedMessageCount
+        )
+        let actionTitle: String? = reconnectAvailable
+            ? ACPConnectionRecoveryActionPolicy.action(
+                recoveryState: state,
+                agentState: agentState,
+                startedAt: startedAt,
+                now: now,
+                restartInProgress: restartInProgress
+            )?.title
+            : nil
         switch state {
         case .disconnected:
             return .init(
                 title: "Agent process exited",
                 detail: joined("Reconnect to continue.", queuedDetail),
-                actionTitle: "Reconnect",
+                actionTitle: actionTitle,
                 symbolName: "bolt.slash"
             )
         case .waiting(let attempt, let maxAttempts, let retryAt):
@@ -28,12 +87,14 @@ private struct ACPConnectionRecoveryPresentation {
                     "Reconnecting in \(seconds)s (attempt \(attempt) of \(maxAttempts)).",
                     queuedDetail
                 ),
-                actionTitle: "Reconnect now",
+                actionTitle: actionTitle,
                 symbolName: "bolt.slash"
             )
         case .reconnecting(let attempt, let maxAttempts):
             let attemptDetail: String
-            if let attempt, let maxAttempts {
+            if restartInProgress {
+                attemptDetail = "Restarting the connection."
+            } else if let attempt, let maxAttempts {
                 attemptDetail = "Attempt \(attempt) of \(maxAttempts)."
             } else {
                 attemptDetail = "Bringing the agent process back up."
@@ -41,7 +102,7 @@ private struct ACPConnectionRecoveryPresentation {
             return .init(
                 title: "Reconnecting…",
                 detail: joined(attemptDetail, queuedDetail),
-                actionTitle: nil,
+                actionTitle: actionTitle,
                 symbolName: "arrow.triangle.2.circlepath"
             )
         case .exhausted(let attempts):
@@ -51,16 +112,28 @@ private struct ACPConnectionRecoveryPresentation {
             return .init(
                 title: "Couldn’t reconnect",
                 detail: joined(failureDetail, queuedDetail),
-                actionTitle: "Try again",
+                actionTitle: actionTitle,
                 symbolName: "exclamationmark.arrow.triangle.2.circlepath"
             )
         }
     }
 
-    private static func queueDetail(count: Int) -> String? {
-        guard count > 0 else { return nil }
-        let noun = count == 1 ? "message" : "messages"
-        return "\(count) \(noun) queued; \(count == 1 ? "it" : "they") will send after reconnection."
+    private static func queueDetail(count: Int, uncertainCount: Int) -> String? {
+        var details: [String] = []
+        let sendAfterReconnectCount = max(0, count - uncertainCount)
+        if sendAfterReconnectCount > 0 {
+            let noun = sendAfterReconnectCount == 1 ? "message" : "messages"
+            details.append(
+                "\(sendAfterReconnectCount) \(noun) queued; \(sendAfterReconnectCount == 1 ? "it" : "they") will send after reconnection."
+            )
+        }
+        if uncertainCount > 0 {
+            let noun = uncertainCount == 1 ? "message" : "messages"
+            details.append(
+                "Delivery is uncertain for \(uncertainCount) queued \(noun); retry \(uncertainCount == 1 ? "it" : "them") explicitly if you want to send \(uncertainCount == 1 ? "it" : "them") again."
+            )
+        }
+        return details.isEmpty ? nil : details.joined(separator: " ")
     }
 
     private static func joined(_ first: String, _ second: String?) -> String {
@@ -71,13 +144,21 @@ private struct ACPConnectionRecoveryPresentation {
 
 struct ACPConnectionRecoveryCard: View {
     let state: ACPConnectionRecoveryState
+    let agentState: ACPSession.AgentState
+    let startedAt: Date?
     let queuedMessageCount: Int
+    let uncertainQueuedMessageCount: Int
     let reconnectAvailable: Bool
+    let restartInProgress: Bool
     let onReconnect: () -> Void
     @Environment(\.theme) private var theme
 
     var body: some View {
         if case .waiting = state {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                card(now: context.date)
+            }
+        } else if case .reconnecting = state {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 card(now: context.date)
             }
@@ -89,7 +170,12 @@ struct ACPConnectionRecoveryCard: View {
     private func card(now: Date) -> some View {
         let presentation = ACPConnectionRecoveryPresentation.make(
             state: state,
+            agentState: agentState,
+            startedAt: startedAt,
             queuedMessageCount: queuedMessageCount,
+            uncertainQueuedMessageCount: uncertainQueuedMessageCount,
+            reconnectAvailable: reconnectAvailable,
+            restartInProgress: restartInProgress,
             now: now
         )
         return HStack(spacing: 10) {
@@ -132,6 +218,54 @@ struct ACPConnectionRecoveryCard: View {
             return theme.color("accent")
         }
         return theme.color("del")
+    }
+}
+
+struct ACPStalledConnectionButton: View {
+    let startedAt: Date?
+    let reconnectAvailable: Bool
+    let restartInProgress: Bool
+    let onRestart: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            if restartInProgress {
+                Label("Restarting connection…", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.color("fg-muted"))
+            } else if let title = ACPStalledConnectionPresentation.actionTitle(
+                startedAt: startedAt,
+                reconnectAvailable: reconnectAvailable,
+                restartInProgress: restartInProgress,
+                now: context.date
+            ) {
+                Button(title, action: onRestart)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(theme.color("accent"))
+            }
+        }
+    }
+}
+
+/// Shared pure presentation policy for the empty-chat placeholder and the
+/// first-run connecting surface, both of which host `ACPStalledConnectionButton`.
+enum ACPStalledConnectionPresentation {
+    static func actionTitle(
+        startedAt: Date?,
+        reconnectAvailable: Bool,
+        restartInProgress: Bool,
+        now: Date
+    ) -> String? {
+        guard reconnectAvailable else { return nil }
+        return ACPConnectionRecoveryActionPolicy.action(
+            recoveryState: nil,
+            agentState: .spawning,
+            startedAt: startedAt,
+            now: now,
+            restartInProgress: restartInProgress
+        )?.title
     }
 }
 

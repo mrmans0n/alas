@@ -6,12 +6,46 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixes
+### 🐛 Fixes
+
+- Submit a required federated elicitation array with an empty selection: "required" now means the property must be present, and only a declared `minItems` constrains the item count.
+- Report a failed submit to the composer and to remote clients when the writer lease is lost mid-send, and close a remote ACP session whose creation completed after its chat was disposed.
+
+## [0.19.9] - 2026-09-25
+
+### ✨ Features
+
+- Recover ACP chats after stalled startup or failed reconnection, with an immediate retry action and safeguards against stale attempts or uncertain prompt delivery (#1464).
+- Show trusted peer sessions in the native sidebar and open their transcripts without switching to the remote hub (#1462).
+- Preview pasted composer images on hover at their original aspect ratio (#1467).
+- Show live narration and recent tool activity inside collapsed ACP activity groups (#1461, #1466).
+- Use one clear "Insert code" action in review comment composers (#1463).
+
+### 🐛 Fixes
+
+- Keep explanations visible in activity-heavy ACP turns, preserve logical transcript sections across forks, and show the total duration only on the final activity block (#1466).
+
+### 🏗️ Internal
+
+- Restore Release configuration compilation for image hover previews.
+
+## [0.19.8] - 2026-09-24
+
+### 🐛 Fixes
 
 - Preserve ACP tail scrolling when activity folds during scroll settling, retaining any bottom elastic overscroll without jumping back to the activity header. Layout corrections no longer count as user scrolling or resume paused tail-follow; downward scrollbar-track clicks continue paging into hidden newer messages.
 - Bind scheduled cleanup authorization to verified HEAD, retain worktrees after unrelated ACP prompts, write reports to their configured database path, preserve reports owned by live app processes during startup and throttled read reconciliation, discover new first-page reports while the history sheet stays open, reset pagination when a refresh replaces the entire first page, refresh active report details and list rows until task and cleanup state settle, block scheduled cleanup when other instances hold ACP or terminal writer leases, count stale ACP leases while their owner process remains alive, preserve persistent-terminal leases when zmx enumeration fails, fail closed on unreadable leases, retain worktrees with unsent ACP drafts, validate automatic cleanup only when composition is enabled, and await disposal of replacement ACP managers before cleanup completes (#1465).
 - Reconcile scheduled-report deletions across the loaded history prefix so refreshes preserve pagination order and completeness (#1465).
 - Refuse scheduled worktree cleanup unless the superproject and every initialized submodule commit object are remotely reachable; block cleanup when annotated submodule tag refs exist because remote-tracking refs do not prove their tag objects are published; reject any unreachable initialized-submodule object and residual deinitialized submodule repositories, bind all submodule refs and unreachable object inventories, worktree lineage, and superproject remote refs to deletion authorization, fail settlement when a queued prompt is removed before dispatch, finalize reports promptly after schedule cancellation, retain worktrees when report finalization fails, and reject completions whose serialized request exceeds the socket payload limit (#1465).
+- Keep workspaces checked out after deleting their originating workspace and recheck worktree ownership after checkpoint discovery (#1452, #1453).
+- Refresh installed-language status immediately after installation (#1454).
+- Adapt the ACP composer to narrow and wide windows without crowding its controls (#1456).
+- Keep indeterminate loading indicators at their intended size (#1459).
+
+### 🏗️ Internal
+
+- Fix LSP hook approval test compilation and replace timing-based inlay-hint assertions with deterministic request synchronization (#1451, #1460).
+- Add a repository worktree-create hook and update the Lassie review workflow.
 
 ## [0.19.7] - 2026-09-24
 

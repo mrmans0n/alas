@@ -269,6 +269,17 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue[0].lastError == nil)
     }
 
+    @Test("markQueueHeadSending does not claim broker dispatch")
+    func markHeadSendingDoesNotClaimBrokerDispatch() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("a")])
+
+        _ = s.markQueueHeadSending()
+
+        #expect(s.queue[0].status == .sending)
+        #expect(s.queue[0].dispatchedBrokerGeneration == nil)
+    }
+
     @Test("popQueueHead removes the head when it's .sending; returns it")
     func popHead() {
         let s = mkSession()
@@ -289,6 +300,26 @@ struct ACPSessionQueueAPITests {
         s.setQueueHeadError("network")
         #expect(s.queue[0].status == .pending)
         #expect(s.queue[0].lastError == "network")
+    }
+
+    @Test("terminal broker failure drops dispatch provenance from the next attempt")
+    func terminalBrokerFailureDropsDispatchProvenance() {
+        let s = mkSession()
+        let oldGeneration = ACPBrokerGeneration(rawValue: 7)
+        let nextGeneration = ACPBrokerGeneration(rawValue: 8)
+        s.enqueue(blocks: [.text("terminal failure")])
+        _ = s.markQueueHeadSending()
+        #expect(s.queue[0].dispatchedBrokerGeneration == nil)
+        #expect(s.markQueueHeadDispatched(id: s.queue[0].id, brokerGeneration: oldGeneration))
+        #expect(s.queue[0].dispatchedBrokerGeneration == oldGeneration)
+
+        s.setQueueHeadError("terminal", advancesBrokerOperationAttempt: true)
+
+        #expect(s.queue[0].status == .pending)
+        #expect(s.queue[0].brokerOperationAttempt == 1)
+        #expect(s.queue[0].dispatchedBrokerGeneration == nil)
+        #expect(!s.markQueuedPromptsUncertain(afterBrokerGeneration: nextGeneration))
+        #expect(!s.queue[0].deliveryUncertain)
     }
 
     @Test("editQueueItem(id:blocks:) replaces blocks of a .pending item only")

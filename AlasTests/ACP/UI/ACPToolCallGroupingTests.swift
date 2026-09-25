@@ -28,6 +28,7 @@ struct ACPToolCallGroupingTests {
         expandAll: Bool = false,
         currentTurnAnswerIndex: Int? = nil,
         priorCurrentTurnCommentaryIndices: Set<Int> = [],
+        currentNarrationIndex: Int? = nil,
         createdAts: [Int: Date] = [:]
     ) -> [ACPTranscriptRenderRow] {
         let rows = ACPTranscriptVisibleRow.rows(
@@ -40,7 +41,8 @@ struct ACPToolCallGroupingTests {
                 enabled: enabled,
                 breakAfterIndex: breakAfterIndex,
                 currentTurnAnswerIndex: currentTurnAnswerIndex,
-                priorCurrentTurnCommentaryIndices: priorCurrentTurnCommentaryIndices
+                priorCurrentTurnCommentaryIndices: priorCurrentTurnCommentaryIndices,
+                currentNarrationIndex: currentNarrationIndex
             ),
             messageCreatedAt: { createdAts[$0] },
             isExpanded: { _ in expandAll }
@@ -177,6 +179,26 @@ struct ACPToolCallGroupingTests {
         ])
     }
 
+    @Test("a turn split by prose or a fork shows its duration only once", arguments: [false, true])
+    func splitTurnDoesNotRepeatDuration(fork: Bool) {
+        let messages: [ACPMessage] = [
+            .user(id: UUID(), messageId: "u", text: "Investigate", attachments: []),
+            tool("a"),
+            fork ? tool("boundary") : agent("note", "Keep this explanation visible", phase: .finalAnswer),
+            tool("b"),
+            agent("answer", "Done", phase: .finalAnswer),
+        ]
+        let rows = fold(messages, breakAfterIndex: fork ? 2 : nil, currentTurnAnswerIndex: 4)
+        let groups = rows.compactMap { row -> ACPTranscriptToolCallGroup? in
+            if case .toolCallGroup(let group) = row { return group }
+            return nil
+        }
+        #expect(groups.count == 2)
+        #expect(groups.first?.kind == .activity)
+        #expect(groups.last?.kind == .completedTurn(duration: nil))
+        if !fork { #expect(ids(rows).contains("acp-agent:note")) }
+    }
+
     @Test("a completed turn keeps blockers outside its work disclosure")
     func completedTurnKeepsBlockersVisible() {
         let user = ACPMessage.user(id: UUID(), messageId: "u1", text: "Fix it", attachments: [])
@@ -214,6 +236,22 @@ struct ACPToolCallGroupingTests {
             return
         }
         #expect(group.members.map(\.stableId) == ["acp-agent:p1", "tc-a"])
+    }
+
+    @Test("a collapsed group identifies the live narration without splitting the run")
+    func collapsedGroupCarriesLiveNarration() throws {
+        let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("Inspecting the scroller"))
+        let folded = fold(
+            [tool("a"), thought, tool("b")],
+            currentNarrationIndex: 1
+        )
+
+        #expect(ids(folded) == ["tcg-tc-a"])
+        guard case .toolCallGroup(let group) = try #require(folded.first) else {
+            Issue.record("expected one collapsed activity group")
+            return
+        }
+        #expect(group.currentNarrationIndex == 1)
     }
 
     @Test("the live-status fold never hides earlier ordinary agent prose")
@@ -505,11 +543,11 @@ struct ACPToolCallGroupSummaryTests {
     @Test("collapsed label pluralizes and appends the failure count")
     func collapsedLabel() {
         #expect(ACPToolCallGroupSummary(toolCalls: []).collapsedLabel == "Activity")
-        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a"), tool("b")]).collapsedLabel == "Activity · 2 tool calls")
-        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a")]).collapsedLabel == "Activity · 1 tool call")
+        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a"), tool("b")]).collapsedLabel == "b · 2 tool calls")
+        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a")]).collapsedLabel == "a · 1 tool call")
         #expect(ACPToolCallGroupSummary(toolCalls: [
             tool("a"), tool("b", status: "failed"), tool("c"),
-        ]).collapsedLabel == "Activity · 3 tool calls · 1 failed")
+        ]).collapsedLabel == "c · 3 tool calls · 1 failed")
     }
 
     @Test("expanded label offers to hide the bundle and keeps the failure count")

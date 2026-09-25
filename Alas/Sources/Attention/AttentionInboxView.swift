@@ -72,9 +72,15 @@ struct AttentionInboxPresentation {
     }
 
     let activeRows: [AttentionInboxRowPresentation]
+    let peerRows: [RemoteSessionSummary]
     let historyRows: [AttentionInboxRowPresentation]
     let errors: [PersistenceError]
-    var emptyTitle: String? { activeRows.isEmpty ? "Nothing needs attention" : nil }
+    var totalCount: Int { activeRows.count + peerRows.count }
+    var emptyTitle: String? { totalCount == 0 ? "Nothing needs attention" : nil }
+    var acknowledgeLabel: String? {
+        guard !activeRows.isEmpty else { return nil }
+        return peerRows.isEmpty ? "Acknowledge all" : "Acknowledge local"
+    }
 
     /// Label for the collapsed-by-default history section, used for both the tooltip and VoiceOver.
     static func historyToggleLabel(count: Int, isExpanded: Bool) -> String {
@@ -82,8 +88,10 @@ struct AttentionInboxPresentation {
         return isExpanded ? "Hide \(events)" : "Show \(events)"
     }
 
-    init(aggregation: AttentionAggregation, loadError: String?, writeError: String? = nil, now: Date = Date()) {
+    init(aggregation: AttentionAggregation, loadError: String?, writeError: String? = nil,
+         peerRows: [RemoteSessionSummary] = [], now: Date = Date()) {
         activeRows = aggregation.items.map { AttentionInboxRowPresentation(item: $0, now: now) }
+        self.peerRows = peerRows
         historyRows = aggregation.history.map { AttentionInboxRowPresentation(item: $0, now: now) }
         errors = [
             loadError.map { PersistenceError(title: "History could not be loaded", message: $0) },
@@ -94,39 +102,42 @@ struct AttentionInboxPresentation {
 
 struct AttentionInboxView: View {
     let aggregation: AttentionAggregation
+    let peerRows: [RemoteSessionSummary]
     let loadError: String?
     let writeError: String?
     let navigationErrors: [UUID: String]
     let onDismiss: (AttentionItem) -> Void
     let onOpen: (AttentionItem) async -> Void
+    let onOpenPeer: (RemoteSessionSummary) -> Void
     @Environment(\.theme) private var theme
     @State private var historyExpanded = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let presentation = AttentionInboxPresentation(
-                aggregation: aggregation, loadError: loadError, writeError: writeError, now: context.date
+                aggregation: aggregation, loadError: loadError, writeError: writeError,
+                peerRows: peerRows, now: context.date
             )
             VStack(spacing: 0) {
                 HStack(spacing: 9) {
                     Image(systemName: "tray")
                         .font(.system(size: 12))
-                        .foregroundStyle(theme.color(aggregation.unresolvedCount > 0 ? "warn" : "fg-muted"))
+                        .foregroundStyle(theme.color(presentation.totalCount > 0 ? "warn" : "fg-muted"))
                         .accessibilityHidden(true)
                     Text("Inbox")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("\(aggregation.unresolvedCount)")
+                    Text("\(presentation.totalCount)")
                         .font(.system(size: 11, weight: .medium))
                         .monospacedDigit()
                         .foregroundStyle(theme.color("fg-muted"))
-                        .accessibilityLabel("\(aggregation.unresolvedCount) items needing attention")
+                        .accessibilityLabel("\(presentation.totalCount) items needing attention")
                     Spacer()
-                    if !presentation.activeRows.isEmpty {
-                        Button("Acknowledge all") {
+                    if let acknowledgeLabel = presentation.acknowledgeLabel {
+                        Button(acknowledgeLabel) {
                             for item in presentation.activeRows { onDismiss(item.item) }
                         }
                         .controlSize(.small)
-                        .accessibilityLabel("Acknowledge all \(aggregation.unresolvedCount) items needing attention")
+                        .accessibilityLabel("\(acknowledgeLabel) \(presentation.activeRows.count) items needing attention")
                     }
                 }
                 .foregroundStyle(theme.color("fg"))
@@ -135,7 +146,8 @@ struct AttentionInboxView: View {
                 Divider()
                 ScrollView {
                     AttentionInboxList(presentation: presentation, historyExpanded: $historyExpanded,
-                                       navigationErrors: navigationErrors, onDismiss: onDismiss, onOpen: onOpen)
+                                       navigationErrors: navigationErrors, onDismiss: onDismiss,
+                                       onOpen: onOpen, onOpenPeer: onOpenPeer)
                         .padding(14)
                 }
             }
@@ -156,6 +168,7 @@ struct AttentionInboxList: View {
     let navigationErrors: [UUID: String]
     let onDismiss: (AttentionItem) -> Void
     let onOpen: (AttentionItem) async -> Void
+    var onOpenPeer: (RemoteSessionSummary) -> Void = { _ in }
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -175,6 +188,29 @@ struct AttentionInboxList: View {
             ForEach(presentation.activeRows) { row in
                 AttentionInboxRow(presentation: row, isHistory: false,
                                   navigationError: navigationErrors[row.id], onDismiss: onDismiss, onOpen: onOpen)
+            }
+            if !presentation.peerRows.isEmpty {
+                Text("Peer sessions")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .padding(.top, 10)
+                ForEach(presentation.peerRows, id: \.id) { row in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "desktopcomputer")
+                            .foregroundStyle(theme.color("warn"))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(row.title).font(.system(size: 13, weight: .medium))
+                            Text(row.serverName ?? "Peer")
+                                .font(.system(size: 11))
+                                .foregroundStyle(theme.color("fg-muted"))
+                        }
+                        Spacer()
+                        Button("Open") { onOpenPeer(row) }
+                            .controlSize(.small)
+                    }
+                    .padding(10)
+                    .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 8))
+                }
             }
             if !presentation.historyRows.isEmpty {
                 AttentionInboxHistoryToggle(count: presentation.historyRows.count, isExpanded: $historyExpanded)

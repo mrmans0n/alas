@@ -16,6 +16,73 @@ struct ACPToolCallGroupRowTests {
         #expect(headerHeight(expanded: true, theme: theme) == headerHeight(expanded: false, theme: theme))
     }
 
+    @Test("live reasoning has readable space below the disclosure")
+    func livePreviewPreservesHeaderHeight() throws {
+        let theme = try ThemeStore().current
+        let narration = ACPToolCallGroupLiveNarration(
+            kind: .thinking,
+            buffer: StreamingText(String(repeating: "Inspecting transcript state. ", count: 20))
+        )
+
+        #expect(
+            headerHeight(expanded: false, theme: theme, liveNarration: narration)
+                > headerHeight(expanded: false, theme: theme)
+        )
+    }
+
+    @Test("a narrow live preview has its own space below the label")
+    func narrowLivePreviewPreservesHeaderHeight() throws {
+        let theme = try ThemeStore().current
+        let toolCalls = (0..<40).map { index in
+            ACPMessage.ToolCall(
+                toolCallId: "tool-\(index)",
+                title: "Completed tool \(index)",
+                status: "completed"
+            )
+        }
+        let summary = ACPToolCallGroupSummary(
+            toolCalls: toolCalls,
+            kind: .completedTurn(duration: 12 * 60)
+        )
+        let narration = ACPToolCallGroupLiveNarration(
+            kind: .thinking,
+            buffer: StreamingText("Inspecting a very narrow transcript layout.")
+        )
+
+        #expect(
+            headerHeight(
+                expanded: false, theme: theme, summary: summary,
+                liveNarration: narration, width: 180
+            )
+                > headerHeight(expanded: false, theme: theme, summary: summary, width: 180)
+        )
+    }
+
+    @Test("live reasoning preview preserves a bounded tail across line breaks")
+    func livePreviewUsesBoundedLatestLine() {
+        let longTail = Array(repeating: "latest", count: 100).joined(separator: " ") + "\nNext step"
+        let preview = ACPToolCallGroupLiveNarration.previewText(
+            in: "old reasoning\n   \n  \(longTail)  \n"
+        )
+
+        #expect(!preview.contains("old reasoning"))
+        #expect(preview.count == ACPToolCallGroupLiveNarration.previewCharacterLimit)
+        #expect(longTail.hasSuffix(preview))
+    }
+
+    @Test("streaming a long thought does not keep growing the preview")
+    func livePreviewHeightIsBounded() throws {
+        let theme = try ThemeStore().current
+        let short = ACPToolCallGroupLiveNarration(kind: .thinking, buffer: StreamingText("Checking"))
+        let long = ACPToolCallGroupLiveNarration(
+            kind: .thinking, buffer: StreamingText(String(repeating: "More reasoning\n", count: 1000))
+        )
+        #expect(
+            headerHeight(expanded: false, theme: theme, liveNarration: short)
+                == headerHeight(expanded: false, theme: theme, liveNarration: long)
+        )
+    }
+
     @Test("a member row renders the card handed to it")
     func memberRowRendersItsContent() throws {
         let theme = try ThemeStore().current
@@ -43,15 +110,23 @@ struct ACPToolCallGroupRowTests {
         )
     }
 
-    private func headerHeight(expanded: Bool, theme: Theme) -> CGFloat {
+    private func headerHeight(
+        expanded: Bool,
+        theme: Theme,
+        summary: ACPToolCallGroupSummary? = nil,
+        liveNarration: ACPToolCallGroupLiveNarration? = nil,
+        width: CGFloat = 400
+    ) -> CGFloat {
         measure(
             ACPToolCallGroupHeaderRow(
-                summary: ACPToolCallGroupSummary(
+                summary: summary ?? ACPToolCallGroupSummary(
                     toolCalls: [.init(toolCallId: "a", title: "a", status: "completed")]
                 ),
-                expanded: expanded
+                expanded: expanded,
+                liveNarration: liveNarration
             ),
-            theme: theme
+            theme: theme,
+            width: width
         )
     }
 
@@ -64,12 +139,12 @@ struct ACPToolCallGroupRowTests {
         )
     }
 
-    private func measure(_ view: some View, theme: Theme) -> CGFloat {
+    private func measure(_ view: some View, theme: Theme, width: CGFloat = 400) -> CGFloat {
         let root = view
             .environment(\.theme, theme)
-            .frame(width: 400)
+            .frame(width: width)
         let controller = NSHostingController(rootView: root)
-        controller.view.frame = NSRect(x: 0, y: 0, width: 400, height: 10)
+        controller.view.frame = NSRect(x: 0, y: 0, width: width, height: 10)
         drainSwiftUI(controller.view)
         return controller.view.fittingSize.height
     }

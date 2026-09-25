@@ -520,6 +520,9 @@ struct ACPInputField: NSViewRepresentable {
             guard let storage = textView.textStorage else { return }
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
+                // Direct storage replacement below never routes through
+                // `didChangeText`, so dismiss the hover preview here.
+                tv.dismissImageChipHover()
             }
             invalidatePendingImageFileInsertions()
             restoringDraft = true
@@ -540,9 +543,18 @@ struct ACPInputField: NSViewRepresentable {
             lastSyncedDraft = draft
         }
 
+        #if DEBUG
+        /// Test seam: exposes the private restore path so tests can exercise
+        /// direct storage replacement without a full submit cycle.
+        func restoreDraftForTesting(_ draft: ACPComposerDraft, into textView: NSTextView) {
+            restore(draft, into: textView)
+        }
+        #endif
+
         private func clearVisibleDraft(in textView: NSTextView) {
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
+                tv.dismissImageChipHover()
             }
             invalidatePendingImageFileInsertions()
             restoringDraft = true
@@ -660,7 +672,6 @@ struct ACPInputField: NSViewRepresentable {
                     chip.addAttributes([
                         .imageAttachmentURI: uri,
                         .imageAttachmentMime: mimeType,
-                        .toolTip: fileURL.lastPathComponent,
                     ], range: NSRange(location: 0, length: chip.length))
                     result.append(chip)
                 }
@@ -862,6 +873,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
         super.didChangeText()
         // Trigger placeholder redraw when text becomes (non-)empty.
         needsDisplay = true
+        // An edit moves or destroys the chip under the cursor — close the
+        // hover popover so it can't linger at a stale anchor.
+        dismissImageChipHover()
         // A manual edit while a dictation span is open (typing elsewhere,
         // pasting) leaves the underlying speech session mid-utterance —
         // it keeps analyzing and will emit more corrections for that same
@@ -883,15 +897,17 @@ final class ACPNSTextView: PairedDelimiterTextView {
         }
     }
 
-    /// A restored draft can already contain an active "/" token before
-    /// this view is attached to a window — `positionAndShow` needs the
-    /// window to place the panel, so `reconcileSlashPanel` is a no-op
-    /// until attachment. Retry once a window exists.
+    /// Retry-once-on-attach: a restored draft can already contain an active
+    /// "/" token before this view is attached to a window — `positionAndShow`
+    /// needs the window to place the panel, so `reconcileSlashPanel` is a
+    /// no-op until attachment. Also (re)installs the scroll bounds observer
+    /// used by the image chip hover preview.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil {
             reconcileSlashPanel()
         }
+        refreshScrollBoundsObserver()
     }
 
     /// Dismiss any floating picker panel owned by this text view. The
@@ -903,6 +919,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     func dismissFloatingPanels() {
         dismissSlashPanel()
         closeMentionPanel()
+        dismissImageChipHover()
     }
 
     override func keyDown(with event: NSEvent) {
@@ -1084,6 +1101,192 @@ final class ACPNSTextView: PairedDelimiterTextView {
         coordinator?.worktreeRoot.lastPathComponent ?? "default"
     }
 
+    // MARK: - Image chip hover preview
+
+    private var imageChipHover: ACPImageChipHoverController?
+
+    /// Character range + file URL when `point` sits on an image chip
+    /// (a character tagged with `.imageAttachmentURI`), nil otherwise.
+    /// `location` clamps to the container length, which is what the layout
+    /// manager answers for glyph-range lookups.
+    func imageChipRange(at point: NSPoint) -> (range: NSRange, fileURL: URL)? {
+        guard let layoutManager, let textContainer, let textStorage, textStorage.length > 0 else { return nil }
+        // Convert from view space (includes textContainerInset) to container
+        // space first, matching how the layout manager maps points to glyphs.
+        let containerPoint = NSPoint(
+            x: point.x - textContainerInset.width,
+            y: point.y - textContainerInset.height
+        )
+        var fraction: CGFloat = 0
+        let characterIndex = layoutManager.characterIndex(
+            for: containerPoint,
+            in: textContainer,
+            fractionOfDistanceBetweenInsertionPoints: &fraction
+        )
+        guard characterIndex != NSNotFound, characterIndex < textStorage.length else { return nil }
+        var chipRange = NSRange()
+        let attrs = textStorage.attributes(at: characterIndex, effectiveRange: &chipRange)
+        guard let uri = attrs[.imageAttachmentURI] as? String,
+              let fileURL = URL(string: uri) else { return nil }
+        // The nearest-character lookup can resolve a character even when the
+        // point is in blank space beside a glyph (e.g. after an end-of-line
+        // chip) — require the chip's glyph rect to actually contain the point.
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: chipRange, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else { return nil }
+        let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        guard glyphRect.contains(containerPoint) else { return nil }
+        return (range: chipRange, fileURL: fileURL)
+    }
+
+    /// View-space rect of the chip's glyphs (inset 1pt, mirroring the cell
+    /// draw) for anchoring the hover popover.
+    func imageChipAnchorRect(for range: NSRange) -> NSRect? {
+        guard let layoutManager, let textContainer else { return nil }
+        guard range.location < (string as NSString).length else { return nil }
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else { return nil }
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        rect.origin.x += textContainerOrigin.x
+        rect.origin.y += textContainerOrigin.y
+        return rect.insetBy(dx: 1, dy: 1)
+    }
+
+    /// Hover preview size cap: the visible composer width when attached to
+    /// a window, otherwise the layout's default content width. Never a floor
+    /// — a narrow composer narrows the preview with it.
+    static func imageChipPreviewCap(in textView: ACPNSTextView) -> NSSize? {
+        let width: CGFloat
+        if textView.window != nil, textView.visibleRect.width > 0 {
+            width = textView.visibleRect.width
+        } else {
+            width = ACPChatLayout.defaultContentMaxWidth
+        }
+        let screenHeight = NSScreen.main?.frame.height ?? 900
+        return NSSize(width: width, height: screenHeight / 2)
+    }
+
+    /// Identifies our hover tracking area across `updateTrackingAreas`
+    /// rebuilds without touching areas other code may have added.
+    private static let hoverTrackingAreaKind = "alas.acp.imageChipHover"
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        // Remove only our hover area, matched by userInfo; areas registered
+        // by other owners stay untouched.
+        for area in trackingAreas
+        where area.owner === self && area.userInfo?[Self.hoverTrackingAreaKind] != nil {
+            removeTrackingArea(area)
+        }
+        addTrackingArea(
+            NSTrackingArea(
+                rect: bounds,
+                options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+                owner: self,
+                userInfo: [Self.hoverTrackingAreaKind: true]
+            )
+        )
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let point = convert(event.locationInWindow, from: nil)
+        if let chip = imageChipRange(at: point) {
+            imageChipHoverController().scheduleShow(range: chip.range, fileURL: chip.fileURL, in: self)
+        } else {
+            imageChipHoverController().hide()
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        imageChipHoverController().hide()
+    }
+
+    /// Observes the enclosing scroll view's clip view while the composer is
+    /// in a window. A scroll moves content under a stationary pointer without
+    /// any `mouseMoved`/`mouseExited`, so without this a pending or visible
+    /// hover preview could anchor to (or show) content that is no longer
+    /// under the pointer. The dismiss re-checks the pointer position so
+    /// hovering a chip across a scroll tick re-schedules instead of flickering.
+    private var scrollBoundsObserver: (any NSObjectProtocol)?
+
+    private func refreshScrollBoundsObserver() {
+        if let scrollBoundsObserver {
+            NotificationCenter.default.removeObserver(scrollBoundsObserver)
+            self.scrollBoundsObserver = nil
+        }
+        guard let clipView = enclosingScrollView?.contentView else { return }
+        clipView.postsBoundsChangedNotifications = true
+        scrollBoundsObserver = NotificationCenter.default.addMainActorObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: clipView
+        ) { [weak self] in
+            guard let self, self.window != nil else { return }
+            // The pointer's current position decides the post-scroll state:
+            // still over a chip re-schedules (no-op while it stays there);
+            // anywhere else hides. `window.mouseLocationOutsideOfEventStream`
+            // is valid without an in-flight mouse event.
+            let point = self.convert(self.window!.mouseLocationOutsideOfEventStream, from: nil)
+            if let chip = self.imageChipRange(at: point) {
+                self.imageChipHoverController().scheduleShow(range: chip.range, fileURL: chip.fileURL, in: self)
+            } else {
+                self.imageChipHoverController().hide()
+            }
+        }
+    }
+
+    private func teardownScrollBoundsObserver() {
+        if let scrollBoundsObserver {
+            NotificationCenter.default.removeObserver(scrollBoundsObserver)
+            self.scrollBoundsObserver = nil
+        }
+    }
+
+    isolated deinit {
+        teardownScrollBoundsObserver()
+    }
+
+    private func imageChipHoverController() -> ACPImageChipHoverController {
+        if let imageChipHover { return imageChipHover }
+        #if DEBUG
+        let controller = imageChipHoverSpy ?? ACPImageChipHoverController()
+        #else
+        let controller = ACPImageChipHoverController()
+        #endif
+        imageChipHover = controller
+        return controller
+    }
+
+    #if DEBUG
+    /// Test seam: substitutes a spy controller for the real one so tests
+    /// can observe dismissal without building real popovers.
+    var imageChipHoverSpy: ACPImageChipHoverController?
+    #endif
+
+    /// Closes the hover popover (if showing) — called on edits, so the
+    /// preview can never linger over a chip the user just changed.
+    func dismissImageChipHover() {
+        imageChipHover?.hide()
+    }
+
+    #if DEBUG
+    /// Test seam: schedules a hover show exactly as `mouseMoved` would.
+    func scheduleImageChipHoverForTesting(range: NSRange, fileURL: URL) {
+        imageChipHoverController().scheduleShow(range: range, fileURL: fileURL, in: self)
+    }
+
+    /// Test seam: count of pending (uncancelled) show work items.
+    var pendingImageChipHoverCountForTesting: Int {
+        imageChipHover?.hasPendingShowForTesting == true ? 1 : 0
+    }
+
+    /// Test seam: routes a draft through the coordinator's private restore
+    /// path (direct `NSTextStorage` replacement, no `didChangeText`).
+    func restoreDraftForTesting(_ draft: ACPComposerDraft) {
+        coordinator?.restoreDraftForTesting(draft, into: self)
+    }
+    #endif
+
     static let maxImagesPerMessage = 10
 
     private func currentImageChipCount() -> Int {
@@ -1113,7 +1316,6 @@ final class ACPNSTextView: PairedDelimiterTextView {
             chipString.addAttributes([
                 .imageAttachmentURI: staged.url.absoluteString,
                 .imageAttachmentMime: staged.mimeType,
-                .toolTip: staged.url.lastPathComponent,
             ], range: NSRange(location: 0, length: chipString.length))
             // Color the trailing space and reset typingAttributes so text the
             // user types right after the chip is the normal label color

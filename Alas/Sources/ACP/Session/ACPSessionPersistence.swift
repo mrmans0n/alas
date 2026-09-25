@@ -652,7 +652,8 @@ actor ACPSessionPersistence {
         pid: Int64,
         now: Int64,
         staleAfter: Int64,
-        leaseToken: String
+        leaseToken: String,
+        replaceOwnedToken: Bool = false
     ) throws -> ACPSessionLease? {
         let store = try openedStore()
         let won = try store.claimLease(
@@ -661,7 +662,8 @@ actor ACPSessionPersistence {
             pid: pid,
             now: now,
             staleAfter: staleAfter,
-            leaseToken: leaseToken
+            leaseToken: leaseToken,
+            replaceOwnedToken: replaceOwnedToken
         )
         return won ? try store.loadLease(sessionId: sessionId) : nil
     }
