@@ -30,6 +30,23 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
         }
     }
 
+    /// Human-readable text for the clipboard: each chip becomes the text it
+    /// stands for (`@filename` for a mention; a command chip is already a
+    /// `/command` text segment), and image chips, which have no text form,
+    /// drop out instead of leaking the U+FFFC attachment placeholder.
+    var plainText: String {
+        segments.reduce(into: "") { result, segment in
+            switch segment {
+            case .text(let value):
+                result += value
+            case .mention(let displayName, _):
+                result += "@" + displayName
+            case .image:
+                break
+            }
+        }
+    }
+
     /// Character offset, into the flattened message text, of each `.image`
     /// segment in order. Mirrors how `ACPInputField.Coordinator.extract`
     /// concatenates a submitted draft into a single string: a `.text`

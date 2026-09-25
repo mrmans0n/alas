@@ -931,6 +931,159 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.string == "before after")
     }
 
+    // MARK: Chip copy / paste (#1491)
+
+    private static let chipDraft = ACPComposerDraft(segments: [
+        .text("/review "),
+        .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+        .text(" tail"),
+    ])
+
+    /// A composer holding a command pill, a mention chip, and plain text.
+    private func makeChipTextView() -> (ACPNSTextView, ACPInputField.Coordinator, NSWindow) {
+        let (textView, coordinator, window) = makeSlashTextView()
+        textView.textStorage?.setAttributedString(
+            ACPInputField.Coordinator.attributedString(from: Self.chipDraft)
+        )
+        textView.pillLeadingCommandIfNeeded()
+        return (textView, coordinator, window)
+    }
+
+    private func chipKinds(in textView: NSTextView) -> [String] {
+        var kinds: [String] = []
+        let storage = textView.attributedString()
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, _, _ in
+            switch value {
+            case is ACPCommandChipAttachment: kinds.append("command")
+            case is ACPMentionChipAttachment: kinds.append("mention")
+            case .some: kinds.append("other")
+            case nil: break
+            }
+        }
+        return kinds
+    }
+
+    @Test("copying chips writes their text instead of the attachment placeholder")
+    func copyingChipsWritesReadableText() {
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        #expect(chipKinds(in: textView) == ["command", "mention"])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.selectAll(nil)
+
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+
+        #expect(board.string(forType: .string) == "/review @File.swift tail")
+        #expect(board.data(forType: ACPNSTextView.composerDraftPasteboardType) != nil)
+    }
+
+    @Test("copying a chip-free selection keeps NSTextView's own pasteboard output")
+    func copyingPlainTextIsUnchanged() {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.string = "just text"
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.selectAll(nil)
+
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+
+        #expect(board.string(forType: .string) == "just text")
+        #expect(board.data(forType: ACPNSTextView.composerDraftPasteboardType) == nil)
+    }
+
+    @Test("copy then paste into an empty composer restores the command pill and mention chip")
+    func copyPasteRoundTripRestoresChips() {
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.selectAll(nil)
+        textView.copy(nil)
+        #expect(NSPasteboard.general.string(forType: .string) == "/review @File.swift tail")
+
+        textView.string = ""
+        textView.paste(nil)
+
+        #expect(chipKinds(in: textView) == ["command", "mention"])
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == Self.chipDraft)
+        #expect(!textView.string.isEmpty)
+        #expect(textView.selectedRange() == NSRange(location: textView.string.utf16.count, length: 0))
+    }
+
+    @Test("a pasted command away from the message start stays plain text; mentions stay chips")
+    func pastedCommandMidMessageStaysText() {
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.selectAll(nil)
+        textView.copy(nil)
+
+        textView.string = "hi "
+        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        textView.paste(nil)
+
+        #expect(chipKinds(in: textView) == ["mention"])
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == ACPComposerDraft(segments: [
+            .text("hi /review "),
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .text(" tail"),
+        ]))
+    }
+
+    @Test("a lone copied command pill pasted before existing text becomes a pill again")
+    func lonePillPastedBeforeWhitespaceRepills() {
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.setSelectedRange(NSRange(location: 0, length: 1))
+        textView.copy(nil)
+        #expect(NSPasteboard.general.string(forType: .string) == "/review")
+
+        textView.string = " the parser"
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        textView.paste(nil)
+
+        #expect(chipKinds(in: textView) == ["command"])
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/review the parser")
+    }
+
+    @Test("pasting chips is one undoable edit and redo brings the chips back")
+    func chipPasteUndoRedo() {
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.selectAll(nil)
+        textView.copy(nil)
+        textView.string = "keep"
+        textView.setSelectedRange(NSRange(location: 4, length: 0))
+        textView.undoManager?.removeAllActions()
+
+        textView.paste(nil)
+        #expect(chipKinds(in: textView) == ["mention"])
+
+        textView.undoManager?.undo()
+        #expect(textView.string == "keep")
+        #expect(chipKinds(in: textView).isEmpty)
+
+        textView.undoManager?.redo()
+        #expect(chipKinds(in: textView) == ["mention"])
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "keep/review @File.swift  tail")
+    }
+
+    @Test("dropping a dragged chip selection reads the draft type and rebuilds the chips")
+    func readSelectionRebuildsChipsFromDraftType() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        #expect(textView.readablePasteboardTypes.first == ACPNSTextView.composerDraftPasteboardType)
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        board.declareTypes([ACPNSTextView.composerDraftPasteboardType, .string], owner: nil)
+        board.setData(try JSONEncoder().encode(Self.chipDraft), forType: ACPNSTextView.composerDraftPasteboardType)
+        board.setString(Self.chipDraft.plainText, forType: .string)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView) == ["command", "mention"])
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == Self.chipDraft)
+    }
+
     @Test("file drop router inserts the relative path at the retained selection")
     func fileDropRouterInsertsRelativePathAtSelection() throws {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 40))

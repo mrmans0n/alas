@@ -1944,6 +1944,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     override func paste(_ sender: Any?) {
         invalidateNextPromptSuggestion()
+        if insertComposerDraft(from: NSPasteboard.general) { return }
         if insertImages(from: NSPasteboard.general) { return }
         if let text = NSPasteboard.general.string(forType: .string) {
             insertPlainText(text)
@@ -1952,14 +1953,106 @@ final class ACPNSTextView: PairedDelimiterTextView {
         super.paste(sender)
     }
 
+    // MARK: Chip-preserving copy / paste
+
+    /// Private pasteboard type carrying a composer selection as a JSON
+    /// `ACPComposerDraft`, so chips keep their identity across copy, cut,
+    /// paste, and drag within the app. Written alongside a readable `.string`
+    /// form for every other destination.
+    static let composerDraftPasteboardType = NSPasteboard.PasteboardType("io.alas.acp.composer-draft")
+
+    /// The single selected range as a draft, when it contains at least one
+    /// chip. Chip-free selections return nil and keep NSTextView's own
+    /// pasteboard behavior.
+    private var selectedChipDraft: ACPComposerDraft? {
+        guard selectedRanges.count == 1, let textStorage else { return nil }
+        let range = selectedRange()
+        guard range.length > 0, NSMaxRange(range) <= textStorage.length else { return nil }
+        let fragment = textStorage.attributedSubstring(from: range)
+        var hasChip = false
+        fragment.enumerateAttributes(in: NSRange(location: 0, length: fragment.length)) { keys, _, stop in
+            if keys.isComposerChip {
+                hasChip = true
+                stop.pointee = true
+            }
+        }
+        return hasChip ? ACPInputField.Coordinator.draft(from: fragment) : nil
+    }
+
+    /// A chip is a U+FFFC attachment character, so NSTextView's own
+    /// `.string` representation of it is that placeholder. Selections with
+    /// chips write the chips' text form instead (`/command`, `@filename`),
+    /// plus the private draft type so a paste back into a composer restores
+    /// the chips themselves.
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard types.contains(.string),
+              let draft = selectedChipDraft,
+              let data = try? JSONEncoder().encode(draft)
+        else { return super.writeSelection(to: pboard, types: types) }
+        pboard.declareTypes([Self.composerDraftPasteboardType, .string], owner: nil)
+        pboard.setData(data, forType: Self.composerDraftPasteboardType)
+        pboard.setString(draft.plainText, forType: .string)
+        return true
+    }
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        [Self.composerDraftPasteboardType] + super.readablePasteboardTypes
+    }
+
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if type == Self.composerDraftPasteboardType, insertComposerDraft(from: pboard) { return true }
+        return super.readSelection(from: pboard, type: type)
+    }
+
+    /// Inserts a copied composer selection over the current selection with
+    /// its chips rebuilt. A leading `/command` pasted at the very start of
+    /// the message becomes a pill again, in the same edit as the paste,
+    /// under the same rule as a hand-typed one: it has to be followed by
+    /// whitespace, from the pasted text or the text already after it.
+    @discardableResult
+    private func insertComposerDraft(from pboard: NSPasteboard) -> Bool {
+        guard let data = pboard.data(forType: Self.composerDraftPasteboardType),
+              let draft = try? JSONDecoder().decode(ACPComposerDraft.self, from: data),
+              !draft.isEmpty,
+              let textStorage
+        else { return false }
+        let replacementRange = boundedSelectedRange(in: textStorage)
+        let fragment = NSMutableAttributedString(
+            attributedString: ACPInputField.Coordinator.attributedString(from: draft, typography: chatTypography)
+        )
+        if replacementRange.location == 0, let coordinator {
+            let tail = NSMaxRange(replacementRange)
+            let combined = NSMutableAttributedString(attributedString: fragment)
+            combined.append(textStorage.attributedSubstring(
+                from: NSRange(location: tail, length: textStorage.length - tail)
+            ))
+            if let target = ACPLeadingCommand.chipTarget(in: combined, suggestions: coordinator.promptSuggestions),
+               NSMaxRange(target.range) <= fragment.length {
+                fragment.replaceCharacters(
+                    in: target.range,
+                    with: ACPLeadingCommand.chip(for: target.command, font: chatTypography.appKitFont())
+                )
+            }
+        }
+        let attrs = baseTypingAttributes
+        typingAttributes = attrs
+        performNativeTextInsertion {
+            insertText(fragment, replacementRange: replacementRange)
+        }
+        typingAttributes = attrs
+        return true
+    }
+
+    private func boundedSelectedRange(in textStorage: NSTextStorage) -> NSRange {
+        let range = selectedRange()
+        let location = min(range.location, textStorage.length)
+        return NSRange(location: location, length: min(range.length, textStorage.length - location))
+    }
+
     @discardableResult
     func insertPlainText(_ text: String) -> Bool {
         guard let textStorage else { return false }
-        let replacementRange = selectedRange()
-        let boundedRange = NSRange(
-            location: min(replacementRange.location, textStorage.length),
-            length: min(replacementRange.length, max(0, textStorage.length - replacementRange.location))
-        )
+        let boundedRange = boundedSelectedRange(in: textStorage)
         let attrs = baseTypingAttributes
         typingAttributes = attrs
         performNativeTextInsertion {

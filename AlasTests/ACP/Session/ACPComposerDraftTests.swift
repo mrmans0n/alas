@@ -18,6 +18,18 @@ struct ACPComposerDraftTests {
         #expect(decoded == draft)
     }
 
+    @Test("plain text spells mentions as @filename and drops image chips")
+    func plainTextSpellsChips() {
+        let draft = ACPComposerDraft(segments: [
+            .text("/review "),
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .image(uri: "file:///tmp/shot.png", mimeType: "image/png"),
+            .text(" tail"),
+        ])
+        #expect(draft.plainText == "/review @File.swift tail")
+        #expect(!draft.plainText.contains("\u{FFFC}"))
+    }
+
     @Test("empty only when it has no meaningful storage segments")
     func emptyState() {
         #expect(ACPComposerDraft.empty.isEmpty)
