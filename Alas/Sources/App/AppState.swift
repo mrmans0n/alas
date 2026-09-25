@@ -184,6 +184,7 @@ final class AppState {
     var nextPromptModelState: NextPromptModelState = .notInstalled
     var nextPromptInferenceState: NextPromptInferenceState = .ready
     var nextPromptRuntimeEnabled = false
+    var nextPromptDisableSavePending = false
     var nextPromptSettingsError: String?
     var nextPromptRemovalFailure: NextPromptModelFailure?
     var nextPromptOffer: String?

@@ -292,7 +292,7 @@ struct NextPromptSettingsTests {
         await state.shutdownNextPromptSuggestions()
     }
 
-    @Test func disableRetainsAssetsAndFailedSaveKeepsRuntimeOff() async throws {
+    @Test func failedDisableRemainsRetryableAndStaysOffAfterRelaunch() async throws {
         let fixture = try ModelStoreFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
@@ -305,13 +305,32 @@ struct NextPromptSettingsTests {
         await state.disableNextPromptSuggestions()
         #expect(!state.nextPromptRuntimeEnabled)
         #expect(!state.config.nextPromptSuggestionsEnabled)
+        #expect(persistence.config.nextPromptSuggestionsEnabled)
+        #expect(state.nextPromptDisableSavePending)
         #expect(state.nextPromptSettingsError != nil)
         #expect(FileManager.default.fileExists(atPath: fixture.directory.path))
+        await state.retryNextPromptSuggestions()
+        #expect(state.nextPromptDisableSavePending)
+        #expect(!state.nextPromptRuntimeEnabled)
         persistence.rejectWrites = false
         await state.enableNextPromptSuggestions()
-        #expect(state.nextPromptRuntimeEnabled)
+        #expect(!state.nextPromptRuntimeEnabled)
+        await state.retryNextPromptSuggestions()
+        #expect(!persistence.config.nextPromptSuggestionsEnabled)
+        #expect(!state.nextPromptDisableSavePending)
+        #expect(!state.nextPromptRuntimeEnabled)
+        #expect(state.nextPromptSettingsError == nil)
         #expect(fixture.transport.requestCount == 0)
         await state.shutdownNextPromptSuggestions()
+        let relaunched = makeState(fixture, persistence)
+        await relaunched.inspectNextPromptModel()
+        #expect(!relaunched.config.nextPromptSuggestionsEnabled)
+        #expect(!relaunched.nextPromptRuntimeEnabled)
+        #expect(relaunched.nextPromptModelState == .ready)
+        await relaunched.enableNextPromptSuggestions()
+        #expect(relaunched.nextPromptRuntimeEnabled)
+        #expect(fixture.transport.requestCount == 0)
+        await relaunched.shutdownNextPromptSuggestions()
     }
 
     @Test func peerLeaseBlocksRemovalAndExplicitRetryRemovesOnlyOwnedRevision() async throws {

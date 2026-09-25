@@ -78,7 +78,7 @@ extension AppState {
     }
 
     func enableNextPromptSuggestions() async {
-        guard nextPromptSupported, !nextPromptShuttingDown else { return }
+        guard nextPromptSupported, !nextPromptShuttingDown, !nextPromptDisableSavePending else { return }
         let previous = config.nextPromptSuggestionsEnabled
         beginNextPromptSettingsChange()
         let generation = nextPromptSettingsGeneration
@@ -92,6 +92,10 @@ extension AppState {
     }
 
     func retryNextPromptSuggestions() async {
+        if nextPromptDisableSavePending {
+            await disableNextPromptSuggestions()
+            return
+        }
         guard config.nextPromptSuggestionsEnabled, nextPromptSupported, !nextPromptShuttingDown else { return }
         beginNextPromptSettingsChange()
         await prepareNextPromptSuggestions(generation: nextPromptSettingsGeneration)
@@ -137,7 +141,10 @@ extension AppState {
     func disableNextPromptSuggestions() async {
         beginNextPromptSettingsChange()
         config.nextPromptSuggestionsEnabled = false
-        if !saveConfig() { nextPromptSettingsError = "Could not save next-prompt settings. Suggestions remain off." }
+        nextPromptDisableSavePending = !saveConfig()
+        nextPromptSettingsError = nextPromptDisableSavePending
+            ? "Could not save disabling. Retry before quitting or suggestions may turn on again after relaunch."
+            : nil
         await drainNextPromptWork()
         updateNextPromptModelState(await nextPromptReadModelState())
     }
@@ -162,7 +169,7 @@ extension AppState {
         nextPromptCoordinator.invalidate()
         nextPromptSettingsGeneration &+= 1
         nextPromptRuntimeEnabled = false
-        nextPromptSettingsError = nil
+        if !nextPromptDisableSavePending { nextPromptSettingsError = nil }
         nextPromptRemovalFailure = nil
         nextPromptInstallation?.cancel()
     }

@@ -7,7 +7,9 @@ struct NextPromptSuggestionsSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             SettingsRow(name: "Next-prompt suggestions", desc: "Experimental, on-device suggestions after a successful agent turn.") {
-                if state.config.nextPromptSuggestionsEnabled {
+                if state.nextPromptDisableSavePending {
+                    Button("Retry Disable") { Task { await state.retryNextPromptSuggestions() } }
+                } else if state.config.nextPromptSuggestionsEnabled {
                     Button("Disable") { Task { await state.disableNextPromptSuggestions() } }
                 } else {
                     Button("Enable…") { showingConsent = true }
@@ -16,6 +18,8 @@ struct NextPromptSuggestionsSettings: View {
             }
             if !state.nextPromptSupported {
                 Text("Requires Apple silicon with a supported Metal GPU. Suggestions are unavailable on this Mac.")
+            } else if state.nextPromptDisableSavePending {
+                Text("Suggestions are off for this session. Disabling has not been saved.")
             } else {
                 modelStatus
             }
