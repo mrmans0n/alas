@@ -2165,7 +2165,8 @@ extension AppState {
             // only proceed when every recent termination was verified.
             let unverifiedKills = await terminal.awaitAndVerifyRecentTerminalKills(
                 within: 15,
-                timeout: 5
+                timeout: 5,
+                restrictToWorktree: worktree.id
             )
             if !unverifiedKills.isEmpty {
                 return .refused("A recently closed terminal did not confirm its termination.")

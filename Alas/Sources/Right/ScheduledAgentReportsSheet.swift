@@ -26,11 +26,12 @@ struct ScheduledAgentReportPageRefresh {
         // Nothing was loaded yet (first read failed or the project had no
         // reports): seed the list from the refreshed read instead of
         // discarding it, otherwise a report that appeared would never be
-        // shown and the list would stay empty.
+        // shown and the list would stay empty. The seed row is data, not a
+        // probe: it says nothing about rows beyond it.
         if windowCount == 0 {
             return replacingLoadedPrefix(
                 Array(prefix.prefix(1)),
-                requestedLimit: prefix.count
+                requestedLimit: prefix.count + 1
             )
         }
         let prefixMatches = window.map(\.id) == reports.map(\.id)

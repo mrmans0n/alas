@@ -486,13 +486,21 @@ final class TerminalService {
     private struct PendingKillOutcome {
         var startedAt: Date
         var succeeded: Bool?
+        /// The worktree the closed session belonged to; cleanup filters on
+        /// it so a failed kill in an unrelated worktree cannot block every
+        /// other project's scheduled cleanup.
+        var worktreeID: String?
     }
 
-    /// Session ids whose termination has NOT been positively verified.
-    /// `succeeded == nil` means the kill is still in flight.
-    func pendingKillSessionIDs(now: Date = Date()) -> [String] {
+    /// Session ids whose termination has NOT been positively verified,
+    /// optionally filtered to those that could still write to a given
+    /// worktree. `succeeded == nil` means the kill is still in flight.
+    func pendingKillSessionIDs(restrictToWorktree worktreeID: String?) -> [String] {
         pendingKillOutcomes
-            .filter { !($0.value.succeeded == true) }
+            .filter { key, pending in
+                !(pending.succeeded == true)
+                    && (worktreeID == nil || pending.worktreeID == worktreeID)
+            }
             .map(\.key)
     }
 
@@ -508,18 +516,23 @@ final class TerminalService {
     /// ids whose termination was NOT confirmed (kill task failed or the wait
     /// timed out). A positively failed kill blocks cleanup regardless of its
     /// age: the tab and writer lease are already gone, and nothing else can
-    /// detect the surviving shell.
+    /// detect the surviving shell. Only sessions that could still write to
+    /// `worktreeID` are returned, so an unrelated worktree's failed kill
+    /// does not block this cleanup.
     func awaitAndVerifyRecentTerminalKills(
         within window: TimeInterval,
         timeout: TimeInterval,
+        restrictToWorktree worktreeID: String?,
         now: Date = Date()
     ) async -> Set<String> {
+        let relevant = pendingKillSessionIDs(restrictToWorktree: worktreeID)
         let recent = recentlyClosedTerminalSessionIDs(within: window, now: now)
-        guard !recent.isEmpty else { return Set(pendingKillSessionIDs()) }
+            .filter { relevant.contains($0) }
+        guard !recent.isEmpty else { return Set(pendingKillSessionIDs(restrictToWorktree: worktreeID)) }
         await drainPendingKills(timeout: timeout)
         // Best-effort kills only: anything still tracked here did not
         // positively terminate, so the caller must retain.
-        return Set(pendingKillSessionIDs())
+        return Set(pendingKillSessionIDs(restrictToWorktree: worktreeID))
     }
 
     func closeSession(
@@ -539,9 +552,10 @@ final class TerminalService {
         // otherwise a quick close+Cmd-Q race would leak the daemon-side
         // session, and the next launch would carry forward the orphan.
         let killDispatched: Bool
+        let killWorktreeID = explicitWorktreeId ?? existing?.worktreeId
         if let host = existing?.remoteHost, let existingName = existing?.zmxSessionName {
             killDispatched = true
-            pendingKillOutcomes[id] = .init(startedAt: Date(), succeeded: nil)
+            pendingKillOutcomes[id] = .init(startedAt: Date(), succeeded: nil, worktreeID: killWorktreeID)
             dispatchTrackedKill {
                 await Self.killRemoteSession(host: host, name: existingName)
                 await MainActor.run { [weak self] in
@@ -550,7 +564,7 @@ final class TerminalService {
             }
         } else if let existingName = existing?.zmxSessionName {
             killDispatched = true
-            pendingKillOutcomes[id] = .init(startedAt: Date(), succeeded: nil)
+            pendingKillOutcomes[id] = .init(startedAt: Date(), succeeded: nil, worktreeID: killWorktreeID)
             let client = zmxClient
             dispatchTrackedKill {
                 let killed = client.killSessionResult(name: existingName)
@@ -560,7 +574,7 @@ final class TerminalService {
             }
         } else if let worktreeId = explicitWorktreeId ?? existing?.worktreeId {
             killDispatched = true
-            pendingKillOutcomes[id] = .init(startedAt: Date(), succeeded: nil)
+            pendingKillOutcomes[id] = .init(startedAt: Date(), succeeded: nil, worktreeID: killWorktreeID)
             let client = zmxClient
             let remoteHost = Self.remoteHostForCleanup(worktreeId: worktreeId, projectPath: projectPath)
             dispatchTrackedKill {
@@ -586,7 +600,8 @@ final class TerminalService {
             killDispatched = false
         }
         if killDispatched {
-            pendingKillOutcomes[id] = pendingKillOutcomes[id] ?? .init(startedAt: Date(), succeeded: nil)
+            pendingKillOutcomes[id] = pendingKillOutcomes[id]
+                ?? .init(startedAt: Date(), succeeded: nil, worktreeID: killWorktreeID)
         } else {
             pendingKillOutcomes.removeValue(forKey: id)
         }
