@@ -235,7 +235,10 @@ struct NextPromptSettingsTests {
         case "cancel": await state.cancelNextPromptDownload()
         case "disable": await state.disableNextPromptSuggestions()
         case "modelChange":
-            try await fixture.store.remove()
+            do { try await fixture.store.remove() } catch {
+                Self.dumpLockHolders(fixture.root)
+                throw error
+            }
             await state.inspectNextPromptModel()
         default: await state.shutdownNextPromptSuggestions()
         }
@@ -433,6 +436,52 @@ struct NextPromptSettingsTests {
                  nextPromptReadModelState: readModelState,
                  nextPromptInference: inference ?? NextPromptInference(acquireLease: { try await fixture.store.acquireVerifiedLease() }, load: { _ in { _ in nil } }),
                  nextPromptSupported: supported)
+    }
+
+    // TEMP diagnostic for CI-only `.busy` on the model lock.
+    static func dumpLockHolders(_ root: URL) {
+        let lockPath = root.appendingPathComponent(".lock").path
+        var lockInfo = stat()
+        stat(lockPath, &lockInfo)
+        var lines = ["[lockdiag] pid=\(getpid()) lock=\(lockPath) ino=\(lockInfo.st_ino)"]
+        for fd in Int32(0)..<Int32(256) {
+            var info = stat()
+            guard fstat(fd, &info) == 0 else {
+                if fd < 3 { lines.append("[lockdiag] fd \(fd) closed errno=\(errno)") }
+                continue
+            }
+            if fd < 3 || info.st_ino == lockInfo.st_ino {
+                lines.append("[lockdiag] fd \(fd) mode=\(String(info.st_mode & S_IFMT, radix: 8)) ino=\(info.st_ino) cloexec=\(fcntl(fd, F_GETFD) & FD_CLOEXEC)")
+            }
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        process.arguments = ["-n", "-P", "--", lockPath]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        process.standardInput = FileHandle.nullDevice
+        if (try? process.run()) != nil {
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            lines.append("[lockdiag] lsof:\n" + (String(data: data, encoding: .utf8) ?? ""))
+            let pids = Set((String(data: data, encoding: .utf8) ?? "").split(separator: "\n").dropFirst()
+                .compactMap { $0.split(separator: " ", omittingEmptySubsequences: true).dropFirst().first.map(String.init) })
+            for pid in pids {
+                let ps = Process()
+                ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+                ps.arguments = ["-o", "pid,ppid,etime,command", "-p", pid]
+                let out = Pipe()
+                ps.standardOutput = out
+                ps.standardInput = FileHandle.nullDevice
+                if (try? ps.run()) != nil {
+                    let psData = out.fileHandleForReading.readDataToEndOfFile()
+                    ps.waitUntilExit()
+                    lines.append("[lockdiag] ps:\n" + (String(data: psData, encoding: .utf8) ?? ""))
+                }
+            }
+        }
+        FileHandle.standardError.write(Data((lines.joined(separator: "\n") + "\n").utf8))
     }
 
     private func waitUntil(_ condition: () async -> Bool) async throws {
