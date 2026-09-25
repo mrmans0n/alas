@@ -39,10 +39,10 @@ enum MarkdownCodeBlockStyler {
         storage.beginEditing()
         defer { storage.endEditing() }
 
-        // Preserve mention and image chips — their `.attachment` cell would be
+        // Preserve composer chips — their `.attachment` cell would be
         // stripped by a blanket `setAttributes`.
         storage.enumerateAttributes(in: target) { attrs, range, _ in
-            if attrs[.attachmentURI] == nil, attrs[.imageAttachmentURI] == nil {
+            if !attrs.isComposerChip {
                 storage.setAttributes([
                     .font: style.baseFont,
                     .foregroundColor: style.baseColor,
@@ -79,7 +79,7 @@ enum MarkdownCodeBlockStyler {
         let clipped = NSIntersectionRange(range, target)
         guard clipped.length > 0 else { return }
         storage.enumerateAttributes(in: clipped) { attrs, subrange, _ in
-            guard attrs[.attachmentURI] == nil, attrs[.imageAttachmentURI] == nil else { return }
+            guard !attrs.isComposerChip else { return }
             storage.addAttributes(attributes, range: subrange)
         }
     }

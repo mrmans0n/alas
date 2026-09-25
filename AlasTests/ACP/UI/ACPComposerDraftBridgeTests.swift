@@ -67,9 +67,7 @@ struct ACPComposerDraftBridgeTests {
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == ACPComposerDraft(
             segments: [
                 .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
-                .text("\n"),
-                .text("> quoted\n\n"),
-                .text(" tail"),
+                .text("\n> quoted\n\n tail"),
             ]
         ))
         #expect(textView.selectedRange() == NSRange(location: 11, length: 0))
@@ -1342,7 +1340,8 @@ struct ACPComposerDraftBridgeTests {
         textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
 
         #expect(received == nil)
-        #expect(textView.string == "/init ")
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/init ")
+        #expect(textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
         #expect(!textView.isSlashPanelOpen)
     }
 
@@ -1451,9 +1450,46 @@ struct ACPComposerDraftBridgeTests {
 
         textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
 
-        #expect(textView.string == "/read-jira-ticket ")
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/read-jira-ticket ")
         #expect(!textView.isSlashPanelOpen)
         #expect(textView.argumentGhostHint == "<CPCL-XXXX>")
+    }
+
+    @Test("typing whitespace after a hand-typed skill turns it into a pill, undoably")
+    func handTypedSkillBecomesPill() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions.append(
+            ACPPromptSuggestion(command: "/$brainstorming:ideas", description: "Ideas")
+        )
+        textView.allowsUndo = true
+        textView.string = "/$brainstorming:ideas"
+        textView.setSelectedRange(NSRange(location: 21, length: 0))
+
+        textView.insertText(" ", replacementRange: textView.selectedRange())
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/$brainstorming:ideas")
+        #expect(ACPInputField.Coordinator.extract(storage).0 == "/$brainstorming:ideas ")
+        #expect(textView.selectedRange() == NSRange(location: storage.length, length: 0))
+
+        // Undo restores the plain text (grouping with the typed space is
+        // up to the undo manager).
+        textView.undoManager?.undo()
+        #expect(textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) == nil)
+        #expect(textView.string.hasPrefix("/$brainstorming:ideas"))
+    }
+
+    @Test("the slash picker stays open for `$`-prefixed skills")
+    func slashPickerAcceptsDollarSkills() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions.append(ACPPromptSuggestion(command: "/$brainstorming", description: "Ideas"))
+        textView.string = "/$bra"
+        textView.setSelectedRange(NSRange(location: 5, length: 0))
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+        textView.dismissSlashPanel()
     }
 
     @Test("drawing the ghost hint never touches the text storage")
