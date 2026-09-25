@@ -32,6 +32,7 @@ let queueItems = [];             // [{id, text, imageCount, resourceCount, statu
 let lastStreamingState = "idle"; // so composer state can be recomputed on text input
 let sessionTitles = new Map();
 let listedSessions = new Map();
+let gatewayCounts = new Map();  // serverId -> {attention, running}, from the active link's last sessionList
 let expandedWorktrees = new Set();
 let canDrive = false, canDriveKnown = false;
 let everConnected = false;      // has any onopen fired this page load? separates "loading" from "disconnected"
@@ -304,6 +305,7 @@ function resetServerScopedState() {
   worktreeCreation.disconnect();
   createState = { ...createState, open: false, step: "worktree", worktrees: [], agents: [], selectedWorktreeId: null, selectedAgentId: null, filter: "", busy: false, error: "" };
   listedSessions = new Map(); sessionTitles = new Map(); expandedWorktrees = new Set();
+  gatewayCounts = new Map();
   repoOverrides = new Map();
   dismissedQuestion = null; deferredCreatePrompt = null;
   // An unsent draft (text or staged images) belongs to the server being
@@ -350,8 +352,10 @@ function switchServer(id) {
 function handle(msg) {
   switch (msg.type) {
     case "sessionList":
+      gatewayCounts = RemoteHubRegistry.peerSessionCounts(msg.sessions);
       renderSessions(msg.sessions);
       worktreeCreation.markRecoveryListLoaded("sessions");
+      refreshHubViews();
       break;
     case "transcriptSnapshot": applySnapshot(msg); break;
     case "transcriptDelta": applyDelta(msg); break;
@@ -581,7 +585,7 @@ function renderSessions(sessions) {
   listedSessions.clear();
   sessions.forEach(s => listedSessions.set(s.id, s));
   sessionTitles = new Map(sessions.map(s => [s.id, s.title]));
-  const allSections = RemoteSessionOrdering.groupSessions(sessions);
+  const allSections = RemoteSessionOrdering.groupSessionsByServer(sessions);
   const sections = filterVisibleSections(allSections);
   renderRepoFilterCounts(allSections);
   sections.forEach(section => list.appendChild(renderSection(section)));
@@ -1333,10 +1337,10 @@ $("status").onclick = () => { if (!currentSession) showSettings(); };
 
 // --- hub settings ------------------------------------------------------------
 
-function serverDotClass(link) {
+function serverDotClass(link, counts) {
   if (!link) return "off";
   switch (link.state) {
-    case "online": return link.counts.running > 0 ? "run" : "idle";
+    case "online": return counts.running > 0 ? "run" : "idle";
     case "connecting": return "connecting";
     case "unauthorized": return "warn";
     case "blocked": return "warn";
@@ -1360,17 +1364,19 @@ function serverSubtitle(server, link) {
 function renderServerList() {
   const box = $("server-list");
   box.innerHTML = "";
+  const active = activeServer();
   for (const server of hub.servers) {
     const link = links.get(server.id);
+    const counts = RemoteHubRegistry.serverBadgeCounts(server, link && link.counts, active, gatewayCounts);
     const row = el("div", "server-row" + (server.id === hub.activeId ? " is-active" : ""));
     row.setAttribute("role", "button");
     row.tabIndex = 0;
-    row.append(el("span", "dot " + serverDotClass(link)));
+    row.append(el("span", "dot " + serverDotClass(link, counts)));
     const main = el("div", "server-main");
     main.append(el("div", "server-name", server.name || server.lastOrigin));
     main.append(el("div", "server-origin", serverSubtitle(server, link)));
     row.append(main);
-    if (link && link.counts.attention > 0) row.append(el("span", "tab-count", String(link.counts.attention)));
+    if (counts.attention > 0) row.append(el("span", "tab-count", String(counts.attention)));
     const menu = el("button", "iconbtn server-menu", "⋯");
     menu.type = "button";
     menu.setAttribute("aria-label", `Actions for ${server.name || server.lastOrigin}`);
@@ -1390,7 +1396,12 @@ function renderServerList() {
 
 function renderSettingsBadge() {
   const badge = $("tab-settings-badge");
-  const total = RemoteHubRegistry.otherAttentionTotal(links.all(), hub.activeId);
+  const active = activeServer();
+  const effective = hub.servers.map((s) => ({
+    id: s.id,
+    counts: RemoteHubRegistry.serverBadgeCounts(s, (links.get(s.id) || {}).counts, active, gatewayCounts),
+  }));
+  const total = RemoteHubRegistry.otherAttentionTotal(effective, hub.activeId);
   badge.textContent = total > 0 ? String(total) : "";
   badge.classList.toggle("hidden", total === 0);
 }
