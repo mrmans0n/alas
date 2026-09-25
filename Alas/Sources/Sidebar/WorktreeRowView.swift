@@ -168,6 +168,7 @@ struct WorktreeRowView: View {
     }
 
     let worktree: Worktree
+    let statusProjectId: String?
     let isSelected: Bool
     let isMain: Bool
     let upstreamStatus: WorktreeUpstreamStatus?
@@ -246,7 +247,9 @@ struct WorktreeRowView: View {
               operationState == nil,
               Self.showsCommitCount(
                 harnessState: harnessSummary?.state,
-                worktreeStatus: WorktreeStatusStore.shared.status(forPath: worktree.path.path),
+                worktreeStatus: WorktreeStatusStore.shared.status(
+                    forPath: worktree.path.path, projectId: statusProjectId
+                ),
                 isMain: isMain
               ) else { return nil }
         return commitQuery
@@ -257,7 +260,9 @@ struct WorktreeRowView: View {
               loadedCommitQuery?.identity == activeCommitQuery.identity,
               Self.showsCommitCount(
                 harnessState: harnessSummary?.state,
-                worktreeStatus: WorktreeStatusStore.shared.status(forPath: worktree.path.path),
+                worktreeStatus: WorktreeStatusStore.shared.status(
+                    forPath: worktree.path.path, projectId: statusProjectId
+                ),
                 isMain: isMain
               ),
               Self.hasVisibleCommits(branchCommits) else { return nil }
@@ -311,7 +316,9 @@ struct WorktreeRowView: View {
     var body: some View {
         let status = Self.statusPresentation(
             harnessState: harnessSummary?.state,
-            worktreeStatus: WorktreeStatusStore.shared.status(forPath: worktree.path.path)
+            worktreeStatus: WorktreeStatusStore.shared.status(
+                forPath: worktree.path.path, projectId: statusProjectId
+            )
         )
         ZStack(alignment: .leading) {
             if isSelected {
@@ -430,7 +437,7 @@ struct WorktreeRowView: View {
     }
 
     private var diffStats: WorktreeDiffStats {
-        WorktreeStatusStore.shared.diffStats(forPath: worktree.path.path)
+        WorktreeStatusStore.shared.diffStats(forPath: worktree.path.path, projectId: statusProjectId)
             ?? WorktreeDiffStats(added: worktree.addedLines, deleted: worktree.deletedLines)
     }
 

@@ -239,6 +239,7 @@ struct WorktreeRowHeightTests {
 
         let view = WorktreeRowView(
             worktree: worktree,
+            statusProjectId: nil,
             isSelected: false,
             isMain: false,
             upstreamStatus: nil,

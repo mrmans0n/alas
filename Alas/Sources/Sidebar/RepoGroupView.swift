@@ -149,6 +149,7 @@ struct RepoGroupView: View {
                     ForEach(worktrees) { wt in
                         WorktreeRowView(
                             worktree: wt,
+                            statusProjectId: project.host == nil ? nil : project.id,
                             isSelected: wt.id == selectedWorktreeId,
                             isMain: isMain(wt),
                             upstreamStatus: upstreamStatus(wt),

@@ -2,6 +2,46 @@ import Foundation
 import Testing
 @testable import Alas
 
+private final class ProjectGitInvocationProbe: @unchecked Sendable {
+    struct Invocation: Equatable {
+        let projectId: String
+        let remoteHost: String?
+        let usesRegistry: Bool
+    }
+
+    private let lock = NSLock()
+    private var dirtyProjectIds = Set<String>()
+    private var capturedInvocations: [Invocation] = []
+
+    func setDirtyProjects(_ projectIds: Set<String>) {
+        lock.withLock {
+            dirtyProjectIds = projectIds
+        }
+    }
+
+    func invocations() -> [Invocation] {
+        lock.withLock { capturedInvocations }
+    }
+
+    func runner(projectId: String) -> GitService.ProcessRunner {
+        { [self] args, _, _, remoteHost, usesRegistry, _ in
+            let projectIsDirty = lock.withLock {
+                capturedInvocations.append(Invocation(
+                    projectId: projectId,
+                    remoteHost: remoteHost,
+                    usesRegistry: usesRegistry
+                ))
+                return dirtyProjectIds.contains(projectId)
+            }
+
+            let stdout = projectIsDirty && args.first == "status"
+                ? "1 .M N... 100644 100644 100644 deadbeef deadbeef shared.swift\u{0}"
+                : ""
+            return ProcessResult(exitCode: 0, stdout: stdout, stderr: "")
+        }
+    }
+}
+
 @Suite(.serialized)
 @MainActor
 struct WorktreeStatusStoreTests {
@@ -118,6 +158,80 @@ struct WorktreeStatusStoreTests {
         store.apply(["/a": .dirty(fileCount: 1, conflictCount: 0)])
         #expect(store.status(forPath: "/a") == .dirty(fileCount: 1, conflictCount: 0))
         #expect(store.status(forPath: "/b") == .dirty(fileCount: 2, conflictCount: 0))
+    }
+
+    @Test func statusAndDiffStatsStayScopedToTheirProject() {
+        let store = WorktreeStatusStore()
+        let path = "/shared/worktree"
+        let projectAStatus = WorktreeDirtyState.dirty(fileCount: 2, conflictCount: 1)
+        let projectAStats = WorktreeDiffStats(added: 5, deleted: 2)
+        let projectBStats = WorktreeDiffStats(added: 1, deleted: 0)
+
+        store.apply([path: projectAStatus], projectId: "project-a")
+        store.apply([path: .clean], projectId: "project-b")
+        store.applyDiffStats([path: projectAStats], projectId: "project-a")
+        store.applyDiffStats([path: projectBStats], projectId: "project-b")
+
+        #expect(store.status(forPath: path, projectId: "project-a") == projectAStatus)
+        #expect(store.status(forPath: path, projectId: "project-b") == .clean)
+        #expect(store.status(forPath: path) == .unknown)
+        #expect(store.diffStats(forPath: path, projectId: "project-a") == projectAStats)
+        #expect(store.diffStats(forPath: path, projectId: "project-b") == projectBStats)
+        #expect(store.diffStats(forPath: path) == nil)
+    }
+
+    @Test func remoteSummaryAndStatusScansUseOwningProjectForSharedPath() async throws {
+        let suffix = UUID().uuidString
+        let path = "/remote/shared-\(suffix)"
+        let projectA = ProjectConfig(
+            id: "project-a-\(suffix)", name: "Project A", path: "/repos/a-\(suffix)",
+            color: "red", addedAt: .distantPast, host: "host-a-\(suffix)"
+        )
+        let projectB = ProjectConfig(
+            id: "project-b-\(suffix)", name: "Project B", path: "/repos/b-\(suffix)",
+            color: "blue", addedAt: .distantPast, host: "host-b-\(suffix)"
+        )
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [projectA, projectB])),
+            runHistoryStore: nil,
+            restoreActiveTabsOnStartup: false,
+            worktreeStatusScan: { _ in }
+        )
+        let worktreeA = worktree(path: path, branch: "project-a", projectId: projectA.id)
+        let worktreeB = worktree(path: path, branch: "project-b", projectId: projectB.id)
+        state.projectsManager.insertOptimisticWorktree(worktreeA)
+        state.projectsManager.insertOptimisticWorktree(worktreeB)
+
+        RemoteHostRegistry.shared.register(root: path, host: "registry-host-\(suffix)")
+        defer { RemoteHostRegistry.shared.unregister(root: path) }
+
+        let probe = ProjectGitInvocationProbe()
+        state.projectGitServiceFactory = { (project: ProjectConfig) in
+            GitService(
+                hostResolution: .project(project.host),
+                processRunner: probe.runner(projectId: project.id)
+            )
+        }
+
+        let options = await state.remoteWorktrees()
+        #expect(Set(options.map { $0.projectId }) == Set([projectA.id, projectB.id]))
+        #expect(options.allSatisfy { $0.metricsAvailable })
+
+        probe.setDirtyProjects([projectA.id])
+        state.rescanWorktreeStatuses()
+        for _ in 0..<100 {
+            let statusA = WorktreeStatusStore.shared.status(forPath: path, projectId: projectA.id)
+            let statusB = WorktreeStatusStore.shared.status(forPath: path, projectId: projectB.id)
+            if statusA != .unknown, statusB != .unknown { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        #expect(WorktreeStatusStore.shared.status(forPath: path, projectId: projectA.id) == .dirty(fileCount: 1, conflictCount: 0))
+        #expect(WorktreeStatusStore.shared.status(forPath: path, projectId: projectB.id) == .clean)
+        let invocations = probe.invocations()
+        #expect(invocations.contains(.init(projectId: projectA.id, remoteHost: projectA.host, usesRegistry: false)))
+        #expect(invocations.contains(.init(projectId: projectB.id, remoteHost: projectB.host, usesRegistry: false)))
+        #expect(!invocations.contains { $0.remoteHost == "registry-host-\(suffix)" })
     }
 
     @Test func applyIgnoresAnEmptyScan() {

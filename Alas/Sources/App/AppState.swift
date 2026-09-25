@@ -639,7 +639,13 @@ final class AppState {
     @ObservationIgnored
     var remoteWorktreeCommandRunner: (@MainActor (String, String?, String) async throws -> ProcessResult)?
     @ObservationIgnored
+    var projectGitServiceFactory: ((ProjectConfig) -> GitService)?
+    @ObservationIgnored
     var remoteSessionCreator: (@MainActor (String, String, String) async -> RemoteCreateSessionResult)?
+
+    func projectGitService(for project: ProjectConfig) -> GitService {
+        projectGitServiceFactory?(project) ?? GitService(hostResolution: .project(project.host))
+    }
 
     private func makeRemoteInterfaces() -> [RemoteNetworkInterface] {
         RemoteNetwork.interfaces()
@@ -1790,7 +1796,12 @@ final class AppState {
             projectsManager.worktrees(projectId: project.id).map(\.path.path)
         })
         GGStackSummaryStore.shared.prune(keepingPaths: livePaths)
-        WorktreeStatusStore.shared.prune(keepingPaths: livePaths)
+        let liveProjectPaths = Set(projectsManager.projects.flatMap { project in
+            projectsManager.worktrees(projectId: project.id).map {
+                WorktreeStatusStoreKey(projectId: project.id, path: $0.path.path)
+            }
+        })
+        WorktreeStatusStore.shared.prune(keepingPaths: livePaths, keepingProjectPaths: liveProjectPaths)
         GGInboxStore.shared.prune(keepingProjectIds: Set(projects.map(\.id)))
         refreshGGSidebar()
         GGLandingStore.shared.prune(keepingProjectIds: Set(projects.map(\.id)))
@@ -2057,7 +2068,7 @@ final class AppState {
                     else { continue }
                     targetedWorktreeIDsByPath[worktree.path.path] = worktree.id
                     targetedGenerationsByPath[worktree.path.path] = worktreeGeneration
-                    guard let snapshot = await remoteWorktreeStatus(worktree: worktree) else { continue }
+                    guard let snapshot = await remoteWorktreeStatus(project: project, worktree: worktree) else { continue }
                     results[worktree.path.path] = snapshot.state
                     diffs[worktree.path.path] = snapshot.diff
                 }
@@ -2075,8 +2086,10 @@ final class AppState {
                     generation: currentGeneration
                 )
             }
-            WorktreeStatusStore.shared.apply(currentResults)
-            WorktreeStatusStore.shared.applyDiffStats(diffs.filter { currentResults[$0.key] != nil })
+            WorktreeStatusStore.shared.apply(currentResults, projectId: project.id)
+            WorktreeStatusStore.shared.applyDiffStats(
+                diffs.filter { currentResults[$0.key] != nil }, projectId: project.id
+            )
         }
     }
 
@@ -2099,22 +2112,26 @@ final class AppState {
             case nil, .launchFailed, .deleteFailed:
                 break
             }
-            guard let snapshot = await self.remoteWorktreeStatus(worktree: worktree),
+            guard let snapshot = await self.remoteWorktreeStatus(project: project, worktree: worktree),
                   self.remoteWorktreeStatusRescanGenerations.isCurrent(worktreeScanToken)
             else { return }
-            WorktreeStatusStore.shared.apply([worktree.path.path: snapshot.state])
+            WorktreeStatusStore.shared.apply([worktree.path.path: snapshot.state], projectId: project.id)
             if let diff = snapshot.diff {
-                WorktreeStatusStore.shared.applyDiffStats([worktree.path.path: diff])
+                WorktreeStatusStore.shared.applyDiffStats([worktree.path.path: diff], projectId: project.id)
             }
         }
     }
 
-    private func remoteWorktreeStatus(worktree: Worktree) async -> (state: WorktreeDirtyState, diff: WorktreeDiffStats?)? {
+    private func remoteWorktreeStatus(
+        project: ProjectConfig,
+        worktree: Worktree
+    ) async -> (state: WorktreeDirtyState, diff: WorktreeDiffStats?)? {
+        let git = projectGitService(for: project)
         do {
-            let changes = try await GitService().statusIdentity(worktreePath: worktree.path)
+            let changes = try await git.statusIdentity(worktreePath: worktree.path)
             let fileCount = Set(changes.map(\.path)).count
             guard fileCount > 0 else { return (.clean, WorktreeDiffStats(added: 0, deleted: 0)) }
-            let diff = try? await GitService().worktreeDiffStats(worktreePath: worktree.path)
+            let diff = try? await git.worktreeDiffStats(worktreePath: worktree.path)
             return (.dirty(fileCount: fileCount, conflictCount: changes.filter { $0.conflict != nil }.count), diff)
         } catch {
             return nil
@@ -14876,7 +14893,7 @@ private extension WorkspaceCheckoutMember {
 // worktrees not opened this run simply don't appear (documented v1 behavior).
 extension AppState: RemoteSessionsProvider {
     private func remoteWorktreeSummary(project: ProjectConfig, worktree: Worktree) async -> RemoteWorktreeSummary {
-        let git = GitService()
+        let git = projectGitService(for: project)
         do {
             async let status = git.status(worktreePath: worktree.path)
             async let commits = git.commitsAhead(
