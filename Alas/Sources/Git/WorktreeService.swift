@@ -1369,9 +1369,10 @@ struct WorktreeService {
         return WorktreeDeletePreflight(reasons: reasons)
     }
 
-    /// A scheduled run may discard its checkout only when its original base
-    /// still contains the current tip and a remote-tracking ref contains that
-    /// tip. Local-only commits remain available for review in the worktree.
+    /// A scheduled run may discard its checkout only when its original base is
+    /// an ancestor of the current tip, that tip is remotely reachable, and every
+    /// initialized submodule reflog commit is also remotely reachable. Local-only
+    /// commits remain available for review in the worktree.
     static func scheduledCleanupHistoryIsSafe(
         baseCommit: String,
         expectedBranch: String,
@@ -1413,7 +1414,13 @@ struct WorktreeService {
         let submoduleRemoteRefs = try await Process.git(
             [
                 "submodule", "foreach", "--quiet", "--recursive",
-                "refs=$(git for-each-ref --contains=HEAD --format='%(refname)' refs/remotes/) && test -n \"$refs\""
+                """
+                set -e
+                refs=$(git for-each-ref --contains=HEAD --format='%(refname)' refs/remotes/)
+                test -n "$refs"
+                local_only=$(git rev-list --max-count=1 --reflog --not --remotes 2>/dev/null)
+                test -z "$local_only"
+                """
             ],
             cwd: worktreePath,
             usesRemoteHostRegistry: false

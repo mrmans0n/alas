@@ -654,6 +654,73 @@ extension WorktreeServiceTests {
         )))
     }
 
+    @Test func scheduledCleanupRejectsReflogOnlyInitializedSubmoduleCommits() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "scheduled-submodule-reflog-only")
+        defer { fixture.removeFiles() }
+
+        let baseResult = try await Process.git(["rev-parse", "HEAD"], cwd: fixture.worktree.path)
+        try #require(baseResult.exitCode == 0)
+        let base = baseResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let superprojectRemote = "refs/remotes/origin/\(fixture.worktree.branch)"
+        let reachableSuperprojectHead = try await Process.git(
+            ["update-ref", superprojectRemote, base],
+            cwd: fixture.worktree.path
+        )
+        try #require(reachableSuperprojectHead.exitCode == 0)
+
+        let submodulePath = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
+        let submoduleHead = try await Process.git(["rev-parse", "HEAD"], cwd: submodulePath)
+        try #require(submoduleHead.exitCode == 0)
+        let reachableSubmoduleHead = try await Process.git(
+            ["update-ref", "refs/remotes/origin/main", submoduleHead.stdout.trimmingCharacters(in: .whitespacesAndNewlines)],
+            cwd: submodulePath
+        )
+        try #require(reachableSubmoduleHead.exitCode == 0)
+
+        try "rewritten local commit".write(
+            to: submodulePath.appendingPathComponent("tracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let localCommit = try await Process.git(["commit", "-am", "local submodule commit"], cwd: submodulePath)
+        try #require(localCommit.exitCode == 0)
+        let localOnlyCommit = try await Process.git(["rev-parse", "HEAD"], cwd: submodulePath)
+        try #require(localOnlyCommit.exitCode == 0)
+        let reset = try await Process.git(["reset", "--hard", "HEAD^"], cwd: submodulePath)
+        try #require(reset.exitCode == 0)
+
+        let reflogOnly = try await Process.git(
+            ["rev-list", "--max-count=50", "--reflog", "--not", "--remotes"],
+            cwd: submodulePath
+        )
+        try #require(reflogOnly.exitCode == 0)
+        #expect(reflogOnly.stdout.contains(localOnlyCommit.stdout.trimmingCharacters(in: .whitespacesAndNewlines)))
+        let cleanStatus = try await Process.git(["status", "--porcelain"], cwd: submodulePath)
+        try #require(cleanStatus.exitCode == 0)
+        #expect(cleanStatus.stdout.isEmpty)
+
+        #expect(!(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        )))
+        let publishReflogCommit = try await Process.git(
+            [
+                "update-ref",
+                "refs/remotes/origin/recovered",
+                localOnlyCommit.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            ],
+            cwd: submodulePath
+        )
+        try #require(publishReflogCommit.exitCode == 0)
+        #expect(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        ))
+    }
+
+
     @Test func worktreeDeleteContentFingerprintTracksSubmoduleRemoteRefChanges() async throws {
         let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-remote-ref-fingerprint")
         defer { fixture.removeFiles() }
