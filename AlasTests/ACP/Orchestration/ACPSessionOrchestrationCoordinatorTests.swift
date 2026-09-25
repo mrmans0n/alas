@@ -502,6 +502,210 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(manager.liveSession(for: "child")?.agentId == "codex")
     }
 
+    private struct OutcomeFixture {
+        let coordinator: ACPSessionOrchestrationCoordinator
+        let persistence: ACPOrchestrationPersistence
+        let manager: ACPSessionManager
+    }
+
+    /// A parent session that exists but cannot attach (missing agent), so
+    /// delivery leaves rows pending and unclaimed for inspection.
+    private func makeOutcomeFixture(parentReachable: Bool = true) throws -> OutcomeFixture {
+        let orchestrationPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-orchestration-outcome-\(UUID().uuidString).sqlite").path
+        let sessionPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-orchestration-outcome-session-\(UUID().uuidString).sqlite").path
+        let persistence = ACPOrchestrationPersistence(path: orchestrationPath)
+        let manager = ACPSessionManager(
+            worktreeId: "worktree",
+            worktreePath: "/tmp/worktree",
+            store: try ACPSessionStore(path: sessionPath),
+            setupEvaluator: { _ in .missing(reason: "Install Codex") }
+        )
+        _ = manager.createSession(id: "parent", agentId: "codex", autoRunDefault: false)
+        let worktree = Worktree(
+            id: "worktree", projectId: "project", name: "feature-x", branch: "feature-x",
+            path: URL(fileURLWithPath: "/tmp/worktree"), status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        let coordinator = ACPSessionOrchestrationCoordinator(environment: .init(
+            persistence: persistence,
+            instanceId: "instance",
+            now: { 900 },
+            makeID: { UUID().uuidString },
+            worktree: { parentReachable && $0 == worktree.id ? worktree : nil },
+            existingWorktree: { _, _ in nil },
+            configuredAgents: { [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)] },
+            availableAgents: { _, _ in [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)] },
+            sessionLocation: { sessionId in
+                parentReachable && sessionId == "parent"
+                    ? .init(origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"), manager: manager)
+                    : nil
+            },
+            manager: { _ in parentReachable ? manager : nil },
+            newWorktreeDestination: { _, _ in nil },
+            createWorktree: { _, _, _ in .failure(.init(message: "unused")) },
+            rememberParent: { _, _ in },
+            autoRunDefault: { false },
+            notifyChanged: {}
+        ))
+        return .init(coordinator: coordinator, persistence: persistence, manager: manager)
+    }
+
+    private func insertReadyChild(_ persistence: ACPOrchestrationPersistence) async throws {
+        try await persistence.insert(.init(
+            childSessionId: "child", parentSessionId: "parent", projectId: "project",
+            parentWorktreeId: "worktree", childWorktreeId: "worktree", agentId: "codex",
+            worktreeRequest: .current(worktreeId: "worktree"), pendingInitialPrompt: nil,
+            phase: .ready, failureMessage: nil, createdAt: 100, updatedAt: 100
+        ))
+    }
+
+    private func completion(
+        result: ACPTurnCompletion.Result = .completed,
+        startedAt: Int64 = 500,
+        lastAgentText: String? = "Parser fixed."
+    ) -> ACPTurnCompletion {
+        .init(sessionId: "child", startedAt: startedAt, result: result,
+              delegatedSource: nil, lastAgentText: lastAgentText)
+    }
+
+    @Test("unreported child completion wakes the parent")
+    func unreportedCompletionWakesParent() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childTurnCompleted(completion())
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.count == 1)
+        #expect(pending.first?.id == "outcome-child-500")
+        #expect(pending.first?.kind == .prompt)
+        #expect(pending.first?.sourceSessionId == "child")
+        #expect(pending.first?.prompt.contains("finished its turn without sending a result") == true)
+        #expect(pending.first?.prompt.contains("Parser fixed.") == true)
+        #expect(pending.first?.prompt.contains("worktree feature-x") == true)
+    }
+
+    @Test("reported child completion only notices the parent")
+    func reportedCompletionNotices() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+        try await fixture.persistence.markParentReport(childSessionId: "child", at: 600)
+
+        await fixture.coordinator.childTurnCompleted(completion(startedAt: 500))
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.count == 1)
+        #expect(pending.first?.kind == .notice)
+        #expect(pending.first?.prompt == "Delegated session child (codex, worktree feature-x) finished its turn.")
+    }
+
+    @Test("an earlier report does not cover a later turn")
+    func earlierReportDoesNotCoverLaterTurn() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+        try await fixture.persistence.markParentReport(childSessionId: "child", at: 600)
+
+        await fixture.coordinator.childTurnCompleted(completion(startedAt: 700))
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.map(\.kind) == [.prompt])
+        #expect(pending.first?.id == "outcome-child-700")
+    }
+
+    @Test("failed and cancelled turns produce wake and notice respectively")
+    func failedAndCancelledTurns() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childTurnCompleted(completion(result: .failed("prompt failed: boom"), startedAt: 10))
+        await fixture.coordinator.childTurnCompleted(completion(result: .cancelled, startedAt: 20))
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.map(\.kind) == [.prompt, .notice])
+        #expect(pending.first?.prompt == "[alas system] Delegated session child (codex, worktree feature-x) failed: prompt failed: boom.")
+    }
+
+    @Test("duplicate completion events enqueue nothing new")
+    func duplicateCompletionIsIdempotent() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childTurnCompleted(completion())
+        await fixture.coordinator.childTurnCompleted(completion())
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").count == 1)
+    }
+
+    @Test("sessions without a delegation record produce no outcome")
+    func nonDelegatedSessionIsIgnored() async throws {
+        let fixture = try makeOutcomeFixture()
+
+        await fixture.coordinator.childTurnCompleted(completion())
+
+        #expect(try await fixture.persistence.pendingMessageTargetSessionIds().isEmpty)
+    }
+
+    @Test("terminal children do not produce turn outcomes")
+    func terminalChildIsIgnored() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+        try await fixture.persistence.updatePhase(childSessionId: "child", phase: .closed, failureMessage: nil, updatedAt: 200)
+
+        await fixture.coordinator.childTurnCompleted(completion())
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+    }
+
+    @Test("markChildFailed records the phase and wakes the parent once")
+    func markChildFailedWakesParent() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.markChildFailed(childSessionId: "child", message: "Agent is not enabled or ACP-capable: codex")
+        await fixture.coordinator.markChildFailed(childSessionId: "child", message: "Agent is not enabled or ACP-capable: codex")
+
+        let record = try #require(try await fixture.persistence.delegation(childSessionId: "child"))
+        #expect(record.phase == .failed)
+        #expect(record.failureMessage == "Agent is not enabled or ACP-capable: codex")
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.count == 1)
+        #expect(pending.first?.id == "outcome-child-failed")
+        #expect(pending.first?.kind == .prompt)
+    }
+
+    @Test("parent unavailable leaves the outcome pending without a claim")
+    func parentUnavailableLeavesRowPending() async throws {
+        let fixture = try makeOutcomeFixture(parentReachable: false)
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childTurnCompleted(completion())
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.count == 1)
+        let store = try ACPOrchestrationStore(path: fixture.persistence.path)
+        #expect(try store.claimedMessage(id: "outcome-child-500") == nil)
+    }
+
+    @Test("a child's session_send to its parent records the report time")
+    func sendToParentMarksReport() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        let response = await fixture.coordinator.send(
+            origin: .init(sessionId: "child", projectId: "project", worktreeId: "worktree"),
+            request: .init(targetSessionId: "parent", prompt: "Done: parser fixed.")
+        )
+
+        guard case .text = response else {
+            Issue.record("Expected a queued response, got \(response)")
+            return
+        }
+        let record = try #require(try await fixture.persistence.delegation(childSessionId: "child"))
+        #expect(record.lastParentReportAt == 900)
+    }
+
     private func eventuallyLoadDelegation(
         persistence: ACPOrchestrationPersistence,
         childSessionId: String,

@@ -229,10 +229,7 @@ final class ACPSessionOrchestrationCoordinator {
                 case .success(let worktree):
                     await self.startPersistedChild(childID: childID, prompt: prompt, worktree: worktree)
                 case .failure(let error):
-                    try? await self.environment.persistence.updatePhase(
-                        childSessionId: childID, phase: .failed, failureMessage: error.message, updatedAt: self.environment.now()
-                    )
-                    self.environment.notifyChanged()
+                    await self.markChildFailed(childSessionId: childID, message: error.message)
                 }
             }
             return json(ACPOrchestrationNewResponse(sessionId: childID, state: "creating_worktree", worktreeId: nil))
@@ -315,6 +312,12 @@ final class ACPSessionOrchestrationCoordinator {
             return .error("Could not queue delegated message.")
         }
         targetSession?.hasPendingDelegatedMessages = true
+        if callerParent?.parentSessionId == request.targetSessionId {
+            try? await environment.persistence.markParentReport(
+                childSessionId: origin.sessionId,
+                at: message.createdAt
+            )
+        }
         environment.notifyChanged()
         deliveryScheduled = true
         Task { @MainActor in
@@ -326,6 +329,82 @@ final class ACPSessionOrchestrationCoordinator {
             )
         }
         return json(ACPOrchestrationSendResponse(messageId: message.id, state: "queued"))
+    }
+
+    /// Entry point for a delegated child's finished turn. Non-children and
+    /// terminal children are ignored; everything else becomes an inbox row
+    /// for the parent, wake or notice per `outcomeDisposition`.
+    func childTurnCompleted(_ completion: ACPTurnCompletion) async {
+        guard let record = try? await environment.persistence.delegation(childSessionId: completion.sessionId),
+              record.phase != .failed, record.phase != .closed
+        else { return }
+        let disposition = ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: completion.result,
+            lastParentReportAt: record.lastParentReportAt,
+            turnStartedAt: completion.startedAt
+        )
+        let context = outcomeContext(for: record)
+        let prompt: String
+        switch (disposition, completion.result) {
+        case (.notice, _):
+            prompt = ACPDelegatedOutcomeText.notice(context)
+        case (.wake, .failed(let message)):
+            prompt = ACPDelegatedOutcomeText.failure(context, message: message)
+        case (.wake, _):
+            prompt = ACPDelegatedOutcomeText.unreported(context, lastAgentText: completion.lastAgentText)
+        }
+        await enqueueOutcome(.init(
+            id: "outcome-\(record.childSessionId)-\(completion.startedAt)",
+            sourceSessionId: record.childSessionId,
+            targetSessionId: record.parentSessionId,
+            prompt: prompt,
+            createdAt: environment.now(),
+            kind: disposition == .wake ? .prompt : .notice
+        ), child: record)
+    }
+
+    /// Mark a delegated child failed and wake its parent with the reason.
+    /// Idempotent: the outcome id is fixed per child, so repeated calls
+    /// update the phase but enqueue nothing new.
+    func markChildFailed(childSessionId: String, message: String) async {
+        try? await environment.persistence.updatePhase(
+            childSessionId: childSessionId,
+            phase: .failed,
+            failureMessage: message,
+            updatedAt: environment.now()
+        )
+        environment.notifyChanged()
+        guard let record = try? await environment.persistence.delegation(childSessionId: childSessionId) else { return }
+        await enqueueOutcome(.init(
+            id: "outcome-\(childSessionId)-failed",
+            sourceSessionId: childSessionId,
+            targetSessionId: record.parentSessionId,
+            prompt: ACPDelegatedOutcomeText.failure(outcomeContext(for: record), message: message),
+            createdAt: environment.now(),
+            kind: .prompt
+        ), child: record)
+    }
+
+    private func outcomeContext(for record: ACPDelegationRecord) -> ACPDelegatedOutcomeText.Context {
+        .init(
+            childSessionId: record.childSessionId,
+            agentId: record.agentId,
+            worktreeName: record.childWorktreeId.flatMap { environment.worktree($0)?.name }
+        )
+    }
+
+    private func enqueueOutcome(_ message: ACPDelegatedMessage, child: ACPDelegationRecord) async {
+        do {
+            try await environment.persistence.enqueue(message)
+        } catch {
+            return
+        }
+        environment.notifyChanged()
+        await deliverPendingMessages(
+            to: message.targetSessionId,
+            callerParent: child,
+            targetParent: nil
+        )
     }
 
     private func createChild(
@@ -371,10 +450,7 @@ final class ACPSessionOrchestrationCoordinator {
 
     private func startPersistedChild(childID: String, prompt: String, worktree: Worktree) async {
         guard let manager = environment.manager(worktree) else {
-            try? await environment.persistence.updatePhase(
-                childSessionId: childID, phase: .failed, failureMessage: "Could not create ACP session manager.", updatedAt: environment.now()
-            )
-            environment.notifyChanged()
+            await markChildFailed(childSessionId: childID, message: "Could not create ACP session manager.")
             return
         }
         let record: ACPDelegationRecord?
@@ -400,16 +476,10 @@ final class ACPSessionOrchestrationCoordinator {
                 worktree: worktree
             )
         } catch ACPSessionOrchestrationPolicy.Error.agentUnavailable(let id) {
-            try? await environment.persistence.updatePhase(
-                childSessionId: childID, phase: .failed, failureMessage: "Agent is not enabled or ACP-capable: \(id)", updatedAt: environment.now()
-            )
-            environment.notifyChanged()
+            await markChildFailed(childSessionId: childID, message: "Agent is not enabled or ACP-capable: \(id)")
             return
         } catch {
-            try? await environment.persistence.updatePhase(
-                childSessionId: childID, phase: .failed, failureMessage: "Could not validate delegated session request.", updatedAt: environment.now()
-            )
-            environment.notifyChanged()
+            await markChildFailed(childSessionId: childID, message: "Could not validate delegated session request.")
             return
         }
         try? await environment.persistence.updateChildWorktree(
@@ -431,23 +501,17 @@ final class ACPSessionOrchestrationCoordinator {
             into: childID
         )
         guard accepted else {
-            try? await environment.persistence.updatePhase(
-                childSessionId: childID, phase: .failed, failureMessage: "Could not queue initial prompt.", updatedAt: environment.now()
-            )
-            environment.notifyChanged()
+            await markChildFailed(childSessionId: childID, message: "Could not queue initial prompt.")
             return
         }
         await manager.attach(to: childID, freshlyCreated: true)
         guard let session = manager.liveSession(for: childID),
               session.agentState == .ready
         else {
-            try? await environment.persistence.updatePhase(
+            await markChildFailed(
                 childSessionId: childID,
-                phase: .failed,
-                failureMessage: delegatedChildStartFailureMessage(manager.liveSession(for: childID)),
-                updatedAt: environment.now()
+                message: delegatedChildStartFailureMessage(manager.liveSession(for: childID))
             )
-            environment.notifyChanged()
             return
         }
         try? await environment.persistence.clearPendingInitialPrompt(childSessionId: childID, updatedAt: environment.now())
@@ -546,14 +610,23 @@ final class ACPSessionOrchestrationCoordinator {
             target.manager.notifyDelegatedMessagesAvailable()
             return
         }
-        let accepted = await target.manager.enqueueDelegatedPrompt(
-            text: claimed.message.prompt,
-            source: ACPDelegatedPromptSource(
-                sessionId: claimed.message.sourceSessionId,
-                messageId: claimed.message.id
-            ),
-            into: claimed.message.targetSessionId
-        )
+        let accepted: Bool
+        switch claimed.message.kind {
+        case .prompt:
+            accepted = await target.manager.enqueueDelegatedPrompt(
+                text: claimed.message.prompt,
+                source: ACPDelegatedPromptSource(
+                    sessionId: claimed.message.sourceSessionId,
+                    messageId: claimed.message.id
+                ),
+                into: claimed.message.targetSessionId
+            )
+        case .notice:
+            accepted = await target.manager.appendDelegatedNotice(
+                text: claimed.message.prompt,
+                into: claimed.message.targetSessionId
+            )
+        }
         guard accepted else {
             try? await environment.persistence.releaseMessageClaim(id: claimed.message.id, claim: claimed.claim)
             return
