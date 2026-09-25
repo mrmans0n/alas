@@ -487,7 +487,9 @@ enum NativePeerElicitationForm {
             let allowed = Set(field.options.map(\.value))
             guard selected.isSubset(of: allowed) else { return "Choose only listed options." }
             if selected.isEmpty && !field.required { return nil }
-            let minimum = max(field.required ? 1 : 0, field.minItems ?? 0)
+            // "Required" means the property must be present in the response;
+            // an explicit `minItems` is the only constraint on item count.
+            let minimum = field.minItems ?? 0
             if selected.count < minimum { return "Choose at least \(minimum) options." }
             if let maximum = field.maxItems, selected.count > maximum {
                 return "Choose no more than \(maximum) options."

@@ -87,5 +87,45 @@ assert.deepStrictEqual(ordering.createSessionRequest({ id: "legacy" }, "claude")
   worktreeId: "legacy",
   agentId: "claude",
 }, "older servers without project identity keep the legacy request shape");
+// --- groupSessionsByServer -----------------------------------------------------
+
+const withPeers = ordering.groupSessionsByServer([
+  session("local-a", "repo-a", "Alpha", "a-primary", 100, true),
+  {
+    id: "peer-1", title: "peer session", projectId: "repo-x", worktreeId: "x-wt", updatedAt: 90, isActive: true,
+    worktree: { projectName: "PeerRepo", worktreeName: "x-wt-worktree", path: "/worktrees/x-wt" },
+    serverId: "srv-B", serverName: "Nacho's Studio",
+  },
+  {
+    id: "peer-2", title: "peer orphan", projectId: null, worktreeId: null, updatedAt: 80, isActive: true, worktree: null,
+    serverId: "srv-B", serverName: "Nacho's Studio",
+  },
+]);
+assert.deepStrictEqual(withPeers.map((s) => s.id), ["repo-a", "server:srv-B"]);
+const peerSection = withPeers[1];
+assert.equal(peerSection.title, "Nacho's Studio");
+assert.equal(peerSection.isPeer, true);
+assert.deepStrictEqual(peerSection.worktrees.map((w) => w.id), ["x-wt", "other"]);
+assert.deepStrictEqual(peerSection.worktrees[0].activeSessions.map((s) => s.id), ["peer-1"]);
+assert.deepStrictEqual(peerSection.worktrees[1].activeSessions.map((s) => s.id), ["peer-2"]);
+
+// A pre-federation sessionList (no serverId anywhere) must group identically
+// to groupSessions() itself.
+const noServerId = [
+  session("a", "repo-a", "Alpha", "a-wt", 10, true),
+  session("b", "repo-b", "Beta", "b-wt", 20, true),
+];
+assert.deepStrictEqual(ordering.groupSessionsByServer(noServerId), ordering.groupSessions(noServerId));
+
+// Two peers each get their own section, sorted by server name, after every
+// local section including this Mac's own "Other" bucket (orphan local
+// sessions) — peer sections represent an entirely different Mac each.
+const twoPeers = ordering.groupSessionsByServer([
+  session("orphan-local", null, null, null, 5, true),
+  { id: "z1", title: "z", projectId: null, worktreeId: null, updatedAt: 1, isActive: true, worktree: null, serverId: "srv-Z", serverName: "Zulu" },
+  { id: "a1", title: "a", projectId: null, worktreeId: null, updatedAt: 1, isActive: true, worktree: null, serverId: "srv-A", serverName: "Alpha Studio" },
+]);
+assert.deepStrictEqual(twoPeers.map((s) => s.id), ["other", "server:srv-A", "server:srv-Z"]);
+assert.equal(twoPeers[0].isOther, true);
 
 console.log("session ordering tests passed");

@@ -263,10 +263,15 @@ struct AppStateRunRecordTests {
             )
         }
         let errors = ErrorBox()
-        var openCount = 0
-        let opener = terminalSessionOpener ?? { _, _, _, _, _, _, _, _, _ in
-            openCount += 1
-            return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { 123 })
+        // Session IDs derive from the worktree identity, not a call counter:
+        // the two async launches of `eachWorktreeKeepsItsOwnRun` can open in
+        // either order, so a counter can hand the two worktrees swapped IDs.
+        let opener = terminalSessionOpener ?? { worktree, _, _, _, _, _, _, _, _ in
+            let index = worktree.id.hasPrefix("wt-") ? Int(worktree.id.dropFirst(3)) : nil
+            return AppState.OpenedTerminalSession(
+                id: "session-\(index ?? 1)",
+                foregroundPid: { 123 }
+            )
         }
         let state = AppState(
             store: MemoryStore(),

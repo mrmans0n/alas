@@ -239,6 +239,21 @@ function applyHello(doc, clientId, hello) {
   const helloName = typeof hello.name === "string" ? hello.name.trim() : "";
   const name = helloName || server.name;
   const protocolVersion = Number.isInteger(hello.protocolVersion) ? hello.protocolVersion : null;
+  const federationEnabled = hello.federationEnabled === true;
+  // The gateway's own ONLINE peer roster, independent of whichever peers
+  // currently happen to have rows in the last sessionList — see
+  // peerSessionCounts, which seeds a zero entry for each so an emptied-out
+  // peer reads as "0", not "not gatewayed, fall back to idle polling". Only
+  // "online" actually carries sessions through the gateway (see
+  // RemotePeerManager.helloPeers); every other state (offline, unauthorized,
+  // unverified, idle, connecting, ...) is listed for visibility only, so
+  // treating it as gatewayed would override a possibly-valid direct-link
+  // idle-polled count with a permanent false zero.
+  const peers = Array.isArray(hello.peers)
+    ? hello.peers
+        .filter((p) => p && p.state === "online" && typeof p.serverId === "string")
+        .map((p) => p.serverId)
+    : [];
   const twin = serverId ? doc.servers.find((s) => s.id !== clientId && s.serverId === serverId) : null;
   if (twin) {
     twin.token = server.token;
@@ -246,6 +261,8 @@ function applyHello(doc, clientId, hello) {
     twin.lastOrigin = server.lastOrigin;
     twin.name = name;
     twin.protocolVersion = protocolVersion;
+    twin.federationEnabled = federationEnabled;
+    twin.peers = peers;
     doc.servers = doc.servers.filter((s) => s.id !== clientId);
     if (doc.activeId === clientId) doc.activeId = twin.id;
     return { server: twin, mergedFromId: clientId };
@@ -253,6 +270,8 @@ function applyHello(doc, clientId, hello) {
   server.serverId = serverId;
   server.name = name;
   server.protocolVersion = protocolVersion;
+  server.federationEnabled = federationEnabled;
+  server.peers = peers;
   return { server, mergedFromId: null };
 }
 
@@ -280,14 +299,59 @@ function fallbackActiveId(doc, onlineIds) {
 }
 
 // Derived from a `sessionList` payload. Closed sessions never need attention.
+function classifySessionCount(session, counts) {
+  if (!session || session.isActive === false) return;
+  if (ATTENTION_STATUSES.has(session.status)) counts.attention += 1;
+  else if (session.status === "streaming") counts.running += 1;
+}
+
 function attentionCounts(sessions) {
   const counts = { attention: 0, running: 0 };
-  for (const session of sessions || []) {
-    if (!session || session.isActive === false) continue;
-    if (ATTENTION_STATUSES.has(session.status)) counts.attention += 1;
-    else if (session.status === "streaming") counts.running += 1;
-  }
+  for (const session of sessions || []) classifySessionCount(session, counts);
   return counts;
+}
+
+// Attention/running counts per peer serverId found in a gateway's pushed
+// sessionList — only rows carrying a serverId (forwarded from a peer)
+// contribute. Local rows (no serverId) are the gateway's own sessions,
+// already counted toward that gateway's own idle-poll-derived link.counts.
+// `knownServerIds` (the gateway's own peer roster, from hello.peers) seeds
+// a zero entry for each first, so a peer the gateway reports but currently
+// has no rows for (no sessions, or its last attention session just closed)
+// reads as an authoritative "0" rather than "not gatewayed" — without this,
+// serverBadgeCounts would fall back to that peer's stale idle-polled count
+// until the next 30s poll.
+function peerSessionCounts(sessions, knownServerIds) {
+  const byServer = new Map();
+  for (const id of knownServerIds || []) byServer.set(id, { attention: 0, running: 0 });
+  for (const session of sessions || []) {
+    if (!session || !session.serverId) continue;
+    const counts = byServer.get(session.serverId) || { attention: 0, running: 0 };
+    classifySessionCount(session, counts);
+    byServer.set(session.serverId, counts);
+  }
+  return byServer;
+}
+
+// Which counts the Servers list should show for `server`: the active
+// gateway's pushed peer counts when the active server federates and has
+// actually forwarded rows for this server's serverId, otherwise this
+// server's own idle-polled link.counts (the pre-federation and
+// non-gateway-peer fallback).
+function serverBadgeCounts(server, linkCounts, activeServer, gatewayCounts) {
+  if (
+    activeServer && activeServer.federationEnabled &&
+    server.serverId && gatewayCounts && gatewayCounts.has(server.serverId) &&
+    // Re-checked against the CURRENT roster, not just at gatewayCounts'
+    // build time: a peer that left the online roster between one
+    // sessionList and the next hello can otherwise keep reading a stale
+    // seeded entry (or an entry from before it left) until some unrelated
+    // sessionList happens to rebuild gatewayCounts without it.
+    Array.isArray(activeServer.peers) && activeServer.peers.includes(server.serverId)
+  ) {
+    return gatewayCounts.get(server.serverId);
+  }
+  return linkCounts || { attention: 0, running: 0 };
 }
 
 // Badge on the Settings tab: attention across every server except the one
@@ -316,5 +380,7 @@ globalThis.RemoteHubRegistry = {
   setLastOrigin,
   fallbackActiveId,
   attentionCounts,
+  peerSessionCounts,
+  serverBadgeCounts,
   otherAttentionTotal,
 };

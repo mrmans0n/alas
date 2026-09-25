@@ -1157,7 +1157,8 @@ struct RemoteWebAssetTests {
         #expect(js.contains("function showAddServerSheet(targetId)"))
         #expect(js.contains("async function submitAddServer()"))
         #expect(js.contains("function forgetServer(id)"))
-        #expect(js.contains("RemoteHubRegistry.otherAttentionTotal(links.all(), hub.activeId)"))
+        #expect(js.contains("RemoteHubRegistry.serverBadgeCounts(s, (links.get(s.id) || {}).counts, active, gatewayCounts)"))
+        #expect(js.contains("RemoteHubRegistry.otherAttentionTotal(effective, hub.activeId)"))
         #expect(html.contains(#"id="tab-settings" class="bt-tab" aria-label="Settings">"#))
         #expect(js.contains(#"$("status").onclick = () => { if (!currentSession) showSettings(); };"#))
 
@@ -1234,7 +1235,7 @@ struct RemoteWebAssetTests {
 
         let app = try asset("app.js")
         #expect(app.contains("function showOriginBlockedGate(link) {"))
-        let stateChange = try #require(app.range(of: "function handleLinkStateChange(link) {").map { app[$0.lowerBound...].prefix(700) })
+        let stateChange = try #require(app.range(of: "function handleLinkStateChange(link) {").map { app[$0.lowerBound...].prefix(900) })
         #expect(stateChange.contains(#"case "blocked":"#))
         #expect(stateChange.contains("showOriginBlockedGate(link);"))
         let switchServer = try #require(app.range(of: "function switchServer(id) {").map { app[$0.lowerBound...].prefix(900) })
@@ -1528,5 +1529,34 @@ struct RemoteWebAssetTests {
         let picked = try #require(js.range(of: "async function onFilesPicked(files) {").map { js[$0.lowerBound...].prefix(700) })
         #expect(picked.contains("const generation = composerGeneration;"))
         #expect(picked.contains("if (generation !== composerGeneration) return;"))
+    }
+
+    // Regression (Codex review, PR #1470): a peer section's own inner
+    // "Other" bucket (orphan sessions the gateway forwards with no
+    // project/worktree info) sits inside a section whose isOther is false —
+    // only the top-level local "Other" section has that flag set. Gating
+    // worktreeRow1's summary-free rendering path on section.isOther alone
+    // sent that bucket through the branch-reading path instead, which reads
+    // summary.branch off a worktree that never has a summary and throws,
+    // aborting the entire session-list render.
+    @Test func worktreeRow1SkipsBranchRenderingForAnySummaryFreeWorktree() throws {
+        let js = try asset("app.js")
+        let body = try #require(js.range(of: "function worktreeRow1(section, worktree, singleSession, expanded) {").map { js[$0.lowerBound...].prefix(900) })
+        #expect(body.contains("if (section.isOther || !worktree.summary) {"))
+        #expect(!body.contains("if (section.isOther) {"))
+    }
+
+    // Regression (Codex review, PR #1470): gatewayCounts is only fresh while
+    // the active link is online and pushing sessionList updates. Without
+    // clearing it on disconnect, a peer's Servers badge stayed frozen at its
+    // last gateway-pushed value instead of falling back to that peer's own
+    // live idle-polled counts once the gateway dropped.
+    @Test func gatewayCountsAreClearedWhenTheActiveLinkLeavesOnline() throws {
+        let js = try asset("app.js")
+        let body = try #require(js.range(of: "function handleLinkStateChange(link) {").map { js[$0.lowerBound...].prefix(500) })
+        #expect(body.contains(#"if (link.role === "active" && link.state !== "online") gatewayCounts = new Map();"#))
+        let clearedAt = try #require(body.range(of: "gatewayCounts = new Map();")?.lowerBound)
+        let refreshedAt = try #require(body.range(of: "refreshHubViews();")?.lowerBound)
+        #expect(clearedAt < refreshedAt, "must clear before refreshing views, not after")
     }
 }

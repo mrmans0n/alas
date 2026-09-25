@@ -115,4 +115,89 @@ function groupSessions(sessions) {
   });
 }
 
-globalThis.RemoteSessionOrdering = { groupSessions, sessionIsActive, worktreeOptionKey, createSessionRequest };
+
+// Sessions bucketed by worktree only, ignoring project grouping — used for
+// a single peer server's sessions, which get one section per server rather
+// than the full project/worktree nesting `groupSessions` builds for the
+// local Mac's own repos.
+function bucketWorktrees(sessions) {
+  const worktrees = new Map();
+  const other = { id: "other", title: "Other", activeSessions: [], closedSessions: [] };
+  let hasOther = false;
+
+  sessions.forEach((session) => {
+    const worktreeID = worktreeIdentity(session);
+    if (!session.worktree || !worktreeID) {
+      (sessionIsActive(session) ? other.activeSessions : other.closedSessions).push(session);
+      hasOther = true;
+      return;
+    }
+    const worktree = worktrees.get(worktreeID) || {
+      id: worktreeID,
+      title: session.worktree.worktreeName,
+      summary: session.worktree,
+      activeSessions: [],
+      closedSessions: [],
+    };
+    (sessionIsActive(session) ? worktree.activeSessions : worktree.closedSessions).push(session);
+    worktrees.set(worktreeID, worktree);
+  });
+
+  const list = [...worktrees.values()].map((worktree) => {
+    worktree.activeSessions.sort(compareSessions);
+    worktree.closedSessions.sort(compareSessions);
+    return worktree;
+  }).sort(compareWorktrees);
+
+  if (hasOther) {
+    other.activeSessions.sort(compareSessions);
+    other.closedSessions.sort(compareSessions);
+    list.push(other);
+  }
+  return list;
+}
+
+// Splits a sessionList into this Mac's own sessions (grouped exactly as
+// `groupSessions` already does) plus one additional section per peer
+// server whose rows the active gateway forwarded (`session.serverId` set).
+// A pre-federation sessionList carries no serverId on any row, so the peer
+// map stays empty and the local sections come back unchanged.
+function groupSessionsByServer(sessions) {
+  const local = [];
+  const peers = new Map(); // serverId -> { serverId, serverName, sessions }
+
+  sessions.forEach((session) => {
+    if (session.serverId) {
+      const peer = peers.get(session.serverId) || {
+        serverId: session.serverId,
+        serverName: session.serverName || session.serverId,
+        sessions: [],
+      };
+      peer.sessions.push(session);
+      peers.set(session.serverId, peer);
+    } else {
+      local.push(session);
+    }
+  });
+
+  const sections = groupSessions(local);
+  if (peers.size === 0) return sections;
+
+  // `groupSessions` already sorts its own "Other" bucket (this Mac's own
+  // orphan sessions) last among local sections — peer sections, each
+  // representing an entirely different Mac, belong after ALL local content,
+  // Other included.
+  const peerSections = [...peers.values()]
+    .sort((a, b) => a.serverName.localeCompare(b.serverName, undefined, { sensitivity: "accent" }))
+    .map((peer) => ({
+      id: "server:" + peer.serverId,
+      title: peer.serverName,
+      isOther: false,
+      isPeer: true,
+      worktrees: bucketWorktrees(peer.sessions),
+    }));
+
+  return [...sections, ...peerSections];
+}
+
+globalThis.RemoteSessionOrdering = { groupSessions, groupSessionsByServer, sessionIsActive, worktreeOptionKey, createSessionRequest };
