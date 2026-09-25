@@ -520,6 +520,9 @@ struct ACPInputField: NSViewRepresentable {
             guard let storage = textView.textStorage else { return }
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
+                // Direct storage replacement below never routes through
+                // `didChangeText`, so dismiss the hover preview here.
+                tv.dismissImageChipHover()
             }
             invalidatePendingImageFileInsertions()
             restoringDraft = true
@@ -540,9 +543,18 @@ struct ACPInputField: NSViewRepresentable {
             lastSyncedDraft = draft
         }
 
+        #if DEBUG
+        /// Test seam: exposes the private restore path so tests can exercise
+        /// direct storage replacement without a full submit cycle.
+        func restoreDraftForTesting(_ draft: ACPComposerDraft, into textView: NSTextView) {
+            restore(draft, into: textView)
+        }
+        #endif
+
         private func clearVisibleDraft(in textView: NSTextView) {
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
+                tv.dismissImageChipHover()
             }
             invalidatePendingImageFileInsertions()
             restoringDraft = true
@@ -1137,6 +1149,20 @@ final class ACPNSTextView: PairedDelimiterTextView {
         return rect.insetBy(dx: 1, dy: 1)
     }
 
+    /// Hover preview size cap: the visible composer width when attached to
+    /// a window, otherwise the layout's default content width. Never a floor
+    /// — a narrow composer narrows the preview with it.
+    static func imageChipPreviewCap(in textView: ACPNSTextView) -> NSSize? {
+        let width: CGFloat
+        if textView.window != nil, textView.visibleRect.width > 0 {
+            width = textView.visibleRect.width
+        } else {
+            width = ACPChatLayout.defaultContentMaxWidth
+        }
+        let screenHeight = NSScreen.main?.frame.height ?? 900
+        return NSSize(width: width, height: screenHeight / 2)
+    }
+
     /// Identifies our hover tracking area across `updateTrackingAreas`
     /// rebuilds without touching areas other code may have added.
     private static let hoverTrackingAreaKind = "alas.acp.imageChipHover"
@@ -1176,16 +1202,40 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     private func imageChipHoverController() -> ACPImageChipHoverController {
         if let imageChipHover { return imageChipHover }
-        let controller = ACPImageChipHoverController()
+        let controller = imageChipHoverSpy ?? ACPImageChipHoverController()
         imageChipHover = controller
         return controller
     }
+
+    #if DEBUG
+    /// Test seam: substitutes a spy controller for the real one so tests
+    /// can observe dismissal without building real popovers.
+    var imageChipHoverSpy: ACPImageChipHoverController?
+    #endif
 
     /// Closes the hover popover (if showing) — called on edits, so the
     /// preview can never linger over a chip the user just changed.
     func dismissImageChipHover() {
         imageChipHover?.hide()
     }
+
+    #if DEBUG
+    /// Test seam: schedules a hover show exactly as `mouseMoved` would.
+    func scheduleImageChipHoverForTesting(range: NSRange, fileURL: URL) {
+        imageChipHoverController().scheduleShow(range: range, fileURL: fileURL, in: self)
+    }
+
+    /// Test seam: count of pending (uncancelled) show work items.
+    var pendingImageChipHoverCountForTesting: Int {
+        imageChipHover?.hasPendingShowForTesting == true ? 1 : 0
+    }
+
+    /// Test seam: routes a draft through the coordinator's private restore
+    /// path (direct `NSTextStorage` replacement, no `didChangeText`).
+    func restoreDraftForTesting(_ draft: ACPComposerDraft) {
+        coordinator?.restoreDraftForTesting(draft, into: self)
+    }
+    #endif
 
     static let maxImagesPerMessage = 10
 

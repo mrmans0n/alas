@@ -78,6 +78,17 @@ struct ACPImageChipHoverTests {
         #expect(size.height == 400)
     }
 
+    @Test("composer width cap falls back to the layout default without a window")
+    func composerWidthCapFallsBackToDefault() throws {
+        // A detached text view (no window) has no visible layout, so the
+        // cap falls back to the layout's default content width rather than
+        // flooring at some minimum.
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 80))
+        let cap = try #require(ACPNSTextView.imageChipPreviewCap(in: textView))
+        #expect(cap.width == ACPChatLayout.defaultContentMaxWidth)
+        #expect(cap.height > 0)
+    }
+
     // MARK: - Chip hit-testing
 
     private func makeTextViewWithImageChip(fileURL: URL) throws -> (ACPNSTextView, NSRange) {
@@ -160,5 +171,53 @@ struct ACPImageChipHoverTests {
         #expect(anchorRect.width > 0)
         #expect(anchorRect.height > 0)
         #expect(textView.bounds.contains(anchorRect))
+    }
+
+    // MARK: - Dismissal on direct storage replacement
+
+    @Test("restore and clearVisibleDraft close the hover preview")
+    func draftReplacementsDismissHover() throws {
+        let fileURL = try makeStubPNGFile()
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let (textView, _) = try makeTextViewWithImageChip(fileURL: fileURL)
+        let chipRange = (textView.string as NSString).range(of: "\u{FFFC}")
+        try #require(chipRange.location != NSNotFound)
+        // `restore` resolves the coordinator through the text view.
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: NSTemporaryDirectory()),
+            initialDraft: ACPComposerDraft.empty,
+            focusRequest: 0,
+            sendOnEnter: true,
+            onDraftChange: { _ in },
+            onDraftClear: {},
+            onSubmit: { _, _, _, _, _ in true }
+        )
+        coordinator.textView = textView
+        textView.coordinator = coordinator
+
+        // Simulate a displayed preview without instantiating NSPopover/NSImage
+        // machinery: an injected spy records dismissal state transitions.
+        let spy = HoverControllerSpy()
+        textView.imageChipHoverSpy = spy
+        // Schedule the pending 250ms show exactly as a real hover would.
+        textView.scheduleImageChipHoverForTesting(range: chipRange, fileURL: fileURL)
+
+        textView.restoreDraftForTesting(
+            ACPComposerDraft(segments: [.text("replaced")])
+        )
+        #expect(spy.didHide)
+        #expect(textView.pendingImageChipHoverCountForTesting == 0)
+    }
+
+    /// Records `hide()` calls so tests can assert dismissal without
+    /// constructing real popovers. Delegates to super so cancellation of
+    /// the pending show work item is exercised too.
+    @MainActor
+    private final class HoverControllerSpy: ACPImageChipHoverController {
+        private(set) var didHide = false
+        override func hide() {
+            didHide = true
+            super.hide()
+        }
     }
 }

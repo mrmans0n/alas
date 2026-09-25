@@ -8,7 +8,7 @@ import SwiftUI
 /// clicking anywhere also dismisses it. Content is the image aspect-fit into
 /// the composer's width and half the screen's height, whichever binds first.
 @MainActor
-final class ACPImageChipHoverController {
+class ACPImageChipHoverController {
     /// The chip a pending timer will show for; a struct (not a tuple) so
     /// equality comparison is synthesized.
     private struct ChipTarget: Equatable {
@@ -71,6 +71,11 @@ final class ACPImageChipHoverController {
         shownTarget = nil
     }
 
+    #if DEBUG
+    /// Test seam: true while a debounced show work item is still scheduled.
+    var hasPendingShowForTesting: Bool { showWork != nil && showWork?.isCancelled == false }
+    #endif
+
     private func cancelPendingShow() {
         showWork?.cancel()
         showWork = nil
@@ -78,30 +83,49 @@ final class ACPImageChipHoverController {
     }
 
     private func show(range: NSRange, fileURL: URL, in textView: ACPNSTextView) {
-        guard let image = ACPImageThumbnail.loadImage(from: fileURL) else { return }
         guard let anchor = textView.imageChipAnchorRect(for: range) else { return }
         let target = ChipTarget(range: range, fileURL: fileURL)
 
-        // Cap: composer width, and half the main screen's height — whichever
-        // binds first for the image's aspect ratio.
-        let composerWidth = max(200, textView.bounds.width)
-        let screenHeight = NSScreen.main?.frame.height ?? 900
-        let size = Self.fittedSize(
-            for: image.size,
-            maxWidth: composerWidth,
-            maxHeight: screenHeight / 2
-        )
+        // Cap: the visible composer width, and half the main screen's height
+        // — whichever binds first for the image's aspect ratio.
+        let cap = ACPNSTextView.imageChipPreviewCap(in: textView) ?? Self.fallbackCap
 
-        let popover = popover ?? NSPopover()
-        popover.behavior = .transient
-        popover.animates = false
-        popover.contentSize = size
-        popover.contentViewController = NSHostingController(
-            rootView: ACPImageChipHoverPreview(image: image, size: size)
-        )
-        popover.show(relativeTo: anchor, of: textView, preferredEdge: .maxY)
-        self.popover = popover
-        self.shownTarget = target
+        // Decoding a staged image (up to 20 MiB) happens off the main actor
+        // through the shared thumbnail cache; presentation stays on main.
+        let cacheKey = ACPImageThumbnail.cacheKey(for: fileURL)
+        let load: @Sendable () -> NSImage? = { [fileURL] in
+            ACPImageThumbnail.loadImage(from: fileURL)
+        }
+        Task { @MainActor [weak self, weak textView] in
+            guard let self, let textView else { return }
+            guard self.pendingTarget == nil || self.pendingTarget == target,
+                  self.shownTarget == nil || self.shownTarget == target else { return }
+            guard let image = await ACPThumbnailImageCache.shared.image(for: cacheKey, load: load)
+            else { return }
+            // The popover may have been hidden while the load was in flight.
+            guard self.pendingTarget == target || self.shownTarget == target else { return }
+            let size = Self.fittedSize(
+                for: image.size,
+                maxWidth: cap.width,
+                maxHeight: cap.height
+            )
+            let popover = self.popover ?? NSPopover()
+            popover.behavior = .transient
+            popover.animates = false
+            popover.contentSize = size
+            popover.contentViewController = NSHostingController(
+                rootView: ACPImageChipHoverPreview(image: image, size: size)
+            )
+            popover.show(relativeTo: anchor, of: textView, preferredEdge: .maxY)
+            self.popover = popover
+            self.shownTarget = target
+        }
+    }
+
+    static let fallbackPreviewCapWidth: CGFloat = 720
+
+    static var fallbackCap: NSSize {
+        NSSize(width: fallbackPreviewCapWidth, height: fallbackPreviewCapWidth)
     }
 }
 
