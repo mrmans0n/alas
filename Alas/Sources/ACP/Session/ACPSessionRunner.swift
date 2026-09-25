@@ -204,6 +204,14 @@ final class ACPSessionRunner {
     private var stopped = false
     private var pendingCompletedOutputBoundary: (updateCount: Int, successfulTurn: NextPromptCompletedTurn?)?
     private var turnPublicationGeneration = 0
+#if DEBUG
+    var onPromptResponseProcessedForTesting: ((Int) -> Void)?
+    private var turnPublicationTasksForTesting: [Int: Task<Void, Never>] = [:]
+
+    func waitForTurnPublicationForTesting(promptID: Int) async {
+        await turnPublicationTasksForTesting[promptID]?.value
+    }
+#endif
     private var pendingStreamingPersistIndices: Set<Int> = []
     /// Revisions distinguish a new streamed chunk from the payload currently
     /// being written. A successful write may only clear the revision it saw.
@@ -3140,6 +3148,9 @@ extension ACPSessionRunner {
                     if !hasNewerActivePrompt {
                         onPromptFinished?(true)
                     }
+#if DEBUG
+                    self.onPromptResponseProcessedForTesting?(promptID)
+#endif
                 }
             } catch {
                 await MainActor.run {
@@ -3192,6 +3203,9 @@ extension ACPSessionRunner {
                     if !hasNewerActivePrompt {
                         onPromptFinished?(wasCancelled)
                     }
+#if DEBUG
+                    self.onPromptResponseProcessedForTesting?(promptID)
+#endif
                 }
             }
         }
@@ -3266,6 +3280,9 @@ extension ACPSessionRunner {
                     // ONLY thing that clears the "Restoring…" spinner — skipping
                     // it on supersession strands the spinner forever.
                     onCompleted?(isActivePrompt && !wasCancelled)
+#if DEBUG
+                    self.onPromptResponseProcessedForTesting?(promptID)
+#endif
                 }
             } catch {
                 await MainActor.run {
@@ -3281,6 +3298,9 @@ extension ACPSessionRunner {
                     // See the success path above: the recovery status must
                     // resolve regardless of supersession or the spinner strands.
                     onCompleted?(false)
+#if DEBUG
+                    self.onPromptResponseProcessedForTesting?(promptID)
+#endif
                 }
             }
         }
@@ -3378,7 +3398,7 @@ extension ACPSessionRunner {
               !nativeForkBarrierActive
         else { return }
         let publicationGeneration = turnPublicationGeneration
-        Task { @MainActor [weak self] in
+        let publicationTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.flushPersistence()
             guard !self.stopped,
@@ -3403,6 +3423,9 @@ extension ACPSessionRunner {
                 transcriptRevision: self.session.transcript.messagesGeneration
             ))
         }
+#if DEBUG
+        turnPublicationTasksForTesting[turn.promptID] = publicationTask
+#endif
     }
 
     /// Append a system notice to the session AND persist it. Use this

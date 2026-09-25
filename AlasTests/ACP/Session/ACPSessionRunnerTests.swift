@@ -254,6 +254,10 @@ struct ACPSessionRunnerTests {
         var turns: [NextPromptCompletedTurn] = []
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
         runner.session.agentState = .ready
+        let recoveryProcessed = AsyncGate()
+        runner.onPromptResponseProcessedForTesting = { promptID in
+            if promptID == 1 { Task { await recoveryProcessed.open() } }
+        }
         runner.send(text: "fails", attachments: [])
         try await waitUntil { runner.session.lastError != nil }
         #expect(turns.isEmpty)
@@ -262,7 +266,9 @@ struct ACPSessionRunnerTests {
         var recoveryDelivered: Bool?
         let accepted = runner.sendRecoveryContext("restore", onCompleted: { recoveryDelivered = $0 })
         #expect(accepted)
-        try await waitUntil { recoveryDelivered == true }
+        await recoveryProcessed.wait()
+        #expect(recoveryDelivered == true)
+        await runner.waitForTurnPublicationForTesting(promptID: 1)
         #expect(turns.isEmpty)
 
         runner.send(text: "ordinary", attachments: [])
@@ -287,10 +293,16 @@ struct ACPSessionRunnerTests {
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
         runner.session.agentState = .ready
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let automatedProcessed = AsyncGate()
+        runner.onPromptResponseProcessedForTesting = { promptID in
+            if promptID == 0 { Task { await automatedProcessed.open() } }
+        }
         var automatedFinished: Bool?
         runner.sendNow(blocks: [.text("automation")], queuedItemId: nil,
             normalUserTurn: false, onPromptFinished: { automatedFinished = $0 })
-        try await waitUntil { automatedFinished == true }
+        await automatedProcessed.wait()
+        #expect(automatedFinished == true)
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
         #expect(turns.isEmpty)
         runner.send(text: "ordinary", attachments: [])
         try await waitUntil { turns.count == 1 }
@@ -303,6 +315,10 @@ struct ACPSessionRunnerTests {
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
         runner.session.agentState = .ready
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let delegatedProcessed = AsyncGate()
+        runner.onPromptResponseProcessedForTesting = { promptID in
+            if promptID == 0 { Task { await delegatedProcessed.open() } }
+        }
         var delegatedFinished: Bool?
         runner.sendNow(
             blocks: [.text("delegated")],
@@ -310,7 +326,9 @@ struct ACPSessionRunnerTests {
             delegatedSource: ACPDelegatedPromptSource(sessionId: "parent", messageId: "message"),
             onPromptFinished: { delegatedFinished = $0 }
         )
-        try await waitUntil { delegatedFinished == true }
+        await delegatedProcessed.wait()
+        #expect(delegatedFinished == true)
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
         #expect(turns.isEmpty)
         runner.send(text: "ordinary", attachments: [])
         try await waitUntil { turns.count == 1 }
@@ -615,6 +633,10 @@ struct ACPSessionRunnerTests {
         var turns: [NextPromptCompletedTurn] = []
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
         runner.session.agentState = .ready
+        let cancelledProcessed = AsyncGate()
+        runner.onPromptResponseProcessedForTesting = { promptID in
+            if promptID == 0 { Task { await cancelledProcessed.open() } }
+        }
         let promptStarted = AsyncGate()
         let finishPrompt = AsyncGate()
         mock.scriptAsync(method: "session/prompt") { _ in
@@ -630,10 +652,8 @@ struct ACPSessionRunnerTests {
         await promptStarted.wait()
         await runner.userCancel()
         await finishPrompt.open()
-
-        for _ in 0..<20 where completion == nil {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await cancelledProcessed.wait()
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
         #expect(completion == true)
         #expect(runner.session.lastError == nil)
         #expect(runner.session.transcript.streamingState == .idle)
@@ -709,6 +729,13 @@ struct ACPSessionRunnerTests {
     func cancelledPromptSuccessDoesNotCompleteOverNewerPrompt() async throws {
         var turns: [NextPromptCompletedTurn] = []
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.session.agentState = .ready
+        let staleProcessed = AsyncGate()
+        let successorProcessed = AsyncGate()
+        runner.onPromptResponseProcessedForTesting = { promptID in
+            if promptID == 0 { Task { await staleProcessed.open() } }
+            if promptID == 1 { Task { await successorProcessed.open() } }
+        }
         let promptCounter = AsyncCounter()
         let firstStarted = AsyncGate()
         let finishFirst = AsyncGate()
@@ -739,21 +766,19 @@ struct ACPSessionRunnerTests {
         }
         await secondStarted.wait()
         await finishFirst.open()
-
-        for _ in 0..<20 where runner.session.transcript.streamingState != .sending {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await staleProcessed.wait()
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
         #expect(firstCompletion == nil)
         #expect(secondCompletion == nil)
         #expect(runner.session.transcript.streamingState == .sending)
         #expect(turns.isEmpty)
 
         await finishSecond.open()
-        for _ in 0..<20 where secondCompletion == nil {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await successorProcessed.wait()
+        await runner.waitForTurnPublicationForTesting(promptID: 1)
         #expect(secondCompletion == true)
         #expect(runner.session.transcript.streamingState == .idle)
+        #expect(turns.map(\.promptID) == [1])
     }
 
     @Test("emitted session/update lands on the session and persists a message row")
