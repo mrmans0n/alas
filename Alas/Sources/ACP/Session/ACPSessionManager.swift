@@ -219,11 +219,12 @@ final class ACPSessionManager: ObservableObject {
     private let onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)?
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
     private let onQueueChanged: ((ACPSession.ID, Bool) -> Void)?
-    /// Consulted immediately before a writer lease is claimed. Returns
-    /// `false` when scheduled worktree cleanup holds the deletion lock — the
-    /// attach must not become a writer for a worktree that is about to be
-    /// renamed away.
-    private let writerAdmissionProbe: (@Sendable () async -> Bool)?
+    /// Consulted immediately before a writer lease is claimed. Acquires and
+    /// returns the per-lineage deletion lease (held until released) so the
+    /// subsequent SQLite claim is serialized against scheduled cleanup's
+    /// final lease checks and staging rename; `nil` means admission was
+    /// refused because cleanup currently holds the lock.
+    private let writerAdmissionProbe: (@Sendable () async -> CheckpointDeletionLease?)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
@@ -1545,7 +1546,7 @@ final class ACPSessionManager: ObservableObject {
          onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)? = nil,
          onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
          onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
-         writerAdmissionProbe: (@Sendable () async -> Bool)? = nil,
+         writerAdmissionProbe: (@Sendable () async -> CheckpointDeletionLease?)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          delegatedMessageNotifier: ACPChangeNotifier? = nil,
@@ -3835,9 +3836,9 @@ extension ACPSessionManager {
         // Scheduled cleanup holds the deletion lock across its final lease
         // checks and the staging rename; claiming a writer lease now would
         // register a writer for a worktree that is about to be renamed away.
-        if let writerAdmissionProbe, !(await writerAdmissionProbe()) {
-            return false
-        }
+        let admissionLease = await writerAdmissionProbe?()
+        guard admissionLease != nil else { return false }
+        defer { _ = admissionLease }
         let now = Int64(Date().timeIntervalSince1970)
         let requestedToken = ownedLeaseTokens[sessionId] ?? UUID().uuidString
         do {
@@ -3876,6 +3877,14 @@ extension ACPSessionManager {
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
             return false
         }
+        // Scheduled cleanup holds the deletion lock across its final lease
+        // checks and the staging rename. The probe acquires the deletion
+        // lease and it is released only after the SQLite claim has landed —
+        // so a cleanup racing after the probe observes the new lease row
+        // and refuses instead of renaming the worktree underneath it.
+        let admissionLease = await writerAdmissionProbe?()
+        guard admissionLease != nil else { return false }
+        defer { _ = admissionLease }
         let now = Int64(Date().timeIntervalSince1970)
         let requestedToken = attempt.leaseToken ?? UUID().uuidString
         attempt.leaseToken = requestedToken

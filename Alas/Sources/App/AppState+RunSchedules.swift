@@ -2071,6 +2071,15 @@ extension AppState {
             if let expectedFingerprint, expectedFingerprint != fingerprint {
                 return .refused("Git content changed while cleanup was being prepared.")
             }
+            // Ignored paths never show up in the preflight's clean check or
+            // the fingerprint's untracked inventory, but a non-force
+            // `git worktree remove` deletes them. Unattended cleanup must
+            // not destroy an ignored artifact's only copy.
+            guard try await !WorktreeService.worktreeHasIgnoredContent(
+                worktreePath: worktree.path
+            ) else {
+                return .refused("The worktree holds ignored files that cleanup would delete.")
+            }
             guard let baseCommit = report.baseCommit,
                   try await WorktreeService.scheduledCleanupHistoryIsSafe(
                       baseCommit: baseCommit,

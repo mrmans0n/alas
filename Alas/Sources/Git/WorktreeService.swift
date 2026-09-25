@@ -1457,6 +1457,22 @@ struct WorktreeService {
         return WorktreeDeletePreflight(reasons: reasons)
     }
 
+    /// `git status --untracked-files=all` and the fingerprint's
+    /// `ls-files --others --exclude-standard` both omit ignored paths, but a
+    /// non-force `git worktree remove` still deletes them. Scheduled cleanup
+    /// must therefore refuse whenever the checkout holds ANY ignored
+    /// content — an ignored artifact (build output, `.env`, logs) can hold
+    /// its only copy, and unattended deletion must not destroy it.
+    static func worktreeHasIgnoredContent(worktreePath: URL) async throws -> Bool {
+        let result = try await Process.gitData(
+            ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
+        let listing = String(decoding: result.stdout, as: UTF8.self)
+        return !listing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// A scheduled run may discard its checkout only when its original base is
     /// an ancestor of the current tip and the tip is remotely reachable. Every
     /// initialized submodule commit must be remotely reachable. Every local

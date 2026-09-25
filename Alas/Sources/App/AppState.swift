@@ -12096,12 +12096,16 @@ final class AppState {
                 )
             },
             writerAdmissionProbe: { [weak self] in
-                guard let self else { return true }
+                guard let self else { return nil }
                 return await MainActor.run {
                     guard let lineageID = self.worktree(withId: worktree.id)?.lineageID else {
-                        return true
+                        return CheckpointDeletionLease(handles: [], instanceID: self.instanceId, sessionID: worktree.id)
                     }
-                    return self.checkpointWriterLeases.admissionIsAllowed(lineageIDs: [lineageID])
+                    return self.checkpointWriterLeases.holdDeletionLock(
+                        lineageIDs: [lineageID],
+                        instanceID: self.instanceId,
+                        sessionID: worktree.id
+                    )
                 }
             },
             onCheckpointCapture: { [weak self] prompt, hasAttachments in
