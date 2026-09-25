@@ -553,6 +553,28 @@ struct NativePeerSessionsTests {
         ) == ["message": .string("")])
     }
 
+    @Test func requiredArrayCanSubmitAnEmptySelectionWhenTheSchemaHasNoMinItems() {
+        let scopes = elicitationField("scopes", type: "array", options: [
+            .init(value: "read", title: "Read", description: nil),
+            .init(value: "write", title: "Write", description: nil),
+        ])
+
+        #expect(NativePeerElicitationForm.canSubmit(
+            fields: [scopes], values: [:], selectedOptions: [:]
+        ))
+        #expect(NativePeerElicitationForm.submittedContent(
+            fields: [scopes], values: [:], selectedOptions: [:]
+        ) == ["scopes": .strings([])])
+
+        let minOne = elicitationField("scopes", type: "array", minItems: 1, options: [
+            .init(value: "read", title: "Read", description: nil),
+            .init(value: "write", title: "Write", description: nil),
+        ])
+        #expect(!NativePeerElicitationForm.canSubmit(
+            fields: [minOne], values: [:], selectedOptions: [:]
+        ))
+    }
+
     @Test func booleanElicitationAcceptsEitherExplicitChoice() {
         let enabled = elicitationField("enabled", type: "boolean")
 

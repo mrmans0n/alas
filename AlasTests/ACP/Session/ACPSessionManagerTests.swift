@@ -542,6 +542,13 @@ struct ACPSessionManagerTests {
         let session = mgr.createSession(id: "session", agentId: "claude")
         session.enqueueScheduled(blocks: [.text("queued")], scheduledAt: Date().addingTimeInterval(-1))
         session.markQueueHeadSending()
+        // Dispatch provenance is what separates "in flight when the app died,
+        // outcome unknown but the request did cross the handoff" from a
+        // legacy row with no provenance at all. The latter is held as
+        // delivery-uncertain on restore instead of being resent; only a
+        // provenance-carrying row normalizes back to `.pending` and flushes.
+        let headID = try #require(session.queue.first?.id)
+        #expect(session.markQueueHeadDispatched(id: headID, brokerGeneration: ACPBrokerGeneration(rawValue: 1)))
 
         await mgr.attach(to: session.id, freshlyCreated: true)
         for _ in 0 ..< 20 where !session.queue.isEmpty {

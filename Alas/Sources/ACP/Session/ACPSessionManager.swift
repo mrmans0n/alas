@@ -5347,6 +5347,18 @@ extension ACPSessionManager {
                     )
                 )
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                    // Teardown fenced this attempt out while `session/new` was
+                    // in flight (dispose closes the session and drops the
+                    // attempt). The agent still created the remote session, so
+                    // this late result is the only handle on it — close it
+                    // here; no later guard will run.
+                    if disposingAttachments.contains(sessionId) || isDisposed {
+                        try? await closeRemoteSession(
+                            id: result.sessionId,
+                            using: connection,
+                            sessionCapabilities: initialized.sessionCapabilities
+                        )
+                    }
                     await connection.shutdown()
                     return
                 }
