@@ -2161,16 +2161,14 @@ extension AppState {
             // the scheduled session) had its writer lease released before
             // its zmx kill finished dispatching. A slow or failed kill
             // leaves a shell invisible to the session and lease checks
-            // above, so cleanup must positively await the pending kills
-            // before trusting this window's absence of writers.
-            let recentCloses = terminal.recentlyClosedTerminalSessionIDs(within: 15)
-            if !recentCloses.isEmpty {
-                await terminal.awaitRecentlyClosedTerminalKills(timeout: 5)
-                // The kill tasks are best-effort; if the kill failed, the
-                // shell is still alive but undetectable. A close this recent
-                // is itself grounds to wait a round: refuse and let the next
-                // poll re-verify with a settled state.
-                return .refused("A terminal closed recently; cleanup waits for its termination to settle.")
+            // above, so cleanup must positively await the pending kills and
+            // only proceed when every recent termination was verified.
+            let unverifiedKills = await terminal.awaitAndVerifyRecentTerminalKills(
+                within: 15,
+                timeout: 5
+            )
+            if !unverifiedKills.isEmpty {
+                return .refused("A recently closed terminal did not confirm its termination.")
             }
             return .allowed(contentFingerprint: fingerprint)
         } catch {

@@ -551,12 +551,15 @@ private struct ScheduleCard: View {
         let ids = Array(Set(state.runScheduler.firings(for: schedule.id).flatMap(\.reportIDs))).sorted()
         // A thrown lookup (e.g. the SQLite write lock held by another
         // process) is not proof the report is gone. `.task(id:)` re-runs
-        // only when the token changes, so retry here with a short backoff
-        // instead of leaving stale or generic links displayed indefinitely.
-        for attempt in 0..<3 {
+        // only when the token changes, so retry here until it succeeds —
+        // bounded only by the task's cancellation — instead of leaving
+        // stale or generic links displayed indefinitely.
+        var attempt = 0
+        while !Task.isCancelled {
             if attempt > 0 {
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: .seconds(min(1 << min(attempt - 1, 4), 16)))
             }
+            attempt += 1
             var loaded: [String: ScheduledAgentReport] = [:]
             var sawReadError = false
             for id in ids {

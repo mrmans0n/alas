@@ -473,26 +473,52 @@ final class TerminalService {
         return (invocation.executable, invocation.args)
     }
 
-    /// Termination dispatched but possibly still in flight, keyed by the
-    /// closed session's id. `recentlyClosedTerminalSessionIDs(within:)`
-    /// surfaces these so destructive work can positively await (or refuse
-    /// around) the pending kill instead of trusting the released lease.
+    /// Termination dispatched but not yet positively observed, keyed by the
+    /// closed session's id. `closeSession` releases the writer lease before
+    /// its asynchronous kill lands, so a failed or hung kill leaves a shell
+    /// that no session or lease check can see: scheduled cleanup consults
+    /// `pendingTerminalKillSessionIDs()` and refuses while any entry is
+    /// unresolved (killed-ok entries are removed; failures stay until the
+    /// caller verifies the process is actually gone).
     @ObservationIgnored
-    private var recentlyClosedSessionKillDeadlines: [String: Date] = [:]
+    private var pendingKillOutcomes: [String: PendingKillOutcome] = [:]
 
-    /// Session ids whose `closeSession` dispatched a kill less than `window`
-    /// ago. Their termination has not been positively observed, so cleanup
-    /// must wait for the tracked kill before trusting "no writers".
-    func recentlyClosedTerminalSessionIDs(within window: TimeInterval, now: Date = Date()) -> [String] {
-        recentlyClosedSessionKillDeadlines
-            .filter { now.timeIntervalSince($0.value) < window }
+    private struct PendingKillOutcome {
+        var startedAt: Date
+        var succeeded: Bool?
+    }
+
+    /// Session ids whose termination has NOT been positively verified.
+    /// `succeeded == nil` means the kill is still in flight.
+    func pendingKillSessionIDs(now: Date = Date()) -> [String] {
+        pendingKillOutcomes
+            .filter { !($0.value.succeeded == true) }
             .map(\.key)
     }
 
-    /// Blocks until every currently tracked recent-close kill has drained
-    /// (bounded by `timeout`).
-    func awaitRecentlyClosedTerminalKills(timeout: TimeInterval) async {
+    /// Kills dispatched within `window` (still in flight or recently
+    /// resolved) — used by cleanup to decide whether it must wait.
+    func recentlyClosedTerminalSessionIDs(within window: TimeInterval, now: Date = Date()) -> [String] {
+        pendingKillOutcomes
+            .filter { now.timeIntervalSince($0.value.startedAt) < window }
+            .map(\.key)
+    }
+
+    /// Awaits in-flight kills for recently closed sessions, then returns the
+    /// ids whose termination was NOT confirmed (kill task failed or the wait
+    /// timed out). Cleanup retains the worktree unless this set is empty.
+    func awaitAndVerifyRecentTerminalKills(
+        within window: TimeInterval,
+        timeout: TimeInterval,
+        now: Date = Date()
+    ) async -> Set<String> {
+        let recent = recentlyClosedTerminalSessionIDs(within: window, now: now)
+        guard !recent.isEmpty else { return [] }
         await drainPendingKills(timeout: timeout)
+        // Best-effort kills only: anything still tracked here did not
+        // positively terminate, so the caller must retain.
+        let unresolved = Set(pendingKillSessionIDs())
+        return unresolved.intersection(recent)
     }
 
     func closeSession(
@@ -514,13 +540,26 @@ final class TerminalService {
         let killDispatched: Bool
         if let host = existing?.remoteHost, let existingName = existing?.zmxSessionName {
             killDispatched = true
-            dispatchTrackedKill { await Self.killRemoteSession(host: host, name: existingName) }
+            pendingKillOutcomes[id] = .init(startedAt: Date(), succeeded: nil)
+            dispatchTrackedKill {
+                await Self.killRemoteSession(host: host, name: existingName)
+                await MainActor.run { [weak self] in
+                    self?.pendingKillOutcomes[id]?.succeeded = true
+                }
+            }
         } else if let existingName = existing?.zmxSessionName {
             killDispatched = true
+            pendingKillOutcomes[id] = .init(startedAt: Date(), succeeded: nil)
             let client = zmxClient
-            dispatchTrackedKill { client.killSession(name: existingName) }
+            dispatchTrackedKill {
+                let killed = client.killSessionResult(name: existingName)
+                await MainActor.run { [weak self] in
+                    self?.pendingKillOutcomes[id]?.succeeded = killed
+                }
+            }
         } else if let worktreeId = explicitWorktreeId ?? existing?.worktreeId {
             killDispatched = true
+            pendingKillOutcomes[id] = .init(startedAt: Date(), succeeded: nil)
             let client = zmxClient
             let remoteHost = Self.remoteHostForCleanup(worktreeId: worktreeId, projectPath: projectPath)
             dispatchTrackedKill {
@@ -530,21 +569,25 @@ final class TerminalService {
                     leafId: id,
                     zmxClient: client
                 )
+                var allKilled = true
                 for sessionName in sessionNames {
                     if let remoteHost {
                         await Self.killRemoteSession(host: remoteHost, name: sessionName)
                     } else {
-                        client.killSession(name: sessionName)
+                        allKilled = client.killSessionResult(name: sessionName) && allKilled
                     }
+                }
+                await MainActor.run { [weak self] in
+                    self?.pendingKillOutcomes[id]?.succeeded = allKilled
                 }
             }
         } else {
             killDispatched = false
         }
         if killDispatched {
-            recentlyClosedSessionKillDeadlines[id] = Date()
+            pendingKillOutcomes[id] = pendingKillOutcomes[id] ?? .init(startedAt: Date(), succeeded: nil)
         } else {
-            recentlyClosedSessionKillDeadlines.removeValue(forKey: id)
+            pendingKillOutcomes.removeValue(forKey: id)
         }
         socketReleaseHandler?(id)
         cleanupRcfile(sessionId: id)

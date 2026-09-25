@@ -1221,6 +1221,56 @@ struct WorktreeService {
                         )
                     }
 
+                    // `git ls-files` does not recurse into submodules: a
+                    // late ignored artifact inside an initialized submodule
+                    // would be invisible to the check above. Each staged
+                    // submodule Git directory is already resolved for the
+                    // history audit below; run the same listing against
+                    // each with the staged work tree.
+                    let submodulePaths = try await submodulePathsFromGitmodules(
+                        ticket.stagedPath,
+                        usesRemoteHostRegistry: false
+                    )
+                    for relativePath in submodulePaths {
+                        let submodulePath = ticket.stagedPath.appendingPathComponent(relativePath)
+                        guard FileManager.default.fileExists(
+                            atPath: submodulePath.appendingPathComponent(".git").path
+                        ) else { continue }
+                        guard let submoduleGitDirectory = Self.submoduleGitDirectory(
+                            for: submodulePath,
+                            relativePath: relativePath,
+                            parentGitDirectory: expectedRegistration.gitDirectory
+                        ) else {
+                            try failAfterRollingBack(
+                                "Could not verify the staged submodule's ignored content."
+                            )
+                        }
+                        let submoduleIgnored = try await Process.gitData(
+                            [
+                                "ls-files", "--others", "--ignored", "--exclude-standard",
+                                "--git-dir", submoduleGitDirectory.path,
+                                "--work-tree", submodulePath.path,
+                            ],
+                            cwd: submodulePath
+                        )
+                        guard submoduleIgnored.exitCode == 0 else {
+                            try failAfterRollingBack(
+                                submoduleIgnored.stderr.isEmpty
+                                    ? "Could not verify the staged submodule's ignored content."
+                                    : submoduleIgnored.stderr
+                            )
+                        }
+                        let submoduleIgnoredListing = String(decoding: submoduleIgnored.stdout, as: UTF8.self)
+                        guard submoduleIgnoredListing
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .isEmpty
+                        else {
+                            try failAfterRollingBack(
+                                "The staged submodule holds ignored files that cleanup would delete."
+                            )
+                        }
+                    }
+
                     let stored = try Self.stagedSubmoduleGitDirectories(
                         worktreePath: ticket.stagedPath,
                         worktreeGitDirectory: expectedRegistration.gitDirectory
