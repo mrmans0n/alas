@@ -287,4 +287,66 @@ struct ACPOrchestrationStoreTests {
 
         #expect(try store.pendingMessages(targetSessionId: "parent") == [])
     }
+
+    @Test("migrates a v1 database to v2 and decodes old messages as prompts")
+    func migratesV1ToV2() throws {
+        let path = temporaryPath()
+        do {
+            let db = try SQLiteDatabase(path: path, busyTimeoutMilliseconds: 5_000)
+            try db.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+            try db.exec("INSERT INTO schema_version (version) VALUES (1)")
+            try db.exec("""
+            CREATE TABLE delegations (
+                child_session_id TEXT PRIMARY KEY, parent_session_id TEXT NOT NULL,
+                project_id TEXT NOT NULL, parent_worktree_id TEXT NOT NULL,
+                child_worktree_id TEXT, agent_id TEXT NOT NULL, worktree_request BLOB NOT NULL,
+                pending_initial_prompt TEXT, phase TEXT NOT NULL, failure_message TEXT,
+                created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+            )
+            """)
+            try db.exec("""
+            CREATE TABLE delegated_messages (
+                id TEXT PRIMARY KEY, source_session_id TEXT NOT NULL,
+                target_session_id TEXT NOT NULL, prompt TEXT NOT NULL,
+                created_at INTEGER NOT NULL, claim_instance_id TEXT,
+                claim_token TEXT, claim_expires_at INTEGER
+            )
+            """)
+            try db.exec("""
+            INSERT INTO delegated_messages (id, source_session_id, target_session_id, prompt, created_at)
+            VALUES ('m1', 'child', 'parent', 'hello', 5)
+            """)
+        }
+
+        let store = try ACPOrchestrationStore(path: path)
+        #expect(try store.currentSchemaVersion() == 2)
+        let pending = try store.pendingMessages(targetSessionId: "parent")
+        #expect(pending.count == 1)
+        #expect(pending.first?.kind == .prompt)
+        #expect(pending.first?.prompt == "hello")
+    }
+
+    @Test("round-trips message kind")
+    func roundTripsMessageKind() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        try store.enqueue(.init(
+            id: "n1", sourceSessionId: "child", targetSessionId: "parent",
+            prompt: "Delegated session child (codex) finished its turn.", createdAt: 7, kind: .notice
+        ))
+        try store.enqueue(.init(
+            id: "p1", sourceSessionId: "child", targetSessionId: "parent",
+            prompt: "wake", createdAt: 8
+        ))
+        let pending = try store.pendingMessages(targetSessionId: "parent")
+        #expect(pending.map(\.kind) == [.notice, .prompt])
+    }
+
+    @Test("records and reads last parent report time")
+    func marksParentReport() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        try store.insert(newRecord())
+        #expect(try store.delegation(childSessionId: "child")?.lastParentReportAt == nil)
+        try store.markParentReport(childSessionId: "child", at: 640)
+        #expect(try store.delegation(childSessionId: "child")?.lastParentReportAt == 640)
+    }
 }

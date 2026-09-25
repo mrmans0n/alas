@@ -77,6 +77,10 @@ actor ACPOrchestrationPersistence {
         try openedStore().clearPendingInitialPrompt(childSessionId: childSessionId, updatedAt: updatedAt)
     }
 
+    func markParentReport(childSessionId: String, at reportedAt: Int64) throws {
+        try openedStore().markParentReport(childSessionId: childSessionId, at: reportedAt)
+    }
+
     func enqueue(_ message: ACPDelegatedMessage) throws {
         try openedStore().enqueue(message)
     }
