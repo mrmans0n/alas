@@ -180,6 +180,32 @@ struct NextPromptInferenceTests {
         #expect(fixture.canLockExclusively())
     }
 
+    @Test func callerCancellationAfterCompletionReleasesLeaseBeforeReturning() async throws {
+        let fixture = try LeaseFixture()
+        let completed = Mutex(false)
+        let clock = NextPromptInference.Clock(now: {
+            if CompletionCancellation.isCaller && completed.withLock({ $0 }) {
+                // The caller has joined evaluation and is about to retain it for idle reuse.
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+            return .now
+        })
+        let inference = NextPromptInference(acquireLease: { try fixture.acquire() }, load: { _ in
+            return { _ in
+                completed.withLock { $0 = true }
+                return #"{"suggestion":"Completed candidate."}"#
+            }
+        }, clock: clock)
+        try await Task {
+            try await CompletionCancellation.$isCaller.withValue(true) {
+                let result = try await inference.generate(request)
+                #expect(result == nil)
+                #expect(fixture.canLockExclusively())
+            }
+        }.value
+        await inference.cancelAndUnload()
+    }
+
     @Test func containerIsReleasedBeforeLeaseOnUnloadAndOwnerDeinit() async throws {
         let fixture = try LeaseFixture()
         let releasedUnderLease = Mutex<[Bool]>([])
@@ -304,4 +330,8 @@ private final class ContainerLifetime: Sendable {
     let onRelease: @Sendable () -> Void
     init(_ onRelease: @escaping @Sendable () -> Void) { self.onRelease = onRelease }
     deinit { onRelease() }
+}
+
+private enum CompletionCancellation {
+    @TaskLocal static var isCaller = false
 }

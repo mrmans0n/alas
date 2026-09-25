@@ -116,7 +116,11 @@ actor NextPromptInference: NextPromptGenerating {
         deadlineTask = nil
         operation = nil
         if evaluation != nil { scheduleIdleUnload(id) }
-        return Task.isCancelled ? nil : result
+        if Task.isCancelled {
+            await stop(retry: false)
+            return nil
+        }
+        return result
     }
 
     private func run(_ request: NextPromptRequest, id: UInt64, deadline: ContinuousClock.Instant) async -> String? {
