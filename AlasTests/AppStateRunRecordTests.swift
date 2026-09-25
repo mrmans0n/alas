@@ -1112,8 +1112,19 @@ struct AppStateRunRecordTests {
         }
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
-
+        // The launch hops through several main-actor turns before
+        // `markRunning` fires; a fixed sleep races that transition on a
+        // loaded runner. Wait for the precondition this test actually
+        // needs — the run is up — instead of guessing a duration.
+        var budget = 100
+        while runRecord(fixture)?.status != .running {
+            budget -= 1
+            guard budget > 0 else {
+                Issue.record("run never reached .running; last status \(String(describing: runRecord(fixture)?.status))")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
         fixture.state.config.rightPaneVisible = false
         fixture.state.rightPaneStore.deactivate()
 
