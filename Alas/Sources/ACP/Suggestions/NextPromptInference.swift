@@ -263,7 +263,7 @@ actor NextPromptInference: NextPromptRuntime {
     }
 
     nonisolated static func isSupported() -> Bool {
-        #if DEBUG && arch(arm64)
+        #if arch(arm64)
         return MTLCreateSystemDefaultDevice()?.supportsFamily(.apple7) == true
         #else
         return false
