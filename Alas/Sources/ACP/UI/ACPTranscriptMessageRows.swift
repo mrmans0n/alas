@@ -8,6 +8,7 @@ struct UserMessageRow: View {
     let isDelegated: Bool
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
+    let session: ACPSession
     @Environment(\.theme) private var theme
     var body: some View {
         HStack {
@@ -45,9 +46,11 @@ struct UserMessageRow: View {
                         }
                     }
                 }
-                ACPMarkdownText(
-                    raw: ACPUserMessageImageMarkers.displayText(text: text, attachments: attachments),
-                    typography: typography
+                ACPUserMessageText(
+                    text: text,
+                    attachments: attachments,
+                    typography: typography,
+                    session: session
                 )
                     .padding(.vertical, 9)
                     .padding(.horizontal, 13)

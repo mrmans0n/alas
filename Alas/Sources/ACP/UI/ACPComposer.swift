@@ -149,6 +149,9 @@ struct ACPInputField: NSViewRepresentable {
             context.coordinator.syncPersistedDraft(composer.draft, into: tv)
             if suggestionsChanged {
                 tv.reconcileSlashPanel()
+                // A draft restored before the agent listed its commands
+                // gets its pill once the list arrives.
+                tv.pillLeadingCommandIfNeeded()
             }
             tv.nextPromptOffer = nextPromptOffer
             if tv.nextPromptGhostText == nil, nextPromptOffer != nil { tv.invalidateNextPromptSuggestion() }
@@ -570,6 +573,7 @@ struct ACPInputField: NSViewRepresentable {
             invalidatePendingImageFileInsertions()
             restoringDraft = true
             storage.setAttributedString(Self.attributedString(from: draft, typography: typography))
+            ACPLeadingCommand.chipify(storage, suggestions: promptSuggestions, font: typography.appKitFont())
             // `restoringDraft` short-circuits `textDidChange`, where the fence
             // cache is normally refreshed, so refresh it here or it keeps
             // describing the document this one replaced.
@@ -651,7 +655,7 @@ struct ACPInputField: NSViewRepresentable {
             // walk entirely. This is the common case while typing.
             var hasChip = false
             attributed.enumerateAttributes(in: full) { keys, _, stop in
-                if keys[.attachmentURI] != nil || keys[.imageAttachmentURI] != nil {
+                if keys.isComposerChip {
                     hasChip = true
                     stop.pointee = true
                 }
@@ -662,8 +666,20 @@ struct ACPInputField: NSViewRepresentable {
             }
 
             var segments: [ACPComposerDraft.Segment] = []
+            // A command chip serializes to its `/command` text, merged with
+            // neighbouring text so the draft matches its plain-text form.
+            func appendText(_ text: String) {
+                guard !text.isEmpty else { return }
+                if case .text(let previous) = segments.last {
+                    segments[segments.count - 1] = .text(previous + text)
+                } else {
+                    segments.append(.text(text))
+                }
+            }
             attributed.enumerateAttributes(in: full) { keys, range, _ in
-                if let uri = keys[.imageAttachmentURI] as? String {
+                if let command = keys[.commandChipName] as? String {
+                    appendText(command)
+                } else if let uri = keys[.imageAttachmentURI] as? String {
                     let mime = (keys[.imageAttachmentMime] as? String) ?? "image/png"
                     segments.append(.image(uri: uri, mimeType: mime))
                 } else if let uri = keys[.attachmentURI] as? String {
@@ -676,8 +692,7 @@ struct ACPInputField: NSViewRepresentable {
                         segments.append(.mention(displayName: displayName, uri: uri))
                     }
                 } else {
-                    let text = attributed.attributedSubstring(from: range).string
-                    if !text.isEmpty { segments.append(.text(text)) }
+                    appendText(attributed.attributedSubstring(from: range).string)
                 }
             }
             return ACPComposerDraft(segments: segments)
@@ -734,7 +749,9 @@ struct ACPInputField: NSViewRepresentable {
             var atts: [ACPMessage.Attachment] = []
             let full = NSRange(location: 0, length: attributed.length)
             attributed.enumerateAttributes(in: full) { keys, range, _ in
-                if let uri = keys[.imageAttachmentURI] as? String {
+                if let command = keys[.commandChipName] as? String {
+                    text += command
+                } else if let uri = keys[.imageAttachmentURI] as? String {
                     let mime = (keys[.imageAttachmentMime] as? String) ?? "image/png"
                     let name = URL(string: uri)?.lastPathComponent
                     atts.append(.init(uri: uri, name: name, mimeType: mime))
@@ -755,6 +772,14 @@ struct ACPInputField: NSViewRepresentable {
             }
             return (text, atts)
         }
+    }
+}
+
+extension Dictionary where Key == NSAttributedString.Key, Value == Any {
+    /// A composer chip run (mention, image, or command) that restyling must
+    /// leave alone: resetting its attributes strips the attachment cell.
+    var isComposerChip: Bool {
+        self[.attachmentURI] != nil || self[.imageAttachmentURI] != nil || self[.commandChipName] != nil
     }
 }
 
@@ -1053,12 +1078,32 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// drawn (see `draw(_:)`), never inserted into the storage, so it can't
     /// be submitted, persisted as a draft, or restyled.
     var argumentGhostHint: String? {
-        guard slashPanel == nil, let coord = coordinator else { return nil }
-        let text = string
-        guard text.hasPrefix("/") else { return nil }
-        let sel = selectedRange()
-        guard sel.length == 0, sel.location == (text as NSString).length,
-              let suggestion = coord.promptSuggestions.first(where: { text == $0.command + " " }),
+        guard slashPanel == nil, let coord = coordinator, let textStorage else { return nil }
+        return Self.argumentGhostHint(
+            storage: textStorage,
+            selection: selectedRange(),
+            suggestions: coord.promptSuggestions
+        )
+    }
+
+    /// The draft reads as exactly `/cmd ` with the caret at the end, whether
+    /// the command is plain text or a leading command chip.
+    static func argumentGhostHint(
+        storage: NSAttributedString,
+        selection: NSRange,
+        suggestions: [ACPPromptSuggestion]
+    ) -> String? {
+        let length = storage.length
+        guard length > 0, selection.length == 0, selection.location == length else { return nil }
+        let text: String
+        if let command = storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String {
+            guard length == 2, (storage.string as NSString).character(at: 1) == 0x20 else { return nil }
+            text = command + " "
+        } else {
+            text = storage.string
+        }
+        guard text.hasPrefix("/"),
+              let suggestion = suggestions.first(where: { text == $0.command + " " }),
               let hint = suggestion.hint, !hint.isEmpty
         else { return nil }
         return hint
@@ -1125,6 +1170,109 @@ final class ACPNSTextView: PairedDelimiterTextView {
             dictationRange = nil
             coordinator?.onStopDictation()
         }
+    }
+
+    /// Intercepts the single whitespace character that completes a
+    /// hand-typed leading command, turning it into a pill in the SAME edit
+    /// as the keystroke instead of a follow-up one — see
+    /// `ACPLeadingCommand.chipTarget(completingWith:at:in:suggestions:)` for
+    /// why a follow-up edit is unsafe here. Everything else (fenced-block
+    /// pairing, IME composition, plain typing) still goes through
+    /// `PairedDelimiterTextView`'s own `insertText`.
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        let range = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
+        if let text = insertString as? String,
+           let textStorage, let coordinator,
+           let target = ACPLeadingCommand.chipTarget(
+               completingWith: text, at: range, in: textStorage,
+               suggestions: coordinator.promptSuggestions
+           ) {
+            let chip = NSMutableAttributedString(
+                attributedString: ACPLeadingCommand.chip(for: target.command, font: chatTypography.appKitFont())
+            )
+            chip.append(NSAttributedString(string: text, attributes: baseTypingAttributes))
+            replaceClearingUndo(range: target.range, with: chip)
+            return
+        }
+        super.insertText(insertString, replacementRange: replacementRange)
+    }
+
+    /// A draft restored, or (re)assigned wholesale, before the agent listed
+    /// its commands gets its pill once the list arrives — possibly after the
+    /// user already typed `/command ` as plain text with its own undo
+    /// history. Safe to call from SwiftUI's `updateNSView` — never nested
+    /// inside another edit, unlike the reentrancy the `insertText` override
+    /// above guards against.
+    func pillLeadingCommandIfNeeded() {
+        guard let textStorage, let coordinator,
+              let target = ACPLeadingCommand.chipTarget(in: textStorage, suggestions: coordinator.promptSuggestions)
+        else { return }
+        let chip = ACPLeadingCommand.chip(for: target.command, font: chatTypography.appKitFont())
+        replaceClearingUndo(range: target.range, with: chip)
+    }
+
+    /// Replaces `range` with `replacement`, deliberately WITHOUT registering
+    /// an undo action.
+    ///
+    /// This transformation only ever runs once the plain-text command
+    /// already sitting in storage is complete — right as the user finishes
+    /// typing it, or once a late `available_commands_update` recognizes it —
+    /// so there is always a PRE-EXISTING undo record from the typing that
+    /// put that text there. Every attempt to also make this specific edit
+    /// undoable (`shouldChangeText`/`didChangeText`'s automatic rich-text
+    /// synthesis, a manually registered inverse, breaking typing-coalescing
+    /// first, bracketing it in its own undo group, reordering it against
+    /// `didChangeText()`) still corrupted that earlier record when the user
+    /// undid afterward — `NSTextStorage` throws `NSRangeException` out of an
+    /// internal post-edit attribute-fixing pass, reproducibly, regardless of
+    /// mechanism. Clearing the undo stack here is the one option that is
+    /// actually safe: it costs the user one step of undo history (the
+    /// letters they just typed collapse into a pill they can no longer type
+    /// back out via Cmd-Z; deleting the chip and retyping still works), in
+    /// exchange for never risking a crash. The chip still round-trips to
+    /// identical plain text for drafts, queued prompts, and the outgoing
+    /// message — only interactive undo of this specific transformation is
+    /// given up.
+    private func replaceClearingUndo(range: NSRange, with replacement: NSAttributedString) {
+        guard let textStorage else { return }
+        let selectionBefore = selectedRange()
+        undoManager?.removeAllActions()
+        textStorage.replaceCharacters(in: range, with: replacement)
+        let replacedRange = NSRange(location: range.location, length: replacement.length)
+        // `didChangeText()` must run before the selection is touched — it's
+        // what tells the layout manager the storage changed shape, and
+        // reading/writing the selection first operates against layout that
+        // still describes the pre-edit text. Mutating `textStorage` directly
+        // bypasses `NSTextView`'s own selection bookkeeping, so the
+        // selection must be clamped back into range explicitly here too.
+        didChangeText()
+        // Preserve the selection outside the command rather than always
+        // collapsing it to a caret right after the chip: a late
+        // `available_commands_update` can land while the user has kept
+        // typing past the command, has a selection past it, or simply left
+        // their caret sitting before it (`/init body` with the caret still
+        // at position 0) — forcing any of those to jump to right after the
+        // pill would yank the user's cursor out from under them. Each
+        // endpoint maps independently: at or after the replaced range, it
+        // survives shifted by the length delta; at or before its start —
+        // ONLY for a zero-length caret, which touches none of the
+        // command's own characters — it's untouched, since nothing before
+        // the edit moved; anywhere else was inside the text the chip just
+        // replaced and has nowhere sensible to land but the chip's end
+        // (also where the typed-completion path above always finds its
+        // caret, since typing the completing space puts it exactly at the
+        // command's end).
+        let delta = replacement.length - range.length
+        let rangeEnd = NSMaxRange(range)
+        let isEmptySelection = selectionBefore.length == 0
+        func map(_ location: Int) -> Int {
+            if location >= rangeEnd { return location + delta }
+            if isEmptySelection, location <= range.location { return location }
+            return NSMaxRange(replacedRange)
+        }
+        let newStart = map(selectionBefore.location)
+        let newEnd = map(NSMaxRange(selectionBefore))
+        setSelectedRange(NSRange(location: newStart, length: newEnd - newStart))
     }
 
     /// Retry-once-on-attach: a restored draft can already contain an active
@@ -1270,14 +1418,15 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// Locate an active `/<word>` token at the caret. Active means: the
     /// `/` starts at the beginning of the buffer or right after
     /// whitespace, and everything between it and the caret is
-    /// command-shaped (letters / digits / `-` / `_` / `:`). Returns the
+    /// command-shaped (letters / digits / `-` / `_` / `:` / `$`, the last
+    /// for skills some agents list as `/$name`). Returns the
     /// `/`'s character index and the current query (without the slash).
     private func currentSlashToken() -> (start: Int, query: String)? {
         let str = (string as NSString)
         let caret = selectedRange().location
         guard caret <= str.length else { return nil }
         var i = caret
-        let allowed: Set<Character> = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_:")
+        let allowed: Set<Character> = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_:$")
         while i > 0 {
             let ch = str.substring(with: NSRange(location: i - 1, length: 1))
             if ch == "/" {
@@ -1353,12 +1502,29 @@ final class ACPNSTextView: PairedDelimiterTextView {
     // MARK: - Image chip hover preview
 
     private var imageChipHover: ACPImageChipHoverController?
+    private let commandChipHover = ACPCommandChipHoverController()
 
     /// Character range + file URL when `point` sits on an image chip
     /// (a character tagged with `.imageAttachmentURI`), nil otherwise.
     /// `location` clamps to the container length, which is what the layout
     /// manager answers for glyph-range lookups.
     func imageChipRange(at point: NSPoint) -> (range: NSRange, fileURL: URL)? {
+        guard let hit = chipHit(at: point, key: .imageAttachmentURI),
+              let uri = hit.value as? String,
+              let fileURL = URL(string: uri) else { return nil }
+        return (range: hit.range, fileURL: fileURL)
+    }
+
+    /// Range + suggestion when `point` sits on a leading command chip.
+    func commandChipHit(at point: NSPoint) -> (range: NSRange, suggestion: ACPPromptSuggestion)? {
+        guard let hit = chipHit(at: point, key: .commandChipName),
+              let command = hit.value as? String,
+              let suggestion = coordinator?.promptSuggestions.first(where: { $0.command == command })
+        else { return nil }
+        return (range: hit.range, suggestion: suggestion)
+    }
+
+    private func chipHit(at point: NSPoint, key: NSAttributedString.Key) -> (range: NSRange, value: Any)? {
         guard let layoutManager, let textContainer, let textStorage, textStorage.length > 0 else { return nil }
         // Convert from view space (includes textContainerInset) to container
         // space first, matching how the layout manager maps points to glyphs.
@@ -1374,9 +1540,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
         )
         guard characterIndex != NSNotFound, characterIndex < textStorage.length else { return nil }
         var chipRange = NSRange()
-        let attrs = textStorage.attributes(at: characterIndex, effectiveRange: &chipRange)
-        guard let uri = attrs[.imageAttachmentURI] as? String,
-              let fileURL = URL(string: uri) else { return nil }
+        guard let value = textStorage.attribute(key, at: characterIndex, effectiveRange: &chipRange)
+        else { return nil }
         // The nearest-character lookup can resolve a character even when the
         // point is in blank space beside a glyph (e.g. after an end-of-line
         // chip) — require the chip's glyph rect to actually contain the point.
@@ -1384,7 +1549,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         guard glyphRange.length > 0 else { return nil }
         let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
         guard glyphRect.contains(containerPoint) else { return nil }
-        return (range: chipRange, fileURL: fileURL)
+        return (range: chipRange, value: value)
     }
 
     /// View-space rect of the chip's glyphs (inset 1pt, mirroring the cell
@@ -1444,11 +1609,17 @@ final class ACPNSTextView: PairedDelimiterTextView {
         } else {
             imageChipHoverController().hide()
         }
+        if let chip = commandChipHit(at: point) {
+            commandChipHover.scheduleShow(range: chip.range, suggestion: chip.suggestion, in: self)
+        } else {
+            commandChipHover.hide()
+        }
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         imageChipHoverController().hide()
+        commandChipHover.hide()
     }
 
     /// Observes the enclosing scroll view's clip view while the composer is
@@ -1471,6 +1642,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             object: clipView
         ) { [weak self] in
             guard let self, self.window != nil else { return }
+            self.commandChipHover.hide()
             // The pointer's current position decides the post-scroll state:
             // still over a chip re-schedules (no-op while it stays there);
             // anywhere else hides. `window.mouseLocationOutsideOfEventStream`
@@ -1516,6 +1688,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// preview can never linger over a chip the user just changed.
     func dismissImageChipHover() {
         imageChipHover?.hide()
+        commandChipHover.hide()
     }
 
     #if DEBUG
@@ -1924,16 +2097,37 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // argument. Falls back to a plain append if we somehow lost the
         // slash range.
         let replacement = suggestion.command + " "
-        if slashStart >= 0, caret >= slashStart {
-            let range = NSRange(location: slashStart, length: caret - slashStart)
-            ts.replaceCharacters(in: range, with: replacement)
-            let newCaret = slashStart + (replacement as NSString).length
-            setSelectedRange(NSRange(location: newCaret, length: 0))
-        } else {
+        guard slashStart >= 0, caret >= slashStart else {
             ts.append(NSAttributedString(string: replacement))
+            closeSlashPanel()
+            didChangeText()
+            return
         }
+        let range = NSRange(location: slashStart, length: caret - slashStart)
+        // Captured before `closeSlashPanel()`, which resets `slashStart`.
+        let isLeadingCommand = slashStart == 0
         closeSlashPanel()
-        didChangeText()
+        // A leading command is what the agent will actually run, so only
+        // that one becomes a pill; mid-message picks stay plain text. The
+        // picked token can be several characters longer than its one-glyph
+        // chip (e.g. accepting `/read-jira-ticket` while `/read-j` is still
+        // live) — the same shrinking edit `replaceClearingUndo` exists for,
+        // so the leading branch goes through it too instead of a direct
+        // `replaceCharacters` that would leave this keystroke's own typing
+        // undo record targeting a range that no longer exists.
+        if isLeadingCommand {
+            let chip = NSMutableAttributedString(
+                attributedString: ACPLeadingCommand.chip(for: suggestion.command, font: chatTypography.appKitFont())
+            )
+            chip.append(NSAttributedString(string: " ", attributes: baseTypingAttributes))
+            replaceClearingUndo(range: range, with: chip)
+        } else {
+            ts.replaceCharacters(in: range, with: NSAttributedString(string: replacement, attributes: baseTypingAttributes))
+            // `range.location`, not `slashStart` — `closeSlashPanel()` above
+            // already reset `slashStart` to -1.
+            setSelectedRange(NSRange(location: range.location + (replacement as NSString).length, length: 0))
+            didChangeText()
+        }
     }
 
     private func positionAndShow(_ panel: NSPanel, makeKey: Bool = true) {

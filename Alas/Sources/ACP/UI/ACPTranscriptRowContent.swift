@@ -183,7 +183,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                     attachments: attachments,
                     isDelegated: delegatedSource != nil,
                     contentMaxWidth: contentMaxWidth,
-                    typography: typography
+                    typography: typography,
+                    session: session
                 )
             }
         case .agent(_, _, let buf):

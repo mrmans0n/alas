@@ -68,9 +68,7 @@ struct ACPComposerDraftBridgeTests {
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == ACPComposerDraft(
             segments: [
                 .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
-                .text("\n"),
-                .text("> quoted\n\n"),
-                .text(" tail"),
+                .text("\n> quoted\n\n tail"),
             ]
         ))
         #expect(textView.selectedRange() == NSRange(location: 11, length: 0))
@@ -1346,7 +1344,8 @@ struct ACPComposerDraftBridgeTests {
         textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
 
         #expect(received == nil)
-        #expect(textView.string == "/init ")
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/init ")
+        #expect(textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
         #expect(!textView.isSlashPanelOpen)
     }
 
@@ -1730,9 +1729,209 @@ struct ACPComposerDraftBridgeTests {
 
         textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
 
-        #expect(textView.string == "/read-jira-ticket ")
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/read-jira-ticket ")
         #expect(!textView.isSlashPanelOpen)
         #expect(textView.argumentGhostHint == "<CPCL-XXXX>")
+    }
+
+    @Test("typing whitespace after a hand-typed skill turns it into a pill")
+    func handTypedSkillBecomesPill() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions.append(
+            ACPPromptSuggestion(command: "/$brainstorming:ideas", description: "Ideas")
+        )
+        textView.allowsUndo = true
+        // A real insertText call (not `.string =`) leaves its own undo
+        // record behind, matching production: the pill-forming edit
+        // deliberately clears the undo stack rather than risk corrupting
+        // that record — see `replaceClearingUndo`.
+        textView.insertText("/$brainstorming:ideas", replacementRange: textView.selectedRange())
+        textView.insertText(" ", replacementRange: textView.selectedRange())
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/$brainstorming:ideas")
+        #expect(ACPInputField.Coordinator.extract(storage).0 == "/$brainstorming:ideas ")
+        #expect(textView.selectedRange() == NSRange(location: storage.length, length: 0))
+        #expect(textView.undoManager?.canUndo == false)
+    }
+
+    @Test("late-arriving suggestions pill a hand-typed command without corrupting undo")
+    func lateSuggestionsPillWithoutCorruptingUndo() throws {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        // The suggestion list is not known yet at typing time — exactly
+        // when `available_commands_update` arrives after the user already
+        // typed the command, the scenario `pillLeadingCommandIfNeeded` (and
+        // the late-arrival call in `updateNSView`) exists for.
+        coordinator.promptSuggestions = []
+        textView.allowsUndo = true
+        textView.insertText("/init ", replacementRange: textView.selectedRange())
+        #expect(textView.string == "/init ")
+        #expect(textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) == nil)
+        // The typing above left its own undo record. Confirm it exists
+        // before the pill-forming edit clears it below.
+        #expect(textView.undoManager?.canUndo == true)
+
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        #expect(ACPInputField.Coordinator.extract(storage).0 == "/init ")
+
+        // The prior typing's undo record targeted the pre-chip character
+        // range, which this edit just shrank — replaying it (via undo)
+        // reproducibly crashed `NSTextStorage` regardless of mechanism
+        // (see `replaceClearingUndo`'s doc comment), so it's cleared
+        // instead of preserved.
+        #expect(textView.undoManager?.canUndo == false)
+    }
+
+    @Test("accepting a leading command from the picker clears stale undo history")
+    func pickerAcceptClearsStaleUndoHistory() throws {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        textView.allowsUndo = true
+        // A real insertText call leaves its own undo record behind, same
+        // precondition as the other undo-safety tests above — this one
+        // exercises the slash-PICKER accept path (`insertSlash`) rather
+        // than the typed-completion or late-arrival paths.
+        textView.insertText("/read-j", replacementRange: textView.selectedRange())
+        #expect(textView.undoManager?.canUndo == true)
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+
+        textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/read-jira-ticket")
+        #expect(ACPInputField.Coordinator.extract(storage).0 == "/read-jira-ticket ")
+        #expect(!textView.isSlashPanelOpen)
+        // Same reasoning as `replaceClearingUndo`: the picked token can be
+        // longer than its one-glyph chip, so the prior typing's undo
+        // record no longer matches — clear it instead of risking a crash.
+        #expect(textView.undoManager?.canUndo == false)
+    }
+
+    @Test("late chipification preserves the caret's position past the command")
+    func lateChipificationPreservesCaretPastCommand() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions = []
+        textView.insertText("/init some text", replacementRange: textView.selectedRange())
+        let fullLength = (textView.string as NSString).length
+        textView.setSelectedRange(NSRange(location: fullLength, length: 0))
+
+        // The suggestion list arrives while the caret is still at the end
+        // of what the user kept typing past the command — it must not get
+        // yanked back to right after the newly formed chip.
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        #expect(ACPInputField.Coordinator.extract(storage).0 == "/init some text")
+        // The command shrank from 5 characters to a 1-character chip (a
+        // delta of -4); the caret shifts by that same delta, staying at
+        // the true end of the message instead of snapping to position 1.
+        #expect(textView.selectedRange() == NSRange(location: fullLength - 4, length: 0))
+    }
+
+    @Test("accepting a mid-message slash suggestion places the caret after it")
+    func midMessageSlashAcceptPlacesCaretCorrectly() throws {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        // Not a leading command (there's a word before the `/`), so this
+        // exercises `insertSlash`'s plain-text branch, which — like the
+        // leading branch above — reads `range.location` for the caret
+        // rather than `slashStart`, since `closeSlashPanel()` already
+        // reset `slashStart` to -1 by the time either branch runs.
+        textView.string = "please /rev"
+        textView.setSelectedRange(NSRange(location: 11, length: 0))
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+
+        textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
+
+        #expect(textView.string == "please /review ")
+        #expect(textView.selectedRange() == NSRange(location: (textView.string as NSString).length, length: 0))
+    }
+
+    @Test("late chipification preserves a selection past the command")
+    func lateChipificationPreservesSelectionPastCommand() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions = []
+        textView.insertText("/init some text", replacementRange: textView.selectedRange())
+        // Select "some", entirely past the leading command.
+        textView.setSelectedRange(NSRange(location: 6, length: 4))
+
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        // The command shrank from 5 characters to a 1-character chip (a
+        // delta of -4); the selection shifts by that same delta, keeping
+        // both its position AND its length — "some" stays selected
+        // instead of collapsing to a caret.
+        #expect(textView.selectedRange() == NSRange(location: 2, length: 4))
+        #expect((storage.string as NSString).substring(with: textView.selectedRange()) == "some")
+    }
+
+    @Test("late chipification preserves the surviving tail of an overlapping selection")
+    func lateChipificationPreservesOverlappingSelectionTail() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions = []
+        textView.insertText("/init some text", replacementRange: textView.selectedRange())
+        // Select the whole message: starts inside the command, extends
+        // into the body.
+        textView.setSelectedRange(NSRange(location: 0, length: 15))
+
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        // The command itself was consumed by the chip; only the body
+        // survives, anchored right after the chip instead of collapsing
+        // to a caret.
+        #expect(textView.selectedRange() == NSRange(location: 1, length: 10))
+        #expect((storage.string as NSString).substring(with: textView.selectedRange()) == " some text")
+    }
+
+    @Test("late chipification leaves a caret before the command untouched")
+    func lateChipificationLeavesLeadingCaretUntouched() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions = []
+        textView.insertText("/init body", replacementRange: textView.selectedRange())
+        // The caret is at the very start, before the command even begins —
+        // it touches none of the command's own characters.
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        // Nothing before the edit moved, so the caret stays exactly where
+        // it was instead of jumping to after the pill.
+        #expect(textView.selectedRange() == NSRange(location: 0, length: 0))
+    }
+
+    @Test("the slash picker stays open for `$`-prefixed skills")
+    func slashPickerAcceptsDollarSkills() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions.append(ACPPromptSuggestion(command: "/$brainstorming", description: "Ideas"))
+        textView.string = "/$bra"
+        textView.setSelectedRange(NSRange(location: 5, length: 0))
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+        textView.dismissSlashPanel()
     }
 
     @Test("drawing the ghost hint never touches the text storage")

@@ -59,7 +59,7 @@ enum ACPMarkdownLiveStyler {
         // mention AND image chips don't get bulldozed (their `.attachment`
         // cell stripped) by every keystroke's restyle.
         storage.enumerateAttributes(in: target) { attrs, range, _ in
-            guard attrs[.attachmentURI] == nil, attrs[.imageAttachmentURI] == nil else { return }
+            guard !attrs.isComposerChip else { return }
             guard !Self.intersects(range, excludedRanges) else { return }
             storage.setAttributes([
                 .font: baseFont,
@@ -112,7 +112,7 @@ enum ACPMarkdownLiveStyler {
             // Don't double-style chip mentions or image chips.
             var skip = false
             storage.enumerateAttributes(in: m.range) { attrs, _, stop in
-                if attrs[.attachmentURI] != nil || attrs[.imageAttachmentURI] != nil {
+                if attrs.isComposerChip {
                     skip = true
                     stop.pointee = true
                 }
