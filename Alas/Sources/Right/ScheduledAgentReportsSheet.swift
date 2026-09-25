@@ -508,6 +508,9 @@ struct ScheduledAgentReportsSheet: View {
         do {
             let report = try await state.scheduledAgentReport(id: selectedReportID, projectID: projectID)
             guard !Task.isCancelled else { return }
+            if let report {
+                updateReportInList(report)
+            }
             selectedReport = report
             if report == nil {
                 detailError = "This report was deleted or is no longer available in this project."
@@ -523,6 +526,9 @@ struct ScheduledAgentReportsSheet: View {
         do {
             let report = try await state.scheduledAgentReport(id: selectedReportID, projectID: projectID)
             guard !Task.isCancelled else { return }
+            if let report {
+                updateReportInList(report)
+            }
             selectedReport = report
             detailError = report == nil
                 ? "This report was deleted or is no longer available in this project."
@@ -531,6 +537,11 @@ struct ScheduledAgentReportsSheet: View {
             guard !Task.isCancelled, selectedReport == nil else { return }
             detailError = error.localizedDescription
         }
+    }
+
+    private func updateReportInList(_ report: ScheduledAgentReport) {
+        guard let index = reports.firstIndex(where: { $0.id == report.id }) else { return }
+        reports[index] = report
     }
 
     private func deleteSelectedReport() async {
