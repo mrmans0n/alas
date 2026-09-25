@@ -240,12 +240,19 @@ function applyHello(doc, clientId, hello) {
   const name = helloName || server.name;
   const protocolVersion = Number.isInteger(hello.protocolVersion) ? hello.protocolVersion : null;
   const federationEnabled = hello.federationEnabled === true;
-  // The gateway's own peer roster, independent of whichever peers currently
-  // happen to have rows in the last sessionList — see peerSessionCounts,
-  // which seeds a zero entry for each so an emptied-out peer reads as "0",
-  // not "not gatewayed, fall back to idle polling".
+  // The gateway's own ONLINE peer roster, independent of whichever peers
+  // currently happen to have rows in the last sessionList — see
+  // peerSessionCounts, which seeds a zero entry for each so an emptied-out
+  // peer reads as "0", not "not gatewayed, fall back to idle polling". Only
+  // "online" actually carries sessions through the gateway (see
+  // RemotePeerManager.helloPeers); every other state (offline, unauthorized,
+  // unverified, idle, connecting, ...) is listed for visibility only, so
+  // treating it as gatewayed would override a possibly-valid direct-link
+  // idle-polled count with a permanent false zero.
   const peers = Array.isArray(hello.peers)
-    ? hello.peers.map((p) => (p && typeof p.serverId === "string") ? p.serverId : null).filter(Boolean)
+    ? hello.peers
+        .filter((p) => p && p.state === "online" && typeof p.serverId === "string")
+        .map((p) => p.serverId)
     : [];
   const twin = serverId ? doc.servers.find((s) => s.id !== clientId && s.serverId === serverId) : null;
   if (twin) {

@@ -389,9 +389,18 @@ assert.deepEqual([...registry.peerSessionCounts(undefined).entries()], []);
   const { server } = registry.upsertPaired(doc, { origins: ["http://10.0.0.3:8765"], token: "t1", now: 1 });
   registry.applyHello(doc, server.id, {
     type: "hello", protocolVersion: 1, serverId: "srv-GW", name: "Gateway", federationEnabled: true,
-    peers: [{ serverId: "srv-B", name: "Peer B", state: "online" }, { serverId: "srv-C", name: "Peer C", state: "online" }, { serverId: null, name: "bad", state: "online" }],
+    peers: [
+      { serverId: "srv-B", name: "Peer B", state: "online" },
+      { serverId: "srv-C", name: "Peer C", state: "online" },
+      { serverId: null, name: "bad", state: "online" },
+      { serverId: "srv-D", name: "Peer D (offline)", state: "offline" },
+      { serverId: "srv-E", name: "Peer E (unverified)", state: "unverified" },
+    ],
   });
-  assert.deepEqual(server.peers, ["srv-B", "srv-C"], "peer serverIds are extracted; malformed entries are dropped");
+  assert.deepEqual(
+    server.peers, ["srv-B", "srv-C"],
+    "only online peers are kept; malformed entries and non-online states (offline/unverified/etc, which carry no sessions) are dropped"
+  );
 }
 
 {
