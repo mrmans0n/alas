@@ -5016,6 +5016,32 @@ extension ACPSessionManager {
                       isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
                       !disposingAttachments.contains(sessionId), !isDisposed
                 else { return }
+                if attempt.requiresFreshBrokerNamespace {
+                    // The timeout landed after this connection was created
+                    // and initialized, so `makeBrokerConnectionWithRecovery`
+                    // never consulted the flag. `requiresFreshBrokerNamespace`
+                    // would otherwise stay unconsumed for this attach: the
+                    // default namespace is the one the timeout identified as
+                    // wedged, and reusing it risks replaying a stuck broker.
+                    // Tear this connection down (isolated namespaces were
+                    // never wedged by construction — the wedged one was
+                    // their retirement source) and re-enter the restart flow,
+                    // which builds its replacement attempt with the flag set
+                    // and routes the next attach through the isolated
+                    // namespace. Nested restarts serialize on
+                    // `restartingConnections`, and the deferred teardown below
+                    // sees the superseded attempt only after its cleanup.
+                    let currentStartupID = attempt.brokerClientStartupID
+                    let connectionIsolated = currentStartupID.map {
+                        attempt.isolatedBrokerStartupIDs.contains($0)
+                    } ?? false
+                    if !connectionIsolated {
+                        await connection.shutdown()
+                        stderrTask.cancel()
+                        await restartConnection(to: sessionId)
+                        return
+                    }
+                }
             }
             // Deliberately not reset here (unlike promptCapabilities/authMethods,
             // which are re-derived from every `initialize` response): a broker-
@@ -6312,6 +6338,10 @@ extension ACPSessionManager {
             ?? oldRunner?.connection
         replacementAttempt.retiringConnection = retiringConnection
         replacementAttempt.connection = oldConnection === retiringConnection ? nil : oldConnection
+        // A previous attempt may have discovered a wedged broker after its
+        // own replacement connection was already attached; that attach then
+        // delegated here. Honor the flag it could not consume itself.
+        replacementAttempt.requiresFreshBrokerNamespace = oldAttempt?.requiresFreshBrokerNamespace ?? false
 #if DEBUG
         await beforeRestartRunnerStopForTesting?(sessionId)
 #endif

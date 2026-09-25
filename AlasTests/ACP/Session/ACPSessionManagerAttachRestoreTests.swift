@@ -715,6 +715,75 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadLease(sessionId: session.id)?.token == replacementLease?.token)
     }
 
+    @Test("a late retiring detach timeout retries the attach in a fresh broker namespace")
+    func lateRetiringDetachTimeoutRetriesAttachInFreshBrokerNamespace() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerServiceProxy(stallDetach: true)
+        let isolatedService = ManagerBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .seconds(10),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "late-detach-fresh-namespace", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+        let originalRunner = try #require(manager.runners[session.id])
+        let originalLease = try store.loadLease(sessionId: session.id)
+        let originalBrokerId = try await #require(sharedService.opened.first?.brokerId)
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        defer {
+            Task {
+                // The retirement detach's cancelled operation task still
+                // waits on the gate; release it so the actor winds down.
+                await sharedService.detachGate.release()
+            }
+        }
+
+        // The replacement initializes on the shared broker namespace while
+        // the retiring connection's detach is still stalled.
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.detachGate.hasEntered
+                && session.agentState != .ready
+                && manager.runners[session.id] == nil
+        }
+        #expect(await sharedService.detached.count == 1)
+
+        // The detach times out without the gate ever being released — the
+        // retry must not wait on the wedged broker. The attach abandons that
+        // connection and re-runs in an isolated namespace.
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            let isolatedOpenCount = await isolatedService.opened.count
+            return session.agentState == .ready && isolatedOpenCount == 1
+        }
+        let isolatedBrokerId = try await #require(isolatedService.opened.first?.brokerId)
+        #expect(isolatedBrokerId.rawValue.hasPrefix("fallback-"))
+        #expect(isolatedBrokerId != originalBrokerId)
+
+        let retriedRunner = try #require(manager.runners[session.id])
+        #expect(retriedRunner !== originalRunner)
+        let retriedLease = try store.loadLease(sessionId: session.id)
+        #expect(retriedLease != nil)
+        #expect(retriedLease?.token != originalLease?.token)
+
+        // The abandoned replacement unwinds: its broker connection is closed.
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.closed.count >= 1
+        }
+        #expect(session.agentState == .ready)
+        await restart.value
+
+        #expect(session.agentState == .ready)
+        #expect(manager.runners[session.id] === retriedRunner)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("restart detaches the retiring broker without closing it before replacement initialization")
     func restartRetainsRetiringBrokerUntilReplacementInitialization() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
