@@ -1260,6 +1260,43 @@ struct TabsManagerTests {
         #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-b").isEmpty)
     }
 
+    @Test func purgingSharedWorktreeRemovesEveryOwnedTabButKeepsSiblingTabs() throws {
+        let worktreeId = "tabs-manager-project-purge-\(UUID().uuidString)"
+        let tabsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tabs-manager-project-purge-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tabsDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tabsDirectory) }
+        let manager = TabsManager(tabsDirectory: tabsDirectory)
+
+        let diffA = manager.appendDiff(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            title: "Shared.swift",
+            relativePath: "Shared.swift"
+        )
+        let changesA = manager.openOrFocusReviewChanges(worktreeId: worktreeId, projectId: "project-a")
+        let reportA = manager.openOrFocusRunReport(worktreeId: worktreeId, projectId: "project-a", runID: "project-a-run")
+
+        let diffB = manager.appendDiff(
+            worktreeId: worktreeId,
+            projectId: "project-b",
+            title: "Shared.swift",
+            relativePath: "Shared.swift"
+        )
+        let changesB = manager.openOrFocusReviewChanges(worktreeId: worktreeId, projectId: "project-b")
+        let reportB = manager.openOrFocusRunReport(worktreeId: worktreeId, projectId: "project-b", runID: "project-b-run")
+
+        manager.purgeProjectOwnedEditorState(worktreeId: worktreeId, projectId: "project-a")
+
+        let expectedRemainingIDs = [diffB.id, changesB.id, reportB.id]
+        #expect(manager.tabs(forWorktree: worktreeId).map(\.id) == expectedRemainingIDs)
+
+        let reloadedManager = TabsManager(tabsDirectory: tabsDirectory)
+        reloadedManager.loadAll(worktreeIds: [worktreeId])
+        #expect(reloadedManager.tabs(forWorktree: worktreeId).map(\.id) == expectedRemainingIDs)
+        #expect(!reloadedManager.tabs(forWorktree: worktreeId).contains { $0.id == diffA.id || $0.id == changesA.id || $0.id == reportA.id })
+    }
+
     @Test func activeTerminalTabIsRememberedSeparatelyForEachProject() {
         let worktreeId = "tabs-manager-project-active-terminal"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

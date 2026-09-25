@@ -1108,6 +1108,81 @@ struct TabsManagerBufferTests {
         #expect(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8) == "edited\n")
     }
 
+    @Test func saveAllAwaitingRemoteDoesNotUseSiblingPathRegistryHostForProjectOwnedSnapshot() async throws {
+        let root = tempWorktree()
+        defer {
+            RemoteHostRegistry.shared.unregister(root: root.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try "base\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("a.txt").path)
+        let (manager, store, storeRoot) = makeManager()
+        defer { try? FileManager.default.removeItem(at: storeRoot) }
+        let worktreeId = "shared-worktree"
+        let tab = manager.appendEditor(
+            worktreeId: worktreeId,
+            projectId: "project-b",
+            title: "a.txt",
+            relativePath: "a.txt"
+        )
+        try store.write(.init(
+            relativePath: "a.txt",
+            content: "project b edit\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        ), worktreeId: worktreeId, tabId: tab.id)
+        RemoteHostRegistry.shared.register(root: root.path, host: "other-project.invalid")
+        let errors = await manager.saveAllAwaitingRemote(
+            worktreeRoots: [worktreeId: root],
+            allowedWorktreeIDs: [worktreeId]
+        )
+
+        #expect(errors.isEmpty)
+        #expect(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8) == "project b edit\n")
+        #expect(try store.read(worktreeId: worktreeId, tabId: tab.id) == nil)
+    }
+
+    @Test func saveAllAwaitingRemoteMaterializesSnapshotWithOwningProjectHost() async throws {
+        let root = tempWorktree()
+        defer {
+            RemoteHostRegistry.shared.unregister(root: root.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try "base\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("a.txt").path)
+        let (manager, store, storeRoot) = makeManager()
+        defer { try? FileManager.default.removeItem(at: storeRoot) }
+        let worktreeId = "shared-worktree"
+        let tab = manager.appendEditor(
+            worktreeId: worktreeId,
+            projectId: "project-b",
+            title: "a.txt",
+            relativePath: "a.txt"
+        )
+        try store.write(.init(
+            relativePath: "a.txt",
+            content: "project b edit\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        ), worktreeId: worktreeId, tabId: tab.id)
+        RemoteHostRegistry.shared.register(root: root.path, host: "other-project.invalid")
+
+        let errors = await manager.saveAllAwaitingRemote(
+            worktreeRoots: [worktreeId: root],
+            allowedWorktreeIDs: [worktreeId],
+            projectHosts: ["project-b": "project-b.invalid"]
+        )
+        let error = try #require(errors.first?.error)
+        let description = String(describing: error)
+
+        #expect(errors.count == 1)
+        #expect(description.contains("project-b.invalid"))
+        #expect(!description.contains("other-project.invalid"))
+        #expect(try store.read(worktreeId: worktreeId, tabId: tab.id) != nil)
+    }
+
     @Test func saveAllAwaitingRemoteSkipsLiveBuffersOutsideAllowedWorktrees() async throws {
         let allowedRoot = tempWorktree()
         let blockedRoot = tempWorktree()

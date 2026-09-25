@@ -8308,13 +8308,21 @@ final class AppState {
     func saveAllTabs() {
         Task { @MainActor in
             var roots: [String: URL] = [:]
+            var projectHosts: [String: String] = [:]
             for project in projects {
+                if let host = project.host {
+                    projectHosts[project.id] = host
+                }
                 for worktree in projectsManager.worktrees(projectId: project.id) {
                     guard await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktree.id) else { continue }
                     roots[worktree.id] = roots[worktree.id] ?? worktree.path
                 }
             }
-            let errors = await tabs.saveAllAwaitingRemote(worktreeRoots: roots, allowedWorktreeIDs: Set(roots.keys))
+            let errors = await tabs.saveAllAwaitingRemote(
+                worktreeRoots: roots,
+                allowedWorktreeIDs: Set(roots.keys),
+                projectHosts: projectHosts
+            )
             guard !errors.isEmpty else { return }
             showFileActionError(
                 title: "Save All Failed",

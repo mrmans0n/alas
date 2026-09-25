@@ -60,6 +60,11 @@ extension AppState {
             .flatMap { self.worktree(withId: $0)?.projectId }
             ?? projects.first?.id
         let perWorktreeResolution = perWorktreeBaseResolutions(projectId: projectId)
+        let projectHostsByID = Dictionary(
+            uniqueKeysWithValues: projects.compactMap { project in
+                project.host.map { (project.id, $0) }
+            }
+        )
 
         return ReviewTargetPaletteEnvironment(
             worktrees: { [weak self] in
@@ -75,26 +80,33 @@ extension AppState {
             },
             loadCommitsAhead: { worktree in
                 let override = perWorktreeResolution[worktree.id]
-                return try await GitService().commitsAhead(
+                let git = GitService(hostResolution: .project(projectHostsByID[worktree.projectId]))
+                return try await git.commitsAhead(
                     at: worktree.path,
                     baseBranch: override?.baseBranch ?? defaultBaseBranch,
                     resolution: override?.resolution ?? defaultResolution
                 )
             },
             loadBranches: { worktree in
-                try await GitService().branches(at: worktree.path)
+                let git = GitService(hostResolution: .project(projectHostsByID[worktree.projectId]))
+                return try await git.branches(at: worktree.path)
             },
             resolveRevision: { worktree, ref in
-                try await GitService().resolveRevision(at: worktree.path, ref: ref)
+                let git = GitService(hostResolution: .project(projectHostsByID[worktree.projectId]))
+                return try await git.resolveRevision(at: worktree.path, ref: ref)
             },
             currentBranch: { worktree in
-                try await GitService().currentBranch(worktreePath: worktree.path)
+                let git = GitService(hostResolution: .project(projectHostsByID[worktree.projectId]))
+                return try await git.currentBranch(worktreePath: worktree.path)
             },
             resolveTrackedRevision: { worktree, expression in
-                try await TrackedRevisionResolver.live.resolve(at: worktree.path, expression: expression)
+                try await TrackedRevisionResolver.makeLive(
+                    hostResolution: .project(projectHostsByID[worktree.projectId])
+                ).resolve(at: worktree.path, expression: expression)
             },
             headSHA: { worktree in
-                try await GitService().headSHA(at: worktree.path)
+                let git = GitService(hostResolution: .project(projectHostsByID[worktree.projectId]))
+                return try await git.headSHA(at: worktree.path)
             },
             openTarget: { [weak self] target, worktree in
                 guard let self else { return }

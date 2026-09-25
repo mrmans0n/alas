@@ -1784,10 +1784,22 @@ struct AppStateCLIRoutingTests {
         rightPaneState.selectBaseBranch("shared")
         #expect(rightPaneState.userOverrodeBaseBranch)
 
+        RemoteHostRegistry.shared.register(root: worktree.path.path, host: "other-project.invalid")
+        defer { RemoteHostRegistry.shared.unregister(root: worktree.path.path) }
+
         let environment = state.reviewTargetPaletteEnvironment()
         let result = try await environment.loadCommitsAhead(worktree)
+        let branches = try await environment.loadBranches(worktree)
+        let resolved = try await environment.resolveRevision(worktree, "shared")
+        let currentBranch = try await environment.currentBranch(worktree)
+        let tracked = try await environment.resolveTrackedRevision(worktree, "HEAD")
+        let head = try await environment.headSHA(worktree)
 
         #expect(result.comparisonRef == "shared")
         #expect(result.commits.count == 2)
+        #expect(branches.contains("shared"))
+        #expect(resolved.count == 40)
+        #expect(currentBranch == "feature")
+        #expect(tracked.sha == head)
     }
 }
