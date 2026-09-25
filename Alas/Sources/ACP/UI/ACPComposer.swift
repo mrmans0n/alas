@@ -2004,6 +2004,29 @@ final class ACPNSTextView: PairedDelimiterTextView {
         return super.readSelection(from: pboard, type: type)
     }
 
+    /// Drops `.image` segments once the message would exceed
+    /// `maxImagesPerMessage`, reporting the same `.tooManyImages` error the
+    /// normal image-insertion path does. Without this, repeatedly
+    /// copy/pasting a draft that carries an image chip would recreate the
+    /// attachment directly and bypass the cap `insertImage` enforces.
+    private func capImages(in draft: ACPComposerDraft) -> ACPComposerDraft {
+        var budget = Self.maxImagesPerMessage - currentImageChipCount()
+        var overflowed = false
+        let segments = draft.segments.filter { segment in
+            guard case .image = segment else { return true }
+            guard budget > 0 else {
+                overflowed = true
+                return false
+            }
+            budget -= 1
+            return true
+        }
+        if overflowed {
+            coordinator?.reportImageError(.tooManyImages)
+        }
+        return ACPComposerDraft(segments: segments)
+    }
+
     /// Inserts a copied composer selection over the current selection with
     /// its chips rebuilt. A leading `/command` pasted at the very start of
     /// the message becomes a pill again, in the same edit as the paste,
@@ -2012,10 +2035,16 @@ final class ACPNSTextView: PairedDelimiterTextView {
     @discardableResult
     private func insertComposerDraft(from pboard: NSPasteboard) -> Bool {
         guard let data = pboard.data(forType: Self.composerDraftPasteboardType),
-              let draft = try? JSONDecoder().decode(ACPComposerDraft.self, from: data),
-              !draft.isEmpty,
+              let decoded = try? JSONDecoder().decode(ACPComposerDraft.self, from: data),
+              !decoded.isEmpty,
               let textStorage
         else { return false }
+        let draft = capImages(in: decoded)
+        // The whole draft was one or more images already at the cap: the
+        // error was reported, and there's nothing left to insert, but the
+        // paste itself was still handled — falling through would let
+        // `paste(_:)` retry with the general pasteboard's plain-text form.
+        guard !draft.isEmpty else { return true }
         let replacementRange = boundedSelectedRange(in: textStorage)
         let fragment = NSMutableAttributedString(
             attributedString: ACPInputField.Coordinator.attributedString(from: draft, typography: chatTypography)

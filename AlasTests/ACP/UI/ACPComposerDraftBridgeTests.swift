@@ -1067,6 +1067,64 @@ struct ACPComposerDraftBridgeTests {
         #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "keep/review @File.swift  tail")
     }
 
+    @Test("pasting a chip draft with images enforces the per-message image cap")
+    func pastedDraftEnforcesImageCap() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        // Pre-fill the composer with 9 image chips (dummy URIs — only their
+        // presence, not their file, is what the cap counts) so one more
+        // slot remains.
+        let storage = NSMutableAttributedString(string: "")
+        for index in 0..<(ACPNSTextView.maxImagesPerMessage - 1) {
+            let attachment = ACPImageChipAttachment(
+                fileURL: URL(string: "file:///tmp/existing-\(index).png")!,
+                mimeType: "image/png"
+            )
+            let chip = NSMutableAttributedString(attachment: attachment)
+            chip.addAttributes([
+                .imageAttachmentURI: "file:///tmp/existing-\(index).png",
+                .imageAttachmentMime: "image/png",
+            ], range: NSRange(location: 0, length: chip.length))
+            storage.append(chip)
+        }
+        textView.textStorage?.setAttributedString(storage)
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+
+        // A copied draft offering two more images: only one fits in the
+        // remaining slot.
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-cap-\(UUID().uuidString).png")
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
+            .write(to: temp)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let draft = ACPComposerDraft(segments: [
+            .image(uri: temp.absoluteString, mimeType: "image/png"),
+            .image(uri: temp.absoluteString, mimeType: "image/png"),
+            .text(" tail"),
+        ])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        board.declareTypes([ACPNSTextView.composerDraftPasteboardType, .string], owner: nil)
+        board.setData(try JSONEncoder().encode(draft), forType: ACPNSTextView.composerDraftPasteboardType)
+        board.setString(draft.plainText, forType: .string)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        var imageCount = 0
+        let full = NSRange(location: 0, length: textView.attributedString().length)
+        textView.attributedString().enumerateAttribute(.imageAttachmentURI, in: full) { v, _, _ in
+            if v != nil { imageCount += 1 }
+        }
+        #expect(imageCount == ACPNSTextView.maxImagesPerMessage)
+        #expect(textView.string.hasSuffix(" tail"))
+        let errors = await reported.snapshot()
+        #expect(errors == [.tooManyImages])
+    }
+
     @Test("dropping a dragged chip selection reads the draft type and rebuilds the chips")
     func readSelectionRebuildsChipsFromDraftType() throws {
         let (textView, coordinator, window) = makeSlashTextView()
