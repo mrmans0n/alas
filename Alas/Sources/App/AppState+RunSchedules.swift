@@ -1759,6 +1759,43 @@ extension AppState {
                 )
             }
             closeTab(worktreeId: worktree.id, tabId: scheduledScriptTerminal.tabID)
+        } else if report.scriptRun != nil {
+            // The tab is gone (the user closed it), but the run record's
+            // shell may still be alive: `closeSession` released the lease
+            // and dispatched its zmx kill asynchronously, so a hung or
+            // failed kill leaves a shell that no session or lease check
+            // can see. Derive the zmx identity from the run record and
+            // refuse unless that session is provably gone.
+            if let scriptRun = report.scriptRun,
+               let record = runRecords.records(worktreeID: worktree.id).first(where: {
+                   $0.id == scriptRun.runID
+                       && $0.scriptName == scriptRun.scriptName
+                       && $0.branch == worktree.branch
+               }),
+               let sessionID = record.sessionID {
+                let identity = TerminalSessionIdentity(
+                    worktreeId: worktree.id,
+                    projectPath: project.path,
+                    leafId: sessionID
+                )
+                let derivedName = identity.zmxSessionName
+                let liveNames = await terminal.zmxSessionNames()
+                if liveNames.contains(derivedName) {
+                    projectsManager.setOperationState(for: worktree, state: nil)
+                    return await retainScheduledWorktree(
+                        reportID: report.id,
+                        reason: "The scheduled script session is still alive after its tab was closed.",
+                        store: store
+                    )
+                }
+            } else {
+                projectsManager.setOperationState(for: worktree, state: nil)
+                return await retainScheduledWorktree(
+                    reportID: report.id,
+                    reason: "The scheduled script terminal could not be identified for cleanup.",
+                    store: store
+                )
+            }
         }
         await disposeACPManagerAndWait(owner: .worktree(worktree.id))
         let sessionPersistence = ACPSessionPersistence(

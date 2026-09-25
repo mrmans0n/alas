@@ -106,27 +106,28 @@ struct ScheduledAgentReportStoreTests {
         #expect(loadedReports.map(\.id) == ["report-0", "report-1", "report-2", "report-3"])
         #expect(try await store.delete(id: "report-0"))
 
+        // Loaded window of 4 plus one probe row.
         let refreshedFirstPage = try await store.page(projectID: "project", offset: 0, limit: 2)
-        #expect(ScheduledAgentReportPageRefresh.loadedPrefixHasChanged(
-            refreshedFirstPage,
-            from: loadedReports,
-            pageSize: 2
-        ))
+        #expect(refreshedFirstPage.map(\.id) == ["report-1", "report-2"])
+        let requestedLimit = loadedReports.count + 1
         let refreshedPrefix = try await store.page(
             projectID: "project",
             offset: 0,
-            limit: loadedReports.count
+            limit: requestedLimit
         )
-        let refreshed = ScheduledAgentReportPageRefresh.replacingLoadedPrefix(
-            refreshedPrefix,
-            requestedLimit: loadedReports.count
+        let refreshed = ScheduledAgentReportPageRefresh.loadedWindowRefresh(
+            firstPage: refreshedFirstPage,
+            from: loadedReports,
+            pageSize: 2,
+            prefix: refreshedPrefix,
+            requestedLimit: requestedLimit
         )
-        #expect(refreshed.reports.map(\.id) == ["report-1", "report-2", "report-3", "report-4"])
-        #expect(refreshed.pageOffset == 4)
+        #expect(refreshed.reports.map(\.id) == ["report-1", "report-2", "report-3", "report-4", "report-5"])
+        #expect(refreshed.pageOffset == 5)
         #expect(refreshed.hasMore)
 
-        let nextPage = try await store.page(projectID: "project", offset: refreshed.pageOffset, limit: 2)
-        #expect(nextPage.map(\.id) == ["report-5"])
+        let nextPage = try await store.page(projectID: "project", offset: 5, limit: 2)
+        #expect(nextPage.map(\.id) == [])
     }
 
     @Test func reportPageRefreshDetectsDeletionBelowTheLoadedRange() async throws {
@@ -161,30 +162,83 @@ struct ScheduledAgentReportStoreTests {
         #expect(try await store.delete(id: "report-3"))
 
         let refreshedFirstPage = try await store.page(projectID: "project", offset: 0, limit: 2)
-        // First-page IDs are unchanged, so the old first-page-only predicate
-        // kept stale rows; the loaded-range check must catch the shift.
+        // First-page IDs are unchanged, so a first-page-only comparison kept
+        // stale rows; the loaded-window comparison must catch the shift.
         #expect(refreshedFirstPage.map(\.id) == ["report-0", "report-1"])
-        #expect(ScheduledAgentReportPageRefresh.loadedPrefixHasChanged(
-            refreshedFirstPage,
-            from: loadedReports,
-            pageSize: 2
-        ))
-
+        let requestedLimit = loadedReports.count + 1
         let refreshedPrefix = try await store.page(
             projectID: "project",
             offset: 0,
-            limit: loadedReports.count
+            limit: requestedLimit
         )
-        let refreshed = ScheduledAgentReportPageRefresh.replacingLoadedPrefix(
-            refreshedPrefix,
-            requestedLimit: loadedReports.count
+        #expect(refreshedPrefix.map(\.id) == ["report-0", "report-1", "report-2", "report-4", "report-5"])
+        let refreshed = ScheduledAgentReportPageRefresh.loadedWindowRefresh(
+            firstPage: refreshedFirstPage,
+            from: loadedReports,
+            pageSize: 2,
+            prefix: refreshedPrefix,
+            requestedLimit: requestedLimit
         )
-        #expect(refreshed.reports.map(\.id) == ["report-0", "report-1", "report-2", "report-4"])
-        #expect(refreshed.pageOffset == 4)
+        #expect(refreshed.reports.map(\.id) == ["report-0", "report-1", "report-2", "report-4", "report-5"])
+        #expect(refreshed.pageOffset == 5)
         #expect(refreshed.hasMore)
 
-        let nextPage = try await store.page(projectID: "project", offset: refreshed.pageOffset, limit: 2)
-        #expect(nextPage.map(\.id) == ["report-5", "report-6"])
+        let nextPage = try await store.page(projectID: "project", offset: 5, limit: 2)
+        #expect(nextPage.map(\.id) == ["report-6", "report-7"])
+    }
+
+    @Test func reportPageRefreshKeepsLoadedWindowStableWithoutReappearingLoadMore() async throws {
+        let path = temporaryPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = try ScheduledAgentReportStore(path: path)
+
+        // Exactly 6 reports: one page of 4 loaded, nothing more.
+        for index in 0..<6 {
+            let reportID = "report-\(index)"
+            try await store.create(report(
+                id: reportID,
+                occurrenceID: reportID,
+                cleanupRequested: false,
+                startedAt: epoch.addingTimeInterval(-TimeInterval(index))
+            ))
+            let sessionID = "session-\(index)"
+            try await store.associateSession(reportID: reportID, sessionID: sessionID)
+            try await store.finish(
+                reportID: reportID,
+                authenticatedSessionID: sessionID,
+                completion: completion,
+                at: epoch.addingTimeInterval(10)
+            )
+        }
+
+        let loadedReports = try await store.page(projectID: "project", offset: 0, limit: 4)
+        #expect(loadedReports.map(\.id) == ["report-0", "report-1", "report-2", "report-3"])
+
+        // Refresh with the loaded window (4) plus one probe row. The probe
+        // row exists, so hasMore is true — the loaded window itself is
+        // unchanged and must NOT be replaced.
+        let requestedLimit = loadedReports.count + 1
+        let refreshedPrefix = try await store.page(
+            projectID: "project",
+            offset: 0,
+            limit: requestedLimit
+        )
+        let refreshedFirstPage = try await store.page(projectID: "project", offset: 0, limit: 4)
+        let refreshed = ScheduledAgentReportPageRefresh.loadedWindowRefresh(
+            firstPage: refreshedFirstPage,
+            from: loadedReports,
+            pageSize: 4,
+            prefix: refreshedPrefix,
+            requestedLimit: requestedLimit
+        )
+        #expect(refreshed.reports.map(\.id) == ["report-0", "report-1", "report-2", "report-3", "report-4"])
+        #expect(refreshed.pageOffset == 5)
+        #expect(refreshed.hasMore)
+
+        // All records loaded: the probe row is absent, so the tail page is
+        // exhausted and hasMore must flip to false instead of reappearing.
+        let tailPage = try await store.page(projectID: "project", offset: 4, limit: 2)
+        #expect(tailPage.map(\.id) == ["report-4", "report-5"])
     }
     @Test func acceptedCompletionStaysRunningUntilThePromptSettlesAndRejectsDuplicates() async throws {
         let path = temporaryPath()

@@ -5,21 +5,29 @@ struct ScheduledAgentReportPageRefresh {
     let pageOffset: Int
     let hasMore: Bool
 
-    static func loadedPrefixHasChanged(
-        _ firstPage: [ScheduledAgentReport],
+    /// Whether the loaded window no longer matches the store. Compares the
+    /// loaded rows positionally against a refreshed read of the same
+    /// window plus one probe row: the first page alone cannot prove the
+    /// tail is intact (a deletion below it shifts every later row up), and
+    /// the probe row decides `hasMore` without a second request.
+    static func loadedWindowRefresh(
+        firstPage: [ScheduledAgentReport],
         from reports: [ScheduledAgentReport],
-        pageSize: Int
-    ) -> Bool {
-        let prefix = reports.prefix(pageSize)
-        if firstPage.map(\.id) != prefix.map(\.id) {
-            return true
+        pageSize: Int,
+        prefix: [ScheduledAgentReport],
+        requestedLimit: Int
+    ) -> Self {
+        let prefixMatches = prefix.map(\.id) == reports.map(\.id)
+        if prefixMatches {
+            return updatingFirstPage(
+                firstPage,
+                in: reports,
+                pageOffset: requestedLimit - 1,
+                hasMore: requestedLimit > prefix.count,
+                pageSize: pageSize
+            )
         }
-        // A deletion below the loaded prefix shifts every later row up, so a
-        // stable first page does not prove the loaded range is intact: the
-        // whole loaded window has to be positionally consistent with a
-        // re-read of its offset, otherwise `loadMore` reads a shifted page.
-        let firstPageIDs = Set(firstPage.map(\.id))
-        return reports.dropFirst(prefix.count).contains { !firstPageIDs.contains($0.id) }
+        return replacingLoadedPrefix(prefix, requestedLimit: requestedLimit)
     }
 
     static func replacingLoadedPrefix(
@@ -570,32 +578,25 @@ struct ScheduledAgentReportsSheet: View {
             )
             guard !Task.isCancelled, selectedReportID == nil else { return }
 
-            let mustReplaceLoadedPrefix = ScheduledAgentReportPageRefresh.loadedPrefixHasChanged(
-                firstPage,
-                from: reports,
-                pageSize: pageSize
+            // Read the whole loaded window plus one row: the extra row
+            // decides `hasMore` without a second request, and a positional
+            // comparison against the loaded rows catches deletions below
+            // the first page that a first-page-only check would miss.
+            let requestedLimit = pageOffset + 1
+            let refreshedPrefix = try await state.scheduledAgentReportPrefix(
+                projectID: projectID,
+                limit: requestedLimit
             )
-            let refreshedPage: ScheduledAgentReportPageRefresh
-            let refreshedReportIDs: Set<String>
-            if mustReplaceLoadedPrefix {
-                let requestedLimit = max(pageOffset, pageSize)
-                let loadedPrefix = try await state.scheduledAgentReportPrefix(
-                    projectID: projectID,
-                    limit: requestedLimit
-                )
-                guard !Task.isCancelled, selectedReportID == nil else { return }
-                refreshedPage = .replacingLoadedPrefix(loadedPrefix, requestedLimit: requestedLimit)
-                refreshedReportIDs = Set(loadedPrefix.map(\.id))
-            } else {
-                refreshedPage = .updatingFirstPage(
-                    firstPage,
-                    in: reports,
-                    pageOffset: pageOffset,
-                    hasMore: hasMore,
-                    pageSize: pageSize
-                )
-                refreshedReportIDs = Set(firstPage.map(\.id))
-            }
+            guard !Task.isCancelled, selectedReportID == nil else { return }
+
+            let refreshedPage = ScheduledAgentReportPageRefresh.loadedWindowRefresh(
+                firstPage: firstPage,
+                from: reports,
+                pageSize: pageSize,
+                prefix: refreshedPrefix,
+                requestedLimit: requestedLimit
+            )
+            let refreshedReportIDs = Set(refreshedPrefix.map(\.id))
             reports = refreshedPage.reports
             pageOffset = refreshedPage.pageOffset
             hasMore = refreshedPage.hasMore
