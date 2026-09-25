@@ -4398,7 +4398,8 @@ extension ACPSessionManager {
     /// already exists for this session, returns immediately. On cold start,
     /// runs the setup check; if ready, spawns the process, initialises ACP,
     /// and calls `session/new` (new sessions) or `session/load` (reopened).
-    func attach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async {
+    @discardableResult
+    func attach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async -> UUID? {
         if let attempt = attachmentAttempts[sessionId] {
             let retryAfterDetachedAttachment = await withCheckedContinuation { continuation in
                 attempt.waiters.append(.init(
@@ -4406,18 +4407,17 @@ extension ACPSessionManager {
                     arrivedAfterTemporaryDetach: cancelledInFlightAttachments.contains(sessionId)
                 ))
             }
-            guard retryAfterDetachedAttachment else { return }
+            guard retryAfterDetachedAttachment else { return attempt.id }
             await waitForTeardown(sessionId: sessionId)
             // A detach can cancel the in-flight attempt while this caller is
             // waiting. Re-enter `attach` so concurrent reconnects coalesce
             // again, rather than all starting a replacement attachment.
-            await attach(to: sessionId, freshlyCreated: freshlyCreated)
-            return
+            return await attach(to: sessionId, freshlyCreated: freshlyCreated)
         }
         if let session = sessions[sessionId],
            case .ready = session.agentState,
            runners[sessionId] != nil {
-            return
+            return nil
         }
         let attempt = AttachmentAttempt()
         attachmentAttempts[sessionId] = attempt
@@ -4428,6 +4428,7 @@ extension ACPSessionManager {
             to: sessionId,
             freshlyCreated: freshlyCreated
         )
+        return attempt.id
     }
 
     private func runAttachmentAttempt(
@@ -6236,8 +6237,11 @@ extension ACPSessionManager {
             if isRecovering {
                 session.beginConnectionRecoveryAttempt()
             }
-            await attach(to: sessionId, freshlyCreated: false)
-            if isRecovering, session.agentState != .ready {
+            let attachmentOwnerID = await attach(to: sessionId, freshlyCreated: false)
+            if isRecovering,
+               attachmentOwnerID != nil,
+               connectionOwnerIDs[sessionId] == attachmentOwnerID,
+               session.agentState != .ready {
                 session.exhaustConnectionRecovery()
             }
         }
@@ -6342,19 +6346,21 @@ extension ACPSessionManager {
                   isCurrentAttachment(sessionId: sessionId, attempt: replacementAttempt, session: session)
             else { return }
         }
-        if let oldConnection, oldConnection !== replacementAttempt.retiringConnection {
-            let shutdownOutcome = await runBounded(timeout: restartTeardownTimeout) {
-                if oldAttemptConnection != nil {
-                    // A startup RPC may still be pending in the broker. Detach
-                    // leaves that process alive, so close this attempt's
-                    // generation before retrying with its stable operation key.
-                    await oldConnection.shutdown()
-                } else {
-                    await oldConnection.detach()
+        if let oldConnection {
+            if oldConnection !== replacementAttempt.retiringConnection {
+                let shutdownOutcome = await runBounded(timeout: restartTeardownTimeout) {
+                    if oldAttemptConnection != nil {
+                        // A startup RPC may still be pending in the broker. Detach
+                        // leaves that process alive, so close this attempt's
+                        // generation before retrying with its stable operation key.
+                        await oldConnection.shutdown()
+                    } else {
+                        await oldConnection.detach()
+                    }
                 }
-            }
-            if oldBrokerClient != nil, case .timedOut = shutdownOutcome {
-                replacementAttempt.requiresFreshBrokerNamespace = true
+                if oldBrokerClient != nil, case .timedOut = shutdownOutcome {
+                    replacementAttempt.requiresFreshBrokerNamespace = true
+                }
             }
         } else if let oldBrokerClient {
             let shutdownOutcome = await runBounded(timeout: restartTeardownTimeout) {
