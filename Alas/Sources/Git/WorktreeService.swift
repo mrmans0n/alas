@@ -1165,27 +1165,40 @@ struct WorktreeService {
                 try failAfterRollingBack("Worktree changed while its contents were audited.")
             }
 
-            // Cleanliness is not the only thing the pre-stage audit checked.
-            // A concurrent process can add a ref or object to a submodule's
-            // repository after the pre-stage fingerprint and before the
-            // rename above; the scheduled-cleanup reachability audit ran
-            // against the live path, so re-run it against the staged
-            // submodule Git directories before deletion destroys them.
-            do {
-                let stagedModulesDirectory = try Self.stagedModulesDirectory(
-                    expectedRegistration.gitDirectory
-                )
-                let stored = try Self.submoduleGitDirectories(in: stagedModulesDirectory)
-                guard try await Self.stagedSubmoduleHistoryIsSafe(
-                    stored,
-                    worktreeGitDirectory: expectedRegistration.gitDirectory
-                ) else {
-                    try failAfterRollingBack(
-                        "A submodule of this worktree holds unpublished Git state that cleanup would destroy."
+            // Cleanliness is not the only thing the pre-stage audit checked
+            // for SCHEDULED cleanup: a concurrent process can add a ref or
+            // object to a submodule's repository after the pre-stage
+            // fingerprint and before the rename above, so the reachability
+            // audit re-runs against the staged submodule Git directories
+            // before deletion destroys them. For a linked worktree those
+            // repositories live under the worktree's OWN git directory
+            // (`<gitdir>/modules/…`, matching `git rev-parse --git-path
+            // modules`), not under the shared common directory — enumerating
+            // the shared `.git/modules` would audit the main checkout's
+            // repositories and miss late writes into the worktree-specific
+            // copies that this removal destroys.
+            //
+            // An ordinary (user-driven) removal never ran the reachability
+            // audit — local-only submodule state is expected and deletable —
+            // so the post-stage audit is likewise gated on the lease check
+            // that only scheduled cleanup supplies.
+            if let beforeRemoval {
+                do {
+                    let stored = try Self.stagedSubmoduleGitDirectories(
+                        worktreePath: ticket.stagedPath,
+                        worktreeGitDirectory: expectedRegistration.gitDirectory
                     )
+                    guard try await Self.stagedSubmoduleHistoryIsSafe(
+                        stored,
+                        worktreeGitDirectory: expectedRegistration.gitDirectory
+                    ) else {
+                        try failAfterRollingBack(
+                            "A submodule of this worktree holds unpublished Git state that cleanup would destroy."
+                        )
+                    }
+                } catch {
+                    try failAfterRollingBack(error.localizedDescription)
                 }
-            } catch {
-                try failAfterRollingBack(error.localizedDescription)
             }
         }
 
@@ -1321,6 +1334,23 @@ struct WorktreeService {
         )
         guard untracked.exitCode == 0 else { throw WorktreeError.gitFailed(untracked.stderr) }
 
+        // `git status --untracked-files=all` and `ls-files --others
+        // --exclude-standard` both omit ignored paths, but a non-force
+        // `git worktree remove` still deletes them. An ignored artifact
+        // (build output, `.env`, logs) can hold its only copy here, so the
+        // fingerprint must cover it: an ignored file appearing or changing
+        // invalidates an authorized deletion just like untracked content.
+        let ignored = try await Process.runData(
+            "/bin/sh",
+            args: [
+                "-c",
+                #"git ls-files --others --ignored --exclude-standard --directory -z | perl -0ne 'chomp; print "ignored-path-hex=", unpack("H*", $_), "\n"; system("git","hash-object","--",$_) == 0 or exit 1'"#
+            ],
+            cwd: worktreePath,
+            env: Process.gitEnv()
+        )
+        guard ignored.exitCode == 0 else { throw WorktreeError.gitFailed(ignored.stderr) }
+
         let submodules = try await Process.gitData([
             "submodule", "foreach", "--quiet", "--recursive",
             """
@@ -1332,7 +1362,7 @@ struct WorktreeService {
             git diff --no-ext-diff --binary --full-index --submodule=diff HEAD --
             git diff --cached --no-ext-diff --binary --full-index --submodule=diff HEAD --
             git ls-files --others --exclude-standard -z | perl -0ne 'chomp; print "untracked-path-hex=", unpack("H*", $_), "\\n"; system("git","hash-object","--",$_) == 0 or exit 1'
-            # Bind the scheduled cleanup reachability audit to the staged-delete fingerprint.
+            git ls-files --others --ignored --exclude-standard --directory -z | perl -0ne 'chomp; print "ignored-path-hex=", unpack("H*", $_), "\\n"; system("git","hash-object","--",$_) == 0 or exit 1'
             git for-each-ref --format='ref=%(refname)=%(objectname)'
             git rev-list --max-count=50 --reflog --not --remotes 2>/dev/null | while IFS= read -r oid; do printf 'reflog=%s\\n' "$oid"; done
             fsck_output=$(mktemp)
@@ -1360,6 +1390,7 @@ struct WorktreeService {
         append("diff", diff.stdout)
         append("cachedDiff", cachedDiff.stdout)
         append("untracked", untracked.stdout)
+        append("ignored", ignored.stdout)
         append("submodules", submodules.stdout)
         append("submoduleGitDirectories", Data(submoduleGitDirectories.stored.joined(separator: "\n").utf8))
         append("activeSubmoduleGitDirectories", Data(submoduleGitDirectories.active.sorted().joined(separator: "\n").utf8))
@@ -1479,12 +1510,13 @@ struct WorktreeService {
                 test -n "$refs"
                 local_only=$(git rev-list --max-count=1 --all --reflog --not --remotes 2>/dev/null)
                 test -z "$local_only"
-                # Every local tag or branch *name* must exist on a remote
-                # under the same namespace AND point at the same object. The
-                # commits behind them are already covered by the
+                # Every local ref *name* (branches, tags, and any custom
+                # namespace like refs/notes or refs/archive) must exist on a
+                # remote under the same namespace AND point at the same
+                # object. The commits behind them are already covered by the
                 # rev-list/fsck checks above, but the ref *names* themselves
                 # are destroyed with the worktree-specific repository, so a
-                # same-short-name remote ref in the other namespace — or one
+                # same-short-name remote ref in another namespace — or one
                 # pointing at a different object — does not preserve the
                 # association. The protocol override keeps file:// remotes
                 # (local test fixtures) working; network remotes ignore it.
@@ -1494,7 +1526,7 @@ struct WorktreeService {
                     remote_oid=$(git -c protocol.file.allow=always ls-remote origin "$ref_name" | awk '$2 == ref { print $1; exit }' ref="$ref_name")
                     test "$remote_oid" = "$ref_oid" || names_failed=1
                 done <<REFS_EOF
-                $(git for-each-ref --format='%(objectname) %(refname)' refs/tags/ refs/heads/)
+                $(git for-each-ref --format='%(objectname) %(refname)' | awk '$2 !~ /^refs\\/remotes\\// { print }')
                 REFS_EOF
                 test "$names_failed" -eq 0
                 unreachable=$(git fsck --no-reflogs --unreachable --no-progress 2>/dev/null)
@@ -1509,24 +1541,21 @@ struct WorktreeService {
         return submoduleRemoteRefs.exitCode == 0
     }
 
-    /// Resolves the `modules` directory of a *staged* (renamed) worktree from
-    /// its own Git directory. The relative `gitdir:` pointers inside the
-    /// staged tree are dangling, so this recomputes the path instead of
-    /// shelling out from the staged path.
-    private static func stagedModulesDirectory(_ worktreeGitDirectory: URL) throws -> URL {
-        let marker = worktreeGitDirectory.appendingPathComponent("commondir")
-        let commonDirectory: URL
-        if let raw = try? String(contentsOf: marker, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !raw.isEmpty
-        {
-            commonDirectory = (raw as NSString).isAbsolutePath
-                ? URL(fileURLWithPath: raw).standardizedFileURL
-                : worktreeGitDirectory.appendingPathComponent(raw).standardizedFileURL
-        } else {
-            commonDirectory = worktreeGitDirectory.standardizedFileURL
+    /// Enumerates the submodule Git directories a *staged* (renamed) worktree
+    /// owns. A linked worktree's repositories live at computable spots
+    /// relative to its own git directory — the same fallback
+    /// `submoduleGitDirectory` uses once the relative `gitdir:` pointers go
+    /// dangling — so this walks `<gitdir>/modules/**` rather than the shared
+    /// common directory's `.git/modules`.
+    private static func stagedSubmoduleGitDirectories(
+        worktreePath: URL,
+        worktreeGitDirectory: URL
+    ) throws -> [String] {
+        let modulesDirectory = worktreeGitDirectory.appendingPathComponent("modules", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: modulesDirectory.path) else {
+            return []
         }
-        return commonDirectory.appendingPathComponent("modules", isDirectory: true)
+        return try submoduleGitDirectories(in: modulesDirectory)
     }
 
     /// Post-rename counterpart of `scheduledCleanupHistoryIsSafe`'s submodule
@@ -1570,7 +1599,7 @@ struct WorktreeService {
             else { return false }
 
             let namesResult = try await Process.git(
-                gitArguments + ["for-each-ref", "--format=%(objectname) %(refname)", "refs/tags/", "refs/heads/"],
+                gitArguments + ["for-each-ref", "--format=%(objectname) %(refname)"],
                 cwd: worktreeGitDirectory
             )
             guard namesResult.exitCode == 0 else { return false }
@@ -1580,11 +1609,14 @@ struct WorktreeService {
                 guard parts.count == 2 else { return false }
                 let oid = String(parts[0])
                 let fullName = String(parts[1])
-                guard fullName.hasPrefix("refs/tags/") || fullName.hasPrefix("refs/heads/") else { continue }
+                // Remote-tracking refs are the anchor the reachability checks
+                // rely on; every other local namespace (branches, tags,
+                // notes, custom archives) must survive on a remote.
+                guard !fullName.hasPrefix("refs/remotes/") else { continue }
                 // The ref *name* is destroyed with the repository, so each
                 // one has to exist on the remote under the same namespace
                 // AND point at the same object — a same-short-name remote
-                // ref in the other namespace, or one pointing at a different
+                // ref in another namespace, or one pointing at a different
                 // object, does not preserve the association. The protocol
                 // override keeps file:// remotes (local test fixtures)
                 // working; network remotes ignore it.
