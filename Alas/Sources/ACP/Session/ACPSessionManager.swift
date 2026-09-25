@@ -4484,7 +4484,11 @@ extension ACPSessionManager {
         sessionId: ACPSession.ID
     ) async {
         guard let connection = attempt.retiringConnection else { return }
-        attempt.retiringConnection = nil
+        // Keep the field set while the bounded operation is suspended: a
+        // nested restart or disposal landing in that window is the only
+        // other teardown-visible reader (`restartConnection` /
+        // `tearDownSession`), and it must be able to claim the connection
+        // if the transport wedges.
         let outcome = await runBounded(timeout: restartTeardownTimeout) {
             if attempt.shouldCloseRemoteResultOnCompletion {
                 await connection.shutdown()
@@ -4492,6 +4496,7 @@ extension ACPSessionManager {
                 await connection.detach()
             }
         }
+        attempt.retiringConnection = nil
         if connection.client is ACPBrokerClient, case .timedOut = outcome {
             attempt.requiresFreshBrokerNamespace = true
             // This attempt may be deregistered before anything consumes the
