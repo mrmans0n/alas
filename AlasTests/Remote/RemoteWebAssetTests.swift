@@ -1232,7 +1232,7 @@ struct RemoteWebAssetTests {
 
         let app = try asset("app.js")
         #expect(app.contains("function showOriginBlockedGate(link) {"))
-        let stateChange = try #require(app.range(of: "function handleLinkStateChange(link) {").map { app[$0.lowerBound...].prefix(700) })
+        let stateChange = try #require(app.range(of: "function handleLinkStateChange(link) {").map { app[$0.lowerBound...].prefix(900) })
         #expect(stateChange.contains(#"case "blocked":"#))
         #expect(stateChange.contains("showOriginBlockedGate(link);"))
         let switchServer = try #require(app.range(of: "function switchServer(id) {").map { app[$0.lowerBound...].prefix(900) })
@@ -1541,5 +1541,19 @@ struct RemoteWebAssetTests {
         let body = try #require(js.range(of: "function worktreeRow1(section, worktree, singleSession, expanded) {").map { js[$0.lowerBound...].prefix(900) })
         #expect(body.contains("if (section.isOther || !worktree.summary) {"))
         #expect(!body.contains("if (section.isOther) {"))
+    }
+
+    // Regression (Codex review, PR #1470): gatewayCounts is only fresh while
+    // the active link is online and pushing sessionList updates. Without
+    // clearing it on disconnect, a peer's Servers badge stayed frozen at its
+    // last gateway-pushed value instead of falling back to that peer's own
+    // live idle-polled counts once the gateway dropped.
+    @Test func gatewayCountsAreClearedWhenTheActiveLinkLeavesOnline() throws {
+        let js = try asset("app.js")
+        let body = try #require(js.range(of: "function handleLinkStateChange(link) {").map { js[$0.lowerBound...].prefix(500) })
+        #expect(body.contains(#"if (link.role === "active" && link.state !== "online") gatewayCounts = new Map();"#))
+        let clearedAt = try #require(body.range(of: "gatewayCounts = new Map();")?.lowerBound)
+        let refreshedAt = try #require(body.range(of: "refreshHubViews();")?.lowerBound)
+        #expect(clearedAt < refreshedAt, "must clear before refreshing views, not after")
     }
 }

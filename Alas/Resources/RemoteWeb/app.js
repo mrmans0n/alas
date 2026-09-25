@@ -173,6 +173,8 @@ function connectedLabel() {
 }
 
 function handleLinkStateChange(link) {
+  // gatewayCounts is stale once the active link stops being online.
+  if (link.role === "active" && link.state !== "online") gatewayCounts = new Map();
   refreshHubViews();
   if (link.role !== "active") return;
   switch (link.state) {
