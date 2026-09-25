@@ -58,7 +58,8 @@ struct QueuedPromptTests {
                              enqueuedAt: .init(), status: .sending, lastError: "boom")
         let n = q.normalizedAfterRestore()
         #expect(n.status == .pending)
-        #expect(n.lastError == "boom")    // lastError survives; only status flips
+        #expect(n.lastError == "boom") // Existing, specific error survives normalization.
+        #expect(n.deliveryUncertain)
     }
 
     @Test("encodes status as raw string")
