@@ -1509,6 +1509,56 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.undoManager?.canUndo == false)
     }
 
+    @Test("accepting a leading command from the picker clears stale undo history")
+    func pickerAcceptClearsStaleUndoHistory() throws {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        textView.allowsUndo = true
+        // A real insertText call leaves its own undo record behind, same
+        // precondition as the other undo-safety tests above — this one
+        // exercises the slash-PICKER accept path (`insertSlash`) rather
+        // than the typed-completion or late-arrival paths.
+        textView.insertText("/read-j", replacementRange: textView.selectedRange())
+        #expect(textView.undoManager?.canUndo == true)
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+
+        textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/read-jira-ticket")
+        #expect(ACPInputField.Coordinator.extract(storage).0 == "/read-jira-ticket ")
+        #expect(!textView.isSlashPanelOpen)
+        // Same reasoning as `replaceClearingUndo`: the picked token can be
+        // longer than its one-glyph chip, so the prior typing's undo
+        // record no longer matches — clear it instead of risking a crash.
+        #expect(textView.undoManager?.canUndo == false)
+    }
+
+    @Test("late chipification preserves the caret's position past the command")
+    func lateChipificationPreservesCaretPastCommand() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions = []
+        textView.insertText("/init some text", replacementRange: textView.selectedRange())
+        let fullLength = (textView.string as NSString).length
+        textView.setSelectedRange(NSRange(location: fullLength, length: 0))
+
+        // The suggestion list arrives while the caret is still at the end
+        // of what the user kept typing past the command — it must not get
+        // yanked back to right after the newly formed chip.
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        #expect(ACPInputField.Coordinator.extract(storage).0 == "/init some text")
+        // The command shrank from 5 characters to a 1-character chip (a
+        // delta of -4); the caret shifts by that same delta, staying at
+        // the true end of the message instead of snapping to position 1.
+        #expect(textView.selectedRange() == NSRange(location: fullLength - 4, length: 0))
+    }
+
     @Test("the slash picker stays open for `$`-prefixed skills")
     func slashPickerAcceptsDollarSkills() {
         let (textView, coordinator, window) = makeGhostHintTextView()

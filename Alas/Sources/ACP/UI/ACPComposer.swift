@@ -1005,6 +1005,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// given up.
     private func replaceClearingUndo(range: NSRange, with replacement: NSAttributedString) {
         guard let textStorage else { return }
+        let selectionBefore = selectedRange()
         undoManager?.removeAllActions()
         textStorage.replaceCharacters(in: range, with: replacement)
         let replacedRange = NSRange(location: range.location, length: replacement.length)
@@ -1015,7 +1016,21 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // bypasses `NSTextView`'s own selection bookkeeping, so the
         // selection must be clamped back into range explicitly here too.
         didChangeText()
-        setSelectedRange(NSRange(location: NSMaxRange(replacedRange), length: 0))
+        // Preserve the caret's position in the REST of the message rather
+        // than always snapping it to right after the chip: a late
+        // `available_commands_update` can land while the user has kept
+        // typing past the command (`/init some text I'm still writing`),
+        // and forcing their caret back to position 6 there would yank it
+        // out from under them mid-sentence. A caret already past the
+        // replaced range just shifts by the length delta, staying exactly
+        // where the user left it; one still inside (or before) it — the
+        // typed-completion path above, where the caret IS the end of the
+        // range — has nowhere sensible to go but the end of the chip.
+        let delta = replacement.length - range.length
+        let newLocation = selectionBefore.location >= NSMaxRange(range)
+            ? selectionBefore.location + delta
+            : NSMaxRange(replacedRange)
+        setSelectedRange(NSRange(location: newLocation, length: 0))
     }
 
     /// Retry-once-on-attach: a restored draft can already contain an active
@@ -1795,28 +1810,35 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // argument. Falls back to a plain append if we somehow lost the
         // slash range.
         let replacement = suggestion.command + " "
-        if slashStart >= 0, caret >= slashStart {
-            let range = NSRange(location: slashStart, length: caret - slashStart)
-            // A leading command is what the agent will actually run, so only
-            // that one becomes a pill; mid-message picks stay plain text.
-            let inserted: NSAttributedString
-            if slashStart == 0 {
-                let chip = NSMutableAttributedString(
-                    attributedString: ACPLeadingCommand.chip(for: suggestion.command, font: chatTypography.appKitFont())
-                )
-                chip.append(NSAttributedString(string: " ", attributes: baseTypingAttributes))
-                inserted = chip
-            } else {
-                inserted = NSAttributedString(string: replacement, attributes: baseTypingAttributes)
-            }
-            ts.replaceCharacters(in: range, with: inserted)
-            let newCaret = slashStart + inserted.length
-            setSelectedRange(NSRange(location: newCaret, length: 0))
-        } else {
+        guard slashStart >= 0, caret >= slashStart else {
             ts.append(NSAttributedString(string: replacement))
+            closeSlashPanel()
+            didChangeText()
+            return
         }
+        let range = NSRange(location: slashStart, length: caret - slashStart)
+        // Captured before `closeSlashPanel()`, which resets `slashStart`.
+        let isLeadingCommand = slashStart == 0
         closeSlashPanel()
-        didChangeText()
+        // A leading command is what the agent will actually run, so only
+        // that one becomes a pill; mid-message picks stay plain text. The
+        // picked token can be several characters longer than its one-glyph
+        // chip (e.g. accepting `/read-jira-ticket` while `/read-j` is still
+        // live) — the same shrinking edit `replaceClearingUndo` exists for,
+        // so the leading branch goes through it too instead of a direct
+        // `replaceCharacters` that would leave this keystroke's own typing
+        // undo record targeting a range that no longer exists.
+        if isLeadingCommand {
+            let chip = NSMutableAttributedString(
+                attributedString: ACPLeadingCommand.chip(for: suggestion.command, font: chatTypography.appKitFont())
+            )
+            chip.append(NSAttributedString(string: " ", attributes: baseTypingAttributes))
+            replaceClearingUndo(range: range, with: chip)
+        } else {
+            ts.replaceCharacters(in: range, with: NSAttributedString(string: replacement, attributes: baseTypingAttributes))
+            setSelectedRange(NSRange(location: slashStart + (replacement as NSString).length, length: 0))
+            didChangeText()
+        }
     }
 
     private func positionAndShow(_ panel: NSPanel, makeKey: Bool = true) {
