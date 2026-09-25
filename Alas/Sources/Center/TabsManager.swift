@@ -3178,12 +3178,15 @@ final class TabsManager {
 
     /// Relative paths with unsaved editor state for one worktree. Includes
     /// unloaded hot-exit snapshots because a restore would otherwise replace
-    /// the on-disk file behind an unsaved editor draft.
+    /// the on-disk file behind an unsaved editor draft. Legacy unowned
+    /// (nil-project) tabs count for every project: the underlying file lives
+    /// in the shared worktree, so checkpoint coordination must not skip it
+    /// merely because the triggering project-qualified row didn't open it.
     func unsavedRelativePaths(forWorktree worktreeId: String, projectId: String? = nil) -> Set<String> {
         guard let file = byWorktree[worktreeId] else { return [] }
         return Set(file.tabs.compactMap { tab in
             guard case let .editor(state) = tab,
-                  projectId == nil || state.projectId == projectId,
+                  projectId == nil || state.projectId == nil || state.projectId == projectId,
                   !state.isExternal else { return nil }
             if let buffer = peekBuffer(tabId: state.id) {
                 return buffer.saveDisposition == .clean ? nil : buffer.relativePath
