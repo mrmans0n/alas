@@ -5,26 +5,33 @@ struct ScheduledAgentReportPageRefresh {
     let pageOffset: Int
     let hasMore: Bool
 
-    static func mergingFirstPage(
+    static func firstPageHasChanged(
         _ firstPage: [ScheduledAgentReport],
-        into reports: [ScheduledAgentReport],
+        from reports: [ScheduledAgentReport],
+        pageSize: Int
+    ) -> Bool {
+        firstPage.map(\.id) != reports.prefix(pageSize).map(\.id)
+    }
+
+    static func replacingLoadedPrefix(
+        _ reports: [ScheduledAgentReport],
+        requestedLimit: Int
+    ) -> Self {
+        Self(
+            reports: reports,
+            pageOffset: reports.count,
+            hasMore: reports.count == requestedLimit
+        )
+    }
+
+    static func updatingFirstPage(
+        _ firstPage: [ScheduledAgentReport],
+        in reports: [ScheduledAgentReport],
         pageOffset: Int,
         hasMore: Bool,
         pageSize: Int
     ) -> Self {
-        let existingIDs = Set(reports.map(\.id))
-        let newReports = firstPage.filter { !existingIDs.contains($0.id) }
-
-        if firstPage.count == pageSize, newReports.count == pageSize {
-            // The first page is entirely new; continue from its boundary, not
-            // the old offset, or intervening reports will be skipped.
-            return Self(reports: firstPage, pageOffset: firstPage.count, hasMore: true)
-        }
-
         var refreshedReports = reports
-        if !newReports.isEmpty {
-            refreshedReports.insert(contentsOf: newReports, at: 0)
-        }
         for report in firstPage {
             guard let index = refreshedReports.firstIndex(where: { $0.id == report.id }) else { continue }
             refreshedReports[index] = report
@@ -32,7 +39,7 @@ struct ScheduledAgentReportPageRefresh {
 
         return Self(
             reports: refreshedReports,
-            pageOffset: pageOffset + newReports.count,
+            pageOffset: pageOffset,
             hasMore: pageOffset > pageSize ? hasMore : firstPage.count == pageSize
         )
     }
@@ -553,18 +560,38 @@ struct ScheduledAgentReportsSheet: View {
                 limit: pageSize
             )
             guard !Task.isCancelled, selectedReportID == nil else { return }
-            let refreshedPage = ScheduledAgentReportPageRefresh.mergingFirstPage(
+
+            let mustReplaceLoadedPrefix = ScheduledAgentReportPageRefresh.firstPageHasChanged(
                 firstPage,
-                into: reports,
-                pageOffset: pageOffset,
-                hasMore: hasMore,
+                from: reports,
                 pageSize: pageSize
             )
+            let refreshedPage: ScheduledAgentReportPageRefresh
+            let refreshedReportIDs: Set<String>
+            if mustReplaceLoadedPrefix {
+                let requestedLimit = max(pageOffset, pageSize)
+                let loadedPrefix = try await state.scheduledAgentReportPrefix(
+                    projectID: projectID,
+                    limit: requestedLimit
+                )
+                guard !Task.isCancelled, selectedReportID == nil else { return }
+                refreshedPage = .replacingLoadedPrefix(loadedPrefix, requestedLimit: requestedLimit)
+                refreshedReportIDs = Set(loadedPrefix.map(\.id))
+            } else {
+                refreshedPage = .updatingFirstPage(
+                    firstPage,
+                    in: reports,
+                    pageOffset: pageOffset,
+                    hasMore: hasMore,
+                    pageSize: pageSize
+                )
+                refreshedReportIDs = Set(firstPage.map(\.id))
+            }
             reports = refreshedPage.reports
             pageOffset = refreshedPage.pageOffset
             hasMore = refreshedPage.hasMore
             pageError = nil
-            await refreshPendingReports(excluding: Set(firstPage.map(\.id)))
+            await refreshPendingReports(excluding: refreshedReportIDs)
         } catch {
             guard !Task.isCancelled, selectedReportID == nil else { return }
             pageError = error.localizedDescription

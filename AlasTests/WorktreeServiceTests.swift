@@ -992,6 +992,65 @@ extension WorktreeServiceTests {
         ))
     }
 
+    @Test func scheduledCleanupRejectsAndFingerprintsUnreachableSubmoduleBlobsAndTrees() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "scheduled-submodule-unreachable-objects")
+        defer { fixture.removeFiles() }
+
+        let baseResult = try await Process.git(["rev-parse", "HEAD"], cwd: fixture.worktree.path)
+        try #require(baseResult.exitCode == 0)
+        let base = baseResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let superprojectRemote = "refs/remotes/origin/\(fixture.worktree.branch)"
+        let reachableSuperprojectHead = try await Process.git(
+            ["update-ref", superprojectRemote, base],
+            cwd: fixture.worktree.path
+        )
+        try #require(reachableSuperprojectHead.exitCode == 0)
+
+        let submodulePath = fixture.worktree.path.appendingPathComponent("Deps/Submodule")
+        let submoduleHead = try await Process.git(["rev-parse", "HEAD"], cwd: submodulePath)
+        try #require(submoduleHead.exitCode == 0)
+        let reachableSubmoduleHead = try await Process.git(
+            ["update-ref", "refs/remotes/origin/main", submoduleHead.stdout.trimmingCharacters(in: .whitespacesAndNewlines)],
+            cwd: submodulePath
+        )
+        try #require(reachableSubmoduleHead.exitCode == 0)
+
+        let fingerprintBeforeUnreachableObjects = try await WorktreeService.worktreeDeleteContentFingerprint(
+            worktreePath: fixture.worktree.path
+        )
+        let danglingBlob = try await Process.git(
+            ["hash-object", "-w", "--stdin"],
+            cwd: submodulePath,
+            stdin: "unreachable scheduled cleanup blob\n"
+        )
+        try #require(danglingBlob.exitCode == 0)
+        let blobOID = danglingBlob.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let danglingTree = try await Process.git(
+            ["mktree"],
+            cwd: submodulePath,
+            stdin: "100644 blob \(blobOID)\ttracked.txt\n"
+        )
+        try #require(danglingTree.exitCode == 0)
+        let treeOID = danglingTree.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let unreachableObjects = try await Process.git(
+            ["fsck", "--no-reflogs", "--unreachable", "--no-progress"],
+            cwd: submodulePath
+        )
+        try #require(unreachableObjects.exitCode == 0)
+        #expect(unreachableObjects.stdout.contains("unreachable blob \(blobOID)"))
+        #expect(unreachableObjects.stdout.contains("unreachable tree \(treeOID)"))
+
+        let fingerprintWithUnreachableObjects = try await WorktreeService.worktreeDeleteContentFingerprint(
+            worktreePath: fixture.worktree.path
+        )
+        #expect(fingerprintWithUnreachableObjects != fingerprintBeforeUnreachableObjects)
+        #expect(!(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        )))
+    }
     @Test func worktreeDeleteContentFingerprintTracksSubmoduleRefChanges() async throws {
         let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-remote-ref-fingerprint")
         defer { fixture.removeFiles() }

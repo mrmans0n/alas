@@ -604,6 +604,20 @@ extension AppState {
         )
     }
 
+    func scheduledAgentReportPrefix(
+        projectID: String,
+        limit: Int
+    ) async throws -> [ScheduledAgentReport] {
+        await scheduledAgentReportsRecoveryTask?.value
+        let store = try scheduledAgentReportsStore()
+        _ = try await store.reconcileAfterRestartIfNeeded()
+        return try await store.page(
+            projectID: projectID,
+            offset: 0,
+            limit: max(1, limit)
+        )
+    }
+
     func scheduledAgentReport(id: String) async throws -> ScheduledAgentReport? {
         await scheduledAgentReportsRecoveryTask?.value
         let store = try scheduledAgentReportsStore()

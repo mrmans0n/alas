@@ -15,7 +15,8 @@ struct ScheduledAgentReportStoreTests {
         id: String = "target-run",
         occurrenceID: String = "occurrence",
         projectID: String = "project",
-        cleanupRequested: Bool = true
+        cleanupRequested: Bool = true,
+        startedAt: Date? = nil
     ) -> ScheduledAgentReport {
         ScheduledAgentReport(
             id: id,
@@ -27,7 +28,7 @@ struct ScheduledAgentReportStoreTests {
             agentID: "claude",
             modelID: "sonnet",
             request: "Review the open issues and label clear duplicates.",
-            startedAt: epoch,
+            startedAt: startedAt ?? epoch,
             cleanupRequested: cleanupRequested
         )
     }
@@ -78,50 +79,55 @@ struct ScheduledAgentReportStoreTests {
         #expect(try await reopened.page(projectID: "project", offset: 0, limit: 10) == [finished])
     }
 
-    @Test func reportPageRefreshResetsPaginationWhenFirstPageIsEntirelyNew() {
-        let firstPage = [
-            report(id: "new-1", occurrenceID: "new-1"),
-            report(id: "new-2", occurrenceID: "new-2")
-        ]
-        let existingReports = (0..<6).map { index in
-            report(id: "old-\(index)", occurrenceID: "old-\(index)")
+    @Test func reportPageRefreshReconcilesDeletionWithoutSkippingTheNextReport() async throws {
+        let path = temporaryPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let store = try ScheduledAgentReportStore(path: path)
+
+        for index in 0..<6 {
+            let reportID = "report-\(index)"
+            try await store.create(report(
+                id: reportID,
+                occurrenceID: reportID,
+                cleanupRequested: false,
+                startedAt: epoch.addingTimeInterval(-TimeInterval(index))
+            ))
+            let sessionID = "session-\(index)"
+            try await store.associateSession(reportID: reportID, sessionID: sessionID)
+            try await store.finish(
+                reportID: reportID,
+                authenticatedSessionID: sessionID,
+                completion: completion,
+                at: epoch.addingTimeInterval(10)
+            )
         }
 
-        let refreshed = ScheduledAgentReportPageRefresh.mergingFirstPage(
-            firstPage,
-            into: existingReports,
-            pageOffset: existingReports.count,
-            hasMore: false,
-            pageSize: firstPage.count
+        let loadedReports = try await store.page(projectID: "project", offset: 0, limit: 4)
+        #expect(loadedReports.map(\.id) == ["report-0", "report-1", "report-2", "report-3"])
+        #expect(try await store.delete(id: "report-0"))
+
+        let refreshedFirstPage = try await store.page(projectID: "project", offset: 0, limit: 2)
+        #expect(ScheduledAgentReportPageRefresh.firstPageHasChanged(
+            refreshedFirstPage,
+            from: loadedReports,
+            pageSize: 2
+        ))
+        let refreshedPrefix = try await store.page(
+            projectID: "project",
+            offset: 0,
+            limit: loadedReports.count
         )
-
-        #expect(refreshed.reports.map(\.id) == ["new-1", "new-2"])
-        #expect(refreshed.pageOffset == 2)
-        #expect(refreshed.hasMore)
-    }
-
-    @Test func reportPageRefreshMergesSmallInsertionsWithoutResettingOlderPages() {
-        let existingReports = (0..<4).map { index in
-            report(id: "old-\(index)", occurrenceID: "old-\(index)")
-        }
-        let firstPage = [
-            report(id: "new", occurrenceID: "new"),
-            existingReports[0]
-        ]
-
-        let refreshed = ScheduledAgentReportPageRefresh.mergingFirstPage(
-            firstPage,
-            into: existingReports,
-            pageOffset: existingReports.count,
-            hasMore: true,
-            pageSize: firstPage.count
+        let refreshed = ScheduledAgentReportPageRefresh.replacingLoadedPrefix(
+            refreshedPrefix,
+            requestedLimit: loadedReports.count
         )
-
-        #expect(refreshed.reports.map(\.id) == ["new", "old-0", "old-1", "old-2", "old-3"])
-        #expect(refreshed.pageOffset == 5)
+        #expect(refreshed.reports.map(\.id) == ["report-1", "report-2", "report-3", "report-4"])
+        #expect(refreshed.pageOffset == 4)
         #expect(refreshed.hasMore)
-    }
 
+        let nextPage = try await store.page(projectID: "project", offset: refreshed.pageOffset, limit: 2)
+        #expect(nextPage.map(\.id) == ["report-5"])
+    }
     @Test func acceptedCompletionStaysRunningUntilThePromptSettlesAndRejectsDuplicates() async throws {
         let path = temporaryPath()
         defer { try? FileManager.default.removeItem(atPath: path) }

@@ -1316,7 +1316,7 @@ struct WorktreeService {
             unreachable_object_inventory=$(mktemp)
             trap 'rm -f "$fsck_output" "$unreachable_object_inventory"' EXIT
             git fsck --no-reflogs --unreachable --no-progress >"$fsck_output" 2>/dev/null
-            awk '$2 == "commit" { print "unreachable-commit=" $3 } $2 == "tag" { print "unreachable-tag=" $3 }' "$fsck_output" >"$unreachable_object_inventory"
+            awk '$1 == "unreachable" || $1 == "dangling" { print "unreachable-object=" $2 ":" $3 }' "$fsck_output" >"$unreachable_object_inventory"
             LC_ALL=C sort -u "$unreachable_object_inventory"
             """
         ], cwd: worktreePath)
@@ -1458,9 +1458,7 @@ struct WorktreeService {
                 annotated_tags=$(git for-each-ref --format='%(objecttype)' refs/tags/ | awk '$1 == "tag" { print "annotated" }')
                 test -z "$annotated_tags"
                 unreachable=$(git fsck --no-reflogs --unreachable --no-progress 2>/dev/null)
-                case "$unreachable" in
-                    *"unreachable commit "*|*"dangling commit "*|*"unreachable tag "*|*"dangling tag "*) exit 1 ;;
-                esac
+                test -z "$unreachable"
                 """
             ],
             cwd: worktreePath,
