@@ -894,6 +894,25 @@ extension WorktreeServiceTests {
         )
         try #require(reflogCommits.exitCode == 0)
         #expect(!reflogCommits.stdout.contains(localOnlyOID))
+        let unreachableCommitObject = try await Process.git(
+            ["cat-file", "-e", "\(localOnlyOID)^{commit}"],
+            cwd: submodulePath
+        )
+        try #require(unreachableCommitObject.exitCode == 0)
+        let unreachableObjects = try await Process.git(
+            ["fsck", "--no-reflogs", "--unreachable", "--no-progress"],
+            cwd: submodulePath
+        )
+        try #require(unreachableObjects.exitCode == 0)
+        #expect(
+            unreachableObjects.stdout.contains("unreachable commit \(localOnlyOID)")
+                || unreachableObjects.stdout.contains("dangling commit \(localOnlyOID)")
+        )
+        #expect(!(try await WorktreeService.scheduledCleanupHistoryIsSafe(
+            baseCommit: base,
+            expectedBranch: fixture.worktree.branch,
+            worktreePath: fixture.worktree.path
+        )))
 
         let localTag = try await Process.git(["tag", "local-only", localOnlyOID], cwd: submodulePath)
         try #require(localTag.exitCode == 0)

@@ -1392,10 +1392,11 @@ struct WorktreeService {
     }
 
     /// A scheduled run may discard its checkout only when its original base is
-    /// an ancestor of the current tip, that tip is remotely reachable, every
-    /// initialized submodule HEAD and local commit is remotely reachable, and no
-    /// deinitialized submodule repository remains under the worktree Git directory.
-    /// Local-only commits remain available for review in the worktree.
+    /// an ancestor of the current tip and the tip is remotely reachable. Every
+    /// commit object in each initialized submodule must also be remotely
+    /// reachable, and no deinitialized submodule repository may remain under
+    /// the worktree Git directory. Local-only commits remain available for
+    /// review in the worktree.
     static func scheduledCleanupHistoryIsSafe(
         baseCommit: String,
         expectedBranch: String,
@@ -1448,6 +1449,10 @@ struct WorktreeService {
                 test -n "$refs"
                 local_only=$(git rev-list --max-count=1 --all --reflog --not --remotes 2>/dev/null)
                 test -z "$local_only"
+                unreachable=$(git fsck --no-reflogs --unreachable --no-progress 2>/dev/null)
+                case "$unreachable" in
+                    *"unreachable commit "*|*"dangling commit "*) exit 1 ;;
+                esac
                 """
             ],
             cwd: worktreePath,

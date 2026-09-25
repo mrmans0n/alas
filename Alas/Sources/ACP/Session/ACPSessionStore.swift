@@ -1169,11 +1169,15 @@ extension ACPSessionStore {
         let rows = try db.query("SELECT * FROM session_leases")
         return rows.reduce(into: 0) { count, row in
             let heartbeatAt = (row["heartbeat_at"] as? Int64) ?? 0
-            guard heartbeatAt >= staleCutoff else { return }
             if let excludingInstanceId,
                (row["owner_instance"] as? String) == excludingInstanceId {
                 return
             }
+            let processMayOwnLease = ACPProcessLiveness.pidCouldOwnLease(
+                (row["pid"] as? Int64) ?? 0,
+                lastHeartbeatAt: Date(timeIntervalSince1970: TimeInterval(heartbeatAt))
+            )
+            guard heartbeatAt >= staleCutoff || processMayOwnLease else { return }
             count += 1
         }
     }
