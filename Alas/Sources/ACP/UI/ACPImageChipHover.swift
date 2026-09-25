@@ -21,6 +21,11 @@ class ACPImageChipHoverController {
     /// Range + URL the pending timer will show for; lets `hide` cancel a
     /// chip-to-chip move instead of flashing a stale popover.
     private var pendingTarget: ChipTarget?
+    /// The chip whose image is currently loading off-main. Set by `show`,
+    /// cleared when presentation completes or the controller hides, so an
+    /// in-flight load is abandoned exactly when a real user-visible state
+    /// (pending timer or shown popover) would be.
+    private var inFlightTarget: ChipTarget?
     /// The chip whose popover is currently displayed, so moving from one
     /// chip directly onto another closes the stale preview immediately
     /// instead of leaving it up during the next chip's debounce.
@@ -66,6 +71,7 @@ class ACPImageChipHoverController {
 
     func hide() {
         cancelPendingShow()
+        inFlightTarget = nil
         popover?.performClose(nil)
         popover = nil
         shownTarget = nil
@@ -85,6 +91,7 @@ class ACPImageChipHoverController {
     private func show(range: NSRange, fileURL: URL, in textView: ACPNSTextView) {
         guard let anchor = textView.imageChipAnchorRect(for: range) else { return }
         let target = ChipTarget(range: range, fileURL: fileURL)
+        inFlightTarget = target
 
         // Cap: the visible composer width, and half the main screen's height
         // — whichever binds first for the image's aspect ratio.
@@ -98,12 +105,16 @@ class ACPImageChipHoverController {
         }
         Task { @MainActor [weak self, weak textView] in
             guard let self, let textView else { return }
-            guard self.pendingTarget == nil || self.pendingTarget == target,
-                  self.shownTarget == nil || self.shownTarget == target else { return }
             guard let image = await ACPThumbnailImageCache.shared.image(for: cacheKey, load: load)
-            else { return }
-            // The popover may have been hidden while the load was in flight.
-            guard self.pendingTarget == target || self.shownTarget == target else { return }
+            else {
+                self.inFlightTarget = nil
+                return
+            }
+            // The load is obsolete if the user left the chip (hide cleared
+            // every target) or moved onto another chip (a new in-flight
+            // target replaced this one).
+            guard self.inFlightTarget == target else { return }
+            self.inFlightTarget = nil
             let size = Self.fittedSize(
                 for: image.size,
                 maxWidth: cap.width,
