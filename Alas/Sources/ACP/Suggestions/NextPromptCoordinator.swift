@@ -7,13 +7,14 @@ struct NextPromptEligibilitySnapshot {
     let isEligible: Bool
 
     /// Facts owned outside the session. Defaults deny an offer until the live UI/runtime supplies them.
-    struct Environment {
+    struct Environment: Equatable {
         var isEnabled = false
         var hasVerifiedModel = false
         var isRuntimeAvailable = false
         var isAppActive = false
         var isActiveVisibleWriter = false
         var hasComposerFocus = false
+        var hasKeyWindow = false
         var hasPendingInput = false
         var hasSelection = false
         var hasMarkedText = false
@@ -159,6 +160,11 @@ final class NextPromptCoordinator: ObservableObject {
         offer = nil
         oldDeadline?.cancel()
         oldGeneration?.cancel()
+    }
+
+    func shutdown() async {
+        invalidate()
+        await drainTask?.value
     }
 
     /// Called when the live session object is removed, not when its tab loses focus.

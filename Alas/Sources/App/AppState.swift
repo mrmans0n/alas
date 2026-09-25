@@ -172,6 +172,29 @@ final class AppState {
     /// session-lease layer so two running Alas builds don't fight over a
     /// shared per-worktree database.
     let instanceId: String = UUID().uuidString
+    @ObservationIgnored let nextPromptModelStore: NextPromptModelStore
+    @ObservationIgnored let nextPromptInference: NextPromptInference
+    @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] in
+        self?.nextPromptSnapshot()
+    }
+    @ObservationIgnored let nextPromptObservers = NextPromptObservers()
+    @ObservationIgnored var nextPromptInstallation: Task<Void, Never>?
+    let nextPromptSupported: Bool
+    var nextPromptModelState: NextPromptModelState = .notInstalled
+    var nextPromptInferenceState: NextPromptInferenceState = .ready
+    var nextPromptRuntimeEnabled = false
+    var nextPromptSettingsError: String?
+    var nextPromptRemovalFailure: NextPromptModelFailure?
+    var nextPromptOffer: String?
+    @ObservationIgnored var nextPromptSettingsGeneration: UInt64 = 0
+    @ObservationIgnored var nextPromptModelGeneration: UInt64 = 0
+    @ObservationIgnored var nextPromptComposerEpoch: UInt64 = 0
+    @ObservationIgnored var nextPromptShuttingDown = false
+    @ObservationIgnored var nextPromptOwner: SessionOwnerID?
+    @ObservationIgnored var nextPromptSessionID: String?
+    @ObservationIgnored var nextPromptActiveIncarnation: UUID?
+    @ObservationIgnored var nextPromptCompletedTurn: NextPromptCompletedTurn?
+    @ObservationIgnored var nextPromptComposerEnvironment = NextPromptEligibilitySnapshot.Environment()
     var config: AppConfig
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
@@ -1333,9 +1356,16 @@ final class AppState {
         },
         attentionStore: AttentionStore? = nil,
         attentionNavigationEnvironment: AttentionNavigationEnvironment? = nil,
-        harnessAttentionSettleInterval: TimeInterval = 1.5
+        harnessAttentionSettleInterval: TimeInterval = 1.5,
+        nextPromptModelStore: NextPromptModelStore? = nil,
+        nextPromptInference: NextPromptInference? = nil,
+        nextPromptSupported: Bool = NextPromptInference.isSupported()
     ) {
         self.store = store
+        let suggestionStore = nextPromptModelStore ?? NextPromptModelStore()
+        self.nextPromptModelStore = suggestionStore
+        self.nextPromptInference = nextPromptInference ?? NextPromptInference(store: suggestionStore)
+        self.nextPromptSupported = nextPromptSupported
         self.workspaceStore = workspaceStore
         self.workspaceRemoteTransport = workspaceRemoteTransport
         self.attentionStore = attentionStore ?? AttentionStore()
@@ -1453,7 +1483,9 @@ final class AppState {
             self?.persistenceErrorHandler("Schedules Save Failed", message)
         }
         installRunScheduleRunner()
+        startNextPromptObservers()
         AlasTerminationCoordinator.shared.flush = { [weak self] in
+            await self?.shutdownNextPromptSuggestions()
             self?.runScheduler.stop()
             await GGLandingStore.shared.cancelAllAndWait()
             self?.cancelPendingRunScriptLaunches()
@@ -11906,7 +11938,9 @@ final class AppState {
                     await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
                 }
             },
-            onSuccessfulTurn: { _ in },
+            onSuccessfulTurn: { [weak self] turn in
+                self?.nextPromptCompleted(turn, owner: owner)
+            },
             onQueueChanged: { [weak self] sessionId, retainActivePrompt in
                 self?.restartRetainedACPSessionCleanupIfNeeded(
                     owner: owner,
@@ -12194,6 +12228,7 @@ final class AppState {
             return (adapterState, configOutcome, userServerNames, skippedServerStatuses, requestedServerStatuses)
         }
         acpManagers[owner] = mgr
+        observeNextPromptSessions(mgr, owner: owner)
         acpHarnessBridge.attach(manager: mgr)
         #if DEBUG
         memoryDiagnostics.attach(manager: mgr)
@@ -12329,7 +12364,9 @@ final class AppState {
                     owner: owner
                 )
             },
-            onSuccessfulTurn: { _ in },
+            onSuccessfulTurn: { [weak self] turn in
+                self?.nextPromptCompleted(turn, owner: owner)
+            },
             onQueueChanged: { [weak self] sessionId, retainActivePrompt in
                 self?.restartRetainedACPSessionCleanupIfNeeded(
                     owner: owner,
@@ -12480,6 +12517,7 @@ final class AppState {
             return (adapterState, configOutcome, userServerNames, skippedServerStatuses, requestedServerStatuses)
         }
         acpManagers[owner] = manager
+        observeNextPromptSessions(manager, owner: owner)
         acpHarnessBridge.attach(manager: manager)
         #if DEBUG
         memoryDiagnostics.attach(manager: manager)
@@ -12652,6 +12690,7 @@ final class AppState {
         // must be torn down explicitly to stop the 2.5s backstop polls and
         // notifier subscriptions from outliving the manager.
         manager.shutdownBackgroundTasks()
+        nextPromptObservers.managers[owner] = nil
     }
 
     private func finishDisposingACPManager(_ manager: ACPSessionManager) async {

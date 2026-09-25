@@ -248,7 +248,7 @@ actor NextPromptInference: NextPromptGenerating {
         // MLX's global allocator cache can belong to other subsystems. Leave it alone.
     }
 
-    private static func isSupported() -> Bool {
+    nonisolated static func isSupported() -> Bool {
         #if arch(arm64)
         return MTLCreateSystemDefaultDevice()?.supportsFamily(.apple7) == true
         #else

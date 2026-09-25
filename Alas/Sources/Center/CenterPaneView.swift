@@ -660,13 +660,26 @@ struct CenterPaneView: View {
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                     case .acpSession(let s):
+                        let suggestionOwner = activeSharedOwner ?? .worktree(worktree.id)
                         ACPTabView(
                             sessionId: s.sessionId,
                             state: state,
                             worktree: worktree,
                             owner: activeSharedOwner,
                             onOpenPreview: selectedCheckoutForSharedOwner == nil ? nil : { openWebPreview() },
-                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) },
+                            nextPromptOffer: state.nextPromptOwner == suggestionOwner && state.nextPromptSessionID == s.sessionId ? state.nextPromptOffer : nil,
+                            takeNextPromptOffer: {
+                                guard !state.nextPromptInputBlocked(owner: suggestionOwner, sessionID: s.sessionId) else { return nil }
+                                return state.nextPromptCoordinator.takeOffer()
+                            },
+                            dismissNextPromptOffer: {
+                                if state.nextPromptOwner == suggestionOwner && state.nextPromptSessionID == s.sessionId {
+                                    state.nextPromptCoordinator.invalidate()
+                                }
+                            },
+                            onNextPromptStateChange: { state.nextPromptComposerChanged($0, owner: suggestionOwner, sessionID: s.sessionId) },
+                            nextPromptInputBlocked: { state.nextPromptInputBlocked(owner: suggestionOwner, sessionID: s.sessionId) }
                         )
                             .id(s.id)
                     case .ggLanding(let s):

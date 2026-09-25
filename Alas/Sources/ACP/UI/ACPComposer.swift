@@ -786,6 +786,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     var nextPromptInputState: NextPromptEligibilitySnapshot.Environment {
         var state = NextPromptEligibilitySnapshot.Environment()
         state.hasComposerFocus = window != nil && window?.firstResponder === self
+        state.hasKeyWindow = window?.isKeyWindow == true
         state.hasSelection = selectedRanges.count != 1 || selectedRange() != NSRange(location: 0, length: 0)
         state.hasMarkedText = hasMarkedText()
         state.isDictating = nextPromptIsDictating() || dictationRange != nil || isApplyingDictationUpdate
@@ -796,7 +797,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     private var canShowNextPrompt: Bool {
         let state = nextPromptInputState
-        guard isEditable, state.hasComposerFocus, string.isEmpty, nextPromptDraftIsEmpty(),
+        guard isEditable, state.hasComposerFocus, state.hasKeyWindow, string.isEmpty, nextPromptDraftIsEmpty(),
               coordinator?.hasEmptyNextPromptDraft == true,
               !state.hasSelection, !state.hasMarkedText, !state.isDictating,
               !state.isPickerPresented, !state.hasPendingInput else { return false }

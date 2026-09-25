@@ -1116,7 +1116,7 @@ struct ACPComposerDraftBridgeTests {
         // presentSlashPanel() needs a window to position the panel against.
         // `textView.window` is unowned, so the caller must keep the returned
         // window alive for as long as the text view is used.
-        let window = NSWindow(contentRect: textView.frame, styleMask: [], backing: .buffered, defer: false)
+        let window = NextPromptTestWindow(contentRect: textView.frame, styleMask: [], backing: .buffered, defer: false)
         window.contentView?.addSubview(textView)
         let coordinator = makeCoordinator(sendOnEnter: true, onSubmit: onSubmit)
         coordinator.promptSuggestions = [
@@ -1598,6 +1598,19 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.accessibilityCustomActions()?.isEmpty != false)
     }
 
+    @Test("a first responder in a non-key window cannot display or accept next prompt")
+    func nextPromptRequiresKeyWindow() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain this tradeoff.", in: textView)
+        window.resignKey()
+        #expect(window.firstResponder === textView)
+        #expect(textView.nextPromptGhostText == nil)
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(textView.string.isEmpty)
+    }
+
     @Test("next prompt wraps at narrow widths and releases reserved height on dismissal")
     func nextPromptWrappedHeight() async {
         let (textView, coordinator, window) = makeSlashTextView()
@@ -1961,4 +1974,11 @@ struct ACPComposerDraftBridgeTests {
             .text("queued"),
         ]))
     }
+}
+
+// These tests run concurrently; OS key-window ownership belongs to the whole process.
+private final class NextPromptTestWindow: NSWindow {
+    private var keyForTest = true
+    override var isKeyWindow: Bool { keyForTest }
+    override func resignKey() { keyForTest = false; super.resignKey() }
 }
