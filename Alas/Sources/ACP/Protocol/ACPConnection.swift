@@ -21,6 +21,27 @@ private final class ACPRequestHandoff: @unchecked Sendable {
     }
 }
 
+private final class ACPRequestHandoffBoundary: @unchecked Sendable {
+    private let lock = NSLock()
+    private var hasFired = false
+    private let action: @Sendable () throws -> Void
+
+    init(_ action: @escaping @Sendable () throws -> Void) {
+        self.action = action
+    }
+
+    func fire() throws {
+        lock.lock()
+        guard !hasFired else {
+            lock.unlock()
+            return
+        }
+        hasFired = true
+        lock.unlock()
+        try action()
+    }
+}
+
 struct ACPInitializeOutcome: Equatable {
     let promptCapabilities: ACPInitializeResult.ACPPromptCapabilities
     let authMethods: [ACPInitializeResult.ACPAuthMethod]
@@ -284,7 +305,8 @@ final class ACPConnection: @unchecked Sendable {
         brokerOperationKey: String? = nil,
         acknowledgeDurableConsumption: Bool = true,
         onRequestHandoff: (@Sendable () -> Void)? = nil,
-        beforeRequestHandoff: (@Sendable (ACPBrokerGeneration?) async throws -> Void)? = nil
+        beforeRequestHandoff: (@Sendable (ACPBrokerGeneration?) async throws -> Void)? = nil,
+        onRequestHandoffDidOccur: (@Sendable () throws -> Void)? = nil
     ) async throws -> ACPPromptOutcome {
         let request = ACPRequest(
             method: "session/prompt",
@@ -293,13 +315,17 @@ final class ACPConnection: @unchecked Sendable {
         )
         let resp: ACPResponse
         let handoff = onRequestHandoff.map(ACPRequestHandoff.init)
+        let handoffBoundary = onRequestHandoffDidOccur.map(ACPRequestHandoffBoundary.init)
         do {
             if let beforeRequestHandoff,
                let preparingClient = client as? ACPRequestHandoffPreparing {
                 resp = try await preparingClient.send(
                     request,
                     beforeRequestHandoff: beforeRequestHandoff,
-                    onRequestHandoff: { handoff?.fire() }
+                    onRequestHandoff: {
+                        try handoffBoundary?.fire()
+                        handoff?.fire()
+                    }
                 )
             } else if let handoff {
                 resp = try await client.send(request, onRequestHandoff: { handoff.fire() })

@@ -14,6 +14,55 @@ private struct QueueDispatchProvenancePersistenceError: LocalizedError {
     }
 }
 
+private final class QueueDispatchHandoffTracker: @unchecked Sendable {
+    private enum State: Equatable {
+        case provenancePending
+        case handedOff
+        case cancelled
+    }
+
+    private let lock = NSLock()
+    private var states: [UUID: State] = [:]
+
+    func markProvenancePending(_ itemId: UUID) {
+        lock.lock()
+        states[itemId] = .provenancePending
+        lock.unlock()
+    }
+
+    func markHandedOff(_ itemId: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        switch states[itemId] {
+        case .provenancePending:
+            states[itemId] = .handedOff
+            return true
+        case .cancelled:
+            return false
+        case .handedOff, nil:
+            return true
+        }
+    }
+
+    func takeUnhandedItemIDs() -> Set<UUID> {
+        lock.lock()
+        defer { lock.unlock() }
+        let unhanded = Set(states.compactMap { itemId, state in
+            state == .provenancePending ? itemId : nil
+        })
+        for itemId in unhanded {
+            states[itemId] = .cancelled
+        }
+        return unhanded
+    }
+
+    func finish(_ itemId: UUID) {
+        lock.lock()
+        states[itemId] = nil
+        lock.unlock()
+    }
+}
+
 @MainActor
 final class ACPSessionRunner {
     let session: ACPSession
@@ -89,6 +138,7 @@ final class ACPSessionRunner {
     private let isConnectionCurrent: () -> Bool
 #if DEBUG
     var remoteFileWriteForTesting: ACPRemoteFileWriteForTesting?
+    var queueDispatchProvenancePersistedForTesting: (@MainActor @Sendable (UUID) async -> Void)?
 #endif
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
@@ -105,6 +155,7 @@ final class ACPSessionRunner {
     private var authStatusTask: Task<Void, Never>?
     private var seq: Int64 = 0
     private var scheduledQueueWakeTask: Task<Void, Never>?
+    private let queueDispatchHandoffTracker = QueueDispatchHandoffTracker()
     /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
     /// from main / PR #338). Reused by the queue's sendNow path:
     /// `activePromptID` identifies the task that currently owns
@@ -2466,7 +2517,8 @@ extension ACPSessionRunner {
                 // `ACPMessage.Attachment.textOffset`.
                 draft: head.draft,
                 onDispatchRegistered: self.queuedPromptDispatchRegistration(for: head.id),
-                beforeRequestHandoff: self.queuedPromptRequestHandoff(for: head.id)
+                beforeRequestHandoff: self.queuedPromptRequestHandoff(for: head.id),
+                onRequestHandoffDidOccur: self.queuedPromptHandoffDidOccur(for: head.id)
             )
         })
     }
@@ -2489,6 +2541,23 @@ extension ACPSessionRunner {
         }
     }
 
+    private func queuedPromptHandoffDidOccur(for itemId: UUID) -> (@Sendable () throws -> Void)? {
+        guard connection.client is ACPRequestHandoffPreparing else { return nil }
+        return { [queueDispatchHandoffTracker] in
+            guard queueDispatchHandoffTracker.markHandedOff(itemId) else {
+                throw CancellationError()
+            }
+        }
+    }
+
+    /// Invalidates every provenance write that has not crossed the transport
+    /// handoff boundary. The broker callback checks the same tracker
+    /// synchronously before sending, so a racing restart either preserves an
+    /// actually-handed-off marker or prevents the superseded request.
+    func takeUnhandedQueueDispatchesForRestart() -> Set<UUID> {
+        queueDispatchHandoffTracker.takeUnhandedItemIDs()
+    }
+
     private func persistQueueDispatchProvenance(
         itemId: UUID,
         brokerGeneration: ACPBrokerGeneration
@@ -2497,6 +2566,7 @@ extension ACPSessionRunner {
               session.queue.contains(where: { $0.id == itemId && $0.status == .sending }),
               session.markQueueHeadDispatched(id: itemId, brokerGeneration: brokerGeneration)
         else { throw CancellationError() }
+        queueDispatchHandoffTracker.markProvenancePending(itemId)
 
         let persisted = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             persistQueue(completion: { didPersist in
@@ -2504,16 +2574,18 @@ extension ACPSessionRunner {
             })
         }
         guard persisted else {
+            guard !stopped, isConnectionCurrent() else { throw CancellationError() }
             clearQueueDispatchProvenance(itemId: itemId, brokerGeneration: brokerGeneration)
             throw QueueDispatchProvenancePersistenceError()
         }
+#if DEBUG
+        await queueDispatchProvenancePersistedForTesting?(itemId)
+#endif
         guard !stopped, isConnectionCurrent(),
               session.queue.contains(where: {
                   $0.id == itemId && $0.status == .sending && $0.dispatchedBrokerGeneration == brokerGeneration
               })
         else {
-            clearQueueDispatchProvenance(itemId: itemId, brokerGeneration: brokerGeneration)
-            persistQueue()
             throw CancellationError()
         }
     }
@@ -2765,6 +2837,7 @@ extension ACPSessionRunner {
         draft: ACPComposerDraft? = nil,
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
         beforeRequestHandoff: (@Sendable (ACPBrokerGeneration?) async throws -> Void)? = nil,
+        onRequestHandoffDidOccur: (@Sendable () throws -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         flushPendingIncomingUpdates()
@@ -2780,8 +2853,10 @@ extension ACPSessionRunner {
         // detach-clears-cleanly fix from the previous commit.
         activePromptID = promptID
         let connectionIsCurrent = isConnectionCurrent
+        let queueDispatchHandoffTracker = self.queueDispatchHandoffTracker
         latestPromptTask = Task {
-            [weak self, onDispatchRegistered, beforeRequestHandoff, onPromptFinished, connectionIsCurrent] in
+            [weak self, onDispatchRegistered, beforeRequestHandoff, onRequestHandoffDidOccur,
+             onPromptFinished, connectionIsCurrent, queuedItemId, queueDispatchHandoffTracker] in
             guard let self else {
                 await MainActor.run {
                     onDispatchRegistered?()
@@ -2790,6 +2865,11 @@ extension ACPSessionRunner {
                     }
                 }
                 return
+            }
+            defer {
+                if let queuedItemId {
+                    queueDispatchHandoffTracker.finish(queuedItemId)
+                }
             }
             guard await self.hasConfirmedLeaseForSideEffect() else {
                 await MainActor.run {
@@ -2939,7 +3019,8 @@ extension ACPSessionRunner {
                     brokerOperationKey: brokerOperationKey,
                     acknowledgeDurableConsumption: queuedItemId == nil && pendingForkContext == nil,
                     onRequestHandoff: onDispatchRegistered,
-                    beforeRequestHandoff: beforeRequestHandoff
+                    beforeRequestHandoff: beforeRequestHandoff,
+                    onRequestHandoffDidOccur: onRequestHandoffDidOccur
                 )
                 let promptAcknowledgement = promptOutcome.acknowledgement
                 await MainActor.run {

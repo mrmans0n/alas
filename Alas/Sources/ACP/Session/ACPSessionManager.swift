@@ -6123,6 +6123,7 @@ extension ACPSessionManager {
         let oldLeaseToken = oldAttempt?.leaseToken ?? ownedLeaseTokens[sessionId]
         let oldAttachingConnection = attachingConnections.removeValue(forKey: sessionId)?.connection
         let oldRunner = runners.removeValue(forKey: sessionId)
+        let unhandedQueueDispatches = oldRunner?.takeUnhandedQueueDispatchesForRestart() ?? []
         let oldAttemptConnection = oldAttempt?.connection
         let oldConnection = oldAttemptConnection ?? oldAttachingConnection ?? oldRunner?.connection
         let oldBrokerClient = oldAttempt?.brokerClient
@@ -6134,12 +6135,29 @@ extension ACPSessionManager {
         endMirroring(sessionId: sessionId)
         session.agentState = .idle
         session.transcript.streamingState = .idle
-        session.restoreQueue(session.queue, markLegacySendingUncertain: true)
+        session.restoreQueue(
+            session.queue,
+            markLegacySendingUncertain: true,
+            knownUnsentDispatches: unhandedQueueDispatches
+        )
         session.lastError = nil
         session.setupState = .checking
         if let oldRunner {
             _ = await runBounded(timeout: restartTeardownTimeout) {
                 await oldRunner.flushPersistence()
+            }
+            guard sessions[sessionId] === session,
+                  isCurrentAttachment(sessionId: sessionId, attempt: replacementAttempt, session: session)
+            else { return }
+        }
+        if !unhandedQueueDispatches.isEmpty {
+            // The old runner may have persisted its provisional generation
+            // marker before the restart invalidated its transport handoff.
+            // Re-persist the normalized queue under the still-owned session
+            // lease so a later restore cannot resurrect that stale marker.
+            persistQueue(for: session)
+            _ = await runBounded(timeout: restartTeardownTimeout) {
+                await self.flushPersistence()
             }
             guard sessions[sessionId] === session,
                   isCurrentAttachment(sessionId: sessionId, attempt: replacementAttempt, session: session)

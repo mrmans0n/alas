@@ -2403,10 +2403,19 @@ final class ACPSession: ObservableObject, Identifiable {
     /// from `ACPSessionManager.openSession` after pulling rows from the
     /// store. `.sending` items get flipped to `.pending` here so the
     /// flusher re-attempts on next idle.
-    func restoreQueue(_ items: [QueuedPrompt], markLegacySendingUncertain: Bool = false) {
+    func restoreQueue(
+        _ items: [QueuedPrompt],
+        markLegacySendingUncertain: Bool = false,
+        knownUnsentDispatches: Set<UUID> = []
+    ) {
         forceSendAfterSendingHeadId = nil
-        queue = items.map {
-            $0.normalizedAfterRestore(markLegacySendingUncertain: markLegacySendingUncertain)
+        queue = items.map { item in
+            guard knownUnsentDispatches.contains(item.id) else {
+                return item.normalizedAfterRestore(markLegacySendingUncertain: markLegacySendingUncertain)
+            }
+            var restored = item.normalizedAfterRestore(markLegacySendingUncertain: false)
+            restored.dispatchedBrokerGeneration = nil
+            return restored
         }
     }
 

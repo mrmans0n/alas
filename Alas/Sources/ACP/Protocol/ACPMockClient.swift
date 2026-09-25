@@ -102,10 +102,11 @@ final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendable {
     func send(
         _ request: ACPRequest,
         beforeRequestHandoff: @Sendable (ACPBrokerGeneration?) async throws -> Void,
-        onRequestHandoff: @Sendable () -> Void
+        onRequestHandoff: @Sendable () throws -> Void
     ) async throws -> ACPResponse {
         try await beforeRequestHandoff(brokerGenerationForTesting)
-        return try await send(request, onRequestHandoff: onRequestHandoff)
+        try onRequestHandoff()
+        return try await send(request)
     }
 
     /// Mock notifications just record the call. Tests can inspect

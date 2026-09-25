@@ -663,6 +663,75 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(promptSends.first?.operationKey.rawValue == neverSent.brokerOperationKey)
     }
 
+    @Test("restart before queued prompt handoff keeps the prompt eligible for delivery")
+    func restartBeforeQueuedPromptHandoffKeepsPromptEligible() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerService(generation: 7, supportsPromptResponses: true)
+        let isolatedService = ManagerBrokerService(generation: 8, supportsPromptResponses: true)
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .milliseconds(50),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "pre-handoff-restart-session", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+
+        let queued = QueuedPrompt(blocks: [.text("not handed off yet")])
+        session.queue = [queued]
+        manager.persistQueue(for: session)
+        await manager.flushAllPersistence()
+
+        let oldRunner = try #require(manager.runners[session.id])
+        let provenanceGate = AttachPhaseGate()
+        defer {
+            Task {
+                await provenanceGate.release()
+                await sharedService.openGate.release()
+            }
+        }
+        oldRunner.queueDispatchProvenancePersistedForTesting = { _ in
+            await provenanceGate.enterAndWait()
+        }
+        oldRunner.flushQueueIfIdle()
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await provenanceGate.hasEntered
+        }
+        #expect(session.queue.first?.dispatchedBrokerGeneration == ACPBrokerGeneration(rawValue: 7))
+        #expect(await sharedService.sent.filter { $0.method == "session/prompt" }.isEmpty)
+
+        await sharedService.holdNextOpen()
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.openGate.hasEntered
+                && session.agentState == .ready
+                && manager.runners[session.id] !== oldRunner
+        }
+        await sharedService.openGate.release()
+        await restart.value
+        await manager.flushAllPersistence()
+
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            let sends = await isolatedService.sent.filter { $0.method == "session/prompt" }
+            return sends.count == 1 && session.queue.isEmpty
+        }
+        let replacementPrompt = try #require(
+            await isolatedService.sent.first { $0.method == "session/prompt" }
+        )
+        #expect(replacementPrompt.operationKey.rawValue == queued.brokerOperationKey)
+        #expect(session.queue.isEmpty)
+
+        await provenanceGate.release()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await sharedService.sent.filter { $0.method == "session/prompt" }.isEmpty)
+        #expect(try store.loadQueue(sessionId: session.id).isEmpty)
+    }
+
     @Test("retrying uncertain queued prompt advances its durable key once")
     func retryingUncertainQueuedPromptAdvancesOperationAttempt() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

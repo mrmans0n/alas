@@ -131,7 +131,7 @@ protocol ACPRequestHandoffPreparing: ACPClient {
     func send(
         _ request: ACPRequest,
         beforeRequestHandoff: @Sendable (ACPBrokerGeneration?) async throws -> Void,
-        onRequestHandoff: @Sendable () -> Void
+        onRequestHandoff: @Sendable () throws -> Void
     ) async throws -> ACPResponse
 }
 

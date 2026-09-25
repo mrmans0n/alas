@@ -384,11 +384,11 @@ final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Sendable {
     func send(
         _ request: ACPRequest,
         beforeRequestHandoff: @Sendable (ACPBrokerGeneration?) async throws -> Void,
-        onRequestHandoff: @Sendable () -> Void
+        onRequestHandoff: @Sendable () throws -> Void
     ) async throws -> ACPResponse {
         if let replayed = cachedResponse(for: request.method) {
             try await beforeRequestHandoff(currentBrokerGeneration)
-            onRequestHandoff()
+            try onRequestHandoff()
             return ACPResponse(body: try replayed.data)
         }
         let generation = try currentGeneration()
@@ -436,7 +436,7 @@ final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Sendable {
         guard !isConnectionTerminated(), currentBrokerGeneration == generation else {
             throw CancellationError()
         }
-        onRequestHandoff()
+        try onRequestHandoff()
         while true {
             let result = try await service.send(ACPBrokerSendParams(
                 brokerId: brokerId,
