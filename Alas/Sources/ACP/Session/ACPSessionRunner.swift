@@ -2701,11 +2701,14 @@ extension ACPSessionRunner {
 
         let item = session.queue.remove(at: idx)
         persistQueue()
+        let normalUserTurn = session.normalQueuedTurnIDs.remove(item.id) != nil
+        let recordedUserMessageID = session.normalQueuedTurnUserMessageIDs.removeValue(forKey: item.id)
         steer(
             blocks: item.blocks,
             delegatedSource: item.delegatedSource,
             recordUserPrompt: !item.transcriptRecorded,
-            normalUserTurn: session.normalQueuedTurnIDs.remove(item.id) != nil,
+            normalUserTurn: normalUserTurn,
+            recordedUserMessageID: recordedUserMessageID,
             // See the matching comment in `flushQueueIfIdle`: the raw
             // optional, not the heuristic `restorableDraft`.
             draft: item.draft,
@@ -2744,6 +2747,7 @@ extension ACPSessionRunner {
         delegatedSource: ACPDelegatedPromptSource? = nil,
         recordUserPrompt: Bool = true,
         normalUserTurn: Bool = true,
+        recordedUserMessageID: UUID? = nil,
         draft: ACPComposerDraft? = nil,
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
@@ -2814,6 +2818,7 @@ extension ACPSessionRunner {
                     delegatedSource: delegatedSource,
                     recordUserPrompt: recordUserPrompt,
                     normalUserTurn: normalUserTurn,
+                    recordedUserMessageID: recordedUserMessageID,
                     draft: draft,
                     onDispatchRegistered: onDispatchRegistered,
                     onPromptFinished: onPromptFinished
@@ -2856,6 +2861,7 @@ extension ACPSessionRunner {
         brokerOperationKey: String? = nil,
         recordUserPrompt: Bool = true,
         normalUserTurn: Bool = true,
+        recordedUserMessageID: UUID? = nil,
         draft: ACPComposerDraft? = nil,
         onDispatchRegistered: (@Sendable () -> Void)? = nil,
         beforeRequestHandoff: (@Sendable (ACPBrokerGeneration?) async throws -> Void)? = nil,
@@ -2984,6 +2990,9 @@ extension ACPSessionRunner {
                     if let qid = queuedItemId,
                        let idx = self.session.queue.firstIndex(where: { $0.id == qid }) {
                         self.session.queue[idx].transcriptRecorded = true
+                        if normalUserTurn {
+                            self.session.normalQueuedTurnUserMessageIDs[qid] = messageID
+                        }
                         self.persistQueue()
                     }
                     self.resetStreamingPersistBuffer()
@@ -3093,9 +3102,13 @@ extension ACPSessionRunner {
                     }
                     if isActivePrompt {
                         self.session.clearRetryStatus()
+                        let completionUserMessageID = promptRecording.messageID
+                            ?? recordedUserMessageID
+                            ?? queuedItemId.flatMap { self.session.normalQueuedTurnUserMessageIDs[$0] }
                         if let queuedItemId {
                             _ = self.session.popQueueHead()
                             self.session.normalQueuedTurnIDs.remove(queuedItemId)
+                            self.session.normalQueuedTurnUserMessageIDs.removeValue(forKey: queuedItemId)
                             if deliveredForkContext {
                                 self.persistForkContextDeliveredAndQueue(
                                     acknowledging: promptAcknowledgement
@@ -3106,7 +3119,7 @@ extension ACPSessionRunner {
                         }
                         self.activePromptID = nil
                         self.deferCompletedOutputBoundaryUntilUpdatesDrain(
-                            successfulTurn: promptRecording.messageID.flatMap { userMessageID in
+                            successfulTurn: completionUserMessageID.flatMap { userMessageID in
                                 guard normalUserTurn,
                                       delegatedSource == nil,
                                       pendingForkContext == nil,

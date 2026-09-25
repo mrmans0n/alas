@@ -253,6 +253,7 @@ struct ACPSessionRunnerTests {
     func failedAndRecoveryPromptsDoNotPublishTurns() async throws {
         var turns: [NextPromptCompletedTurn] = []
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.session.agentState = .ready
         runner.send(text: "fails", attachments: [])
         try await waitUntil { runner.session.lastError != nil }
         #expect(turns.isEmpty)
@@ -263,18 +264,57 @@ struct ACPSessionRunnerTests {
         #expect(accepted)
         try await waitUntil { recoveryDelivered == true }
         #expect(turns.isEmpty)
+
+        runner.send(text: "ordinary", attachments: [])
+        try await waitUntil { turns.count == 1 }
+        #expect(turns.map(\.promptID) == [2])
+    }
+
+    @Test("ordinary success publishes through the shared runner helper")
+    func ordinarySuccessPublishesThroughHelper() async throws {
+        var turns: [NextPromptCompletedTurn] = []
+        let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.session.agentState = .ready
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        runner.send(text: "ordinary", attachments: [])
+        try await waitUntil { turns.count == 1 }
+        #expect(turns[0].promptID == 0)
     }
 
     @Test("automated prompt success does not publish a user turn")
     func automatedPromptDoesNotPublishTurn() async throws {
         var turns: [NextPromptCompletedTurn] = []
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.session.agentState = .ready
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
-        runner.sendNow(blocks: [.text("automation")], queuedItemId: nil, normalUserTurn: false)
-        try await waitUntil { runner.session.transcript.messages.count == 1
-            && runner.session.transcript.streamingState == .idle }
-        await runner.flushPersistence()
+        var automatedFinished: Bool?
+        runner.sendNow(blocks: [.text("automation")], queuedItemId: nil,
+            normalUserTurn: false, onPromptFinished: { automatedFinished = $0 })
+        try await waitUntil { automatedFinished == true }
         #expect(turns.isEmpty)
+        runner.send(text: "ordinary", attachments: [])
+        try await waitUntil { turns.count == 1 }
+        #expect(turns.map(\.promptID) == [1])
+    }
+
+    @Test("delegated success does not publish a normal user turn")
+    func delegatedPromptDoesNotPublishTurn() async throws {
+        var turns: [NextPromptCompletedTurn] = []
+        let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.session.agentState = .ready
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        var delegatedFinished: Bool?
+        runner.sendNow(
+            blocks: [.text("delegated")],
+            queuedItemId: nil,
+            delegatedSource: ACPDelegatedPromptSource(sessionId: "parent", messageId: "message"),
+            onPromptFinished: { delegatedFinished = $0 }
+        )
+        try await waitUntil { delegatedFinished == true }
+        #expect(turns.isEmpty)
+        runner.send(text: "ordinary", attachments: [])
+        try await waitUntil { turns.count == 1 }
+        #expect(turns.map(\.promptID) == [1])
     }
 
     @Test("prompt IDs continue across runner reattach for the same session incarnation")
@@ -509,19 +549,31 @@ struct ACPSessionRunnerTests {
         #expect(session.transcript.streamingState == .sending)
         #expect(turns.isEmpty)
 
-        runner.send(blocks: [.text("replacement")], intent: .steer)
+        var replacementCompletion: Bool?
+        runner.send(blocks: [.text("replacement")], intent: .steer) { succeeded in
+            replacementCompletion = succeeded
+        }
         try await waitUntil {
             client.sent.filter { $0.method == "session/prompt" }.count == 2
                 && session.transcript.streamingState == .sending
         }
 
         client.emitReserved(.agentMessageChunk(.text(" old-tail")))
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitUntil {
+            session.transcript.messages.contains {
+                if case .agent(_, _, let buffer) = $0 { return buffer.value.contains("old-tail") }
+                return false
+            }
+        }
         #expect(session.transcript.streamingState == .sending)
+        #expect(turns.isEmpty)
 
         await replacementGate.open()
+        try await waitUntil { replacementCompletion == true }
+        #expect(turns.isEmpty)
         client.emitReserved(.agentMessageChunk(.text(" replacement-tail")))
-        try await waitUntil { session.transcript.streamingState == .idle }
+        try await waitUntil { turns.count == 1 }
+        #expect(turns.map(\.promptID) == [1])
     }
 
     @Test("send treats user-cancelled prompt errors as accepted completion")
@@ -562,6 +614,7 @@ struct ACPSessionRunnerTests {
         // way no matter what the field says.
         var turns: [NextPromptCompletedTurn] = []
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
+        runner.session.agentState = .ready
         let promptStarted = AsyncGate()
         let finishPrompt = AsyncGate()
         mock.scriptAsync(method: "session/prompt") { _ in
@@ -585,6 +638,10 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.lastError == nil)
         #expect(runner.session.transcript.streamingState == .idle)
         #expect(turns.isEmpty)
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        runner.send(text: "after cancel", attachments: [])
+        try await waitUntil { turns.count == 1 }
+        #expect(turns.map(\.promptID) == [1])
     }
 
     @Test("user cancel invokes the pending input cancellation hook")

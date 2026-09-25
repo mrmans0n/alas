@@ -1141,30 +1141,74 @@ struct ACPSessionRunnerQueueTests {
         #expect(userTexts == ["queued-q"])
     }
 
-    @Test("queued retry doesn't double-record the user prompt")
+    @Test("queued retry publishes the original user row once after success")
     func queuedRetryDoesNotDoubleRecord() async throws {
-        let (runner, mock, session, _) = try mkRunner()
+        var turns: [NextPromptCompletedTurn] = []
+        let (runner, mock, session, _) = try mkRunner(onSuccessfulTurn: { turns.append($0) })
         // First attempt fails (no script). User clicks Retry. Second
         // attempt succeeds (script wired below). Verify the transcript
         // contains the user prompt exactly once across both attempts.
-        session.enqueue(blocks: [.text("retry-me")])
-        runner.persistQueue()
+        session.transcript.streamingState = .streaming
+        runner.send(blocks: [.text("retry-me")], intent: .auto)
+        await runner.flushPersistence()
+        session.transcript.streamingState = .idle
         runner.flushQueueIfIdle()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        try await waitUntil { session.queue.first?.lastError != nil }
         #expect(session.queue.count == 1)
-        #expect(session.queue[0].lastError != nil)
         #expect(session.queue[0].transcriptRecorded == true)
         var users = session.transcript.messages.filter { if case .user = $0 { return true } else { return false } }
         #expect(users.count == 1)
+        guard case .user(let originalUserID, _, _, _, _) = users[0] else {
+            Issue.record("expected original queued user row")
+            return
+        }
+        #expect(turns.isEmpty)
 
         // Simulate Retry: wire success script + clear lastError + flush.
         mock.script(method: "session/prompt") { _ in Data("null".utf8) }
         session.queue[0].lastError = nil
         runner.flushQueueIfIdle()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        try await waitUntil { turns.count == 1 }
         #expect(session.queue.isEmpty)
         users = session.transcript.messages.filter { if case .user = $0 { return true } else { return false } }
         #expect(users.count == 1)
+        #expect(turns[0].userMessageID == originalUserID)
+        #expect(turns[0].promptID == 1)
+    }
+
+    @Test("force-sent queued retry keeps the original user row")
+    func forceSentQueuedRetryKeepsOriginalUserRow() async throws {
+        var turns: [NextPromptCompletedTurn] = []
+        let (runner, mock, session, _) = try mkRunner(onSuccessfulTurn: { turns.append($0) })
+        session.transcript.streamingState = .streaming
+        runner.send(blocks: [.text("retry-me")], intent: .auto)
+        await runner.flushPersistence()
+        session.transcript.streamingState = .idle
+        runner.flushQueueIfIdle()
+        try await waitUntil { session.queue.first?.lastError != nil }
+        guard case .some(.user(let userID, _, _, _, _)) = session.transcript.messages.first,
+              let queueID = session.queue.first?.id else {
+            Issue.record("expected failed queued user row")
+            return
+        }
+
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        session.queue[0].lastError = nil
+        session.transcript.streamingState = .streaming
+        runner.forceSendQueuedItem(id: queueID)
+        try await waitUntil { turns.count == 1 }
+        #expect(turns[0].userMessageID == userID)
+        #expect(turns[0].promptID == 1)
+        let users = session.transcript.messages.filter { if case .user = $0 { return true } else { return false } }
+        #expect(users.count == 1)
+    }
+
+    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds + 1_000_000_000
+        while !condition(), DispatchTime.now().uptimeNanoseconds < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(condition())
     }
 
     @Test("steer drops a .sending head and preserves the pending tail")
@@ -1489,17 +1533,19 @@ struct ACPSessionRunnerQueueTests {
         // .sending was normalized to .pending on restore.
         #expect(session2.queue[0].status == .pending)
         #expect(session2.queue[0].deliveryUncertain)
+        var restoredTurns: [NextPromptCompletedTurn] = []
         let runner2 = ACPSessionRunner(
             session: session2, connection: ACPConnection(client: mock2), store: store,
-            sessionId: "rt", worktreePath: FileManager.default.temporaryDirectory.path)
+            sessionId: "rt", worktreePath: FileManager.default.temporaryDirectory.path,
+            onSuccessfulTurn: { restoredTurns.append($0) })
         runner2.flushQueueIfIdle()
         #expect(mock2.sent.isEmpty)
 
         runner2.forceSendQueuedItem(id: session2.queue[0].id)
-        for _ in 0 ..< 100 where !session2.queue.isEmpty {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        try await waitUntil { session2.queue.isEmpty && session2.transcript.streamingState == .idle }
+        await runner2.flushPersistence()
         #expect(session2.queue.isEmpty)
+        #expect(restoredTurns.isEmpty)
         let prompts = mock2.sent.filter { $0.method == "session/prompt" }
         #expect(prompts.count == 2)
     }

@@ -57,6 +57,8 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Only newly queued ordinary user turns can publish a completion event.
     /// Restored queue rows have no runtime origin, so they stay ineligible.
     var normalQueuedTurnIDs: Set<UUID> = []
+    /// The user row recorded on a queued attempt survives a failed RPC retry.
+    var normalQueuedTurnUserMessageIDs: [UUID: UUID] = [:]
 
     func allocatePromptID() -> Int {
         defer { nextPromptID += 1 }
