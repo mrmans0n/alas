@@ -4,6 +4,58 @@ import Foundation
 
 @MainActor
 struct DraftCommitTabsManagerTests {
+    private struct ProjectMemoryStore: PersistenceStoreProtocol {
+        var projectsFile: ProjectsFile
+
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            if type == ProjectsFile.self { return projectsFile as? T }
+            if type == AppConfig.self { return AppConfig.defaults as? T }
+            return nil
+        }
+    }
+
+    @Test func commitComposerGitClientUsesTheSelectedProjectHost() throws {
+        let root = URL(fileURLWithPath: "/draft-commit-project-host-\(UUID().uuidString)")
+        defer { RemoteHostRegistry.shared.unregister(root: root.path) }
+        let projectA = ProjectConfig(
+            id: "project-a", name: "A", path: root.path, color: "blue", addedAt: .distantPast, host: "host-a"
+        )
+        let projectB = ProjectConfig(
+            id: "project-b", name: "B", path: root.path, color: "green", addedAt: .distantPast
+        )
+        let appState = AppState(
+            store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [projectA, projectB])),
+            runHistoryStore: nil,
+            restoreActiveTabsOnStartup: false
+        )
+        RemoteHostRegistry.shared.register(root: root.path, host: "host-a")
+
+        let worktree = Worktree(
+            id: "shared-worktree-id",
+            projectId: projectB.id,
+            name: "main",
+            branch: "main",
+            path: root,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        let view = DraftCommitTabView(
+            worktreePath: root,
+            worktreeId: "shared-worktree-id",
+            projectId: projectB.id,
+            projectHost: appState.remoteHost(for: worktree),
+            tabState: DraftCommitTabState(worktreeId: "shared-worktree-id", projectId: projectB.id),
+            executionTarget: .local,
+            appState: appState
+        )
+
+        #expect(RemoteHostRegistry.shared.host(forPath: root.path) == "host-a")
+        #expect(appState.remoteHost(for: worktree) == nil)
+        #expect(view.git.remoteHost(forWorktreePath: root) == nil)
+    }
+
     @Test func openDraftWithPublishIntentCreatesPublishFirstDraft() {
         let worktreeId = "draft-commit-tabs-mgr-publish-intent-new"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

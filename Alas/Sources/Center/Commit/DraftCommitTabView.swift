@@ -4,6 +4,7 @@ struct DraftCommitTabView: View {
     let worktreePath: URL
     let worktreeId: String
     let projectId: String
+    let projectHost: String?
     let tabState: DraftCommitTabState
     let executionTarget: AgentExecutionTarget
     @Bindable var appState: AppState
@@ -33,7 +34,8 @@ struct DraftCommitTabView: View {
     @State private var showWhitespace = false
 
     @Environment(\.theme) private var theme
-    private let git = GitService()
+    var git: GitService { GitService(hostResolution: hostResolution) }
+    private var hostResolution: EditorBufferHostResolution { .project(projectHost) }
 
     private var agentAvailability: AgentAvailabilityState {
         appState.agentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
@@ -461,9 +463,9 @@ struct DraftCommitTabView: View {
                 } else {
                     priorMessage = nil
                 }
-                let diffResult = try await Process.git(["diff", "--cached", "--no-color"], cwd: wt)
-                let recentResult = try await Process.git(["log", "-3", "--pretty=format:%s"], cwd: wt)
-                let branchResult = try await Process.git(["rev-parse", "--abbrev-ref", "HEAD"], cwd: wt)
+                let diffResult = try await git.runGit(["diff", "--cached", "--no-color"], cwd: wt)
+                let recentResult = try await git.runGit(["log", "-3", "--pretty=format:%s"], cwd: wt)
+                let branchResult = try await git.runGit(["rev-parse", "--abbrev-ref", "HEAD"], cwd: wt)
                 try Task.checkCancellation()
                 let recentSubjects = recentResult.stdout
                     .split(separator: "\n", omittingEmptySubsequences: true)
@@ -616,7 +618,7 @@ struct DraftCommitTabView: View {
                     // No active comparison — try the new commit's first parent. If the
                     // new commit has no parent (root commit), fall back to the canonical
                     // empty-tree SHA so the commit editor can still render a diff.
-                    let parentResult = try? await Process.git(["rev-parse", "--verify", "\(newSha)^"], cwd: worktreePath)
+                    let parentResult = try? await git.runGit(["rev-parse", "--verify", "\(newSha)^"], cwd: worktreePath)
                     if let pr = parentResult, pr.exitCode == 0 {
                         baseRef = pr.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
                     } else {
@@ -661,10 +663,12 @@ struct DraftCommitTabView: View {
         }
         let comparisonBase = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId, projectId: projectId)
         error = nil
+        let gitService = git
         var operations = CommitPublishOperations.live(
             worktreePath: worktreePath, reviewLoop: rps.reviewLoop, comparisonBase: comparisonBase,
             syncGG: { execution in try await rps.syncGGForCommitPublish(markExecutionStarted: execution.markStarted) },
-            refreshAfterCompletion: { _ = await rps.refresh(forceReviewLoopRemote: true) }
+            refreshAfterCompletion: { _ = await rps.refresh(forceReviewLoopRemote: true) },
+            hostResolution: hostResolution
         )
         operations.validateGGTarget = { try await rps.validateGGTargetForCommitPublish($0) }
         operations.syncGGForTarget = { try await rps.syncGGForCommitPublish(target: $0, markExecutionStarted: $1.markStarted) }
@@ -672,14 +676,14 @@ struct DraftCommitTabView: View {
         operations.validateGGRecoveryHead = { try rps.validateGGRecoveryHeadForCommitPublish(operationID: $0, headSHA: $1) }
         appState.tabs.runCommitPublish(worktreeId: worktreeId, tabId: tabState.id,
             subject: subjectSnapshot, body: bodySnapshot, amend: amendSnapshot,
-            operations: operations, prepareDestination: { [worktreePath] in
+            operations: operations, prepareDestination: { [worktreePath, gitService] in
                 if let ggTarget {
                     return .gg(ggTarget)
                 }
                 guard let reviewSnapshot else { throw CommitPublishWorkflowError.invalidDestination(phase: .push) }
                 return .review(try await CommitPublishReviewTarget.capture(
                     snapshot: reviewSnapshot, createAsDraft: draftSnapshot,
-                    runGit: { try await Process.git($0, cwd: worktreePath) }
+                    runGit: { try await gitService.runGit($0, cwd: worktreePath) }
                 ))
             })
     }

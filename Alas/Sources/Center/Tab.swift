@@ -580,14 +580,24 @@ struct CommitTabState: Codable, Equatable, Identifiable {
 struct CommitEditorTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeId: String
+    let projectId: String?
     let baseRef: String
     let originalSha: String
     var currentSha: String
     var title: String
 
-    init(worktreeId: String, baseRef: String, originalSha: String, currentSha: String, title: String) {
-        self.id = "commit-editor:\(worktreeId):\(originalSha)"
+    init(
+        worktreeId: String,
+        projectId: String? = nil,
+        baseRef: String,
+        originalSha: String,
+        currentSha: String,
+        title: String
+    ) {
+        self.id = projectId.map { "commit-editor-project:\($0):\(worktreeId):\(originalSha)" }
+            ?? "commit-editor:\(worktreeId):\(originalSha)"
         self.worktreeId = worktreeId
+        self.projectId = projectId
         self.baseRef = baseRef
         self.originalSha = originalSha
         self.currentSha = currentSha

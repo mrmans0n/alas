@@ -153,6 +153,8 @@ final class TabsManager {
             inbox.projectId == projectId
         case .ggLanding(let landing):
             landing.projectId == projectId
+        case .commitEditor(let editor):
+            editor.projectId == projectId || (includesLegacyUnownedProjectTabs && editor.projectId == nil)
         case .draftReviewRequest(let draft):
             draft.projectId == projectId || (includesLegacyUnownedProjectTabs && draft.projectId == nil)
         default:
@@ -250,8 +252,20 @@ final class TabsManager {
         byWorktree[owner.tabStorageKey]?.tabs ?? []
     }
 
-    func commitEditorTab(worktreeId: String, currentSha: String) -> Tab? {
-        tabs(forWorktree: worktreeId).first { tab in
+    func commitEditorTab(
+        worktreeId: String,
+        currentSha: String,
+        projectId: String? = nil,
+        includesLegacyUnownedProjectTabs: Bool = false
+    ) -> Tab? {
+        let candidateTabs = projectId.map {
+            tabs(
+                forWorktree: worktreeId,
+                projectId: $0,
+                includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
+            )
+        } ?? tabs(forWorktree: worktreeId)
+        return candidateTabs.first { tab in
             if case .commitEditor(let state) = tab {
                 return state.currentSha == currentSha
             }
@@ -1130,6 +1144,7 @@ final class TabsManager {
     @discardableResult
     func openCommitEditor(
         worktreeId: String,
+        projectId: String? = nil,
         baseRef: String,
         originalSha: String,
         currentSha: String,
@@ -1137,6 +1152,7 @@ final class TabsManager {
     ) -> Tab {
         let state = CommitEditorTabState(
             worktreeId: worktreeId,
+            projectId: projectId,
             baseRef: baseRef,
             originalSha: originalSha,
             currentSha: currentSha,
@@ -1792,10 +1808,12 @@ final class TabsManager {
         title: String
     ) -> Tab? {
         guard let idx = file.tabs.firstIndex(where: { $0.id == draftTabId }),
-              case .draftCommit = file.tabs[idx]
+              case .draftCommit(let draftState) = file.tabs[idx]
         else { return nil }
+        let projectId = draftState.projectId
         for existingIdx in file.tabs.indices {
             guard case .commitEditor(var existing) = file.tabs[existingIdx],
+                  existing.projectId == projectId,
                   existing.currentSha == newSha else { continue }
             existing.title = title
             let tab = Tab.commitEditor(existing)
@@ -1807,6 +1825,7 @@ final class TabsManager {
         }
         let editor = CommitEditorTabState(
             worktreeId: worktreeId,
+            projectId: projectId,
             baseRef: baseRef,
             originalSha: newSha,
             currentSha: newSha,
@@ -1858,11 +1877,18 @@ final class TabsManager {
         return tab
     }
 
-    func updateCommitEditorShas(worktreeId: String, shaMap: [String: String]) {
+    func updateCommitEditorShas(
+        worktreeId: String,
+        shaMap: [String: String],
+        projectId: String? = nil,
+        includesLegacyUnownedProjectTabs: Bool = false
+    ) {
         guard !shaMap.isEmpty, var file = byWorktree[worktreeId] else { return }
         var changed = false
         for idx in file.tabs.indices {
             guard case .commitEditor(var state) = file.tabs[idx],
+                  projectId == nil || state.projectId == projectId
+                      || (includesLegacyUnownedProjectTabs && state.projectId == nil),
                   let newSha = shaMap[state.currentSha],
                   newSha != state.currentSha else { continue }
             state.currentSha = newSha
@@ -2136,7 +2162,7 @@ final class TabsManager {
         persist(worktreeId)
     }
 
-    /// Discards the editor, image-preview, and commit-draft state owned by one
+    /// Discards the editor, commit-editor, image-preview, and commit-draft state owned by one
     /// project while another project still uses the same path-derived bucket.
     /// Unlike `close`, this does not preserve a live draft in its stash: the
     /// caller is completing a destructive worktree removal.
@@ -2153,6 +2179,8 @@ final class TabsManager {
             case .imagePreview(let state):
                 state.projectId == projectId || (includesLegacyUnownedProjectTabs && state.projectId == nil)
             case .draftCommit(let state):
+                state.projectId == projectId || (includesLegacyUnownedProjectTabs && state.projectId == nil)
+            case .commitEditor(let state):
                 state.projectId == projectId || (includesLegacyUnownedProjectTabs && state.projectId == nil)
             case .draftReviewRequest(let state):
                 state.projectId == projectId || (includesLegacyUnownedProjectTabs && state.projectId == nil)

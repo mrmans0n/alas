@@ -452,7 +452,13 @@ struct RootView: View {
     }
 
     private func openOrFocusCommitEditor(worktree: Worktree, commit: CommitInfo, baseRef: String) {
-        if let existing = state.tabs.commitEditorTab(worktreeId: worktree.id, currentSha: commit.sha) {
+        let includesLegacyUnownedProjectTabs = state.legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId
+        if let existing = state.tabs.commitEditorTab(
+            worktreeId: worktree.id,
+            currentSha: commit.sha,
+            projectId: worktree.projectId,
+            includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
+        ) {
             state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: existing.id)
             return
         }
@@ -460,6 +466,7 @@ struct RootView: View {
         let title = "\(commit.shortSha) \(commit.conventionalTag.map { "\($0): \(commit.subject)" } ?? commit.subject)"
         let tab = state.tabs.openCommitEditor(
             worktreeId: worktree.id,
+            projectId: worktree.projectId,
             baseRef: baseRef,
             originalSha: commit.sha,
             currentSha: commit.sha,

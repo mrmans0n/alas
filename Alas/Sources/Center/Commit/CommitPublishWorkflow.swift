@@ -132,13 +132,14 @@ struct CommitPublishOperations {
         comparisonBase: String?,
         syncGG: @escaping (_ execution: CommitPublishSyncExecutionMarker) async throws -> Void,
         refreshAfterCompletion: @escaping () async -> Void,
+        hostResolution: EditorBufferHostResolution = .pathRegistry,
         runGit: (([String]) async throws -> ProcessResult)? = nil,
         commit: ((String, String, Bool) async throws -> String)? = nil,
         publicationState: (() async throws -> HeadPublicationState)? = nil,
         containsCommit: ((String, String, String) async throws -> Bool)? = nil
     ) -> Self {
-        let git = GitService()
-        let run = runGit ?? { try await Process.git($0, cwd: worktreePath) }
+        let git = GitService(hostResolution: hostResolution)
+        let run = runGit ?? { try await git.runGit($0, cwd: worktreePath) }
         let commit = commit ?? { try await git.commit(worktreePath: worktreePath, subject: $0, body: $1, amend: $2) }
         let publication = publicationState ?? { try await git.headPublicationState(worktreePath: worktreePath) }
         let contains = containsCommit ?? {

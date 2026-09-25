@@ -1117,6 +1117,69 @@ struct TabsManagerTests {
         #expect(decoded.iconName == "commit")
     }
 
+    @Test func persistedCommitEditorTabIsVisibleOnlyToItsProject() throws {
+        let worktreeId = "tabs-manager-project-commit-editor"
+        let tabsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tabs-manager-commit-editor-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tabsDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tabsDirectory) }
+
+        let tab = Tab.commitEditor(CommitEditorTabState(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            baseRef: "origin/main",
+            originalSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            currentSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            title: "aaaaaaa subject"
+        ))
+        try JSONEncoder().encode(TabsFile(tabs: [tab], activeTabId: tab.id))
+            .write(to: tabsDirectory.appendingPathComponent("\(worktreeId).json"))
+
+        let manager = TabsManager(tabsDirectory: tabsDirectory)
+        manager.loadAll(worktreeIds: [worktreeId])
+
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-a").map(\.id) == [tab.id])
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-b").isEmpty)
+    }
+
+    @Test func commitEditorIdentityAndShaUpdatesAreProjectScoped() {
+        let worktreeId = "tabs-manager-project-commit-editor-identity"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let originalSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        let updatedSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+        let projectA = manager.openCommitEditor(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            baseRef: "origin/main",
+            originalSha: originalSha,
+            currentSha: originalSha,
+            title: "aaaaaaa A"
+        )
+        let projectB = manager.openCommitEditor(
+            worktreeId: worktreeId,
+            projectId: "project-b",
+            baseRef: "origin/main",
+            originalSha: originalSha,
+            currentSha: originalSha,
+            title: "aaaaaaa B"
+        )
+
+        #expect(projectA.id != projectB.id)
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-a").map(\.id) == [projectA.id])
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-b").map(\.id) == [projectB.id])
+
+        manager.updateCommitEditorShas(
+            worktreeId: worktreeId,
+            shaMap: [originalSha: updatedSha],
+            projectId: "project-b"
+        )
+
+        #expect(manager.commitEditorTab(worktreeId: worktreeId, currentSha: originalSha, projectId: "project-a")?.id == projectA.id)
+        #expect(manager.commitEditorTab(worktreeId: worktreeId, currentSha: updatedSha, projectId: "project-b")?.id == projectB.id)
+    }
+
     @Test func appendCommitEditorReusesOriginalShaIdentityWithoutOverwritingCurrentSha() {
         let worktreeId = "tabs-manager-commit-editor"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

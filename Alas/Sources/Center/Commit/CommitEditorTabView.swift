@@ -4,6 +4,7 @@ struct CommitEditorTabView: View {
     let worktreePath: URL
     let worktreeId: String
     let projectId: String
+    let projectHost: String?
     let tabState: CommitEditorTabState
     let executionTarget: AgentExecutionTarget
     @Bindable var appState: AppState
@@ -38,7 +39,7 @@ struct CommitEditorTabView: View {
     @State private var filesDragStartWidth: CGFloat?
 
     @Environment(\.theme) private var theme
-    private let git = GitService()
+    var git: GitService { GitService(hostResolution: .project(projectHost)) }
 
     private var agentAvailability: AgentAvailabilityState {
         appState.agentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
@@ -369,7 +370,7 @@ struct CommitEditorTabView: View {
     }
 
     private func gitStdout(_ args: [String]) async throws -> String {
-        let result = try await Process.git(args, cwd: worktreePath)
+        let result = try await git.runGit(args, cwd: worktreePath)
         guard result.exitCode == 0 else {
             throw NSError(
                 domain: "CommitEditorTabView.git",
@@ -453,7 +454,12 @@ struct CommitEditorTabView: View {
                 savedSubject = refreshedSubject
                 savedBodyText = message.body
 
-                appState.tabs.updateCommitEditorShas(worktreeId: worktreeId, shaMap: result.shaMap)
+                appState.tabs.updateCommitEditorShas(
+                    worktreeId: worktreeId,
+                    shaMap: result.shaMap,
+                    projectId: projectId,
+                    includesLegacyUnownedProjectTabs: appState.legacyEditorOwnerProjectId(forWorktreeId: worktreeId) == projectId
+                )
                 appState.tabs.updateCommitEditor(
                     worktreeId: worktreeId,
                     tabId: tabId,
