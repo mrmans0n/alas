@@ -1462,7 +1462,10 @@ struct WorktreeService {
     /// non-force `git worktree remove` still deletes them. Scheduled cleanup
     /// must therefore refuse whenever the checkout holds ANY ignored
     /// content — an ignored artifact (build output, `.env`, logs) can hold
-    /// its only copy, and unattended deletion must not destroy it.
+    /// its only copy, and unattended deletion must not destroy it. The
+    /// top-level `ls-files` does not visit initialized submodules, so every
+    /// one is audited too (`--recurse-submodules` is unsupported for this
+    /// listing, so each initialized submodule is walked explicitly).
     static func worktreeHasIgnoredContent(worktreePath: URL) async throws -> Bool {
         let result = try await Process.gitData(
             ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"],
@@ -1470,7 +1473,20 @@ struct WorktreeService {
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         let listing = String(decoding: result.stdout, as: UTF8.self)
-        return !listing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if !listing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+
+        let submodules = try await Process.gitData(
+            ["submodule", "foreach", "--quiet", "--recursive",
+             "git ls-files --others --ignored --exclude-standard --directory"],
+            cwd: worktreePath
+        )
+        guard submodules.exitCode == 0 else {
+            // Enumeration failure is not proof of absence.
+            throw WorktreeError.gitFailed(submodules.stderr)
+        }
+        return !submodules.stdout.isEmpty
     }
 
     /// A scheduled run may discard its checkout only when its original base is

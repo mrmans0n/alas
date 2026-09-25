@@ -27,7 +27,9 @@ struct ScheduledAgentReportPageRefresh {
                 firstPage,
                 in: reports,
                 pageOffset: windowCount,
-                hasMore: requestedLimit > prefix.count,
+                // A probe row came back: at least one more report exists
+                // beyond the loaded window.
+                hasMore: prefix.count == requestedLimit,
                 pageSize: pageSize
             )
         }
@@ -61,7 +63,11 @@ struct ScheduledAgentReportPageRefresh {
         return Self(
             reports: refreshedReports,
             pageOffset: pageOffset,
-            hasMore: pageOffset > pageSize ? hasMore : firstPage.count == pageSize
+            // The caller's `hasMore` comes from a probe row beyond the
+            // loaded window, which is authoritative regardless of window
+            // size (the legacy first-page-only heuristic cannot know the
+            // tail is exhausted).
+            hasMore: hasMore
         )
     }
 }

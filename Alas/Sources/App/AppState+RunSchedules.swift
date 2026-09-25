@@ -1764,8 +1764,10 @@ extension AppState {
             // shell may still be alive: `closeSession` released the lease
             // and dispatched its zmx kill asynchronously, so a hung or
             // failed kill leaves a shell that no session or lease check
-            // can see. Derive the zmx identity from the run record and
-            // refuse unless that session is provably gone.
+            // can see. Whether the run was persistent is not recorded, so
+            // zmx absence alone cannot prove a plain Ghostty process
+            // stopped: verify the derived zmx session is gone when zmx is
+            // available, and retain in every other case.
             if let scriptRun = report.scriptRun,
                let record = runRecords.records(worktreeID: worktree.id).first(where: {
                    $0.id == scriptRun.runID
@@ -1798,6 +1800,16 @@ extension AppState {
                         store: store
                     )
                 }
+                // A plain (non-persistent) shell was never registered with
+                // zmx, so its absence there proves nothing. Its lease was
+                // already released when the tab closed and nothing can
+                // verify the process stopped, so retain conservatively.
+                projectsManager.setOperationState(for: worktree, state: nil)
+                return await retainScheduledWorktree(
+                    reportID: report.id,
+                    reason: "The scheduled script terminal was closed before cleanup; its shell could not be verified stopped.",
+                    store: store
+                )
             } else {
                 projectsManager.setOperationState(for: worktree, state: nil)
                 return await retainScheduledWorktree(
