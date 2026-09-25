@@ -2157,6 +2157,21 @@ extension AppState {
             guard volatileStateIsSafe() else {
                 return .refused("Worktree, session, or application state changed during cleanup checks.")
             }
+            // A terminal closed moments ago (e.g. by the user, unrelated to
+            // the scheduled session) had its writer lease released before
+            // its zmx kill finished dispatching. A slow or failed kill
+            // leaves a shell invisible to the session and lease checks
+            // above, so cleanup must positively await the pending kills
+            // before trusting this window's absence of writers.
+            let recentCloses = terminal.recentlyClosedTerminalSessionIDs(within: 15)
+            if !recentCloses.isEmpty {
+                await terminal.awaitRecentlyClosedTerminalKills(timeout: 5)
+                // The kill tasks are best-effort; if the kill failed, the
+                // shell is still alive but undetectable. A close this recent
+                // is itself grounds to wait a round: refuse and let the next
+                // poll re-verify with a settled state.
+                return .refused("A terminal closed recently; cleanup waits for its termination to settle.")
+            }
             return .allowed(contentFingerprint: fingerprint)
         } catch {
             return .refused("Git could not verify the worktree safety checks.")

@@ -473,6 +473,28 @@ final class TerminalService {
         return (invocation.executable, invocation.args)
     }
 
+    /// Termination dispatched but possibly still in flight, keyed by the
+    /// closed session's id. `recentlyClosedTerminalSessionIDs(within:)`
+    /// surfaces these so destructive work can positively await (or refuse
+    /// around) the pending kill instead of trusting the released lease.
+    @ObservationIgnored
+    private var recentlyClosedSessionKillDeadlines: [String: Date] = [:]
+
+    /// Session ids whose `closeSession` dispatched a kill less than `window`
+    /// ago. Their termination has not been positively observed, so cleanup
+    /// must wait for the tracked kill before trusting "no writers".
+    func recentlyClosedTerminalSessionIDs(within window: TimeInterval, now: Date = Date()) -> [String] {
+        recentlyClosedSessionKillDeadlines
+            .filter { now.timeIntervalSince($0.value) < window }
+            .map(\.key)
+    }
+
+    /// Blocks until every currently tracked recent-close kill has drained
+    /// (bounded by `timeout`).
+    func awaitRecentlyClosedTerminalKills(timeout: TimeInterval) async {
+        await drainPendingKills(timeout: timeout)
+    }
+
     func closeSession(
         id: String,
         worktreeId explicitWorktreeId: String? = nil,
@@ -489,12 +511,16 @@ final class TerminalService {
         // `waitForPendingKills` can drain it before the app exits —
         // otherwise a quick close+Cmd-Q race would leak the daemon-side
         // session, and the next launch would carry forward the orphan.
+        let killDispatched: Bool
         if let host = existing?.remoteHost, let existingName = existing?.zmxSessionName {
+            killDispatched = true
             dispatchTrackedKill { await Self.killRemoteSession(host: host, name: existingName) }
         } else if let existingName = existing?.zmxSessionName {
+            killDispatched = true
             let client = zmxClient
             dispatchTrackedKill { client.killSession(name: existingName) }
         } else if let worktreeId = explicitWorktreeId ?? existing?.worktreeId {
+            killDispatched = true
             let client = zmxClient
             let remoteHost = Self.remoteHostForCleanup(worktreeId: worktreeId, projectPath: projectPath)
             dispatchTrackedKill {
@@ -512,6 +538,13 @@ final class TerminalService {
                     }
                 }
             }
+        } else {
+            killDispatched = false
+        }
+        if killDispatched {
+            recentlyClosedSessionKillDeadlines[id] = Date()
+        } else {
+            recentlyClosedSessionKillDeadlines.removeValue(forKey: id)
         }
         socketReleaseHandler?(id)
         cleanupRcfile(sessionId: id)

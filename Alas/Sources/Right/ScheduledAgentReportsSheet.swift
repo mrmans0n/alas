@@ -11,7 +11,9 @@ struct ScheduledAgentReportPageRefresh {
     /// tail is intact (a deletion below it shifts every later row up), and
     /// the probe row decides `hasMore` without a second request. The probe
     /// row is excluded from both the comparison and the replacement — it
-    /// exists solely to compute `hasMore`.
+    /// exists solely to compute `hasMore`. The refreshed payload is applied
+    /// to every loaded row, not just the first page, so pending rows below
+    /// the first page settle visibly.
     static func loadedWindowRefresh(
         firstPage: [ScheduledAgentReport],
         from reports: [ScheduledAgentReport],
@@ -23,14 +25,17 @@ struct ScheduledAgentReportPageRefresh {
         let window = prefix.prefix(windowCount)
         let prefixMatches = window.map(\.id) == reports.map(\.id)
         if prefixMatches {
-            return updatingFirstPage(
-                firstPage,
-                in: reports,
+            var refreshedReports = reports
+            for report in window {
+                guard let index = refreshedReports.firstIndex(where: { $0.id == report.id }) else { continue }
+                refreshedReports[index] = report
+            }
+            return Self(
+                reports: refreshedReports,
                 pageOffset: windowCount,
                 // A probe row came back: at least one more report exists
                 // beyond the loaded window.
-                hasMore: prefix.count == requestedLimit,
-                pageSize: pageSize
+                hasMore: prefix.count == requestedLimit
             )
         }
         return replacingLoadedPrefix(Array(window), requestedLimit: windowCount)
@@ -44,30 +49,6 @@ struct ScheduledAgentReportPageRefresh {
             reports: reports,
             pageOffset: reports.count,
             hasMore: reports.count == requestedLimit
-        )
-    }
-
-    static func updatingFirstPage(
-        _ firstPage: [ScheduledAgentReport],
-        in reports: [ScheduledAgentReport],
-        pageOffset: Int,
-        hasMore: Bool,
-        pageSize: Int
-    ) -> Self {
-        var refreshedReports = reports
-        for report in firstPage {
-            guard let index = refreshedReports.firstIndex(where: { $0.id == report.id }) else { continue }
-            refreshedReports[index] = report
-        }
-
-        return Self(
-            reports: refreshedReports,
-            pageOffset: pageOffset,
-            // The caller's `hasMore` comes from a probe row beyond the
-            // loaded window, which is authoritative regardless of window
-            // size (the legacy first-page-only heuristic cannot know the
-            // tail is exhausted).
-            hasMore: hasMore
         )
     }
 }
@@ -606,12 +587,16 @@ struct ScheduledAgentReportsSheet: View {
                 prefix: refreshedPrefix,
                 requestedLimit: requestedLimit
             )
-            let refreshedReportIDs = Set(refreshedPrefix.map(\.id))
             reports = refreshedPage.reports
             pageOffset = refreshedPage.pageOffset
             hasMore = refreshedPage.hasMore
             pageError = nil
-            await refreshPendingReports(excluding: refreshedReportIDs)
+            // Every refreshed prefix row's payload is already up to date
+            // here (both branches apply it), so only rows that were NOT
+            // re-fetched — those past the window, e.g. the probe's tail —
+            // still need their pending state polled.
+            let refreshedIDs = Set(refreshedPrefix.map(\.id))
+            await refreshPendingReports(excluding: refreshedIDs)
         } catch {
             guard !Task.isCancelled, selectedReportID == nil else { return }
             pageError = error.localizedDescription
