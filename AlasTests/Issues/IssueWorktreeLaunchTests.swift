@@ -32,7 +32,7 @@ struct IssueWorktreeLaunchTests {
         #expect(session.queue.map(\.id) == [prepared.promptID])
         #expect(session.queue.first.map { ACPSessionRunner.textPreview(of: $0.blocks) } == prepared.text)
 
-        let persisted = ACPSessionPersistence(path: Paths.acpSessionsDB(forWorktreeId: id).path)
+        let persisted = manager.persistence
         #expect(try await persisted.loadSession(id: prepared.sessionID)?.agentId == Self.agentID)
         #expect(try await persisted.loadQueue(sessionId: prepared.sessionID).map(\.id) == [prepared.promptID])
     }
@@ -59,7 +59,7 @@ struct IssueWorktreeLaunchTests {
         let manager = try #require(fixture.state.acpManager(forWorktreeId: id))
         let session = try #require(manager.liveSession(for: prepared.sessionID))
         #expect(session.queue.map(\.id) == [prepared.promptID])
-        let persisted = ACPSessionPersistence(path: Paths.acpSessionsDB(forWorktreeId: id).path)
+        let persisted = manager.persistence
         #expect(try await persisted.loadQueue(sessionId: prepared.sessionID).map(\.id) == [prepared.promptID])
     }
 
@@ -350,10 +350,11 @@ private final class WorktreeLaunchFixture {
             if session?.lastError != nil,
                session?.queue.contains(where: { $0.id == preparedPrompt.promptID }) == true {
                 await manager?.flushPersistence()
-                let persistence = ACPSessionPersistence(
-                    path: Paths.acpSessionsDB(forWorktreeId: worktreeID).path
-                )
-                let persistedQueue = try? await persistence.loadQueue(
+                // Read through the manager's own persistence: the resolved
+                // database is project-scoped (or bound-legacy) per owner, not
+                // the bare worktree-id path.
+                let persisted = manager?.persistence
+                let persistedQueue = try? await persisted?.loadQueue(
                     sessionId: preparedPrompt.sessionID
                 )
                 if persistedQueue?.contains(where: { $0.id == preparedPrompt.promptID }) == true {
