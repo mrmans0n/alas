@@ -998,6 +998,7 @@
 		7DEFB0A61614D65F509A11AE /* ImageDiffDifferenceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4246F7A17DCEC4D2A669BC43 /* ImageDiffDifferenceView.swift */; };
 		7DFE8DCEA8A4BABF51F54215 /* GitTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A92711BC1D9A78D8A80561 /* GitTypes.swift */; };
 		7E2E0B87C53DBAAE4AEF81E9 /* GGStackModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A948C5D9B5EB13DBAC21E538 /* GGStackModelsTests.swift */; };
+		7E3FC231CA6865CF6F172F26 /* NextPromptInferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99ADB2CF3D4BF7E1BFC5ADC5 /* NextPromptInferenceTests.swift */; };
 		7E56D356C235F59E1CE24210 /* AgentBuiltinsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AED8A6EE8EF0CC317D7A4C7 /* AgentBuiltinsTests.swift */; };
 		7E5819BACB71C38AA2B3A80E /* ChangesTabViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEA0432FB3F35FC9780718C8 /* ChangesTabViewTests.swift */; };
 		7EB1A9415AE49BBB694946AC /* PairedComposerTextControlsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E984007859E2721356CAF8A /* PairedComposerTextControlsTests.swift */; };
@@ -1392,6 +1393,7 @@
 		AEB565CDE2F5AEAE088A1A79 /* ACPChatLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90762AFB51B237B783D4190C /* ACPChatLayoutTests.swift */; };
 		AF071864CA8C882F74753E39 /* ACPToolCallPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D710BC995453481F445E2ECF /* ACPToolCallPresentation.swift */; };
 		AF2263B61D95A8BFF0972E93 /* AgentHookEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 136BDA12046FB352E183D6A4 /* AgentHookEvent.swift */; };
+		AF8176129CC52CFEC3D99F42 /* NextPromptInference.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BBAC811184FEB2F4577014A /* NextPromptInference.swift */; };
 		AF8B192B3B321E98F62D2CAF /* RepoConfigStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 293C5591F69E90BFD629F73D /* RepoConfigStoreTests.swift */; };
 		AFC4DE3093E404E4D338E6EF /* AppState+RunScripts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89D180B7FCAA9DD1F7D7D2E4 /* AppState+RunScripts.swift */; };
 		AFD24C0A5D5625A1843751C1 /* ACPFirstRunConnectingPhase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73539FDFE4BDBD4D3B4DE546 /* ACPFirstRunConnectingPhase.swift */; };
@@ -3049,6 +3051,7 @@
 		7B22D5EBE7EDAC07C943C91D /* WebSocketFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketFrame.swift; sourceTree = "<group>"; };
 		7B5260A5CDFBC249F1C17D2C /* CheckpointRestorePreviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointRestorePreviewTests.swift; sourceTree = "<group>"; };
 		7BA6DF8E37E9B38C627B030A /* ACPTranscriptRowHostingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptRowHostingView.swift; sourceTree = "<group>"; };
+		7BBAC811184FEB2F4577014A /* NextPromptInference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NextPromptInference.swift; sourceTree = "<group>"; };
 		7BC9FF2675A6904A01CAEE52 /* DiffReviewRenderContextCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewRenderContextCacheTests.swift; sourceTree = "<group>"; };
 		7BEC4E033DB3BA44C825D453 /* EmojiPickerButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiPickerButton.swift; sourceTree = "<group>"; };
 		7BF6F2D792F7DFAE3DA8E597 /* ThemeEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEnvironment.swift; sourceTree = "<group>"; };
@@ -3288,6 +3291,7 @@
 		99499E6EA14BCB252D1E8AAE /* WebPreviewCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPreviewCommand.swift; sourceTree = "<group>"; };
 		99890AC2531648EB5E9716A8 /* DragOutSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragOutSessionTests.swift; sourceTree = "<group>"; };
 		998E2A9084024F38DEB82886 /* NextPromptLicenses.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = NextPromptLicenses.txt; sourceTree = "<group>"; };
+		99ADB2CF3D4BF7E1BFC5ADC5 /* NextPromptInferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NextPromptInferenceTests.swift; sourceTree = "<group>"; };
 		99B7DD51A2EB1DE409080196 /* ACPTranscriptScrollerConvergenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptScrollerConvergenceTests.swift; sourceTree = "<group>"; };
 		99CD81CC540ACCF1132E62A8 /* ACPMCPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMCPServer.swift; sourceTree = "<group>"; };
 		99CD99C81057F377C5E249B7 /* StagedDiffLoaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StagedDiffLoaderTests.swift; sourceTree = "<group>"; };
@@ -4990,6 +4994,7 @@
 			isa = PBXGroup;
 			children = (
 				332ECD18C5EC56195D662FB8 /* NextPromptContext.swift */,
+				7BBAC811184FEB2F4577014A /* NextPromptInference.swift */,
 				54624656B3B8840BB9282480 /* NextPromptModelDownload.swift */,
 				CCCF8D8A753E293D9E033710 /* NextPromptModelLease.swift */,
 				173D74B7B4349EF7E9D87A53 /* NextPromptModelManifest.swift */,
@@ -6233,6 +6238,7 @@
 			isa = PBXGroup;
 			children = (
 				2D032B8DBF054E2E659A7FDB /* NextPromptContextTests.swift */,
+				99ADB2CF3D4BF7E1BFC5ADC5 /* NextPromptInferenceTests.swift */,
 				89ABF997018CFF8654AF045C /* NextPromptModelLeaseTests.swift */,
 				18E42BF4852159E7E9DFDFAB /* NextPromptModelStoreTests.swift */,
 				C98C49EC1F1F0ED0C02F728D /* NextPromptPolicyTests.swift */,
@@ -8397,6 +8403,7 @@
 				11BA08BA4E2FE30CD6D4DA87 /* NewWorktreeDialog.swift in Sources */,
 				CFA6B63752FF405E2BABDB48 /* NewWorktreeIssueState.swift in Sources */,
 				5A192E49D2739D2D8CDA38CE /* NextPromptContext.swift in Sources */,
+				AF8176129CC52CFEC3D99F42 /* NextPromptInference.swift in Sources */,
 				C00184244AA6E0D16BF66FD2 /* NextPromptModelDownload.swift in Sources */,
 				10D62A1BBCAD4D8A7240147E /* NextPromptModelLease.swift in Sources */,
 				2106BBB75F272BC6D7412059 /* NextPromptModelManifest.swift in Sources */,
@@ -9382,6 +9389,7 @@
 				1201C8A30A1A932311FA2156 /* NewWorktreeDialogTests.swift in Sources */,
 				1240D4046831ECB9ED93AD03 /* NewWorktreeIssueStateTests.swift in Sources */,
 				59E638C5601E88B41FBB5BF8 /* NextPromptContextTests.swift in Sources */,
+				7E3FC231CA6865CF6F172F26 /* NextPromptInferenceTests.swift in Sources */,
 				52555BBEEDFF9625FBBFBF39 /* NextPromptModelLeaseTests.swift in Sources */,
 				A47EABB092B0E1C9F347B69B /* NextPromptModelStoreTests.swift in Sources */,
 				4F325AD310D8C59CF2F5F7AF /* NextPromptPolicyTests.swift in Sources */,

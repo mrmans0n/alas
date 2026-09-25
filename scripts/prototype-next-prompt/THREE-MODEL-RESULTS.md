@@ -195,3 +195,29 @@ TEST_RUNNER_ALAS_NEXT_PROMPT_MODEL_DIR="$VERIFIED_SNAPSHOT" xcodebuild -project 
 ```
 
 `VERIFIED_SNAPSHOT` was the verified local directory ending in the fixed revision above. The probe was temporary, so reproducing that test command requires restoring it. These native results establish the dependency and cancellation path for subsequent implementation. They do not change the earlier model-quality or severe-risk findings.
+
+## Production inference actor gate, 25 September 2026
+
+The production `NextPromptInference` actor passed a temporary native probe using the same pinned packages, M4 Max and local snapshot. All 12 production-manifest assets were rehashed before use. The probe cloned those assets into a temporary installation and used the real store's verification and shared lease. Networking was denied at the process boundary and outbound TCP returned `EPERM`. No model assets were downloaded or modified.
+
+The production policy rendered through the pinned tokenizer matched the exact system/user/assistant template with no thinking block. Inputs measured at 8,191 and 8,192 tokens fit; an 8,193-token latest turn abstained. An oversized earlier turn was evicted whole. A complete 8,192-token generation passed through fifteen synchronized 512-token manual prefill chunks and reached EOS with valid policy-checked output. Temperature was zero and the output limit was 128 IDs. A temporary one-token override separately exercised length-limit abstention. Prefill and decode cancellation both drained before the shared lease became exclusively lockable.
+
+| Observation | Native result |
+|---|---:|
+| First request, including asset verification, load and generation; 307 input / 30 output tokens | 2,609.4 ms |
+| Warm request reusing the container; 307 input / 30 output tokens | 649.8 ms |
+| Warm request; 8,192 input / 19 output tokens | 7,799.3 ms |
+| Prefill cancellation to drain, after starting the first 512-token chunk | 346.3 ms |
+| Decode cancellation to drain, after one consumed token | 30.8 ms |
+| Peak active MLX allocation | 4,221,242,420 bytes |
+| Process RSS before weight loading, after tokenizer boundary checks | 463,421,440 bytes |
+| Peak process RSS | 5,368,578,048 bytes |
+| Active MLX allocation after unload | 8,120 bytes |
+| Shared MLX allocator cache reported after unload | 15,242,835,288 bytes |
+| Process RSS after unload | 5,368,578,048 bytes |
+
+These are single observations from the final passing process, with cached files and uncontrolled host activity. They do not estimate percentiles or composer latency. The first request includes real asset verification; warm requests reuse the loaded container. The probe used public synthetic text only and does not update the model-quality results above.
+
+The actor released its container and request caches, but process RSS did not return to baseline. It deliberately leaves MLX's global allocator cache alone because that cache can serve other subsystems. Reported MLX cache bytes, active allocations and RSS are different, non-additive measures. The remaining resident memory's ownership was not isolated. The earlier compatibility gate's residual-RSS concern therefore remains, with a full-budget native workload now measured.
+
+The native run selected only `AlasTests/NextPromptInferenceTests` and passed 12 tests with no failures or skips. The temporary probe, instrumentation and test-only dependencies were removed afterward. The retained suite then passed all 11 tests with no failures or skips. No package pins changed and no CI result is claimed.
