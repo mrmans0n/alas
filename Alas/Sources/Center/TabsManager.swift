@@ -47,7 +47,9 @@ final class TabsManager {
     private var byWorktree: [String: TabsFile] = [:]
     /// Runtime navigation state belongs to the worktree rather than an editor
     /// view, so a reference search survives tab switches and view recreation.
-    private var navigationStores: [String: EditorNavigationStore] = [:]
+    /// Keyed by host plus worktree id: a shared path-derived id must not leak
+    /// A's jump history or request closures into B's editor.
+    private var navigationStores: [NavigationStoreKey: EditorNavigationStore] = [:]
     @ObservationIgnored private var workspaceUndoCoordinators: [WorkspaceUndoKey: WorkspaceEditUndoCoordinator] = [:]
     /// `true` once `loadAll` has been called at least once, meaning any
     /// persisted tabs have been read from disk. Views use this to
@@ -186,10 +188,11 @@ final class TabsManager {
         }
     }
 
-    func navigationStore(forWorktreeId worktreeId: String) -> EditorNavigationStore {
-        if let store = navigationStores[worktreeId] { return store }
+    func navigationStore(forWorktreeId worktreeId: String, host: String? = nil) -> EditorNavigationStore {
+        let key = NavigationStoreKey(host: host, worktreeId: worktreeId)
+        if let store = navigationStores[key] { return store }
         let store = EditorNavigationStore(openBuffer: { [weak self] document in self?.workspaceEditBuffer(for: document) })
-        navigationStores[worktreeId] = store
+        navigationStores[key] = store
         return store
     }
 
@@ -197,6 +200,11 @@ final class TabsManager {
     /// worktree id: two projects may expose the same path on different SSH
     /// hosts, and recovery state must never cross between them.
     private struct WorkspaceUndoKey: Hashable {
+        let host: String?
+        let worktreeId: String
+    }
+
+    private struct NavigationStoreKey: Hashable {
         let host: String?
         let worktreeId: String
     }
@@ -220,7 +228,7 @@ final class TabsManager {
         let key = WorkspaceUndoKey(host: host, worktreeId: worktreeId)
         workspaceUndoCoordinators[key]?.disposeHistory()
         if workspaceUndoCoordinators[key]?.retainedJournalIDs.isEmpty == true { workspaceUndoCoordinators.removeValue(forKey: key) }
-        navigationStores.removeValue(forKey: worktreeId)?.close()
+        navigationStores.removeValue(forKey: NavigationStoreKey(host: host, worktreeId: worktreeId))?.close()
     }
 
     /// Opens an LSP target using the worktree's explicit host context. In

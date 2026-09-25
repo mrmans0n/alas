@@ -215,9 +215,9 @@ final class CodeEditorCoordinator {
                     language: self.currentLanguage,
                     hostResolution: self.currentHostResolution
                 ) {
-                    self.appState.tabs.navigationStore(forWorktreeId: wid).recordJump(from: source, to: target)
+                    self.appState.tabs.navigationStore(forWorktreeId: wid, host: self.currentProjectHost).recordJump(from: source, to: target)
                 } else {
-                    self.appState.tabs.navigationStore(forWorktreeId: wid).recordActivationFailure(for: target)
+                    self.appState.tabs.navigationStore(forWorktreeId: wid, host: self.currentProjectHost).recordActivationFailure(for: target)
                 }
             },
             cancelPendingNavigation: { [weak self] in
@@ -227,14 +227,14 @@ final class CodeEditorCoordinator {
             isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false },
             snippetStore: { [weak self] in
                 guard let self, let id = self.currentWorktreeId else { return nil }
-                return self.appState.tabs.navigationStore(forWorktreeId: id)
+                return self.appState.tabs.navigationStore(forWorktreeId: id, host: self.currentProjectHost)
             }
         )
-        let initialNavigationStore = appState.tabs.navigationStore(forWorktreeId: worktreeId)
+        let initialNavigationStore = appState.tabs.navigationStore(forWorktreeId: worktreeId, host: currentProjectHost)
         navigation = NavigationFeature(
             store: { [weak self, initialNavigationStore] in
                 guard let self else { return initialNavigationStore }
-                return self.appState.tabs.navigationStore(forWorktreeId: self.currentWorktreeId ?? worktreeId)
+                return self.appState.tabs.navigationStore(forWorktreeId: self.currentWorktreeId ?? worktreeId, host: self.currentProjectHost)
             },
             synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
             isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false },
@@ -1008,7 +1008,7 @@ final class CodeEditorCoordinator {
     }
 
     private var currentNavigationStore: EditorNavigationStore? {
-        currentWorktreeId.map(appState.tabs.navigationStore(forWorktreeId:))
+        currentWorktreeId.map { appState.tabs.navigationStore(forWorktreeId: $0, host: currentProjectHost) }
     }
 
     private func navigationSource(at position: LSPPosition) -> EditorNavigationTarget? {
@@ -1036,7 +1036,7 @@ final class CodeEditorCoordinator {
         guard let worktreeID = currentWorktreeId,
               let root = currentOriginatingWorktreeRoot ?? currentRoot
         else { return }
-        let store = appState.tabs.navigationStore(forWorktreeId: worktreeID)
+        let store = appState.tabs.navigationStore(forWorktreeId: worktreeID, host: currentProjectHost)
         let target: EditorNavigationTarget?
         switch direction {
         case .back:
@@ -1113,9 +1113,9 @@ final class CodeEditorCoordinator {
             language: currentLanguage,
             hostResolution: currentHostResolution
         ) {
-            appState.tabs.navigationStore(forWorktreeId: worktreeID).recordJump(from: source, to: target)
+            appState.tabs.navigationStore(forWorktreeId: worktreeID, host: currentProjectHost).recordJump(from: source, to: target)
         } else {
-            appState.tabs.navigationStore(forWorktreeId: worktreeID).recordActivationFailure(for: target)
+            appState.tabs.navigationStore(forWorktreeId: worktreeID, host: currentProjectHost).recordActivationFailure(for: target)
             textView?.showCommandStatus("Could not open related diagnostic location")
         }
     }
@@ -1155,7 +1155,7 @@ final class CodeEditorCoordinator {
         inlayFeature?.invalidate(preservingPresentation: edit != nil)
         semanticFeature?.invalidate(preservingPresentation: edit != nil)
         if let worktreeID = currentWorktreeId {
-            appState.tabs.navigationStore(forWorktreeId: worktreeID).markResultsStale()
+            appState.tabs.navigationStore(forWorktreeId: worktreeID, host: currentProjectHost).markResultsStale()
         }
         didChangeTask?.cancel()
         hasPendingDidChange = true

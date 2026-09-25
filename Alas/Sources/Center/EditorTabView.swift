@@ -214,7 +214,7 @@ struct EditorTabView: View {
                     host: projectHost
                 ))
                 EditorNavigationResultsView(
-                    store: appState.tabs.navigationStore(forWorktreeId: worktreeId),
+                    store: appState.tabs.navigationStore(forWorktreeId: worktreeId, host: projectHost),
                     onOpen: { target in
                         let sourceURI = externalAbsolutePath.map { URL(fileURLWithPath: $0).lspURI }
                             ?? worktreePath.appendingPathComponent(relativePath).lspURI
@@ -244,16 +244,16 @@ struct EditorTabView: View {
                             ),
                             hostResolution: .project(projectHost)
                         ) {
-                            appState.tabs.navigationStore(forWorktreeId: worktreeId).recordJump(
+                            appState.tabs.navigationStore(forWorktreeId: worktreeId, host: projectHost).recordJump(
                                 from: source,
                                 to: target
                             )
                         } else {
-                            appState.tabs.navigationStore(forWorktreeId: worktreeId).recordActivationFailure(for: target)
+                            appState.tabs.navigationStore(forWorktreeId: worktreeId, host: projectHost).recordActivationFailure(for: target)
                         }
                     },
                     onRerun: {
-                        appState.tabs.navigationStore(forWorktreeId: worktreeId).rerunReferences()
+                        appState.tabs.navigationStore(forWorktreeId: worktreeId, host: projectHost).rerunReferences()
                     },
                     onReturnFocus: {
                         activeTextView?.window?.makeFirstResponder(activeTextView)
