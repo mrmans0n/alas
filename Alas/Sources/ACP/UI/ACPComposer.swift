@@ -171,7 +171,14 @@ struct ACPInputField: NSViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
         guard let width = proposal.width, let textView = nsView.documentView as? ACPNSTextView else { return nil }
-        return CGSize(width: width, height: min(140, textView.composerContentHeight(for: width)))
+        let contentHeight = min(140, textView.composerContentHeight(for: width))
+        // Fill the offered height like a plain flexible NSView would. Hugging
+        // the content height lets SwiftUI center a short editor vertically in
+        // the composer, so the caret starts mid-box instead of at the top.
+        guard let proposedHeight = proposal.height else {
+            return CGSize(width: width, height: contentHeight)
+        }
+        return CGSize(width: width, height: min(140, max(proposedHeight, contentHeight)))
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
