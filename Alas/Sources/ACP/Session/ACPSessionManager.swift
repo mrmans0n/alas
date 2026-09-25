@@ -1193,6 +1193,7 @@ final class ACPSessionManager: ObservableObject {
     var beforeBrokerClientRegistrationForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
     var afterBrokerClientShutdownRequestedForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
     var beforeRestartRunnerStopForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
+    var beforeTakeoverAttachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
 #endif
     private var resolvedRemoteAdapters: [String: ACPResolvedRemoteAdapter] = [:]
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
@@ -1265,6 +1266,8 @@ final class ACPSessionManager: ObservableObject {
         var shutdownRequestedBrokerStartupIDs = Set<UUID>()
     }
     private var attachmentAttempts: [ACPSession.ID: AttachmentAttempt] = [:]
+    /// Invalidates takeover work suspended while mirroring the final writer snapshot.
+    private var takeoverAttemptIDs: [ACPSession.ID: UUID] = [:]
     /// Identifies the latest connection generation after its attach task has
     /// returned. Long-lived callbacks use this in addition to session ID so
     /// an obsolete broker/runner cannot publish into its replacement.
@@ -3881,6 +3884,8 @@ extension ACPSessionManager {
     /// it no longer owns the lease (within ~5s).
     @discardableResult
     func takeOver(sessionId: ACPSession.ID) async -> Bool {
+        let takeoverAttemptID = UUID()
+        takeoverAttemptIDs[sessionId] = takeoverAttemptID
         let now = Int64(Date().timeIntervalSince1970)
         let requestedToken = UUID().uuidString
         let lease: ACPSessionLease
@@ -3893,10 +3898,22 @@ extension ACPSessionManager {
                 leaseToken: requestedToken
             )
         } catch {
+            if takeoverAttemptIDs[sessionId] == takeoverAttemptID {
+                takeoverAttemptIDs.removeValue(forKey: sessionId)
+            }
             persistenceError = error.localizedDescription
             return false
         }
-        guard sessions[sessionId] != nil else {
+        guard takeoverAttemptIDs[sessionId] == takeoverAttemptID else {
+            try? await persistence.releaseLease(
+                sessionId: sessionId,
+                instanceId: instanceId,
+                leaseToken: lease.token
+            )
+            return false
+        }
+        guard let session = sessions[sessionId] else {
+            takeoverAttemptIDs.removeValue(forKey: sessionId)
             try? await persistence.releaseLease(
                 sessionId: sessionId,
                 instanceId: instanceId,
@@ -3910,40 +3927,52 @@ extension ACPSessionManager {
         changeNotifier.post()
         startHeartbeat(sessionId: sessionId)
         startWriterWatch(sessionId: sessionId)
-        if let session = sessions[sessionId] {
-            // Refresh the cached remoteSessionId from the store so the
-            // re-attach uses session/load (resuming the existing agent
-            // conversation) rather than session/new (creating a fresh one).
-            // A mirror that was opened before the writer persisted
-            // remote_session_id has a stale/nil in-memory value; reading
-            // the store row here fixes that before attach branches on it.
-            // Only overwrite when the store has a non-empty value so we
-            // don't clobber a good in-memory id with a missing row.
-            if let row = try? await persistence.loadSession(id: sessionId),
-               let remote = row.remoteSessionId, !remote.isEmpty {
-                persistedRows[sessionId] = row
-                session.remoteSessionId = remote
-            }
-            // Refresh the queue from the store so the taking-over instance
-            // starts from the current persisted queue rather than whatever
-            // stale/empty in-memory state the mirror cached. Queue writes
-            // don't post a change notification, so the mirror's in-memory
-            // queue can be stale at takeover time.
-            let queue = (try? await persistence.loadQueue(sessionId: sessionId)) ?? []
-            session.restoreQueue(queue, markLegacySendingUncertain: true)
-            // Block immediate sends while the final mirror snapshot catches
-            // the cached transcript up to the store before writer attach.
-            session.agentState = .spawning
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                await self.refreshMirror(sessionId: sessionId)
-                self.endMirroring(sessionId: sessionId)
-                guard self.sessions[sessionId] === session else { return }
-                session.agentState = .idle
-                await self.attach(to: sessionId, freshlyCreated: false)
-            }
-        } else {
-            endMirroring(sessionId: sessionId)
+        // Refresh the cached remoteSessionId from the store so the re-attach
+        // uses session/load (resuming the existing agent conversation) rather
+        // than session/new (creating a fresh one). A mirror opened before the
+        // writer persisted remote_session_id can have a stale/nil in-memory id.
+        let row = try? await persistence.loadSession(id: sessionId)
+        guard takeoverAttemptIDs[sessionId] == takeoverAttemptID else { return false }
+        guard sessions[sessionId] === session else {
+            try? await persistence.releaseLease(
+                sessionId: sessionId,
+                instanceId: instanceId,
+                leaseToken: lease.token
+            )
+            return false
+        }
+        if let row, let remote = row.remoteSessionId, !remote.isEmpty {
+            persistedRows[sessionId] = row
+            session.remoteSessionId = remote
+        }
+        // Queue writes don't post a change notification, so a mirror's
+        // in-memory queue can be stale at takeover time.
+        let queue = (try? await persistence.loadQueue(sessionId: sessionId)) ?? []
+        guard takeoverAttemptIDs[sessionId] == takeoverAttemptID else { return false }
+        guard sessions[sessionId] === session else {
+            try? await persistence.releaseLease(
+                sessionId: sessionId,
+                instanceId: instanceId,
+                leaseToken: lease.token
+            )
+            return false
+        }
+        session.restoreQueue(queue, markLegacySendingUncertain: true)
+        // Block immediate sends while the final mirror snapshot catches the
+        // cached transcript up to the store before writer attach.
+        session.agentState = .spawning
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.refreshMirror(sessionId: sessionId)
+#if DEBUG
+            await self.beforeTakeoverAttachForTesting?(sessionId)
+#endif
+            guard self.takeoverAttemptIDs[sessionId] == takeoverAttemptID,
+                  self.sessions[sessionId] === session else { return }
+            self.takeoverAttemptIDs.removeValue(forKey: sessionId)
+            self.endMirroring(sessionId: sessionId)
+            session.agentState = .idle
+            await self.attach(to: sessionId, freshlyCreated: false)
         }
         return true
     }
@@ -6102,6 +6131,7 @@ extension ACPSessionManager {
         guard let session = sessions[sessionId],
               restartingConnections.insert(sessionId).inserted
         else { return }
+        takeoverAttemptIDs.removeValue(forKey: sessionId)
         session.connectionRestartInProgress = true
         retainSession(id: sessionId)
         defer {
@@ -7025,6 +7055,7 @@ extension ACPSessionManager {
 
     private func tearDownSession(sessionId: ACPSession.ID, closeRemote: Bool) async throws {
         teardownCounts[sessionId, default: 0] += 1
+        takeoverAttemptIDs.removeValue(forKey: sessionId)
         defer {
             let remaining = teardownCounts[sessionId, default: 1] - 1
             if remaining == 0 {

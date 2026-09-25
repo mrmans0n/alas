@@ -858,6 +858,75 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.detach(sessionId: session.id)
     }
 
+    @Test("restart fences a suspended takeover continuation")
+    func restartFencesSuspendedTakeoverContinuation() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sessionId = "restart-during-takeover-session"
+        try store.upsertSession(row(id: sessionId, remoteSessionId: "remote-takeover"))
+        let now = Int64(Date().timeIntervalSince1970)
+        #expect(try store.claimLease(
+            sessionId: sessionId,
+            instanceId: "previous-owner",
+            pid: Int64(getpid()),
+            now: now,
+            staleAfter: 60
+        ))
+
+        let takeoverGate = AttachPhaseGate()
+        let setupGate = AttachPhaseGate()
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-takeover")
+        var launchCount = 0
+        var takeoverResumed = false
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            instanceId: "taking-over-owner",
+            setupEvaluator: { _ in
+                await setupGate.enterAndWait()
+                return .ready
+            },
+            connectionFactory: { _, _, _ in
+                launchCount += 1
+                return ACPConnection(client: client)
+            }
+        )
+        manager.beforeTakeoverAttachForTesting = { _ in
+            await takeoverGate.enterAndWait()
+            takeoverResumed = true
+        }
+        let session = try #require(manager.placeholderSession(id: sessionId))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.refreshMirror(sessionId: session.id)
+
+        #expect(await manager.takeOver(sessionId: session.id))
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await takeoverGate.hasEntered
+        }
+        #expect(session.agentState == .spawning)
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await setupGate.hasEntered
+        }
+        await takeoverGate.release()
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            takeoverResumed
+        }
+        #expect(session.agentState == .spawning)
+
+        await setupGate.release()
+        await restart.value
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            session.agentState == .ready && manager.runners[session.id] != nil
+        }
+        #expect(launchCount == 1)
+        #expect(session.agentState == .ready)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("retrying uncertain queued prompt advances its durable key once")
     func retryingUncertainQueuedPromptAdvancesOperationAttempt() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
