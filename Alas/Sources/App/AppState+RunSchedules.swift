@@ -1717,14 +1717,20 @@ extension AppState {
             tabIds: sessionTabIDs
         )
         if let scheduledScriptTerminal {
-            // `TerminalService.closeSession` dispatches the zmx kill
-            // asynchronously and `onSessionUnregistered` releases the
-            // terminal's writer lease immediately, so a plain `closeTab`
-            // would let the final lease and fingerprint checks pass while
-            // the script shell (or work it spawned) is still writing into
-            // the worktree. Terminate first — waiting for the daemon-side
-            // kill — and only then close the tab, mirroring
-            // `stopWorkspaceCheckoutSessions`.
+            // A persistent (zmx-wrapped) terminal is provably terminated by
+            // `terminateSessionsAndWait`. A plain Ghostty shell
+            // (keepSessionsAlive off) has no zmx session: nothing proves its
+            // process — or anything it spawned — stopped writing, and
+            // closing the tab only releases the lease while the kill is
+            // dispatched asynchronously. Retain the worktree in that case.
+            if terminal.registry.session(for: scheduledScriptTerminal.sessionID)?.zmxSessionName == nil {
+                projectsManager.setOperationState(for: worktree, state: nil)
+                return await retainScheduledWorktree(
+                    reportID: report.id,
+                    reason: "The scheduled script terminal cannot be verified stopped; it has no persistent session.",
+                    store: store
+                )
+            }
             let projectPath = project.path
             do {
                 try await terminal.terminateSessionsAndWait(

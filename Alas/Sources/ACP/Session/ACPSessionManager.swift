@@ -3836,7 +3836,14 @@ extension ACPSessionManager {
         // Scheduled cleanup holds the deletion lock across its final lease
         // checks and the staging rename; claiming a writer lease now would
         // register a writer for a worktree that is about to be renamed away.
-        let admissionLease = await writerAdmissionProbe?()
+        // An absent hook means unrestricted admission (callers without the
+        // deletion-lock wiring, e.g. workspace checkouts and tests); only an
+        // installed hook that returns nil (cleanup holds the lock) refuses.
+        let admissionLease = if let writerAdmissionProbe {
+            await writerAdmissionProbe()
+        } else {
+            CheckpointDeletionLease(handles: [], instanceID: instanceId, sessionID: sessionId)
+        }
         guard admissionLease != nil else { return false }
         defer { _ = admissionLease }
         let now = Int64(Date().timeIntervalSince1970)
@@ -3882,7 +3889,14 @@ extension ACPSessionManager {
         // lease and it is released only after the SQLite claim has landed —
         // so a cleanup racing after the probe observes the new lease row
         // and refuses instead of renaming the worktree underneath it.
-        let admissionLease = await writerAdmissionProbe?()
+        // An absent hook means unrestricted admission (callers without the
+        // deletion-lock wiring); only an installed hook that returns nil
+        // (cleanup holds the lock) refuses.
+        let admissionLease = if let writerAdmissionProbe {
+            await writerAdmissionProbe()
+        } else {
+            CheckpointDeletionLease(handles: [], instanceID: instanceId, sessionID: sessionId)
+        }
         guard admissionLease != nil else { return false }
         defer { _ = admissionLease }
         let now = Int64(Date().timeIntervalSince1970)

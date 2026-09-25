@@ -7144,6 +7144,23 @@ final class AppState {
                 environmentRemovals: environmentRemovals,
                 leafId: leafId
             )
+            // The lease is acquired inside `onSessionRegistered`, which has
+            // already run. A scheduled cleanup that grabbed the deletion
+            // lock between the pre-launch probe and registration (or a
+            // failed lease write) must fail this launch, not leave the
+            // caller appending a tab around a session cleanup is about to
+            // destroy. The registration callback closes the shell and
+            // dispatches its tracked kill; rethrowing here keeps the caller
+            // from appending a tab around it.
+            if let lineageID = worktree.lineageID {
+                let leaseCount = checkpointWriterLeases.activeLeaseCountIfReadable(
+                    lineageID: lineageID,
+                    excludingInstanceID: instanceId
+                ) ?? 0
+                guard leaseCount > 0 else {
+                    throw TerminalLaunchError.worktreeOperationInProgress
+                }
+            }
             opened = OpenedTerminalSession(id: session.id, foregroundPid: { [weak session] in
                 session?.surface.foregroundPid
             })
@@ -11821,7 +11838,11 @@ final class AppState {
             // admitted before the lock was taken, so the lease probe passed
             // but the write was refused. The session must not survive —
             // it has no lease and its worktree is about to be renamed away.
+            // Terminate and block on the tracked kill (semaphore-backed, so
+            // it is safe from this synchronous MainActor context) so cleanup
+            // cannot race a still-alive shell.
             closeTerminalSession(id: session.id, worktreeId: session.worktreeId, projectPath: nil)
+            terminal.waitForPendingKills(timeout: 5)
             return
         }
     }
