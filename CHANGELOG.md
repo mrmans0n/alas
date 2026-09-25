@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.9] - 2026-09-25
+
+### ✨ Features
+
+- Recover ACP chats after stalled startup or failed reconnection, with an immediate retry action and safeguards against stale attempts or uncertain prompt delivery (#1464).
+- Preview pasted composer images on hover at their original aspect ratio (#1467).
+- Show live narration and recent tool activity inside collapsed ACP activity groups (#1461, #1466).
+- Use one clear "Insert code" action in review comment composers (#1463).
+
+### 🐛 Fixes
+
+- Keep explanations visible in activity-heavy ACP turns, preserve logical transcript sections across forks, and show the total duration only on the final activity block (#1466).
+
 ## [0.19.8] - 2026-09-24
 
 ### 🐛 Fixes
