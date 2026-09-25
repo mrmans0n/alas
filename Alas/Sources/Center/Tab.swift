@@ -265,12 +265,15 @@ enum GGSplitCommitTabPresentation: Equatable {
 struct GGSplitCommitTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeId: String
+    var projectId: String?
     let targetGGID: String?
     let targetSHA: String
 
-    init(worktreeId: String, targetGGID: String?, targetSHA: String) {
-        self.id = "gg-split:\(worktreeId):\(targetGGID ?? targetSHA)"
+    init(worktreeId: String, projectId: String? = nil, targetGGID: String?, targetSHA: String) {
+        self.id = projectId.map { "gg-split-project:\($0):\(worktreeId):\(targetGGID ?? targetSHA)" }
+            ?? "gg-split:\(worktreeId):\(targetGGID ?? targetSHA)"
         self.worktreeId = worktreeId
+        self.projectId = projectId
         self.targetGGID = targetGGID
         self.targetSHA = targetSHA
     }
@@ -430,6 +433,7 @@ struct ReviewChangesTabState: Codable, Equatable, Identifiable {
 struct ReviewPRTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeId: String
+    var projectId: String?
     let provider: CodeHostKind
     let repositorySlug: String
     let number: Int
@@ -440,17 +444,18 @@ struct ReviewPRTabState: Codable, Equatable, Identifiable {
         "\(provider.reviewRequestLabel) Review"
     }
 
-    init(worktreeId: String, snapshot: ReviewLoopSnapshot) {
+    init(worktreeId: String, projectId: String? = nil, snapshot: ReviewLoopSnapshot) {
         let request = snapshot.reviewRequest
         let remote = request?.remote ?? snapshot.remote
         self.worktreeId = worktreeId
+        self.projectId = projectId
         self.provider = request?.provider ?? remote?.kind ?? .github
         self.repositorySlug = remote?.repositorySlug ?? ""
         self.number = request?.number ?? 0
         self.url = request?.url ?? remote?.webURL ?? URL(fileURLWithPath: "/")
         self.title = request?.title ?? ""
         let host = remote?.host ?? self.url.host ?? ""
-        self.id = [
+        let identity = [
             "review-pr",
             worktreeId,
             provider.rawValue,
@@ -458,6 +463,7 @@ struct ReviewPRTabState: Codable, Equatable, Identifiable {
             repositorySlug,
             "\(number)",
         ].joined(separator: ":")
+        self.id = projectId.map { "review-pr-project:\($0):\(identity)" } ?? identity
     }
 
     mutating func refreshSnapshotMetadata(from snapshot: ReviewLoopSnapshot) {
@@ -920,6 +926,7 @@ struct EditorTabState: Codable, Equatable, Identifiable {
 
 struct DiffTabState: Codable, Equatable, Identifiable {
     let id: TabID
+    var projectId: String?
     var title: String
     var relativePath: String
     var staged: Bool = false
@@ -932,9 +939,11 @@ struct DiffTabState: Codable, Equatable, Identifiable {
         relativePath: String,
         staged: Bool = false,
         originalPath: String? = nil,
-        compareWithHEAD: Bool = false
+        compareWithHEAD: Bool = false,
+        projectId: String? = nil
     ) {
         self.id = id
+        self.projectId = projectId
         self.title = title
         self.relativePath = relativePath
         self.staged = staged
@@ -943,12 +952,13 @@ struct DiffTabState: Codable, Equatable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, relativePath, staged, originalPath, compareWithHEAD
+        case id, projectId, title, relativePath, staged, originalPath, compareWithHEAD
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(TabID.self, forKey: .id)
+        projectId = try container.decodeIfPresent(String.self, forKey: .projectId)
         title = try container.decode(String.self, forKey: .title)
         relativePath = try container.decode(String.self, forKey: .relativePath)
         staged = try container.decodeIfPresent(Bool.self, forKey: .staged) ?? false
@@ -960,22 +970,26 @@ struct DiffTabState: Codable, Equatable, Identifiable {
 struct StashDiffTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeId: String
+    var projectId: String?
     let stash: GitStash
     let file: GitStashFile
     let title: String
 
-    init(worktreeId: String, stash: GitStash, file: GitStashFile) {
+    init(worktreeId: String, projectId: String? = nil, stash: GitStash, file: GitStashFile) {
         self.worktreeId = worktreeId
+        self.projectId = projectId
         self.stash = stash
         self.file = file
         self.title = "\((file.path as NSString).lastPathComponent) @ \(stash.ref)"
-        self.id = "stash-diff:\(worktreeId):\(stash.ref):\(stash.sha):\(file.path)\u{0}\(file.isUntracked)"
+        let identity = "\(worktreeId):\(stash.ref):\(stash.sha):\(file.path)\u{0}\(file.isUntracked)"
+        self.id = projectId.map { "stash-diff-project:\($0):\(identity)" } ?? "stash-diff:\(identity)"
     }
 }
 
 struct CheckpointDiffTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeID: String
+    var projectId: String?
     let checkpointID: CheckpointID
     let groupID: UUID
     let primaryPath: String
@@ -984,19 +998,23 @@ struct CheckpointDiffTabState: Codable, Equatable, Identifiable {
     let title: String
 
     enum CodingKeys: String, CodingKey {
-        case id, worktreeID, checkpointID, groupID, primaryPath, memberPaths, checkpointLabel, title
+        case id, worktreeID, projectId, checkpointID, groupID, primaryPath, memberPaths, checkpointLabel, title
     }
 
     init(
         worktreeID: String,
+        projectId: String? = nil,
         checkpointID: CheckpointID,
         groupID: UUID,
         primaryPath: String,
         memberPaths: [String]? = nil,
         checkpointLabel: String
     ) {
-        self.id = "checkpoint-diff:\(worktreeID):\(checkpointID.uuidString):\(groupID.uuidString)"
+        self.id = projectId.map {
+            "checkpoint-diff-project:\($0):\(worktreeID):\(checkpointID.uuidString):\(groupID.uuidString)"
+        } ?? "checkpoint-diff:\(worktreeID):\(checkpointID.uuidString):\(groupID.uuidString)"
         self.worktreeID = worktreeID
+        self.projectId = projectId
         self.checkpointID = checkpointID
         self.groupID = groupID
         self.primaryPath = primaryPath
@@ -1010,6 +1028,7 @@ struct CheckpointDiffTabState: Codable, Equatable, Identifiable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(TabID.self, forKey: .id)
         worktreeID = try c.decode(String.self, forKey: .worktreeID)
+        projectId = try c.decodeIfPresent(String.self, forKey: .projectId)
         checkpointID = try c.decode(CheckpointID.self, forKey: .checkpointID)
         groupID = try c.decode(UUID.self, forKey: .groupID)
         primaryPath = try c.decode(String.self, forKey: .primaryPath)

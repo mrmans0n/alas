@@ -1212,6 +1212,8 @@ final class RightPaneState: GGSplitCommitServicing {
             else { return }
             appState.tabs.openOrFocusReviewPR(
                 worktreeId: worktree.id,
+                projectId: worktree.projectId,
+                includesLegacyUnownedProjectTabs: appState.legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId,
                 snapshot: snapshot
             )
         case .pushBranch, .forcePushBranch:

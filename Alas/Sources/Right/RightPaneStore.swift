@@ -254,6 +254,8 @@ final class RightPaneStore {
                 guard let app = self?.appState else { return }
                 _ = app.tabs.openGGSplitCommit(
                     worktreeId: worktree.id,
+                    projectId: worktree.projectId,
+                    includesLegacyUnownedProjectTabs: app.legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId,
                     targetGGID: entry.ggId,
                     targetSHA: entry.sha
                 )

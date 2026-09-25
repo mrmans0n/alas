@@ -357,8 +357,12 @@ final class AppState {
         rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled ?? true
     }
 
-    func checkpointFileWritesDisabledAfterDiscovery(worktreeId: String) async -> Bool {
-        await checkpointMutationsDisabledAfterDiscovery(worktreeId: worktreeId)
+    func checkpointFileWritesDisabledAfterDiscovery(worktreeId: String, projectId: String? = nil) async -> Bool {
+        guard let projectId else {
+            return await checkpointMutationsDisabledAfterDiscovery(worktreeId: worktreeId)
+        }
+        guard let worktree = worktree(withId: worktreeId, inProjectId: projectId) else { return true }
+        return await checkpointMutationsDisabledAfterDiscovery(for: worktree)
     }
 
     func checkpointTerminalAdmissionDisabled(worktreeId: String) -> Bool {
@@ -14267,7 +14271,12 @@ final class AppState {
         compareWithHEAD: Bool = false
     ) {
         let worktreeId = worktree.id
-        let existing = tabs.tabs(forWorktree: worktreeId).first { tab in
+        let includesLegacyUnownedProjectTabs = legacyEditorOwnerProjectId(forWorktreeId: worktreeId) == worktree.projectId
+        let existing = tabs.tabs(
+            forWorktree: worktreeId,
+            projectId: worktree.projectId,
+            includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
+        ).first { tab in
             if case .diff(let s) = tab {
                 return s.relativePath == relativePath
                     && s.staged == staged
@@ -14277,6 +14286,7 @@ final class AppState {
             return false
         }
         if let existing {
+            tabs.adoptLegacyProjectOwnedTab(worktreeId: worktreeId, tabId: existing.id, projectId: worktree.projectId)
             activateWorktreeCenterTab(worktreeId: worktreeId, tabId: existing.id)
         } else {
             let basename = (relativePath as NSString).lastPathComponent
@@ -14290,6 +14300,7 @@ final class AppState {
             }
             let tab = tabs.appendDiff(
                 worktreeId: worktreeId,
+                projectId: worktree.projectId,
                 title: title,
                 relativePath: relativePath,
                 staged: staged,
@@ -14302,7 +14313,12 @@ final class AppState {
 
     func openStashDiffTab(worktree: Worktree, stash: GitStash, file: GitStashFile) {
         let worktreeId = worktree.id
-        let existing = tabs.tabs(forWorktree: worktreeId).first { tab in
+        let includesLegacyUnownedProjectTabs = legacyEditorOwnerProjectId(forWorktreeId: worktreeId) == worktree.projectId
+        let existing = tabs.tabs(
+            forWorktree: worktreeId,
+            projectId: worktree.projectId,
+            includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
+        ).first { tab in
             if case .stashDiff(let state) = tab {
                 return state.stash.ref == stash.ref
                     && state.stash.sha == stash.sha
@@ -14312,10 +14328,11 @@ final class AppState {
             return false
         }
         if let existing {
+            tabs.adoptLegacyProjectOwnedTab(worktreeId: worktreeId, tabId: existing.id, projectId: worktree.projectId)
             activateWorktreeCenterTab(worktreeId: worktreeId, tabId: existing.id)
             return
         }
-        let tab = tabs.appendStashDiff(worktreeId: worktreeId, stash: stash, file: file)
+        let tab = tabs.appendStashDiff(worktreeId: worktreeId, projectId: worktree.projectId, stash: stash, file: file)
         activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tab.id)
     }
 
@@ -14328,7 +14345,12 @@ final class AppState {
         checkpointLabel: String
     ) {
         let worktreeID = worktree.id
-        let existing = tabs.tabs(forWorktree: worktreeID).first { tab in
+        let includesLegacyUnownedProjectTabs = legacyEditorOwnerProjectId(forWorktreeId: worktreeID) == worktree.projectId
+        let existing = tabs.tabs(
+            forWorktree: worktreeID,
+            projectId: worktree.projectId,
+            includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
+        ).first { tab in
             if case .checkpointDiff(let state) = tab {
                 return state.worktreeID == worktreeID
                     && state.checkpointID == checkpointID
@@ -14337,11 +14359,13 @@ final class AppState {
             return false
         }
         if let existing {
+            tabs.adoptLegacyProjectOwnedTab(worktreeId: worktreeID, tabId: existing.id, projectId: worktree.projectId)
             activateWorktreeCenterTab(worktreeId: worktreeID, tabId: existing.id)
             return
         }
         let tab = tabs.appendCheckpointDiff(
             worktreeID: worktreeID,
+            projectId: worktree.projectId,
             checkpointID: checkpointID,
             groupID: groupID,
             primaryPath: primaryPath,

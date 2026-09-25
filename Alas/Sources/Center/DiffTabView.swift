@@ -20,6 +20,8 @@ struct DiffTabView: View {
     let originalPath: String?
     let compareWithHEAD: Bool
     let worktreeId: String
+    var projectId: String? = nil
+    var projectHost: String? = nil
     let appState: AppState
     var codeFontFamily: String = ""
     var codeFontSize: CGFloat = 13
@@ -59,9 +61,9 @@ struct DiffTabView: View {
     var onRenderContextCacheMissForTesting: (() -> Void)? = nil
     #endif
 
-    private let git = GitService()
+    var git: GitService { GitService(hostResolution: .project(projectHost)) }
     private var checkpointLeaseActive: Bool {
-        appState.rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled == true
+        appState.rightPaneStore.activeState(worktreeId: worktreeId, projectId: projectId)?.checkpointMutationsDisabled == true
     }
 
     var body: some View {
@@ -375,7 +377,8 @@ struct DiffTabView: View {
 
             let tracked = (try? await Process.git(
                 ["ls-files", "--error-unmatch", "--", relativePath],
-                cwd: worktreePath
+                cwd: worktreePath,
+                hostResolution: .project(projectHost)
             ))?.exitCode == 0
             guard isActiveLoad(requestedLoadToken) else { return }
 
@@ -410,7 +413,7 @@ struct DiffTabView: View {
         guard !checkpointLeaseActive else { return }
         Task {
             guard !checkpointLeaseActive else { return }
-            guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else { return }
+            guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId, projectId: projectId) else { return }
             let tracked = isFileTracked
             // For untracked files we need the real file mode so `git apply
             // --cached` doesn't drop the +x bit or rewrite a symlink as a
@@ -424,7 +427,12 @@ struct DiffTabView: View {
             )
             var didFail = false
             do {
-                let result = try await Process.git(["apply", "--cached", "-"], cwd: worktreePath, stdin: patch)
+                let result = try await Process.git(
+                    ["apply", "--cached", "-"],
+                    cwd: worktreePath,
+                    stdin: patch,
+                    hostResolution: .project(projectHost)
+                )
                 if result.exitCode != 0 {
                     self.error = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
                     didFail = true
@@ -461,7 +469,7 @@ struct DiffTabView: View {
         guard !checkpointLeaseActive else { return }
         Task {
             guard !checkpointLeaseActive else { return }
-            guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else { return }
+            guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId, projectId: projectId) else { return }
             let patch = HunkPatchBuilder.patch(file: relativePath, hunk: hunk, tracked: true)
             var didFail = false
             do {

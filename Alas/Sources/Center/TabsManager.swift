@@ -165,6 +165,16 @@ final class TabsManager {
             snapshot.projectId == projectId || (includesLegacyUnownedProjectTabs && snapshot.projectId == nil)
         case .fileHistory(let history):
             history.projectId == projectId || (includesLegacyUnownedProjectTabs && history.projectId == nil)
+        case .diff(let diff):
+            diff.projectId == projectId || (includesLegacyUnownedProjectTabs && diff.projectId == nil)
+        case .stashDiff(let diff):
+            diff.projectId == projectId || (includesLegacyUnownedProjectTabs && diff.projectId == nil)
+        case .checkpointDiff(let diff):
+            diff.projectId == projectId || (includesLegacyUnownedProjectTabs && diff.projectId == nil)
+        case .reviewPR(let review):
+            review.projectId == projectId || (includesLegacyUnownedProjectTabs && review.projectId == nil)
+        case .ggSplitCommit(let split):
+            split.projectId == projectId || (includesLegacyUnownedProjectTabs && split.projectId == nil)
         default:
             nil
         }
@@ -1062,19 +1072,22 @@ final class TabsManager {
     @discardableResult
     func appendDiff(
         worktreeId: String,
+        projectId: String? = nil,
         title: String,
         relativePath: String,
         staged: Bool = false,
         originalPath: String? = nil,
         compareWithHEAD: Bool = false
     ) -> Tab {
+        let rawID = UUID().uuidString
         let state = DiffTabState(
-            id: UUID().uuidString,
+            id: projectId.map { "diff-project:\($0):\(rawID)" } ?? rawID,
             title: title,
             relativePath: relativePath,
             staged: staged,
             originalPath: originalPath,
-            compareWithHEAD: compareWithHEAD
+            compareWithHEAD: compareWithHEAD,
+            projectId: projectId
         )
         let tab = Tab.diff(state)
         append(tab, to: worktreeId)
@@ -1082,8 +1095,8 @@ final class TabsManager {
     }
 
     @discardableResult
-    func appendStashDiff(worktreeId: String, stash: GitStash, file: GitStashFile) -> Tab {
-        let state = StashDiffTabState(worktreeId: worktreeId, stash: stash, file: file)
+    func appendStashDiff(worktreeId: String, projectId: String? = nil, stash: GitStash, file: GitStashFile) -> Tab {
+        let state = StashDiffTabState(worktreeId: worktreeId, projectId: projectId, stash: stash, file: file)
         let tab = Tab.stashDiff(state)
         append(tab, to: worktreeId)
         return tab
@@ -1092,6 +1105,7 @@ final class TabsManager {
     @discardableResult
     func appendCheckpointDiff(
         worktreeID: String,
+        projectId: String? = nil,
         checkpointID: CheckpointID,
         groupID: UUID,
         primaryPath: String,
@@ -1100,6 +1114,7 @@ final class TabsManager {
     ) -> Tab {
         let state = CheckpointDiffTabState(
             worktreeID: worktreeID,
+            projectId: projectId,
             checkpointID: checkpointID,
             groupID: groupID,
             primaryPath: primaryPath,
@@ -1465,17 +1480,37 @@ final class TabsManager {
     @discardableResult
     func openGGSplitCommit(
         worktreeId: String,
+        projectId: String? = nil,
+        includesLegacyUnownedProjectTabs: Bool = false,
         targetGGID: String?,
         targetSHA: String
     ) -> TabID {
         let state = GGSplitCommitTabState(
             worktreeId: worktreeId,
+            projectId: projectId,
             targetGGID: targetGGID,
             targetSHA: targetSHA
         )
-        if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {
-            activate(worktreeId: worktreeId, tabId: state.id)
-            return state.id
+        let targetIdentity = targetGGID ?? targetSHA
+        if var file = byWorktree[worktreeId],
+           let index = file.tabs.firstIndex(where: { tab in
+               guard case .ggSplitCommit(let existing) = tab,
+                     existing.projectId == projectId
+                         || (includesLegacyUnownedProjectTabs && existing.projectId == nil)
+               else { return false }
+               return (existing.targetGGID ?? existing.targetSHA) == targetIdentity
+        }),
+           case .ggSplitCommit(var existing) = file.tabs[index] {
+            if existing.projectId == nil, let projectId {
+                existing.projectId = projectId
+                file.tabs[index] = .ggSplitCommit(existing)
+            }
+            let tab = Tab.ggSplitCommit(existing)
+            rememberProjectLocalTab(tab, in: &file)
+            file.activeTabId = existing.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return existing.id
         }
         append(.ggSplitCommit(state), to: worktreeId)
         return state.id
@@ -1535,15 +1570,30 @@ final class TabsManager {
     }
 
     @discardableResult
-    func openOrFocusReviewPR(worktreeId: String, snapshot: ReviewLoopSnapshot) -> Tab {
-        let baseState = ReviewPRTabState(worktreeId: worktreeId, snapshot: snapshot)
+    func openOrFocusReviewPR(
+        worktreeId: String,
+        projectId: String? = nil,
+        includesLegacyUnownedProjectTabs: Bool = false,
+        snapshot: ReviewLoopSnapshot
+    ) -> Tab {
+        let baseState = ReviewPRTabState(worktreeId: worktreeId, projectId: projectId, snapshot: snapshot)
         if var file = byWorktree[worktreeId],
-           let idx = file.tabs.firstIndex(where: { $0.id == baseState.id }),
+           let idx = file.tabs.firstIndex(where: { tab in
+               guard case .reviewPR(let state) = tab,
+                     state.projectId == projectId
+                         || (includesLegacyUnownedProjectTabs && state.projectId == nil)
+               else { return false }
+               return state.id == baseState.id || state.matches(snapshot)
+           }),
            case .reviewPR(var existing) = file.tabs[idx] {
+            if existing.projectId == nil, let projectId {
+                existing.projectId = projectId
+            }
             existing.refreshSnapshotMetadata(from: snapshot)
             let tab = Tab.reviewPR(existing)
             file.tabs[idx] = tab
             file.activeTabId = tab.id
+            rememberProjectLocalTab(tab, in: &file)
             byWorktree[worktreeId] = file
             persist(worktreeId)
             return tab
@@ -2416,9 +2466,45 @@ final class TabsManager {
         case .mergeConflict(let state): state.projectId
         case .fileSnapshot(let state): state.projectId
         case .fileHistory(let state): state.projectId
+        case .diff(let state): state.projectId
+        case .stashDiff(let state): state.projectId
+        case .checkpointDiff(let state): state.projectId
+        case .reviewPR(let state): state.projectId
+        case .ggSplitCommit(let state): state.projectId
         default: nil
         }
         if let projectId { file.activeEditorTabIds[projectId] = tab.id }
+    }
+
+    func adoptLegacyProjectOwnedTab(worktreeId: String, tabId: TabID, projectId: String) {
+        guard var file = byWorktree[worktreeId],
+              let index = file.tabs.firstIndex(where: { $0.id == tabId })
+        else { return }
+
+        switch file.tabs[index] {
+        case .diff(var state) where state.projectId == nil:
+            state.projectId = projectId
+            file.tabs[index] = .diff(state)
+        case .stashDiff(var state) where state.projectId == nil:
+            state.projectId = projectId
+            file.tabs[index] = .stashDiff(state)
+        case .checkpointDiff(var state) where state.projectId == nil:
+            state.projectId = projectId
+            file.tabs[index] = .checkpointDiff(state)
+        case .reviewPR(var state) where state.projectId == nil:
+            state.projectId = projectId
+            file.tabs[index] = .reviewPR(state)
+        case .ggSplitCommit(var state) where state.projectId == nil:
+            state.projectId = projectId
+            file.tabs[index] = .ggSplitCommit(state)
+        default:
+            return
+        }
+
+        let adoptedTab = file.tabs[index]
+        rememberProjectLocalTab(adoptedTab, in: &file)
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
     }
 
     private func setStashedDraft(

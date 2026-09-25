@@ -1338,6 +1338,142 @@ struct TabsManagerTests {
         #expect(manager.activeTabId(forWorktree: worktreeId, projectId: "project-a") == history.id)
     }
 
+    @Test func unownedActionTabsAreVisibleOnlyToTheirLegacyProjectOwner() throws {
+        let worktreeId = "tabs-manager-legacy-action-tabs-\(UUID().uuidString)"
+        let tabsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tabs-manager-legacy-actions-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tabsDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tabsDirectory) }
+        let manager = TabsManager(tabsDirectory: tabsDirectory)
+        let stash = GitStash(ref: "stash@{0}", subject: "legacy", relativeTime: "now", sha: "abc")
+        let file = GitStashFile(path: "Shared.swift", status: "M", add: 1, del: 0)
+        let snapshot = ReviewLoopSnapshot(
+            local: ReviewLoopLocalState(
+                branchName: "feature",
+                headSHA: "abc",
+                baseBranch: "main",
+                hasWorkingTreeChanges: false,
+                hasStagedChanges: false,
+                aheadCommitCount: 1,
+                hasUpstream: false,
+                needsPush: true
+            ),
+            remote: nil,
+            reviewRequest: nil,
+            providerAvailable: true,
+            providerAuthenticated: true,
+            providerCapabilities: .githubCLI,
+            errorMessage: nil
+        )
+
+        let diff = manager.appendDiff(worktreeId: worktreeId, title: "Shared.swift", relativePath: "Shared.swift")
+        let stashDiff = manager.appendStashDiff(worktreeId: worktreeId, stash: stash, file: file)
+        let checkpointDiff = manager.appendCheckpointDiff(
+            worktreeID: worktreeId,
+            checkpointID: UUID(),
+            groupID: UUID(),
+            primaryPath: "Shared.swift",
+            checkpointLabel: "Before"
+        )
+        let reviewPR = manager.openOrFocusReviewPR(worktreeId: worktreeId, snapshot: snapshot)
+        let ggSplit = manager.openGGSplitCommit(worktreeId: worktreeId, targetGGID: "change-1", targetSHA: "abc")
+        let expectedIDs: Set<TabID> = [diff.id, stashDiff.id, checkpointDiff.id, reviewPR.id, ggSplit]
+
+        #expect(Set(manager.tabs(forWorktree: worktreeId).map(\.id)) == expectedIDs)
+        #expect(Set(manager.tabs(
+            forWorktree: worktreeId,
+            projectId: "project-a",
+            includesLegacyUnownedProjectTabs: true
+        ).map(\.id)) == expectedIDs)
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-b").isEmpty)
+
+        for id in expectedIDs {
+            manager.adoptLegacyProjectOwnedTab(worktreeId: worktreeId, tabId: id, projectId: "project-a")
+        }
+        #expect(Set(manager.tabs(forWorktree: worktreeId, projectId: "project-a").map(\.id)) == expectedIDs)
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-b").isEmpty)
+
+        let reloaded = TabsManager(tabsDirectory: tabsDirectory)
+        reloaded.loadAll(worktreeIds: [worktreeId])
+        #expect(Set(reloaded.tabs(forWorktree: worktreeId, projectId: "project-a").map(\.id)) == expectedIDs)
+        #expect(reloaded.tabs(forWorktree: worktreeId, projectId: "project-b").isEmpty)
+    }
+
+    @Test func actionTabsCreatedForEachProjectHaveDistinctOwnedIdentities() throws {
+        let worktreeId = "tabs-manager-owned-action-tabs-\(UUID().uuidString)"
+        let tabsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tabs-manager-owned-actions-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tabsDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tabsDirectory) }
+        let manager = TabsManager(tabsDirectory: tabsDirectory)
+        let stash = GitStash(ref: "stash@{0}", subject: "owned", relativeTime: "now", sha: "abc")
+        let file = GitStashFile(path: "Shared.swift", status: "M", add: 1, del: 0)
+        let checkpointID = UUID()
+        let groupID = UUID()
+        let snapshot = ReviewLoopSnapshot(
+            local: ReviewLoopLocalState(
+                branchName: "feature",
+                headSHA: "abc",
+                baseBranch: "main",
+                hasWorkingTreeChanges: false,
+                hasStagedChanges: false,
+                aheadCommitCount: 1,
+                hasUpstream: false,
+                needsPush: true
+            ),
+            remote: nil,
+            reviewRequest: nil,
+            providerAvailable: true,
+            providerAuthenticated: true,
+            providerCapabilities: .githubCLI,
+            errorMessage: nil
+        )
+
+        func addActionTabs(projectId: String) -> [TabID] {
+            let diff = manager.appendDiff(
+                worktreeId: worktreeId,
+                projectId: projectId,
+                title: "Shared.swift",
+                relativePath: "Shared.swift"
+            )
+            let stashDiff = manager.appendStashDiff(worktreeId: worktreeId, projectId: projectId, stash: stash, file: file)
+            let checkpointDiff = manager.appendCheckpointDiff(
+                worktreeID: worktreeId,
+                projectId: projectId,
+                checkpointID: checkpointID,
+                groupID: groupID,
+                primaryPath: "Shared.swift",
+                checkpointLabel: "Before"
+            )
+            let reviewPR = manager.openOrFocusReviewPR(worktreeId: worktreeId, projectId: projectId, snapshot: snapshot)
+            let ggSplit = manager.openGGSplitCommit(
+                worktreeId: worktreeId,
+                projectId: projectId,
+                targetGGID: "change-1",
+                targetSHA: "abc"
+            )
+            return [diff.id, stashDiff.id, checkpointDiff.id, reviewPR.id, ggSplit]
+        }
+
+        let projectAIDs = addActionTabs(projectId: "project-a")
+        let projectBIDs = addActionTabs(projectId: "project-b")
+
+        #expect(Set(projectAIDs).count == 5)
+        #expect(Set(projectBIDs).count == 5)
+        #expect(Set(projectAIDs).isDisjoint(with: Set(projectBIDs)))
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-a").map(\.id) == projectAIDs)
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-b").map(\.id) == projectBIDs)
+        manager.activate(worktreeId: worktreeId, tabId: projectAIDs[0])
+        manager.activate(worktreeId: worktreeId, tabId: projectBIDs[1])
+        #expect(manager.activeTabId(forWorktree: worktreeId, projectId: "project-a") == projectAIDs[0])
+        #expect(manager.activeTabId(forWorktree: worktreeId, projectId: "project-b") == projectBIDs[1])
+
+        let reloaded = TabsManager(tabsDirectory: tabsDirectory)
+        reloaded.loadAll(worktreeIds: [worktreeId])
+        #expect(reloaded.tabs(forWorktree: worktreeId, projectId: "project-a").map(\.id) == projectAIDs)
+        #expect(reloaded.tabs(forWorktree: worktreeId, projectId: "project-b").map(\.id) == projectBIDs)
+    }
+
     @Test func appendCommitEditorReusesOriginalShaIdentityWithoutOverwritingCurrentSha() {
         let worktreeId = "tabs-manager-commit-editor"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

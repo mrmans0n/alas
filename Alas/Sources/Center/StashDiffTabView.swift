@@ -3,6 +3,7 @@ import SwiftUI
 struct StashDiffTabView: View {
     let worktreePath: URL
     let state: StashDiffTabState
+    var projectHost: String? = nil
     var codeFontFamily: String = ""
     var codeFontSize: CGFloat = 13
     var onStartupRecoveryReady: () -> Void = {}
@@ -18,7 +19,7 @@ struct StashDiffTabView: View {
     @State private var imagePairLoaded = false
     @State private var imageRetryGeneration = 0
 
-    private let git = GitService()
+    var git: GitService { GitService(hostResolution: .project(projectHost)) }
 
     var body: some View {
         if ImageFileType.isSupported(currentPath: state.file.path, originalPath: state.file.oldPath) {

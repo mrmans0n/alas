@@ -516,6 +516,8 @@ struct CenterPaneView: View {
                             originalPath: s.originalPath,
                             compareWithHEAD: s.compareWithHEAD,
                             worktreeId: worktree.id,
+                            projectId: worktree.projectId,
+                            projectHost: state.remoteHost(for: worktree),
                             appState: state,
                             codeFontFamily: state.config.code.fontFamily,
                             codeFontSize: CGFloat(state.config.code.fontSize),
@@ -537,6 +539,7 @@ struct CenterPaneView: View {
                         StashDiffTabView(
                             worktreePath: worktree.path,
                             state: s,
+                            projectHost: state.remoteHost(for: worktree),
                             codeFontFamily: state.config.code.fontFamily,
                             codeFontSize: CGFloat(state.config.code.fontSize),
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }

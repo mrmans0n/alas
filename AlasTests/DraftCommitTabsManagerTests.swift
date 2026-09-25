@@ -89,11 +89,36 @@ struct DraftCommitTabsManagerTests {
             ),
             projectHost: appState.remoteHost(for: worktree)
         )
+        let diffView = DiffTabView(
+            worktreePath: root,
+            relativePath: "README.md",
+            staged: false,
+            originalPath: nil,
+            compareWithHEAD: false,
+            worktreeId: worktree.id,
+            projectId: worktree.projectId,
+            projectHost: appState.remoteHost(for: worktree),
+            appState: appState,
+            onOpenFile: nil,
+            onRequestDiscardFile: nil
+        )
+        let stashDiffView = StashDiffTabView(
+            worktreePath: root,
+            state: StashDiffTabState(
+                worktreeId: worktree.id,
+                projectId: worktree.projectId,
+                stash: GitStash(ref: "stash@{0}", subject: "change", relativeTime: "now", sha: "abc"),
+                file: GitStashFile(path: "README.md", status: "M", add: 1, del: 0)
+            ),
+            projectHost: appState.remoteHost(for: worktree)
+        )
 
         #expect(commitGit.remoteHost(forWorktreePath: root) == nil)
         #expect(snapshotGit.remoteHost(forWorktreePath: root) == nil)
         #expect(historyGit.remoteHost(forWorktreePath: root) == nil)
         #expect(mergeConflictView.gitService.remoteHost(forWorktreePath: root) == nil)
+        #expect(diffView.git.remoteHost(forWorktreePath: root) == nil)
+        #expect(stashDiffView.git.remoteHost(forWorktreePath: root) == nil)
     }
 
     @Test func openDraftWithPublishIntentCreatesPublishFirstDraft() {
