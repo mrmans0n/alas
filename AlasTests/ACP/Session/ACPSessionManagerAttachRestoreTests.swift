@@ -378,6 +378,65 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadLease(sessionId: session.id)?.token == replacementLease?.token)
     }
 
+    @Test("disposing during restart does not strand a reopened session attachment")
+    func disposingDuringRestartDoesNotStrandReopenedAttachment() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let service = ManagerBrokerServiceProxy(stallDetach: true)
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { service },
+            isolatedBrokerServiceFactory: { ManagerBrokerService() },
+            restartTeardownTimeout: .seconds(5)
+        )
+        let session = manager.createSession(id: "reopened-after-restart-dispose", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushPersistence()
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await service.detachGate.hasEntered
+        }
+
+        try await manager.disposeSession(id: session.id)
+        await service.detachGate.release()
+        await restart.value
+
+        let reopenedSession = try #require(manager.placeholderSession(id: session.id))
+        await manager.hydrateIfNeeded(id: reopenedSession.id)
+        let previousOpenCount = await service.opened.count
+        let reopenedAttach = Task {
+            await manager.attach(to: reopenedSession.id, freshlyCreated: false)
+        }
+
+        let openStart = DispatchTime.now().uptimeNanoseconds
+        while await service.opened.count == previousOpenCount,
+              DispatchTime.now().uptimeNanoseconds - openStart < 2_000_000_000 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let reopenedConnectionStarted = await service.opened.count > previousOpenCount
+
+        let readyStart = DispatchTime.now().uptimeNanoseconds
+        while reopenedSession.agentState != .ready,
+              DispatchTime.now().uptimeNanoseconds - readyStart < 3_000_000_000 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let reopenedAttachmentCompleted = reopenedSession.agentState == .ready
+        if !reopenedAttachmentCompleted {
+            // Let the test fail on the stranded waiter without leaving an
+            // unstructured attachment task behind on the broken behavior.
+            await manager.restartConnection(to: reopenedSession.id)
+        }
+        await reopenedAttach.value
+
+        #expect(reopenedConnectionStarted)
+        #expect(reopenedAttachmentCompleted)
+        #expect(reopenedSession.agentState == .ready)
+        await manager.detach(sessionId: reopenedSession.id)
+    }
+
     @Test("restored queue preserves uncertainty fields and marks legacy sends uncertain")
     func restoredQueuePreservesDeliveryUncertainty() async throws {
         let pending = QueuedPrompt(blocks: [.text("not sent")])

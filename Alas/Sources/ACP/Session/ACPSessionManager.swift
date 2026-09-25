@@ -6105,6 +6105,14 @@ extension ACPSessionManager {
         cancelledInFlightAttachments.remove(sessionId)
         let replacementAttempt = AttachmentAttempt()
         attachmentAttempts[sessionId] = replacementAttempt
+        defer {
+            if attachmentAttempts[sessionId] === replacementAttempt {
+                _ = supersedeAttachmentAttempt(for: sessionId)
+                if sessions[sessionId] !== session {
+                    disposingAttachments.remove(sessionId)
+                }
+            }
+        }
         connectionOwnerIDs[sessionId] = replacementAttempt.id
         brokerCallbackOwnerIDs[sessionId] = nil
 
