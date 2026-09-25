@@ -159,6 +159,27 @@ struct AppStateWorktreeCleanupBatchTests {
         }
     }
 
+    @Test func singleDeleteUsesTheOwningProjectsHostInsteadOfTheSharedPathRegistry() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        let conflictingHost = "sibling-project.invalid"
+        RemoteHostRegistry.shared.register(root: fixture.project.path, host: conflictingHost)
+        RemoteHostRegistry.shared.register(root: target.path.path, host: conflictingHost)
+        defer {
+            RemoteHostRegistry.shared.unregister(root: fixture.project.path)
+            RemoteHostRegistry.shared.unregister(root: target.path.path)
+        }
+
+        let response = await fixture.state.cliDeleteWorktree(target, force: true, keepBranch: true)
+
+        #expect(response == .ok)
+        for _ in 0..<200 where FileManager.default.fileExists(atPath: target.path.path) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!FileManager.default.fileExists(atPath: target.path.path))
+    }
+
     /// The scan that produced a worktree's cached `Worktree.branch` can be
     /// stale by the time the batch actually runs. If something switches the
     /// checkout to a detached HEAD in that window, deleting on the stale

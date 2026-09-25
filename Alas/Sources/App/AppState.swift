@@ -10599,6 +10599,7 @@ final class AppState {
                 ))
                 continue
             }
+            let hostResolution = EditorBufferHostResolution.project(project.host)
             guard !projectsManager.isMain(worktree, in: project) else {
                 results.append(WorktreeBatchResult(
                     worktreeId: worktree.id,
@@ -10675,7 +10676,10 @@ final class AppState {
             if let authorization {
                 do {
                     let preflight = try await Task.detached {
-                        try await WorktreeService().deletePreflight(worktreePath: worktree.path)
+                        try await WorktreeService().deletePreflight(
+                            worktreePath: worktree.path,
+                            hostResolution: hostResolution
+                        )
                     }.value
                     guard let acknowledgedPreflight = authorization.preflightByWorktree[worktree.id],
                           preflight.reasons.isSubset(of: acknowledgedPreflight.reasons),
@@ -10691,7 +10695,8 @@ final class AppState {
                     }
                     if let acknowledgedFingerprint = authorization.contentFingerprintsByWorktree[worktree.id] {
                         let currentFingerprint = try await Self.worktreeDeleteContentFingerprint(
-                            worktreePath: worktree.path
+                            worktreePath: worktree.path,
+                            hostResolution: hostResolution
                         )
                         guard currentFingerprint == acknowledgedFingerprint else {
                             results.append(WorktreeBatchResult(
@@ -11092,8 +11097,12 @@ final class AppState {
             }
             let preflight: WorktreeDeletePreflight
             do {
+                let hostResolution = EditorBufferHostResolution.project(remoteHost(for: worktree))
                 preflight = try await Task.detached {
-                    try await WorktreeService().deletePreflight(worktreePath: worktree.path)
+                    try await WorktreeService().deletePreflight(
+                        worktreePath: worktree.path,
+                        hostResolution: hostResolution
+                    )
                 }.value
             } catch {
                 unavailableReasons[worktree.id] = (error as? LocalizedError)?.errorDescription ?? "\(error)"
@@ -11104,7 +11113,8 @@ final class AppState {
             if preflight.requiresForce {
                 do {
                     contentFingerprintsByWorktree[worktree.id] = try await Self.worktreeDeleteContentFingerprint(
-                        worktreePath: worktree.path
+                        worktreePath: worktree.path,
+                        hostResolution: .project(remoteHost(for: worktree))
                     )
                 } catch {
                     unavailableReasons[worktree.id] = (error as? LocalizedError)?.errorDescription ?? "\(error)"
@@ -11423,7 +11433,11 @@ final class AppState {
             projectsManager.setOperationState(for: worktree, state: nil)
             return .error("Could not find the project for this worktree.")
         }
-        let preflight = await Self.performDeletePreflight(worktreePath: worktree.path)
+        let hostResolution = EditorBufferHostResolution.project(project.host)
+        let preflight = await Self.performDeletePreflight(
+            worktreePath: worktree.path,
+            hostResolution: hostResolution
+        )
         if !force, preflight.requiresForce {
             projectsManager.setOperationState(for: worktree, state: nil)
             if preflight.reasons.contains(.dirty) {
@@ -11540,7 +11554,7 @@ final class AppState {
         head: String,
         threeDot: Bool
     ) async -> AlasCLIResponse {
-        let git = GitService()
+        let git = GitService(hostResolution: .project(remoteHost(for: worktree)))
         let baseSHA: String
         let headSHA: String
         do {
@@ -11572,7 +11586,7 @@ final class AppState {
 
     @MainActor
     private func cliOpenRevisionReview(worktree: Worktree, ref: String) async -> AlasCLIResponse {
-        let git = GitService()
+        let git = GitService(hostResolution: .project(remoteHost(for: worktree)))
         let localBranches = (try? await git.localBranches(at: worktree.path)) ?? []
         if localBranches.contains(ref) {
             // The named branch is the HEAD; the repository's configured base
@@ -11662,7 +11676,8 @@ final class AppState {
         for worktree: Worktree,
         registry: CodeHostProviderRegistry
     ) async throws -> [CodeHostRemote] {
-        let remotes = try await GitService().remotes(worktreePath: worktree.path)
+        let git = GitService(hostResolution: .project(remoteHost(for: worktree)))
+        let remotes = try await git.remotes(worktreePath: worktree.path)
         let baseBranch = rightPaneStore.state(
             for: worktree,
             baseBranch: config.worktrees.baseBranch,
@@ -11761,6 +11776,7 @@ final class AppState {
         authorizedSessionIDs: Set<String>? = nil,
         verifiedMergedBranchSHA: String? = nil
     ) async -> WorktreeBatchOutcome {
+        let hostResolution = EditorBufferHostResolution.project(remoteHost(for: worktree))
         guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
             projectsManager.setOperationState(
                 for: worktree,
@@ -11818,7 +11834,8 @@ final class AppState {
                     deleteBranchIfMerged: deleteBranchIfMerged,
                     force: force,
                     verifiedMergedBranchSHA: verifiedMergedBranchSHA,
-                    authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
+                    authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint,
+                    hostResolution: hostResolution
                 )
             }
         } catch is WorktreeRemovalOwnershipChanged {
@@ -12090,25 +12107,29 @@ final class AppState {
         deleteBranchIfMerged: Bool,
         force: Bool,
         verifiedMergedBranchSHA: String? = nil,
-        authorizedDeleteContentFingerprint: String? = nil
+        authorizedDeleteContentFingerprint: String? = nil,
+        hostResolution: EditorBufferHostResolution
     ) async throws -> WorktreeRemovalOutcome {
         try await Task.detached {
             if let authorizedDeleteContentFingerprint {
                 let currentFingerprint = try await WorktreeService.worktreeDeleteContentFingerprint(
-                    worktreePath: worktree.path
+                    worktreePath: worktree.path,
+                    hostResolution: hostResolution
                 )
                 guard currentFingerprint == authorizedDeleteContentFingerprint else {
                     throw WorktreeDeleteContentFingerprintMismatch()
                 }
             }
 
-            if worktree.path.isRemoteAlasPath {
+            if hostResolution.remoteHost(forPath: worktree.path.path) != nil
+                || hostResolution.remoteHost(forPath: repoPath.path) != nil {
                 try await WorktreeService().remove(
                     repoPath: repoPath,
                     worktree: worktree,
                     deleteBranchIfMerged: deleteBranchIfMerged,
                     force: force,
-                    verifiedMergedBranchSHA: verifiedMergedBranchSHA
+                    verifiedMergedBranchSHA: verifiedMergedBranchSHA,
+                    hostResolution: hostResolution
                 )
                 return .synchronous
             }
@@ -12118,15 +12139,22 @@ final class AppState {
                 deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force,
                 verifiedMergedBranchSHA: verifiedMergedBranchSHA,
-                authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint
+                authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint,
+                hostResolution: hostResolution
             )
         }.value
     }
 
-    nonisolated private static func performDeletePreflight(worktreePath: URL) async -> WorktreeDeletePreflight {
+    nonisolated private static func performDeletePreflight(
+        worktreePath: URL,
+        hostResolution: EditorBufferHostResolution
+    ) async -> WorktreeDeletePreflight {
         do {
             return try await Task.detached {
-                try await WorktreeService().deletePreflight(worktreePath: worktreePath)
+                try await WorktreeService().deletePreflight(
+                    worktreePath: worktreePath,
+                    hostResolution: hostResolution
+                )
             }.value
         } catch {
             return WorktreeDeletePreflight(reasons: [])
@@ -12160,8 +12188,14 @@ final class AppState {
     private struct WorktreeDeleteContentFingerprintMismatch: Error {}
     private struct WorktreeRemovalOwnershipChanged: Error {}
 
-    nonisolated static func worktreeDeleteContentFingerprint(worktreePath: URL) async throws -> String {
-        try await WorktreeService.worktreeDeleteContentFingerprint(worktreePath: worktreePath)
+    nonisolated static func worktreeDeleteContentFingerprint(
+        worktreePath: URL,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
+    ) async throws -> String {
+        try await WorktreeService.worktreeDeleteContentFingerprint(
+            worktreePath: worktreePath,
+            hostResolution: hostResolution
+        )
     }
 
     nonisolated static func workspaceCleanupOwnershipAvailable(

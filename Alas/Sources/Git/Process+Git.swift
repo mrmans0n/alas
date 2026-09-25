@@ -275,6 +275,37 @@ extension Process {
         )
     }
 
+    /// Runs a fixed shell script in a worktree while preserving the same
+    /// project-vs-path-registry host choice as `git` invocations. This is
+    /// used for compound audits that need byte-safe shell pipelines (for
+    /// example hashing untracked paths), which cannot be represented as a
+    /// single Git argv list.
+    static func gitScriptData(
+        _ script: String,
+        cwd: URL,
+        hostResolution: EditorBufferHostResolution = .pathRegistry,
+        timeout: TimeInterval = Process.defaultTimeout
+    ) async throws -> ProcessResultData {
+        if let host = hostResolution.remoteHost(forPath: cwd.path) {
+            let command = "export GIT_OPTIONAL_LOCKS=0 LC_ALL=C; \(script)"
+            let remoteScript = SSHCommand.remoteScript(cwd: cwd.path, command: command)
+            let ssh = SSHCommand(host: host, mode: .batch)
+            return try await runData(
+                SSHCommand.executable,
+                args: ssh.argv(remoteScript: remoteScript),
+                timeout: timeout
+            )
+        }
+
+        return try await runData(
+            "/bin/sh",
+            args: ["-c", script],
+            cwd: cwd,
+            env: gitEnv(),
+            timeout: timeout
+        )
+    }
+
     /// Bounded-prefix variant of `gitData`: returns only the first
     /// `maxBytes` of stdout, terminating the child process as soon as that
     /// much has been buffered instead of waiting for it to exit naturally.

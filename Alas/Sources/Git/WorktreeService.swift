@@ -763,7 +763,8 @@ struct WorktreeService {
         force: Bool = false,
         forceTwice: Bool = false,
         usesRemoteHostRegistry: Bool = true,
-        verifiedMergedBranchSHA: String? = nil
+        verifiedMergedBranchSHA: String? = nil,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
     ) async throws {
         var args = ["worktree", "remove", worktree.path.path]
         if forceTwice {
@@ -771,17 +772,30 @@ struct WorktreeService {
         } else if force {
             args.append("--force")
         }
-        var result = try await Process.git(args, cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry, timeout: 90)
+        var result = try await Process.git(
+            args,
+            cwd: repoPath,
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution,
+            timeout: 90
+        )
         if result.exitCode != 0 {
             if Self.looksLikeMissingLFS(result.stderr) {
-                result = try await Process.git(Self.lfsFilterOverride + args, cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry, timeout: 90)
+                result = try await Process.git(
+                    Self.lfsFilterOverride + args,
+                    cwd: repoPath,
+                    usesRemoteHostRegistry: usesRemoteHostRegistry,
+                    hostResolution: hostResolution,
+                    timeout: 90
+                )
             }
             if !force,
                result.exitCode != 0,
                Self.looksLikeSubmoduleRemoveRefusal(result.stderr) {
                 var clean = try? await isRemovalClean(
                     worktree.path,
-                    usesRemoteHostRegistry: usesRemoteHostRegistry
+                    usesRemoteHostRegistry: usesRemoteHostRegistry,
+                    hostResolution: hostResolution
                 )
                 if clean == nil {
                     // The plain status check can fail the exact same way
@@ -793,7 +807,8 @@ struct WorktreeService {
                     // the tree can't be verified.
                     clean = try? await canForceRemoveAfterMissingLFS(
                         worktree.path,
-                        usesRemoteHostRegistry: usesRemoteHostRegistry
+                        usesRemoteHostRegistry: usesRemoteHostRegistry,
+                        hostResolution: hostResolution
                     )
                 }
                 guard clean == true else {
@@ -803,17 +818,23 @@ struct WorktreeService {
                     Self.lfsFilterOverride + args + ["--force"],
                     cwd: repoPath,
                     usesRemoteHostRegistry: usesRemoteHostRegistry,
+                    hostResolution: hostResolution,
                     timeout: 90
                 )
             }
             if !force,
                result.exitCode != 0,
                Self.looksLikeDirtyWorktreeRemoveError(result.stderr),
-               try await canForceRemoveAfterMissingLFS(worktree.path, usesRemoteHostRegistry: usesRemoteHostRegistry) {
+               try await canForceRemoveAfterMissingLFS(
+                   worktree.path,
+                   usesRemoteHostRegistry: usesRemoteHostRegistry,
+                   hostResolution: hostResolution
+               ) {
                 result = try await Process.git(
                     Self.lfsFilterOverride + ["worktree", "remove", worktree.path.path, "--force"],
                     cwd: repoPath,
                     usesRemoteHostRegistry: usesRemoteHostRegistry,
+                    hostResolution: hostResolution,
                     timeout: 90
                 )
             }
@@ -842,13 +863,19 @@ struct WorktreeService {
                     branch: worktree.branch,
                     gitDirArguments: [],
                     cwd: repoPath,
-                    usesRemoteHostRegistry: usesRemoteHostRegistry
+                    usesRemoteHostRegistry: usesRemoteHostRegistry,
+                    hostResolution: hostResolution
                 )
                 branchDeleteFlag = currentTip == verifiedMergedBranchSHA ? "-D" : "-d"
             } else {
                 branchDeleteFlag = "-d"
             }
-            _ = try? await Process.git(["branch", branchDeleteFlag, worktree.branch], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
+            _ = try? await Process.git(
+                ["branch", branchDeleteFlag, worktree.branch],
+                cwd: repoPath,
+                usesRemoteHostRegistry: usesRemoteHostRegistry,
+                hostResolution: hostResolution
+            )
         }
     }
 
@@ -860,12 +887,14 @@ struct WorktreeService {
         branch: String,
         gitDirArguments: [String],
         cwd: URL,
-        usesRemoteHostRegistry: Bool
+        usesRemoteHostRegistry: Bool,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
     ) async -> String? {
         guard let result = try? await Process.git(
             gitDirArguments + ["rev-parse", "refs/heads/\(branch)"],
             cwd: cwd,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
         ), result.exitCode == 0 else { return nil }
         let sha = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         return sha.isEmpty ? nil : sha
@@ -879,18 +908,21 @@ struct WorktreeService {
         usesRemoteHostRegistry: Bool = true,
         verifiedMergedBranchSHA: String? = nil,
         authorizedDeleteContentFingerprint: String? = nil,
+        hostResolution: EditorBufferHostResolution = .pathRegistry,
         moveItem: @Sendable (URL, URL) throws -> Void = {
             try WorktreeService.renameAtomically(from: $0, to: $1)
         }
     ) async throws -> WorktreeRemovalOutcome {
-        if repoPath.isRemoteAlasPath || worktree.path.isRemoteAlasPath {
+        if hostResolution.remoteHost(forPath: repoPath.path) != nil
+            || hostResolution.remoteHost(forPath: worktree.path.path) != nil {
             try await remove(
                 repoPath: repoPath,
                 worktree: worktree,
                 deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force,
                 usesRemoteHostRegistry: usesRemoteHostRegistry,
-                verifiedMergedBranchSHA: verifiedMergedBranchSHA
+                verifiedMergedBranchSHA: verifiedMergedBranchSHA,
+                hostResolution: hostResolution
             )
             return .synchronous
         }
@@ -993,7 +1025,8 @@ struct WorktreeService {
         } catch {
             if let authorizedDeleteContentFingerprint {
                 let fallbackFingerprint = try await Self.worktreeDeleteContentFingerprint(
-                    worktreePath: worktree.path
+                    worktreePath: worktree.path,
+                    hostResolution: hostResolution
                 )
                 guard fallbackFingerprint == authorizedDeleteContentFingerprint else {
                     throw WorktreeError.gitFailed("Git deletion risks changed since confirmation")
@@ -1006,7 +1039,8 @@ struct WorktreeService {
                 force: force,
                 forceTwice: registration.isLocked && force,
                 usesRemoteHostRegistry: false,
-                verifiedMergedBranchSHA: verifiedMergedBranchSHA
+                verifiedMergedBranchSHA: verifiedMergedBranchSHA,
+                hostResolution: hostResolution
             )
             return .synchronous
         }
@@ -1018,7 +1052,8 @@ struct WorktreeService {
         }
         if let authorizedDeleteContentFingerprint {
             let stagedBoundaryFingerprint = try await Self.worktreeDeleteContentFingerprint(
-                worktreePath: worktree.path
+                worktreePath: worktree.path,
+                hostResolution: hostResolution
             )
             guard stagedBoundaryFingerprint == authorizedDeleteContentFingerprint else {
                 throw WorktreeError.gitFailed("Git deletion risks changed since confirmation")
@@ -1040,7 +1075,8 @@ struct WorktreeService {
             }
             if let authorizedDeleteContentFingerprint {
                 let fallbackFingerprint = try await Self.worktreeDeleteContentFingerprint(
-                    worktreePath: worktree.path
+                    worktreePath: worktree.path,
+                    hostResolution: hostResolution
                 )
                 guard fallbackFingerprint == authorizedDeleteContentFingerprint else {
                     throw WorktreeError.gitFailed("Git deletion risks changed since confirmation")
@@ -1053,7 +1089,8 @@ struct WorktreeService {
                 force: force,
                 forceTwice: registration.isLocked && force,
                 usesRemoteHostRegistry: false,
-                verifiedMergedBranchSHA: verifiedMergedBranchSHA
+                verifiedMergedBranchSHA: verifiedMergedBranchSHA,
+                hostResolution: hostResolution
             )
             return .synchronous
         }
@@ -1224,33 +1261,35 @@ struct WorktreeService {
         return outcome
     }
 
-    static func worktreeDeleteContentFingerprint(worktreePath: URL) async throws -> String {
+    static func worktreeDeleteContentFingerprint(
+        worktreePath: URL,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
+    ) async throws -> String {
         let status = try await Process.gitData(
             ["status", "--porcelain=v1", "--ignore-submodules=none", "--untracked-files=all"],
-            cwd: worktreePath
+            cwd: worktreePath,
+            hostResolution: hostResolution
         )
         guard status.exitCode == 0 else { throw WorktreeError.gitFailed(status.stderr) }
 
         let diff = try await Process.gitData(
             ["diff", "--no-ext-diff", "--binary", "--full-index", "--submodule=diff", "HEAD", "--"],
-            cwd: worktreePath
+            cwd: worktreePath,
+            hostResolution: hostResolution
         )
         guard diff.exitCode == 0 else { throw WorktreeError.gitFailed(diff.stderr) }
 
         let cachedDiff = try await Process.gitData(
             ["diff", "--cached", "--no-ext-diff", "--binary", "--full-index", "--submodule=diff", "HEAD", "--"],
-            cwd: worktreePath
+            cwd: worktreePath,
+            hostResolution: hostResolution
         )
         guard cachedDiff.exitCode == 0 else { throw WorktreeError.gitFailed(cachedDiff.stderr) }
 
-        let untracked = try await Process.runData(
-            "/bin/sh",
-            args: [
-                "-c",
-                #"git ls-files --others --exclude-standard -z | perl -0ne 'chomp; print "untracked-path-hex=", unpack("H*", $_), "\n"; system("git","hash-object","--",$_) == 0 or exit 1'"#
-            ],
+        let untracked = try await Process.gitScriptData(
+            #"git ls-files --others --exclude-standard -z | perl -0ne 'chomp; print "untracked-path-hex=", unpack("H*", $_), "\n"; system("git","hash-object","--",$_) == 0 or exit 1'"#,
             cwd: worktreePath,
-            env: Process.gitEnv()
+            hostResolution: hostResolution
         )
         guard untracked.exitCode == 0 else { throw WorktreeError.gitFailed(untracked.stderr) }
 
@@ -1266,7 +1305,7 @@ struct WorktreeService {
             git for-each-ref --format='ref=%(refname)=%(objectname)' refs/heads refs/tags refs/notes refs/stash
             git rev-list --max-count=50 --reflog --not --remotes 2>/dev/null | while IFS= read -r oid; do printf 'reflog=%s\\n' "$oid"; done
             """
-        ], cwd: worktreePath)
+        ], cwd: worktreePath, hostResolution: hostResolution)
         guard submodules.exitCode == 0 else { throw WorktreeError.gitFailed(submodules.stderr) }
 
         var payload = Data()
@@ -1296,14 +1335,16 @@ struct WorktreeService {
     /// to approve a risk that does not exist.
     func deletePreflight(
         worktreePath: URL,
-        usesRemoteHostRegistry: Bool = true
+        usesRemoteHostRegistry: Bool = true,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
     ) async throws -> WorktreeDeletePreflight {
         var reasons: Set<WorktreeDeletePreflightReason> = []
 
         let registrations = try await Process.git(
             ["worktree", "list", "--porcelain"],
             cwd: worktreePath,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
         )
         guard registrations.exitCode == 0 else { throw WorktreeError.gitFailed(registrations.stderr) }
         if Self.porcelainMarksWorktreeLocked(registrations.stdout, worktreePath: worktreePath) {
@@ -1314,7 +1355,8 @@ struct WorktreeService {
         do {
             isClean = try await isRemovalClean(
                 worktreePath,
-                usesRemoteHostRegistry: usesRemoteHostRegistry
+                usesRemoteHostRegistry: usesRemoteHostRegistry,
+                hostResolution: hostResolution
             )
         } catch {
             // The plain status check can fail for a reason that has nothing
@@ -1325,7 +1367,8 @@ struct WorktreeService {
             // only rethrow if that one can't determine cleanliness either.
             guard let tolerant = try? await canForceRemoveAfterMissingLFS(
                 worktreePath,
-                usesRemoteHostRegistry: usesRemoteHostRegistry
+                usesRemoteHostRegistry: usesRemoteHostRegistry,
+                hostResolution: hostResolution
             ) else {
                 throw error
             }
@@ -1522,17 +1565,20 @@ struct WorktreeService {
     private func isRemovalClean(
         _ path: URL,
         gitDirectory: URL? = nil,
-        usesRemoteHostRegistry: Bool = true
+        usesRemoteHostRegistry: Bool = true,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
     ) async throws -> Bool {
         guard try await isWorktreeClean(
             path,
             gitDirectory: gitDirectory,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
         ) else { return false }
         return try await areInitializedSubmodulesClean(
             path,
             gitDirectory: gitDirectory,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
         )
     }
 
@@ -1540,7 +1586,8 @@ struct WorktreeService {
         _ path: URL,
         gitDirectory: URL? = nil,
         ignoresSubmodules: Bool = false,
-        usesRemoteHostRegistry: Bool = true
+        usesRemoteHostRegistry: Bool = true,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
     ) async throws -> Bool {
         let result = try await Process.git(
             Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory) + [
@@ -1550,7 +1597,8 @@ struct WorktreeService {
                 "--untracked-files=all"
             ],
             cwd: path,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1560,7 +1608,8 @@ struct WorktreeService {
         _ path: URL,
         gitDirectory: URL? = nil,
         allowsSmudgedLFS: Bool = false,
-        usesRemoteHostRegistry: Bool = true
+        usesRemoteHostRegistry: Bool = true,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
     ) async throws -> Bool {
         let statusCommand = allowsSmudgedLFS
             ? "git \(Self.lfsFilterOverrideShellFlags) status --porcelain --ignore-submodules=none --untracked-files=all"
@@ -1570,7 +1619,8 @@ struct WorktreeService {
                 "submodule", "foreach", "--quiet", "--recursive", statusCommand
             ],
             cwd: path,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1684,20 +1734,23 @@ struct WorktreeService {
         _ path: URL,
         gitDirectory: URL? = nil,
         ignoresSubmodules: Bool = false,
-        usesRemoteHostRegistry: Bool = true
+        usesRemoteHostRegistry: Bool = true,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
     ) async throws -> Bool {
         guard try await isWorktreeCleanAllowingSmudgedLFS(
             path,
             gitDirectory: gitDirectory,
             ignoresSubmodules: ignoresSubmodules,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
         ) else { return false }
         if ignoresSubmodules { return true }
         return try await areInitializedSubmodulesClean(
             path,
             gitDirectory: gitDirectory,
             allowsSmudgedLFS: true,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
         )
     }
 
@@ -1705,7 +1758,8 @@ struct WorktreeService {
         _ path: URL,
         gitDirectory: URL? = nil,
         ignoresSubmodules: Bool = false,
-        usesRemoteHostRegistry: Bool = true
+        usesRemoteHostRegistry: Bool = true,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
     ) async throws -> Bool {
         let result = try await Process.git(
             Self.lfsFilterOverride
@@ -1715,7 +1769,8 @@ struct WorktreeService {
                 "--untracked-files=all"
             ],
             cwd: path,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
 
@@ -1738,7 +1793,8 @@ struct WorktreeService {
                 relativePath,
                 in: path,
                 gitDirectory: gitDirectory,
-                usesRemoteHostRegistry: usesRemoteHostRegistry
+                usesRemoteHostRegistry: usesRemoteHostRegistry,
+                hostResolution: hostResolution
             ) else { return false }
         }
         return true
@@ -1748,19 +1804,22 @@ struct WorktreeService {
         _ relativePath: String,
         in worktreePath: URL,
         gitDirectory: URL? = nil,
-        usesRemoteHostRegistry: Bool = true
+        usesRemoteHostRegistry: Bool = true,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
     ) async throws -> Bool {
         guard try await usesLFSFilter(
             relativePath,
             in: worktreePath,
             gitDirectory: gitDirectory,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
         ),
               let pointer = try await indexLFSPointer(
                   relativePath,
                   in: worktreePath,
                   gitDirectory: gitDirectory,
-                  usesRemoteHostRegistry: usesRemoteHostRegistry
+                  usesRemoteHostRegistry: usesRemoteHostRegistry,
+                  hostResolution: hostResolution
               )
         else { return false }
 
@@ -1783,13 +1842,15 @@ struct WorktreeService {
         _ relativePath: String,
         in worktreePath: URL,
         gitDirectory: URL? = nil,
-        usesRemoteHostRegistry: Bool = true
+        usesRemoteHostRegistry: Bool = true,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
     ) async throws -> Bool {
         let result = try await Process.git(
             Self.gitContextArguments(worktreePath: worktreePath, gitDirectory: gitDirectory)
                 + ["check-attr", "-z", "filter", "--", relativePath],
             cwd: worktreePath,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         let parts = result.stdout.split(separator: "\u{0}", omittingEmptySubsequences: false)
@@ -1800,13 +1861,15 @@ struct WorktreeService {
         _ relativePath: String,
         in worktreePath: URL,
         gitDirectory: URL? = nil,
-        usesRemoteHostRegistry: Bool = true
+        usesRemoteHostRegistry: Bool = true,
+        hostResolution: EditorBufferHostResolution = .pathRegistry
     ) async throws -> LFSPointer? {
         let listed = try await Process.git(
             Self.gitContextArguments(worktreePath: worktreePath, gitDirectory: gitDirectory)
                 + ["ls-files", "-s", "--", relativePath],
             cwd: worktreePath,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
         )
         guard listed.exitCode == 0 else { throw WorktreeError.gitFailed(listed.stderr) }
         guard let sha = listed.stdout.split(whereSeparator: \.isWhitespace).dropFirst().first else {
@@ -1817,7 +1880,8 @@ struct WorktreeService {
             Self.gitContextArguments(worktreePath: worktreePath, gitDirectory: gitDirectory)
                 + ["cat-file", "-p", String(sha)],
             cwd: worktreePath,
-            usesRemoteHostRegistry: usesRemoteHostRegistry
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
         )
         guard blob.exitCode == 0 else { throw WorktreeError.gitFailed(blob.stderr) }
         return Self.parseLFSPointer(blob.stdout)

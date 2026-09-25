@@ -521,6 +521,31 @@ extension WorktreeServiceTests {
         #expect(preflight.reasons.isEmpty)
     }
 
+    @Test func deletePreflightAndFingerprintUseTheExplicitProjectHost() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "project-host-preflight")
+        defer { fixture.removeFiles() }
+        try "untracked\n".write(
+            to: fixture.worktree.path.appendingPathComponent("untracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        RemoteHostRegistry.shared.register(root: fixture.repo.path, host: "sibling-project.invalid")
+        defer { RemoteHostRegistry.shared.unregister(root: fixture.repo.path) }
+
+        let hostResolution = EditorBufferHostResolution.project(nil)
+        let preflight = try await fixture.service.deletePreflight(
+            worktreePath: fixture.worktree.path,
+            hostResolution: hostResolution
+        )
+        let fingerprint = try await WorktreeService.worktreeDeleteContentFingerprint(
+            worktreePath: fixture.worktree.path,
+            hostResolution: hostResolution
+        )
+
+        #expect(preflight.reasons == [.dirty])
+        #expect(fingerprint.count == 64)
+    }
+
     @Test func deletePreflightReportsDirtyForUntrackedFile() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -1067,6 +1092,27 @@ extension WorktreeServiceTests {
         )
 
         #expect(outcome == .synchronous)
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+    }
+
+    @Test func fastLocalRemoveUsesTheExplicitProjectHostWhenPathRegistryConflicts() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "project-host-remove")
+        defer { fixture.removeFiles() }
+        RemoteHostRegistry.shared.register(root: fixture.repo.path, host: "sibling-project.invalid")
+        defer { RemoteHostRegistry.shared.unregister(root: fixture.repo.path) }
+
+        let outcome = try await fixture.service.removeFastLocal(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            hostResolution: .project(nil)
+        )
+
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected the selected local project to use staged local removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
         #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
     }
 

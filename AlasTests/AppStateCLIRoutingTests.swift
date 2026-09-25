@@ -1352,6 +1352,81 @@ struct AppStateCLIRoutingTests {
         ))
     }
 
+    @Test func cliReviewRangeUsesSelectedProjectsHostInsteadOfSharedPathRegistry() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "review-range-project-host")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let source = worktree.path.appendingPathComponent("change.txt")
+        try "change\n".write(to: source, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "change.txt"], cwd: worktree.path)
+        _ = try await Process.git(["commit", "-q", "-m", "change"], cwd: worktree.path)
+        let baseSHA = try await revParse("HEAD~1", at: worktree.path)
+        let headSHA = try await revParse("HEAD", at: worktree.path)
+        let conflictingHost = "sibling-project.invalid"
+        RemoteHostRegistry.shared.register(root: worktree.path.path, host: conflictingHost)
+        defer { RemoteHostRegistry.shared.unregister(root: worktree.path.path) }
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.target("HEAD~1..HEAD", worktree: nil))
+        ))
+
+        guard case .text = response else {
+            Issue.record("expected review range to resolve in the selected local project, got \(response)")
+            return
+        }
+        let expectedTarget = ReviewSessionTarget.commitRange(
+            worktreeID: worktree.id, repositoryPath: worktree.path, base: baseSHA, head: headSHA
+        )
+        let record = try #require(try ReviewSessionStore().load(id: expectedTarget.id))
+        #expect(record.target.payload == .commitRange(base: baseSHA, head: headSHA))
+    }
+
+    @Test func cliReviewRevisionUsesSelectedProjectsHostInsteadOfSharedPathRegistry() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "review-revision-project-host")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let headSHA = try await revParse("HEAD", at: worktree.path)
+        let conflictingHost = "sibling-project.invalid"
+        RemoteHostRegistry.shared.register(root: worktree.path.path, host: conflictingHost)
+        defer { RemoteHostRegistry.shared.unregister(root: worktree.path.path) }
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.target("HEAD", worktree: nil))
+        ))
+
+        guard case .text = response else {
+            Issue.record("expected review revision to resolve in the selected local project, got \(response)")
+            return
+        }
+        let expectedTarget = ReviewSessionTarget.commit(
+            worktreeID: worktree.id, repositoryPath: worktree.path, sha: headSHA, title: "irrelevant"
+        )
+        let record = try #require(try ReviewSessionStore().load(id: expectedTarget.id))
+        #expect(record.target.payload == .commit(sha: headSHA))
+    }
+
+    @Test func cliReviewRemoteDiscoveryUsesSelectedProjectsHostInsteadOfSharedPathRegistry() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "review-remotes-project-host")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        _ = try await Process.git(
+            ["remote", "add", "origin", "https://github.com/acme/project.git"],
+            cwd: worktree.path
+        )
+        let conflictingHost = "sibling-project.invalid"
+        RemoteHostRegistry.shared.register(root: worktree.path.path, host: conflictingHost)
+        defer { RemoteHostRegistry.shared.unregister(root: worktree.path.path) }
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.target("https://github.com/other/project/pull/12", worktree: nil))
+        ))
+
+        #expect(response == .error("review URL does not match this worktree's remote"))
+    }
+
     private func revParse(_ ref: String, at path: URL) async throws -> String {
         let result = try await Process.git(["rev-parse", ref], cwd: path)
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
