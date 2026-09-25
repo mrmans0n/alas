@@ -1779,7 +1779,17 @@ extension AppState {
                     leafId: sessionID
                 )
                 let derivedName = identity.zmxSessionName
-                let liveNames = await terminal.zmxSessionNames()
+                guard let liveNames = await terminal.zmxSessionNamesIfVerified() else {
+                    // Enumeration failure is not proof of absence: the shell
+                    // may still be alive and invisible to the session and
+                    // lease checks.
+                    projectsManager.setOperationState(for: worktree, state: nil)
+                    return await retainScheduledWorktree(
+                        reportID: report.id,
+                        reason: "Could not verify the scheduled script session is stopped; zmx enumeration failed.",
+                        store: store
+                    )
+                }
                 if liveNames.contains(derivedName) {
                     projectsManager.setOperationState(for: worktree, state: nil)
                     return await retainScheduledWorktree(

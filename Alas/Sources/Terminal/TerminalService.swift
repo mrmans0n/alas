@@ -667,13 +667,13 @@ final class TerminalService {
     }
 
     /// Live zmx session names visible to this instance, for callers that
-    /// must prove a session is gone before destructive work. Returns an
-    /// empty set when zmx is unavailable or enumeration fails: the caller's
-    /// checked-termination path treats that as unprovable and refuses.
-    func zmxSessionNames() async -> Set<String> {
+    /// must prove a session is gone before destructive work. Returns `nil`
+    /// when zmx is unavailable or enumeration fails: the caller treats
+    /// "could not enumerate" as unprovable and refuses.
+    func zmxSessionNamesIfVerified() async -> Set<String>? {
         let client = zmxClient
         let names = await Task.detached { client.listSessionsIfAvailable() }.value
-        return Set(names ?? [])
+        return names.map(Set.init)
     }
 
     /// Splits persisted session identities into the local zmx session names

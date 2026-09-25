@@ -122,12 +122,12 @@ struct ScheduledAgentReportStoreTests {
             prefix: refreshedPrefix,
             requestedLimit: requestedLimit
         )
-        #expect(refreshed.reports.map(\.id) == ["report-1", "report-2", "report-3", "report-4", "report-5"])
-        #expect(refreshed.pageOffset == 5)
+        #expect(refreshed.reports.map(\.id) == ["report-1", "report-2", "report-3", "report-4"])
+        #expect(refreshed.pageOffset == 4)
         #expect(refreshed.hasMore)
 
-        let nextPage = try await store.page(projectID: "project", offset: 5, limit: 2)
-        #expect(nextPage.map(\.id) == [])
+        let nextPage = try await store.page(projectID: "project", offset: 4, limit: 2)
+        #expect(nextPage.map(\.id) == ["report-5"])
     }
 
     @Test func reportPageRefreshDetectsDeletionBelowTheLoadedRange() async throws {
@@ -179,12 +179,12 @@ struct ScheduledAgentReportStoreTests {
             prefix: refreshedPrefix,
             requestedLimit: requestedLimit
         )
-        #expect(refreshed.reports.map(\.id) == ["report-0", "report-1", "report-2", "report-4", "report-5"])
-        #expect(refreshed.pageOffset == 5)
+        #expect(refreshed.reports.map(\.id) == ["report-0", "report-1", "report-2", "report-4"])
+        #expect(refreshed.pageOffset == 4)
         #expect(refreshed.hasMore)
 
-        let nextPage = try await store.page(projectID: "project", offset: 5, limit: 2)
-        #expect(nextPage.map(\.id) == ["report-6", "report-7"])
+        let nextPage = try await store.page(projectID: "project", offset: 4, limit: 2)
+        #expect(nextPage.map(\.id) == ["report-5", "report-6"])
     }
 
     @Test func reportPageRefreshKeepsLoadedWindowStableWithoutReappearingLoadMore() async throws {
@@ -231,8 +231,8 @@ struct ScheduledAgentReportStoreTests {
             prefix: refreshedPrefix,
             requestedLimit: requestedLimit
         )
-        #expect(refreshed.reports.map(\.id) == ["report-0", "report-1", "report-2", "report-3", "report-4"])
-        #expect(refreshed.pageOffset == 5)
+        #expect(refreshed.reports.map(\.id) == ["report-0", "report-1", "report-2", "report-3"])
+        #expect(refreshed.pageOffset == 4)
         #expect(refreshed.hasMore)
 
         // All records loaded: the probe row is absent, so the tail page is

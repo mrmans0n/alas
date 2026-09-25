@@ -7145,21 +7145,14 @@ final class AppState {
                 leafId: leafId
             )
             // The lease is acquired inside `onSessionRegistered`, which has
-            // already run. A scheduled cleanup that grabbed the deletion
-            // lock between the pre-launch probe and registration (or a
-            // failed lease write) must fail this launch, not leave the
-            // caller appending a tab around a session cleanup is about to
-            // destroy. The registration callback closes the shell and
-            // dispatches its tracked kill; rethrowing here keeps the caller
-            // from appending a tab around it.
-            if let lineageID = worktree.lineageID {
-                let leaseCount = checkpointWriterLeases.activeLeaseCountIfReadable(
-                    lineageID: lineageID,
-                    excludingInstanceID: instanceId
-                ) ?? 0
-                guard leaseCount > 0 else {
-                    throw TerminalLaunchError.worktreeOperationInProgress
-                }
+            // already run and recorded its outcome. A scheduled cleanup that
+            // grabbed the deletion lock between the pre-launch probe and
+            // registration (or a failed lease write) must fail this launch,
+            // not leave the caller appending a tab around a session cleanup
+            // is about to destroy. A missing entry means no lease attempt
+            // happened (no lineage), which is fine.
+            if let result = terminalLeaseAcquisitionResults.removeValue(forKey: session.id), !result {
+                throw TerminalLaunchError.worktreeOperationInProgress
             }
             opened = OpenedTerminalSession(id: session.id, foregroundPid: { [weak session] in
                 session?.surface.foregroundPid
@@ -11699,6 +11692,13 @@ final class AppState {
     @ObservationIgnored
     private var acpManagerDisposalTasksByOwner: [SessionOwnerID: Task<Void, Never>] = [:]
 
+    /// Outcome of the most recent `acquireCheckpointTerminalLease` call,
+    /// keyed by terminal session id. `openTerminalTab` reads the entry for
+    /// the session it just launched: `false` (deletion lock held, or the
+    /// lease could not be written) fails the launch.
+    @ObservationIgnored
+    private var terminalLeaseAcquisitionResults: [String: Bool] = [:]
+
     @ObservationIgnored
     private let acpOrchestrationPersistence = ACPOrchestrationPersistence()
 
@@ -11833,6 +11833,7 @@ final class AppState {
             zmxSessionName: session.zmxSessionName,
             remoteHost: session.remoteHost
         )
+        terminalLeaseAcquisitionResults[session.id] = acquired
         guard acquired else {
             // A scheduled cleanup holds the deletion lock: the shell was
             // admitted before the lock was taken, so the lease probe passed

@@ -9,7 +9,9 @@ struct ScheduledAgentReportPageRefresh {
     /// loaded rows positionally against a refreshed read of the same
     /// window plus one probe row: the first page alone cannot prove the
     /// tail is intact (a deletion below it shifts every later row up), and
-    /// the probe row decides `hasMore` without a second request.
+    /// the probe row decides `hasMore` without a second request. The probe
+    /// row is excluded from both the comparison and the replacement — it
+    /// exists solely to compute `hasMore`.
     static func loadedWindowRefresh(
         firstPage: [ScheduledAgentReport],
         from reports: [ScheduledAgentReport],
@@ -17,17 +19,19 @@ struct ScheduledAgentReportPageRefresh {
         prefix: [ScheduledAgentReport],
         requestedLimit: Int
     ) -> Self {
-        let prefixMatches = prefix.map(\.id) == reports.map(\.id)
+        let windowCount = requestedLimit - 1
+        let window = prefix.prefix(windowCount)
+        let prefixMatches = window.map(\.id) == reports.map(\.id)
         if prefixMatches {
             return updatingFirstPage(
                 firstPage,
                 in: reports,
-                pageOffset: requestedLimit - 1,
+                pageOffset: windowCount,
                 hasMore: requestedLimit > prefix.count,
                 pageSize: pageSize
             )
         }
-        return replacingLoadedPrefix(prefix, requestedLimit: requestedLimit)
+        return replacingLoadedPrefix(Array(window), requestedLimit: windowCount)
     }
 
     static func replacingLoadedPrefix(
