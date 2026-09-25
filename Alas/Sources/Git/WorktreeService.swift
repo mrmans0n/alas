@@ -1193,82 +1193,16 @@ struct WorktreeService {
                     // The pre-rename ignored-content audit ran against the
                     // live path; an external process can create an ignored
                     // artifact between that fingerprint and the rename, and
-                    // the staged `git status` above omits ignored paths. The
-                    // same `ls-files --git-dir/--work-tree` form used by the
-                    // cleanliness recheck works post-rename, so re-run it.
-                    let stagedIgnored = try await Process.gitData(
-                        [
-                            "ls-files", "--others", "--ignored", "--exclude-standard",
-                            "--git-dir", expectedRegistration.gitDirectory.path,
-                            "--work-tree", ticket.stagedPath.path,
-                        ],
-                        cwd: ticket.stagedPath
+                    // the staged `git status` above omits ignored paths.
+                    // Re-run it against the staged tree, recursively into
+                    // every initialized (nested) submodule: `ls-files`
+                    // never visits submodules on its own. `--git-dir` and
+                    // `--work-tree` are global options and must precede
+                    // `ls-files`.
+                    try await stagedIgnoredContentIsVerifiedEmpty(
+                        worktreePath: ticket.stagedPath,
+                        gitDirectory: expectedRegistration.gitDirectory
                     )
-                    guard stagedIgnored.exitCode == 0 else {
-                        try failAfterRollingBack(
-                            stagedIgnored.stderr.isEmpty
-                                ? "Could not verify the staged worktree's ignored content."
-                                : stagedIgnored.stderr
-                        )
-                    }
-                    // The listing always ends with a newline for nonempty
-                    // output; test raw emptiness so an all-space pathname
-                    // still counts as ignored content.
-                    guard stagedIgnored.stdout.isEmpty
-                    else {
-                        try failAfterRollingBack(
-                            "The staged worktree holds ignored files that cleanup would delete."
-                        )
-                    }
-
-                    // `git ls-files` does not recurse into submodules: a
-                    // late ignored artifact inside an initialized submodule
-                    // would be invisible to the check above. Each staged
-                    // submodule Git directory is already resolved for the
-                    // history audit below; run the same listing against
-                    // each with the staged work tree.
-                    let submodulePaths = try await submodulePathsFromGitmodules(
-                        ticket.stagedPath,
-                        usesRemoteHostRegistry: false
-                    )
-                    for relativePath in submodulePaths {
-                        let submodulePath = ticket.stagedPath.appendingPathComponent(relativePath)
-                        guard FileManager.default.fileExists(
-                            atPath: submodulePath.appendingPathComponent(".git").path
-                        ) else { continue }
-                        guard let submoduleGitDirectory = Self.submoduleGitDirectory(
-                            for: submodulePath,
-                            relativePath: relativePath,
-                            parentGitDirectory: expectedRegistration.gitDirectory
-                        ) else {
-                            try failAfterRollingBack(
-                                "Could not verify the staged submodule's ignored content."
-                            )
-                        }
-                        let submoduleIgnored = try await Process.gitData(
-                            [
-                                "ls-files", "--others", "--ignored", "--exclude-standard",
-                                "--git-dir", submoduleGitDirectory.path,
-                                "--work-tree", submodulePath.path,
-                            ],
-                            cwd: submodulePath
-                        )
-                        guard submoduleIgnored.exitCode == 0 else {
-                            try failAfterRollingBack(
-                                submoduleIgnored.stderr.isEmpty
-                                    ? "Could not verify the staged submodule's ignored content."
-                                    : submoduleIgnored.stderr
-                            )
-                        }
-                        // Raw emptiness: an all-space pathname must still
-                        // count as ignored content.
-                        guard submoduleIgnored.stdout.isEmpty
-                        else {
-                            try failAfterRollingBack(
-                                "The staged submodule holds ignored files that cleanup would delete."
-                            )
-                        }
-                    }
 
                     let stored = try Self.stagedSubmoduleGitDirectories(
                         worktreePath: ticket.stagedPath,
@@ -2181,6 +2115,64 @@ struct WorktreeService {
             ) else { return false }
         }
         return true
+    }
+
+    /// Post-rename counterpart of `worktreeHasIgnoredContent`, recursive into
+    /// every initialized (nested) submodule. `ls-files` never visits
+    /// submodules on its own, and a submodule's own listing misses its nested
+    /// submodules, so each level resolves the next level's gitdir explicitly —
+    /// the same dangling-`gitdir:` workaround the cleanliness traversal uses.
+    /// Throws when the audit cannot run (enumeration failure is not proof of
+    /// absence) and rolls the caller back to the pre-stage state.
+    private func stagedIgnoredContentIsVerifiedEmpty(
+        worktreePath: URL,
+        gitDirectory: URL
+    ) async throws {
+        let result = try await Process.gitData(
+            [
+                "--git-dir", gitDirectory.path,
+                "--work-tree", worktreePath.path,
+                "ls-files", "--others", "--ignored", "--exclude-standard",
+            ],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else {
+            throw WorktreeError.gitFailed(
+                result.stderr.isEmpty
+                    ? "Could not verify the staged worktree's ignored content."
+                    : result.stderr
+            )
+        }
+        // Raw emptiness: an all-space pathname must still count as content.
+        guard result.stdout.isEmpty else {
+            throw WorktreeError.gitFailed(
+                "The staged worktree holds ignored files that cleanup would delete."
+            )
+        }
+
+        let submodulePaths = try await submodulePathsFromGitmodules(
+            worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        for relativePath in submodulePaths {
+            let submodulePath = worktreePath.appendingPathComponent(relativePath)
+            guard FileManager.default.fileExists(
+                atPath: submodulePath.appendingPathComponent(".git").path
+            ) else { continue }
+            guard let submoduleGitDirectory = Self.submoduleGitDirectory(
+                for: submodulePath,
+                relativePath: relativePath,
+                parentGitDirectory: gitDirectory
+            ) else {
+                throw WorktreeError.gitFailed(
+                    "Could not verify the staged submodule's ignored content."
+                )
+            }
+            try await stagedIgnoredContentIsVerifiedEmpty(
+                worktreePath: submodulePath,
+                gitDirectory: submoduleGitDirectory
+            )
+        }
     }
 
     private func canForceRemoveAfterMissingLFS(

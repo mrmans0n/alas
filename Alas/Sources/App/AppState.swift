@@ -7353,6 +7353,11 @@ final class AppState {
                 repoStartupScript: repoStartupScript,
                 leafId: newLeafId
             )
+            // `onSessionRegistered` already ran; a refused lease means the
+            // session was closed and the split must not install a dead pane.
+            if let result = terminalLeaseAcquisitionResults.removeValue(forKey: session.id), !result {
+                throw TerminalLaunchError.worktreeOperationInProgress
+            }
             harness.detector.register(sessionId: session.id) { [weak session] in
                 session?.surface.foregroundPid
             }
@@ -7997,6 +8002,11 @@ final class AppState {
                 allowLegacyAttach: allowLegacyAttach,
                 preResolvedZmxSessionName: preResolvedZmxSessionName
             )
+            // `onSessionRegistered` already ran; a refused lease means the
+            // session was closed and must not be registered as restored.
+            if let result = terminalLeaseAcquisitionResults.removeValue(forKey: session.id), !result {
+                throw TerminalLaunchError.worktreeOperationInProgress
+            }
             harness.detector.register(sessionId: session.id) { [weak session] in
                 session?.surface.foregroundPid
             }
