@@ -67,7 +67,7 @@ struct ACPImageChipHoverTests {
         #expect(abs(size.height - 300) < 0.01)
     }
 
-    @Test("zero-size image falls back to the width cap")
+    @Test("zero-size image falls back to a square bounded by both caps")
     func zeroSizeFallsBackToWidthCap() {
         let size = ACPImageChipHoverController.fittedSize(
             for: NSSize(width: 0, height: 0),
@@ -76,6 +76,18 @@ struct ACPImageChipHoverTests {
         )
         #expect(size.width == 400)
         #expect(size.height == 400)
+    }
+
+    @Test("zero-size image respects the smaller height cap")
+    func zeroSizeRespectsSmallerHeightCap() {
+        let size = ACPImageChipHoverController.fittedSize(
+            for: NSSize(width: 0, height: 0),
+            maxWidth: 720,
+            maxHeight: 450
+        )
+        #expect(size.width == 450)
+        #expect(size.height == 450)
+        #expect(size.height <= 450 + 0.01)
     }
 
     @Test("composer width cap falls back to the layout default without a window")

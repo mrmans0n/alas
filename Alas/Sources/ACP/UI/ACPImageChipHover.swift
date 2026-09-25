@@ -35,14 +35,16 @@ class ACPImageChipHoverController {
 
     /// Aspect-fit `size` into the `maxWidth` × `maxHeight` cap, preserving
     /// aspect ratio. Never scales up — a small image previews at its native
-    /// size. A degenerate (zero) size falls back to a square at `maxWidth`.
+    /// size. A degenerate (zero) size falls back to a square bounded by the
+    /// smaller of the two caps.
     nonisolated static func fittedSize(
         for size: NSSize,
         maxWidth: CGFloat,
         maxHeight: CGFloat
     ) -> NSSize {
         guard size.width > 0, size.height > 0, maxWidth > 0, maxHeight > 0 else {
-            return NSSize(width: maxWidth, height: maxWidth)
+            let side = min(max(maxWidth, 0), max(maxHeight, 0))
+            return NSSize(width: side, height: side)
         }
         let scale = min(1, min(maxWidth / size.width, maxHeight / size.height))
         return NSSize(width: size.width * scale, height: size.height * scale)
