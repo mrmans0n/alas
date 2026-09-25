@@ -319,4 +319,67 @@ assert.equal(
   "sums attention across every server but the active one"
 );
 
+// --- federationEnabled on hello -----------------------------------------------
+
+{
+  const doc = { version: 1, activeId: null, servers: [] };
+  const { server } = registry.upsertPaired(doc, { origins: ["http://10.0.0.1:8765"], token: "t1", now: 1 });
+  registry.applyHello(doc, server.id, { type: "hello", protocolVersion: 1, serverId: "srv-A", name: "Studio", federationEnabled: true });
+  assert.equal(server.federationEnabled, true);
+}
+
+{
+  const doc = { version: 1, activeId: null, servers: [] };
+  const { server } = registry.upsertPaired(doc, { origins: ["http://10.0.0.2:8765"], token: "t2", now: 1 });
+  registry.applyHello(doc, server.id, { type: "hello", protocolVersion: 1, serverId: "srv-B", name: "Legacy" });
+  assert.equal(server.federationEnabled, false, "hello without federationEnabled means a pre-federation Mac");
+}
+
+// --- peerSessionCounts / serverBadgeCounts ------------------------------------
+
+assert.deepEqual(
+  [...registry.peerSessionCounts([
+    { id: "1", serverId: "srv-B", status: "awaitingPermission" },
+    { id: "2", serverId: "srv-B", status: "streaming" },
+    { id: "3", serverId: "srv-C", status: "streaming" },
+    { id: "4", status: "awaitingPermission" },
+    { id: "5", serverId: "srv-B", status: "awaitingInput", isActive: false },
+  ]).entries()],
+  [["srv-B", { attention: 1, running: 1 }], ["srv-C", { attention: 0, running: 1 }]],
+  "only serverId-tagged, still-active rows count; local rows and closed rows are excluded"
+);
+assert.deepEqual([...registry.peerSessionCounts(undefined).entries()], []);
+
+{
+  const gatewayCounts = new Map([["srv-B", { attention: 4, running: 0 }]]);
+  const federatedActive = { federationEnabled: true };
+  const idleCounts = { attention: 1, running: 0 };
+
+  assert.deepEqual(
+    registry.serverBadgeCounts({ serverId: "srv-B" }, idleCounts, federatedActive, gatewayCounts),
+    { attention: 4, running: 0 },
+    "a federated gateway's pushed count for a known peer wins over idle polling"
+  );
+  assert.deepEqual(
+    registry.serverBadgeCounts({ serverId: "srv-Z" }, idleCounts, federatedActive, gatewayCounts),
+    idleCounts,
+    "a paired server the active Mac does not gateway falls back to idle polling"
+  );
+  assert.deepEqual(
+    registry.serverBadgeCounts({ serverId: "srv-B" }, idleCounts, { federationEnabled: false }, gatewayCounts),
+    idleCounts,
+    "a non-federated active server never trusts gatewayCounts"
+  );
+  assert.deepEqual(
+    registry.serverBadgeCounts({ serverId: null }, idleCounts, federatedActive, gatewayCounts),
+    idleCounts,
+    "a server with no confirmed serverId yet cannot be matched against gatewayCounts"
+  );
+  assert.deepEqual(
+    registry.serverBadgeCounts({ serverId: "srv-B" }, null, federatedActive, new Map()),
+    { attention: 0, running: 0 },
+    "no link and no gateway data yet -> zero, not a crash"
+  );
+}
+
 console.log("hub-registry tests passed");
