@@ -6131,12 +6131,15 @@ extension ACPSessionManager {
         guard let session = sessions[sessionId],
               restartingConnections.insert(sessionId).inserted
         else { return }
+        var ownsRestartLatch = true
         takeoverAttemptIDs.removeValue(forKey: sessionId)
         session.connectionRestartInProgress = true
         retainSession(id: sessionId)
         defer {
-            session.connectionRestartInProgress = false
-            restartingConnections.remove(sessionId)
+            if ownsRestartLatch {
+                session.connectionRestartInProgress = false
+                restartingConnections.remove(sessionId)
+            }
             releaseSession(id: sessionId)
         }
 
@@ -6239,6 +6242,12 @@ extension ACPSessionManager {
         guard sessions[sessionId] === session,
               isCurrentAttachment(sessionId: sessionId, attempt: replacementAttempt, session: session)
         else { return }
+        // The replacement attempt now owns connection state. Let a later
+        // restart supersede it if an ACP RPC stalls instead of keeping the
+        // restart latch held until the entire attach returns.
+        ownsRestartLatch = false
+        session.connectionRestartInProgress = false
+        restartingConnections.remove(sessionId)
         await runAttachmentAttempt(
             replacementAttempt,
             to: sessionId,

@@ -61,6 +61,65 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadLease(sessionId: session.id)?.token == replacementLease?.token)
     }
 
+    @Test("a stalled replacement attach can be restarted")
+    func stalledReplacementAttachCanBeRestarted() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let initializeGate = AttachPhaseGate()
+        let initialClient = ACPMockClient()
+        let stalledClient = ACPMockClient()
+        let replacementClient = ACPMockClient()
+        scriptInitialize(initialClient)
+        scriptSessionResult(initialClient, method: "session/new", sessionId: "remote-initial")
+        stalledClient.scriptAsync(method: "initialize") { _ in
+            await initializeGate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(stalledClient, method: "session/new", sessionId: "remote-stalled")
+        scriptInitialize(replacementClient)
+        scriptSessionResult(replacementClient, method: "session/new", sessionId: "remote-replacement")
+        var launchCount = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                launchCount += 1
+                if launchCount == 1 { return ACPConnection(client: initialClient) }
+                if launchCount == 2 { return ACPConnection(client: stalledClient) }
+                return ACPConnection(client: replacementClient)
+            }
+        )
+        let session = manager.createSession(agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        #expect(session.agentState == .ready)
+
+        let stalledRestart = Task { await manager.restartConnection(to: session.id) }
+        defer { Task { await initializeGate.release() } }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await initializeGate.hasEntered
+        }
+
+        #expect(session.connectionRestartInProgress == false)
+        let nextRestart = Task { await manager.restartConnection(to: session.id) }
+        try? await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            launchCount == 3 && session.agentState == .ready
+        }
+
+        await initializeGate.release()
+        await stalledRestart.value
+        await nextRestart.value
+
+        #expect(launchCount == 3)
+        #expect(session.agentState == .ready)
+        #expect(!session.connectionRestartInProgress)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("closing a suspended setup attempt clears its attachment marker")
     func closingSuspendedSetupAttemptClearsAttachmentMarker() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
