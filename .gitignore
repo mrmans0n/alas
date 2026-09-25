@@ -33,3 +33,4 @@ zig-pkg/
 
 # Profiling artifacts
 default.profraw
+__pycache__/
