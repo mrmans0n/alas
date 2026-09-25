@@ -1607,10 +1607,41 @@ extension AppState {
                 )
                 return .succeeded
             } catch {
+                // A transient throw (e.g. the shared SQLite write lock held
+                // by another process past its busy timeout) must not leave
+                // the row `running` with the only registration torn down:
+                // retry the final write with backoff. The completion is
+                // already recorded, so this converges once the store frees.
+                var lastError: Error?
+                for attempt in 0..<5 {
+                    if attempt > 0 {
+                        try? await Task.sleep(for: .seconds(1 << min(attempt - 1, 3)))
+                    }
+                    do {
+                        let report = try await store.finishRecordedCompletion(
+                            reportID: reportID,
+                            authenticatedSessionID: prepared.sessionID
+                        )
+                        guard report.taskState == .succeeded else {
+                            let retryReason = "The ACP agent reported \(completion.outcome.rawValue); the worktree was retained."
+                            reportScheduleFailure(
+                                schedule,
+                                reason: "\(retryReason) Report: \(reportID).",
+                                project: project,
+                                worktree: worktree,
+                                reportID: reportID
+                            )
+                            return .launchFailed(retryReason)
+                        }
+                        return .succeeded
+                    } catch {
+                        lastError = error
+                    }
+                }
                 let reason = "Could not finalize the scheduled-agent report; the report was not committed and the worktree was retained."
                 reportScheduleFailure(
                     schedule,
-                    reason: "\(reason) Report: \(reportID).",
+                    reason: "\(reason) \(lastError.map { "Last error: \($0)." } ?? "") Report: \(reportID).",
                     project: project,
                     worktree: worktree,
                     reportID: reportID
