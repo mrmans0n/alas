@@ -3114,6 +3114,11 @@ extension ACPSessionRunner {
                     guard self.isConnectionCurrent() else { return }
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
+                    // Read-only here (not `.remove`): `deferCompletedOutputBoundaryUntilUpdatesDrain`'s
+                    // `successfulTurn` closure below also checks `cancelledPromptIDs.contains(promptID)`
+                    // and needs the id still present when it runs. The actual removal happens once,
+                    // after the `isActivePrompt` block, mirroring the pre-existing cleanup point.
+                    let wasCancelled = self.cancelledPromptIDs.contains(promptID)
                     // A cancelled/superseded prompt's response can still
                     // arrive after a successor has started or finished.
                     // Its tokens are real spend, so always fold them into
@@ -3164,7 +3169,7 @@ extension ACPSessionRunner {
                             }
                         }
                         self.activePromptID = nil
-                        self.emitTurnCompleted(.completed)
+                        self.emitTurnCompleted(wasCancelled ? .cancelled : .completed)
                         self.deferCompletedOutputBoundaryUntilUpdatesDrain(
                             successfulTurn: completionUserMessageID.flatMap { userMessageID in
                                 guard normalUserTurn,

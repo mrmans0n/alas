@@ -326,6 +326,51 @@ struct ACPOrchestrationStoreTests {
         #expect(pending.first?.prompt == "hello")
     }
 
+    @Test("two instances opening the same v1 database back-to-back both migrate cleanly")
+    func concurrentV1ToV2MigrationDoesNotWedgeSecondInstance() throws {
+        // Simulates two Alas instances racing to open a freshly-shipped
+        // v1 database for the first time. `migrateToV2()`'s `ALTER TABLE
+        // ... ADD COLUMN` statements aren't idempotent, so without
+        // `migrate()` wrapping its read-check-migrate sequence in a
+        // transaction, the second instance to construct a store here would
+        // read schema version 1, attempt `migrateToV2()` again, and throw a
+        // duplicate-column error — permanently wedging its delegation store
+        // (per `ACPOrchestrationPersistence.openedStore()`'s failure cache).
+        let path = temporaryPath()
+        do {
+            let db = try SQLiteDatabase(path: path, busyTimeoutMilliseconds: 5_000)
+            try db.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+            try db.exec("INSERT INTO schema_version (version) VALUES (1)")
+            try db.exec("""
+            CREATE TABLE delegations (
+                child_session_id TEXT PRIMARY KEY, parent_session_id TEXT NOT NULL,
+                project_id TEXT NOT NULL, parent_worktree_id TEXT NOT NULL,
+                child_worktree_id TEXT, agent_id TEXT NOT NULL, worktree_request BLOB NOT NULL,
+                pending_initial_prompt TEXT, phase TEXT NOT NULL, failure_message TEXT,
+                created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+            )
+            """)
+            try db.exec("""
+            CREATE TABLE delegated_messages (
+                id TEXT PRIMARY KEY, source_session_id TEXT NOT NULL,
+                target_session_id TEXT NOT NULL, prompt TEXT NOT NULL,
+                created_at INTEGER NOT NULL, claim_instance_id TEXT,
+                claim_token TEXT, claim_expires_at INTEGER
+            )
+            """)
+        }
+
+        // Both instances construct against the SAME on-disk file. With the
+        // transactional fix, the second construction's `BEGIN IMMEDIATE`
+        // blocks until the first's migration commits, then observes schema
+        // version 2 already and no-ops instead of erroring.
+        let first = try ACPOrchestrationStore(path: path)
+        let second = try ACPOrchestrationStore(path: path)
+
+        #expect(try first.currentSchemaVersion() == 2)
+        #expect(try second.currentSchemaVersion() == 2)
+    }
+
     @Test("round-trips message kind")
     func roundTripsMessageKind() throws {
         let store = try ACPOrchestrationStore(path: temporaryPath())

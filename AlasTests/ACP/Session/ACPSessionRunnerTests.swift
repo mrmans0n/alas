@@ -4180,6 +4180,58 @@ struct ACPSessionRunnerTests {
         #expect((completions.first?.startedAt ?? 0) > 0)
     }
 
+    @Test("a cancelled prompt whose RPC still succeeds emits .cancelled, not .completed")
+    func cancelledPromptThatSucceedsEmitsCancelled() async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
+
+        let promptCanFinish = AsyncGate()
+        let cancelStarted = AsyncGate()
+        let cancelCanFinish = AsyncGate()
+        let sendDone = AsyncGate()
+
+        // The prompt RPC does succeed — this is the ACP-conformant reply an
+        // adapter can still send after acknowledging a server-side cancel —
+        // but only once the test lets it, so `activePromptID` stays pinned
+        // to this prompt while `userCancel()` races it below.
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await promptCanFinish.wait()
+            return Data("{}".utf8)
+        }
+        // `session/cancel` is a fire-and-forget notification. Gating it lets
+        // the test hold `userCancel()` right after it has recorded the
+        // prompt as cancelled but before it clears `activePromptID` —
+        // exactly the window in which the real race occurs.
+        mock.scriptNotifyAsync(method: "session/cancel") { _ in
+            await cancelStarted.open()
+            await cancelCanFinish.wait()
+        }
+
+        var sendSucceeded: Bool?
+        runner.send(text: "hello", attachments: []) { succeeded in
+            sendSucceeded = succeeded
+            Task { await sendDone.open() }
+        }
+
+        let userCancelTask = Task { @MainActor in await runner.userCancel() }
+        // Wait until userCancel() has inserted the prompt id into
+        // `cancelledPromptIDs` and is blocked sending the cancel RPC.
+        // `activePromptID` is still this prompt's id at this point.
+        await cancelStarted.wait()
+
+        // Let the original session/prompt RPC "win the race" and succeed
+        // while the turn is still marked cancelled.
+        await promptCanFinish.open()
+        await sendDone.wait()
+
+        await cancelCanFinish.open()
+        await userCancelTask.value
+
+        #expect(sendSucceeded == true)
+        #expect(completions.count == 1)
+        #expect(completions.first?.result == .cancelled)
+    }
+
     @Test("failed prompt emits a failed turn")
     func failedPromptEmitsFailure() async throws {
         var completions: [ACPTurnCompletion] = []

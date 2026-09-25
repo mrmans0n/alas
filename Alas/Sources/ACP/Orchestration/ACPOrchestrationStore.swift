@@ -259,25 +259,47 @@ final class ACPOrchestrationStore {
         """, bindings: [id, claim.instanceId, claim.token])
     }
 
+    /// Alas supports multiple concurrent instances sharing one on-disk
+    /// database (see the claim-based delegated-message inbox above). If two
+    /// instances both open a v1 database for the first time, both would
+    /// otherwise read `currentSchemaVersion() == 1` and both attempt
+    /// `migrateToV2()` — whose `ALTER TABLE ... ADD COLUMN` statements are
+    /// NOT idempotent, so the loser fails with a duplicate-column error and
+    /// (per `ACPOrchestrationPersistence.openedStore()`, which caches that
+    /// failure) is left permanently unable to open its store.
+    ///
+    /// Wrapping the read-check-migrate-bump sequence in `BEGIN IMMEDIATE`
+    /// (same idiom as `insert()`) closes that window: it acquires the write
+    /// lock immediately, so a second instance's `BEGIN IMMEDIATE` blocks
+    /// until the first instance's migration transaction commits. By the
+    /// time the second instance's `currentSchemaVersion()` runs, it observes
+    /// the already-migrated version and skips `migrateToV2()` entirely.
     private func migrate() throws {
         try db.exec("""
         CREATE TABLE IF NOT EXISTS schema_version (
             version INTEGER NOT NULL
         )
         """)
-        let current = try currentSchemaVersion()
-        if current < 1 { try migrateToV1() }
-        if current < 2 { try migrateToV2() }
-        if current == 0 {
-            try db.exec(
-                "INSERT INTO schema_version (version) VALUES (?)",
-                bindings: [Int64(Self.targetSchemaVersion)]
-            )
-        } else if current < Self.targetSchemaVersion {
-            try db.exec(
-                "UPDATE schema_version SET version = ?",
-                bindings: [Int64(Self.targetSchemaVersion)]
-            )
+        try db.exec("BEGIN IMMEDIATE")
+        do {
+            let current = try currentSchemaVersion()
+            if current < 1 { try migrateToV1() }
+            if current < 2 { try migrateToV2() }
+            if current == 0 {
+                try db.exec(
+                    "INSERT INTO schema_version (version) VALUES (?)",
+                    bindings: [Int64(Self.targetSchemaVersion)]
+                )
+            } else if current < Self.targetSchemaVersion {
+                try db.exec(
+                    "UPDATE schema_version SET version = ?",
+                    bindings: [Int64(Self.targetSchemaVersion)]
+                )
+            }
+            try db.exec("COMMIT")
+        } catch {
+            try? db.exec("ROLLBACK")
+            throw error
         }
     }
 
