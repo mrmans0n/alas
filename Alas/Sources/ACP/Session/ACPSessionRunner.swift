@@ -2873,7 +2873,17 @@ extension ACPSessionRunner {
             }
             guard await self.hasConfirmedLeaseForSideEffect() else {
                 await MainActor.run {
-                    let canFinishPrompt = self.isConnectionCurrent() && !self.stopped &&
+                    // Losing the lease stands this runner down inside the
+                    // check itself, so `stopped` is already true by the time
+                    // we get here. That teardown belongs to THIS prompt, not a
+                    // successor: when the connection still belongs to this
+                    // attempt and no newer prompt has taken over, the
+                    // submitter must learn the send failed — otherwise the
+                    // composer and remote gateways wait forever on a
+                    // completion that never fires. A replaced connection or a
+                    // newer active prompt keeps the callback (its successor
+                    // turn owns the outcome).
+                    let canFinishPrompt = self.isConnectionCurrent() &&
                         !self.steerInProgress &&
                         (self.activePromptID == nil || self.activePromptID == promptID)
                     if self.activePromptID == promptID {

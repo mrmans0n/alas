@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Submit a required federated elicitation array with an empty selection: "required" now means the property must be present, and only a declared `minItems` constrains the item count.
+- Report a failed submit to the composer and to remote clients when the writer lease is lost mid-send, and close a remote ACP session whose creation completed after its chat was disposed.
+
 ## [0.19.9] - 2026-09-25
 
 ### ✨ Features
