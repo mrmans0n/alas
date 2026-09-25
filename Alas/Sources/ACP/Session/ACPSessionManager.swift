@@ -141,6 +141,7 @@ final class ACPSessionManager: ObservableObject {
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
     private let onQueueChanged: ((ACPSession.ID, Bool) -> Void)?
     private let onSuccessfulTurn: @MainActor (NextPromptCompletedTurn) -> Void
+    private let onTurnCompleted: ((ACPTurnCompletion) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
@@ -1367,6 +1368,7 @@ final class ACPSessionManager: ObservableObject {
          onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
          onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
          onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
+         onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          delegatedMessageNotifier: ACPChangeNotifier? = nil,
@@ -1409,6 +1411,7 @@ final class ACPSessionManager: ObservableObject {
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
         self.onQueueChanged = onQueueChanged
         self.onSuccessfulTurn = onSuccessfulTurn
+        self.onTurnCompleted = onTurnCompleted
         self.onCheckpointCapture = onCheckpointCapture
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
@@ -5384,6 +5387,12 @@ extension ACPSessionManager {
                                           onSuccessfulTurn: { [weak self] turn in
                                               self?.onSuccessfulTurn(turn)
                                           },
+                                          onTurnCompleted: { [weak self] completion in
+                                              guard let self,
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                              else { return }
+                                              self.onTurnCompleted?(completion)
+                                          },
                                           onQueuedPromptDispatchRegistration: { [weak self] itemId in
                                               guard let self,
                                                     self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID,
@@ -6899,6 +6908,18 @@ extension ACPSessionManager {
             return false
         }
         runners[sessionId]?.flushQueueIfIdle()
+        return true
+    }
+
+    /// Append a delegated system notice to a session's transcript without
+    /// running a turn. Requires a live runner so the row is persisted under
+    /// the lease; callers treat `false` like a rejected delegated prompt and
+    /// release their inbox claim.
+    func appendDelegatedNotice(text: String, into sessionId: ACPSession.ID) async -> Bool {
+        guard sessions[sessionId] != nil else { return false }
+        await awaitBackfill(id: sessionId)
+        guard let runner = runners[sessionId], isWriter(for: sessionId) else { return false }
+        runner.appendAndPersistSystemNotice(text)
         return true
     }
 

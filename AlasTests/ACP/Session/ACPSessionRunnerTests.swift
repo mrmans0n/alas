@@ -4221,6 +4221,22 @@ struct ACPSessionRunnerTests {
         #expect(completions.first?.lastAgentText == "Parser fixed.")
     }
 
+    @Test("system notice appended while streaming still lands and persists")
+    func noticeWhileStreamingLands() async throws {
+        let (runner, _) = try makeRunner()
+        runner.session.transcript.streamingState = .streaming
+        let before = runner.session.transcript.messages.count
+
+        runner.appendAndPersistSystemNotice("Delegated session child (codex) finished its turn.")
+
+        #expect(runner.session.transcript.messages.count == before + 1)
+        guard case .systemNotice(_, let text) = runner.session.transcript.messages.last else {
+            Issue.record("Expected a system notice at the tail")
+            return
+        }
+        #expect(text == "Delegated session child (codex) finished its turn.")
+    }
+
     private func createLongRunningTerminal(id: JSONRPCID, using mock: ACPMockClient) async throws -> String? {
         mock.emitTerminal(.create(id: id, params: .init(
             sessionId: "s", command: "/bin/sleep", args: ["60"],
