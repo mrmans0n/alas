@@ -600,6 +600,7 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
                             projectId: worktree.projectId,
+                            projectHost: state.remoteHost(for: worktree),
                             tabState: draftState,
                             executionTarget: composerExecutionTarget,
                             appState: state,

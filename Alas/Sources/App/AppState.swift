@@ -3744,9 +3744,15 @@ final class AppState {
 
     func openWorkspaceReview(_ action: WorkspaceReviewAction) {
         guard workspaceMutationAvailable else { return }
-        WorkspaceReviewActionHandler(open: { [weak self] worktreeID, record in
+        WorkspaceReviewActionHandler(open: { [weak self] worktreeID, projectID, record in
             guard let self else { return }
-            let tab = self.tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: record)
+            let tab = self.tabs.openOrFocusReviewSession(
+                worktreeId: worktreeID,
+                projectId: projectID,
+                includesLegacyUnownedProjectTabs: projectID != nil
+                    && self.legacyEditorOwnerProjectId(forWorktreeId: worktreeID) == projectID,
+                record: record
+            )
             self.activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
             self.selectedWorktreeId = worktreeID
             if let checkoutID = self.workspaceNavigationState.selectedCheckoutID,
@@ -5731,7 +5737,12 @@ final class AppState {
                 }
             case .reviewSession(let state):
                 _ = bumpFollowRevisionRequestGeneration(followRevisionRequestKey(for: tab))
-                stopFollowingReviewSession(worktreeID: worktreeID, tabID: tabID, sessionID: state.sessionID)
+                stopFollowingReviewSession(
+                    worktreeID: worktreeID,
+                    tabID: tabID,
+                    sessionID: state.sessionID,
+                    projectId: state.projectId ?? legacyEditorOwnerProjectId(forWorktreeId: worktreeID)
+                )
             default:
                 return
             }
@@ -5752,7 +5763,12 @@ final class AppState {
             bumpRevisionGeneration(worktreeID: worktreeID)
         case .reviewSession(let state):
             _ = bumpFollowRevisionRequestGeneration(followRevisionRequestKey(for: tab))
-            acceptTrackedReviewSessionCheckout(worktreeID: worktreeID, tabID: tabID, sessionID: state.sessionID)
+            acceptTrackedReviewSessionCheckout(
+                worktreeID: worktreeID,
+                tabID: tabID,
+                sessionID: state.sessionID,
+                projectId: state.projectId ?? legacyEditorOwnerProjectId(forWorktreeId: worktreeID)
+            )
         default:
             return
         }
@@ -5813,7 +5829,13 @@ final class AppState {
                 $0.follow(revision)
             }
         case .reviewSession(let state):
-            followReviewSession(worktreeID: worktreeID, tabID: tab.id, sessionID: state.sessionID, revision: revision)
+            followReviewSession(
+                worktreeID: worktreeID,
+                tabID: tab.id,
+                sessionID: state.sessionID,
+                revision: revision,
+                projectId: state.projectId ?? worktree.projectId
+            )
         default:
             return
         }
@@ -5878,7 +5900,8 @@ final class AppState {
         worktreeID: String,
         tabID: TabID,
         sessionID: ReviewSessionID,
-        revision: TrackedRevision
+        revision: TrackedRevision,
+        projectId: String?
     ) {
         let store = ReviewSessionStore()
         guard let record = try? store.load(id: sessionID),
@@ -5909,14 +5932,25 @@ final class AppState {
             }
             NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
             bumpReviewSessionRetargetGeneration(sessionID: merged.id)
-            let tab = tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: merged)
+            let tab = tabs.openOrFocusReviewSession(
+                worktreeId: worktreeID,
+                projectId: projectId,
+                includesLegacyUnownedProjectTabs: projectId != nil
+                    && legacyEditorOwnerProjectId(forWorktreeId: worktreeID) == projectId,
+                record: merged
+            )
             activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
             return
         }
-        persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID)
+        persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID, projectId: projectId)
     }
 
-    private func stopFollowingReviewSession(worktreeID: String, tabID: TabID, sessionID: ReviewSessionID) {
+    private func stopFollowingReviewSession(
+        worktreeID: String,
+        tabID: TabID,
+        sessionID: ReviewSessionID,
+        projectId: String?
+    ) {
         let store = ReviewSessionStore()
         guard let record = try? store.load(id: sessionID),
               let result = TrackedRevisionRetargeter.stop(
@@ -5945,14 +5979,25 @@ final class AppState {
             }
             NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
             bumpReviewSessionRetargetGeneration(sessionID: merged.id)
-            let tab = tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: merged)
+            let tab = tabs.openOrFocusReviewSession(
+                worktreeId: worktreeID,
+                projectId: projectId,
+                includesLegacyUnownedProjectTabs: projectId != nil
+                    && legacyEditorOwnerProjectId(forWorktreeId: worktreeID) == projectId,
+                record: merged
+            )
             activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
             return
         }
-        persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID)
+        persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID, projectId: projectId)
     }
 
-    private func acceptTrackedReviewSessionCheckout(worktreeID: String, tabID: TabID, sessionID: ReviewSessionID) {
+    private func acceptTrackedReviewSessionCheckout(
+        worktreeID: String,
+        tabID: TabID,
+        sessionID: ReviewSessionID,
+        projectId: String?
+    ) {
         let store = ReviewSessionStore()
         guard let record = try? store.load(id: sessionID),
               case .trackedCommit(let revision) = record.target.payload,
@@ -5964,7 +6009,7 @@ final class AppState {
                   now: Date()
               )
         else { return }
-        persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID)
+        persistReviewRetargeting(result, worktreeID: worktreeID, tabID: tabID, projectId: projectId)
     }
 
     private func mergedReviewSession(existing: ReviewSessionRecord, source: ReviewSessionRecord) -> ReviewSessionRecord {
@@ -5974,7 +6019,8 @@ final class AppState {
     private func persistReviewRetargeting(
         _ result: TrackedRevisionRetargetingResult,
         worktreeID: String,
-        tabID: TabID
+        tabID: TabID,
+        projectId: String?
     ) {
         let sessionStore = ReviewSessionStore()
         var savedRecord = false
@@ -5985,6 +6031,7 @@ final class AppState {
             savedRecord = true
             try ReviewDraftCommentStore().migrate(from: result.oldDraftSessionID, to: result.newDraftSessionID)
             _ = tabs.updateReviewSession(worktreeId: worktreeID, tabId: tabID) {
+                if $0.projectId == nil { $0.projectId = projectId }
                 $0.retarget(to: result.record)
             }
             bumpReviewSessionRetargetGeneration(sessionID: result.record.id)
@@ -11580,7 +11627,13 @@ final class AppState {
             findActive: { try store.findActive(targetID: $0) },
             save: { try store.save($0) },
             open: { [weak self] record in
-                _ = self?.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
+                _ = self?.tabs.openOrFocusReviewSession(
+                    worktreeId: worktree.id,
+                    projectId: worktree.projectId,
+                    includesLegacyUnownedProjectTabs: self?.legacyEditorOwnerProjectId(forWorktreeId: worktree.id)
+                        == worktree.projectId,
+                    record: record
+                )
             }
         )
         guard opened else {
@@ -14008,7 +14061,11 @@ final class AppState {
 
     @discardableResult
     func openReviewChangesTab(for worktree: Worktree) -> Tab {
-        tabs.openOrFocusReviewChanges(worktreeId: worktree.id)
+        tabs.openOrFocusReviewChanges(
+            worktreeId: worktree.id,
+            projectId: worktree.projectId,
+            includesLegacyUnownedProjectTabs: legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId
+        )
     }
 
     nonisolated static func reviewLoopHandoffActionKind(for request: ReviewRequest?) -> ReviewLoopActionKind {
@@ -15468,7 +15525,7 @@ extension AppState: RemoteSessionsProvider {
     /// worktree is no longer available (e.g. deleted while its manager still
     /// lives), so callers can report different error messages.
     private enum RemoteWorktreeContextResult {
-        case found(Worktree)
+        case found(worktree: Worktree, projectHost: String?)
         case sessionUnknown
         case worktreeUnavailable
     }
@@ -15489,10 +15546,10 @@ extension AppState: RemoteSessionsProvider {
                     withWorktreeId: mgr.worktreeId,
                     inProjectId: projectId
                 ) else { return .worktreeUnavailable }
-                return .found(resolved.worktree)
+                return .found(worktree: resolved.worktree, projectHost: resolved.project.host)
             }
             guard let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId) else { return .worktreeUnavailable }
-            return .found(resolved.worktree)
+            return .found(worktree: resolved.worktree, projectHost: resolved.project.host)
         }
         return .sessionUnknown
     }
@@ -15632,11 +15689,11 @@ extension AppState: RemoteSessionsProvider {
     /// misleading empty "successful" diff.
     private func isDiffTargetBinary(
         worktree: Worktree, normalizedPath: String, url: URL, comparisonRef: String?, git: GitService,
-        missingFileUsesIndex: Bool = false
+        projectHost: String?, missingFileUsesIndex: Bool = false
     ) async -> Bool {
         let existsOnDisk: Bool
         let onDiskLooksBinary: Bool
-        if worktree.path.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) {
+        if let host = projectHost {
             switch await readRemoteWorktreeFilePrefix(
                 host: host, worktreeRoot: worktree.path.path, relativePath: normalizedPath,
                 maxBytes: Self.binarySniffPrefixBytes
@@ -15740,15 +15797,17 @@ extension AppState: RemoteSessionsProvider {
 
     func remoteChangeList(sessionId: String) async -> RemoteChangeListResult {
         let worktree: Worktree
+        let projectHost: String?
         switch remoteWorktreeContext(sessionId: sessionId) {
         case .sessionUnknown:
             return .failure(reason: .sessionUnknown, message: nil)
         case .worktreeUnavailable:
             return .failure(reason: .worktreeUnavailable, message: nil)
-        case .found(let w):
-            worktree = w
+        case .found(let resolvedWorktree, let host):
+            worktree = resolvedWorktree
+            projectHost = host
         }
-        let git = GitService()
+        let git = GitService(hostResolution: .project(projectHost))
         do {
             let commits = try await git.commitsAhead(
                 at: worktree.path,
@@ -15779,13 +15838,15 @@ extension AppState: RemoteSessionsProvider {
 
     func remoteFileDiff(sessionId: String, path: String, stage: String? = nil) async -> RemoteFileDiffResult {
         let worktree: Worktree
+        let projectHost: String?
         switch remoteWorktreeContext(sessionId: sessionId) {
         case .sessionUnknown:
             return .failure(reason: .sessionUnknown, message: nil)
         case .worktreeUnavailable:
             return .failure(reason: .worktreeUnavailable, message: nil)
-        case .found(let w):
-            worktree = w
+        case .found(let resolvedWorktree, let host):
+            worktree = resolvedWorktree
+            projectHost = host
         }
         guard let normalizedPath = RemoteWorktreeFileAccess.normalizedRelativePath(path),
               let url = RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path)
@@ -15803,7 +15864,7 @@ extension AppState: RemoteSessionsProvider {
         // — the one place that WOULD leak it is the on-disk binary sniff
         // below, which `isDiffTargetBinary` guards against by special-
         // casing a symlink path before ever following it.
-        let git = GitService()
+        let git = GitService(hostResolution: .project(projectHost))
         do {
             let commits = try await git.commitsAhead(
                 at: worktree.path,
@@ -15834,6 +15895,7 @@ extension AppState: RemoteSessionsProvider {
             if changeStage != .staged, await isDiffTargetBinary(
                 worktree: worktree, normalizedPath: normalizedPath, url: url,
                 comparisonRef: commits.comparisonRef, git: git,
+                projectHost: projectHost,
                 missingFileUsesIndex: changeStage == .unstaged
             ) {
                 return .failure(reason: .binary, message: nil)
@@ -15876,15 +15938,17 @@ extension AppState: RemoteSessionsProvider {
 
     func remoteFileTree(sessionId: String, path: String?) async -> RemoteFileTreeResult {
         let worktree: Worktree
+        let projectHost: String?
         switch remoteWorktreeContext(sessionId: sessionId) {
         case .sessionUnknown:
             return .failure(reason: .sessionUnknown, message: nil)
         case .worktreeUnavailable:
             return .failure(reason: .worktreeUnavailable, message: nil)
-        case .found(let w):
-            worktree = w
+        case .found(let resolvedWorktree, let host):
+            worktree = resolvedWorktree
+            projectHost = host
         }
-        let git = GitService()
+        let git = GitService(hostResolution: .project(projectHost))
         do {
             // Base-relative (against `comparisonRef`), matching the Changes
             // tab — not working-tree/index `status()` — so a file with
@@ -15926,8 +15990,8 @@ extension AppState: RemoteSessionsProvider {
             // at `.git`) would otherwise let a remote listing leak directory
             // names from anywhere on the remote host. Mirrors
             // `readRemoteWorktreeFileRaw`'s containment check for reads.
-            if worktree.path.isRemoteAlasPath {
-                guard let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) else {
+            if let host = projectHost {
+                guard !host.isEmpty else {
                     return .failure(reason: .gitFailed, message: "Remote host is not registered for this worktree.")
                 }
                 do {
@@ -15959,13 +16023,15 @@ extension AppState: RemoteSessionsProvider {
 
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult {
         let worktree: Worktree
+        let projectHost: String?
         switch remoteWorktreeContext(sessionId: sessionId) {
         case .sessionUnknown:
             return .failure(reason: .sessionUnknown, byteSize: nil, message: nil)
         case .worktreeUnavailable:
             return .failure(reason: .worktreeUnavailable, byteSize: nil, message: nil)
-        case .found(let w):
-            worktree = w
+        case .found(let resolvedWorktree, let host):
+            worktree = resolvedWorktree
+            projectHost = host
         }
         guard let normalizedPath = RemoteWorktreeFileAccess.normalizedRelativePath(path),
               let url = RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path)
@@ -15979,11 +16045,12 @@ extension AppState: RemoteSessionsProvider {
         // open/fstat/read sequence), but this earlier, cheaper check lets
         // the request fail fast with the right reason before doing the
         // ignore-check git call at all.
-        if !worktree.path.isRemoteAlasPath, RemoteWorktreeFileAccess.isSymlink(at: url) {
+        if projectHost == nil, RemoteWorktreeFileAccess.isSymlink(at: url) {
             return .failure(reason: .notFound, byteSize: nil, message: nil)
         }
+        let git = GitService(hostResolution: .project(projectHost))
         do {
-            let ignored = try await GitService().isPathIgnored(worktreePath: worktree.path, path: normalizedPath)
+            let ignored = try await git.isPathIgnored(worktreePath: worktree.path, path: normalizedPath)
             if ignored {
                 return .failure(reason: .pathRejected, byteSize: nil, message: nil)
             }
@@ -15991,8 +16058,8 @@ extension AppState: RemoteSessionsProvider {
             return .failure(reason: .gitFailed, byteSize: nil, message: error.localizedDescription)
         }
 
-        if worktree.path.isRemoteAlasPath {
-            guard let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) else {
+        if let host = projectHost {
+            guard !host.isEmpty else {
                 return .failure(
                     reason: .gitFailed, byteSize: nil,
                     message: "Remote host is not registered for this worktree.")

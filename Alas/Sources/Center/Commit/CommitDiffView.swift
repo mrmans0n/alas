@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CommitDiffView: View {
     let worktreePath: URL
+    let projectHost: String?
     let sha: String
     let file: CommitChangedFile
     let path: String
@@ -24,10 +25,11 @@ struct CommitDiffView: View {
     @State private var imagePair: ImageDiffPair?
     @State private var imagePairLoaded: Bool = false
     @State private var imageRetryGeneration = 0
-    private let git = GitService()
+    private var git: GitService { GitService(hostResolution: .project(projectHost)) }
 
     init(
         worktreePath: URL,
+        projectHost: String? = nil,
         sha: String,
         file: CommitChangedFile,
         path: String,
@@ -45,6 +47,7 @@ struct CommitDiffView: View {
         dropHunkEnabled: @escaping (CommitChangedFile, ParsedDiff.Hunk) -> Bool = { _, _ in false }
     ) {
         self.worktreePath = worktreePath
+        self.projectHost = projectHost
         self.sha = sha
         self.file = file
         self.path = path

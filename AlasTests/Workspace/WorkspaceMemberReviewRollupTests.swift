@@ -77,7 +77,7 @@ struct WorkspaceMemberReviewRollupTests {
         var opened: [(String, ReviewSessionRecord)] = []
         let handler = WorkspaceReviewActionHandler(
             load: { id in id == record.id ? record : nil },
-            open: { worktreeID, loaded in opened.append((worktreeID, loaded)) }
+            open: { worktreeID, _, loaded in opened.append((worktreeID, loaded)) }
         )
 
         handler.open(WorkspaceReviewAction(

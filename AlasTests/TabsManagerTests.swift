@@ -382,6 +382,44 @@ struct TabsManagerTests {
         #expect(first.title == "Review Changes")
     }
 
+    @Test func reviewChangesTabsAreScopedToTheirProject() {
+        let worktreeId = "tabs-manager-review-changes-project-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager(store: RestoreMemoryStore())
+
+        let projectA = manager.openOrFocusReviewChanges(worktreeId: worktreeId, projectId: "project-a")
+        let projectB = manager.openOrFocusReviewChanges(worktreeId: worktreeId, projectId: "project-b")
+
+        #expect(projectA.id != projectB.id)
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-a").map(\.id) == [projectA.id])
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-b").map(\.id) == [projectB.id])
+        #expect(manager.activeTabId(forWorktree: worktreeId, projectId: "project-a") == projectA.id)
+        #expect(manager.activeTabId(forWorktree: worktreeId, projectId: "project-b") == projectB.id)
+    }
+
+    @Test func adoptingLegacyReviewChangesTabPersistsItsFirstProjectOwner() {
+        let worktreeId = "tabs-manager-review-changes-legacy-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager(store: RestoreMemoryStore())
+        let legacy = Tab.reviewChanges(ReviewChangesTabState(worktreeId: worktreeId))
+        _ = manager.restore(
+            tab: legacy,
+            worktreeID: worktreeId,
+            placement: .init(previousID: nil, nextID: nil, ordinal: 0)
+        )
+
+        manager.adoptLegacyProjectOwnedTab(worktreeId: worktreeId, tabId: legacy.id, projectId: "project-a")
+
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-a").map(\.id) == [legacy.id])
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-b").isEmpty)
+        guard case .reviewChanges(let state)? = manager.tabs(forWorktree: worktreeId).first else {
+            Issue.record("Expected the legacy review-changes tab")
+            return
+        }
+        #expect(state.projectId == "project-a")
+        #expect(state.id == legacy.id)
+    }
+
     @Test func webPreviewStateRoundTripsWithStableOwnerScopedIdentity() throws {
         let url = URL(string: "http://127.0.0.1:5173")!
         let tab = Tab.webPreview(WebPreviewTabState(ownerKey: "owner-a", url: url, remoteHost: "devbox"))

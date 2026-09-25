@@ -528,9 +528,17 @@ extension Process {
         _ args: [String],
         cwd: URL? = nil,
         maxOutputBytes: Int,
+        remoteHost: String? = nil,
+        usesRemoteHostRegistry: Bool = true,
+        hostResolution: EditorBufferHostResolution? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessCappedResult {
-        let host = RemoteHostRegistry.shared.host(forPath: cwd?.path)
+        let host = Self.remoteGitHost(
+            cwd: cwd,
+            remoteHost: remoteHost,
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
+            hostResolution: hostResolution
+        )
         if host == nil {
             try validateWorkingDirectory(cwd)
         }

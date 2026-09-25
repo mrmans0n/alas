@@ -91,7 +91,13 @@ struct AttentionNavigationEnvironment {
                       let record = records.first(where: { $0.target.draftSessionID == comment.sessionID }) else { return false }
                 let focused = record.selectingFile(comment.fileID, now: Date()).focusingComment(commentID, now: Date())
                 do { try reviewSessionStore.save(focused) } catch { return false }
-                let tab = appState.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: focused)
+                let tab = appState.tabs.openOrFocusReviewSession(
+                    worktreeId: worktree.id,
+                    projectId: worktree.projectID,
+                    includesLegacyUnownedProjectTabs: appState.legacyEditorOwnerProjectId(forWorktreeId: worktree.id)
+                        == worktree.projectID,
+                    record: focused
+                )
                 appState.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
                 guard case .reviewSession(let session) = tab, let command = session.commentScrollRequest else { return false }
                 appState.attentionPendingReviewReveal = AttentionPendingReviewReveal(

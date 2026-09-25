@@ -175,6 +175,10 @@ final class TabsManager {
             review.projectId == projectId || (includesLegacyUnownedProjectTabs && review.projectId == nil)
         case .ggSplitCommit(let split):
             split.projectId == projectId || (includesLegacyUnownedProjectTabs && split.projectId == nil)
+        case .reviewChanges(let review):
+            review.projectId == projectId || (includesLegacyUnownedProjectTabs && review.projectId == nil)
+        case .reviewSession(let review):
+            review.projectId == projectId || (includesLegacyUnownedProjectTabs && review.projectId == nil)
         default:
             nil
         }
@@ -1220,22 +1224,34 @@ final class TabsManager {
     }
 
     @discardableResult
-    func openOrFocusReviewChanges(worktreeId: String) -> Tab {
+    func openOrFocusReviewChanges(
+        worktreeId: String,
+        projectId: String? = nil,
+        includesLegacyUnownedProjectTabs: Bool = false
+    ) -> Tab {
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: {
                if case .reviewChanges(let state) = $0 {
                    return state.worktreeId == worktreeId
+                       && (state.projectId == projectId
+                           || (includesLegacyUnownedProjectTabs && state.projectId == nil))
                }
                return false
            }) {
+            if case .reviewChanges(var state) = file.tabs[idx],
+               state.projectId == nil, includesLegacyUnownedProjectTabs {
+                state.projectId = projectId
+                file.tabs[idx] = .reviewChanges(state)
+            }
             let tab = file.tabs[idx]
             file.activeTabId = tab.id
+            rememberProjectLocalTab(tab, in: &file)
             byWorktree[worktreeId] = file
             persist(worktreeId)
             return tab
         }
 
-        let tab = Tab.reviewChanges(ReviewChangesTabState(worktreeId: worktreeId))
+        let tab = Tab.reviewChanges(ReviewChangesTabState(worktreeId: worktreeId, projectId: projectId))
         append(tab, to: worktreeId)
         return tab
     }
@@ -1517,11 +1533,24 @@ final class TabsManager {
     }
 
     @discardableResult
-    func openOrFocusReviewSession(worktreeId: String, record: ReviewSessionRecord) -> Tab {
-        let baseState = ReviewSessionTabState(worktreeId: worktreeId, record: record)
+    func openOrFocusReviewSession(
+        worktreeId: String,
+        projectId: String? = nil,
+        includesLegacyUnownedProjectTabs: Bool = false,
+        record: ReviewSessionRecord
+    ) -> Tab {
+        let baseState = ReviewSessionTabState(worktreeId: worktreeId, projectId: projectId, record: record)
         if var file = byWorktree[worktreeId],
-           let idx = file.tabs.firstIndex(where: { $0.id == baseState.id }),
+           let idx = file.tabs.firstIndex(where: { tab in
+               guard case .reviewSession(let state) = tab,
+                     state.sessionID == record.id else { return false }
+               return state.projectId == projectId
+                   || (includesLegacyUnownedProjectTabs && state.projectId == nil)
+           }),
            case .reviewSession(var existing) = file.tabs[idx] {
+            if existing.projectId == nil, includesLegacyUnownedProjectTabs {
+                existing.projectId = projectId
+            }
             existing.title = record.target.title
             existing.selectedFileID = record.selectedFileID
             existing.focusedCommentID = record.focusedCommentID
@@ -1529,6 +1558,7 @@ final class TabsManager {
             let tab = Tab.reviewSession(existing)
             file.tabs[idx] = tab
             file.activeTabId = tab.id
+            rememberProjectLocalTab(tab, in: &file)
             byWorktree[worktreeId] = file
             persist(worktreeId)
             return tab
@@ -2471,6 +2501,8 @@ final class TabsManager {
         case .checkpointDiff(let state): state.projectId
         case .reviewPR(let state): state.projectId
         case .ggSplitCommit(let state): state.projectId
+        case .reviewChanges(let state): state.projectId
+        case .reviewSession(let state): state.projectId
         default: nil
         }
         if let projectId { file.activeEditorTabIds[projectId] = tab.id }
@@ -2497,6 +2529,12 @@ final class TabsManager {
         case .ggSplitCommit(var state) where state.projectId == nil:
             state.projectId = projectId
             file.tabs[index] = .ggSplitCommit(state)
+        case .reviewChanges(var state) where state.projectId == nil:
+            state.projectId = projectId
+            file.tabs[index] = .reviewChanges(state)
+        case .reviewSession(var state) where state.projectId == nil:
+            state.projectId = projectId
+            file.tabs[index] = .reviewSession(state)
         default:
             return
         }

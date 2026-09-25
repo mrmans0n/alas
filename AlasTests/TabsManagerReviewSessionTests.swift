@@ -28,6 +28,81 @@ struct TabsManagerReviewSessionTests {
         }.count == 1)
     }
 
+    @Test func reviewSessionTabsAreScopedToTheirProject() throws {
+        let tabsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-review-session-project-tabs-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tabsDirectory) }
+        let manager = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDirectory)
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: "shared-worktree",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let record = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: .init(timeIntervalSince1970: 1),
+            updatedAt: .init(timeIntervalSince1970: 1)
+        )
+
+        let projectA = manager.openOrFocusReviewSession(
+            worktreeId: "shared-worktree", projectId: "project-a", record: record
+        )
+        let projectB = manager.openOrFocusReviewSession(
+            worktreeId: "shared-worktree", projectId: "project-b", record: record
+        )
+
+        #expect(projectA.id != projectB.id)
+        #expect(manager.tabs(forWorktree: "shared-worktree", projectId: "project-a").map(\.id) == [projectA.id])
+        #expect(manager.tabs(forWorktree: "shared-worktree", projectId: "project-b").map(\.id) == [projectB.id])
+        #expect(manager.activeTabId(forWorktree: "shared-worktree", projectId: "project-a") == projectA.id)
+        #expect(manager.activeTabId(forWorktree: "shared-worktree", projectId: "project-b") == projectB.id)
+
+        guard case .reviewSession(let state) = projectB else {
+            Issue.record("Expected a review-session tab")
+            return
+        }
+        #expect(state.projectId == "project-b")
+        #expect(try JSONDecoder().decode(Tab.self, from: JSONEncoder().encode(projectB)) == projectB)
+    }
+
+    @Test func adoptingLegacyReviewSessionTabPersistsItsFirstProjectOwner() {
+        let tabsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-review-session-legacy-tabs-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tabsDirectory) }
+        let manager = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDirectory)
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: "shared-worktree",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let legacy = Tab.reviewSession(ReviewSessionTabState(
+            worktreeId: "shared-worktree",
+            record: ReviewSessionRecord(
+                id: target.id,
+                target: target,
+                createdAt: .init(timeIntervalSince1970: 1),
+                updatedAt: .init(timeIntervalSince1970: 1)
+            )
+        ))
+        _ = manager.restore(
+            tab: legacy,
+            worktreeID: "shared-worktree",
+            placement: .init(previousID: nil, nextID: nil, ordinal: 0)
+        )
+
+        manager.adoptLegacyProjectOwnedTab(worktreeId: "shared-worktree", tabId: legacy.id, projectId: "project-a")
+
+        #expect(manager.tabs(forWorktree: "shared-worktree", projectId: "project-a").map(\.id) == [legacy.id])
+        #expect(manager.tabs(forWorktree: "shared-worktree", projectId: "project-b").isEmpty)
+        guard case .reviewSession(let state)? = manager.tabs(forWorktree: "shared-worktree").first else {
+            Issue.record("Expected the legacy review-session tab")
+            return
+        }
+        #expect(state.projectId == "project-a")
+        #expect(state.id == legacy.id)
+    }
+
     @Test func updatesReviewSessionSelection() {
         let manager = TabsManager()
         let target = ReviewSessionTarget.commit(

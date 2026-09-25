@@ -499,7 +499,13 @@ struct RootView: View {
             save: { try store.save($0) },
             open: { record in
                 commitReviewSessionLaunchError = nil
-                let tab = state.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
+                let tab = state.tabs.openOrFocusReviewSession(
+                    worktreeId: worktree.id,
+                    projectId: worktree.projectId,
+                    includesLegacyUnownedProjectTabs: state.legacyEditorOwnerProjectId(forWorktreeId: worktree.id)
+                        == worktree.projectId,
+                    record: record
+                )
                 state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
             },
             onFailure: { error in

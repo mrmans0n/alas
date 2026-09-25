@@ -106,8 +106,8 @@ struct ReviewSessionLoader: @unchecked Sendable {
         worktree: Worktree,
         providerRegistry: CodeHostProviderRegistry = .live()
     ) -> ReviewSessionLoader {
-        let changesLoader = ReviewChangesLoader()
-        let git = GitService()
+        let git = GitService(hostResolution: .project(appState.remoteHost(for: worktree)))
+        let changesLoader = ReviewChangesLoader(git: git)
         let commitLoader = CommitReviewLoader(git: git)
         let rangeLoader = RangeReviewLoader(git: git)
 
@@ -242,7 +242,7 @@ struct ReviewSessionLoader: @unchecked Sendable {
                     },
                     contextProviderForPath: { path, originalPath in
                         return DiffReviewContextProvider {
-                            try await GitService().refContextSnapshot(
+                            try await git.refContextSnapshot(
                                 worktreePath: target.repositoryPath,
                                 baseRef: base,
                                 headRef: resolvedHeadRef,

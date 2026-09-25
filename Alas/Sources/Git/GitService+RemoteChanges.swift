@@ -268,7 +268,8 @@ extension GitService {
             let result = try await Process.gitCapped(
                 ["--literal-pathspecs", "-c", "core.quotePath=false",
                  "diff", "--no-color", "-M", "-C", ref, "--", file, originalPath], cwd: worktreePath,
-                maxOutputBytes: maxOutputBytes)
+                maxOutputBytes: maxOutputBytes,
+                hostResolution: hostResolution)
             // A fatal exit (>= 2, e.g. a dropped SSH connection) must propagate
             // rather than fall through as a successful, blank diff — see the
             // matching comment on the tracked-file diff below. A size-capped
@@ -323,7 +324,8 @@ extension GitService {
             // in this function.
             let result = try await Process.gitCapped(
                 ["--literal-pathspecs", "diff", "--no-color", "--no-index", "--", "/dev/null", file], cwd: worktreePath,
-                maxOutputBytes: maxOutputBytes)
+                maxOutputBytes: maxOutputBytes,
+                hostResolution: hostResolution)
             // `--no-index` exits 1 when there ARE differences, which is the
             // normal case here; only >= 2 is a real failure that must
             // propagate — see the matching comment on the tracked-file diff
@@ -339,7 +341,8 @@ extension GitService {
         // glob pathspec (see comment above).
         let result = try await Process.gitCapped(
             ["--literal-pathspecs", "diff", "--no-color", "-M", "-C", ref, "--", file], cwd: worktreePath,
-            maxOutputBytes: maxOutputBytes)
+            maxOutputBytes: maxOutputBytes,
+            hostResolution: hostResolution)
         // A fatal exit here (e.g. an SSH connection dropping after the
         // preceding probes succeeded) must propagate rather than turn into a
         // successful, blank diff: `remoteFileDiff` maps a thrown error to

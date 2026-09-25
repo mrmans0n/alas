@@ -240,6 +240,7 @@ struct CommitEditorTabView: View {
                         )
                         CommitDiffView(
                             worktreePath: worktreePath,
+                            projectHost: projectHost,
                             sha: tabState.currentSha,
                             file: file,
                             path: path,

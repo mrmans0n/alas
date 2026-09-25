@@ -356,6 +356,7 @@ struct FileHistoryTabState: Codable, Equatable, Identifiable {
 struct ReviewSessionTabState: Codable, Equatable, Identifiable {
     var id: TabID
     let worktreeId: String
+    var projectId: String?
     var viewID: TabID
     var sessionID: ReviewSessionID
     var title: String
@@ -380,6 +381,7 @@ struct ReviewSessionTabState: Codable, Equatable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case id
         case worktreeId
+        case projectId
         case viewID
         case sessionID
         case title
@@ -387,9 +389,11 @@ struct ReviewSessionTabState: Codable, Equatable, Identifiable {
         case focusedCommentID
     }
 
-    init(worktreeId: String, record: ReviewSessionRecord) {
-        self.id = "review-session:\(record.id.rawValue)"
+    init(worktreeId: String, projectId: String? = nil, record: ReviewSessionRecord) {
+        self.id = projectId.map { "review-session-project:\($0):\(record.id.rawValue)" }
+            ?? "review-session:\(record.id.rawValue)"
         self.worktreeId = worktreeId
+        self.projectId = projectId
         self.viewID = id
         self.sessionID = record.id
         self.title = record.target.title
@@ -402,6 +406,7 @@ struct ReviewSessionTabState: Codable, Equatable, Identifiable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(TabID.self, forKey: .id)
         worktreeId = try container.decode(String.self, forKey: .worktreeId)
+        projectId = try container.decodeIfPresent(String.self, forKey: .projectId)
         viewID = try container.decodeIfPresent(TabID.self, forKey: .viewID) ?? id
         sessionID = try container.decode(ReviewSessionID.self, forKey: .sessionID)
         title = try container.decode(String.self, forKey: .title)
@@ -411,7 +416,8 @@ struct ReviewSessionTabState: Codable, Equatable, Identifiable {
     }
 
     mutating func retarget(to record: ReviewSessionRecord) {
-        id = "review-session:\(record.id.rawValue)"
+        id = projectId.map { "review-session-project:\($0):\(record.id.rawValue)" }
+            ?? "review-session:\(record.id.rawValue)"
         sessionID = record.id
         title = record.target.title
         selectedFileID = record.selectedFileID
@@ -421,12 +427,15 @@ struct ReviewSessionTabState: Codable, Equatable, Identifiable {
 }
 
 struct ReviewChangesTabState: Codable, Equatable, Identifiable {
-    let id: TabID
+    var id: TabID
     let worktreeId: String
+    var projectId: String?
 
-    init(worktreeId: String) {
-        self.id = "review-changes:\(worktreeId)"
+    init(worktreeId: String, projectId: String? = nil) {
+        self.id = projectId.map { "review-changes-project:\($0):\(worktreeId)" }
+            ?? "review-changes:\(worktreeId)"
         self.worktreeId = worktreeId
+        self.projectId = projectId
     }
 }
 

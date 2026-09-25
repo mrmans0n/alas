@@ -420,7 +420,8 @@ extension GitService {
         if tracked.exitCode != 0 && !staged {
             let result = try await Process.gitCapped(
                 ["--literal-pathspecs", "diff", "--no-color", "--no-index", "--", "/dev/null", file], cwd: worktreePath,
-                maxOutputBytes: maxOutputBytes ?? .max)
+                maxOutputBytes: maxOutputBytes ?? .max,
+                hostResolution: hostResolution)
             // `git diff --no-index` exits non-zero (1) when there ARE differences
             // — that's the normal case for an untracked file. Only treat exit
             // codes >= 2 as real failures.
@@ -452,7 +453,11 @@ extension GitService {
         if let originalPath, !originalPath.isEmpty {
             args.append(originalPath)
         }
-        let result = try await Process.gitCapped(args, cwd: worktreePath, maxOutputBytes: maxOutputBytes ?? .max)
+        let result = try await Process.gitCapped(
+            args,
+            cwd: worktreePath,
+            maxOutputBytes: maxOutputBytes ?? .max,
+            hostResolution: hostResolution)
         guard result.stdoutTruncated || result.exitCode <= 1 else {
             throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
         }
@@ -512,7 +517,11 @@ extension GitService {
             }
             let noIndexArgs = ["diff", "--no-color", "--no-index", "--", "/dev/null", file]
             if let maxOutputBytes {
-                let result = try await Process.gitCapped(noIndexArgs, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
+                let result = try await Process.gitCapped(
+                    noIndexArgs,
+                    cwd: worktreePath,
+                    maxOutputBytes: maxOutputBytes,
+                    hostResolution: hostResolution)
                 // Same reasoning as the tracked-file branch below: a fatal
                 // exit (e.g. an SSH connection dropping) must propagate
                 // rather than parse whatever (usually empty) stdout came
@@ -535,7 +544,11 @@ extension GitService {
         if headBlob.exitCode != 0 {
             let noIndexArgs = ["diff", "--no-color", "--no-index", "--", "/dev/null", file]
             if let maxOutputBytes {
-                let result = try await Process.gitCapped(noIndexArgs, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
+                let result = try await Process.gitCapped(
+                    noIndexArgs,
+                    cwd: worktreePath,
+                    maxOutputBytes: maxOutputBytes,
+                    hostResolution: hostResolution)
                 // Same reasoning as the tracked-file branch below: a fatal
                 // exit (e.g. an SSH connection dropping) must propagate
                 // rather than parse whatever (usually empty) stdout came
@@ -558,7 +571,11 @@ extension GitService {
             args.append(originalPath)
         }
         if let maxOutputBytes {
-            let result = try await Process.gitCapped(args, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
+            let result = try await Process.gitCapped(
+                args,
+                cwd: worktreePath,
+                maxOutputBytes: maxOutputBytes,
+                hostResolution: hostResolution)
             // Same reasoning as the two capped branches above: a fatal exit
             // (e.g. an SSH connection dropping) must propagate rather than
             // parse whatever (usually empty) stdout came back as a

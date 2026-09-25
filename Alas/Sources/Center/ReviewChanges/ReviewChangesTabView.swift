@@ -75,7 +75,12 @@ struct ReviewChangesTabView: View {
     let tabState: ReviewChangesTabState
     let appState: AppState
     var onStartupRecoveryReady: () -> Void = {}
-    var loader: ReviewChangesLoader = ReviewChangesLoader()
+
+    private var loader: ReviewChangesLoader {
+        let hostResolution: EditorBufferHostResolution = .project(appState.remoteHost(for: worktree))
+        let git = GitService(hostResolution: hostResolution)
+        return ReviewChangesLoader(git: git)
+    }
 
     @Environment(\.theme) private var theme
     @State private var session: ReviewChangesLoadedSession?
@@ -488,7 +493,13 @@ struct ReviewChangesTabView: View {
             save: { try store.save($0) },
             open: {
                 reviewSessionLaunchError = nil
-                appState.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: $0)
+                appState.tabs.openOrFocusReviewSession(
+                    worktreeId: worktree.id,
+                    projectId: worktree.projectId,
+                    includesLegacyUnownedProjectTabs: appState.legacyEditorOwnerProjectId(forWorktreeId: worktree.id)
+                        == worktree.projectId,
+                    record: $0
+                )
             },
             onFailure: { reviewSessionLaunchError = $0.localizedDescription }
         )

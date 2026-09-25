@@ -419,6 +419,70 @@ struct RemoteAppStateAccessTests {
         })
     }
 
+    @Test func remoteFileEndpointsUseTheSessionProjectsHostInsteadOfSharedPathRegistry() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        let sharedPath = repository.path
+        let remoteHost = "path-owner.invalid"
+        defer { RemoteHostRegistry.shared.unregister(root: sharedPath) }
+
+        let visibleFile = repository.appendingPathComponent("visible.txt")
+        try "base\n".write(to: visibleFile, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "visible.txt"], cwd: repository, usesRemoteHostRegistry: false)
+        _ = try await Process.git(["commit", "-q", "-m", "seed file"], cwd: repository, usesRemoteHostRegistry: false)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature/remote"], cwd: repository, usesRemoteHostRegistry: false)
+        try "project B contents\n".write(to: visibleFile, atomically: true, encoding: .utf8)
+
+        let projectA = ProjectConfig(
+            id: "path-owner-\(UUID().uuidString)", name: "Path Owner", path: sharedPath,
+            color: "blue", addedAt: .distantPast, host: remoteHost
+        )
+        let projectB = ProjectConfig(
+            id: "selected-project-\(UUID().uuidString)", name: "Selected Project", path: sharedPath,
+            color: "green", addedAt: .distantPast
+        )
+        let state = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [projectA, projectB])
+        ))
+        state.config.worktrees.baseBranch = "main"
+        let first = Worktree(
+            id: sharedPath, projectId: projectA.id, name: "feature", branch: "feature/remote",
+            path: repository, status: .clean, lastActivity: .distantPast
+        )
+        let selected = Worktree(
+            id: sharedPath, projectId: projectB.id, name: "feature", branch: "feature/remote",
+            path: repository, status: .clean, lastActivity: .distantPast
+        )
+        state.projectsManager.insertOptimisticWorktree(first)
+        state.projectsManager.insertOptimisticWorktree(selected)
+        RemoteHostRegistry.shared.register(root: sharedPath, host: remoteHost)
+        defer { cleanupSharedPathFiles((state: state, first: first, second: selected)) }
+
+        let manager = try #require(state.acpManager(for: selected))
+        let session = manager.createSession(agentId: "test-agent")
+
+        let changes = await state.remoteChangeList(sessionId: session.id)
+        let diff = await state.remoteFileDiff(sessionId: session.id, path: "visible.txt")
+        let tree = await state.remoteFileTree(sessionId: session.id, path: nil)
+        let contents = await state.remoteFileContents(sessionId: session.id, path: "visible.txt")
+
+        if case let .success(_, _, _, _, unstaged, _, _, _) = changes {
+            #expect(unstaged.contains { $0.path == "visible.txt" })
+        } else {
+            Issue.record("Expected project B's local change list, got \(changes)")
+        }
+        if case let .success(hunks, _, _) = diff {
+            #expect(!hunks.isEmpty)
+        } else {
+            Issue.record("Expected project B's local diff, got \(diff)")
+        }
+        if case let .success(nodes, _) = tree {
+            #expect(nodes.contains { $0.path == "visible.txt" })
+        } else {
+            Issue.record("Expected project B's local file tree, got \(tree)")
+        }
+        #expect(contents == .success(text: "project B contents\n", truncated: false))
+    }
+
     @Test func remoteSessionCheckpointAdmissionUsesTheSelectedProject() async throws {
         let fixture = try makeSharedPathState()
         defer { cleanupSharedPathFiles(fixture) }
@@ -2021,7 +2085,7 @@ struct RemoteAppStateAccessTests {
                 cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
             }
         }
-        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let state = makeRemoteGitBackedState(repositoryPath: repository, projectHost: "nonexistent-host.invalid")
         let worktreeId = try #require(state.selectedWorktreeId)
         cleanupWorktreeId = worktreeId
         state.openNewACPSession(agentID: "test-agent")
@@ -2399,13 +2463,14 @@ struct RemoteAppStateAccessTests {
     /// repository (rather than a bare `/tmp` directory) so `remoteFileDiff`
     /// / `remoteFileContents`' git-backed checks (ignore status, diffing)
     /// have a real repo to work against.
-    private func makeRemoteGitBackedState(repositoryPath: URL) -> AppState {
+    private func makeRemoteGitBackedState(repositoryPath: URL, projectHost: String? = nil) -> AppState {
         let project = ProjectConfig(
             id: UUID().uuidString,
             name: "test",
             path: repositoryPath.path,
             color: "blue",
-            addedAt: Date()
+            addedAt: Date(),
+            host: projectHost
         )
         let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [project])))
         let worktree = Worktree(

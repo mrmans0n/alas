@@ -9,8 +9,13 @@ struct ReviewSessionLoaderTests {
         let repo = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-review-session-loader-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: repo) }
+        defer {
+            RemoteHostRegistry.shared.unregister(root: repo.path)
+            try? FileManager.default.removeItem(at: repo)
+        }
         _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        try "untracked change\n".write(to: repo.appendingPathComponent("change.txt"), atomically: true, encoding: .utf8)
+        RemoteHostRegistry.shared.register(root: repo.path, host: "other-project.invalid")
 
         let worktree = Worktree(
             id: Worktree.makeId(path: repo),
@@ -38,7 +43,7 @@ struct ReviewSessionLoaderTests {
         )
         let draftCommitLoaded = try await loader.load(target: draftCommitTarget)
 
-        #expect(loaded.session.files.isEmpty)
+        #expect(loaded.session.files.map(\.summary.path) == ["change.txt"])
         #expect(loaded.feedbackTarget.title == "Review all changes")
         #expect(draftCommitLoaded.session.files.isEmpty)
         #expect(draftCommitLoaded.feedbackTarget.title == "Review draft commit")

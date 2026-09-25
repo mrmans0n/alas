@@ -5,6 +5,7 @@ struct DraftReviewRequestTabView: View {
     let worktreePath: URL
     let worktreeId: String
     let projectId: String
+    let projectHost: String?
     let tabState: DraftReviewRequestTabState
     let executionTarget: AgentExecutionTarget
     @Bindable var appState: AppState
@@ -37,7 +38,7 @@ struct DraftReviewRequestTabView: View {
     @Environment(\.theme) private var theme
     @FocusState private var focused: Field?
 
-    private let git = GitService()
+    private var git: GitService { GitService(hostResolution: .project(projectHost)) }
 
     private var agentAvailability: AgentAvailabilityState {
         appState.agentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
@@ -513,7 +514,7 @@ struct DraftReviewRequestTabView: View {
                 },
                 contextProviderForPath: { path, originalPath in
                     DiffReviewContextProvider {
-                        try await GitService().refContextSnapshot(
+                        try await git.refContextSnapshot(
                             worktreePath: worktreePath,
                             baseRef: tabState.baseBranch,
                             headRef: resolvedHeadRef,
@@ -759,7 +760,13 @@ struct DraftReviewRequestTabView: View {
             save: { try store.save($0) },
             open: {
                 reviewSessionLaunchError = nil
-                appState.tabs.openOrFocusReviewSession(worktreeId: worktreeId, record: $0)
+                appState.tabs.openOrFocusReviewSession(
+                    worktreeId: worktreeId,
+                    projectId: projectId,
+                    includesLegacyUnownedProjectTabs: appState.legacyEditorOwnerProjectId(forWorktreeId: worktreeId)
+                        == projectId,
+                    record: $0
+                )
             },
             onFailure: { reviewSessionLaunchError = $0.localizedDescription }
         )

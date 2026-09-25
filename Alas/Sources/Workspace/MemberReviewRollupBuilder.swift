@@ -63,6 +63,7 @@ enum WorkspaceReviewSessionIdentity {
 
 struct WorkspaceReviewAction: Equatable {
     var memberID: UUID
+    var projectID: String? = nil
     var worktreeID: String
     var reviewSessionID: ReviewSessionID
     var sharedCheckoutBranch: String?
@@ -70,11 +71,11 @@ struct WorkspaceReviewAction: Equatable {
 
 struct WorkspaceReviewActionHandler {
     var load: (ReviewSessionID) throws -> ReviewSessionRecord?
-    var open: (String, ReviewSessionRecord) -> Void
+    var open: (String, String?, ReviewSessionRecord) -> Void
 
     init(
         load: @escaping (ReviewSessionID) throws -> ReviewSessionRecord? = { try ReviewSessionStore().load(id: $0) },
-        open: @escaping (String, ReviewSessionRecord) -> Void
+        open: @escaping (String, String?, ReviewSessionRecord) -> Void
     ) {
         self.load = load
         self.open = open
@@ -82,7 +83,7 @@ struct WorkspaceReviewActionHandler {
 
     func open(_ action: WorkspaceReviewAction) {
         guard let record = try? load(action.reviewSessionID) else { return }
-        open(action.worktreeID, record)
+        open(action.worktreeID, action.projectID, record)
     }
 }
 
@@ -144,6 +145,7 @@ struct MemberReviewRollupBuilder {
                 reviewActions: reviewRecords.map {
                     WorkspaceReviewAction(
                         memberID: member.id,
+                        projectID: member.projectID,
                         worktreeID: worktreeID,
                         reviewSessionID: $0.id,
                         sharedCheckoutBranch: nil

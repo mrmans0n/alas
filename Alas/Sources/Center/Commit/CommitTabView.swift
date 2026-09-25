@@ -417,7 +417,13 @@ struct CommitTabView: View {
             save: { try store.save($0) },
             open: {
                 reviewSessionLaunchError = nil
-                appState.tabs.openOrFocusReviewSession(worktreeId: worktreeId, record: $0)
+                appState.tabs.openOrFocusReviewSession(
+                    worktreeId: worktreeId,
+                    projectId: projectId,
+                    includesLegacyUnownedProjectTabs: appState.legacyEditorOwnerProjectId(forWorktreeId: worktreeId)
+                        == projectId,
+                    record: $0
+                )
             },
             onFailure: { reviewSessionLaunchError = $0.localizedDescription }
         )

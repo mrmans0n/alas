@@ -105,7 +105,13 @@ extension AppState {
                     save: { try store.save($0) },
                     open: { record in
                         self.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
-                        _ = self.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
+                        _ = self.tabs.openOrFocusReviewSession(
+                            worktreeId: worktree.id,
+                            projectId: worktree.projectId,
+                            includesLegacyUnownedProjectTabs: self.legacyEditorOwnerProjectId(forWorktreeId: worktree.id)
+                                == worktree.projectId,
+                            record: record
+                        )
                         self.closeReviewPaletteOverlay()
                     },
                     onFailure: { error in

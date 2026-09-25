@@ -89,7 +89,12 @@ struct ReviewTabView: View {
     var onStartupRecoveryReady: () -> Void = {}
     // Loads the working-tree diff (same as ReviewChangesTabView). To show PR base..head diff
     // instead, inject a PR-diff loader here when that loader exists.
-    var loader: ReviewChangesLoader = ReviewChangesLoader()
+
+    private var loader: ReviewChangesLoader {
+        let hostResolution: EditorBufferHostResolution = .project(appState.remoteHost(for: worktree))
+        let git = GitService(hostResolution: hostResolution)
+        return ReviewChangesLoader(git: git)
+    }
 
     @Environment(\.theme) private var theme
     @State private var session: ReviewChangesLoadedSession?
