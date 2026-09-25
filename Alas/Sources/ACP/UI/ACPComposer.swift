@@ -1016,35 +1016,33 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // bypasses `NSTextView`'s own selection bookkeeping, so the
         // selection must be clamped back into range explicitly here too.
         didChangeText()
-        // Preserve the selection in the REST of the message rather than
-        // always collapsing it to a caret right after the chip: a late
+        // Preserve the selection outside the command rather than always
+        // collapsing it to a caret right after the chip: a late
         // `available_commands_update` can land while the user has kept
-        // typing — or has a selection — past the command
-        // (`/init some text I'm still writing`), and forcing their caret
-        // or wiping their selection there would yank it out from under
-        // them mid-sentence. The part of the selection at or after the end
-        // of the replaced range survives the edit (shifted by the length
-        // delta); the part inside it doesn't, since that's the command
-        // text the chip just replaced. A selection that starts inside the
-        // command and extends into the body (or spans the whole thing)
-        // keeps only its surviving tail, anchored at the end of the chip;
-        // one that never reaches past the command at all — the
-        // typed-completion path above, where the caret IS the end of the
-        // range — has nothing to preserve and collapses to a caret there.
+        // typing past the command, has a selection past it, or simply left
+        // their caret sitting before it (`/init body` with the caret still
+        // at position 0) — forcing any of those to jump to right after the
+        // pill would yank the user's cursor out from under them. Each
+        // endpoint maps independently: at or after the replaced range, it
+        // survives shifted by the length delta; at or before its start —
+        // ONLY for a zero-length caret, which touches none of the
+        // command's own characters — it's untouched, since nothing before
+        // the edit moved; anywhere else was inside the text the chip just
+        // replaced and has nowhere sensible to land but the chip's end
+        // (also where the typed-completion path above always finds its
+        // caret, since typing the completing space puts it exactly at the
+        // command's end).
         let delta = replacement.length - range.length
-        let selectionEnd = NSMaxRange(selectionBefore)
         let rangeEnd = NSMaxRange(range)
-        let newSelection: NSRange
-        if selectionEnd > rangeEnd {
-            let newStart = selectionBefore.location >= rangeEnd
-                ? selectionBefore.location + delta
-                : NSMaxRange(replacedRange)
-            let newEnd = selectionEnd + delta
-            newSelection = NSRange(location: newStart, length: newEnd - newStart)
-        } else {
-            newSelection = NSRange(location: NSMaxRange(replacedRange), length: 0)
+        let isEmptySelection = selectionBefore.length == 0
+        func map(_ location: Int) -> Int {
+            if location >= rangeEnd { return location + delta }
+            if isEmptySelection, location <= range.location { return location }
+            return NSMaxRange(replacedRange)
         }
-        setSelectedRange(newSelection)
+        let newStart = map(selectionBefore.location)
+        let newEnd = map(NSMaxRange(selectionBefore))
+        setSelectedRange(NSRange(location: newStart, length: newEnd - newStart))
     }
 
     /// Retry-once-on-attach: a restored draft can already contain an active

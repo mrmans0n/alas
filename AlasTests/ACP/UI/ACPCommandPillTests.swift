@@ -95,4 +95,25 @@ struct ACPCommandPillTests {
         #expect(ACPLeadingCommand.match(in: "/review the parser", suggestions: suggestions)?.rest == "the parser")
         #expect(ACPLeadingCommand.match(in: "/review\tthe parser", suggestions: suggestions)?.rest == "\tthe parser")
     }
+
+    @Test("an image attached before the leading command still lets the pill render")
+    func leadingCommandSurvivesImageAtOffsetZero() {
+        // Mirrors what ACPUserMessageText.content computes: the leading
+        // command is detected against the RAW text first (images
+        // contribute no wire text, so it's unaffected either way), then
+        // markers are spliced into `rest` only, re-anchored by however many
+        // characters the command consumed. An image whose captured offset
+        // is 0 in the FULL message — attached before the command was typed
+        // — must not corrupt the "/" prefix that `match` looks for.
+        let text = "/review the parser"
+        let match = ACPLeadingCommand.match(in: text, suggestions: suggestions)
+        #expect(match?.suggestion.command == "/review")
+        let consumed = text.count - (match?.rest.count ?? 0)
+        let rest = ACPUserMessageImageMarkers.displayText(
+            text: String(match?.rest ?? ""),
+            attachments: [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png", textOffset: 0)],
+            offsetAdjustment: -consumed
+        )
+        #expect(rest == "`🖼 image`the parser")
+    }
 }

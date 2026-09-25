@@ -348,13 +348,21 @@ struct ACPCommandPill: View {
 /// Observes only the session's command list, so a streaming transcript never
 /// re-renders this row.
 struct ACPUserMessageText: View {
+    /// The raw message text — NOT pre-spliced with image markers. Detecting
+    /// the leading command has to run against this first: an image chip
+    /// attached before the user typed the command carries no wire text of
+    /// its own but still gets a `` `🖼 …` `` marker spliced in ahead of it,
+    /// and that marker would otherwise cover up the leading `/` before
+    /// `ACPLeadingCommand.match` ever saw it.
     let text: String
+    let attachments: [ACPMessage.Attachment]
     let typography: ACPChatTypography
     let session: ACPSession
     @State private var suggestions: [ACPPromptSuggestion]
 
-    init(text: String, typography: ACPChatTypography, session: ACPSession) {
+    init(text: String, attachments: [ACPMessage.Attachment], typography: ACPChatTypography, session: ACPSession) {
         self.text = text
+        self.attachments = attachments
         self.typography = typography
         self.session = session
         _suggestions = State(initialValue: session.promptSuggestions)
@@ -370,16 +378,28 @@ struct ACPUserMessageText: View {
     @ViewBuilder
     private var content: some View {
         if let match = ACPLeadingCommand.match(in: text, suggestions: suggestions) {
+            // Markers are spliced into `rest` only, with each image's
+            // offset (captured against the FULL message) re-anchored by
+            // however many characters the command consumed — an image
+            // attached before the command still gets a marker, now at the
+            // front of `rest`, rather than one glued to a pill it can't
+            // render next to.
+            let consumed = text.count - match.rest.count
+            let rest = ACPUserMessageImageMarkers.displayText(
+                text: String(match.rest),
+                attachments: attachments,
+                offsetAdjustment: -consumed
+            )
             // Multi-line content (a blank line, a following paragraph) goes
             // below the pill in its own row instead of the same HStack —
             // squeezing a whole markdown block into the row beside the pill
             // would turn the message into a two-column layout and swallow
             // its line breaks.
-            if match.rest.contains(where: \.isNewline) {
+            if rest.contains(where: \.isNewline) {
                 VStack(alignment: .leading, spacing: 4) {
                     ACPCommandPill(suggestion: match.suggestion)
-                    if !match.rest.isEmpty {
-                        ACPMarkdownText(raw: String(match.rest), typography: typography)
+                    if !rest.isEmpty {
+                        ACPMarkdownText(raw: rest, typography: typography)
                     }
                 }
             } else {
@@ -388,13 +408,16 @@ struct ACPUserMessageText: View {
                         .padding(.top, ACPCommandPillStyle.topInset(
                             forLineFont: typography.appKitFont(size: typography.paragraphSize)
                         ))
-                    if !match.rest.isEmpty {
-                        ACPMarkdownText(raw: String(match.rest), typography: typography)
+                    if !rest.isEmpty {
+                        ACPMarkdownText(raw: rest, typography: typography)
                     }
                 }
             }
         } else {
-            ACPMarkdownText(raw: text, typography: typography)
+            ACPMarkdownText(
+                raw: ACPUserMessageImageMarkers.displayText(text: text, attachments: attachments),
+                typography: typography
+            )
         }
     }
 }

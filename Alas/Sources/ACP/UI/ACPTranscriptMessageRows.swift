@@ -47,7 +47,8 @@ struct UserMessageRow: View {
                     }
                 }
                 ACPUserMessageText(
-                    text: ACPUserMessageImageMarkers.displayText(text: text, attachments: attachments),
+                    text: text,
+                    attachments: attachments,
                     typography: typography,
                     session: session
                 )

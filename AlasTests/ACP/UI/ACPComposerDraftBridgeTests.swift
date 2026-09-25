@@ -1623,6 +1623,26 @@ struct ACPComposerDraftBridgeTests {
         #expect((storage.string as NSString).substring(with: textView.selectedRange()) == " some text")
     }
 
+    @Test("late chipification leaves a caret before the command untouched")
+    func lateChipificationLeavesLeadingCaretUntouched() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions = []
+        textView.insertText("/init body", replacementRange: textView.selectedRange())
+        // The caret is at the very start, before the command even begins —
+        // it touches none of the command's own characters.
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        // Nothing before the edit moved, so the caret stays exactly where
+        // it was instead of jumping to after the pill.
+        #expect(textView.selectedRange() == NSRange(location: 0, length: 0))
+    }
+
     @Test("the slash picker stays open for `$`-prefixed skills")
     func slashPickerAcceptsDollarSkills() {
         let (textView, coordinator, window) = makeGhostHintTextView()

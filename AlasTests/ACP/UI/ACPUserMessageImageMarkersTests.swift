@@ -39,6 +39,26 @@ struct ACPUserMessageImageMarkersTests {
         #expect(text == "hello")
     }
 
+    @Test("offsetAdjustment re-anchors offsets against a shorter slice of the full message")
+    func offsetAdjustmentShiftsAndClamps() {
+        // A caller rendering only the text after a leading command shifts
+        // every offset back by however many characters the command
+        // consumed — an image originally at the very start of the full
+        // message (offset 0) lands at the front of this slice instead of
+        // being dropped or landing mid-word.
+        let shifted = ACPUserMessageImageMarkers.displayText(
+            text: "shows here",
+            attachments: [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png", textOffset: 6)],
+            offsetAdjustment: -6)
+        #expect(shifted == "`🖼 image`shows here")
+
+        let clamped = ACPUserMessageImageMarkers.displayText(
+            text: "shows here",
+            attachments: [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png", textOffset: 0)],
+            offsetAdjustment: -6)
+        #expect(clamped == "`🖼 image`shows here")
+    }
+
     @Test("keeps stable numbering when a middle image has no offset")
     func middleImageWithoutOffsetKeepsNumbering() {
         let text = ACPUserMessageImageMarkers.displayText(
