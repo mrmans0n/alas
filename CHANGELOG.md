@@ -6,11 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.10] - 2026-09-25
+
+### ✨ Features
+
+- Group web-client sessions by their owning server and derive badge counts from gateway state (#1470).
+
 ### 🐛 Fixes
 
-- Keep the ACP composer aligned with the transcript column on wide panes instead of stretching it across the window.
-- Submit a required federated elicitation array with an empty selection: "required" now means the property must be present, and only a declared `minItems` constrains the item count.
-- Report a failed submit to the composer and to remote clients when the writer lease is lost mid-send, and close a remote ACP session whose creation completed after its chat was disposed.
+- Keep the ACP composer aligned with the transcript column on wide panes instead of stretching it across the window (#1471).
+- Submit a required federated elicitation array with an empty selection: "required" now means the property must be present, and only a declared `minItems` constrains the item count (#1469).
+- Report a failed submit to the composer and to remote clients when the writer lease is lost mid-send, and close a remote ACP session whose creation completed after its chat was disposed (#1468).
+- Hide the new-chat empty state as soon as a prompt is queued (#1472).
 
 ## [0.19.9] - 2026-09-25
 
