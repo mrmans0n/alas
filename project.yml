@@ -24,7 +24,7 @@ packages:
     exactVersion: 0.31.4
   SwiftTransformers:
     url: https://github.com/huggingface/swift-transformers
-    exactVersion: 1.3.4
+    exactVersion: 1.3.0
   # Only the tree-sitter *runtime* and Swift API come from SwiftPM. The
   # grammars themselves live in ThirdParty/treesitter-pack, a Rust staticlib
   # that depends on them via cargo and exposes languages + highlight queries
