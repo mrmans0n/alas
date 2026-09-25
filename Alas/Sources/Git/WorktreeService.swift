@@ -1312,6 +1312,12 @@ struct WorktreeService {
             # Bind the scheduled cleanup reachability audit to the staged-delete fingerprint.
             git for-each-ref --format='ref=%(refname)=%(objectname)' refs/heads refs/tags refs/notes refs/stash refs/remotes
             git rev-list --max-count=50 --reflog --not --remotes 2>/dev/null | while IFS= read -r oid; do printf 'reflog=%s\\n' "$oid"; done
+            fsck_output=$(mktemp)
+            commit_inventory=$(mktemp)
+            trap 'rm -f "$fsck_output" "$commit_inventory"' EXIT
+            git fsck --no-reflogs --unreachable --no-progress >"$fsck_output" 2>/dev/null
+            awk '$2 == "commit" { print "unreachable-commit=" $3 }' "$fsck_output" >"$commit_inventory"
+            LC_ALL=C sort -u "$commit_inventory"
             """
         ], cwd: worktreePath)
         guard submodules.exitCode == 0 else { throw WorktreeError.gitFailed(submodules.stderr) }

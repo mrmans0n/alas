@@ -870,6 +870,9 @@ extension WorktreeServiceTests {
             cwd: submodulePath
         )
         try #require(reachableSubmoduleHead.exitCode == 0)
+        let fingerprintBeforeDanglingCommit = try await WorktreeService.worktreeDeleteContentFingerprint(
+            worktreePath: fixture.worktree.path
+        )
 
         try "local tag commit".write(
             to: submodulePath.appendingPathComponent("tracked.txt"),
@@ -908,6 +911,10 @@ extension WorktreeServiceTests {
             unreachableObjects.stdout.contains("unreachable commit \(localOnlyOID)")
                 || unreachableObjects.stdout.contains("dangling commit \(localOnlyOID)")
         )
+        let fingerprintWithDanglingCommit = try await WorktreeService.worktreeDeleteContentFingerprint(
+            worktreePath: fixture.worktree.path
+        )
+        #expect(fingerprintWithDanglingCommit != fingerprintBeforeDanglingCommit)
         #expect(!(try await WorktreeService.scheduledCleanupHistoryIsSafe(
             baseCommit: base,
             expectedBranch: fixture.worktree.branch,
