@@ -1517,6 +1517,47 @@ struct ACPComposerDraftBridgeTests {
         withExtendedLifetime(observation) {}
     }
 
+    @Test("offer consumption cannot accept after a synchronous empty-editor selection invalidates it")
+    func nextPromptConsumptionRechecksInvalidation() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        var changedSelection = false
+        let observation = fixture.suggestionCoordinator.$offer.dropFirst().sink { value in
+            guard value == nil, !changedSelection else { return }
+            changedSelection = true
+            textView.setSelectedRange(NSRange(location: 0, length: 0))
+        }
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(changedSelection)
+        #expect(textView.string.isEmpty)
+        #expect(fixture.suggestionCoordinator.offer == nil)
+        withExtendedLifetime(observation) {}
+    }
+
+    @Test("accepted insertion does not dismiss the consumed offer a second time")
+    func nextPromptAcceptanceDoesNotRepublishNil() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        var nilPublications = 0
+        let observation = fixture.suggestionCoordinator.$offer.dropFirst().sink { value in
+            guard value == nil else { return }
+            nilPublications += 1
+            if nilPublications == 2 {
+                textView.insertText("intruder", replacementRange: textView.selectedRange())
+            }
+        }
+        #expect(textView.acceptNextPromptSuggestion())
+        #expect(nilPublications == 1)
+        #expect(textView.string == "Explain the tradeoff.")
+        observation.cancel()
+        textView.undoManager?.undo()
+        #expect(textView.string.isEmpty)
+    }
+
     @Test("Escape dismisses next prompt without changing draft or undo")
     func nextPromptEscape() async throws {
         let (textView, coordinator, window) = makeSlashTextView()

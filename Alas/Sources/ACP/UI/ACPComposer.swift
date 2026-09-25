@@ -778,6 +778,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
     var nextPromptDraftIsEmpty: () -> Bool = { true }
     var nextPromptInputBlocked: () -> Bool = { false }
     var nextPromptIsDictating: () -> Bool = { false }
+    private var nextPromptInvalidationGeneration: UInt64 = 0
+    private var insertingAcceptedNextPrompt = false
     private var imagePickerPresented = false
     private var dropPending = false
 
@@ -853,12 +855,18 @@ final class ACPNSTextView: PairedDelimiterTextView {
     func acceptNextPromptSuggestion() -> Bool {
         onNextPromptStateChange(nextPromptInputState)
         guard let displayed = nextPromptGhostText else { return false }
-        guard let accepted = takeNextPromptOffer(), accepted == displayed,
-              canShowNextPrompt else {
+        let generation = nextPromptInvalidationGeneration
+        guard let accepted = takeNextPromptOffer(), accepted == displayed else {
             invalidateNextPromptSuggestion()
             return false
         }
         nextPromptOffer = nil
+        guard nextPromptInvalidationGeneration == generation, canShowNextPrompt else {
+            invalidateNextPromptSuggestion()
+            return false
+        }
+        insertingAcceptedNextPrompt = true
+        defer { insertingAcceptedNextPrompt = false }
         breakUndoCoalescing()
         undoManager?.beginUndoGrouping()
         typingAttributes = baseTypingAttributes
@@ -872,8 +880,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     func invalidateNextPromptSuggestion() {
+        nextPromptInvalidationGeneration &+= 1
         nextPromptOffer = nil
-        dismissNextPromptOffer()
+        if !insertingAcceptedNextPrompt { dismissNextPromptOffer() }
     }
 
     override func accessibilityHelp() -> String? {
