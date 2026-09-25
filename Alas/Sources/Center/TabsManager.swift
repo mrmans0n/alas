@@ -3730,7 +3730,10 @@ final class TabsManager {
         for key in liveKeys {
             guard let file = byWorktree[key.worktreeId] else { continue }
             for tab in file.tabs {
+                // Legacy unowned tabs share only with unowned buffers (`nil == nil`);
+                // missing ownership must never widen a project's snapshot fan-out.
                 guard case .editor(let state) = tab,
+                      state.projectId == key.projectId,
                       state.relativePath == key.relativePath,
                       !seen.contains(state.id) else { continue }
                 result.append((state.id, key))

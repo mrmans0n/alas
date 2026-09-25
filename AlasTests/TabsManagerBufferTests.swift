@@ -475,6 +475,67 @@ struct TabsManagerBufferTests {
         #expect(manager.peekBuffer(tabId: second.id) == nil)
     }
 
+    @Test func editorSnapshotsAndDiscardStayWithinTheOwningProject() async throws {
+        let root = tempWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appendingPathComponent("shared.swift")
+        try "base\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        let worktreeId = root.path
+        let (manager, store, _) = makeManager()
+        let projectATab = manager.appendEditor(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            title: "shared.swift",
+            relativePath: "shared.swift"
+        )
+        let unloadedProjectATab = manager.appendEditor(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            title: "shared copy.swift",
+            relativePath: "shared.swift"
+        )
+        let projectBTab = manager.appendEditor(
+            worktreeId: worktreeId,
+            projectId: "project-b",
+            title: "shared.swift",
+            relativePath: "shared.swift"
+        )
+        let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let projectBSnapshot = EditorBufferStore.Snapshot(
+            relativePath: "shared.swift",
+            content: "project B draft\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(projectBSnapshot, worktreeId: worktreeId, tabId: projectBTab.id)
+
+        let projectABuffer = manager.buffer(
+            worktreeId: worktreeId,
+            tabId: projectATab.id,
+            worktreeRoot: root,
+            relativePath: "shared.swift",
+            projectId: "project-a"
+        )
+        defer { projectABuffer.close(persistDirtySnapshot: false) }
+        await projectABuffer.awaitLoadForTesting()
+        projectABuffer.storage.replaceCharacters(
+            in: NSRange(location: 0, length: projectABuffer.storage.length),
+            with: "project A draft\n"
+        )
+        try await Task.sleep(nanoseconds: 900_000_000)
+
+        #expect(try store.read(worktreeId: worktreeId, tabId: projectATab.id)?.content == "project A draft\n")
+        #expect(try store.read(worktreeId: worktreeId, tabId: unloadedProjectATab.id)?.content == "project A draft\n")
+        #expect(try store.read(worktreeId: worktreeId, tabId: projectBTab.id) == projectBSnapshot)
+
+        try projectABuffer.save()
+
+        #expect(try store.read(worktreeId: worktreeId, tabId: projectATab.id) == nil)
+        #expect(try store.read(worktreeId: worktreeId, tabId: unloadedProjectATab.id) == nil)
+        #expect(try store.read(worktreeId: worktreeId, tabId: projectBTab.id) == projectBSnapshot)
+    }
+
     @Test func savingSharedBufferDiscardsEveryTabSnapshot() async throws {
         let root = tempWorktree()
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
