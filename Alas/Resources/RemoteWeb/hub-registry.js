@@ -341,7 +341,13 @@ function peerSessionCounts(sessions, knownServerIds) {
 function serverBadgeCounts(server, linkCounts, activeServer, gatewayCounts) {
   if (
     activeServer && activeServer.federationEnabled &&
-    server.serverId && gatewayCounts && gatewayCounts.has(server.serverId)
+    server.serverId && gatewayCounts && gatewayCounts.has(server.serverId) &&
+    // Re-checked against the CURRENT roster, not just at gatewayCounts'
+    // build time: a peer that left the online roster between one
+    // sessionList and the next hello can otherwise keep reading a stale
+    // seeded entry (or an entry from before it left) until some unrelated
+    // sessionList happens to rebuild gatewayCounts without it.
+    Array.isArray(activeServer.peers) && activeServer.peers.includes(server.serverId)
   ) {
     return gatewayCounts.get(server.serverId);
   }

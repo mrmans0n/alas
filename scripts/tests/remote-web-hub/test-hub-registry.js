@@ -352,7 +352,7 @@ assert.deepEqual([...registry.peerSessionCounts(undefined).entries()], []);
 
 {
   const gatewayCounts = new Map([["srv-B", { attention: 4, running: 0 }]]);
-  const federatedActive = { federationEnabled: true };
+  const federatedActive = { federationEnabled: true, peers: ["srv-B"] };
   const idleCounts = { attention: 1, running: 0 };
 
   assert.deepEqual(
@@ -379,6 +379,11 @@ assert.deepEqual([...registry.peerSessionCounts(undefined).entries()], []);
     registry.serverBadgeCounts({ serverId: "srv-B" }, null, federatedActive, new Map()),
     { attention: 0, running: 0 },
     "no link and no gateway data yet -> zero, not a crash"
+  );
+  assert.deepEqual(
+    registry.serverBadgeCounts({ serverId: "srv-B" }, idleCounts, { federationEnabled: true, peers: ["srv-C"] }, gatewayCounts),
+    idleCounts,
+    "srv-B left the active gateway's online roster (hello updated activeServer.peers) even though a stale entry still sits in gatewayCounts -> falls back to idle polling"
   );
 }
 
@@ -430,7 +435,7 @@ assert.deepEqual(
 {
   const gatewayCounts = registry.peerSessionCounts([], ["srv-B"]);
   assert.deepEqual(
-    registry.serverBadgeCounts({ serverId: "srv-B" }, { attention: 3, running: 0 }, { federationEnabled: true }, gatewayCounts),
+    registry.serverBadgeCounts({ serverId: "srv-B" }, { attention: 3, running: 0 }, { federationEnabled: true, peers: ["srv-B"] }, gatewayCounts),
     { attention: 0, running: 0 },
     "a known peer with zero current rows overrides a stale nonzero idle-polled count"
   );
