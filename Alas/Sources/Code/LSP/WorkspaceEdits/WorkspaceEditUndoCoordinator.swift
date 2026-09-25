@@ -373,18 +373,21 @@ final class TabsWorkspaceEditUndoAccess: WorkspaceEditFileAccess {
     private weak var tabs: TabsManager?
     private let worktreeID: String
     private let root: URL
+    private let host: String?
 
-    init(tabs: TabsManager, worktreeID: String, root: URL) {
+    init(tabs: TabsManager, worktreeID: String, root: URL, host: String? = nil) {
         self.tabs = tabs
         self.worktreeID = worktreeID
         self.root = root
+        self.host = host
     }
 
     private func adapter(for document: EditorDocumentID) throws -> HostWorkspaceEditFileAccess {
-        guard let tabs, document.worktreeID == worktreeID else { throw WorkspaceEditAccessError.unsupportedTarget(document) }
+        guard let tabs, document.worktreeID == worktreeID, document.host == host else { throw WorkspaceEditAccessError.unsupportedTarget(document) }
         let directory = root
         let ownerID = worktreeID
-        return HostWorkspaceEditFileAccess(tabs: tabs, rootForDocument: { $0.worktreeID == ownerID ? directory : nil })
+        let ownerHost = host
+        return HostWorkspaceEditFileAccess(tabs: tabs, rootForDocument: { $0.worktreeID == ownerID && $0.host == ownerHost ? directory : nil })
     }
 
     func snapshot(_ document: EditorDocumentID) async throws -> WorkspaceFileSnapshot {

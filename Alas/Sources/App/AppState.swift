@@ -2695,7 +2695,11 @@ final class AppState {
                   self.selectedWorktreeProjectId == targetProjectId,
                   self.worktreeSelectionFollowUpGeneration == generation, let id else { return }
             if acknowledgeSidebar {
-                self.acknowledgeAttentionSurface(worktreeID: id, target: .remoteWorktree)
+                self.acknowledgeAttentionSurface(
+                    worktreeID: id,
+                    projectId: targetProjectId,
+                    target: .remoteWorktree
+                )
             }
             self.refreshGGSidebar()
             guard let resolved = self.projectAndWorktree(withWorktreeId: id, inProjectId: targetProjectId) else { return }
@@ -4260,7 +4264,8 @@ final class AppState {
             do {
                 canonicalDestination = try await Self.preparedCreateWorktreeDestination(
                     repoPath: repoPath,
-                    destination: destination
+                    destination: destination,
+                    host: project.host
                 )
             } catch {
                 showFileActionError(title: "Create Worktree Failed", message: error.localizedDescription)
@@ -4329,7 +4334,8 @@ final class AppState {
                 }
                 let newWorktree = try await Self.performCreateWorktree(
                     repoPath: repoPath,
-                    base: base, branch: branch, destination: canonicalDestination, projectId: projectId
+                    base: base, branch: branch, destination: canonicalDestination, projectId: projectId,
+                    host: project.host
                 )
                 guard projects.contains(where: { $0.id == projectId }) else { return }
                 let repoStartupScript = try await self.preparedRepoHook(
@@ -4996,11 +5002,12 @@ final class AppState {
         base: String,
         branch: String,
         destination: URL,
-        projectId: String
+        projectId: String,
+        host: String?
     ) async throws -> Worktree {
         try await ProjectMutationGate.shared.withMutation(projectID: projectId) {
             try await Task.detached {
-                if !repoPath.isRemoteAlasPath {
+                if host == nil, !repoPath.isRemoteAlasPath {
                     try FileManager.default.createDirectory(
                         at: destination.deletingLastPathComponent(),
                         withIntermediateDirectories: true
@@ -5011,17 +5018,22 @@ final class AppState {
                     base: base,
                     branch: branch,
                     destination: destination,
-                    projectId: projectId
+                    projectId: projectId,
+                    host: host
                 )
             }.value
         }
     }
 
-    nonisolated static func preparedCreateWorktreeDestination(repoPath: URL, destination: URL) async throws -> URL {
-        let isRemote = repoPath.isRemoteAlasPath
+    nonisolated static func preparedCreateWorktreeDestination(
+        repoPath: URL,
+        destination: URL,
+        host: String?
+    ) async throws -> URL {
+        let isRemote = host != nil || repoPath.isRemoteAlasPath
         let preparedDestination: URL
         if isRemote,
-           let host = RemoteHostRegistry.shared.host(forPath: repoPath.path) {
+           let host = host ?? RemoteHostRegistry.shared.host(forPath: repoPath.path) {
             let remoteHome = try await Self.remoteHomeDirectory(host: host)
             preparedDestination = URL(fileURLWithPath: Self.destinationPathReplacingLocalHome(
                 destination.path,
@@ -6935,7 +6947,13 @@ final class AppState {
             openExternalFile: { [weak self] url, worktreeId in
                 guard let self, let worktree = self.worktreeForFileOpen(worktreeId, projectId: nil) else { return }
                 if BinaryFileType.isKnownBinary(relativePath: url.path) {
-                    _ = self.tabs.openBinaryPreview(worktreeId: worktreeId, relativePath: url.path)
+                    let includesLegacyUnownedProjectTabs = self.legacyEditorOwnerProjectId(forWorktreeId: worktreeId) == worktree.projectId
+                    _ = self.tabs.openBinaryPreview(
+                        worktreeId: worktreeId,
+                        projectId: worktree.projectId,
+                        includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs,
+                        relativePath: url.path
+                    )
                     if self.selectedWorktreeId != worktreeId || self.selectedWorktreeProjectId != worktree.projectId {
                         self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
                     }
@@ -6983,7 +7001,13 @@ final class AppState {
                 guard let self else { return }
                 self.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
                 if BinaryFileType.isKnownBinary(relativePath: url.path) {
-                    _ = self.tabs.openBinaryPreview(worktreeId: worktree.id, relativePath: url.path)
+                    let includesLegacyUnownedProjectTabs = self.legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId
+                    _ = self.tabs.openBinaryPreview(
+                        worktreeId: worktree.id,
+                        projectId: worktree.projectId,
+                        includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs,
+                        relativePath: url.path
+                    )
                     return
                 }
                 _ = self.tabs.openExternalEditor(
@@ -9599,7 +9623,13 @@ final class AppState {
         cleanupTerminals(worktreeId: worktreeId, allTabs: allTabs, tabIds: closed)
         cleanupClosedEditorBuffers(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
         disposeACPManager(for: worktreeId)
-        if purgeRunScriptFailures { tabs.disposeWorkspaceEditHistory(worktreeId: worktreeId) }
+        if purgeRunScriptFailures {
+            // Coordinators are keyed by host (shared paths may be owned by
+            // several projects), so dispose every host bucket for this id.
+            for host in [nil] + projects.compactMap(\.host) {
+                tabs.disposeWorkspaceEditHistory(worktreeId: worktreeId, host: host)
+            }
+        }
         return runHistoryPurgeTask
     }
 
@@ -10112,7 +10142,12 @@ final class AppState {
             return
         }
         if BinaryFileType.isKnownBinary(relativePath: relativePath) {
-            _ = tabs.openBinaryPreview(worktreeId: worktree.id, relativePath: relativePath)
+            _ = tabs.openBinaryPreview(
+                worktreeId: worktree.id,
+                projectId: worktree.projectId,
+                includesLegacyUnownedProjectTabs: legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId,
+                relativePath: relativePath
+            )
             return
         }
 
@@ -15287,7 +15322,8 @@ extension AppState: RemoteSessionsProvider {
             } else {
                 try await Self.preparedCreateWorktreeDestination(
                     repoPath: repoPath,
-                    destination: renderedDestination
+                    destination: renderedDestination,
+                    host: project.host
                 )
             }
             if try await remoteCreationDestinationExists(project: project, destination: destination) {

@@ -208,7 +208,11 @@ struct EditorTabView: View {
                     onTextViewDetached: { detachFindController(from: $0) },
                     onInitialHighlightReady: onStartupRecoveryReady
                 )
-                WorkspaceEditRecoveryView(coordinator: appState.tabs.workspaceEditUndoCoordinator(forWorktreeId: worktreeId, worktreeRoot: worktreePath))
+                WorkspaceEditRecoveryView(coordinator: appState.tabs.workspaceEditUndoCoordinator(
+                    forWorktreeId: worktreeId,
+                    worktreeRoot: worktreePath,
+                    host: projectHost
+                ))
                 EditorNavigationResultsView(
                     store: appState.tabs.navigationStore(forWorktreeId: worktreeId),
                     onOpen: { target in

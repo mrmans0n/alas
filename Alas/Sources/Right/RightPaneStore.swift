@@ -209,7 +209,7 @@ final class RightPaneStore {
             new.isAwaitingBaseBranchProbe = shouldDeferInitialRefresh
             new.closeDiffTabs = { [weak self] paths in
                 guard let app = self?.appState else { return }
-                app.tabs.closeDiffTabs(worktreeId: id, relativePaths: paths)
+                app.tabs.closeDiffTabs(worktreeId: id, projectId: worktree.projectId, relativePaths: paths)
             }
             new.openConflict = { [weak self] path in
                 guard let app = self?.appState,
@@ -224,7 +224,7 @@ final class RightPaneStore {
                     title: title
                 )
                 app.activateWorktreeCenterTab(worktreeId: id, tabId: tab.id)
-                app.acknowledgeAttentionSurface(worktreeID: id, target: .conflicts(path: path))
+                app.acknowledgeAttentionSurface(worktreeID: id, projectId: worktree.projectId, target: .conflicts(path: path))
             }
             new.ggContextProvider = { [weak self] branch in
                 guard let app = self?.appState,

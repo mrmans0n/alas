@@ -210,7 +210,11 @@ final class RenameFeature {
 
     func makePreviewModel(plan: WorkspaceEditPlan, context: EditorRequestContext,
                           reportOutcome: Bool = false) -> WorkspaceEditPreviewModel {
-        let coordinator = tabs.workspaceEditUndoCoordinator(forWorktreeId: context.document.worktreeID, worktreeRoot: root)
+        let coordinator = tabs.workspaceEditUndoCoordinator(
+            forWorktreeId: context.document.worktreeID,
+            worktreeRoot: root,
+            host: context.document.host
+        )
         let notifications = textView?.notificationStore
         return WorkspaceEditPreviewModel(plan: plan) { [isCurrent] plan in
             let outcome: WorkspaceEditOutcome

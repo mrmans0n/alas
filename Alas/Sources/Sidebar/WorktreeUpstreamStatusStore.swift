@@ -6,14 +6,14 @@ import Observation
 final class WorktreeUpstreamStatusStore {
     nonisolated static let defaultFetchInterval: TimeInterval = 5 * 60
 
-    private(set) var statuses: [String: WorktreeUpstreamStatus] = [:]
+    private(set) var statuses: [WorktreeStatusKey: WorktreeUpstreamStatus] = [:]
 
     @ObservationIgnored private let git = GitService()
-    @ObservationIgnored private var refreshGenerationByWorktreeID: [String: Int] = [:]
+    @ObservationIgnored private var refreshGenerationByKey: [WorktreeStatusKey: Int] = [:]
     @ObservationIgnored private var lastFetchAtByTarget: [String: Date] = [:]
 
-    func status(for worktreeID: String) -> WorktreeUpstreamStatus? {
-        statuses[worktreeID]
+    func status(for worktreeID: String, projectId: String) -> WorktreeUpstreamStatus? {
+        statuses[WorktreeStatusKey(projectId: projectId, worktreeId: worktreeID)]
     }
 
     nonisolated static func fetchInterval(fetchIntervalMinutes: Int) -> TimeInterval {
@@ -31,42 +31,61 @@ final class WorktreeUpstreamStatusStore {
         return now.timeIntervalSince(lastFetchAt) >= minFetchInterval
     }
 
+    struct WorktreeStatusKey: Hashable, Sendable {
+        let projectId: String
+        let worktreeId: String
+
+        init(projectId: String, worktreeId: String) {
+            self.projectId = projectId
+            self.worktreeId = worktreeId
+        }
+
+        init(_ worktree: Worktree) {
+            self.init(projectId: worktree.projectId, worktreeId: worktree.id)
+        }
+    }
+
     func refresh(
         worktrees: [Worktree],
         allowFetch: Bool = false,
         minFetchInterval: TimeInterval = WorktreeUpstreamStatusStore.defaultFetchInterval
     ) async {
-        var generations: [String: Int] = [:]
+        var generations: [WorktreeStatusKey: Int] = [:]
         for worktree in worktrees {
-            let generation = (refreshGenerationByWorktreeID[worktree.id] ?? 0) + 1
-            refreshGenerationByWorktreeID[worktree.id] = generation
-            generations[worktree.id] = generation
+            let key = WorktreeStatusKey(worktree)
+            let generation = (refreshGenerationByKey[key] ?? 0) + 1
+            refreshGenerationByKey[key] = generation
+            generations[key] = generation
         }
         for worktree in worktrees {
-            guard let generation = generations[worktree.id] else { continue }
+            let key = WorktreeStatusKey(worktree)
+            let host = git.remoteHost(forWorktreePath: worktree.path)
+            let scoped = host == nil ? git : git.scoped(to: .project(host))
+            guard let generation = generations[key] else { continue }
             do {
-                if let upstream = try await git.resolveUpstreamRef(worktreePath: worktree.path) {
+                if let upstream = try await scoped.resolveUpstreamRef(worktreePath: worktree.path) {
                     await fetchUpstreamIfNeeded(
                         upstream,
                         for: worktree,
+                        scoped: scoped,
                         allowFetch: allowFetch,
                         minFetchInterval: minFetchInterval
                     )
                 }
-                guard let divergence = try await git.upstreamDivergence(worktreePath: worktree.path) else {
-                    guard generation == refreshGenerationByWorktreeID[worktree.id] else { continue }
-                    statuses[worktree.id] = nil
+                guard let divergence = try await scoped.upstreamDivergence(worktreePath: worktree.path) else {
+                    guard generation == refreshGenerationByKey[key] else { continue }
+                    statuses[key] = nil
                     continue
                 }
-                guard generation == refreshGenerationByWorktreeID[worktree.id] else { continue }
-                statuses[worktree.id] = WorktreeUpstreamStatus(
+                guard generation == refreshGenerationByKey[key] else { continue }
+                statuses[key] = WorktreeUpstreamStatus(
                     ahead: divergence.ahead,
                     behind: divergence.behind,
                     upstreamRef: divergence.upstreamRef
                 )
             } catch {
-                guard generation == refreshGenerationByWorktreeID[worktree.id] else { continue }
-                statuses[worktree.id] = nil
+                guard generation == refreshGenerationByKey[key] else { continue }
+                statuses[key] = nil
             }
         }
     }
@@ -74,11 +93,12 @@ final class WorktreeUpstreamStatusStore {
     private func fetchUpstreamIfNeeded(
         _ upstream: (remote: String, ref: String),
         for worktree: Worktree,
+        scoped: GitService,
         allowFetch: Bool,
         minFetchInterval: TimeInterval
     ) async {
         let branch = String(upstream.ref.dropFirst(upstream.remote.count + 1))
-        let target = "\(worktree.id)\u{0}\(upstream.remote)\u{0}\(branch)"
+        let target = "\(worktree.projectId)\u{0}\(worktree.id)\u{0}\(upstream.remote)\u{0}\(branch)"
         let now = Date()
         guard Self.shouldFetchUpstream(
             autoFetch: allowFetch,
@@ -87,6 +107,6 @@ final class WorktreeUpstreamStatusStore {
             minFetchInterval: minFetchInterval
         ) else { return }
         lastFetchAtByTarget[target] = now
-        let _ = try? await git.fetchRef(worktreePath: worktree.path, remote: upstream.remote, branch: branch)
+        let _ = try? await scoped.fetchRef(worktreePath: worktree.path, remote: upstream.remote, branch: branch)
     }
 }

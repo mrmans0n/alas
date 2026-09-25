@@ -122,7 +122,7 @@ struct ChangesTabView: View {
                     canOpenAgentHandoff: rps.canOpenReviewLoopHandoff(appState: appState),
                     onAction: { action in rps.handleReviewReadinessAction(action, appState: appState) },
                     onRevealReviewRequest: { number in
-                        appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, target: .reviewRequest(number: number))
+                        appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, projectId: rps.worktree.projectId, target: .reviewRequest(number: number))
                     }
                 )
             }
@@ -325,7 +325,7 @@ struct ChangesTabView: View {
                     onAbort: { rps.abortOperation() }
                 )
                 .simultaneousGesture(TapGesture().onEnded {
-                    appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, target: .gitOperation)
+                    appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, projectId: rps.worktree.projectId, target: .gitOperation)
                 })
             })
         }
@@ -369,7 +369,7 @@ struct ChangesTabView: View {
                     }
                 )
                 .simultaneousGesture(TapGesture().onEnded {
-                    appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, target: .conflicts(path: nil))
+                    appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, projectId: rps.worktree.projectId, target: .conflicts(path: nil))
                 })
             })
         }

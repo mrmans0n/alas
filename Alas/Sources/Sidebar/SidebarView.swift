@@ -62,7 +62,7 @@ struct SidebarView: View {
                                     ),
                                     selectedWorktreeId: state.selectedWorktreeId,
                                     isMain: { wt in state.projectsManager.isMain(wt, in: project) },
-                                    upstreamStatus: { wt in state.worktreeUpstreamStatusStore.status(for: wt.id) },
+                                    upstreamStatus: { wt in state.worktreeUpstreamStatusStore.status(for: wt.id, projectId: wt.projectId) },
                                     workspaceCheckout: { wt in
                                         WorkspaceCheckoutWorktreeResolver.presentation(
                                             for: wt,
@@ -218,6 +218,7 @@ struct SidebarView: View {
                                             branch: wt.branch,
                                             baseBranch: override ?? state.config.worktrees.baseBranch,
                                             preferLocal: override != nil,
+                                            host: project.host,
                                             revision: state.revisionChangeGeneration(worktreeID: wt.id)
                                         )
                                     }

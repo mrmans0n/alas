@@ -68,4 +68,56 @@ struct WorktreeUpstreamStatusTests {
             minFetchInterval: 60
         ))
     }
+
+    /// Two projects may expose the same worktree id; status stored under a
+    /// bare worktree id would leak one project's ahead/behind into the other.
+    @MainActor
+    @Test func statusLookupIsScopedByProject() async throws {
+        func makeRepo(name: String) async throws -> URL {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("alas-upstream-\(name)-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            _ = try await Process.git(["init", "-q", "-b", "main"], cwd: dir)
+            _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: dir)
+            return dir
+        }
+        let repo = try await makeRepo(name: "keyed")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "ahead"], cwd: repo)
+        // A real remote-tracking ref: `set-upstream-to` requires origin to
+        // exist as a remote, not just a bare refs/remotes entry.
+        _ = try await Process.git(["remote", "add", "origin", "."], cwd: repo)
+        _ = try await Process.git(["fetch", "-q", "origin"], cwd: repo)
+        _ = try await Process.git(["branch", "--set-upstream-to=origin/main", "feature"], cwd: repo)
+
+        let store = WorktreeUpstreamStatusStore()
+        let path = URL(fileURLWithPath: repo.path)
+        await store.refresh(worktrees: [
+            Worktree(
+                id: "shared-worktree",
+                projectId: "project-a",
+                name: "shared",
+                branch: "feature",
+                path: path,
+                status: .clean,
+                lastActivity: .distantPast
+            ),
+            Worktree(
+                id: "shared-worktree",
+                projectId: "project-b",
+                name: "shared",
+                branch: "feature",
+                path: path,
+                status: .clean,
+                lastActivity: .distantPast
+            ),
+        ])
+
+        #expect(store.status(for: "shared-worktree", projectId: "project-a")?.ahead == 1)
+        #expect(store.status(for: "shared-worktree", projectId: "project-b")?.ahead == 1)
+        // A distinct project id never resolves another project's entry even
+        // when the worktree id is identical.
+        #expect(store.status(for: "shared-worktree", projectId: "project-c") == nil)
+    }
 }

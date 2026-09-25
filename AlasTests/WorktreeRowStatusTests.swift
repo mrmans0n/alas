@@ -103,6 +103,7 @@ struct WorktreeRowStatusTests {
             branch: "feature",
             baseBranch: "main",
             preferLocal: false,
+            host: nil,
             revision: 1
         )
         let bumped = WorktreeRowView.CommitQuery(
@@ -110,6 +111,7 @@ struct WorktreeRowStatusTests {
             branch: base.branch,
             baseBranch: base.baseBranch,
             preferLocal: base.preferLocal,
+            host: base.host,
             revision: 2
         )
         // A revision bump alone — e.g. an unrelated ref change elsewhere in
@@ -122,9 +124,21 @@ struct WorktreeRowStatusTests {
             branch: "other",
             baseBranch: base.baseBranch,
             preferLocal: base.preferLocal,
+            host: base.host,
             revision: 1
         )
         #expect(base.identity != differentBranch.identity)
+
+        // Same path on a different host is a different count source.
+        let differentHost = WorktreeRowView.CommitQuery(
+            path: base.path,
+            branch: base.branch,
+            baseBranch: base.baseBranch,
+            preferLocal: base.preferLocal,
+            host: "remote.test",
+            revision: base.revision
+        )
+        #expect(base.identity != differentHost.identity)
     }
 
     @Test func zeroCommitsAreNotVisible() {

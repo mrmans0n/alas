@@ -173,6 +173,26 @@ struct TabsManagerTests {
         #expect(mgr.activeTabId(forWorktree: worktreeId) == other.id)
     }
 
+    /// After a discard in project A, the bulk close must not close project
+    /// B's diff tab for the same relative path in the shared worktree bucket.
+    @Test func closingDiffTabsIsScopedToTheProject() {
+        let worktreeId = "tabs-manager-closing-diff-tabs-project"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let diffA = mgr.appendDiff(worktreeId: worktreeId, projectId: "project-a", title: "Shared.swift", relativePath: "Shared.swift")
+        let diffB = mgr.appendDiff(worktreeId: worktreeId, projectId: "project-b", title: "Shared.swift", relativePath: "Shared.swift")
+
+        let closed = mgr.closeDiffTabs(worktreeId: worktreeId, projectId: "project-a", relativePaths: ["Shared.swift"])
+
+        #expect(closed == [diffA.id])
+        #expect(mgr.tabs(forWorktree: worktreeId).map(\.id) == [diffB.id])
+
+        // Legacy unowned (nil) tabs stay reachable from any project owner.
+        let legacy = mgr.appendDiff(worktreeId: worktreeId, title: "Legacy.swift", relativePath: "Legacy.swift")
+        let closedLegacy = mgr.closeDiffTabs(worktreeId: worktreeId, projectId: "project-b", relativePaths: ["Legacy.swift"])
+        #expect(closedLegacy == [legacy.id])
+    }
+
     @Test func activatingTabNumberUsesOneBasedWorktreeLocalOrder() {
         let worktreeId = "tabs-manager-activate-tab-number"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

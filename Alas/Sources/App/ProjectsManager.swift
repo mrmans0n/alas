@@ -599,7 +599,7 @@ final class ProjectsManager {
         } else {
             url = configuredURL
         }
-        let trees = try await worktreeSvc.list(repoPath: url, projectId: projectId)
+        let trees = try await worktreeSvc.list(repoPath: url, projectId: projectId, host: project.host)
         let anchorChanged = url.standardizedFileURL != configuredURL.standardizedFileURL
 
         // Reconcile optimistic rows: preserve creating rows until the owner

@@ -48,7 +48,7 @@ final class TabsManager {
     /// Runtime navigation state belongs to the worktree rather than an editor
     /// view, so a reference search survives tab switches and view recreation.
     private var navigationStores: [String: EditorNavigationStore] = [:]
-    @ObservationIgnored private var workspaceUndoCoordinators: [String: WorkspaceEditUndoCoordinator] = [:]
+    @ObservationIgnored private var workspaceUndoCoordinators: [WorkspaceUndoKey: WorkspaceEditUndoCoordinator] = [:]
     /// `true` once `loadAll` has been called at least once, meaning any
     /// persisted tabs have been read from disk. Views use this to
     /// distinguish "no tabs yet (still loading)" from "genuinely empty".
@@ -149,6 +149,8 @@ final class TabsManager {
             report.projectId == projectId || (includesLegacyUnownedProjectTabs && report.projectId == nil)
         case .imagePreview(let preview):
             preview.projectId == projectId || (includesLegacyUnownedProjectTabs && preview.projectId == nil)
+        case .binaryPreview(let preview):
+            preview.projectId == projectId || (includesLegacyUnownedProjectTabs && preview.projectId == nil)
         case .ggInbox(let inbox):
             inbox.projectId == projectId
         case .ggLanding(let landing):
@@ -191,19 +193,33 @@ final class TabsManager {
         return store
     }
 
-    func workspaceEditUndoCoordinator(forWorktreeId worktreeId: String, worktreeRoot: URL) -> WorkspaceEditUndoCoordinator {
-        if let coordinator = workspaceUndoCoordinators[worktreeId] { return coordinator }
-        let access = TabsWorkspaceEditUndoAccess(tabs: self, worktreeID: worktreeId, root: worktreeRoot)
+    /// Workspace-edit coordinators are keyed by the buffer's host plus the
+    /// worktree id: two projects may expose the same path on different SSH
+    /// hosts, and recovery state must never cross between them.
+    private struct WorkspaceUndoKey: Hashable {
+        let host: String?
+        let worktreeId: String
+    }
+
+    func workspaceEditUndoCoordinator(
+        forWorktreeId worktreeId: String,
+        worktreeRoot: URL,
+        host: String? = nil
+    ) -> WorkspaceEditUndoCoordinator {
+        let key = WorkspaceUndoKey(host: host, worktreeId: worktreeId)
+        if let coordinator = workspaceUndoCoordinators[key] { return coordinator }
+        let access = TabsWorkspaceEditUndoAccess(tabs: self, worktreeID: worktreeId, root: worktreeRoot, host: host)
         let coordinator = WorkspaceEditUndoCoordinator(access: access, journal: workspaceEditJournal) { [weak self] document in
             self?.workspaceEditBuffer(for: document)
         }
-        workspaceUndoCoordinators[worktreeId] = coordinator
+        workspaceUndoCoordinators[key] = coordinator
         return coordinator
     }
 
-    func disposeWorkspaceEditHistory(worktreeId: String) {
-        workspaceUndoCoordinators[worktreeId]?.disposeHistory()
-        if workspaceUndoCoordinators[worktreeId]?.retainedJournalIDs.isEmpty == true { workspaceUndoCoordinators.removeValue(forKey: worktreeId) }
+    func disposeWorkspaceEditHistory(worktreeId: String, host: String? = nil) {
+        let key = WorkspaceUndoKey(host: host, worktreeId: worktreeId)
+        workspaceUndoCoordinators[key]?.disposeHistory()
+        if workspaceUndoCoordinators[key]?.retainedJournalIDs.isEmpty == true { workspaceUndoCoordinators.removeValue(forKey: key) }
         navigationStores.removeValue(forKey: worktreeId)?.close()
     }
 
@@ -2138,10 +2154,20 @@ final class TabsManager {
     /// Used for files whose extension is in `BinaryFileType.knownBinaryExtensions`,
     /// so they skip a wasted text-load attempt in the editor.
     @discardableResult
-    func openBinaryPreview(worktreeId: String, relativePath: String) -> Tab {
+    func openBinaryPreview(
+        worktreeId: String,
+        projectId: String? = nil,
+        includesLegacyUnownedProjectTabs: Bool = false,
+        relativePath: String
+    ) -> Tab {
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: {
-               if case .binaryPreview(let s) = $0 { return s.relativePath == relativePath }
+               if case .binaryPreview(let s) = $0 {
+                   return s.relativePath == relativePath
+                       && (projectId == nil
+                           ? s.projectId == nil
+                           : s.projectId == projectId || (includesLegacyUnownedProjectTabs && s.projectId == nil))
+               }
                return false
            }) {
             if case .binaryPreview(let s) = file.tabs[idx] {
@@ -2153,7 +2179,12 @@ final class TabsManager {
         }
 
         let title = (relativePath as NSString).lastPathComponent
-        let state = BinaryPreviewTabState(id: UUID().uuidString, title: title, relativePath: relativePath)
+        let state = BinaryPreviewTabState(
+            id: UUID().uuidString,
+            title: title,
+            relativePath: relativePath,
+            projectId: projectId
+        )
         let tab = Tab.binaryPreview(state)
         append(tab, to: worktreeId)
         return tab
@@ -2386,11 +2417,20 @@ final class TabsManager {
     }
 
     @discardableResult
-    func closeDiffTabs(worktreeId: String, relativePaths: some Sequence<String>) -> [TabID] {
+    func closeDiffTabs(
+        worktreeId: String,
+        projectId: String? = nil,
+        relativePaths: some Sequence<String>
+    ) -> [TabID] {
         let pathSet = Set(relativePaths)
         guard !pathSet.isEmpty else { return [] }
         let tabIds = tabs(forWorktree: worktreeId).compactMap { tab -> TabID? in
             guard case .diff(let state) = tab, pathSet.contains(state.relativePath) else { return nil }
+            guard let projectId else { return state.id }
+            guard state.projectId == projectId else {
+                // Only legacy unowned (nil) tabs may be adopted by any project.
+                return state.projectId == nil ? state.id : nil
+            }
             return state.id
         }
         for tabId in tabIds {
@@ -2733,7 +2773,8 @@ final class TabsManager {
         let document = EditorDocumentID(host: buffer.workspaceEditHost, worktreeID: worktreeId,
                                         uri: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI)
         guard workspaceEditBuffer(for: document) === buffer else { return }
-        workspaceUndoCoordinators[worktreeId]?.reattachCleanBuffer(buffer, document: document)
+        workspaceUndoCoordinators[WorkspaceUndoKey(host: buffer.workspaceEditHost, worktreeId: worktreeId)]?
+            .reattachCleanBuffer(buffer, document: document)
     }
 
     /// Returns (or creates) a read-only external buffer keyed by absolute URL.
@@ -3034,7 +3075,9 @@ final class TabsManager {
                 absoluteURL: ext.url,
                 hostResolution: ext.hostResolution
             ) {
-                workspaceUndoCoordinators[ext.worktreeId]?.bufferWillClose(buffer)
+                workspaceUndoCoordinators[
+                    WorkspaceUndoKey(host: ext.hostResolution.remoteHost(forPath: ext.url.path), worktreeId: ext.worktreeId)
+                ]?.bufferWillClose(buffer)
             }
             bufferStore.discardExternalBuffer(
                 worktreeId: ext.worktreeId,
@@ -3061,7 +3104,8 @@ final class TabsManager {
         if buffers[key] === buffer {
             buffers.removeValue(forKey: key)
         }
-        workspaceUndoCoordinators[worktreeId]?.bufferWillClose(buffer)
+        workspaceUndoCoordinators[WorkspaceUndoKey(host: buffer.workspaceEditHost, worktreeId: worktreeId)]?
+            .bufferWillClose(buffer)
         buffer.close(persistDirtySnapshot: false)
     }
 

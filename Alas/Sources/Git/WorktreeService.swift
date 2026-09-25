@@ -26,10 +26,10 @@ struct WorktreeService {
     }
 
     /// Parse `git worktree list --porcelain` into Worktree records.
-    func list(repoPath: URL, projectId: String) async throws -> [Worktree] {
+    func list(repoPath: URL, projectId: String, host: String? = nil) async throws -> [Worktree] {
         let result = try await Process.git(["worktree", "list", "--porcelain"], cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
-        let host = RemoteHostRegistry.shared.host(forPath: repoPath.path)
+        let host = host ?? RemoteHostRegistry.shared.host(forPath: repoPath.path)
         let absentLockedPaths = if let host {
             await Self.absentRemoteLockedPaths(in: result.stdout, host: host)
         } else {
@@ -377,7 +377,8 @@ struct WorktreeService {
         base: String,
         branch: String,
         destination: URL,
-        projectId: String
+        projectId: String,
+        host explicitHost: String? = nil
     ) async throws -> Worktree {
         switch GitNameValidator.validateBranchName(branch) {
         case .valid:
@@ -385,19 +386,24 @@ struct WorktreeService {
         case .invalid(let message):
             throw WorktreeError.gitFailed("Invalid branch name: \(message)")
         }
+        let host = explicitHost ?? RemoteHostRegistry.shared.host(forPath: repoPath.path)
         let refCheck = try await Process.git(
             ["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"],
-            cwd: repoPath
+            cwd: repoPath,
+            remoteHost: host,
+            usesRemoteHostRegistry: false
         )
         let branchExists = refCheck.exitCode == 0
         var staleRegistration: StaleWorktreeRegistration?
         if let registration = try? await Process.git(
                ["worktree", "list", "--porcelain"],
-               cwd: repoPath
+               cwd: repoPath,
+               remoteHost: host,
+               usesRemoteHostRegistry: false
            ),
            registration.exitCode == 0 {
             let lockedDestinationIsMissing: Bool
-            if let host = RemoteHostRegistry.shared.host(forPath: repoPath.path) {
+            if let host {
                 lockedDestinationIsMissing = await RemoteFileAccess.existence(
                     host: host,
                     path: destination.path
@@ -415,7 +421,9 @@ struct WorktreeService {
         if staleRegistration == .locked {
             let unlock = try await Process.git(
                 ["worktree", "unlock", destination.path],
-                cwd: repoPath
+                cwd: repoPath,
+                remoteHost: host,
+                usesRemoteHostRegistry: false
             )
             guard unlock.exitCode == 0 else {
                 throw WorktreeError.gitFailed(unlock.stderr)
@@ -424,7 +432,9 @@ struct WorktreeService {
         if staleRegistration != nil {
             let removal = try await Process.git(
                 ["worktree", "remove", destination.path],
-                cwd: repoPath
+                cwd: repoPath,
+                remoteHost: host,
+                usesRemoteHostRegistry: false
             )
             guard removal.exitCode == 0 else {
                 throw WorktreeError.gitFailed(removal.stderr)
@@ -438,9 +448,9 @@ struct WorktreeService {
             args = ["worktree", "add", destination.path, "-b", branch, base]
         }
 
-        let result = try await Process.git(args, cwd: repoPath)
+        let result = try await Process.git(args, cwd: repoPath, remoteHost: host, usesRemoteHostRegistry: false)
         if result.exitCode == 0 {
-            return makeWorktree(destination: destination, branch: branch, projectId: projectId)
+            return makeWorktree(destination: destination, branch: branch, projectId: projectId, host: host)
         }
 
         guard Self.looksLikeMissingLFS(result.stderr) else {
@@ -451,14 +461,16 @@ struct WorktreeService {
         // post-checkout hook rather than the checkout itself (e.g. LFS hook
         // detecting missing git-lfs after files are already checked out).
         if let existing = try await existingWorktree(
-            repoPath: repoPath, destination: destination, projectId: projectId
+            repoPath: repoPath, destination: destination, projectId: projectId, host: host
         ) {
             return existing
         }
 
         let recheck = try await Process.git(
             ["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"],
-            cwd: repoPath
+            cwd: repoPath,
+            remoteHost: host,
+            usesRemoteHostRegistry: false
         )
         let branchNowExists = recheck.exitCode == 0
 
@@ -471,14 +483,12 @@ struct WorktreeService {
 
         let fallbackResult = try await Process.git(
             Self.lfsFilterOverride + ["-c", "core.hooksPath=/dev/null"] + fallbackArgs,
-            cwd: repoPath
+            cwd: repoPath,
+            remoteHost: host,
+            usesRemoteHostRegistry: false
         )
         guard fallbackResult.exitCode == 0 else { throw WorktreeError.gitFailed(fallbackResult.stderr) }
-        var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
-        if !repoPath.isRemoteAlasPath {
-            worktree.lineageID = Self.localLineageID(forWorktreeAt: destination)
-        }
-        return worktree
+        return makeWorktree(destination: destination, branch: branch, projectId: projectId, host: host)
     }
 
     /// Prepares exactly the branch state recorded by Workspace preflight.
@@ -655,7 +665,7 @@ struct WorktreeService {
             }
             throw WorktreeError.gitFailed("Frozen Workspace worktree '\(destination.path)' checked out the wrong commit.")
         }
-        var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
+        var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId, host: nil)
         if let host = pinnedRemoteHost {
             let lineage: ProcessResult
             do {
@@ -1927,15 +1937,25 @@ struct WorktreeService {
     private func existingWorktree(
         repoPath: URL,
         destination: URL,
-        projectId: String
+        projectId: String,
+        host: String?
     ) async throws -> Worktree? {
-        let listed = try await list(repoPath: repoPath, projectId: projectId)
+        let listed = try await list(repoPath: repoPath, projectId: projectId, host: host)
         let normalizedDest = destination.standardizedFileURL.path
         return listed.first { $0.path.standardizedFileURL.path == normalizedDest }
     }
 
-    private func makeWorktree(destination: URL, branch: String, projectId: String) -> Worktree {
+    private func makeWorktree(
+        destination: URL,
+        branch: String,
+        projectId: String,
+        host: String?
+    ) -> Worktree {
         let now = Date()
+        var lineageID: String?
+        if host == nil {
+            lineageID = Self.localLineageID(forWorktreeAt: destination)
+        }
         return Worktree(
             id: Worktree.makeId(path: destination),
             projectId: projectId,
@@ -1945,7 +1965,8 @@ struct WorktreeService {
             isMainWorktree: false,
             status: .clean,
             lastActivity: now,
-            createdAt: now
+            createdAt: now,
+            lineageID: lineageID
         )
     }
 }

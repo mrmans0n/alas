@@ -204,6 +204,7 @@ struct WorktreeRowView: View {
         let branch: String
         let baseBranch: String
         let preferLocal: Bool
+        let host: String?
         let revision: Int
 
         /// What's actually being counted, excluding `revision`. A revision
@@ -215,10 +216,11 @@ struct WorktreeRowView: View {
             let branch: String
             let baseBranch: String
             let preferLocal: Bool
+            let host: String?
         }
 
         var identity: Identity {
-            Identity(path: path, branch: branch, baseBranch: baseBranch, preferLocal: preferLocal)
+            Identity(path: path, branch: branch, baseBranch: baseBranch, preferLocal: preferLocal, host: host)
         }
     }
 
@@ -370,7 +372,7 @@ struct WorktreeRowView: View {
             }
             // Coalesce bursts of ref updates before launching Git.
             do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
-            let summary = try? await GitService().branchCommitCount(
+            let summary = try? await GitService(hostResolution: .project(query.host)).branchCommitCount(
                 worktreePath: query.path,
                 baseBranch: query.baseBranch,
                 preferLocal: query.preferLocal

@@ -520,9 +520,14 @@ extension AppState {
     }
 
     /// Called by explicit surface interactions, never by producer refreshes.
-    func acknowledgeAttentionSurface(worktreeID: String, target: AttentionJumpTarget) {
+    /// `projectId` scopes the acknowledgment to the resolved worktree of one
+    /// project: two projects may share a worktree id, and acknowledging in
+    /// one must not dismiss the other's unseen alerts. Nil keeps the legacy
+    /// id-only behavior for unqualified callers.
+    func acknowledgeAttentionSurface(worktreeID: String, projectId: String? = nil, target: AttentionJumpTarget) {
         guard !isAttentionInboxOpen, attentionNavigationDepth == 0 else { return }
-        for item in currentAttentionItems where item.worktree?.id == worktreeID {
+        for item in currentAttentionItems
+        where item.worktree?.id == worktreeID && (projectId == nil || item.owner.projectID == projectId) {
             if attentionItem(item, matches: target) { attentionStore.acknowledge(eventID: item.eventID, at: Date()) }
         }
     }
@@ -594,7 +599,7 @@ extension AppState {
         if case .workspaceCheckout = owner {
             acknowledgeAttentionTarget(target)
         } else {
-            acknowledgeAttentionSurface(worktreeID: worktreeID, target: target)
+            acknowledgeAttentionSurface(worktreeID: worktreeID, projectId: owner.projectID, target: target)
         }
     }
 

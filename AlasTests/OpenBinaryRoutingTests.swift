@@ -45,6 +45,21 @@ struct OpenBinaryRoutingTests {
         #expect(active == clipTab?.id)
     }
 
+    /// Same-path projects must not reuse or see each other's binary previews.
+    @Test func openBinaryPreviewKeepsProjectOwnersSeparate() {
+        let mgr = TabsManager()
+        let wid = "wt-shared"
+        let a = mgr.openBinaryPreview(worktreeId: wid, projectId: "project-a", relativePath: "clip.mp4")
+        let b = mgr.openBinaryPreview(worktreeId: wid, projectId: "project-b", relativePath: "clip.mp4")
+        #expect(a.id != b.id)
+        #expect(mgr.tabs(forWorktree: wid, projectId: "project-a").count == 1)
+        #expect(mgr.tabs(forWorktree: wid, projectId: "project-b").count == 1)
+        // Re-opening for the same project focuses the existing tab.
+        let focused = mgr.openBinaryPreview(worktreeId: wid, projectId: "project-a", relativePath: "clip.mp4")
+        #expect(focused.id == a.id)
+        #expect(mgr.tabs(forWorktree: wid).filter { if case .binaryPreview = $0 { return true } else { return false } }.count == 2)
+    }
+
     @Test func openFileRoutesKnownBinaryToBinaryPreview() async throws {
         let repo = try await makeRepo(name: "route-binary")
         defer { try? FileManager.default.removeItem(at: repo) }

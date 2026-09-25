@@ -672,7 +672,7 @@ extension AppState {
     func openRunReport(worktreeID: String, projectId: String? = nil, runID: String) {
         let tab = tabs.openOrFocusRunReport(worktreeId: worktreeID, projectId: projectId, runID: runID)
         activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
-        acknowledgeAttentionSurface(worktreeID: worktreeID, target: .runScriptFailure(failureID: runID))
+        acknowledgeAttentionSurface(worktreeID: worktreeID, projectId: projectId, target: .runScriptFailure(failureID: runID))
     }
 
     func openTransientRunReport(_ entry: RunHistoryEntry) {
@@ -685,7 +685,7 @@ extension AppState {
             isTransient: true
         )
         activateWorktreeCenterTab(worktreeId: entry.worktreeID, tabId: tab.id)
-        acknowledgeAttentionSurface(worktreeID: entry.worktreeID, target: .runScriptFailure(failureID: entry.id))
+        acknowledgeAttentionSurface(worktreeID: entry.worktreeID, projectId: entry.projectId, target: .runScriptFailure(failureID: entry.id))
     }
 
     func transientRunReport(worktreeID: String, projectId: String? = nil, runID: String) -> RunHistoryEntry? {

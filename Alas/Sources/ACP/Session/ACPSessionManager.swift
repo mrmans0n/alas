@@ -6905,6 +6905,13 @@ extension ACPSessionManager {
         remoteHost ?? (usesRemoteHostRegistry ? RemoteHostRegistry.shared.host(forPath: worktreePath) : nil)
     }
 
+    /// Host the adapter setup/update banners and installs must target.
+    /// Mirrors the host the session itself launches against so a shared
+    /// path never routes adapter work through another project's registry.
+    var adapterHost: String? {
+        effectiveRemoteHost()
+    }
+
     private func evaluateSetup(for spec: ACPLaunchSpec) async -> ACPSetupResult {
         guard let host = effectiveRemoteHost() else {
             return await setupEvaluator(spec)

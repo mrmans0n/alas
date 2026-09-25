@@ -426,6 +426,22 @@ struct WorkspaceEditUndoTests {
         #expect(!reopened.undoManager.canUndo)
     }
 
+    /// Two projects may expose the same worktree id on different SSH hosts.
+    /// Recovery state created under one host's coordinator must never be
+    /// displayed or executed from the other host's editor.
+    @Test func undoCoordinatorsAreScopedByHost() async throws {
+        let f = try await UndoFixture()
+        defer { f.remove() }
+        let local = f.tabs.workspaceEditUndoCoordinator(forWorktreeId: "w", worktreeRoot: f.root)
+        let remoteA = f.tabs.workspaceEditUndoCoordinator(forWorktreeId: "w", worktreeRoot: f.root, host: "remote-a.test")
+        let remoteB = f.tabs.workspaceEditUndoCoordinator(forWorktreeId: "w", worktreeRoot: f.root, host: "remote-b.test")
+        #expect(local !== remoteA)
+        #expect(remoteA !== remoteB)
+        #expect(f.tabs.workspaceEditUndoCoordinator(forWorktreeId: "w", worktreeRoot: f.root, host: "remote-a.test") === remoteA)
+        // Legacy nil-host lookups still return the shared local coordinator.
+        #expect(f.tabs.workspaceEditUndoCoordinator(forWorktreeId: "w", worktreeRoot: f.root) === local)
+    }
+
     @Test func workspaceUndoWaitsForLaterTypingAndChangesUnopenedDisk() async throws {
         let f = try await UndoFixture()
         defer { f.remove() }

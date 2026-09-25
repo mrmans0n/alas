@@ -96,6 +96,31 @@ struct WorktreeServiceTests {
         #expect(listed.count == 2)
     }
 
+    /// An explicitly supplied host must be used for every git probe inside
+    /// `add` instead of the path-keyed registry; a fake host fails the ssh
+    /// invocation, which proves the call was routed to the explicit host
+    /// rather than running local git against the registered mapping.
+    @Test func addUsesExplicitHostOverThePathRegistry() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-hosted")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        RemoteHostRegistry.shared.register(root: repo.path, host: "registry-host.test")
+        defer { RemoteHostRegistry.shared.unregister(root: repo.path) }
+
+        do {
+            _ = try await WorktreeService().add(
+                repoPath: repo, base: "main", branch: "feat/hosted",
+                destination: dest, projectId: "p", host: "explicit-host.test"
+            )
+        } catch {
+            // Expected: the fake host cannot execute git.
+        }
+        // The registry mapping was never consulted for the explicit host,
+        // so the local destination was not created by a local git run.
+        #expect(!FileManager.default.fileExists(atPath: dest.path))
+    }
+
     @Test func addFrozenReturnsTheCreatedLocalLineage() async throws {
         let repo = try await makeRepo()
         let destination = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-frozen")

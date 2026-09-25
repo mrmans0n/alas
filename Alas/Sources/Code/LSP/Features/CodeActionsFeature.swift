@@ -242,7 +242,11 @@ final class CodeActionsFeature {
             let accepted = await presentation.present(model, parent: textView.window, forcePreview: true)
             guard accepted else { return .init(applied: false, failureReason: model.errorMessage ?? "Workspace edit preview cancelled.") }
             guard let operationID = model.appliedOperationID else { return .cancelled }
-            let coordinator = tabs.workspaceEditUndoCoordinator(forWorktreeId: original.document.worktreeID, worktreeRoot: root)
+            let coordinator = tabs.workspaceEditUndoCoordinator(
+                forWorktreeId: original.document.worktreeID,
+                worktreeRoot: root,
+                host: original.document.host
+            )
             let record = try coordinator.journal.record(operationID)
             guard record.status == .applied else { return .cancelled }
             var applied: [EditorDocumentID: WorkspaceFileSnapshot] = [:]

@@ -161,7 +161,11 @@ private struct ACPSessionView: View {
     @StateObject private var composerActions = ACPComposerActions()
 
     private var adapterTarget: ACPAdapterTarget {
-        guard let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) else {
+        // The session's manager is the single source of host truth: it was
+        // created from the owning project (or workspace-checkout location),
+        // so a shared path never routes adapter setup through a foreign
+        // project's registry entry.
+        guard let host = manager.adapterHost else {
             return .local
         }
         return .ssh(host: host)
