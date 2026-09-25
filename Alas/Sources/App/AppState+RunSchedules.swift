@@ -1868,6 +1868,15 @@ extension AppState {
         return otherSessionIDs.isEmpty
     }
 
+    static func scheduledCleanupSessionIsQuiescent(_ session: ACPSession) -> Bool {
+        session.queue.isEmpty
+            && session.composerDraft.isEmpty
+            && session.transcript.streamingState == .idle
+            && session.transcript.pendingPermission == nil
+            && session.transcript.pendingQuestion == nil
+            && session.transcript.pendingUserInputs.isEmpty
+    }
+
     /// Return only the finished scheduled script's sole terminal leaf; split
     /// or unrelated panes remain blockers rather than being closed.
     static func scheduledScriptTerminalForCleanup(
@@ -1983,11 +1992,7 @@ extension AppState {
             )
                 && session.agentState == .ready
                 && session.setupState == .ready
-                && session.queue.isEmpty
-                && session.transcript.streamingState == .idle
-                && session.transcript.pendingPermission == nil
-                && session.transcript.pendingQuestion == nil
-                && session.transcript.pendingUserInputs.isEmpty
+                && Self.scheduledCleanupSessionIsQuiescent(session)
                 && builtInMCPIsRequested
                 && session.builtInMCPRegistration == .registered
                 && registration.completion?.outcome == .succeeded

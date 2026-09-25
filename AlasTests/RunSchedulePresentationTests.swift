@@ -538,6 +538,18 @@ struct RunSchedulePresentationTests {
         #expect(draft.validationError == nil)
     }
 
+    @Test func scriptOnlyScheduleIgnoresDisabledCompositionCleanupPolicy() throws {
+        var draft = RunScheduleDraft(projectID: "project", worktreeID: "origin", isMainWorktree: false)
+        draft.name = "Nightly"
+        draft.scriptKey = "repo:test.sh"
+        draft.createsWorktree = false
+        draft.afterExecution = .reportAndCleanupOnSuccess
+
+        #expect(draft.validationError == nil)
+        let schedule = try #require(draft.makeSchedule())
+        #expect(schedule.composition == nil)
+    }
+
     @Test func scheduledReportHistoryDistinguishesTaskAndCleanupOutcomes() {
         var report = ScheduledAgentReport(
             id: "target-run",

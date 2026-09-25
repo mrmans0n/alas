@@ -178,11 +178,20 @@ struct ZmxClientTests {
     }
 
     @Test
+    func listSessionsIfAvailableDistinguishesSuccessfulEmptyOutput() {
+        let recorder = RecordingRunner()
+        recorder.result = SubprocessRunner.Result(exitCode: 0, stdout: "", stderr: "")
+        let client = ZmxClient(env: env(available: true), runner: recorder.runner())
+        #expect(client.listSessionsIfAvailable() == [])
+    }
+
+    @Test
     func listSessionsReturnsEmptyOnNonZeroExit() {
         let recorder = RecordingRunner()
         recorder.result = SubprocessRunner.Result(exitCode: 1, stdout: "garbage", stderr: "boom")
         let client = ZmxClient(env: env(available: true), runner: recorder.runner())
         #expect(client.listSessions() == [])
+        #expect(client.listSessionsIfAvailable() == nil)
     }
 
     @Test
@@ -191,6 +200,7 @@ struct ZmxClientTests {
         recorder.result = SubprocessRunner.Result(exitCode: nil, stdout: "", stderr: "")
         let client = ZmxClient(env: env(available: true), runner: recorder.runner())
         #expect(client.listSessions() == [])
+        #expect(client.listSessionsIfAvailable() == nil)
     }
 
     @Test
@@ -199,6 +209,7 @@ struct ZmxClientTests {
         let client = ZmxClient(env: env(available: false), runner: recorder.runner())
         #expect(client.listSessions() == [])
         #expect(recorder.calls.isEmpty)
+        #expect(client.listSessionsIfAvailable() == nil)
     }
 
     @Test

@@ -264,6 +264,14 @@ struct AppStateRunScheduleTests {
         ))
     }
 
+    @Test func scheduledCleanupTreatsUnsentComposerDraftAsPendingWork() {
+        let session = ACPSession(id: "scheduled", agentId: "claude", worktreeId: "worktree", title: "Scheduled")
+        #expect(AppState.scheduledCleanupSessionIsQuiescent(session))
+
+        session.replaceComposerDraft(ACPComposerDraft(segments: [.text("Unsent follow-up.")]))
+        #expect(!AppState.scheduledCleanupSessionIsQuiescent(session))
+    }
+
     @Test func scheduledCleanupRecognizesOnlyItsFinishedScriptTerminal() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

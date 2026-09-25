@@ -14,12 +14,13 @@ struct CheckpointWriterLeaseRecord: Codable, Equatable, Sendable {
 
 struct CheckpointWriterLeaseStore: Sendable {
     private let root: URL
-    private let activePersistentSessionNames: @Sendable () -> Set<String>
+    private let activePersistentSessionNames: @Sendable () -> Set<String>?
 
     init(
         root: URL = Paths.checkpointsRoot.appendingPathComponent("writer-leases", isDirectory: true),
-        activePersistentSessionNames: @escaping @Sendable () -> Set<String> = {
-            Set(ZmxClient(env: ZmxEnv.resolve()).listSessions())
+        activePersistentSessionNames: @escaping @Sendable () -> Set<String>? = {
+            guard let names = ZmxClient(env: ZmxEnv.resolve()).listSessionsIfAvailable() else { return nil }
+            return Set(names)
         }
     ) {
         self.root = root
@@ -124,10 +125,11 @@ struct CheckpointWriterLeaseStore: Sendable {
         return count
     }
 
-    private func recordIsActive(_ record: CheckpointWriterLeaseRecord, persistentSessionNames: Set<String>) -> Bool {
+    private func recordIsActive(_ record: CheckpointWriterLeaseRecord, persistentSessionNames: Set<String>?) -> Bool {
         if ACPProcessLiveness.pidMatchesLease(pid: record.pid, createdAt: record.createdAt) { return true }
         guard let zmxSessionName = record.zmxSessionName else { return false }
         if record.remoteHost != nil { return true }
+        guard let persistentSessionNames else { return true }
         return persistentSessionNames.contains(zmxSessionName)
     }
 

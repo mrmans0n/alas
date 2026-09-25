@@ -215,7 +215,7 @@ struct RunScheduleDraft: Equatable {
             if !(0...23).contains(hour) || !(0...59).contains(minute) { return "Enter a valid time." }
             if weekdays.isEmpty { return "Pick at least one weekday." }
         }
-        if afterExecution == .reportAndCleanupOnSuccess {
+        if createsWorktree && afterExecution == .reportAndCleanupOnSuccess {
             guard let agentID else { return "Choose an ACP-capable agent for automatic cleanup." }
             guard let spec = ACPLaunchCatalog.spec(for: agentID) else {
                 return "Automatic cleanup requires an ACP-capable agent."
