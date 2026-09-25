@@ -1933,6 +1933,13 @@ extension AppState {
                 return false
             }
 
+            guard scheduledCleanupHasNoOtherWriterLeases(
+                for: worktree,
+                lineageID: capturedLineageID
+            ) else {
+                return false
+            }
+
             let tabSessionIDs = worktreeCleanupSessionIDs(worktreeId: worktree.id)
             if sessionDisposed {
                 return acpManager(forWorktreeId: worktree.id) == nil && tabSessionIDs.isEmpty

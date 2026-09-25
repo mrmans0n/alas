@@ -1160,14 +1160,21 @@ extension ACPSessionStore {
             token: r["lease_token"] as? String ?? "")
     }
 
-    func activeLeaseCount(now: Int64, staleAfter: Int64) throws -> Int {
+    func activeLeaseCount(
+        now: Int64,
+        staleAfter: Int64,
+        excludingInstanceId: String? = nil
+    ) throws -> Int {
         let staleCutoff = now - staleAfter
         let rows = try db.query("SELECT * FROM session_leases")
         return rows.reduce(into: 0) { count, row in
             let heartbeatAt = (row["heartbeat_at"] as? Int64) ?? 0
-            if heartbeatAt >= staleCutoff {
-                count += 1
+            guard heartbeatAt >= staleCutoff else { return }
+            if let excludingInstanceId,
+               (row["owner_instance"] as? String) == excludingInstanceId {
+                return
             }
+            count += 1
         }
     }
 

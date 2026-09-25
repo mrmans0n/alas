@@ -11663,16 +11663,7 @@ final class AppState {
         var workspaceName: String?
         var repositoryName = projects.first(where: { $0.id == worktree.projectId })?.name ?? worktree.name
 
-        let worktreePath = worktree.path.standardizedFileURL.path
-        let matchingCheckouts = workspacesManager.checkouts.compactMap { checkout -> (WorkspaceCheckout, WorkspaceCheckoutMember)? in
-            guard checkout.archivedAt == nil,
-                  let member = checkout.members.first(where: {
-                      $0.projectID == worktree.projectId &&
-                          URL(fileURLWithPath: $0.worktreePath).standardizedFileURL.path == worktreePath
-                  })
-            else { return nil }
-            return (checkout, member)
-        }
+        let matchingCheckouts = checkpointWorkspaces(containing: worktree)
         for (checkout, member) in matchingCheckouts {
             let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
             terminalCount += terminal.registry.sessions(forWorktree: owner.storageKey).count
@@ -11700,6 +11691,21 @@ final class AppState {
         )
     }
 
+    private func checkpointWorkspaces(
+        containing worktree: Worktree
+    ) -> [(WorkspaceCheckout, WorkspaceCheckoutMember)] {
+        let worktreePath = worktree.path.standardizedFileURL.path
+        return workspacesManager.checkouts.compactMap { checkout -> (WorkspaceCheckout, WorkspaceCheckoutMember)? in
+            guard checkout.archivedAt == nil,
+                  let member = checkout.members.first(where: {
+                      $0.projectID == worktree.projectId &&
+                          URL(fileURLWithPath: $0.worktreePath).standardizedFileURL.path == worktreePath
+                  })
+            else { return nil }
+            return (checkout, member)
+        }
+    }
+
     private func acquireCheckpointTerminalLease(for session: TerminalSession) {
         let lineageIDs = checkpointTerminalLeaseLineageIDs(for: session)
         checkpointWriterLeases.acquire(
@@ -11725,15 +11731,48 @@ final class AppState {
         }
     }
 
-    private func checkpointACPLeaseCount(owner: SessionOwnerID) -> Int {
+    private func checkpointACPLeaseCount(
+        owner: SessionOwnerID,
+        excludingInstanceId: String? = nil
+    ) -> Int {
         do {
             return try ACPSessionStore(path: Paths.acpSessionsDB(for: owner).path).activeLeaseCount(
                 now: Int64(Date().timeIntervalSince1970),
-                staleAfter: ACPSessionManager.leaseStaleAfter
+                staleAfter: ACPSessionManager.leaseStaleAfter,
+                excludingInstanceId: excludingInstanceId
             )
         } catch {
+            guard excludingInstanceId == nil else { return 1 }
             return acpManager(for: owner)?.hasActiveCheckpointWriter == true ? 1 : 0
         }
+    }
+
+    /// Scheduled removal must not invalidate another instance's ACP or terminal writer.
+    func scheduledCleanupHasNoOtherWriterLeases(
+        for worktree: Worktree,
+        lineageID: String
+    ) -> Bool {
+        guard UUID(uuidString: lineageID)?.uuidString.lowercased() == lineageID,
+              checkpointWriterLeases.activeLeaseCount(
+                  lineageID: lineageID,
+                  excludingInstanceID: instanceId
+              ) == 0
+        else {
+            return false
+        }
+
+        let owners: [SessionOwnerID] = [.worktree(worktree.id)] + checkpointWorkspaces(containing: worktree).map { pair in
+            SessionOwnerID.workspaceCheckout(pair.0.id, pair.0.executionLocation)
+        }
+        for owner in owners {
+            guard FileManager.default.fileExists(atPath: Paths.acpSessionsDB(for: owner).path) else {
+                continue
+            }
+            guard checkpointACPLeaseCount(owner: owner, excludingInstanceId: instanceId) == 0 else {
+                return false
+            }
+        }
+        return true
     }
 
     private func checkpointTerminalAdmissionDisabled(for checkout: WorkspaceCheckout) -> Bool {
