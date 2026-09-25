@@ -1346,14 +1346,13 @@ struct WorktreeService {
         // (build output, `.env`, logs) can hold its only copy here, so the
         // fingerprint must cover it: an ignored file appearing or changing
         // invalidates an authorized deletion just like untracked content.
-        // `--directory` collapses an ignored directory to its name, which
-        // `git hash-object` rejects, so enumerate the files inside each
-        // ignored directory and hash those instead.
+        // Plain `--ignored` lists every ignored file individually (no
+        // `--directory` collapsing), so each one can be hashed directly.
         let ignored = try await Process.runData(
             "/bin/sh",
             args: [
                 "-c",
-                #"git ls-files --others --ignored --exclude-standard --directory -z | perl -0ne 'chomp; if (-d $_) { print "ignored-path-hex=", unpack("H*", $_), "\n"; system("find", $_, "-type", "f", "-print0") == 0 or exit 1 } else { print "ignored-path-hex=", unpack("H*", $_), "\n"; system("git","hash-object","--",$_) == 0 or exit 1 }'"#
+                #"git ls-files --others --ignored --exclude-standard -z | perl -0ne 'chomp; print "ignored-file-hex=", unpack("H*", $_), "\n"; system("git","hash-object","--",$_) == 0 or exit 1'"#
             ],
             cwd: worktreePath,
             env: Process.gitEnv()
@@ -1371,7 +1370,7 @@ struct WorktreeService {
             git diff --no-ext-diff --binary --full-index --submodule=diff HEAD --
             git diff --cached --no-ext-diff --binary --full-index --submodule=diff HEAD --
             git ls-files --others --exclude-standard -z | perl -0ne 'chomp; print "untracked-path-hex=", unpack("H*", $_), "\\n"; system("git","hash-object","--",$_) == 0 or exit 1'
-            git ls-files --others --ignored --exclude-standard --directory -z | perl -0ne 'chomp; if (-d $_) { print "ignored-path-hex=", unpack("H*", $_), "\\n"; system("find", $_, "-type", "f", "-print0") == 0 or exit 1 } else { print "ignored-path-hex=", unpack("H*", $_), "\\n"; system("git","hash-object","--",$_) == 0 or exit 1 }'
+            git ls-files --others --ignored --exclude-standard -z | perl -0ne 'chomp; print "ignored-file-hex=", unpack("H*", $_), "\\n"; system("git","hash-object","--",$_) == 0 or exit 1'
             git for-each-ref --format='ref=%(refname)=%(objectname)'
             git rev-list --max-count=50 --reflog --not --remotes 2>/dev/null | while IFS= read -r oid; do printf 'reflog=%s\\n' "$oid"; done
             fsck_output=$(mktemp)
@@ -1471,7 +1470,7 @@ struct WorktreeService {
     /// listing, so each initialized submodule is walked explicitly).
     static func worktreeHasIgnoredContent(worktreePath: URL) async throws -> Bool {
         let result = try await Process.gitData(
-            ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"],
+            ["ls-files", "--others", "--ignored", "--exclude-standard"],
             cwd: worktreePath
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
@@ -1482,7 +1481,7 @@ struct WorktreeService {
 
         let submodules = try await Process.gitData(
             ["submodule", "foreach", "--quiet", "--recursive",
-             "git ls-files --others --ignored --exclude-standard --directory"],
+             "git ls-files --others --ignored --exclude-standard"],
             cwd: worktreePath
         )
         guard submodules.exitCode == 0 else {

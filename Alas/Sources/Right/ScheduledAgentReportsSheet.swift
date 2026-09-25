@@ -86,6 +86,12 @@ struct ScheduledAgentReportsSheet: View {
         return selectedReport.hasPendingWork
     }
 
+    /// A failed `loadSelectedReport`/`refreshSelectedReport` read is not
+    /// proof the report is gone (e.g. the shared SQLite store stayed busy
+    /// past its timeout), so the polling loop must keep running until a
+    /// settled or confirmed-missing result arrives.
+    @State private var selectedReportReadFailed = false
+
     init(state: AppState, projectID: String, initialReportID: String? = nil) {
         _state = Bindable(wrappedValue: state)
         self.projectID = projectID
@@ -113,7 +119,13 @@ struct ScheduledAgentReportsSheet: View {
             }
             await loadSelectedReport()
             while !Task.isCancelled {
-                if selectedReportID != nil, !selectedReportNeedsRefresh { break }
+                // A failed read is not proof the report is settled or gone:
+                // keep polling so a transient store error (e.g. the SQLite
+                // write lock held by another process) retries instead of
+                // leaving the detail in a permanent error state.
+                let keepPolling = selectedReportID != nil
+                    && (selectedReportNeedsRefresh || selectedReportReadFailed)
+                if selectedReportID != nil, !keepPolling { break }
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled else { break }
                 if selectedReportID == nil {
@@ -629,11 +641,13 @@ struct ScheduledAgentReportsSheet: View {
     private func loadSelectedReport() async {
         guard let selectedReportID else {
             selectedReport = nil
+            selectedReportReadFailed = false
             detailError = nil
             return
         }
         isLoadingReport = true
         selectedReport = nil
+        selectedReportReadFailed = false
         detailError = nil
         defer { if !Task.isCancelled { isLoadingReport = false } }
         do {
@@ -648,6 +662,7 @@ struct ScheduledAgentReportsSheet: View {
             }
         } catch {
             guard !Task.isCancelled else { return }
+            selectedReportReadFailed = true
             detailError = error.localizedDescription
         }
     }
@@ -661,11 +676,13 @@ struct ScheduledAgentReportsSheet: View {
                 updateReportInList(report)
             }
             selectedReport = report
+            selectedReportReadFailed = false
             detailError = report == nil
                 ? "This report was deleted or is no longer available in this project."
                 : nil
         } catch {
             guard !Task.isCancelled, selectedReport == nil else { return }
+            selectedReportReadFailed = true
             detailError = error.localizedDescription
         }
     }
