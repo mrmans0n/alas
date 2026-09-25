@@ -71,7 +71,15 @@ struct AppStateFollowStackEntryTests {
             status: .clean,
             lastActivity: Date()
         )
-        let state = AppState()
+        let project = ProjectConfig(
+            id: worktree.projectId,
+            name: "Test",
+            path: path.path,
+            color: "blue",
+            addedAt: .distantPast
+        )
+        let state = AppState(store: MemoryStore(projects: .init(projects: [project])))
+        state.projectsManager.insertOptimisticWorktree(worktree)
 
         // No right pane state has been activated for this worktree yet:
         // fall back to false rather than recomputing the gate from disk.
@@ -87,6 +95,53 @@ struct AppStateFollowStackEntryTests {
 
         rightPaneState.ggContext = .inactive(reason: .policyOff)
         #expect(!state.ggFollowSupported(worktreeID: worktree.id))
+    }
+
+    @Test func ggFollowSupportUsesTheExplicitProjectForDuplicateWorktreeIDs() {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-follow-duplicate-projects-\(UUID().uuidString)")
+        let projectA = ProjectConfig(
+            id: "project-a",
+            name: "A",
+            path: path.path,
+            color: "blue",
+            addedAt: .distantPast
+        )
+        let projectB = ProjectConfig(
+            id: "project-b",
+            name: "B",
+            path: path.path,
+            color: "green",
+            addedAt: .distantPast
+        )
+        let worktreeA = Worktree(
+            id: "shared-worktree-id",
+            projectId: projectA.id,
+            name: "feature",
+            branch: "feature",
+            path: path,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        let worktreeB = Worktree(
+            id: worktreeA.id,
+            projectId: projectB.id,
+            name: "feature",
+            branch: "feature",
+            path: path,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        let state = AppState(store: MemoryStore(projects: .init(projects: [projectA, projectB])))
+        state.projectsManager.insertOptimisticWorktree(worktreeA)
+        state.projectsManager.insertOptimisticWorktree(worktreeB)
+        state.rightPaneStore.state(for: worktreeA, baseBranch: "main", comparisonMode: .manual)
+            .ggContext = .active(stackName: "stack-a")
+        state.rightPaneStore.state(for: worktreeB, baseBranch: "main", comparisonMode: .manual)
+            .ggContext = .inactive(reason: .policyOff)
+
+        #expect(state.ggFollowSupported(worktreeID: worktreeA.id, projectId: projectA.id))
+        #expect(!state.ggFollowSupported(worktreeID: worktreeB.id, projectId: projectB.id))
     }
 
     @Test func pickerUsesTheLoadedChangesStackImmediately() throws {

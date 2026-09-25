@@ -317,30 +317,36 @@ struct GGSplitCommitTabState: Codable, Equatable, Identifiable {
 struct FileSnapshotTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeId: String
+    var projectId: String?
     let relativePath: String
     let ref: String
     var title: String
 
-    init(worktreeId: String, relativePath: String, ref: String = "HEAD") {
+    init(worktreeId: String, projectId: String? = nil, relativePath: String, ref: String = "HEAD") {
         self.worktreeId = worktreeId
+        self.projectId = projectId
         self.relativePath = relativePath
         self.ref = ref
         self.title = "\((relativePath as NSString).lastPathComponent) @ \(ref)"
-        self.id = "file-snapshot:\(worktreeId):\(ref):\(relativePath)"
+        self.id = projectId.map { "file-snapshot-project:\($0):\(worktreeId):\(ref):\(relativePath)" }
+            ?? "file-snapshot:\(worktreeId):\(ref):\(relativePath)"
     }
 }
 
 struct FileHistoryTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeId: String
+    var projectId: String?
     let relativePath: String
     var title: String
 
-    init(worktreeId: String, relativePath: String) {
+    init(worktreeId: String, projectId: String? = nil, relativePath: String) {
         self.worktreeId = worktreeId
+        self.projectId = projectId
         self.relativePath = relativePath
         self.title = "\((relativePath as NSString).lastPathComponent) History"
-        self.id = "file-history:\(worktreeId):\(relativePath)"
+        self.id = projectId.map { "file-history-project:\($0):\(worktreeId):\(relativePath)" }
+            ?? "file-history:\(worktreeId):\(relativePath)"
     }
 }
 
@@ -493,6 +499,7 @@ enum CommitRevision: Codable, Equatable, Hashable, Sendable {
 struct CommitTabState: Codable, Equatable, Identifiable {
     var id: TabID
     let worktreeId: String
+    var projectId: String?
     var viewID: TabID
     var revision: CommitRevision
     var title: String
@@ -500,6 +507,7 @@ struct CommitTabState: Codable, Equatable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case id
         case worktreeId
+        case projectId
         case viewID
         case revision
         case sha
@@ -513,17 +521,23 @@ struct CommitTabState: Codable, Equatable, Identifiable {
         return sha
     }
 
-    init(worktreeId: String, sha: String, title: String) {
-        self.id = Self.fixedID(worktreeId: worktreeId, sha: sha)
+    init(worktreeId: String, projectId: String? = nil, sha: String, title: String) {
+        self.id = Self.fixedID(worktreeId: worktreeId, projectId: projectId, sha: sha)
         self.worktreeId = worktreeId
+        self.projectId = projectId
         self.viewID = id
         self.revision = .fixed(sha: sha)
         self.title = title
     }
 
-    init(worktreeId: String, trackedRevision: TrackedRevision, title: String) {
-        self.id = Self.trackedID(worktreeId: worktreeId, targetKey: trackedRevision.target.identityKey)
+    init(worktreeId: String, projectId: String? = nil, trackedRevision: TrackedRevision, title: String) {
+        self.id = Self.trackedID(
+            worktreeId: worktreeId,
+            projectId: projectId,
+            targetKey: trackedRevision.target.identityKey
+        )
         self.worktreeId = worktreeId
+        self.projectId = projectId
         self.viewID = id
         self.revision = .following(trackedRevision)
         self.title = title
@@ -533,6 +547,7 @@ struct CommitTabState: Codable, Equatable, Identifiable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(TabID.self, forKey: .id)
         worktreeId = try container.decode(String.self, forKey: .worktreeId)
+        projectId = try container.decodeIfPresent(String.self, forKey: .projectId)
         viewID = try container.decodeIfPresent(TabID.self, forKey: .viewID) ?? id
         title = try container.decode(String.self, forKey: .title)
         if let decodedRevision = try container.decodeIfPresent(CommitRevision.self, forKey: .revision) {
@@ -546,6 +561,7 @@ struct CommitTabState: Codable, Equatable, Identifiable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(worktreeId, forKey: .worktreeId)
+        try container.encodeIfPresent(projectId, forKey: .projectId)
         try container.encode(viewID, forKey: .viewID)
         try container.encode(revision, forKey: .revision)
         try container.encode(sha, forKey: .sha)
@@ -553,21 +569,23 @@ struct CommitTabState: Codable, Equatable, Identifiable {
     }
 
     mutating func follow(_ revision: TrackedRevision) {
-        id = Self.trackedID(worktreeId: worktreeId, targetKey: revision.target.identityKey)
+        id = Self.trackedID(worktreeId: worktreeId, projectId: projectId, targetKey: revision.target.identityKey)
         self.revision = .following(revision)
     }
 
     mutating func fix(sha: String) {
-        id = Self.fixedID(worktreeId: worktreeId, sha: sha)
+        id = Self.fixedID(worktreeId: worktreeId, projectId: projectId, sha: sha)
         revision = .fixed(sha: sha)
     }
 
-    private static func fixedID(worktreeId: String, sha: String) -> String {
-        "commit:\(worktreeId):\(sha)"
+    private static func fixedID(worktreeId: String, projectId: String?, sha: String) -> String {
+        projectId.map { "commit-project:\($0):\(worktreeId):\(sha)" }
+            ?? "commit:\(worktreeId):\(sha)"
     }
 
-    private static func trackedID(worktreeId: String, targetKey: String) -> String {
-        "commit:\(worktreeId):tracked:\(trackedIDDigest(for: targetKey))"
+    private static func trackedID(worktreeId: String, projectId: String?, targetKey: String) -> String {
+        let identity = projectId.map { "project:\($0):\(worktreeId)" } ?? worktreeId
+        return "commit:\(identity):tracked:\(trackedIDDigest(for: targetKey))"
     }
 
     private static func trackedIDDigest(for targetKey: String) -> String {

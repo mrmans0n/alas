@@ -215,8 +215,11 @@ final class RightPaneStore {
                 guard let app = self?.appState,
                       self?.states[key]?.changes.contains(where: { $0.path == path && $0.conflict != nil }) == true else { return }
                 let title = (path as NSString).lastPathComponent
+                let includesLegacyUnownedProjectTabs = app.legacyEditorOwnerProjectId(forWorktreeId: id) == worktree.projectId
                 let tab = app.tabs.openMergeConflict(
                     worktreeId: id,
+                    projectId: worktree.projectId,
+                    includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs,
                     relativePath: path,
                     title: title
                 )

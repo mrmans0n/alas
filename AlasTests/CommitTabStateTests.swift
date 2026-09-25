@@ -21,6 +21,23 @@ struct CommitTabStateTests {
         #expect(a.id != c.id)
     }
 
+    @Test func projectOwnedCommitsUseDistinctFixedAndTrackedIdentities() throws {
+        let fixedA = CommitTabState(worktreeId: "shared", projectId: "project-a", sha: "same", title: "A")
+        let fixedB = CommitTabState(worktreeId: "shared", projectId: "project-b", sha: "same", title: "B")
+        let tracked = try #require(TrackedRevision(
+            expression: "HEAD~1",
+            baselineBranch: "main",
+            resolvedSHA: "same"
+        ))
+        let followingA = CommitTabState(worktreeId: "shared", projectId: "project-a", trackedRevision: tracked, title: "A")
+        let followingB = CommitTabState(worktreeId: "shared", projectId: "project-b", trackedRevision: tracked, title: "B")
+
+        #expect(fixedA.id != fixedB.id)
+        #expect(followingA.id != followingB.id)
+        #expect(fixedA.projectId == "project-a")
+        #expect(followingB.projectId == "project-b")
+    }
+
     @Test func codableRoundTripPreservesAllFields() throws {
         let s = CommitTabState(worktreeId: "wt-1", sha: "deadbeefcafebabe", title: "fix: foo")
         let data = try JSONEncoder().encode(Tab.commit(s))

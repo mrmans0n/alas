@@ -4,6 +4,8 @@ struct MergeConflictTabView: View {
     @Bindable var state: AppState
     let worktree: Worktree
     let tabState: MergeConflictTabState
+    let projectHost: String?
+    let gitService: GitService
     let onStartupRecoveryReady: () -> Void
 
     @State private var model: MergeConflictTabModel
@@ -18,17 +20,21 @@ struct MergeConflictTabView: View {
         state: AppState,
         worktree: Worktree,
         tabState: MergeConflictTabState,
+        projectHost: String?,
         onStartupRecoveryReady: @escaping () -> Void = {}
     ) {
         self.state = state
         self.worktree = worktree
         self.tabState = tabState
+        self.projectHost = projectHost
         self.onStartupRecoveryReady = onStartupRecoveryReady
+        let gitService = GitService(hostResolution: .project(projectHost))
+        self.gitService = gitService
         self._model = State(
             initialValue: MergeConflictTabModel(
                 worktreePath: worktree.path,
                 relativePath: tabState.relativePath,
-                gitService: GitService(),
+                gitService: gitService,
                 agentBinaryUnavailable: { [state, worktree] target in
                     guard case .ssh = target else { return }
                     state.agentAvailabilityStore.invalidate(
@@ -49,7 +55,7 @@ struct MergeConflictTabView: View {
                     onOpenFile: {
                         state.openFile(
                             relativePath: tabState.relativePath,
-                            worktreeId: worktree.id
+                            worktree: worktree
                         )
                     },
                     onCloseTab: {

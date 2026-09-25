@@ -1180,6 +1180,164 @@ struct TabsManagerTests {
         #expect(manager.commitEditorTab(worktreeId: worktreeId, currentSha: updatedSha, projectId: "project-b")?.id == projectB.id)
     }
 
+    @Test func commitConflictSnapshotAndHistoryTabsAreVisibleOnlyToTheirPersistedProject() throws {
+        let worktreeId = "tabs-manager-project-local-review-tabs"
+        let tabsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tabs-manager-project-local-review-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tabsDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tabsDirectory) }
+
+        let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        let relativePath = "Sources/Shared.swift"
+        let projectOwnedTabs = [
+            Tab.commit(CommitTabState(worktreeId: worktreeId, projectId: "project-a", sha: sha, title: "aaaaaaa Shared")),
+            Tab.mergeConflict(MergeConflictTabState(
+                worktreeId: worktreeId,
+                projectId: "project-a",
+                relativePath: relativePath,
+                title: "Shared.swift"
+            )),
+            Tab.fileSnapshot(FileSnapshotTabState(
+                worktreeId: worktreeId,
+                projectId: "project-a",
+                relativePath: relativePath
+            )),
+            Tab.fileHistory(FileHistoryTabState(
+                worktreeId: worktreeId,
+                projectId: "project-a",
+                relativePath: relativePath
+            )),
+        ]
+        let projectOwnedIDs = projectOwnedTabs.map(\.id)
+        let tabsFile = TabsFile(tabs: projectOwnedTabs, activeTabId: projectOwnedIDs[0])
+        try JSONEncoder().encode(tabsFile)
+            .write(to: tabsDirectory.appendingPathComponent("\(worktreeId).json"))
+
+        let manager = TabsManager(tabsDirectory: tabsDirectory)
+        manager.loadAll(worktreeIds: [worktreeId])
+
+        let projectATabIDs = manager.tabs(forWorktree: worktreeId, projectId: "project-a").map(\.id)
+        #expect(projectATabIDs.count == projectOwnedIDs.count)
+        #expect(Set(projectATabIDs) == Set(projectOwnedIDs))
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-b").isEmpty)
+    }
+
+    @Test func activeTerminalTabIsRememberedSeparatelyForEachProject() {
+        let worktreeId = "tabs-manager-project-active-terminal"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+
+        let firstA = manager.appendTerminal(worktreeId: worktreeId, projectId: "project-a", title: "A first", sessionId: "a-first")
+        _ = manager.appendTerminal(worktreeId: worktreeId, projectId: "project-a", title: "A second", sessionId: "a-second")
+        let onlyB = manager.appendTerminal(worktreeId: worktreeId, projectId: "project-b", title: "B", sessionId: "b")
+        manager.activate(worktreeId: worktreeId, tabId: firstA.id)
+        manager.activate(worktreeId: worktreeId, tabId: onlyB.id)
+
+        #expect(manager.activeTabId(forWorktree: worktreeId, projectId: "project-a") == firstA.id)
+        #expect(manager.activeTabId(forWorktree: worktreeId, projectId: "project-b") == onlyB.id)
+    }
+
+    @Test func openingSamePathReviewTabsKeepsEachProjectOwnerSeparate() throws {
+        let worktreeId = "tabs-manager-shared-review-tabs-\(UUID().uuidString)"
+        let tabsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tabs-manager-shared-review-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tabsDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tabsDirectory) }
+        let manager = TabsManager(tabsDirectory: tabsDirectory)
+
+        let commitA = manager.appendCommit(worktreeId: worktreeId, projectId: "project-a", sha: "a", title: "A")
+        let conflictA = manager.openMergeConflict(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            relativePath: "Shared.swift",
+            title: "Shared.swift"
+        )
+        let snapshotA = manager.openOrFocusFileSnapshot(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            relativePath: "Shared.swift"
+        )
+        let historyA = manager.openOrFocusFileHistory(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            relativePath: "Shared.swift"
+        )
+        let commitB = manager.appendCommit(worktreeId: worktreeId, projectId: "project-b", sha: "a", title: "A")
+        let conflictB = manager.openMergeConflict(
+            worktreeId: worktreeId,
+            projectId: "project-b",
+            relativePath: "Shared.swift",
+            title: "Shared.swift"
+        )
+        let snapshotB = manager.openOrFocusFileSnapshot(
+            worktreeId: worktreeId,
+            projectId: "project-b",
+            relativePath: "Shared.swift"
+        )
+        let historyB = manager.openOrFocusFileHistory(
+            worktreeId: worktreeId,
+            projectId: "project-b",
+            relativePath: "Shared.swift"
+        )
+
+        #expect(Set([commitA.id, conflictA.id, snapshotA.id, historyA.id]).count == 4)
+        #expect(Set([commitB.id, conflictB.id, snapshotB.id, historyB.id]).count == 4)
+        #expect(Set([commitA.id, conflictA.id, snapshotA.id, historyA.id]).isDisjoint(with: Set([commitB.id, conflictB.id, snapshotB.id, historyB.id])))
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-a").map(\.id) == [commitA.id, conflictA.id, snapshotA.id, historyA.id])
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-b").map(\.id) == [commitB.id, conflictB.id, snapshotB.id, historyB.id])
+
+        let reopenedSnapshotA = manager.openOrFocusFileSnapshot(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            relativePath: "Shared.swift"
+        )
+        #expect(reopenedSnapshotA.id == snapshotA.id)
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-a").count == 4)
+    }
+
+    @Test func focusingLegacyReviewTabsAdoptsTheirExistingIdentityForTheLegacyOwner() throws {
+        let worktreeId = "tabs-manager-legacy-review-tabs-\(UUID().uuidString)"
+        let tabsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tabs-manager-legacy-review-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tabsDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tabsDirectory) }
+        let manager = TabsManager(tabsDirectory: tabsDirectory)
+        let conflict = manager.openMergeConflict(
+            worktreeId: worktreeId,
+            relativePath: "Shared.swift",
+            title: "Shared.swift"
+        )
+        let snapshot = manager.openOrFocusFileSnapshot(worktreeId: worktreeId, relativePath: "Shared.swift")
+        let history = manager.openOrFocusFileHistory(worktreeId: worktreeId, relativePath: "Shared.swift")
+
+        let openedConflict = manager.openMergeConflict(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            includesLegacyUnownedProjectTabs: true,
+            relativePath: "Shared.swift",
+            title: "Shared.swift"
+        )
+        let openedSnapshot = manager.openOrFocusFileSnapshot(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            includesLegacyUnownedProjectTabs: true,
+            relativePath: "Shared.swift"
+        )
+        let openedHistory = manager.openOrFocusFileHistory(
+            worktreeId: worktreeId,
+            projectId: "project-a",
+            includesLegacyUnownedProjectTabs: true,
+            relativePath: "Shared.swift"
+        )
+
+        #expect(openedConflict.id == conflict.id)
+        #expect(openedSnapshot.id == snapshot.id)
+        #expect(openedHistory.id == history.id)
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-a").map(\.id) == [conflict.id, snapshot.id, history.id])
+        #expect(manager.tabs(forWorktree: worktreeId, projectId: "project-b").isEmpty)
+        #expect(manager.activeTabId(forWorktree: worktreeId, projectId: "project-a") == history.id)
+    }
+
     @Test func appendCommitEditorReusesOriginalShaIdentityWithoutOverwritingCurrentSha() {
         let worktreeId = "tabs-manager-commit-editor"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

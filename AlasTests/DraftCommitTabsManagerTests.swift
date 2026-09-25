@@ -16,7 +16,7 @@ struct DraftCommitTabsManagerTests {
         }
     }
 
-    @Test func commitComposerGitClientUsesTheSelectedProjectHost() throws {
+    @Test func projectScopedGitClientsUseTheSelectedProjectHost() throws {
         let root = URL(fileURLWithPath: "/draft-commit-project-host-\(UUID().uuidString)")
         defer { RemoteHostRegistry.shared.unregister(root: root.path) }
         let projectA = ProjectConfig(
@@ -54,6 +54,46 @@ struct DraftCommitTabsManagerTests {
         #expect(RemoteHostRegistry.shared.host(forPath: root.path) == "host-a")
         #expect(appState.remoteHost(for: worktree) == nil)
         #expect(view.git.remoteHost(forWorktreePath: root) == nil)
+
+        let commitView = CommitTabView(
+            worktreePath: root,
+            tabState: CommitTabState(worktreeId: worktree.id, projectId: projectB.id, sha: "abc", title: "abc"),
+            worktreeId: worktree.id,
+            projectId: projectB.id,
+            projectHost: appState.remoteHost(for: worktree),
+            appState: appState
+        )
+        let commitGit = commitView.git
+        let snapshotView = FileSnapshotTabView(
+            worktreePath: root,
+            state: FileSnapshotTabState(worktreeId: worktree.id, projectId: projectB.id, relativePath: "README.md"),
+            projectHost: appState.remoteHost(for: worktree)
+        )
+        let snapshotGit = snapshotView.git
+        let historyView = FileHistoryTabView(
+            worktreePath: root,
+            state: FileHistoryTabState(worktreeId: worktree.id, projectId: projectB.id, relativePath: "README.md"),
+            projectHost: appState.remoteHost(for: worktree),
+            onSelectCommit: { _ in },
+            onCopySHA: { _ in }
+        )
+        let historyGit = historyView.git
+        let mergeConflictView = MergeConflictTabView(
+            state: appState,
+            worktree: worktree,
+            tabState: MergeConflictTabState(
+                worktreeId: worktree.id,
+                projectId: projectB.id,
+                relativePath: "README.md",
+                title: "README.md"
+            ),
+            projectHost: appState.remoteHost(for: worktree)
+        )
+
+        #expect(commitGit.remoteHost(forWorktreePath: root) == nil)
+        #expect(snapshotGit.remoteHost(forWorktreePath: root) == nil)
+        #expect(historyGit.remoteHost(forWorktreePath: root) == nil)
+        #expect(mergeConflictView.gitService.remoteHost(forWorktreePath: root) == nil)
     }
 
     @Test func openDraftWithPublishIntentCreatesPublishFirstDraft() {

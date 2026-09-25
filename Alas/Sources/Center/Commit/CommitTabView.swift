@@ -6,6 +6,7 @@ struct CommitTabView: View {
     let tabState: CommitTabState
     let worktreeId: String
     let projectId: String
+    let projectHost: String?
     @Bindable var appState: AppState
     var onStartupRecoveryReady: () -> Void = {}
 
@@ -30,17 +31,20 @@ struct CommitTabView: View {
     @State private var isRefreshingTrackedRevision = false
 
     @Environment(\.theme) private var theme
-    private let git = GitService()
-    private let reviewLoader = CommitReviewLoader()
-    private let revisionResolver = TrackedRevisionResolver.live
+    var git: GitService { GitService(hostResolution: hostResolution) }
+    private var hostResolution: EditorBufferHostResolution { .project(projectHost) }
+    private var reviewLoader: CommitReviewLoader { CommitReviewLoader(git: git) }
+    private var revisionResolver: TrackedRevisionResolver {
+        TrackedRevisionResolver.makeLive(hostResolution: hostResolution)
+    }
 
     private var sha: String { tabState.sha }
 
     private var loadTaskID: String {
         if let tracked = tabState.revision.tracked {
-            return "\(tabState.id):\(tracked.target.identityKey):\(appState.revisionChangeGeneration(worktreeID: worktreeId))"
+            return "\(projectId):\(tabState.id):\(tracked.target.identityKey):\(appState.revisionChangeGeneration(worktreeID: worktreeId))"
         }
-        return "\(tabState.id):\(sha)"
+        return "\(projectId):\(tabState.id):\(sha)"
     }
 
     private var diffPreferences: DiffPreferenceBindings {
@@ -401,7 +405,7 @@ struct CommitTabView: View {
                 ].joined(separator: "\u{1f}")
             }
             .joined(separator: "\u{1e}")
-        return "\(sha)\u{0}\(details.info.sha)\u{0}\(details.files.count)\u{0}\(fileKey)"
+        return "\(projectId)\u{0}\(sha)\u{0}\(details.info.sha)\u{0}\(details.files.count)\u{0}\(fileKey)"
     }
 
     @MainActor

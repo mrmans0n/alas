@@ -5491,9 +5491,16 @@ final class AppState {
     }
 
     func promptFollowRevision(worktreeID: String, tabID: TabID, prefill: TrackedRevisionTarget? = nil) {
+        let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID })
+        let projectId: String?
+        if case .commit(let state) = tab {
+            projectId = state.projectId ?? legacyEditorOwnerProjectId(forWorktreeId: worktreeID)
+        } else {
+            projectId = nil
+        }
         switch FollowRevisionPromptRoute.route(
             prefill: prefill,
-            stackEntrySupported: ggFollowSupported(worktreeID: worktreeID)
+            stackEntrySupported: ggFollowSupported(worktreeID: worktreeID, projectId: projectId)
         ) {
         case .stackEntryPicker(let isEditing):
             promptFollowStackEntry(worktreeID: worktreeID, tabID: tabID, isEditing: isEditing)
@@ -5533,7 +5540,8 @@ final class AppState {
             isEditing: isEditing,
             state: .loading
         )
-        guard let worktree = worktree(withId: worktreeID) else { return }
+        guard let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }),
+              let worktree = worktree(forFollowRevisionTab: tab) else { return }
         let currentGGID = followedStackEntryGGID(worktreeID: worktreeID, tabID: tabID)
         let displayedSHA = displayedCommitSHA(worktreeID: worktreeID, tabID: tabID)
         if let rightPaneState = rightPaneStore.activeState(for: worktree),
@@ -5600,7 +5608,16 @@ final class AppState {
     /// with an active gg stack; fall back to deriving the context directly
     /// in that case rather than reporting unsupported.
     func ggFollowSupported(worktreeID: String) -> Bool {
-        guard let worktree = worktree(withId: worktreeID) else { return false }
+        ggFollowSupported(worktreeID: worktreeID, projectId: nil)
+    }
+
+    func ggFollowSupported(worktreeID: String, projectId: String?) -> Bool {
+        let worktree = if let projectId {
+            worktree(withId: worktreeID, inProjectId: projectId)
+        } else {
+            worktree(withId: worktreeID)
+        }
+        guard let worktree else { return false }
         if let context = rightPaneStore.activeState(for: worktree)?.ggContext {
             return context.isActive
         }
@@ -5650,10 +5667,12 @@ final class AppState {
     }
 
     private func suggestedFollowRevisionPrefill(worktreeID: String, tabID: TabID) async -> String? {
-        guard let worktree = worktree(withId: worktreeID),
+        guard let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }),
+              let worktree = worktree(forFollowRevisionTab: tab),
               let displayedSHA = displayedCommitSHA(worktreeID: worktreeID, tabID: tabID)
         else { return nil }
-        let result = try? await Process.git(
+        let git = GitService(hostResolution: .project(remoteHost(for: worktree)))
+        let result = try? await git.runGit(
             ["rev-list", "--first-parent", "--max-count=200", "HEAD"],
             cwd: worktree.path
         )
@@ -5662,6 +5681,19 @@ final class AppState {
             .split(whereSeparator: \.isNewline)
             .map(String.init) ?? []
         return FollowRevisionPrefill.expression(displayedSHA: displayedSHA, firstParentSHAs: firstParentSHAs)
+    }
+
+    private func worktree(forFollowRevisionTab tab: Tab) -> Worktree? {
+        switch tab {
+        case .commit(let state):
+            let projectId = state.projectId ?? legacyEditorOwnerProjectId(forWorktreeId: state.worktreeId)
+            guard let projectId else { return worktree(withId: state.worktreeId) }
+            return worktree(withId: state.worktreeId, inProjectId: projectId)
+        case .reviewSession(let state):
+            return worktree(withId: state.worktreeId)
+        default:
+            return nil
+        }
     }
 
     private func displayedCommitSHA(worktreeID: String, tabID: TabID) -> String? {
@@ -5728,10 +5760,13 @@ final class AppState {
         requestGeneration: Int,
         target: TrackedRevisionTarget
     ) async {
-        guard let worktree = worktree(withId: worktreeID) else { return }
+        guard let tab = followRevisionRequestTab(worktreeID: worktreeID, requestKey: requestKey),
+              let worktree = worktree(forFollowRevisionTab: tab) else { return }
         let candidate: TrackedRevisionCandidate
         do {
-            candidate = try await TrackedRevisionResolver.live.resolve(at: worktree.path, target: target)
+            candidate = try await TrackedRevisionResolver.makeLive(
+                hostResolution: .project(remoteHost(for: worktree))
+            ).resolve(at: worktree.path, target: target)
         } catch {
             guard isCurrentFollowRevisionRequest(worktreeID: worktreeID, requestKey: requestKey, requestGeneration: requestGeneration)
             else { return }
@@ -14316,13 +14351,18 @@ final class AppState {
         activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
     }
 
-    func openCommitTab(worktreeId: String, commit: CommitInfo) {
-        guard let worktree = worktree(withId: worktreeId) else { return }
-        if selectedWorktreeId != worktree.id {
+    func openCommitTab(worktreeId: String, projectId: String? = nil, commit: CommitInfo) {
+        guard let worktree = worktreeForFileOpen(worktreeId, projectId: projectId) else { return }
+        if selectedWorktreeId != worktree.id || selectedWorktreeProjectId != worktree.projectId {
             focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
         }
 
-        let existing = tabs.tabs(forWorktree: worktree.id).first { tab in
+        let includesLegacyUnownedProjectTabs = legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId
+        let existing = tabs.tabs(
+            forWorktree: worktree.id,
+            projectId: worktree.projectId,
+            includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
+        ).first { tab in
             if case .commit(let state) = tab { return state.fixedSHA == commit.sha }
             return false
         }
@@ -14330,7 +14370,7 @@ final class AppState {
             activateWorktreeCenterTab(worktreeId: worktree.id, tabId: existing.id)
         } else {
             let title = "\(commit.shortSha) \(commit.conventionalTag.map { "\($0): \(commit.subject)" } ?? commit.subject)"
-            let tab = tabs.appendCommit(worktreeId: worktree.id, sha: commit.sha, title: title)
+            let tab = tabs.appendCommit(worktreeId: worktree.id, projectId: worktree.projectId, sha: commit.sha, title: title)
             activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
         }
     }
@@ -14341,7 +14381,13 @@ final class AppState {
         if selectedWorktreeId != worktree.id || selectedWorktreeProjectId != worktree.projectId {
             focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
         }
-        let tab = tabs.openOrFocusFileSnapshot(worktreeId: worktree.id, relativePath: relativePath, ref: "HEAD")
+        let tab = tabs.openOrFocusFileSnapshot(
+            worktreeId: worktree.id,
+            projectId: worktree.projectId,
+            includesLegacyUnownedProjectTabs: legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId,
+            relativePath: relativePath,
+            ref: "HEAD"
+        )
         activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
     }
 
@@ -14351,7 +14397,12 @@ final class AppState {
         if selectedWorktreeId != worktree.id || selectedWorktreeProjectId != worktree.projectId {
             focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
         }
-        let tab = tabs.openOrFocusFileHistory(worktreeId: worktree.id, relativePath: relativePath)
+        let tab = tabs.openOrFocusFileHistory(
+            worktreeId: worktree.id,
+            projectId: worktree.projectId,
+            includesLegacyUnownedProjectTabs: legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId,
+            relativePath: relativePath
+        )
         activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
     }
 

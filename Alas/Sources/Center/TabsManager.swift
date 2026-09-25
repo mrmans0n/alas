@@ -153,10 +153,18 @@ final class TabsManager {
             inbox.projectId == projectId
         case .ggLanding(let landing):
             landing.projectId == projectId
+        case .commit(let commit):
+            commit.projectId == projectId || (includesLegacyUnownedProjectTabs && commit.projectId == nil)
         case .commitEditor(let editor):
             editor.projectId == projectId || (includesLegacyUnownedProjectTabs && editor.projectId == nil)
         case .draftReviewRequest(let draft):
             draft.projectId == projectId || (includesLegacyUnownedProjectTabs && draft.projectId == nil)
+        case .mergeConflict(let conflict):
+            conflict.projectId == projectId || (includesLegacyUnownedProjectTabs && conflict.projectId == nil)
+        case .fileSnapshot(let snapshot):
+            snapshot.projectId == projectId || (includesLegacyUnownedProjectTabs && snapshot.projectId == nil)
+        case .fileHistory(let history):
+            history.projectId == projectId || (includesLegacyUnownedProjectTabs && history.projectId == nil)
         default:
             nil
         }
@@ -1104,8 +1112,8 @@ final class TabsManager {
     }
 
     @discardableResult
-    func appendCommit(worktreeId: String, sha: String, title: String) -> Tab {
-        let state = CommitTabState(worktreeId: worktreeId, sha: sha, title: title)
+    func appendCommit(worktreeId: String, projectId: String? = nil, sha: String, title: String) -> Tab {
+        let state = CommitTabState(worktreeId: worktreeId, projectId: projectId, sha: sha, title: title)
         let tab = Tab.commit(state)
         append(tab, to: worktreeId)
         return tab
@@ -1334,11 +1342,34 @@ final class TabsManager {
     }
 
     @discardableResult
-    func openOrFocusFileSnapshot(worktreeId: String, relativePath: String, ref: String = "HEAD") -> Tab {
-        let state = FileSnapshotTabState(worktreeId: worktreeId, relativePath: relativePath, ref: ref)
-        if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {
-            activate(worktreeId: worktreeId, tabId: state.id)
-            return tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) ?? .fileSnapshot(state)
+    func openOrFocusFileSnapshot(
+        worktreeId: String,
+        projectId: String? = nil,
+        includesLegacyUnownedProjectTabs: Bool = false,
+        relativePath: String,
+        ref: String = "HEAD"
+    ) -> Tab {
+        let state = FileSnapshotTabState(worktreeId: worktreeId, projectId: projectId, relativePath: relativePath, ref: ref)
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: { tab in
+               guard case .fileSnapshot(let existing) = tab,
+                     existing.relativePath == relativePath,
+                     existing.ref == ref else { return false }
+               guard let projectId else { return true }
+               return existing.projectId == projectId
+                   || (includesLegacyUnownedProjectTabs && existing.projectId == nil)
+           }),
+           case .fileSnapshot(var existing) = file.tabs[idx] {
+            if existing.projectId == nil, includesLegacyUnownedProjectTabs {
+                existing.projectId = projectId
+                file.tabs[idx] = .fileSnapshot(existing)
+            }
+            let tab = file.tabs[idx]
+            file.activeTabId = tab.id
+            rememberProjectLocalTab(tab, in: &file)
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return tab
         }
         let tab = Tab.fileSnapshot(state)
         append(tab, to: worktreeId)
@@ -1346,11 +1377,32 @@ final class TabsManager {
     }
 
     @discardableResult
-    func openOrFocusFileHistory(worktreeId: String, relativePath: String) -> Tab {
-        let state = FileHistoryTabState(worktreeId: worktreeId, relativePath: relativePath)
-        if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {
-            activate(worktreeId: worktreeId, tabId: state.id)
-            return tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) ?? .fileHistory(state)
+    func openOrFocusFileHistory(
+        worktreeId: String,
+        projectId: String? = nil,
+        includesLegacyUnownedProjectTabs: Bool = false,
+        relativePath: String
+    ) -> Tab {
+        let state = FileHistoryTabState(worktreeId: worktreeId, projectId: projectId, relativePath: relativePath)
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: { tab in
+               guard case .fileHistory(let existing) = tab,
+                     existing.relativePath == relativePath else { return false }
+               guard let projectId else { return true }
+               return existing.projectId == projectId
+                   || (includesLegacyUnownedProjectTabs && existing.projectId == nil)
+           }),
+           case .fileHistory(var existing) = file.tabs[idx] {
+            if existing.projectId == nil, includesLegacyUnownedProjectTabs {
+                existing.projectId = projectId
+                file.tabs[idx] = .fileHistory(existing)
+            }
+            let tab = file.tabs[idx]
+            file.activeTabId = tab.id
+            rememberProjectLocalTab(tab, in: &file)
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return tab
         }
         let tab = Tab.fileHistory(state)
         append(tab, to: worktreeId)
@@ -1903,22 +1955,39 @@ final class TabsManager {
     /// Open a merge-conflict tab for `relativePath`, or activate the existing
     /// one if it's already open. Returns the tab.
     @discardableResult
-    func openMergeConflict(worktreeId: String, relativePath: String, title: String) -> Tab {
+    func openMergeConflict(
+        worktreeId: String,
+        projectId: String? = nil,
+        includesLegacyUnownedProjectTabs: Bool = false,
+        relativePath: String,
+        title: String
+    ) -> Tab {
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: {
                if case .mergeConflict(let s) = $0 {
-                   return s.relativePath == relativePath
+                   let belongsToProject = projectId.map {
+                       s.projectId == $0 || (includesLegacyUnownedProjectTabs && s.projectId == nil)
+                   } ?? true
+                   return belongsToProject && s.relativePath == relativePath
                }
                return false
            }) {
+            if case .mergeConflict(var state) = file.tabs[idx],
+               state.projectId == nil,
+               includesLegacyUnownedProjectTabs {
+                state.projectId = projectId
+                file.tabs[idx] = .mergeConflict(state)
+            }
             let existing = file.tabs[idx]
             file.activeTabId = existing.id
+            rememberProjectLocalTab(existing, in: &file)
             byWorktree[worktreeId] = file
             persist(worktreeId)
             return existing
         }
         let state = MergeConflictTabState(
             worktreeId: worktreeId,
+            projectId: projectId,
             relativePath: relativePath,
             title: title
         )
@@ -2334,6 +2403,19 @@ final class TabsManager {
         let projectId: String? = switch tab {
         case .editor(let state): state.projectId
         case .draftCommit(let state): state.projectId
+        case .terminal(let state): state.projectId
+        case .acpSession(let state): state.projectId
+        case .webPreview(let state): state.projectId
+        case .runReport(let state): state.projectId
+        case .imagePreview(let state): state.projectId
+        case .ggInbox(let state): state.projectId
+        case .ggLanding(let state): state.projectId
+        case .commit(let state): state.projectId
+        case .commitEditor(let state): state.projectId
+        case .draftReviewRequest(let state): state.projectId
+        case .mergeConflict(let state): state.projectId
+        case .fileSnapshot(let state): state.projectId
+        case .fileHistory(let state): state.projectId
         default: nil
         }
         if let projectId { file.activeEditorTabIds[projectId] = tab.id }

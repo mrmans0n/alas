@@ -3,6 +3,7 @@ import SwiftUI
 struct FileHistoryTabView: View {
     let worktreePath: URL
     let state: FileHistoryTabState
+    let projectHost: String?
     let onSelectCommit: (CommitInfo) -> Void
     let onCopySHA: (CommitInfo) -> Void
     var onStartupRecoveryReady: () -> Void = {}
@@ -11,7 +12,7 @@ struct FileHistoryTabView: View {
     @State private var commits: [CommitInfo] = []
     @State private var loaded = false
     @State private var error: String?
-    private let git = GitService()
+    var git: GitService { GitService(hostResolution: .project(projectHost)) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,7 +28,7 @@ struct FileHistoryTabView: View {
     }
 
     private var loadKey: String {
-        "\(worktreePath.path)\u{0}\(state.relativePath)"
+        "\(state.projectId ?? "")\u{0}\(projectHost ?? "")\u{0}\(worktreePath.path)\u{0}\(state.relativePath)"
     }
 
     private var header: some View {

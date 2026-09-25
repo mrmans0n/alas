@@ -439,14 +439,19 @@ struct RootView: View {
     }
 
     private func openOrFocusCommit(worktree: Worktree, commit: CommitInfo) {
-        let existing = state.tabs.tabs(forWorktree: worktree.id).first { tab in
+        let includesLegacyUnownedProjectTabs = state.legacyEditorOwnerProjectId(forWorktreeId: worktree.id) == worktree.projectId
+        let existing = state.tabs.tabs(
+            forWorktree: worktree.id,
+            projectId: worktree.projectId,
+            includesLegacyUnownedProjectTabs: includesLegacyUnownedProjectTabs
+        ).first { tab in
             if case .commit(let s) = tab { return s.fixedSHA == commit.sha } else { return false }
         }
         if let existing {
             state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: existing.id)
         } else {
             let title = "\(commit.shortSha) \(commit.subject)"
-            let tab = state.tabs.appendCommit(worktreeId: worktree.id, sha: commit.sha, title: title)
+            let tab = state.tabs.appendCommit(worktreeId: worktree.id, projectId: worktree.projectId, sha: commit.sha, title: title)
             state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
         }
     }

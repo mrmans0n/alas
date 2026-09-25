@@ -4,6 +4,7 @@ import SwiftUI
 struct FileSnapshotTabView: View {
     let worktreePath: URL
     let state: FileSnapshotTabState
+    let projectHost: String?
     var codeFontFamily: String = ""
     var codeFontSize: CGFloat = 13
     var onStartupRecoveryReady: () -> Void = {}
@@ -11,7 +12,7 @@ struct FileSnapshotTabView: View {
     @Environment(\.theme) private var theme
     @State private var result: HeadBlobTextResult?
     @State private var error: String?
-    private let git = GitService()
+    var git: GitService { GitService(hostResolution: .project(projectHost)) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,7 +27,9 @@ struct FileSnapshotTabView: View {
         }
     }
 
-    private var loadKey: String { "\(worktreePath.path)\u{0}\(state.ref)\u{0}\(state.relativePath)" }
+    private var loadKey: String {
+        "\(state.projectId ?? "")\u{0}\(projectHost ?? "")\u{0}\(worktreePath.path)\u{0}\(state.ref)\u{0}\(state.relativePath)"
+    }
 
     private var header: some View {
         HStack(spacing: 12) {

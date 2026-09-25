@@ -560,6 +560,7 @@ struct CenterPaneView: View {
                             tabState: s,
                             worktreeId: worktree.id,
                             projectId: worktree.projectId,
+                            projectHost: state.remoteHost(for: worktree),
                             appState: state,
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
@@ -659,6 +660,7 @@ struct CenterPaneView: View {
                             state: state,
                             worktree: worktree,
                             tabState: s,
+                            projectHost: state.remoteHost(for: worktree),
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                         .id(s.id)
@@ -666,6 +668,7 @@ struct CenterPaneView: View {
                         FileSnapshotTabView(
                             worktreePath: worktree.path,
                             state: s,
+                            projectHost: state.remoteHost(for: worktree),
                             codeFontFamily: state.config.code.fontFamily,
                             codeFontSize: CGFloat(state.config.code.fontSize),
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
@@ -674,7 +677,8 @@ struct CenterPaneView: View {
                         FileHistoryTabView(
                             worktreePath: worktree.path,
                             state: s,
-                            onSelectCommit: { state.openCommitTab(worktreeId: worktree.id, commit: $0) },
+                            projectHost: state.remoteHost(for: worktree),
+                            onSelectCommit: { state.openCommitTab(worktreeId: worktree.id, projectId: worktree.projectId, commit: $0) },
                             onCopySHA: { Clipboard.copy($0.sha) },
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )

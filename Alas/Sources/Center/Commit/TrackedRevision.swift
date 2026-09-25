@@ -249,15 +249,20 @@ struct TrackedRevisionResolver {
     var branch: @Sendable (URL) async throws -> String
     var stack: @Sendable (URL) async throws -> GGStack? = { _ in nil }
 
-    static let live = TrackedRevisionResolver(
-        resolve: { try await GitService().resolveRevision(at: $0, ref: $1) },
-        branch: { try await GitService().currentBranch(worktreePath: $0) },
-        stack: { worktreePath in
+    static let live = makeLive()
+
+    static func makeLive(hostResolution: EditorBufferHostResolution = .pathRegistry) -> TrackedRevisionResolver {
+        let git = GitService(hostResolution: hostResolution)
+        return TrackedRevisionResolver(
+            resolve: { try await git.resolveRevision(at: $0, ref: $1) },
+            branch: { try await git.currentBranch(worktreePath: $0) },
+            stack: { worktreePath in
             try await GGStackCache.shared.stack(at: worktreePath) {
                 try await GGService().currentStack(worktreePath: worktreePath.path)
             }
-        }
-    )
+            }
+        )
+    }
 
     func resolve(at worktreePath: URL, expression: String) async throws -> TrackedRevisionCandidate {
         let expression = expression.trimmingCharacters(in: .whitespacesAndNewlines)
