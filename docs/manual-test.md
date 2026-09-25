@@ -477,3 +477,15 @@ The model store is available as a development API; the settings controls are not
 Observed on 2026-09-25: cancellation after the first 1 MiB of weights drained before cleanup; retry installed and verified all 12 assets totaling 2,278,970,666 bytes. A second process held a verified lease, excluded both writers, and allowed removal after releasing it. The lock inode and unrelated file survived. The source snapshot still matched upstream metadata afterward.
 
 The live network check used HEAD requests against the exact pinned revision. The weights and tokenizer redirected from `huggingface.co` to `us.aws.cdn.hf.co`; `config.json` redirected within `huggingface.co`. No model response bodies were downloaded. The focused `NextPromptModelStoreTests` suite covers native URLSession response handling and cancellation with a local URL protocol, including oversized data, unexpected partial responses, interrupted transfers, and rejected redirects.
+
+## ACP next-prompt ghost text
+
+Run this after the next-prompt owner is connected and a verified model is enabled.
+
+1. Finish a native ACP turn with the empty composer focused. When a suggestion appears, verify that copying, the draft restored after a tab switch, and the transcript do not contain it.
+2. Narrow the window and increase the chat font size. The complete candidate wraps within the composer and reserves enough height. Check light and dark themes and Increase Contrast.
+3. Press Tab. The candidate becomes ordinary editable draft text with the caret at its end. Nothing is sent or queued. Undo removes the complete insertion; redo restores it. Undo must not bring the ghost back. Send only with the ordinary send action.
+4. Repeat with emoji and combined Unicode characters. Verify caret placement and one-step undo.
+5. Press Escape on a new suggestion. The draft stays empty. Shift-Tab retains ordinary backwards focus navigation and does not accept it.
+6. Start typing, select or move the caret, start IME composition or dictation, open slash/mention/image pickers, paste, or drop a file. The suggestion disappears immediately and cannot be accepted while work is pending. Switching tabs, windows, or writer ownership also removes it.
+7. With VoiceOver, inspect the empty composer. Its value stays empty; its separate help contains the full suggestion and its actions include Accept Suggestion. Invoke that action and verify the same insertion and undo behavior as Tab. After dismissal, the action and suggestion help disappear.

@@ -15,6 +15,11 @@ struct ACPTabView: View {
     var owner: SessionOwnerID? = nil
     var onOpenPreview: (() -> Void)? = nil
     var onStartupRecoveryReady: () -> Void = {}
+    var nextPromptOffer: String? = nil
+    var takeNextPromptOffer: () -> String? = { nil }
+    var dismissNextPromptOffer: () -> Void = {}
+    var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
+    var nextPromptInputBlocked: () -> Bool = { false }
 
     var body: some View {
         Group {
@@ -26,7 +31,12 @@ struct ACPTabView: View {
                     owner: owner,
                     onOpenPreview: onOpenPreview,
                     onStartupRecoveryReady: onStartupRecoveryReady,
-                    manager: manager
+                    manager: manager,
+                    nextPromptOffer: nextPromptOffer,
+                    takeNextPromptOffer: takeNextPromptOffer,
+                    dismissNextPromptOffer: dismissNextPromptOffer,
+                    onNextPromptStateChange: onNextPromptStateChange,
+                    nextPromptInputBlocked: nextPromptInputBlocked
                 )
             } else {
                 unavailable
@@ -85,6 +95,11 @@ private struct ACPManagedTabView: View {
     let onOpenPreview: (() -> Void)?
     let onStartupRecoveryReady: () -> Void
     @ObservedObject var manager: ACPSessionManager
+    var nextPromptOffer: String? = nil
+    var takeNextPromptOffer: () -> String? = { nil }
+    var dismissNextPromptOffer: () -> Void = {}
+    var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
+    var nextPromptInputBlocked: () -> Bool = { false }
 
     var body: some View {
         if let session = manager.placeholderSession(id: sessionId) {
@@ -97,7 +112,12 @@ private struct ACPManagedTabView: View {
                 manager: manager,
                 session: session,
                 onStartupRecoveryReady: onStartupRecoveryReady,
-                transcript: session.transcript
+                transcript: session.transcript,
+                nextPromptOffer: nextPromptOffer,
+                takeNextPromptOffer: takeNextPromptOffer,
+                dismissNextPromptOffer: dismissNextPromptOffer,
+                onNextPromptStateChange: onNextPromptStateChange,
+                nextPromptInputBlocked: nextPromptInputBlocked
             )
             // Refcount this tab's hold on the cached `ACPSession`. When the
             // tab is dismissed (worktree switch, tab close, window close)
@@ -153,6 +173,12 @@ private struct ACPSessionView: View {
     /// `""` scope and persisted allow/reject_always decisions land under the
     /// wrong key.
     @ObservedObject var transcript: ACPTranscript
+    var nextPromptOffer: String? = nil
+    var takeNextPromptOffer: () -> String? = { nil }
+    var dismissNextPromptOffer: () -> Void = {}
+    var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
+    var nextPromptInputBlocked: () -> Bool = { false }
+    @State private var pendingComposerDrops = 0
     @State private var updateState: AdapterUpdateState?
     @State private var dismissedLatest: String?
     @Environment(\.theme) private var theme
@@ -336,11 +362,14 @@ private struct ACPSessionView: View {
               })
         else { return false }
 
+        dismissNextPromptOffer()
+        pendingComposerDrops += 1
         provider.loadDataRepresentation(
             forTypeIdentifier: UTType.alasDropPayload.identifier
         ) { data, _ in
-            guard let data else { return }
             Task { @MainActor in
+                defer { pendingComposerDrops -= 1 }
+                guard let data else { return }
                 _ = composerDropRouter.insert(
                     encoded: data,
                     enabled: !manager.isMirror(sessionId: sessionId)
@@ -661,7 +690,12 @@ private struct ACPSessionView: View {
                 // folder icon.
                 result += MentionFuzzy.pickerDirectories(forEntries: dirEntries, root: root)
                 return result
-            }
+            },
+            nextPromptOffer: nextPromptOffer,
+            takeNextPromptOffer: takeNextPromptOffer,
+            dismissNextPromptOffer: dismissNextPromptOffer,
+            onNextPromptStateChange: onNextPromptStateChange,
+            nextPromptInputBlocked: { nextPromptInputBlocked() || pendingComposerDrops > 0 || !composerCanAcceptInput }
         ) { text, attachments, intent, draft, onPromptFinished -> Bool in
             // `intent` is already resolved by the composer for keyboard
             // submits; the toolbar send button bypasses the keyboard
