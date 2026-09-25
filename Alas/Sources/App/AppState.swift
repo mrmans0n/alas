@@ -10096,7 +10096,9 @@ final class AppState {
         // (now visibility-aware) would reject anyway, leaving an empty pane.
         guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
         nativePeerSessions?.clearSelection()
-        focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+        if selectedWorktreeId != worktree.id || selectedWorktreeProjectId != worktree.projectId {
+            focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+        }
 
         let hasRevealTarget = revealLine != nil || revealCharacter != nil
         if ImageFileType.isSupported(relativePath: relativePath),

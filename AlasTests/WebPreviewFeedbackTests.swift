@@ -102,7 +102,11 @@ struct WebPreviewFeedbackTests {
 
         let theme = try ThemeStore().current
         let controller = NSHostingController(
-            rootView: WebPreviewTabView(state: fixture.state, tab: preview).environment(\.theme, theme)
+            rootView: WebPreviewTabView(
+                state: fixture.state,
+                tab: preview,
+                sessionOwnerKey: preview.sessionOwnerKey(sharedOwner: nil)
+            ).environment(\.theme, theme)
         )
         controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
         let window = NSWindow(contentRect: controller.view.frame, styleMask: [.titled], backing: .buffered, defer: false)
