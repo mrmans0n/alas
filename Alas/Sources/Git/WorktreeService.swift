@@ -887,6 +887,7 @@ struct WorktreeService {
         authorizedDeleteContentFingerprint: String? = nil,
         expectedWorktreeLineageID: String? = nil,
         beforeRemoval: (@Sendable () async -> Bool)? = nil,
+        deletionLease: CheckpointDeletionLease? = nil,
         moveItem: @Sendable (URL, URL) throws -> Void = {
             try WorktreeService.renameAtomically(from: $0, to: $1)
         }
@@ -901,6 +902,11 @@ struct WorktreeService {
         }
         try requireExpectedLineage(at: worktree.path)
 
+        // `deletionLease` (scheduled cleanup only) is held by the caller and
+        // released when this function returns — its scope spans the final
+        // lease checks and the `moveItem` staging rename, so a writer that
+        // acquires admission after the lock is released finds a worktree
+        // that is either still fully present (and audited) or already gone.
         func requireRemovalAuthorization() async throws {
             guard let beforeRemoval else { return }
             guard await beforeRemoval() else {

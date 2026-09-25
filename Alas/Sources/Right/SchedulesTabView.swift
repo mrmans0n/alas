@@ -538,13 +538,22 @@ private struct ScheduleCard: View {
         }
         let ids = Array(Set(state.runScheduler.firings(for: schedule.id).flatMap(\.reportIDs))).sorted()
         var loaded: [String: ScheduledAgentReport] = [:]
+        var sawReadError = false
         for id in ids {
             guard !Task.isCancelled else { return }
-            if let report = try? await state.scheduledAgentReport(id: id) {
-                loaded[id] = report
+            do {
+                if let report = try await state.scheduledAgentReport(id: id) {
+                    loaded[id] = report
+                }
+            } catch {
+                // A thrown lookup (e.g. the database write lock held by
+                // another process) is not proof the report is gone: keep
+                // the previous summaries and let the task re-run instead
+                // of rendering a live report as deleted.
+                sawReadError = true
             }
         }
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, !sawReadError else { return }
         reportSummaries = loaded
         hasLoadedReportSummaries = true
     }

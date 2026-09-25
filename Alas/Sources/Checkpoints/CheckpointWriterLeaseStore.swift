@@ -36,6 +36,11 @@ struct CheckpointWriterLeaseStore: Sendable {
         pid: Int64 = Int64(ProcessInfo.processInfo.processIdentifier)
     ) {
         guard !lineageIDs.isEmpty else { return }
+        // Scheduled cleanup holds the per-lineage deletion lock across its
+        // final lease checks and the staging rename. Refusing to write a
+        // lease file while it is held keeps a new writer from attaching to a
+        // worktree that cleanup is about to rename away.
+        guard admissionIsAllowed(lineageIDs: lineageIDs) else { return }
         let record = CheckpointWriterLeaseRecord(
             schemaVersion: CheckpointWriterLeaseRecord.schemaVersion,
             instanceID: instanceID,
@@ -65,6 +70,106 @@ struct CheckpointWriterLeaseStore: Sendable {
         }
     }
 
+    // MARK: - Deletion coordination
+
+    /// Held by scheduled worktree cleanup across its final lease checks and
+    /// the staging rename; also locked (non-blocking) by writer admission
+    /// before a lease file is written. This serializes the two operations
+    /// across processes: a writer either admits while cleanup holds the
+    /// lock (cleanup sees the lease file and refuses), or after cleanup
+    /// finished (the worktree is already unregistered) — never during the
+    /// rename, where a fresh lease would be invisible to the check and the
+    /// worktree would be destroyed underneath the new writer.
+    private func deletionLockURL(lineageID: String) -> URL {
+        root.appendingPathComponent(lineageID, isDirectory: true)
+            .appendingPathComponent("deletion.lock", isDirectory: false)
+    }
+
+    func holdDeletionLock(
+        lineageIDs: Set<String>,
+        instanceID: String,
+        sessionID: String
+    ) -> CheckpointDeletionLease? {
+        let validIDs = lineageIDs.filter(validLineageID)
+        guard !validIDs.isEmpty else { return nil }
+        var acquiredHandles: [FileHandle] = []
+        for lineageID in validIDs {
+            let url = deletionLockURL(lineageID: lineageID)
+            let directory = url.deletingLastPathComponent()
+            do {
+                try FileManager.default.createDirectory(
+                    at: directory,
+                    withIntermediateDirectories: true
+                )
+                if !FileManager.default.fileExists(atPath: url.path) {
+                    _ = FileManager.default.createFile(atPath: url.path, contents: nil)
+                }
+                let handle = try FileHandle(forUpdating: url)
+                guard flock(handle.fileDescriptor, LOCK_EX | LOCK_NB) == 0 else {
+                    let error = errno
+                    try? handle.close()
+                    throw POSIXError(POSIXErrorCode(rawValue: error) ?? .EIO)
+                }
+                acquiredHandles.append(handle)
+            } catch {
+                for held in acquiredHandles {
+                    _ = flock(held.fileDescriptor, LOCK_UN)
+                    try? held.close()
+                }
+                return nil
+            }
+        }
+        return CheckpointDeletionLease(
+            handles: acquiredHandles,
+            instanceID: instanceID,
+            sessionID: sessionID
+        )
+    }
+
+    /// Non-blocking admission probe: returns `false` while any scheduled
+    /// cleanup holds the deletion lock for these lineages, so a terminal or
+    /// ACP session cannot attach to a worktree that is about to be renamed
+    /// away. Called before the lease file is written.
+    func admissionIsAllowed(lineageIDs: Set<String>) -> Bool {
+        for lineageID in lineageIDs where validLineageID(lineageID) {
+            guard let handle = try? FileHandle(forUpdating: deletionLockURL(lineageID: lineageID)) else {
+                continue
+            }
+            let blocked = flock(handle.fileDescriptor, LOCK_EX | LOCK_NB) != 0
+            if !blocked {
+                _ = flock(handle.fileDescriptor, LOCK_UN)
+            }
+            try? handle.close()
+            if blocked {
+                return false
+            }
+        }
+        return true
+    }
+}
+
+/// Closes (and thereby releases) the flock handles when it leaves scope.
+final class CheckpointDeletionLease: @unchecked Sendable {
+    private let handles: [FileHandle]
+
+    init(handles: [FileHandle], instanceID: String, sessionID: String) {
+        self.handles = handles
+        self.instanceID = instanceID
+        self.sessionID = sessionID
+    }
+
+    let instanceID: String
+    let sessionID: String
+
+    deinit {
+        for handle in handles {
+            _ = flock(handle.fileDescriptor, LOCK_UN)
+            try? handle.close()
+        }
+    }
+}
+
+extension CheckpointWriterLeaseStore {
     func activeLeaseCount(lineageID: String, excludingInstanceID: String) -> Int {
         guard validLineageID(lineageID) else { return 0 }
         let directory = root.appendingPathComponent(lineageID, isDirectory: true)

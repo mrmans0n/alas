@@ -6990,6 +6990,16 @@ final class AppState {
         guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
+        // Scheduled cleanup holds the deletion lock across its final lease
+        // checks and the staging rename; a shell admitted in that window
+        // would keep writing into a worktree that is about to be renamed
+        // away. The lease store's own admission check refuses the lease
+        // file; this guard refuses the shell launch as well.
+        if let lineageID = worktree.lineageID {
+            guard checkpointWriterLeases.admissionIsAllowed(lineageIDs: [lineageID]) else {
+                throw TerminalLaunchError.worktreeOperationInProgress
+            }
+        }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
@@ -11167,6 +11177,27 @@ final class AppState {
                 guard workspaceOwnershipIsValid else {
                     throw WorktreeRemovalOwnershipChanged()
                 }
+                // Scheduled cleanup serializes its final lease checks and the
+                // staging rename against writer admission in every process:
+                // the deletion lock blocks new lease acquisition until the
+                // rename has either happened or been refused, closing the
+                // gap where a fresh writer attaches to a worktree that is
+                // about to be renamed underneath it.
+                let deletionLease: CheckpointDeletionLease?
+                if let scheduledCleanupLeaseCheck,
+                   let lineageID = authorizedWorktreeLineageID {
+                    deletionLease = checkpointWriterLeases.holdDeletionLock(
+                        lineageIDs: [lineageID],
+                        instanceID: instanceId,
+                        sessionID: worktree.id
+                    )
+                    guard deletionLease != nil else {
+                        throw WorktreeRemovalWriterLeaseChanged()
+                    }
+                } else {
+                    deletionLease = nil
+                }
+                defer { _ = deletionLease }
                 return try await Self.performRemoveWorktree(
                     repoPath: repoPath,
                     worktree: worktree,
@@ -11175,7 +11206,8 @@ final class AppState {
                     verifiedMergedBranchSHA: verifiedMergedBranchSHA,
                     authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint,
                     authorizedWorktreeLineageID: authorizedWorktreeLineageID,
-                    scheduledCleanupLeaseCheck: scheduledCleanupLeaseCheck
+                    scheduledCleanupLeaseCheck: scheduledCleanupLeaseCheck,
+                    deletionLease: deletionLease
                 )
             }
         } catch is WorktreeRemovalOwnershipChanged {
@@ -11348,7 +11380,8 @@ final class AppState {
         verifiedMergedBranchSHA: String? = nil,
         authorizedDeleteContentFingerprint: String? = nil,
         authorizedWorktreeLineageID: String? = nil,
-        scheduledCleanupLeaseCheck: (@MainActor @Sendable () -> Bool)? = nil
+        scheduledCleanupLeaseCheck: (@MainActor @Sendable () -> Bool)? = nil,
+        deletionLease: CheckpointDeletionLease? = nil
     ) async throws -> WorktreeRemovalOutcome {
         try await Task.detached {
             let beforeRemoval: (@Sendable () async -> Bool)?
@@ -11393,7 +11426,8 @@ final class AppState {
                 verifiedMergedBranchSHA: verifiedMergedBranchSHA,
                 authorizedDeleteContentFingerprint: authorizedDeleteContentFingerprint,
                 expectedWorktreeLineageID: authorizedWorktreeLineageID,
-                beforeRemoval: beforeRemoval
+                beforeRemoval: beforeRemoval,
+                deletionLease: deletionLease
             )
         }.value
     }
@@ -12929,6 +12963,14 @@ final class AppState {
     ) async throws -> ACPSession.ID {
         guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
             throw ACPWorktreeSessionBootstrapError(message: Self.checkpointRecoveryBlocksACPMessage)
+        }
+        // Scheduled cleanup holds the deletion lock across its final lease
+        // checks and the staging rename; a session admitted in that window
+        // would have its worktree renamed underneath it.
+        if let lineageID = worktree.lineageID {
+            guard checkpointWriterLeases.admissionIsAllowed(lineageIDs: [lineageID]) else {
+                throw ACPWorktreeSessionBootstrapError(message: "Worktree deletion is in progress.")
+            }
         }
         guard let manager = acpManager(for: worktree) else {
             throw ACPWorktreeSessionBootstrapError(message: "Could not create ACP session manager.")
