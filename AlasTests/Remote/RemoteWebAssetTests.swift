@@ -1154,7 +1154,8 @@ struct RemoteWebAssetTests {
         #expect(js.contains("function showAddServerSheet(targetId)"))
         #expect(js.contains("async function submitAddServer()"))
         #expect(js.contains("function forgetServer(id)"))
-        #expect(js.contains("RemoteHubRegistry.otherAttentionTotal(links.all(), hub.activeId)"))
+        #expect(js.contains("RemoteHubRegistry.serverBadgeCounts(s, (links.get(s.id) || {}).counts, active, gatewayCounts)"))
+        #expect(js.contains("RemoteHubRegistry.otherAttentionTotal(effective, hub.activeId)"))
         #expect(html.contains(#"id="tab-settings" class="bt-tab" aria-label="Settings">"#))
         #expect(js.contains(#"$("status").onclick = () => { if (!currentSession) showSettings(); };"#))
 
