@@ -7071,6 +7071,12 @@ final class AppState {
                 repoStartupScript: repoStartupScript,
                 leafId: leafID
             )
+            // `onSessionRegistered` already ran and recorded its outcome;
+            // a refused lease means the session was closed and must fail
+            // this launch rather than installing a dead replacement pane.
+            if let result = terminalLeaseAcquisitionResults.removeValue(forKey: session.id), !result {
+                throw TerminalLaunchError.worktreeOperationInProgress
+            }
             opened = .init(id: session.id, foregroundPid: { [weak session] in
                 session?.surface.foregroundPid
             })

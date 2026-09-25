@@ -506,19 +506,20 @@ final class TerminalService {
 
     /// Awaits in-flight kills for recently closed sessions, then returns the
     /// ids whose termination was NOT confirmed (kill task failed or the wait
-    /// timed out). Cleanup retains the worktree unless this set is empty.
+    /// timed out). A positively failed kill blocks cleanup regardless of its
+    /// age: the tab and writer lease are already gone, and nothing else can
+    /// detect the surviving shell.
     func awaitAndVerifyRecentTerminalKills(
         within window: TimeInterval,
         timeout: TimeInterval,
         now: Date = Date()
     ) async -> Set<String> {
         let recent = recentlyClosedTerminalSessionIDs(within: window, now: now)
-        guard !recent.isEmpty else { return [] }
+        guard !recent.isEmpty else { return Set(pendingKillSessionIDs()) }
         await drainPendingKills(timeout: timeout)
         // Best-effort kills only: anything still tracked here did not
         // positively terminate, so the caller must retain.
-        let unresolved = Set(pendingKillSessionIDs())
-        return unresolved.intersection(recent)
+        return Set(pendingKillSessionIDs())
     }
 
     func closeSession(

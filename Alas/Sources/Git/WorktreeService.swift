@@ -1211,10 +1211,10 @@ struct WorktreeService {
                                 : stagedIgnored.stderr
                         )
                     }
-                    let stagedIgnoredListing = String(decoding: stagedIgnored.stdout, as: UTF8.self)
-                    guard stagedIgnoredListing
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                        .isEmpty
+                    // The listing always ends with a newline for nonempty
+                    // output; test raw emptiness so an all-space pathname
+                    // still counts as ignored content.
+                    guard stagedIgnored.stdout.isEmpty
                     else {
                         try failAfterRollingBack(
                             "The staged worktree holds ignored files that cleanup would delete."
@@ -1260,10 +1260,9 @@ struct WorktreeService {
                                     : submoduleIgnored.stderr
                             )
                         }
-                        let submoduleIgnoredListing = String(decoding: submoduleIgnored.stdout, as: UTF8.self)
-                        guard submoduleIgnoredListing
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                            .isEmpty
+                        // Raw emptiness: an all-space pathname must still
+                        // count as ignored content.
+                        guard submoduleIgnored.stdout.isEmpty
                         else {
                             try failAfterRollingBack(
                                 "The staged submodule holds ignored files that cleanup would delete."
@@ -1555,8 +1554,9 @@ struct WorktreeService {
             cwd: worktreePath
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
-        let listing = String(decoding: result.stdout, as: UTF8.self)
-        if !listing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        // Trim, not raw emptiness: a trailing newline always terminates the
+        // listing, and an all-space pathname must still count as content.
+        if !result.stdout.isEmpty {
             return true
         }
 
