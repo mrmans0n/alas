@@ -2552,9 +2552,9 @@ extension ACPSessionRunner {
 
     /// Invalidates every provenance write that has not crossed the transport
     /// handoff boundary. The broker callback checks the same tracker
-    /// synchronously before sending, so a racing restart either preserves an
+    /// synchronously before sending, so a racing teardown either preserves an
     /// actually-handed-off marker or prevents the superseded request.
-    func takeUnhandedQueueDispatchesForRestart() -> Set<UUID> {
+    func takeUnhandedQueueDispatchesForTeardown() -> Set<UUID> {
         queueDispatchHandoffTracker.takeUnhandedItemIDs()
     }
 

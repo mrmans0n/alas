@@ -6137,7 +6137,7 @@ extension ACPSessionManager {
         let oldLeaseToken = oldAttempt?.leaseToken ?? ownedLeaseTokens[sessionId]
         let oldAttachingConnection = attachingConnections.removeValue(forKey: sessionId)?.connection
         let oldRunner = runners.removeValue(forKey: sessionId)
-        let unhandedQueueDispatches = oldRunner?.takeUnhandedQueueDispatchesForRestart() ?? []
+        let unhandedQueueDispatches = oldRunner?.takeUnhandedQueueDispatchesForTeardown() ?? []
         let oldAttemptConnection = oldAttempt?.connection
         let oldConnection = oldAttemptConnection ?? oldAttachingConnection ?? oldRunner?.connection
         let oldBrokerClient = oldAttempt?.brokerClient ?? (oldConnection?.client as? ACPBrokerClient)
@@ -7066,6 +7066,8 @@ extension ACPSessionManager {
         connectionOwnerIDs[sessionId] = nil
         brokerCallbackOwnerIDs[sessionId] = nil
         let attaching = attachingConnections.removeValue(forKey: sessionId)
+        let runner = runners.removeValue(forKey: sessionId)
+        let unhandedQueueDispatches = runner?.takeUnhandedQueueDispatchesForTeardown() ?? []
         // Reset transient session state SYNCHRONOUSLY before any await.
         // The steer task is unstructured and can resume during the
         // `connection.shutdown()` await below — if `agentState` is still
@@ -7086,10 +7088,14 @@ extension ACPSessionManager {
             // cached object (skipping `restoreQueue`), the post-attach
             // flush sees `.sending`, and the queue stays stuck until a
             // full app restart reloads from SQLite.
-            session.restoreQueue(session.queue, markLegacySendingUncertain: true)
+            session.restoreQueue(
+                session.queue,
+                markLegacySendingUncertain: true,
+                knownUnsentDispatches: unhandedQueueDispatches
+            )
         }
         var closeError: (any Error)?
-        if let runner = runners.removeValue(forKey: sessionId) {
+        if let runner {
             // Invalidate the in-flight prompt BEFORE shutting down the
             // connection. The unstructured `sendNow` task survives stop()
             // and the connection close will make its RPC throw — we want
@@ -7099,6 +7105,13 @@ extension ACPSessionManager {
             runner.invalidateActivePrompt()
             runner.stop()
             await runner.flushPersistence()
+            if !unhandedQueueDispatches.isEmpty, let session {
+                // Persist the cleared provisional provenance before releasing
+                // this lease; a cold reopen must not mistake known-unsent work
+                // for a prompt that may have reached the old broker.
+                persistQueue(for: session)
+                await flushPersistence()
+            }
             if shouldCloseRemote, let remoteSessionId, !remoteSessionId.isEmpty {
                 do {
                     try await closeRemoteSession(

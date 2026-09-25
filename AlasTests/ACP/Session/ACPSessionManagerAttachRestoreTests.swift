@@ -789,6 +789,75 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadQueue(sessionId: session.id).isEmpty)
     }
 
+    @Test("detaching before queued prompt handoff keeps the prompt eligible")
+    func detachBeforeQueuedPromptHandoffKeepsPromptEligible() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let oldService = ManagerBrokerService(generation: 7, supportsPromptResponses: true)
+        let replacementService = ManagerBrokerService(generation: 8, supportsPromptResponses: true)
+        var serviceFactoryCalls = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: {
+                serviceFactoryCalls += 1
+                return serviceFactoryCalls == 1 ? oldService : replacementService
+            },
+            isolatedBrokerServiceFactory: { replacementService },
+            attachmentStartupTimeout: .seconds(2)
+        )
+        let session = manager.createSession(id: "pre-handoff-detach-session", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+
+        let queued = QueuedPrompt(blocks: [.text("not handed off before detach")])
+        session.queue = [queued]
+        manager.persistQueue(for: session)
+        await manager.flushAllPersistence()
+
+        let oldRunner = try #require(manager.runners[session.id])
+        let provenanceGate = AttachPhaseGate()
+        defer {
+            Task { await provenanceGate.release() }
+        }
+        oldRunner.queueDispatchProvenancePersistedForTesting = { _ in
+            await provenanceGate.enterAndWait()
+        }
+        oldRunner.flushQueueIfIdle()
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await provenanceGate.hasEntered
+        }
+        #expect(session.queue.first?.dispatchedBrokerGeneration == ACPBrokerGeneration(rawValue: 7))
+        #expect(await oldService.sent.filter { $0.method == "session/prompt" }.isEmpty)
+
+        await manager.detach(sessionId: session.id)
+        await provenanceGate.release()
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(session.queue.first?.status == .pending)
+        #expect(session.queue.first?.dispatchedBrokerGeneration == nil)
+        #expect(session.queue.first?.deliveryUncertain == false)
+        #expect(await oldService.sent.filter { $0.method == "session/prompt" }.isEmpty)
+        #expect(try store.loadQueue(sessionId: session.id).first?.dispatchedBrokerGeneration == nil)
+
+        let reopenedSession = try #require(manager.placeholderSession(id: session.id))
+        await manager.hydrateIfNeeded(id: reopenedSession.id)
+        await manager.attach(to: reopenedSession.id, freshlyCreated: false)
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await replacementService.sent.contains { $0.method == "session/prompt" }
+        }
+        await manager.flushAllPersistence()
+
+        let replacementPrompt = try #require(
+            await replacementService.sent.first { $0.method == "session/prompt" }
+        )
+        #expect(replacementPrompt.operationKey.rawValue == queued.brokerOperationKey)
+        #expect(reopenedSession.queue.isEmpty)
+        #expect(try store.loadQueue(sessionId: session.id).isEmpty)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("retrying uncertain queued prompt advances its durable key once")
     func retryingUncertainQueuedPromptAdvancesOperationAttempt() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
