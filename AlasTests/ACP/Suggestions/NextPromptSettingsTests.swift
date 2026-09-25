@@ -8,6 +8,23 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct NextPromptSettingsTests {
+    @Test(arguments: [false, true])
+    func startupInspectsInstalledModelOnlyWhenSupported(_ supported: Bool) async throws {
+        let fixture = try ModelStoreFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let persistence = SettingsStore()
+        persistence.config.nextPromptSuggestionsEnabled = true
+        let state = makeState(fixture, persistence, supported: supported)
+        // Wait for the one-shot startup inspection if the supported build scheduled it.
+        await state.nextPromptObservers.tasks.last?.value
+        #expect(await fixture.store.state == (supported ? .ready : .notInstalled))
+        #expect(state.nextPromptRuntimeEnabled == supported)
+        #expect(fixture.transport.requestCount == 0)
+        await state.shutdownNextPromptSuggestions()
+    }
+
     @Test(arguments: ["stream", "delivery", "pending message"])
     func delegatedChildWorkBlocksAndInvalidatesParentSuggestions(_ work: String) async throws {
         let fixture = try ModelStoreFixture.verifiedInstall()
@@ -409,12 +426,13 @@ struct NextPromptSettingsTests {
 
     private func makeState(_ fixture: ModelStoreFixture, _ persistence: SettingsStore,
                            inference: (any NextPromptRuntime)? = nil,
-                           readModelState: (@Sendable () async -> NextPromptModelState)? = nil) -> AppState {
+                           readModelState: (@Sendable () async -> NextPromptModelState)? = nil,
+                           supported: Bool = true) -> AppState {
         AppState(store: persistence, persistenceErrorHandler: { _, _ in },
                  nextPromptModelStore: fixture.store,
                  nextPromptReadModelState: readModelState,
                  nextPromptInference: inference ?? NextPromptInference(acquireLease: { try await fixture.store.acquireVerifiedLease() }, load: { _ in { _ in nil } }),
-                 nextPromptSupported: true)
+                 nextPromptSupported: supported)
     }
 
     private func waitUntil(_ condition: () async -> Bool) async throws {

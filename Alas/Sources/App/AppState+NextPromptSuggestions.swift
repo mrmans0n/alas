@@ -26,6 +26,7 @@ final class NextPromptObservers {
 extension AppState {
     func startNextPromptObservers() {
         nextPromptRuntimeEnabled = config.nextPromptSuggestionsEnabled && nextPromptSupported
+        guard nextPromptSupported else { return }
         let model = nextPromptModelStore, runtime = nextPromptInference
         nextPromptObservers.tasks.append(Task { [weak self] in
             for await value in await model.states() {
