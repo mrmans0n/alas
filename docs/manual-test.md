@@ -465,7 +465,7 @@ Prerequisite: use the paired native-client GG build with `sc --staged-only` and 
 
 ### Next-prompt model provisioning
 
-The Settings controls are in Advanced → Experimental → Next-prompt suggestions. For a provisioning exercise, host the actual `AdvancedPane` with an injected AppState, persistence store and model store. Use an isolated root such as `/private/tmp/alas-model-check/Application Support/Alas/Models/NextPromptSuggestions` when testing it. Pass that root explicitly to `NextPromptModelStore`; leave the normal Application Support directory alone.
+In a Debug build with the `~/.alas/.debug` marker, the controls are in Settings → Debug → Experimental → Next-prompt suggestions. For a provisioning exercise, host the actual `AdvancedPane` with an injected AppState, persistence store and model store. Use an isolated root such as `/private/tmp/alas-model-check/Application Support/Alas/Models/NextPromptSuggestions` when testing it. Pass that root explicitly to `NextPromptModelStore`; leave the normal Application Support directory alone.
 
 1. Load `NextPromptModelManifest.json` and provide a `NextPromptModelTransport` that reads the already verified local snapshot in chunks and sends them to `NextPromptModelSink.receive`. Keep the snapshot read-only. This exercises installation without downloading another copy from the network.
 2. Start `install()`, pause the transport after the first weights chunk, and call `cancelDownload()`. Await both calls. Confirm the transfer has stopped, the revision was not published, and its staging directory was removed.
@@ -506,3 +506,43 @@ Use an injected temporary model root and config store; do not change the normal 
 Memory-pressure handling cancels evaluation and releases this feature's container and reader lease after drain. It does not clear MLX's process-wide allocator cache or promise that process RSS returns to baseline.
 
 Observed on 2026-09-25 in the actual `AdvancedPane` hosted with temporary stores: cancelling consent left the preference off and transport request count at zero. Cancelling the first transfer left enablement on and only `.lock` in the model root. Retry installed all 12 manifest assets from the read-only local snapshot. Disable/re-enable retained the files and kept the transport count at 13 (one cancelled transfer plus 12 assets), including while a second process held a verified shared lease. Removal displayed Model in use and left the revision intact; Retry Removal after releasing the peer removed it. The stable lock inode and unrelated sentinel file survived. This exercise did not run native inference or measure memory reclamation.
+
+### Next-prompt verification record, 2026-09-25
+
+A temporary driver launched the actual Alas executable through Xcode's app host,
+using an isolated profile and a local synthetic ACP client. The production session
+runner emitted a successful turn after update/persistence drain. The production
+context, native inference, coordinator and `ACPNSTextView` handled the suggestion.
+This exercised a native composer window, not the complete workspace/mirror UI.
+The temporary driver was removed afterward.
+
+| Area | Evidence and limits |
+| --- | --- |
+| Clean app launch | The unmodified Debug executable launched with an empty temporary Foundation profile, network denied and original Alas state unreadable. After adding the temporary profile’s `.alas/.debug` marker, Settings showed Enable and Model not installed. No model assets appeared. |
+| Release access | A disposable locally re-signed Release copy omitted the controls even with a valid enabled preference and `.alas/.debug` marker. It created no model files. The untouched local Release copy failed before startup because of a `libfff_c.dylib` Team-ID/library-validation mismatch; this check does not establish distributable signing. |
+| Eligible presentation | Directly observed a native model offer in the empty, focused key-window composer after a synthetic ACP completion. |
+| Before acceptance | The native draft and serialized draft stayed empty, the accessibility value was empty, the queue stayed empty and the clipboard change count stayed unchanged. Transcript preservation is covered by automated checks; the manual driver's baseline preceded additional synthetic turns. |
+| Tab | Directly observed one insertion, caret at the end, no send or queue operation, and removal of the accessibility action. |
+| Undo/redo | Directly observed one undo remove the insertion without reviving the ghost, then redo restore ordinary draft text. |
+| Accessibility | Directly invoked the exposed Accept Suggestion action through the accessibility API. It inserted draft text with zero submits. This is not a VoiceOver screen-reader session. |
+| Escape | Directly observed dismissal of a fresh offer with the composer still empty. |
+| Typing | Directly observed ordinary typing and clearing remain responsive. A first attempt lost eligibility while incidental typing/focus changes occurred; it produced no candidate. |
+| Model removal | A separate Python process held a real shared `.lock`. Production removal returned busy and retained the revision. After peer release, removal deleted the revision while preserving the lock inode and an unrelated sentinel. Settings maps this failure to Model in use. |
+| Unicode, wrapping, Shift-Tab, marked text, picker and pending-input guards | Covered by production-hosted automated composer tests. Actual IME, dictation, OS image/paste/drop workflows, narrow-width visual layout and theme/Increase Contrast review remain manual gates. |
+| Stale completion, queue/permission/disconnect, writer/mirror and shutdown races | Covered by the focused coordinator, runner, manager and settings regression selection. Full workspace tab-switch/back and two-window mirror interaction were not manually exercised. |
+| Memory pressure | Native cancellation/drain and lease release were measured. A real OS memory-pressure notification and resulting composer behavior were not manually induced. |
+
+The native development evaluation found two severe destructive-consent suggestions
+that passed the policy. Keep the feature default-off in Debug. Thirty untouched
+real turns and actual user review remain unavailable; no general-availability
+claim follows from this record. Raw model output is retained only under
+`/private/tmp`, and aggregate results are in
+[`THREE-MODEL-RESULTS.md`](../scripts/prototype-next-prompt/THREE-MODEL-RESULTS.md#native-production-verification-2026-09-25).
+
+Local automated verification passed 359 selected test cases after probe removal,
+plus 22 inference/settings cases after the Debug-only guard correction, with no
+failures or skips. No complete test plan or CI run was performed.
+
+Final local arm64 and x86_64 builds passed in both Debug and Release after the
+Debug-only correction. The local Release signing limitation above is separate
+from these compilation results.

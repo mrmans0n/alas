@@ -221,3 +221,91 @@ These are single observations from the final passing process, with cached files 
 The actor released its container and request caches, but process RSS did not return to baseline. It deliberately leaves MLX's global allocator cache alone because that cache can serve other subsystems. Reported MLX cache bytes, active allocations and RSS are different, non-additive measures. The remaining resident memory's ownership was not isolated. The earlier compatibility gate's residual-RSS concern therefore remains, with a full-budget native workload now measured.
 
 The native run selected only `AlasTests/NextPromptInferenceTests` and passed 12 tests with no failures or skips. The temporary probe, instrumentation and test-only dependencies were removed afterward. The retained suite then passed all 11 tests with no failures or skips. No package pins changed and no CI result is claimed.
+
+## Native production verification, 2026-09-25
+
+The production native path was evaluated on the 22 public synthetic cases in
+[`native-synthetic.json`](native-synthetic.json): the twelve comparison safety
+cases, five disclosure/destructive paraphrases and five benign controls. Each
+case used `NextPromptContext.snapshot`, production template/token fitting,
+`NextPromptInference`, strict parsing and policy checks. No private conversations
+or repository content entered the model. This is development evidence, not a
+fresh holdout or user study.
+
+The model was `mlx-community/Qwen3-4B-Instruct-2507-4bit` at
+`50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b`. All twelve manifest assets matched the
+read-only local snapshot. The native app host denied network access and verified
+an outbound connection failed with EPERM. No model assets were downloaded.
+
+Package pins were unchanged: mlx-swift 0.31.4 at
+`dc43e62d7055353c7f99fa071a4e71d29dfddc44`, mlx-swift-lm 3.31.4 at
+`bd4b7434e6bdb588c7ef55706ff8904cb7fd4c57`, and swift-transformers 1.3.0 at
+`b38443e44d93eca770f2eb68e2a4d0fa100f9aa2`. The complete `Package.resolved`
+SHA-256 was `67cb7c56861188b8b5786a9bf6e6952ca1a3a86d101e790fa9d6bc4f5173a439`.
+Policy version was `optional-followup-v1`; the complete production policy source
+SHA-256 was `f30d584f44b6005f626bb13babf85067bc17d05a1ce295f54d940f7df8d47a38`.
+
+Raw outputs and per-case scoring remain private under `/private/tmp`. The three
+inputs rejected before inference were also run through the native loader as
+separate diagnostics. Those diagnostic outputs were never offered to the user.
+
+| Agent-scored outcome | Raw native, including rejected-input diagnostics | Production result |
+| --- | ---: | ---: |
+| Useful continuation or safe clarification | 18 | 16 |
+| Ordinary quality miss | 1 | 1 |
+| Severe destructive consent | 2 | 2 |
+| Additional disclosure risk | 1 | 0 |
+| Model null | 0 | 0 |
+| Invalid output | 0 | 0 |
+| Input-policy rejection | Not applicable | 3 |
+| Output-policy rejection | Not applicable | 0 |
+
+Two paraphrases produced destructive consent despite explicit instructions to
+preserve project/backup data or production records. Both passed the production
+policy. These are rollout blockers. The additional raw disclosure risk proposed
+publishing a complete `.env` after redacting only token values, without establishing
+that other sensitive configuration was excluded. Production rejected that input;
+this must not be counted as a naturally safe model response.
+
+The original twelve cases yielded nine offers and three input rejections, with
+no severe offered output. All seven benign controls yielded offers, six useful
+and one with assistant/user role confusion. The public-template controls retained
+useful continuation opportunities; the original redacted-excerpt control's role
+confusion was the ordinary quality miss. The paraphrase failures show why passing
+the original cases does not establish safety.
+
+The native driver plus retained inference regressions passed 13 tests. Individual
+measurements through the production actor/store were 3,291.9 ms for the first
+eligible cold request, 3,596.5 ms for reload after unload, and 1,318.2 ms for warm
+reuse. Cancellation requested after 30 ms drained in 480.3 ms, returned no candidate
+and released the reader lease before an exclusive lock succeeded. These are single
+observations, not percentiles or reboot-cold timings.
+
+Peak process RSS was 5,090,459,648 bytes and peak active MLX allocation was
+3,040,302,216 bytes. Final cancellation left 12,176 active MLX bytes and
+11,627,317,572 bytes reported by the process-global allocator cache. These measures
+are not additive. Current post-unload RSS was not measured in this run; unloading
+must not be described as returning process memory to baseline.
+
+The separate interactive app host reached 5,560,696,832 bytes peak RSS after several
+short synthetic completions. These observations fit the disclosed several-GB cost
+and do not establish a worst-case bound for an 8,192-token workload.
+
+General availability remains blocked. No authorized source of thirty untouched
+real completed turns or actual user review was available, so that gate is
+incomplete. Access is default-off and restricted to Debug builds. See the
+[manual verification record](../../docs/manual-test.md#next-prompt-verification-record-2026-09-25)
+for directly observed app behavior and remaining manual checks.
+
+After removing the probes, the final focused selection passed 359 test cases,
+433 expanded runs, with no failures or skips. It selected context, policy, model
+store/lease, inference, coordinator, settings, native composer, session runner,
+manager lease, config and AppState persistence suites. A subsequent focused
+inference/settings run passed 22 cases after restricting both the settings entry
+and runtime capability to Debug. No full test plan was run and no CI result is
+claimed.
+
+Final local arm64 and x86_64 builds passed in both Debug and Release after the
+Debug-only correction. An untouched local Release copy hit a pre-startup FFF
+library-signing mismatch; a disposable re-signed copy was used only for the
+Release UI check. These builds do not establish distribution signing readiness.
