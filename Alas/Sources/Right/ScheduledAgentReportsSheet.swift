@@ -23,6 +23,16 @@ struct ScheduledAgentReportPageRefresh {
     ) -> Self {
         let windowCount = requestedLimit - 1
         let window = prefix.prefix(windowCount)
+        // Nothing was loaded yet (first read failed or the project had no
+        // reports): seed the list from the refreshed read instead of
+        // discarding it, otherwise a report that appeared would never be
+        // shown and the list would stay empty.
+        if windowCount == 0 {
+            return replacingLoadedPrefix(
+                Array(prefix.prefix(1)),
+                requestedLimit: prefix.count
+            )
+        }
         let prefixMatches = window.map(\.id) == reports.map(\.id)
         if prefixMatches {
             var refreshedReports = reports

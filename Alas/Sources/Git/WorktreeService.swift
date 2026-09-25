@@ -1190,6 +1190,37 @@ struct WorktreeService {
             // that only scheduled cleanup supplies.
             if let beforeRemoval {
                 do {
+                    // The pre-rename ignored-content audit ran against the
+                    // live path; an external process can create an ignored
+                    // artifact between that fingerprint and the rename, and
+                    // the staged `git status` above omits ignored paths. The
+                    // same `ls-files --git-dir/--work-tree` form used by the
+                    // cleanliness recheck works post-rename, so re-run it.
+                    let stagedIgnored = try await Process.gitData(
+                        [
+                            "ls-files", "--others", "--ignored", "--exclude-standard",
+                            "--git-dir", expectedRegistration.gitDirectory.path,
+                            "--work-tree", ticket.stagedPath.path,
+                        ],
+                        cwd: ticket.stagedPath
+                    )
+                    guard stagedIgnored.exitCode == 0 else {
+                        try failAfterRollingBack(
+                            stagedIgnored.stderr.isEmpty
+                                ? "Could not verify the staged worktree's ignored content."
+                                : stagedIgnored.stderr
+                        )
+                    }
+                    let stagedIgnoredListing = String(decoding: stagedIgnored.stdout, as: UTF8.self)
+                    guard stagedIgnoredListing
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty
+                    else {
+                        try failAfterRollingBack(
+                            "The staged worktree holds ignored files that cleanup would delete."
+                        )
+                    }
+
                     let stored = try Self.stagedSubmoduleGitDirectories(
                         worktreePath: ticket.stagedPath,
                         worktreeGitDirectory: expectedRegistration.gitDirectory
