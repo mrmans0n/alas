@@ -59,6 +59,25 @@ struct AppStateCleanupTests {
         return dir
     }
 
+    /// ACP launches validate that the agent is available on the worktree's
+    /// execution host, so issue-launch tests register an enabled built-in. Its
+    /// binary points at a missing file, so the session opens and fails to
+    /// start without spawning a real agent.
+    private static let launchableACPAgentID = "omp"
+
+    private func registerLaunchableACPAgent(on state: AppState, missingBinaryIn root: URL) {
+        state.config.agents.builtinState[Self.launchableACPAgentID] = BuiltinAgentState(
+            isEnabled: true,
+            binaryOverride: root.appendingPathComponent("missing-acp-agent").path,
+            extraTerminalArgs: nil
+        )
+        state.agentRegistry = AgentRegistry(
+            builtinState: state.config.agents.builtinState,
+            customs: state.config.agents.custom,
+            installedIds: [Self.launchableACPAgentID]
+        )
+    }
+
     @Test func piMCPExcludeRetriesForUnchangedManagedConfig() {
         #expect(AppState.piMCPGeneratedConfigExcludePath == ".pi/mcp.json")
         #expect(AppState.shouldExcludePiDirectory(after: .wrote))
@@ -652,6 +671,7 @@ struct AppStateCleanupTests {
             color: "#5fb7c4"
         )
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        registerLaunchableACPAgent(on: state, missingBinaryIn: repo)
 
         let attachment = IssueAttachment(
             canonicalURL: URL(string: "https://github.com/acme/alas/issues/42")!,
@@ -673,7 +693,7 @@ struct AppStateCleanupTests {
             branch: branch,
             destination: destination,
             runStartup: false,
-            launchSurface: .acp(agentId: "missing-acp-agent", preparedPrompt: preparedPrompt),
+            launchSurface: .acp(agentId: Self.launchableACPAgentID, preparedPrompt: preparedPrompt),
             issueAttachment: attachment
         )
         try await waitForOperationStateMatching(state.projectsManager, id: failedId, projectId: project.id) { state in
@@ -685,7 +705,7 @@ struct AppStateCleanupTests {
             operationState: state.projectsManager.operationState(forWorktreeId: failedId, projectId: project.id),
             defaultBase: state.config.worktrees.baseBranch
         )
-        #expect(retryParameters.launchSurface == .acp(agentId: "missing-acp-agent", preparedPrompt: preparedPrompt))
+        #expect(retryParameters.launchSurface == .acp(agentId: Self.launchableACPAgentID, preparedPrompt: preparedPrompt))
         #expect(retryParameters.issueAttachment == attachment)
 
         _ = try await Process.git(["branch", retryBase, "main"], cwd: repo)
@@ -725,6 +745,7 @@ struct AppStateCleanupTests {
             color: "#5fb7c4"
         )
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        registerLaunchableACPAgent(on: state, missingBinaryIn: repo)
 
         let destination = repo.appendingPathComponent("wt-reconciled-issue")
         _ = try await Process.git(["worktree", "add", destination.path, "-b", "reconciled-issue", "main"], cwd: repo)
@@ -748,7 +769,7 @@ struct AppStateCleanupTests {
                 message: "refresh failed",
                 base: "main",
                 ggWorktreeMode: .inherit,
-                launchSurface: .acp(agentId: "missing-acp-agent", preparedPrompt: preparedPrompt),
+                launchSurface: .acp(agentId: Self.launchableACPAgentID, preparedPrompt: preparedPrompt),
                 issueAttachment: attachment
             )
         )
@@ -774,6 +795,7 @@ struct AppStateCleanupTests {
             color: "#5fb7c4"
         )
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        registerLaunchableACPAgent(on: state, missingBinaryIn: repo)
 
         let destination = repo.appendingPathComponent("wt-reconciled-all-issue")
         _ = try await Process.git(["worktree", "add", destination.path, "-b", "reconciled-all-issue", "main"], cwd: repo)
@@ -797,7 +819,7 @@ struct AppStateCleanupTests {
                 message: "refresh all failed",
                 base: "main",
                 ggWorktreeMode: .inherit,
-                launchSurface: .acp(agentId: "missing-acp-agent", preparedPrompt: preparedPrompt),
+                launchSurface: .acp(agentId: Self.launchableACPAgentID, preparedPrompt: preparedPrompt),
                 issueAttachment: attachment
             )
         )
