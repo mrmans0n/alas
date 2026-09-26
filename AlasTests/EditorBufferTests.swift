@@ -920,7 +920,11 @@ struct EditorBufferTests {
         defer { buffer.stopWatching() }
         try await Task.sleep(nanoseconds: 1_100_000_000)
         try "v2\n".write(to: url, atomically: true, encoding: .utf8)
-        try await Task.sleep(nanoseconds: 500_000_000)
+        // Wait for the watcher's reload instead of a fixed delay; file events
+        // arrive late under CI load.
+        for _ in 0 ..< 100 where buffer.storage.string != "v2\n" || fired == 0 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
         #expect(buffer.storage.string == "v2\n")
         #expect(buffer.dirty == false)
         #expect(buffer.conflict == nil)
@@ -975,7 +979,9 @@ struct EditorBufferTests {
         try handle.truncate(atOffset: 0)
         try handle.write(contentsOf: Data("external\n".utf8))
         try handle.close()
-        for _ in 0..<20 where buffer.relativePath != "nested/b.txt" {
+        // The rename and the content change can arrive as separate events, so
+        // wait for both instead of asserting the conflict right after the rename.
+        for _ in 0 ..< 100 where buffer.relativePath != "nested/b.txt" || buffer.conflict == nil {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
 
