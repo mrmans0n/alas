@@ -156,6 +156,13 @@ struct CheckpointRestoreIntegrationTests {
         for path in recovery.paths { #expect(path == before.paths[path.relativePath]) }
         #expect(try await fixture.service.summaries(target: fixture.repo.target).summaries.contains { $0.id == recovery.id })
         #expect(try await fixture.store.recoverableJournals(lineageID: fixture.repo.target.lineageID).isEmpty)
+        // A completed restore cleans up after itself: no staging tree is left
+        // in the worktree and the finished journal is removed from the store.
+        let worktreeEntries = try FileManager.default.contentsOfDirectory(atPath: fixture.repo.root.path)
+        #expect(!worktreeEntries.contains { $0.hasPrefix(".alas-checkpoint-restore-") })
+        let storeFiles = FileManager.default.enumerator(at: fixture.storeRoot, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL } ?? []
+        #expect(!storeFiles.contains { $0.pathExtension == "json" && $0.pathComponents.contains("journals") })
     }
 
     @Test func selectiveRestorePreservesUnselectedIndexAndDiskBytes() async throws {

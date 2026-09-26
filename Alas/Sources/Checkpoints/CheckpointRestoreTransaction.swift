@@ -592,8 +592,11 @@ struct CheckpointRestoreTransaction: Sendable {
         journal = terminal
         // Verification and the durable terminal record make the transaction
         // complete. A cleanup failure must not attempt another restore.
+        // The staging root still holds `original-index`, the prepared `index`,
+        // and the replacement/backup trees, so it needs a recursive removal;
+        // a single rmdir fails with ENOTEMPTY and would skip finishJournal.
         do {
-            try fileSystem.removeIfPresent(URL(fileURLWithPath: journal.stagingRoot))
+            try removeDirectoryTreeIfPresent(URL(fileURLWithPath: journal.stagingRoot, isDirectory: true))
             try fileSystem.synchronizeDirectory(target.path)
             try await store.finishJournal(id: journal.id, lineageID: target.lineageID)
         } catch { return }
