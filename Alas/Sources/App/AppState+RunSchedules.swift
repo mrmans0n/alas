@@ -328,16 +328,14 @@ extension AppState {
                 let outcomeReason = finalizationError.map {
                     "\($0) The report was not committed; the worktree was retained."
                 } ?? reason
-                if finalizationError != nil {
-                    reportScheduleFailure(
-                        schedule,
-                        reason: outcomeReason,
-                        project: project,
-                        worktree: originWorktree,
-                        reportID: reportID,
-                        evenIfCancelled: true
-                    )
-                }
+                reportScheduleFailure(
+                    schedule,
+                    reason: outcomeReason,
+                    project: project,
+                    worktree: originWorktree,
+                    reportID: reportID,
+                    evenIfCancelled: finalizationError != nil
+                )
                 return RunScheduleRunReport(
                     outcome: .launchFailed(outcomeReason),
                     reportIDs: [reportID!]
