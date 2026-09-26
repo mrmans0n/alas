@@ -222,11 +222,11 @@ actor NextPromptInference: NextPromptRuntime {
     }
 
     private func generationRequest(for request: NextPromptRequest) -> LocalTextGenerationRequest {
+        let candidateCount = min(10, request.turns.count)
         let lastTurn = request.turns.count - 1
-        let step = max(1, (request.turns.count + 8) / 9)
-        // ponytail: 10 spaced suffixes cap serialization work; binary-search token fitting if context gaps matter.
-        let starts = Array(stride(from: 0, through: lastTurn, by: step))
-            + (lastTurn.isMultiple(of: step) ? [] : [lastTurn])
+        let intervalCount = max(1, candidateCount - 1)
+        // ponytail: 10 evenly spaced suffixes cap serialization; binary search fitting if context gaps matter.
+        let starts = (0..<candidateCount).map { $0 * lastTurn / intervalCount }
         let candidates = starts.map { first in
             NextPromptPolicy.messages(for: Array(request.turns[first...]))
         }
