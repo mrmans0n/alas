@@ -1222,37 +1222,21 @@ final class RightPaneState: GGSplitCommitServicing {
             guard reviewLoop.beginAction(action) else { return }
             Task { @MainActor in
                 defer { reviewLoop.endAction(action) }
-                do {
-                    let result = try await Process.git(
-                        Self.reviewLoopPushArguments(
-                            snapshot: snapshot,
-                            forceWithLease: action == .forcePushBranch
-                        ),
-                        cwd: worktree.path
-                    )
-                    guard result.exitCode == 0 else {
-                        sidebarError = Self.reviewLoopPushFailureMessage(result)
-                        return
-                    }
-                    let refreshed = await refresh()
-                    if action == .pushAndCreateReviewRequest {
-                        guard refreshed,
-                              let current = reviewLoop.snapshot,
-                              current.local.branchName == snapshot.local.branchName,
-                              current.local.headSHA == snapshot.local.headSHA,
-                              !current.local.needsPush,
-                              current.reviewRequest == nil,
-                              current.errorMessage == nil,
-                              ReviewReadinessModel.canCreateReviewRequest(current)
-                        else {
-                            sidebarError = reviewLoop.lastError ?? "Pushed branch, but could not prepare the review request draft. Refresh and try again."
-                            return
-                        }
-                        appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktree.id, snapshot: current)
-                    }
-                } catch {
-                    sidebarError = error.localizedDescription
-                }
+                await performReviewLoopPush(
+                    action,
+                    snapshot: snapshot,
+                    appState: appState,
+                    push: {
+                        try await Process.git(
+                            Self.reviewLoopPushArguments(
+                                snapshot: snapshot,
+                                forceWithLease: action == .forcePushBranch
+                            ),
+                            cwd: worktree.path
+                        )
+                    },
+                    refresh: { await self.refresh() }
+                )
             }
         case .createReviewRequest:
             guard let snapshot = reviewLoop.snapshot else { return }
@@ -1271,6 +1255,40 @@ final class RightPaneState: GGSplitCommitServicing {
                   ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
             else { return }
             pendingMerge = snapshot
+        }
+    }
+
+    func performReviewLoopPush(
+        _ action: ReviewReadinessActionKind,
+        snapshot: ReviewLoopSnapshot,
+        appState: AppState,
+        push: @MainActor () async throws -> ProcessResult,
+        refresh: @MainActor () async -> Bool
+    ) async {
+        do {
+            let result = try await push()
+            guard result.exitCode == 0 else {
+                sidebarError = Self.reviewLoopPushFailureMessage(result)
+                return
+            }
+            let refreshed = await refresh()
+            if action == .pushAndCreateReviewRequest {
+                guard refreshed,
+                      let current = reviewLoop.snapshot,
+                      current.local.branchName == snapshot.local.branchName,
+                      current.local.headSHA == snapshot.local.headSHA,
+                      !current.local.needsPush,
+                      current.reviewRequest == nil,
+                      current.errorMessage == nil,
+                      ReviewReadinessModel.canCreateReviewRequest(current)
+                else {
+                    sidebarError = reviewLoop.lastError ?? "Pushed branch, but could not prepare the review request draft. Refresh and try again."
+                    return
+                }
+                appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktree.id, snapshot: current)
+            }
+        } catch {
+            sidebarError = error.localizedDescription
         }
     }
 
