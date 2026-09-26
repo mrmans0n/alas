@@ -375,7 +375,8 @@ struct ACPComposer: View {
                 dismissNextPromptOffer: dismissNextPromptOffer,
                 onNextPromptStateChange: onNextPromptStateChange,
                 nextPromptInputBlocked: nextPromptInputBlocked,
-                nextPromptIsDictating: { dictation.state == .preparing || dictation.state == .listening }
+                nextPromptIsDictating: { dictation.state == .preparing || dictation.state == .listening },
+                upstreamReferences: manager.upstreamReferences.store(for: worktreeRoot)
             )
             .frame(minHeight: 44, maxHeight: 140)
             .onAppear {

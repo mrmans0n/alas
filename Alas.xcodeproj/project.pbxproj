@@ -190,6 +190,7 @@
 		1721FFC6A99B6E2683378552 /* ACPComposerDraftBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9454F0214E21F91473C96F6 /* ACPComposerDraftBridgeTests.swift */; };
 		172298A09BC94456A27EFCB7 /* DiffInlineHighlighterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61D4F5B30CE2AA0220A3E45C /* DiffInlineHighlighterTests.swift */; };
 		1748C3645E9B769F371F69E6 /* GitServiceUpstreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE2CDF03A998BADF20163D5A /* GitServiceUpstreamTests.swift */; };
+		175449ED203D1BF2A5920466 /* ACPUpstreamReferenceComposerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D31F225DD361D57A6ACC8AF7 /* ACPUpstreamReferenceComposerTests.swift */; };
 		175951CE78A1446A9131BA1F /* GitNameValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 269CE27A6F4F2E663EDF9052 /* GitNameValidator.swift */; };
 		175AA2192F1DBD9836E08E77 /* WorkingTreeChangeGroupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F5959FF98A5105FF7B17894 /* WorkingTreeChangeGroupTests.swift */; };
 		175D0A77579A022F3AB81E48 /* SQLiteDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF5F20AB3B3F7BCEAA56B143 /* SQLiteDatabase.swift */; };
@@ -850,6 +851,7 @@
 		66A233855B8A14C1DB45BC0C /* ACPImageChipHover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EE9D8FC092856E46369F7B6 /* ACPImageChipHover.swift */; };
 		66B355C8C9C8D498F02393BD /* ACPModeInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77DCF9669F4D8F6AB2AD5BBF /* ACPModeInfoTests.swift */; };
 		66D3CC7109527B2938684292 /* ProjectsManagerWorktreeOrderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3711FACCAD4DE3E29AB13DD2 /* ProjectsManagerWorktreeOrderingTests.swift */; };
+		66D51E930D22B562D1063FB9 /* ACPComposer+UpstreamReferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B4AE3B47834B31019FA6EBA /* ACPComposer+UpstreamReferences.swift */; };
 		66D8C1574C3A58C9E959CEDB /* RunScriptFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D27AA18750DEA3843477D9 /* RunScriptFailureTests.swift */; };
 		66DCE2D5A6D886BAE5A6B9A0 /* PairedComposerTextControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36B8003F90C5FD770A293717 /* PairedComposerTextControls.swift */; };
 		671CC15E5225F410BBA41274 /* NativePeerSidebarSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89C39470869F27DF2062567D /* NativePeerSidebarSnapshotTests.swift */; };
@@ -2728,6 +2730,7 @@
 		4B2FAABB50C8BE2321A1B1DD /* ClaudeCodeACPInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeCodeACPInstallerTests.swift; sourceTree = "<group>"; };
 		4B3300F31455EE1BDF7BDE15 /* ZmxClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZmxClientTests.swift; sourceTree = "<group>"; };
 		4B450918CC98255AD9170586 /* AppearancePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearancePane.swift; sourceTree = "<group>"; };
+		4B4AE3B47834B31019FA6EBA /* ACPComposer+UpstreamReferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ACPComposer+UpstreamReferences.swift"; sourceTree = "<group>"; };
 		4B58B29E5D4E497CEA3CE9BA /* GGCommandRunningStreamingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGCommandRunningStreamingTests.swift; sourceTree = "<group>"; };
 		4BECCB29ED6324C55C541D54 /* DiffReviewRail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewRail.swift; sourceTree = "<group>"; };
 		4BF2EE8A6AAA7F9B45DACC0C /* SemanticVersionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticVersionTests.swift; sourceTree = "<group>"; };
@@ -3799,6 +3802,7 @@
 		D2BDAB5BEDF7FE5EBFBFE9A2 /* ACPRemoteFileServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPRemoteFileServerTests.swift; sourceTree = "<group>"; };
 		D2F90D03073708AA01531533 /* GitService+Staging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GitService+Staging.swift"; sourceTree = "<group>"; };
 		D305FE622B772AE41ADBF3CF /* RunScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScheduler.swift; sourceTree = "<group>"; };
+		D31F225DD361D57A6ACC8AF7 /* ACPUpstreamReferenceComposerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPUpstreamReferenceComposerTests.swift; sourceTree = "<group>"; };
 		D33173D002A6484A1F486C66 /* WorkspaceModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceModelsTests.swift; sourceTree = "<group>"; };
 		D331C6C92DAAED460C8921FD /* RepoHookApprovalSheetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoHookApprovalSheetTests.swift; sourceTree = "<group>"; };
 		D3552BE48184E15F0BE6084C /* TrackedRevisionCodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackedRevisionCodingTests.swift; sourceTree = "<group>"; };
@@ -5665,6 +5669,7 @@
 				009B1616C60DB50E1CC11264 /* ACPTranscriptScrollerViewTests.swift */,
 				0D536FED92C1F59BDA8924C3 /* ACPTranscriptTilingControllerTests.swift */,
 				15747B584BD98E180653C6FC /* ACPUpstreamReferenceChipTests.swift */,
+				D31F225DD361D57A6ACC8AF7 /* ACPUpstreamReferenceComposerTests.swift */,
 				78A775AB4D9567A7AAF0519E /* ACPUpstreamReferenceDetectorTests.swift */,
 				79A6CF0F6BDA59AAE1354EE7 /* ACPUserInputFormStateTests.swift */,
 				540D9D6E043DC50CADDFF3FD /* ACPUserMessageImageMarkersTests.swift */,
@@ -6158,6 +6163,7 @@
 				530767799372FE03C3695656 /* ACPCodeBlockHighlighter.swift */,
 				84E426EC196096C3850066C4 /* ACPCommandPill.swift */,
 				C496549308D5C3DD20E988AD /* ACPComposer.swift */,
+				4B4AE3B47834B31019FA6EBA /* ACPComposer+UpstreamReferences.swift */,
 				E69452CB123EB0AABB632F03 /* ACPComposerActionButton.swift */,
 				2B0206F856D9639147D0A4BF /* ACPComposerActions.swift */,
 				458CE5FB9F4C19BE30643F39 /* ACPComposerDropRouter.swift */,
@@ -7900,6 +7906,7 @@
 				A70A62FDF7EA38F99D9E2B06 /* ACPClient.swift in Sources */,
 				EACD40C757361FC2C78F912A /* ACPCodeBlockHighlighter.swift in Sources */,
 				1C256A4D9E750AF8D6EEE318 /* ACPCommandPill.swift in Sources */,
+				66D51E930D22B562D1063FB9 /* ACPComposer+UpstreamReferences.swift in Sources */,
 				34F18AB368DC5D93196056CA /* ACPComposer.swift in Sources */,
 				9CF6B43A0B19392A597A53EC /* ACPComposerActionButton.swift in Sources */,
 				1C5D64F032EAD5EA28B2482B /* ACPComposerActions.swift in Sources */,
@@ -9147,6 +9154,7 @@
 				F0F6D9795D96C41F97B6B6BA /* ACPTranscriptTilingControllerTests.swift in Sources */,
 				A3F27DE52BAC71EFFA69938A /* ACPTranscriptWindowTests.swift in Sources */,
 				AB36E056347848B092911524 /* ACPUpstreamReferenceChipTests.swift in Sources */,
+				175449ED203D1BF2A5920466 /* ACPUpstreamReferenceComposerTests.swift in Sources */,
 				A220C7423AC5EC20790BC277 /* ACPUpstreamReferenceDetectorTests.swift in Sources */,
 				147A21DE7E1EB53B6E7FE0C7 /* ACPUpstreamReferenceStoreTests.swift in Sources */,
 				441EC5990D107F1059F377F3 /* ACPUsageUpdateDecodeTests.swift in Sources */,
