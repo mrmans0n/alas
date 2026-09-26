@@ -2,7 +2,8 @@ import Foundation
 
 extension AppState {
     func enableSessionSummaries() async {
-        guard localTextSupported, !nextPromptShuttingDown, !sessionSummaryDisableSavePending else { return }
+        guard localTextSupported, !nextPromptShuttingDown, !sessionSummaryDisableSavePending,
+              !localTextRemovalInProgress else { return }
         let previous = config.sessionSummariesEnabled
         beginSessionSummarySettingsChange()
         let generation = sessionSummarySettingsGeneration
@@ -17,6 +18,7 @@ extension AppState {
     }
 
     func retrySessionSummarySettings() async {
+        guard !localTextRemovalInProgress else { return }
         if sessionSummaryDisableSavePending {
             await disableSessionSummaries()
             return
@@ -51,7 +53,12 @@ extension AppState {
             await install.value
             guard generation == sessionSummarySettingsGeneration, !nextPromptShuttingDown else { return }
             localTextInstallation = nil
-            updateLocalTextModelState(await localTextReadModelState())
+            let modelGeneration = localTextModelGeneration
+            let modelState = await localTextReadModelState()
+            guard generation == sessionSummarySettingsGeneration, !nextPromptShuttingDown else { return }
+            // The installation's own notification may have already delivered this state.
+            guard modelGeneration == localTextModelGeneration || modelState == localTextModelState else { return }
+            updateLocalTextModelState(modelState)
         }
         guard generation == sessionSummarySettingsGeneration,
               config.sessionSummariesEnabled,

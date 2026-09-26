@@ -180,7 +180,7 @@ struct NextPromptSettingsTests {
         await state.shutdownNextPromptSuggestions()
     }
 
-    @Test(arguments: ["cancel", "disable", "modelChange", "shutdown"])
+    @Test(arguments: ["cancel", "disable", "remove", "modelChange", "shutdown"])
     func staleCompletedInstallationReadCannotResumeSuggestions(_ interruption: String) async throws {
         let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
@@ -194,6 +194,9 @@ struct NextPromptSettingsTests {
         switch interruption {
         case "cancel": await state.cancelLocalTextDownload()
         case "disable": await state.disableNextPromptSuggestions()
+        case "remove":
+            await state.disableNextPromptSuggestions()
+            await state.removeLocalTextModel()
         case "modelChange":
             try await fixture.store.remove()
             await state.inspectLocalTextModel()
@@ -202,8 +205,8 @@ struct NextPromptSettingsTests {
         await gate.open()
         await enable.value
         #expect(!state.nextPromptRuntimeEnabled)
-        #expect(state.config.nextPromptSuggestionsEnabled == (interruption != "disable"))
-        if interruption == "modelChange" {
+        #expect(state.config.nextPromptSuggestionsEnabled == (interruption != "disable" && interruption != "remove"))
+        if interruption == "remove" || interruption == "modelChange" {
             #expect(state.localTextModelState == .notInstalled)
         }
         #expect(fixture.transport.requestCount == fixture.manifest.assets.count)

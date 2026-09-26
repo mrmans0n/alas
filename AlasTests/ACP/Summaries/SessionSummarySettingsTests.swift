@@ -38,6 +38,36 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
+    @Test(arguments: [
+        LocalTextModelState.notInstalled,
+        .failed(.filesystem)
+    ])
+    func staleCompletedSummaryInstallationReadCannotReplaceNewerState(
+        _ newerState: LocalTextModelState
+    ) async throws {
+        let fixture = try LocalTextModelFixture()
+        defer { fixture.removeTemporaryRoot() }
+        let gate = SummaryModelStateReadGate()
+        let state = makeState(
+            fixture,
+            SummarySettingsStore(),
+            readModelState: { await gate.read(fixture.store) }
+        )
+        let enable = Task { await state.enableSessionSummaries() }
+        await gate.waitUntilEntered()
+        let modelObserver = state.localTextObservers.tasks.first
+        modelObserver?.cancel()
+        await modelObserver?.value
+        state.updateLocalTextModelState(newerState)
+
+        await gate.open()
+        await enable.value
+
+        #expect(state.localTextModelState == newerState)
+        #expect(!state.sessionSummariesRuntimeEnabled)
+        await state.shutdownLocalTextFeatures()
+    }
+
     @Test func enablingEitherCapabilityUsesOneInstallationAndCapabilitySpecificConsent() async throws {
         let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
@@ -83,6 +113,7 @@ struct SessionSummarySettingsTests {
         let state = makeState(fixture, SummarySettingsStore(), engine: engine)
         await state.enableNextPromptSuggestions()
         await state.enableSessionSummaries()
+        await engine.resetEvents()
         let session = ACPSession(id: "summary", agentId: "test", worktreeId: "w", title: "Summary")
         session.agentState = .ready
         _ = session.recordUserPrompt(text: "Implement search", attachments: [])
@@ -109,6 +140,40 @@ struct SessionSummarySettingsTests {
         #expect(await engine.callers == [.sessionSummary(session.incarnation), .nextPrompt])
         #expect(nextPromptResult.text == #"{"suggestion":"Show an example."}"#)
         #expect(state.nextPromptRuntimeEnabled)
+        await state.shutdownLocalTextFeatures()
+    }
+
+    @Test(arguments: ["enable", "retry"])
+    func nextPromptResetDoesNotCancelActiveSummary(_ action: String) async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let engine = SettingsFeatureEngine()
+        let state = makeState(fixture, SummarySettingsStore(), engine: engine)
+        await state.enableSessionSummaries()
+        if action == "retry" { await state.enableNextPromptSuggestions() }
+        await engine.resetEvents()
+        let session = ACPSession(id: "summary", agentId: "test", worktreeId: "w", title: "Summary")
+        session.agentState = .ready
+        _ = session.recordUserPrompt(text: "Implement search", attachments: [])
+        session.transcript.appendMessage(.agent(id: UUID(), StreamingText("Search is implemented.")))
+        let summary = Task { await state.sessionSummaryCoordinator.summary(for: session) }
+        await engine.waitUntilSummaryStarted()
+
+        if action == "enable" {
+            await state.enableNextPromptSuggestions()
+        } else {
+            await state.retryNextPromptSuggestions()
+        }
+
+        #expect(await engine.hasActiveSummary)
+        #expect(await engine.cancelledCallers == [.nextPrompt])
+        #expect(await engine.unloadCount == 0)
+        await engine.completeSummary()
+        await summary.value
+        guard case .result = state.sessionSummaryCoordinator.phase else {
+            Issue.record("Expected active summary to complete after next-prompt reset")
+            return
+        }
         await state.shutdownLocalTextFeatures()
     }
 
@@ -161,6 +226,35 @@ struct SessionSummarySettingsTests {
         #expect(state.canRemoveLocalTextModel)
         await state.removeLocalTextModel()
         #expect(state.localTextModelState == .notInstalled)
+        await state.shutdownLocalTextFeatures()
+    }
+
+    @Test(arguments: ["enable next", "enable summary", "retry disable"])
+    func removalExcludesConcurrentSettingChanges(_ action: String) async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let engine = SuspendedRemovalEngine()
+        let state = makeState(fixture, SummarySettingsStore(), engine: engine)
+        await state.inspectLocalTextModel()
+        state.localTextRuntimeStarted = true
+        if action == "retry disable" { state.nextPromptDisableSavePending = true }
+        let removal = Task { await state.removeLocalTextModel() }
+        await engine.waitUntilUnloading()
+
+        switch action {
+        case "enable next": await state.enableNextPromptSuggestions()
+        case "enable summary": await state.enableSessionSummaries()
+        default: await state.retryNextPromptSuggestions()
+        }
+
+        #expect(!state.config.nextPromptSuggestionsEnabled)
+        #expect(!state.config.sessionSummariesEnabled)
+        if action == "retry disable" { #expect(state.nextPromptDisableSavePending) }
+        await engine.finishUnloading()
+        await removal.value
+
+        #expect(state.localTextModelState == .notInstalled)
+        #expect(fixture.transport.requestCount == 0)
         await state.shutdownLocalTextFeatures()
     }
 
@@ -243,9 +337,11 @@ struct SessionSummarySettingsTests {
 }
 
 private actor SettingsFeatureEngine: LocalTextGenerating {
-    private var summaryContinuation: CheckedContinuation<Void, Never>?
+    private var summaryContinuation: CheckedContinuation<LocalTextGenerationResult, Error>?
     private(set) var callers: [LocalTextCaller] = []
     private(set) var cancelledCallers: [LocalTextCaller] = []
+    private(set) var unloadCount = 0
+    var hasActiveSummary: Bool { summaryContinuation != nil }
 
     func generate(
         _ request: LocalTextGenerationRequest,
@@ -254,25 +350,94 @@ private actor SettingsFeatureEngine: LocalTextGenerating {
     ) async throws -> LocalTextGenerationResult {
         callers.append(caller)
         if case .sessionSummary = caller {
-            await withCheckedContinuation { summaryContinuation = $0 }
-            throw LocalTextInferenceFailure.cancelled
+            return try await withCheckedThrowingContinuation { summaryContinuation = $0 }
         }
         return .init(text: #"{"suggestion":"Show an example."}"#, selectedCandidateIndex: 0)
     }
 
     func cancel(caller: LocalTextCaller) {
         cancelledCallers.append(caller)
-        summaryContinuation?.resume()
-        summaryContinuation = nil
+        if case .sessionSummary = caller {
+            summaryContinuation?.resume(throwing: LocalTextInferenceFailure.cancelled)
+            summaryContinuation = nil
+        }
     }
 
     func cancelAndUnload() {
-        summaryContinuation?.resume()
+        unloadCount += 1
+        summaryContinuation?.resume(throwing: LocalTextInferenceFailure.cancelled)
         summaryContinuation = nil
     }
 
     func waitUntilSummaryStarted() async {
         while summaryContinuation == nil { await Task.yield() }
+    }
+
+    func completeSummary() {
+        summaryContinuation?.resume(returning: .init(
+            text: #"{"goal":"Ship search","completed":[],"blockers":[],"next_action":"Run tests"}"#,
+            selectedCandidateIndex: 0
+        ))
+        summaryContinuation = nil
+    }
+
+    func resetEvents() {
+        callers.removeAll()
+        cancelledCallers.removeAll()
+        unloadCount = 0
+    }
+}
+
+private actor SuspendedRemovalEngine: LocalTextGenerating {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var unloads = 0
+
+    func generate(
+        _ request: LocalTextGenerationRequest,
+        caller: LocalTextCaller,
+        priority: LocalTextJobPriority
+    ) async throws -> LocalTextGenerationResult {
+        .init(text: "", selectedCandidateIndex: 0)
+    }
+
+    func cancel(caller: LocalTextCaller) {}
+
+    func cancelAndUnload() async {
+        unloads += 1
+        guard unloads == 1 else { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func waitUntilUnloading() async {
+        while continuation == nil { await Task.yield() }
+    }
+
+    func finishUnloading() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private actor SummaryModelStateReadGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var entered = false
+
+    func read(_ store: LocalTextModelStore) async -> LocalTextModelState {
+        let value = await store.state
+        if value == .ready, !entered {
+            entered = true
+            await withCheckedContinuation { continuation = $0 }
+        }
+        return value
+    }
+
+    func waitUntilEntered() async {
+        while !entered { await Task.yield() }
+    }
+
+    func open() {
+        continuation?.resume()
+        continuation = nil
     }
 }
 

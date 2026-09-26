@@ -130,7 +130,8 @@ extension AppState {
     }
 
     func enableNextPromptSuggestions() async {
-        guard localTextSupported, !nextPromptShuttingDown, !nextPromptDisableSavePending else { return }
+        guard localTextSupported, !nextPromptShuttingDown, !nextPromptDisableSavePending,
+              !localTextRemovalInProgress else { return }
         localTextRuntimeStarted = true
         let previous = config.nextPromptSuggestionsEnabled
         beginNextPromptSettingsChange()
@@ -146,6 +147,7 @@ extension AppState {
     }
 
     func retryNextPromptSuggestions() async {
+        guard !localTextRemovalInProgress else { return }
         if nextPromptDisableSavePending {
             await disableNextPromptSuggestions()
             return
@@ -200,6 +202,7 @@ extension AppState {
     }
 
     func retryLocalTextModel() async {
+        guard !localTextRemovalInProgress else { return }
         if config.nextPromptSuggestionsEnabled { await retryNextPromptSuggestions() }
         if config.sessionSummariesEnabled { await retrySessionSummarySettings() }
     }
@@ -217,11 +220,16 @@ extension AppState {
 
     func removeLocalTextModel() async {
         guard canRemoveLocalTextModel else { return }
+        localTextRemovalInProgress = true
+        defer { localTextRemovalInProgress = false }
         let nextPromptGeneration = nextPromptSettingsGeneration
         let summaryGeneration = sessionSummarySettingsGeneration
         await nextPromptCoordinator.shutdown()
         sessionSummaryCoordinator.teardown()
         if localTextRuntimeStarted { await localTextInference.cancelAndUnload() }
+        guard localTextRemovalFlagsAllowRemoval,
+              nextPromptGeneration == nextPromptSettingsGeneration,
+              summaryGeneration == sessionSummarySettingsGeneration else { return }
         do {
             try await localTextModelStore.remove()
             guard nextPromptGeneration == nextPromptSettingsGeneration,
@@ -237,6 +245,10 @@ extension AppState {
     }
 
     var canRemoveLocalTextModel: Bool {
+        !localTextRemovalInProgress && localTextRemovalFlagsAllowRemoval
+    }
+
+    private var localTextRemovalFlagsAllowRemoval: Bool {
         !config.nextPromptSuggestionsEnabled
             && !config.sessionSummariesEnabled
             && !nextPromptRuntimeEnabled

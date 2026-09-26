@@ -199,7 +199,7 @@ actor NextPromptInference: NextPromptRuntime {
         let id = generation
         activeRequestID = nil
         publish(.unloading)
-        await engine.cancelAndUnload()
+        await engine.cancel(caller: .nextPrompt)
         guard generation == id else { return }
         guard supported() else {
             publish(.unavailable)
