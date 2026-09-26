@@ -14,7 +14,8 @@ It reads every `*.xcresult` bundle under that directory with
 `xcrun xcresulttool`, writes one TSV row per test case, and prints how test
 time is distributed. Invocation names are unique within one run, so a repeated
 name means bundles from several runs were mixed and the script refuses to
-continue.
+continue. It also refuses bundles whose invocation report shows missing tests,
+a timeout, or an extraction error, because those totals would be understated.
 """
 
 import argparse
@@ -25,7 +26,23 @@ import subprocess
 import sys
 
 
+def require_complete(bundle):
+    """A readable bundle can still be partial, so trust the runner's report.
+
+    `scripts/ci_swift_tests.py` writes `<invocation>.report.json` beside each
+    bundle and lists tests the invocation never finished under `missing`.
+    """
+    report_path = bundle.with_suffix(".report.json")
+    if not report_path.exists():
+        sys.exit(f"missing {report_path.name}; cannot confirm {bundle.name} is complete")
+    report = json.loads(report_path.read_text())
+    if report.get("missing") or report.get("exit_status") == 124 or report.get("error"):
+        sys.exit(f"{bundle.name} is incomplete (missing tests, timeout, or extraction error); "
+                 "use the result artifacts of a run whose invocations all finished")
+
+
 def collect(bundle):
+    require_complete(bundle)
     proc = subprocess.run(
         ["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", str(bundle)],
         capture_output=True,
@@ -71,7 +88,7 @@ def main():
             sys.exit(f"invocation {bundle.stem} appears twice ({seen[bundle.stem]} and {bundle}); "
                      "point the script at a directory holding a single run")
         seen[bundle.stem] = bundle
-    rows =[row for bundle in bundles for row in collect(bundle)]
+    rows = [row for bundle in bundles for row in collect(bundle)]
     if not rows:
         sys.exit("no test cases found")
 
