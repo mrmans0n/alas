@@ -30,6 +30,40 @@ struct ACPComposerDraftTests {
         #expect(!draft.plainText.contains("\u{FFFC}"))
     }
 
+    @Test("plain text inserts a separator when a mention directly abuts non-whitespace text")
+    func plainTextSeparatesAbuttingMentionAndText() {
+        let draft = ACPComposerDraft(segments: [
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .text("right here"),
+        ])
+        #expect(draft.plainText == "@File.swift right here")
+    }
+
+    @Test("plain text does not double a separator already present after a mention")
+    func plainTextDoesNotDoubleExistingSeparator() {
+        let draft = ACPComposerDraft(segments: [
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .text(" already spaced"),
+        ])
+        #expect(draft.plainText == "@File.swift already spaced")
+    }
+
+    @Test("plain text separates a mention that abuts text only through an intervening image")
+    func plainTextSeparatesMentionAcrossImage() {
+        let draft = ACPComposerDraft(segments: [
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .image(uri: "file:///tmp/shot.png", mimeType: "image/png"),
+            .text("right here"),
+        ])
+        #expect(draft.plainText == "@File.swift right here")
+    }
+
+    @Test("plain text needs no trailing separator when a mention is the last segment")
+    func plainTextTrailingMentionNeedsNoSeparator() {
+        let draft = ACPComposerDraft(segments: [.text("see "), .mention(displayName: "File.swift", uri: "file:///tmp/File.swift")])
+        #expect(draft.plainText == "see @File.swift")
+    }
+
     @Test("empty only when it has no meaningful storage segments")
     func emptyState() {
         #expect(ACPComposerDraft.empty.isEmpty)
