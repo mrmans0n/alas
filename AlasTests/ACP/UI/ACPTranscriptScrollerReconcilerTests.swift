@@ -748,6 +748,39 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
         #expect(scroller.scrollY > scrollYBefore)
     }
 
+    @Test("height compensation defers mount changes until the row update finishes")
+    func heightCompensationDoesNotReenterLayout() throws {
+        let (reconciler, scroller, tiling, pool) = makeStackWithPool()
+        let specs = (0..<100).map { spec("r\($0)") }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(5_000)
+        reconciler.layoutMountedRowsForScroll()
+        let row = try #require(pool.mountedView(id: "r35"))
+        let anchorBefore = try #require(tiling.row(withId: "r45")).minY - scroller.scrollY
+
+        var mountedDuringCallback: Set<String>?
+        var mountedAfterNestedLayout: Set<String>?
+        scroller.onScroll = { _, _, _, _, isProgrammatic in
+            guard isProgrammatic else { return }
+            mountedDuringCallback = pool.mountedIds
+            reconciler.layoutMountedRowsForScroll()
+            mountedAfterNestedLayout = pool.mountedIds
+        }
+
+        row.updateRootView(AnyView(Color.clear.frame(height: 700)))
+        reconciler.remeasureRow(id: "r35")
+
+        #expect(mountedDuringCallback != nil)
+        #expect(mountedAfterNestedLayout == mountedDuringCallback)
+        #expect(tiling.row(withId: "r35")?.height == 700)
+        #expect(abs((try #require(tiling.row(withId: "r45")).minY - scroller.scrollY) - anchorBefore) < 0.5)
+        let finalBand = tiling.mountBand(
+            viewportMinY: scroller.scrollY, viewportHeight: scroller.viewportHeight,
+            overscan: ACPTranscriptScrollerReconciler.overscan
+        )
+        #expect(pool.mountedIds == Set(finalBand.map { tiling.rowId(at: $0) }))
+    }
+
     @Test("a row shrinking above a reader near the bottom preserves the visible content")
     func shrinkingRowAboveViewportPreservesPosition() {
         let (reconciler, scroller, tiling, pool) = makeStackWithPool()
