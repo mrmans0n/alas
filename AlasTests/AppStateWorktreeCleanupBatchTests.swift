@@ -431,6 +431,24 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(secondFingerprint != firstFingerprint)
     }
 
+    @Test func worktreeDeleteContentFingerprintChangesWhenOnlyHeadChanges() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        defer { fixture.cleanUpAfterTest() }
+        let target = fixture.worktrees[1]
+        let firstFingerprint = try await AppState.worktreeDeleteContentFingerprint(worktreePath: target.path)
+
+        try "committed content".write(
+            to: target.path.appendingPathComponent("head-only.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await Process.git(["add", "head-only.txt"], cwd: target.path)
+        _ = try await Process.git(["commit", "-q", "-m", "local-only commit"], cwd: target.path)
+
+        let secondFingerprint = try await AppState.worktreeDeleteContentFingerprint(worktreePath: target.path)
+        #expect(secondFingerprint != firstFingerprint)
+    }
+
     @Test func worktreeDeleteContentFingerprintChangesWhenStagedContentChanges() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
         defer { fixture.cleanUpAfterTest() }

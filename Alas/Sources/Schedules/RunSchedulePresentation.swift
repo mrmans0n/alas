@@ -190,6 +190,65 @@ enum RunSchedulePresentation {
     /// has already opened, so until then there is nothing to choose from.
     static let modelCatalogEmptyHint = "Open a chat session with this agent once to list its models here."
 
+    static func afterExecutionHint(
+        _ policy: RunScheduleAfterExecution,
+        surface: AgentSurface,
+        agentID: String? = nil
+    ) -> String {
+        switch policy {
+        case .keep:
+            return "Keep the new worktree and agent session after this run."
+        case .reportAndCleanupOnSuccess:
+            if let agentID,
+               let spec = ACPLaunchCatalog.spec(for: agentID),
+               case .external = spec.mcpInjection {
+                return "This agent does not accept the built-in ACP completion tool. Choose an agent with native MCP support."
+            }
+            switch surface {
+            case .chat:
+                return "Requires a nonblank prompt sent automatically to an ACP agent. Alas removes the worktree and session only after an explicit success report and safety checks."
+            case .terminal:
+                return "This terminal agent cannot submit an ACP completion report. Choose an ACP-capable agent before saving."
+            case .resolvedAtFireTime:
+                return "Requires a nonblank, automatically submitted prompt. A project-default terminal agent or unavailable completion tool keeps the worktree and records why."
+            }
+        }
+    }
+
+    static func scheduledAgentTaskLabel(_ state: ScheduledAgentTaskState) -> String {
+        switch state {
+        case .running: "Running"
+        case .succeeded: "Succeeded"
+        case .failed: "Failed"
+        case .needsAttention: "Needs attention"
+        case .interrupted: "Interrupted"
+        }
+    }
+
+    static func scheduledAgentCleanupLabel(_ report: ScheduledAgentReport) -> String? {
+        guard report.cleanupRequested else { return nil }
+        switch report.cleanupState {
+        case .notRequested:
+            return report.taskState == .running ? "Cleanup after success" : "Cleanup not completed"
+        case .pending:
+            return "Cleanup pending"
+        case .removed:
+            return "Cleaned up"
+        case .retained:
+            return "Retained"
+        case .failed:
+            return "Cleanup failed"
+        }
+    }
+
+    static func scheduledAgentReportHistoryLabel(_ report: ScheduledAgentReport) -> String {
+        let task = scheduledAgentTaskLabel(report.taskState)
+        guard let cleanup = scheduledAgentCleanupLabel(report) else {
+            return "\(report.scheduleName) · \(task)"
+        }
+        return "\(report.scheduleName) · \(task) · \(cleanup)"
+    }
+
     static func intervalLabel(_ seconds: TimeInterval) -> String {
         let total = Int(seconds.rounded())
         if total % 86_400 == 0 { return plural(total / 86_400, "day") }

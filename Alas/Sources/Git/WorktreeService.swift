@@ -12,6 +12,8 @@ enum WorktreeDeletePreflightReason: Equatable, Hashable {
     case locked
 }
 
+struct WorktreeRemovalWriterLeaseChanged: Error {}
+
 struct WorktreeService {
     enum WorktreeError: Error, LocalizedError {
         case gitFailed(String)
@@ -440,7 +442,11 @@ struct WorktreeService {
 
         let result = try await Process.git(args, cwd: repoPath)
         if result.exitCode == 0 {
-            return makeWorktree(destination: destination, branch: branch, projectId: projectId)
+            var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
+            if !repoPath.isRemoteAlasPath {
+                worktree.lineageID = Self.localLineageID(forWorktreeAt: destination)
+            }
+            return worktree
         }
 
         guard Self.looksLikeMissingLFS(result.stderr) else {
@@ -879,11 +885,37 @@ struct WorktreeService {
         usesRemoteHostRegistry: Bool = true,
         verifiedMergedBranchSHA: String? = nil,
         authorizedDeleteContentFingerprint: String? = nil,
+        expectedWorktreeLineageID: String? = nil,
+        beforeRemoval: (@Sendable () async -> Bool)? = nil,
+        deletionLease: CheckpointDeletionLease? = nil,
         moveItem: @Sendable (URL, URL) throws -> Void = {
             try WorktreeService.renameAtomically(from: $0, to: $1)
         }
     ) async throws -> WorktreeRemovalOutcome {
+        defer { withExtendedLifetime(deletionLease) {} }
+        func requireExpectedLineage(at path: URL) throws {
+            guard let expectedWorktreeLineageID else { return }
+            guard !path.isRemoteAlasPath,
+                  Self.existingLocalLineageID(forWorktreeAt: path) == expectedWorktreeLineageID
+            else {
+                throw WorktreeError.gitFailed("Git deletion risks changed since confirmation")
+            }
+        }
+        try requireExpectedLineage(at: worktree.path)
+
+        // `deletionLease` (scheduled cleanup only) is held by the caller and
+        // released when this function returns — its scope spans the final
+        // lease checks and the `moveItem` staging rename, so a writer that
+        // acquires admission after the lock is released finds a worktree
+        // that is either still fully present (and audited) or already gone.
+        func requireRemovalAuthorization() async throws {
+            guard let beforeRemoval else { return }
+            guard await beforeRemoval() else {
+                throw WorktreeRemovalWriterLeaseChanged()
+            }
+        }
         if repoPath.isRemoteAlasPath || worktree.path.isRemoteAlasPath {
+            try await requireRemovalAuthorization()
             try await remove(
                 repoPath: repoPath,
                 worktree: worktree,
@@ -999,6 +1031,8 @@ struct WorktreeService {
                     throw WorktreeError.gitFailed("Git deletion risks changed since confirmation")
                 }
             }
+            try requireExpectedLineage(at: worktree.path)
+            try await requireRemovalAuthorization()
             try await remove(
                 repoPath: repoPath,
                 worktree: worktree,
@@ -1033,7 +1067,14 @@ struct WorktreeService {
                 linkedGitDirectory: expectedRegistration.gitDirectory
             )
             hasActivePendingRemoval = true
+            try requireExpectedLineage(at: worktree.path)
+            try await requireRemovalAuthorization()
             try moveItem(worktree.path, ticket.stagedPath)
+        } catch is WorktreeRemovalWriterLeaseChanged {
+            if hasActivePendingRemoval {
+                WorktreeTrash.finishActivePendingRemoval(ticket)
+            }
+            throw WorktreeRemovalWriterLeaseChanged()
         } catch {
             if hasActivePendingRemoval {
                 WorktreeTrash.finishActivePendingRemoval(ticket)
@@ -1046,6 +1087,8 @@ struct WorktreeService {
                     throw WorktreeError.gitFailed("Git deletion risks changed since confirmation")
                 }
             }
+            try requireExpectedLineage(at: worktree.path)
+            try await requireRemovalAuthorization()
             try await remove(
                 repoPath: repoPath,
                 worktree: worktree,
@@ -1127,6 +1170,62 @@ struct WorktreeService {
             }
             guard WorktreeTrash.matchesDirectoryIdentity(ticket) else {
                 try failAfterRollingBack("Worktree changed while its contents were audited.")
+            }
+
+            // Cleanliness is not the only thing the pre-stage audit checked
+            // for SCHEDULED cleanup: a concurrent process can add a ref or
+            // object to a submodule's repository after the pre-stage
+            // fingerprint and before the rename above, so the reachability
+            // audit re-runs against the staged submodule Git directories
+            // before deletion destroys them. For a linked worktree those
+            // repositories live under the worktree's OWN git directory
+            // (`<gitdir>/modules/…`, matching `git rev-parse --git-path
+            // modules`), not under the shared common directory — enumerating
+            // the shared `.git/modules` would audit the main checkout's
+            // repositories and miss late writes into the worktree-specific
+            // copies that this removal destroys.
+            //
+            // An ordinary (user-driven) removal never ran the reachability
+            // audit — local-only submodule state is expected and deletable —
+            // so the post-stage audit is likewise gated on the lease check
+            // that only scheduled cleanup supplies.
+            if beforeRemoval != nil {
+                do {
+                    // The pre-rename ignored-content audit ran against the
+                    // live path; an external process can create an ignored
+                    // artifact between that fingerprint and the rename, and
+                    // the staged `git status` above omits ignored paths.
+                    // Re-run it against the staged tree, recursively into
+                    // every initialized (nested) submodule: `ls-files`
+                    // never visits submodules on its own. `--git-dir` and
+                    // `--work-tree` are global options and must precede
+                    // `ls-files`.
+                    try await stagedIgnoredContentIsVerifiedEmpty(
+                        worktreePath: ticket.stagedPath,
+                        gitDirectory: expectedRegistration.gitDirectory
+                    )
+
+                    let stored = try Self.stagedSubmoduleGitDirectories(
+                        worktreePath: ticket.stagedPath,
+                        worktreeGitDirectory: expectedRegistration.gitDirectory
+                    )
+                    let active = try await stagedActiveSubmoduleGitDirectories(
+                        worktreePath: ticket.stagedPath,
+                        gitDirectory: expectedRegistration.gitDirectory
+                    )
+                    guard Set(stored) == active,
+                          try await Self.stagedSubmoduleHistoryIsSafe(
+                              stored,
+                              worktreeGitDirectory: expectedRegistration.gitDirectory
+                          )
+                    else {
+                        try failAfterRollingBack(
+                            "A submodule of this worktree holds unpublished Git state that cleanup would destroy."
+                        )
+                    }
+                } catch {
+                    try failAfterRollingBack(error.localizedDescription)
+                }
             }
         }
 
@@ -1230,6 +1329,14 @@ struct WorktreeService {
             cwd: worktreePath
         )
         guard status.exitCode == 0 else { throw WorktreeError.gitFailed(status.stderr) }
+        let head = try await Process.gitData(["rev-parse", "HEAD"], cwd: worktreePath)
+        guard head.exitCode == 0 else { throw WorktreeError.gitFailed(head.stderr) }
+        let remoteRefs = try await Process.gitData(
+            ["for-each-ref", "--format=ref=%(refname)=%(objectname)", "refs/remotes"],
+            cwd: worktreePath
+        )
+        guard remoteRefs.exitCode == 0 else { throw WorktreeError.gitFailed(remoteRefs.stderr) }
+        let lineageID = Self.existingLocalLineageID(forWorktreeAt: worktreePath) ?? ""
 
         let diff = try await Process.gitData(
             ["diff", "--no-ext-diff", "--binary", "--full-index", "--submodule=diff", "HEAD", "--"],
@@ -1254,20 +1361,49 @@ struct WorktreeService {
         )
         guard untracked.exitCode == 0 else { throw WorktreeError.gitFailed(untracked.stderr) }
 
+        // `git status --untracked-files=all` and `ls-files --others
+        // --exclude-standard` both omit ignored paths, but a non-force
+        // `git worktree remove` still deletes them. An ignored artifact
+        // (build output, `.env`, logs) can hold its only copy here, so the
+        // fingerprint must cover it: an ignored file appearing or changing
+        // invalidates an authorized deletion just like untracked content.
+        // Plain `--ignored` lists every ignored file individually (no
+        // `--directory` collapsing), so each one can be hashed directly.
+        let ignored = try await Process.runData(
+            "/bin/sh",
+            args: [
+                "-c",
+                #"git ls-files --others --ignored --exclude-standard -z | perl -0ne 'chomp; print "ignored-file-hex=", unpack("H*", $_), "\n"; system("git","hash-object","--",$_) == 0 or exit 1'"#
+            ],
+            cwd: worktreePath,
+            env: Process.gitEnv()
+        )
+        guard ignored.exitCode == 0 else { throw WorktreeError.gitFailed(ignored.stderr) }
+
         let submodules = try await Process.gitData([
             "submodule", "foreach", "--quiet", "--recursive",
             """
             set -e
             printf 'path=%s\\n' "$sm_path"
+            head=$(git rev-parse HEAD)
+            printf 'head=%s\\n' "$head"
             git status --porcelain=v1 --ignore-submodules=none --untracked-files=all
             git diff --no-ext-diff --binary --full-index --submodule=diff HEAD --
             git diff --cached --no-ext-diff --binary --full-index --submodule=diff HEAD --
             git ls-files --others --exclude-standard -z | perl -0ne 'chomp; print "untracked-path-hex=", unpack("H*", $_), "\\n"; system("git","hash-object","--",$_) == 0 or exit 1'
-            git for-each-ref --format='ref=%(refname)=%(objectname)' refs/heads refs/tags refs/notes refs/stash
+            git ls-files --others --ignored --exclude-standard -z | perl -0ne 'chomp; print "ignored-file-hex=", unpack("H*", $_), "\\n"; system("git","hash-object","--",$_) == 0 or exit 1'
+            git for-each-ref --format='ref=%(refname)=%(objectname)'
             git rev-list --max-count=50 --reflog --not --remotes 2>/dev/null | while IFS= read -r oid; do printf 'reflog=%s\\n' "$oid"; done
+            fsck_output=$(mktemp)
+            unreachable_object_inventory=$(mktemp)
+            trap 'rm -f "$fsck_output" "$unreachable_object_inventory"' EXIT
+            git fsck --no-reflogs --unreachable --no-progress >"$fsck_output" 2>/dev/null
+            awk '$1 == "unreachable" || $1 == "dangling" { print "unreachable-object=" $2 ":" $3 }' "$fsck_output" >"$unreachable_object_inventory"
+            LC_ALL=C sort -u "$unreachable_object_inventory"
             """
         ], cwd: worktreePath)
         guard submodules.exitCode == 0 else { throw WorktreeError.gitFailed(submodules.stderr) }
+        let submoduleGitDirectories = try await Self.submoduleGitDirectoryInventory(worktreePath: worktreePath)
 
         var payload = Data()
         func append(_ label: String, _ data: Data) {
@@ -1276,11 +1412,17 @@ struct WorktreeService {
             payload.append(data)
             payload.append(0)
         }
+        append("head", head.stdout)
+        append("lineageID", Data(lineageID.utf8))
+        append("remoteRefs", remoteRefs.stdout)
         append("status", status.stdout)
         append("diff", diff.stdout)
         append("cachedDiff", cachedDiff.stdout)
         append("untracked", untracked.stdout)
+        append("ignored", ignored.stdout)
         append("submodules", submodules.stdout)
+        append("submoduleGitDirectories", Data(submoduleGitDirectories.stored.joined(separator: "\n").utf8))
+        append("activeSubmoduleGitDirectories", Data(submoduleGitDirectories.active.sorted().joined(separator: "\n").utf8))
         return SHA256.hash(data: payload)
             .map { String(format: "%02x", $0) }
             .joined()
@@ -1336,6 +1478,396 @@ struct WorktreeService {
         }
 
         return WorktreeDeletePreflight(reasons: reasons)
+    }
+
+    /// `git status --untracked-files=all` and the fingerprint's
+    /// `ls-files --others --exclude-standard` both omit ignored paths, but a
+    /// non-force `git worktree remove` still deletes them. Scheduled cleanup
+    /// must therefore refuse whenever the checkout holds ANY ignored
+    /// content — an ignored artifact (build output, `.env`, logs) can hold
+    /// its only copy, and unattended deletion must not destroy it. The
+    /// top-level `ls-files` does not visit initialized submodules, so every
+    /// one is audited too (`--recurse-submodules` is unsupported for this
+    /// listing, so each initialized submodule is walked explicitly).
+    static func worktreeHasIgnoredContent(worktreePath: URL) async throws -> Bool {
+        let result = try await Process.gitData(
+            ["ls-files", "--others", "--ignored", "--exclude-standard"],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
+        // Check raw output: a pathname consisting only of whitespace still
+        // makes the ignored-content listing nonempty.
+        if !result.stdout.isEmpty {
+            return true
+        }
+
+        let submodules = try await Process.gitData(
+            ["submodule", "foreach", "--quiet", "--recursive",
+             "git ls-files --others --ignored --exclude-standard"],
+            cwd: worktreePath
+        )
+        guard submodules.exitCode == 0 else {
+            // Enumeration failure is not proof of absence.
+            throw WorktreeError.gitFailed(submodules.stderr)
+        }
+        return !submodules.stdout.isEmpty
+    }
+
+    /// A scheduled run may discard its checkout only when its original base is
+    /// an ancestor of the current tip and the tip is remotely reachable. Every
+    /// initialized submodule commit must be remotely reachable. Every local
+    /// tag name must also exist on the submodule's remote, because the
+    /// worktree-specific repository is destroyed with the checkout and takes
+    /// unpushed tag names with it. No deinitialized submodule repository may
+    /// remain under the worktree Git directory.
+    static func scheduledCleanupHistoryIsSafe(
+        baseCommit: String,
+        expectedBranch: String,
+        worktreePath: URL
+    ) async throws -> Bool {
+        guard (baseCommit.count == 40 || baseCommit.count == 64),
+              baseCommit.allSatisfy(\.isHexDigit),
+              localBranchName(forWorktreeAt: worktreePath) == expectedBranch
+        else {
+            return false
+        }
+        let headResult = try await Process.git(
+            ["rev-parse", "HEAD"],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        guard headResult.exitCode == 0 else { throw WorktreeError.gitFailed(headResult.stderr) }
+        let head = headResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (head.count == 40 || head.count == 64), head.allSatisfy(\.isHexDigit) else {
+            return false
+        }
+
+        let ancestry = try await Process.git(
+            ["merge-base", "--is-ancestor", baseCommit, head],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        guard ancestry.exitCode == 0 else { return false }
+
+        // A local remote-tracking ref can outlive the remote branch it once
+        // represented. Require an advertised branch from origin, then use
+        // the local object graph only to verify that its advertised tip
+        // contains HEAD.
+        let remoteRefs = try await Process.git(
+            ["-c", "protocol.file.allow=always", "ls-remote", "--heads", "origin"],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        guard remoteRefs.exitCode == 0 else { return false }
+        var headIsRemotelyReachable = false
+        for line in remoteRefs.stdout.split(whereSeparator: \.isNewline) {
+            let fields = line.split(whereSeparator: \.isWhitespace)
+            guard fields.count == 2 else { continue }
+            let remoteTip = String(fields[0])
+            guard (remoteTip.count == 40 || remoteTip.count == 64),
+                  remoteTip.allSatisfy(\.isHexDigit)
+            else {
+                continue
+            }
+            let ancestry = try await Process.git(
+                ["merge-base", "--is-ancestor", head, remoteTip],
+                cwd: worktreePath,
+                usesRemoteHostRegistry: false
+            )
+            if ancestry.exitCode == 0 {
+                headIsRemotelyReachable = true
+                break
+            }
+        }
+        guard headIsRemotelyReachable else { return false }
+        let moduleDirectories = try await Self.submoduleGitDirectoryInventory(worktreePath: worktreePath)
+        guard moduleDirectories.stored.allSatisfy({ moduleDirectories.active.contains($0) }) else {
+            return false
+        }
+        let submoduleRemoteRefs = try await Process.git(
+            [
+                "submodule", "foreach", "--quiet", "--recursive",
+                """
+                set -e
+                advertised_refs=$(git -c protocol.file.allow=always ls-remote origin)
+                test -n "$advertised_refs"
+                advertised_oids=$(printf '%s\\n' "$advertised_refs" | awk '{ print $1 }')
+                head=$(git rev-parse HEAD)
+                head_is_advertised_reachable=0
+                while read -r remote_oid remote_ref; do
+                    test -n "$remote_oid" || continue
+                    if git merge-base --is-ancestor "$head" "$remote_oid"; then
+                        head_is_advertised_reachable=1
+                        break
+                    fi
+                done <<REFS_EOF
+                $advertised_refs
+                REFS_EOF
+                test "$head_is_advertised_reachable" -eq 1
+                # Any local tracking ref can mask objects from the
+                # reachability check; map its branch name back to origin's
+                # advertised ref (including the remote default HEAD).
+                tracking_failed=0
+                while IFS=' ' read -r ref_oid ref_name; do
+                    case "$ref_name" in
+                        refs/remotes/*)
+                            tracking_path=${ref_name#refs/remotes/}
+                            tracking_branch=${tracking_path#*/}
+                            if test "$tracking_branch" = "HEAD"; then
+                                remote_name=HEAD
+                            else
+                                remote_name=refs/heads/$tracking_branch
+                            fi
+                            remote_oid=$(printf '%s\\n' "$advertised_refs" | awk -v ref="$remote_name" '$2 == ref { print $1; exit }')
+                            test "$remote_oid" = "$ref_oid" || tracking_failed=1
+                            ;;
+                    esac
+                done <<TRACKING_EOF
+                $(git for-each-ref --format='%(objectname) %(refname)' refs/remotes/)
+                TRACKING_EOF
+                test "$tracking_failed" -eq 0
+                local_only=$(git rev-list --max-count=1 --all --reflog --not $advertised_oids 2>/dev/null)
+                test -z "$local_only"
+                # Every local ref name outside remote-tracking caches must
+                # exist on origin in the same namespace at the same object.
+                names_failed=0
+                while IFS=' ' read -r ref_oid ref_name; do
+                    test -n "$ref_name" || continue
+                    case "$ref_name" in refs/remotes/*) continue ;; esac
+                    remote_oid=$(printf '%s\\n' "$advertised_refs" | awk -v ref="$ref_name" '$2 == ref { print $1; exit }')
+                    test "$remote_oid" = "$ref_oid" || names_failed=1
+                done <<REFS_EOF
+                $(git for-each-ref --format='%(objectname) %(refname)' | awk 'index($2, "refs/remotes/") != 1 { print }')
+                REFS_EOF
+                test "$names_failed" -eq 0
+                unreachable=$(git fsck --no-reflogs --unreachable --no-progress 2>/dev/null)
+                test -z "$unreachable"
+                """
+            ],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        // foreach visits only initialized submodules. The inventory above also
+        // refuses repositories left behind after deinitialization.
+        return submoduleRemoteRefs.exitCode == 0
+    }
+
+    /// Enumerates the submodule Git directories a *staged* (renamed) worktree
+    /// owns. A linked worktree's repositories live at computable spots
+    /// relative to its own git directory — the same fallback
+    /// `submoduleGitDirectory` uses once the relative `gitdir:` pointers go
+    /// dangling — so this walks `<gitdir>/modules/**` rather than the shared
+    /// common directory's `.git/modules`.
+    private static func stagedSubmoduleGitDirectories(
+        worktreePath: URL,
+        worktreeGitDirectory: URL
+    ) throws -> [String] {
+        let modulesDirectory = worktreeGitDirectory.appendingPathComponent("modules", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: modulesDirectory.path) else {
+            return []
+        }
+        return try submoduleGitDirectories(in: modulesDirectory)
+    }
+
+    /// Resolves initialized submodule repositories from the staged checkout.
+    /// A stored gitdir with no corresponding `.git` entry was deinitialized
+    /// before the rename and must not be silently discarded.
+    private func stagedActiveSubmoduleGitDirectories(
+        worktreePath: URL,
+        gitDirectory: URL
+    ) async throws -> Set<String> {
+        let submodulePaths = try await submodulePathsFromGitmodules(
+            worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        var active = Set<String>()
+        for relativePath in submodulePaths {
+            let submodulePath = worktreePath.appendingPathComponent(relativePath)
+            guard FileManager.default.fileExists(atPath: submodulePath.appendingPathComponent(".git").path) else {
+                continue
+            }
+            guard let submoduleGitDirectory = Self.submoduleGitDirectory(
+                for: submodulePath,
+                relativePath: relativePath,
+                parentGitDirectory: gitDirectory
+            ) else {
+                throw WorktreeError.gitFailed("Could not verify a staged submodule repository.")
+            }
+            active.insert(Self.resolvedFileSystemPath(submoduleGitDirectory))
+            active.formUnion(
+                try await stagedActiveSubmoduleGitDirectories(
+                    worktreePath: submodulePath,
+                    gitDirectory: submoduleGitDirectory
+                )
+            )
+        }
+        return active
+    }
+
+    /// Post-rename counterpart of `scheduledCleanupHistoryIsSafe`'s submodule
+    /// audit. Runs the reachability checks directly against each staged
+    /// submodule Git directory (their relative `gitdir:` pointers are
+    /// dangling after the rename, so `submodule foreach` cannot be used) and
+    /// returns `false` when any stored repository holds commits, refs, or
+    /// objects that deletion would destroy without a remote copy.
+    private static func stagedSubmoduleHistoryIsSafe(
+        _ moduleDirectories: [String],
+        worktreeGitDirectory: URL
+    ) async throws -> Bool {
+        for moduleDirectory in moduleDirectories {
+            let gitDirectory = URL(fileURLWithPath: moduleDirectory)
+            let gitArguments = ["--git-dir", gitDirectory.path]
+            let headResult = try await Process.git(
+                gitArguments + ["rev-parse", "HEAD"],
+                cwd: worktreeGitDirectory
+            )
+            guard headResult.exitCode == 0 else { return false }
+            let head = headResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !head.isEmpty else { return false }
+
+            let advertisedRefs = try await Process.git(
+                ["-c", "protocol.file.allow=always"] + gitArguments + ["ls-remote", "origin"],
+                cwd: worktreeGitDirectory
+            )
+            guard advertisedRefs.exitCode == 0 else { return false }
+            let advertised = advertisedRefs.stdout.split(whereSeparator: \.isNewline).compactMap {
+                line -> (oid: String, name: String)? in
+                let fields = line.split(whereSeparator: \.isWhitespace)
+                guard fields.count == 2 else { return nil }
+                return (String(fields[0]), String(fields[1]))
+            }
+            guard !advertised.isEmpty else { return false }
+            let advertisedByName = Dictionary(
+                advertised.map { ($0.name, $0.oid) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            var headIsAdvertisedReachable = false
+            for remoteRef in advertised {
+                let ancestry = try await Process.git(
+                    gitArguments + ["merge-base", "--is-ancestor", head, remoteRef.oid],
+                    cwd: worktreeGitDirectory
+                )
+                if ancestry.exitCode == 0 {
+                    headIsAdvertisedReachable = true
+                    break
+                }
+            }
+            guard headIsAdvertisedReachable else { return false }
+
+            let namesResult = try await Process.git(
+                gitArguments + ["for-each-ref", "--format=%(objectname) %(refname)"],
+                cwd: worktreeGitDirectory
+            )
+            guard namesResult.exitCode == 0 else { return false }
+            for nameRef in namesResult.stdout.split(whereSeparator: \.isNewline) {
+                let parts = nameRef.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .split(maxSplits: 1, omittingEmptySubsequences: true) { $0 == " " }
+                guard parts.count == 2 else { return false }
+                let oid = String(parts[0])
+                let fullName = String(parts[1])
+                if fullName.hasPrefix("refs/remotes/") {
+                    let trackingPath = fullName.dropFirst("refs/remotes/".count)
+                    let trackingBranch = trackingPath.split(separator: "/", maxSplits: 1).dropFirst().first
+                    let advertisedName = trackingBranch == "HEAD"
+                        ? "HEAD"
+                        : "refs/heads/" + (trackingBranch.map { String($0) } ?? "")
+                    guard advertisedByName[advertisedName] == oid else { return false }
+                } else {
+                    // Local branches, tags and custom refs are state too:
+                    // their exact names and objects must still be advertised.
+                    guard advertisedByName[fullName] == oid else { return false }
+                }
+            }
+
+            let localOnly = try await Process.git(
+                gitArguments + ["rev-list", "--max-count=1", "--all", "--reflog", "--not"]
+                    + advertised.map { $0.oid },
+                cwd: worktreeGitDirectory
+            )
+            guard localOnly.exitCode == 0,
+                  localOnly.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return false }
+
+            let unreachable = try await Process.git(
+                gitArguments + ["fsck", "--no-reflogs", "--unreachable", "--no-progress"],
+                cwd: worktreeGitDirectory
+            )
+            guard unreachable.exitCode == 0,
+                  unreachable.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return false }
+        }
+        return true
+    }
+
+    private static func submoduleGitDirectoryInventory(
+        worktreePath: URL
+    ) async throws -> (stored: [String], active: Set<String>) {
+        let modulesDirectoryResult = try await Process.git(
+            ["rev-parse", "--git-path", "modules"],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        guard modulesDirectoryResult.exitCode == 0 else {
+            throw WorktreeError.gitFailed(modulesDirectoryResult.stderr)
+        }
+        let modulesDirectoryPath = modulesDirectoryResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !modulesDirectoryPath.isEmpty else {
+            throw WorktreeError.gitFailed("Git returned an empty submodule repository path.")
+        }
+        let modulesDirectory = URL(
+            fileURLWithPath: modulesDirectoryPath,
+            relativeTo: worktreePath
+        ).standardizedFileURL
+
+        let activeResult = try await Process.git(
+            ["submodule", "foreach", "--quiet", "--recursive", "git rev-parse --absolute-git-dir"],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        guard activeResult.exitCode == 0 else { throw WorktreeError.gitFailed(activeResult.stderr) }
+        let active = Set(activeResult.stdout.split(whereSeparator: \.isNewline).map {
+            Self.resolvedFileSystemPath(URL(fileURLWithPath: String($0)))
+        })
+        return (
+            stored: try Self.submoduleGitDirectories(in: modulesDirectory),
+            active: active
+        )
+    }
+
+    private static func submoduleGitDirectories(in modulesDirectory: URL) throws -> [String] {
+        var gitDirectories = Set<String>()
+        func visit(_ directory: URL) throws {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory) else { return }
+            guard isDirectory.boolValue else {
+                throw WorktreeError.gitFailed("The submodule repository path is not a directory.")
+            }
+
+            let children = try FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                options: []
+            )
+            for child in children {
+                let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                if values.isSymbolicLink == true {
+                    throw WorktreeError.gitFailed("A symbolic link prevents submodule repository verification.")
+                }
+                guard values.isDirectory == true else { continue }
+
+                let hasGitMetadata = ["HEAD", "objects", "refs"].contains {
+                    FileManager.default.fileExists(atPath: child.appendingPathComponent($0).path)
+                }
+                if hasGitMetadata {
+                    gitDirectories.insert(Self.resolvedFileSystemPath(child))
+                    try visit(child.appendingPathComponent("modules", isDirectory: true))
+                } else {
+                    try visit(child)
+                }
+            }
+        }
+        try visit(modulesDirectory)
+        return gitDirectories.sorted()
     }
 
     static func porcelainMarksWorktreeLocked(_ porcelain: String, worktreePath: URL) -> Bool {
@@ -1678,6 +2210,64 @@ struct WorktreeService {
             ) else { return false }
         }
         return true
+    }
+
+    /// Post-rename counterpart of `worktreeHasIgnoredContent`, recursive into
+    /// every initialized (nested) submodule. `ls-files` never visits
+    /// submodules on its own, and a submodule's own listing misses its nested
+    /// submodules, so each level resolves the next level's gitdir explicitly —
+    /// the same dangling-`gitdir:` workaround the cleanliness traversal uses.
+    /// Throws when the audit cannot run (enumeration failure is not proof of
+    /// absence) and rolls the caller back to the pre-stage state.
+    private func stagedIgnoredContentIsVerifiedEmpty(
+        worktreePath: URL,
+        gitDirectory: URL
+    ) async throws {
+        let result = try await Process.gitData(
+            [
+                "--git-dir", gitDirectory.path,
+                "--work-tree", worktreePath.path,
+                "ls-files", "--others", "--ignored", "--exclude-standard",
+            ],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else {
+            throw WorktreeError.gitFailed(
+                result.stderr.isEmpty
+                    ? "Could not verify the staged worktree's ignored content."
+                    : result.stderr
+            )
+        }
+        // Raw emptiness: an all-space pathname must still count as content.
+        guard result.stdout.isEmpty else {
+            throw WorktreeError.gitFailed(
+                "The staged worktree holds ignored files that cleanup would delete."
+            )
+        }
+
+        let submodulePaths = try await submodulePathsFromGitmodules(
+            worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        for relativePath in submodulePaths {
+            let submodulePath = worktreePath.appendingPathComponent(relativePath)
+            guard FileManager.default.fileExists(
+                atPath: submodulePath.appendingPathComponent(".git").path
+            ) else { continue }
+            guard let submoduleGitDirectory = Self.submoduleGitDirectory(
+                for: submodulePath,
+                relativePath: relativePath,
+                parentGitDirectory: gitDirectory
+            ) else {
+                throw WorktreeError.gitFailed(
+                    "Could not verify the staged submodule's ignored content."
+                )
+            }
+            try await stagedIgnoredContentIsVerifiedEmpty(
+                worktreePath: submodulePath,
+                gitDirectory: submoduleGitDirectory
+            )
+        }
     }
 
     private func canForceRemoveAfterMissingLFS(

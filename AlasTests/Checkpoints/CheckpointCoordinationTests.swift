@@ -73,6 +73,98 @@ struct CheckpointCoordinationTests {
         #expect(coordination.activeTerminalCount == 1)
     }
 
+    @Test func scheduledCleanupBlocksOtherACPAndTerminalWriterLeases() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let lineageID = repo.target.lineageID
+        let worktree = Worktree(
+            id: repo.target.worktreeID,
+            projectId: repo.target.projectID,
+            name: "main",
+            branch: "main",
+            path: repo.root,
+            status: .clean,
+            lastActivity: .now,
+            lineageID: lineageID
+        )
+        let state = AppState()
+
+        #expect(state.scheduledCleanupHasNoOtherWriterLeases(for: worktree, lineageID: lineageID))
+
+        let terminalLeases = CheckpointWriterLeaseStore()
+        let localTerminalID = "local-terminal-\(UUID().uuidString)"
+        let otherTerminalID = "other-terminal-\(UUID().uuidString)"
+        terminalLeases.acquire(
+            lineageIDs: [lineageID],
+            sessionID: localTerminalID,
+            instanceID: state.instanceId,
+            zmxSessionName: nil,
+            remoteHost: nil
+        )
+        terminalLeases.acquire(
+            lineageIDs: [lineageID],
+            sessionID: otherTerminalID,
+            instanceID: "other-instance",
+            zmxSessionName: nil,
+            remoteHost: nil
+        )
+        defer {
+            terminalLeases.release(sessionID: localTerminalID, instanceID: state.instanceId)
+            terminalLeases.release(sessionID: otherTerminalID, instanceID: "other-instance")
+        }
+        #expect(!state.scheduledCleanupHasNoOtherWriterLeases(for: worktree, lineageID: lineageID))
+        terminalLeases.release(sessionID: otherTerminalID, instanceID: "other-instance")
+        #expect(state.scheduledCleanupHasNoOtherWriterLeases(for: worktree, lineageID: lineageID))
+
+        let databaseURL = Paths.acpSessionsDB(for: .worktree(worktree.id))
+        var acpStore: ACPSessionStore? = try ACPSessionStore(path: databaseURL.path)
+        let ownSessionID = "local-acp-\(UUID().uuidString)"
+        let otherSessionID = "other-acp-\(UUID().uuidString)"
+        let otherInstanceID = "other-acp-instance-\(UUID().uuidString)"
+        defer {
+            if let acpStore {
+                try? acpStore.releaseLease(sessionId: ownSessionID, instanceId: state.instanceId)
+                try? acpStore.releaseLease(sessionId: otherSessionID, instanceId: otherInstanceID)
+            }
+            acpStore = nil
+            for suffix in ["", "-wal", "-shm"] {
+                try? FileManager.default.removeItem(atPath: databaseURL.path + suffix)
+            }
+        }
+        let now = Int64(Date().timeIntervalSince1970)
+        let store = try #require(acpStore)
+        for sessionID in [ownSessionID, otherSessionID] {
+            try store.upsertSession(.init(
+                id: sessionID,
+                agentId: "codex",
+                title: "Lease test",
+                currentModel: nil,
+                currentMode: nil,
+                autoRun: false,
+                createdAt: now,
+                updatedAt: now,
+                lastOpenedAt: now,
+                archived: false
+            ))
+        }
+        #expect(try #require(acpStore).claimLease(
+            sessionId: ownSessionID,
+            instanceId: state.instanceId,
+            pid: Int64(ProcessInfo.processInfo.processIdentifier),
+            now: now,
+            staleAfter: ACPSessionManager.leaseStaleAfter
+        ))
+        #expect(state.scheduledCleanupHasNoOtherWriterLeases(for: worktree, lineageID: lineageID))
+        #expect(try #require(acpStore).claimLease(
+            sessionId: otherSessionID,
+            instanceId: otherInstanceID,
+            pid: Int64(ProcessInfo.processInfo.processIdentifier),
+            now: now,
+            staleAfter: ACPSessionManager.leaseStaleAfter
+        ))
+        #expect(!state.scheduledCleanupHasNoOtherWriterLeases(for: worktree, lineageID: lineageID))
+    }
+
     @Test func appStateBlocksDirtyBuffersBelowSelectedCheckpointPaths() async throws {
         let state = AppState()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("checkpoint-dirty-descendant-\(UUID().uuidString)")

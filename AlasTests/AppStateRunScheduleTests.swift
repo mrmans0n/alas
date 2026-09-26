@@ -32,7 +32,8 @@ struct AppStateRunScheduleTests {
         host: String? = nil,
         scriptBody: String = "echo hi\n",
         completionGate: Gate? = nil,
-        terminalSessionOpener: AppState.TerminalSessionOpener? = nil
+        terminalSessionOpener: AppState.TerminalSessionOpener? = nil,
+        scheduledAgentReportFinalizer: ScheduledAgentReportFinalizer? = nil
     ) throws -> Fixture {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("run-schedule-tests-\(UUID().uuidString)", isDirectory: true)
@@ -83,7 +84,9 @@ struct AppStateRunScheduleTests {
                 store: MemoryStore(),
                 fileURL: directory.appendingPathComponent("run-schedules.json")
             ),
-            attentionStore: AttentionStore(url: directory.appendingPathComponent("attention-events.json"))
+            attentionStore: AttentionStore(url: directory.appendingPathComponent("attention-events.json")),
+            scheduledAgentReportDatabasePath: directory.appendingPathComponent("scheduled-agent-reports.sqlite").path,
+            scheduledAgentReportFinalizer: scheduledAgentReportFinalizer
         )
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
@@ -127,6 +130,292 @@ struct AppStateRunScheduleTests {
             trigger: .interval(seconds: 3_600),
             composition: composition
         )
+    }
+
+    @Test func scheduledCleanupClaimDoesNotOverwriteAnExistingOperation() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        #expect(fixture.state.claimScheduledAgentWorktreeForCleanup(fixture.worktree))
+        #expect(fixture.state.projectsManager.operationState(for: fixture.worktree)
+            == .deleting(projectId: fixture.project.id))
+
+        fixture.state.projectsManager.setOperationState(for: fixture.worktree, state: .creating)
+        #expect(!fixture.state.claimScheduledAgentWorktreeForCleanup(fixture.worktree))
+        #expect(fixture.state.projectsManager.operationState(for: fixture.worktree) == .creating)
+    }
+
+    @Test func scheduledCleanupIdentityMustMatchItsCapturedTarget() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        var capturedWorktree = fixture.worktree
+        capturedWorktree.lineageID = "created-lineage"
+        let registration = ScheduledAgentRunRegistration(
+            reportID: "report",
+            occurrenceID: "occurrence",
+            scheduleID: "schedule",
+            projectID: fixture.project.id,
+            worktreeID: capturedWorktree.id,
+            worktreeLineageID: "created-lineage",
+            sessionID: "scheduled-session",
+            promptID: UUID()
+        )
+        let report = ScheduledAgentReport(
+            id: "report",
+            occurrenceID: "occurrence",
+            scheduleID: "schedule",
+            scheduleName: "Nightly",
+            projectID: fixture.project.id,
+            projectName: fixture.project.name,
+            branch: capturedWorktree.branch,
+            baseCommit: "base",
+            worktreeID: capturedWorktree.id,
+            sessionID: "scheduled-session",
+            agentID: "codex",
+            request: "Review the repository.",
+            startedAt: Date(),
+            finishedAt: Date(),
+            taskState: .succeeded,
+            completion: ScheduledAgentCompletion(
+                outcome: .succeeded,
+                summary: "Complete.",
+                checks: [],
+                links: []
+            ),
+            cleanupRequested: true,
+            cleanupState: .pending
+        )
+
+        #expect(AppState.scheduledAgentCleanupIdentityIsValid(
+            report: report,
+            registration: registration,
+            project: fixture.project,
+            worktree: capturedWorktree
+        ))
+        var replacementWorktree = capturedWorktree
+        replacementWorktree.lineageID = "replacement-lineage"
+        #expect(!AppState.scheduledAgentCleanupIdentityIsValid(
+            report: report,
+            registration: registration,
+            project: fixture.project,
+            worktree: replacementWorktree
+        ))
+        let unrelatedRegistration = ScheduledAgentRunRegistration(
+            reportID: "another-report",
+            occurrenceID: "occurrence",
+            scheduleID: "schedule",
+            projectID: fixture.project.id,
+            worktreeID: capturedWorktree.id,
+            worktreeLineageID: "created-lineage",
+            sessionID: "scheduled-session",
+            promptID: registration.promptID
+        )
+        #expect(!AppState.scheduledAgentCleanupIdentityIsValid(
+            report: report,
+            registration: unrelatedRegistration,
+            project: fixture.project,
+            worktree: capturedWorktree
+        ))
+        let differentWorktreeRegistration = ScheduledAgentRunRegistration(
+            reportID: "report",
+            occurrenceID: "occurrence",
+            scheduleID: "schedule",
+            projectID: fixture.project.id,
+            worktreeID: "another-worktree",
+            worktreeLineageID: "created-lineage",
+            sessionID: "scheduled-session",
+            promptID: registration.promptID
+        )
+        #expect(!AppState.scheduledAgentCleanupIdentityIsValid(
+            report: report,
+            registration: differentWorktreeRegistration,
+            project: fixture.project,
+            worktree: capturedWorktree
+        ))
+    }
+
+    @Test func scheduledCleanupRefusesEveryOtherOpenSession() {
+        #expect(AppState.scheduledCleanupHasNoOtherSessions(
+            worktreeSessionIDs: ["scheduled"],
+            managerSessionIDs: ["scheduled"],
+            scheduledSessionID: "scheduled"
+        ))
+        #expect(AppState.scheduledCleanupHasNoOtherSessions(
+            worktreeSessionIDs: ["scheduled", "script"],
+            managerSessionIDs: ["scheduled"],
+            scheduledSessionID: "scheduled",
+            scheduledScriptSessionID: "script"
+        ))
+        #expect(!AppState.scheduledCleanupHasNoOtherSessions(
+            worktreeSessionIDs: ["scheduled", "script", "terminal"],
+            managerSessionIDs: ["scheduled"],
+            scheduledSessionID: "scheduled",
+            scheduledScriptSessionID: "script"
+        ))
+        #expect(!AppState.scheduledCleanupHasNoOtherSessions(
+            worktreeSessionIDs: ["scheduled", "terminal"],
+            managerSessionIDs: ["scheduled"],
+            scheduledSessionID: "scheduled"
+        ))
+        #expect(!AppState.scheduledCleanupHasNoOtherSessions(
+            worktreeSessionIDs: ["scheduled"],
+            managerSessionIDs: ["scheduled", "other-acp"],
+            scheduledSessionID: "scheduled"
+        ))
+    }
+
+    @Test func scheduledCleanupTreatsUnsentComposerDraftAsPendingWork() {
+        let session = ACPSession(id: "scheduled", agentId: "claude", worktreeId: "worktree", title: "Scheduled")
+        #expect(AppState.scheduledCleanupSessionIsQuiescent(session))
+
+        session.replaceComposerDraft(ACPComposerDraft(segments: [.text("Unsent follow-up.")]))
+        #expect(!AppState.scheduledCleanupSessionIsQuiescent(session))
+    }
+
+    @Test func scheduledCleanupRecognizesOnlyItsFinishedScriptTerminal() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let scriptRunID = "script-run"
+        let sessionID = "script-session"
+        let finishedAt = Date()
+        let report = ScheduledAgentReport(
+            id: "report",
+            occurrenceID: "occurrence",
+            scheduleID: "schedule",
+            scheduleName: "Nightly",
+            projectID: fixture.project.id,
+            projectName: fixture.project.name,
+            branch: fixture.worktree.branch,
+            baseCommit: "base",
+            worktreeID: fixture.worktree.id,
+            sessionID: "scheduled-session",
+            agentID: "codex",
+            request: "Run checks.",
+            scriptRun: RunScheduleFiring.RunReference(
+                worktreeID: fixture.worktree.id,
+                branch: fixture.worktree.branch,
+                runID: scriptRunID,
+                scriptName: "Checks"
+            ),
+            startedAt: finishedAt.addingTimeInterval(-1),
+            finishedAt: finishedAt,
+            taskState: .succeeded,
+            completion: ScheduledAgentCompletion(
+                outcome: .succeeded,
+                summary: "Complete.",
+                checks: [],
+                links: []
+            ),
+            cleanupRequested: true,
+            cleanupState: .pending
+        )
+        let run = RunRecord(
+            id: scriptRunID,
+            scriptKey: "repo:checks.sh",
+            scriptName: "Checks",
+            worktreeID: fixture.worktree.id,
+            branch: fixture.worktree.branch,
+            target: RunExecutionTarget(host: nil, workingDirectory: fixture.worktree.path.path),
+            status: .finished(.succeeded),
+            startedAt: finishedAt.addingTimeInterval(-1),
+            finishedAt: finishedAt,
+            sessionID: sessionID
+        )
+        var runRecords = RunRecordStore()
+        _ = runRecords.begin(run)
+        let scriptTab = Tab.terminal(TerminalTabState(
+            id: "script-tab",
+            title: "Checks",
+            sessionId: sessionID,
+            runScriptKey: run.scriptKey
+        ))
+
+        let terminal = try #require(AppState.scheduledScriptTerminalForCleanup(
+            report: report,
+            worktree: fixture.worktree,
+            runRecords: runRecords,
+            tabs: [scriptTab]
+        ))
+        #expect(terminal.tabID == "script-tab")
+        #expect(terminal.sessionID == sessionID)
+
+        var activeRecords = RunRecordStore()
+        var activeRun = run
+        activeRun.status = .running
+        _ = activeRecords.begin(activeRun)
+        #expect(AppState.scheduledScriptTerminalForCleanup(
+            report: report,
+            worktree: fixture.worktree,
+            runRecords: activeRecords,
+            tabs: [scriptTab]
+        )?.sessionID == nil)
+        let unrelatedTab = Tab.terminal(TerminalTabState(
+            id: "unrelated-tab",
+            title: "Terminal",
+            sessionId: "unrelated-session"
+        ))
+        #expect(AppState.scheduledScriptTerminalForCleanup(
+            report: report,
+            worktree: fixture.worktree,
+            runRecords: runRecords,
+            tabs: [unrelatedTab]
+        )?.sessionID == nil)
+        // A closed tab must not be mistaken for a terminal that cleanup can
+        // terminate through its tab; the caller must use the closed-session
+        // verification path instead.
+        #expect(AppState.scheduledScriptTerminalForCleanup(
+            report: report,
+            worktree: fixture.worktree,
+            runRecords: runRecords,
+            tabs: []
+        ) == nil)
+    }
+
+    @Test func appStateReconcilesReportsLoadedFromDisk() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("scheduled-report-recovery-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databasePath = directory.appendingPathComponent("reports.sqlite").path
+        let initialStore = try ScheduledAgentReportStore(path: databasePath, pid: Int64.max)
+        try await initialStore.create(ScheduledAgentReport(
+            id: "interrupted",
+            occurrenceID: "occurrence",
+            scheduleID: "schedule",
+            scheduleName: "Nightly",
+            projectID: "project",
+            projectName: "Alas",
+            agentID: "claude",
+            request: "Review the repository.",
+            startedAt: Date(),
+            cleanupRequested: true
+        ))
+
+        let state = AppState(
+            store: MemoryStore(),
+            scheduledAgentReportDatabasePath: databasePath
+        )
+        await state.scheduledAgentReportsRecoveryTask?.value
+
+        let reopenedStore = try ScheduledAgentReportStore(path: databasePath)
+        let recovered = try #require(try await reopenedStore.report(id: "interrupted"))
+        #expect(recovered.taskState == .interrupted)
+        #expect(recovered.cleanupState == .retained)
+    }
+
+    @Test func lazyScheduledReportStoreUsesConfiguredDatabasePath() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("scheduled-report-lazy-path-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databasePath = directory.appendingPathComponent("reports.sqlite").path
+        let state = AppState(
+            store: MemoryStore(),
+            scheduledAgentReportDatabasePath: databasePath
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: databasePath))
+        let reports = try await state.scheduledAgentReportPage(projectID: "project", offset: 0)
+        #expect(reports.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: databasePath))
     }
 
     /// Lives here because this is the suite the problem was found in, but the
@@ -277,6 +566,152 @@ struct AppStateRunScheduleTests {
         #expect(fixture.errors().contains(where: { $0.title == "Run Script Failed" }))
     }
 
+    @Test func reportFinalizationFailureIsSurfacedAsUncommitted() async throws {
+        struct FinalizationFailure: LocalizedError {
+            var errorDescription: String? { "Injected report write failure" }
+        }
+        let fixture = try makeFixture(scheduledAgentReportFinalizer: { _, _, _, _ in
+            throw FinalizationFailure()
+        })
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let posted = NotificationBox()
+        fixture.state.harness.notifications.notificationAdder = { posted.append($0) }
+
+        let result = await fixture.state.runSchedule(schedule(
+            target: .project(id: fixture.project.id),
+            composition: RunScheduleComposition(
+                agentId: "term-agent",
+                prompt: "Run the scheduled task.",
+                afterExecution: .reportAndCleanupOnSuccess
+            )
+        ))
+
+        guard case .launchFailed(let message) = result.outcome else {
+            Issue.record("Expected report finalization failure, got \(result.outcome)")
+            return
+        }
+        #expect(message.contains("Could not commit the scheduled-agent report finalization"))
+        #expect(message.contains("The report was not committed"))
+        #expect(message.contains("worktree was retained"))
+
+        let reportID = try #require(result.reportIDs.first)
+        let report = try #require(try await fixture.state.scheduledAgentReport(id: reportID))
+        #expect(report.taskState == .running)
+        #expect(fixture.state.inAppNotifications.notifications(in: fixture.worktree.id).contains {
+            $0.severity == .error && $0.message.contains("The report was not committed")
+        })
+        #expect(posted.values.contains {
+            $0.content.title.contains("Nightly")
+                && $0.content.body.contains("The report was not committed")
+        })
+    }
+
+    @Test func recordedEligibilityFailureNotifiesTheUser() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let posted = NotificationBox()
+        fixture.state.harness.notifications.notificationAdder = { posted.append($0) }
+
+        let result = await fixture.state.runSchedule(schedule(
+            target: .project(id: fixture.project.id),
+            composition: RunScheduleComposition(
+                agentId: "term-agent",
+                prompt: "Run the scheduled task.",
+                afterExecution: .reportAndCleanupOnSuccess
+            )
+        ))
+
+        guard case .launchFailed(let reason) = result.outcome else {
+            Issue.record("Expected an ineligible saved agent to fail, got \(result.outcome)")
+            return
+        }
+        let reportID = try #require(result.reportIDs.first)
+        let report = try #require(try await fixture.state.scheduledAgentReport(id: reportID))
+        #expect(report.taskState == .needsAttention)
+        #expect(fixture.state.inAppNotifications.notifications(in: fixture.worktree.id).contains {
+            $0.severity == .error && $0.message.contains(reason)
+        })
+        #expect(posted.values.contains {
+            $0.content.title.contains("Nightly")
+                && $0.content.body.contains(reason)
+        })
+    }
+
+    @Test func reportCompletionRetryKeepsItsOwnerUntilPersistenceRecovers() async throws {
+        struct FinalizationFailure: Error {}
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let expected = ScheduledAgentReport(
+            id: "retry-report",
+            occurrenceID: "retry-occurrence",
+            scheduleID: "retry-schedule",
+            scheduleName: "Nightly",
+            projectID: fixture.project.id,
+            projectName: fixture.project.name,
+            branch: fixture.worktree.branch,
+            baseCommit: "base",
+            worktreeID: fixture.worktree.id,
+            sessionID: "session",
+            agentID: "agent",
+            request: "Run the task.",
+            startedAt: Date(),
+            finishedAt: Date(),
+            taskState: .succeeded,
+            completion: ScheduledAgentCompletion(
+                outcome: .succeeded,
+                summary: "Complete.",
+                checks: [],
+                links: []
+            ),
+            cleanupRequested: true,
+            cleanupState: .pending
+        )
+        let registration = ScheduledAgentRunRegistration(
+            reportID: expected.id,
+            occurrenceID: expected.occurrenceID,
+            scheduleID: expected.scheduleID,
+            projectID: fixture.project.id,
+            worktreeID: fixture.worktree.id,
+            worktreeLineageID: fixture.worktree.lineageID,
+            sessionID: "session",
+            promptID: UUID()
+        )
+        fixture.state.activeScheduledAgentRunsBySession["session"] = registration
+        var allowPersistence = false
+        var attempts = 0
+        var returned = false
+        let retryTask = Task {
+            defer {
+                if fixture.state.activeScheduledAgentRunsBySession["session"] === registration {
+                    registration.invalidate()
+                    fixture.state.activeScheduledAgentRunsBySession["session"] = nil
+                }
+            }
+            let report = await AppState.finishRecordedScheduledReportWithRetry(
+                retryDelay: { _ in .milliseconds(1) }
+            ) {
+                attempts += 1
+                guard allowPersistence else { throw FinalizationFailure() }
+                return expected
+            }
+            returned = true
+            return report
+        }
+
+        let deadline = Date().addingTimeInterval(5)
+        while attempts < 8 && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(attempts >= 8)
+        #expect(!returned)
+        #expect(fixture.state.activeScheduledAgentRunsBySession["session"] === registration)
+        allowPersistence = true
+
+        let finalized = await retryTask.value
+        #expect(finalized.id == expected.id)
+        #expect(returned)
+        #expect(fixture.state.activeScheduledAgentRunsBySession["session"] == nil)
+    }
     /// A schedule's history links runs in worktrees whose Run tab may never
     /// have been opened — a worktree the schedule created itself, most
     /// obviously. After a relaunch nothing has loaded their report ids, so the
@@ -436,7 +871,9 @@ struct AppStateRunScheduleTests {
 
     private func makeComposedState(
         repo: URL,
-        installedAgentIDs: Set<String>
+        installedAgentIDs: Set<String>,
+        completionGate: Gate? = nil,
+        scheduledAgentReportFinalizer: ScheduledAgentReportFinalizer? = nil
     ) async throws -> (AppState, ProjectConfig, LocationBox) {
         let locations = LocationBox()
         var openCount = 0
@@ -455,11 +892,14 @@ struct AppStateRunScheduleTests {
             },
             runScriptCompletionWaiter: { location in
                 locations.locations.append(location)
+                if let completionGate { await completionGate.wait() }
                 return RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
             },
             runHistoryStore: try RunHistoryStore(path: repo.appendingPathComponent("history.sqlite").path),
             runScheduler: RunScheduler(store: MemoryStore(), fileURL: repo.appendingPathComponent("schedules.json")),
-            attentionStore: AttentionStore(url: repo.appendingPathComponent("attention-events.json"))
+            attentionStore: AttentionStore(url: repo.appendingPathComponent("attention-events.json")),
+            scheduledAgentReportDatabasePath: repo.appendingPathComponent("scheduled-agent-reports.sqlite").path,
+            scheduledAgentReportFinalizer: scheduledAgentReportFinalizer
         )
         state.config.worktrees.rootPath = repo.deletingLastPathComponent().appendingPathComponent("wts-\(UUID().uuidString)").path
         state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}/{branch}"
@@ -488,6 +928,106 @@ struct AppStateRunScheduleTests {
         let project = try await state.projectsManager.addProject(path: repo, displayName: "compose", color: "#5fb7c4")
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
         return (state, project, locations)
+    }
+    @Test func cancellingReportEnabledScheduleFinalizesBeforeGatedScriptCompletes() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let gate = Gate()
+        let (state, project, _) = try await makeComposedState(
+            repo: repo,
+            installedAgentIDs: ["omp"],
+            completionGate: gate
+        )
+        defer {
+            Task { await gate.open() }
+            try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath)
+        }
+
+        let composed = schedule(
+            target: .project(id: project.id),
+            scriptKey: "repo:setup.sh",
+            composition: RunScheduleComposition(
+                branchTemplate: "sched/{name}-{date}",
+                agentId: "omp",
+                prompt: "Run this scheduled task.",
+                afterExecution: .reportAndCleanupOnSuccess
+            )
+        )
+        let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+        let run = Task { await state.runSchedule(composed, firingID: "cancelled-firing") }
+        let deadline = Date().addingTimeInterval(10)
+        func scriptIsRunning() -> Bool {
+            state.projectsManager.worktrees(projectId: project.id)
+                .filter { $0.id != main.id }
+                .contains {
+                    state.runRecords.record(worktreeID: $0.id, scriptKey: "repo:setup.sh")?.status == .running
+                }
+        }
+        while !scriptIsRunning(), Date() < deadline {
+            await Task.yield()
+        }
+        #expect(scriptIsRunning())
+        run.cancel()
+
+        let result = await run.value
+        let reportID = try #require(result.reportIDs.first)
+        let interrupted = try #require(try await state.scheduledAgentReport(id: reportID))
+        #expect(interrupted.taskState == .interrupted)
+
+        // The command's waiter remains gated after the schedule has returned.
+        await gate.open()
+        let settleDeadline = Date().addingTimeInterval(5)
+        while !state.runScriptSettlementHandlers.isEmpty, Date() < settleDeadline {
+            await Task.yield()
+        }
+        let stillInterrupted = try #require(try await state.scheduledAgentReport(id: reportID))
+        #expect(stillInterrupted.taskState == .interrupted)
+        #expect(state.runScriptSettlementHandlers.isEmpty)
+    }
+
+    @Test func scriptLaunchFailureWithReportFinalizationFailureReturnsUncommittedOutcome() async throws {
+        struct FinalizationFailure: LocalizedError {
+            var errorDescription: String? { "Injected report write failure" }
+        }
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(
+            repo: repo,
+            installedAgentIDs: ["omp"],
+            scheduledAgentReportFinalizer: { _, _, _, _ in
+                throw FinalizationFailure()
+            }
+        )
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        state.config.terminal.shell = "/bin/fish"
+
+        let composed = schedule(
+            target: .project(id: project.id),
+            scriptKey: "repo:setup.sh",
+            composition: RunScheduleComposition(
+                branchTemplate: "sched/{name}-{date}",
+                agentId: "omp",
+                prompt: "Run this scheduled task.",
+                afterExecution: .reportAndCleanupOnSuccess
+            )
+        )
+        let result = await state.runSchedule(composed, firingID: "script-finalization-failure")
+
+        guard case .launchFailed(let message) = result.outcome else {
+            Issue.record("Expected report finalization failure, got \(result.outcome)")
+            return
+        }
+        #expect(message.contains("The report was not committed"))
+        #expect(message.contains("worktree was retained"))
+
+        let reportID = try #require(result.reportIDs.first)
+        let report = try #require(try await state.scheduledAgentReport(id: reportID))
+        #expect(report.taskState == .running)
+        let worktree = try #require(state.projectsManager.worktrees(projectId: project.id)
+            .first { $0.id == report.worktreeID })
+        #expect(state.inAppNotifications.notifications(in: worktree.id).contains {
+            $0.severity == .error && $0.message.contains("The report was not committed")
+        })
     }
 
     @Test func compositionCreatesAWorktreeRunsTheScriptThereAndLaunchesTheAgent() async throws {
@@ -1101,6 +1641,34 @@ struct AppStateRunScheduleTests {
         }
         let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
         #expect(state.tabs.tabs(forWorktree: created.id).isEmpty)
+    }
+
+    @Test func awaitedManagerDisposalAlsoDisposesReplacementManager() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-manager-disposal-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let state = AppState(store: MemoryStore())
+        let worktree = Worktree(
+            id: "disposal-\(UUID().uuidString)",
+            projectId: "project",
+            name: "main",
+            branch: "main",
+            path: root,
+            isMainWorktree: true,
+            status: .clean,
+            lastActivity: Date()
+        )
+        let owner = SessionOwnerID.worktree(worktree.id)
+        let firstManager = try #require(state.acpManager(for: worktree))
+        state.disposeACPManager(for: worktree.id)
+        let replacementManager = try #require(state.acpManager(for: worktree))
+        #expect(replacementManager !== firstManager)
+
+        await state.disposeACPManagerAndWait(owner: owner)
+        #expect(state.acpManager(forWorktreeId: worktree.id) == nil)
+        await state.disposeACPManagerAndWait(owner: owner)
     }
 }
 

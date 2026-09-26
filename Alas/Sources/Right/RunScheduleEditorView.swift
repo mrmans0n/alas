@@ -539,7 +539,25 @@ struct RunScheduleEditorView: View {
                     ))
                 }
             }
+            DialogField(label: "After the agent finishes") {
+                VStack(alignment: .leading, spacing: 8) {
+                    AlasSegmentedControl(
+                        selection: draft.afterExecution,
+                        options: [
+                            AlasSegmentedOption(id: .keep, label: "Keep worktree"),
+                            AlasSegmentedOption(id: .reportAndCleanupOnSuccess, label: "Report and clean up"),
+                        ],
+                        onSelect: { draft.afterExecution = $0 }
+                    )
+                    helpText(RunSchedulePresentation.afterExecutionHint(
+                        draft.afterExecution,
+                        surface: agentSurface,
+                        agentID: draft.agentID
+                    ))
+                }
+            }
             helpText(RunSchedulePresentation.compositionHint(surface: agentSurface))
+            .padding(.top, 2)
         }
         .padding(.leading, 23)
         .padding(.top, 2)

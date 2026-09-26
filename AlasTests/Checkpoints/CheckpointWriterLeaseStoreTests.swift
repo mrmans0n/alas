@@ -7,7 +7,7 @@ struct CheckpointWriterLeaseStoreTests {
     @Test func activeCountIncludesOtherLiveInstancesAndExcludesThisInstance() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { [] })
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { .some([]) })
         let lineageID = UUID().uuidString.lowercased()
 
         store.acquire(lineageIDs: [lineageID], sessionID: "local", instanceID: "this-instance", zmxSessionName: nil, remoteHost: nil)
@@ -15,6 +15,37 @@ struct CheckpointWriterLeaseStoreTests {
 
         #expect(store.activeLeaseCount(lineageID: lineageID, excludingInstanceID: "this-instance") == 1)
         #expect(store.activeLeaseCount(lineageID: lineageID, excludingInstanceID: "other-instance") == 1)
+    }
+
+    @Test func admissionPersistsLeaseUnderHeldDeletionLock() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lineageID = UUID().uuidString.lowercased()
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { .some([]) })
+        let deletionLease = try #require(store.holdDeletionLock(
+            lineageIDs: [lineageID],
+            instanceID: "cleanup",
+            sessionID: "worktree"
+        ))
+
+        #expect(!store.acquire(
+            lineageIDs: [lineageID],
+            sessionID: "writer",
+            instanceID: "writer-instance",
+            zmxSessionName: nil,
+            remoteHost: nil
+        ))
+        #expect(store.activeLeaseCount(lineageID: lineageID, excludingInstanceID: "cleanup") == 0)
+
+        #expect(store.acquire(
+            lineageIDs: [lineageID],
+            sessionID: "writer",
+            instanceID: "writer-instance",
+            zmxSessionName: nil,
+            remoteHost: nil,
+            holding: deletionLease
+        ))
+        #expect(store.activeLeaseCount(lineageID: lineageID, excludingInstanceID: "cleanup") == 1)
     }
 
     @Test func liveReusedPidDoesNotKeepStaleLeaseActive() throws {
@@ -35,7 +66,7 @@ struct CheckpointWriterLeaseStoreTests {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(record).write(to: directory.appendingPathComponent("stale.json"))
-        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { [] })
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { .some([]) })
 
         #expect(store.activeLeaseCount(lineageID: lineageID, excludingInstanceID: "current-instance") == 0)
         #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("stale.json").path))
@@ -44,7 +75,7 @@ struct CheckpointWriterLeaseStoreTests {
     @Test func releaseRemovesSessionFromAllLineages() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { [] })
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { .some([]) })
         let first = UUID().uuidString.lowercased()
         let second = UUID().uuidString.lowercased()
 
@@ -58,7 +89,7 @@ struct CheckpointWriterLeaseStoreTests {
     @Test func releaseRemovesOnlyTheOwningInstanceRecord() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { [] })
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { .some([]) })
         let lineageID = UUID().uuidString.lowercased()
 
         store.acquire(lineageIDs: [lineageID], sessionID: "shared-leaf", instanceID: "first-instance", zmxSessionName: nil, remoteHost: nil)
@@ -73,7 +104,7 @@ struct CheckpointWriterLeaseStoreTests {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let activeZmxSessions = ActiveZmxSessions(["alas-persistent"])
-        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { activeZmxSessions.value })
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { .some(activeZmxSessions.value) })
         let lineageID = UUID().uuidString.lowercased()
 
         store.acquire(
@@ -90,6 +121,77 @@ struct CheckpointWriterLeaseStoreTests {
         activeZmxSessions.value = []
 
         #expect(store.activeLeaseCount(lineageID: lineageID, excludingInstanceID: "new-instance") == 0)
+    }
+
+    @Test func checkedLeaseCountPreservesLeaseWhenZmxEnumerationFails() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { nil })
+        let lineageID = UUID().uuidString.lowercased()
+        store.acquire(
+            lineageIDs: [lineageID],
+            sessionID: "detached",
+            instanceID: "former-instance",
+            zmxSessionName: "alas-persistent",
+            remoteHost: nil,
+            pid: -1
+        )
+        let directory = root.appendingPathComponent(lineageID, isDirectory: true)
+
+        #expect(store.activeLeaseCountIfReadable(
+            lineageID: lineageID,
+            excludingInstanceID: "current-instance"
+        ) == 1)
+        let entries = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        #expect(entries.filter { $0.pathExtension == "json" }.count == 1)
+        #expect(entries.contains { $0.lastPathComponent == "deletion.lock" })
+    }
+
+    @Test func checkedLeaseCountTreatsMissingLineageDirectoryAsEmpty() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { .some([]) })
+        let lineageID = UUID().uuidString.lowercased()
+
+        #expect(store.activeLeaseCountIfReadable(
+            lineageID: lineageID,
+            excludingInstanceID: "current-instance"
+        ) == 0)
+    }
+
+    @Test func checkedLeaseCountFailsClosedOnMalformedLeaseRecord() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lineageID = UUID().uuidString.lowercased()
+        let directory = root.appendingPathComponent(lineageID, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("not json".utf8).write(to: directory.appendingPathComponent("malformed.json"))
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { .some([]) })
+
+        #expect(store.activeLeaseCount(lineageID: lineageID, excludingInstanceID: "current-instance") == 0)
+        #expect(store.activeLeaseCountIfReadable(
+            lineageID: lineageID,
+            excludingInstanceID: "current-instance"
+        ) == nil)
+    }
+
+    @Test func checkedLeaseCountFailsClosedOnUnreadableLineageDirectory() throws {
+        guard getuid() != 0 else { return }
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lineageID = UUID().uuidString.lowercased()
+        let directory = root.appendingPathComponent(lineageID, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: directory.path)
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { .some([]) })
+
+        #expect(store.activeLeaseCountIfReadable(
+            lineageID: lineageID,
+            excludingInstanceID: "current-instance"
+        ) == nil)
     }
 
     private func temporaryDirectory() throws -> URL {

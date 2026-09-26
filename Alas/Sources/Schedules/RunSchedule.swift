@@ -54,6 +54,11 @@ enum RunScheduleMissedRunPolicy: String, Codable, CaseIterable, Sendable {
 /// standard creation path (worktree-create script included), the script runs
 /// inside it, and the agent is launched on it afterwards: as an ACP chat
 /// session when the agent speaks ACP, otherwise in a terminal.
+enum RunScheduleAfterExecution: String, Codable, CaseIterable, Hashable, Sendable {
+    case keep
+    case reportAndCleanupOnSuccess
+}
+
 struct RunScheduleComposition: Codable, Equatable, Hashable, Sendable {
     /// Branch name template. Supports `{name}`, `{date}` and `{time}`.
     var branchTemplate: String
@@ -70,6 +75,9 @@ struct RunScheduleComposition: Codable, Equatable, Hashable, Sendable {
     /// Whether the prompt is submitted as soon as it is delivered, or left in
     /// the agent's input for the user to send. Meaningless without `prompt`.
     var sendsPromptAutomatically: Bool
+    /// Whether this schedule retains its execution resources or requests
+    /// report-backed cleanup after an explicitly successful ACP completion.
+    var afterExecution: RunScheduleAfterExecution
 
     static let defaultBranchTemplate = "scheduled/{name}-{date}-{time}"
 
@@ -78,13 +86,15 @@ struct RunScheduleComposition: Codable, Equatable, Hashable, Sendable {
         agentId: String? = nil,
         modelId: String? = nil,
         prompt: String? = nil,
-        sendsPromptAutomatically: Bool = true
+        sendsPromptAutomatically: Bool = true,
+        afterExecution: RunScheduleAfterExecution = .keep
     ) {
         self.branchTemplate = branchTemplate
         self.agentId = agentId
         self.modelId = modelId
         self.prompt = prompt
         self.sendsPromptAutomatically = sendsPromptAutomatically
+        self.afterExecution = afterExecution
     }
 
     /// The prompt as keystrokes for the agent's terminal.
@@ -115,12 +125,11 @@ struct RunScheduleComposition: Codable, Equatable, Hashable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case branchTemplate, agentId, modelId, prompt, sendsPromptAutomatically
+        case branchTemplate, agentId, modelId, prompt, sendsPromptAutomatically, afterExecution
     }
 
-    /// Written by hand because the prompt and model fields arrived after the
-    /// first release: a file without them must still decode, or the lenient
-    /// per-schedule decoder in `RunSchedulesFile` drops the whole schedule.
+    /// Hand-written because fields are added after the first release. An older
+    /// file must decode or the lenient per-schedule decoder drops the schedule.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         branchTemplate = try c.decodeIfPresent(String.self, forKey: .branchTemplate) ?? Self.defaultBranchTemplate
@@ -128,6 +137,7 @@ struct RunScheduleComposition: Codable, Equatable, Hashable, Sendable {
         modelId = try c.decodeIfPresent(String.self, forKey: .modelId)
         prompt = try c.decodeIfPresent(String.self, forKey: .prompt)
         sendsPromptAutomatically = try c.decodeIfPresent(Bool.self, forKey: .sendsPromptAutomatically) ?? true
+        afterExecution = try c.decodeIfPresent(RunScheduleAfterExecution.self, forKey: .afterExecution) ?? .keep
     }
 }
 
@@ -258,6 +268,9 @@ struct RunScheduleFiring: Codable, Identifiable, Equatable, Hashable, Sendable {
     let wasManual: Bool
     let outcome: RunScheduleOutcome
     let runs: [RunReference]
+    /// Durable scheduled-agent reports. Unlike script run references, these
+    /// remain openable after their execution worktree has been removed.
+    let reportIDs: [String]
 
     init(
         id: String = UUID().uuidString,
@@ -265,7 +278,8 @@ struct RunScheduleFiring: Codable, Identifiable, Equatable, Hashable, Sendable {
         finishedAt: Date,
         wasManual: Bool,
         outcome: RunScheduleOutcome,
-        runs: [RunReference] = []
+        runs: [RunReference] = [],
+        reportIDs: [String] = []
     ) {
         self.id = id
         self.firedAt = firedAt
@@ -273,20 +287,42 @@ struct RunScheduleFiring: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.wasManual = wasManual
         self.outcome = outcome
         self.runs = runs
+        self.reportIDs = reportIDs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, firedAt, finishedAt, wasManual, outcome, runs, reportIDs
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        firedAt = try c.decode(Date.self, forKey: .firedAt)
+        finishedAt = try c.decode(Date.self, forKey: .finishedAt)
+        wasManual = try c.decode(Bool.self, forKey: .wasManual)
+        outcome = try c.decode(RunScheduleOutcome.self, forKey: .outcome)
+        runs = try c.decodeIfPresent([RunReference].self, forKey: .runs) ?? []
+        reportIDs = try c.decodeIfPresent([String].self, forKey: .reportIDs) ?? []
     }
 
     var duration: TimeInterval { finishedAt.timeIntervalSince(firedAt) }
 }
 
-/// What one firing produced. The outcome is what the row shows; the runs are
-/// what its history entry links to.
+/// What one firing produced. The outcome is what the row shows; the runs and
+/// report IDs are what its history entry links to.
 struct RunScheduleRunReport: Equatable, Sendable {
     var outcome: RunScheduleOutcome
     var runs: [RunScheduleFiring.RunReference]
+    var reportIDs: [String]
 
-    init(outcome: RunScheduleOutcome, runs: [RunScheduleFiring.RunReference] = []) {
+    init(
+        outcome: RunScheduleOutcome,
+        runs: [RunScheduleFiring.RunReference] = [],
+        reportIDs: [String] = []
+    ) {
         self.outcome = outcome
         self.runs = runs
+        self.reportIDs = reportIDs
     }
 }
 

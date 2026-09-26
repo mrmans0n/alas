@@ -39,6 +39,8 @@ impl Clone for McpEnv {
 const MAX_MCP_WORKERS: usize = 8;
 const MAX_MCP_PREVIEW_CALLS: usize = MAX_MCP_WORKERS - 1;
 const MAX_HTTP_CONNECTION_WORKERS: usize = 8;
+const MAX_SCHEDULE_REPORT_TEXT_BYTES: usize = 64_000;
+const MAX_SCHEDULE_REPORT_ITEMS: usize = 100;
 const HTTP_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Clone)]
@@ -209,6 +211,50 @@ fn all_tool_definitions() -> Vec<Value> {
                     }
                 },
                 "required": ["body"]
+            }
+        }),
+        json!({
+            "name": "schedule_complete",
+            "description": "Submit the final report for this scheduled ACP task. Available only to an active scheduled run; ordinary sessions cannot submit a completion. Call once after the task is finished, including checks and useful output links. Completion does not authorize destructive cleanup.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["succeeded", "failed", "needs_attention"],
+                        "description": "Final task outcome."
+                    },
+                    "summary": {
+                        "type": "string",
+                        "maxLength": 64000,
+                        "description": "Concise result summary."
+                    },
+                    "checks": {
+                        "type": "array",
+                        "maxItems": 100,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string", "maxLength": 64000 },
+                                "result": { "type": "string", "maxLength": 64000 }
+                            },
+                            "required": ["name", "result"]
+                        }
+                    },
+                    "links": {
+                        "type": "array",
+                        "maxItems": 100,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": { "type": "string", "maxLength": 64000 },
+                                "url": { "type": "string", "maxLength": 64000 }
+                            },
+                            "required": ["label", "url"]
+                        }
+                    }
+                },
+                "required": ["status", "summary"]
             }
         }),
         json!({
@@ -675,6 +721,38 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 level,
             })
         }
+        "schedule_complete" => {
+            let status = required_non_blank_string(args, "status")?;
+            if !["succeeded", "failed", "needs_attention"].contains(&status.as_str()) {
+                return Err(
+                    "schedule_complete 'status' must be 'succeeded', 'failed', or 'needs_attention'"
+                        .into(),
+                );
+            }
+            let summary = required_limited_string(
+                args,
+                "summary",
+                MAX_SCHEDULE_REPORT_TEXT_BYTES,
+            )?;
+            let checks = schedule_report_checks(args)?;
+            let links = schedule_report_links(args)?;
+            let text_bytes = checks
+                .iter()
+                .map(|check| check.name.len().saturating_add(check.result.len()))
+                .chain(links.iter().map(|link| link.label.len().saturating_add(link.url.len())))
+                .fold(summary.len(), usize::saturating_add);
+            if text_bytes > MAX_SCHEDULE_REPORT_TEXT_BYTES {
+                return Err(format!(
+                    "schedule_complete text must total at most {MAX_SCHEDULE_REPORT_TEXT_BYTES} bytes"
+                ));
+            }
+            Ok(Command::ScheduleComplete {
+                status,
+                summary,
+                checks,
+                links,
+            })
+        }
         "session_list" => Ok(Command::SessionList),
         "session_new" => {
             let worktree = optional_non_blank_string(args, "worktree")?;
@@ -1130,6 +1208,79 @@ fn required_object_string(
     }
 }
 
+fn schedule_report_checks(
+    args: &Value,
+) -> Result<Vec<alas_client::ScheduleReportCheck>, String> {
+    parse_schedule_report_items(args, "checks", "name", "result", |name, result| {
+        alas_client::ScheduleReportCheck { name, result }
+    })
+}
+
+fn schedule_report_links(
+    args: &Value,
+) -> Result<Vec<alas_client::ScheduleReportLink>, String> {
+    parse_schedule_report_items(args, "links", "label", "url", |label, url| {
+        alas_client::ScheduleReportLink { label, url }
+    })
+}
+
+fn parse_schedule_report_items<T>(
+    args: &Value,
+    collection: &str,
+    first_key: &str,
+    second_key: &str,
+    build: impl Fn(String, String) -> T,
+) -> Result<Vec<T>, String> {
+    let Some(value) = args.get(collection) else {
+        return Ok(Vec::new());
+    };
+    let items = value
+        .as_array()
+        .ok_or_else(|| format!("schedule_complete '{collection}' must be an array"))?;
+    if items.len() > MAX_SCHEDULE_REPORT_ITEMS {
+        return Err(format!(
+            "schedule_complete '{collection}' must contain at most {MAX_SCHEDULE_REPORT_ITEMS} items"
+        ));
+    }
+    items
+        .iter()
+        .map(|item| {
+            let object = item.as_object().ok_or_else(|| {
+                format!("schedule_complete '{collection}' items must be objects")
+            })?;
+            Ok(build(
+                required_schedule_report_string(object, collection, first_key)?,
+                required_schedule_report_string(object, collection, second_key)?,
+            ))
+        })
+        .collect()
+}
+
+fn required_schedule_report_string(
+    object: &serde_json::Map<String, Value>,
+    collection: &str,
+    key: &str,
+) -> Result<String, String> {
+    let value = match object.get(key) {
+        Some(Value::String(value)) if !value.trim().is_empty() => value.trim(),
+        Some(Value::String(_)) => {
+            return Err(format!("schedule_complete '{collection}.{key}' must be non-empty"));
+        }
+        Some(_) => {
+            return Err(format!("schedule_complete '{collection}.{key}' must be a string"));
+        }
+        None => {
+            return Err(format!("schedule_complete '{collection}' requires '{key}'"));
+        }
+    };
+    if value.len() > MAX_SCHEDULE_REPORT_TEXT_BYTES {
+        return Err(format!(
+            "schedule_complete '{collection}.{key}' must be at most {MAX_SCHEDULE_REPORT_TEXT_BYTES} bytes"
+        ));
+    }
+    Ok(value.to_string())
+}
+
 fn optional_object_string(
     object: &serde_json::Map<String, Value>,
     key: &str,
@@ -1229,6 +1380,7 @@ fn success_message(command: &Command) -> String {
         Command::ReviewResolve { reopen: true, .. } => "Comment reopened.".into(),
         Command::ReviewCommentAdd { path, .. } => format!("Filed review comment on {path}."),
         Command::ReviewFinish { .. } => "Review finished.".into(),
+        Command::ScheduleComplete { .. } => "Scheduled task report submitted to Alas.".into(),
         Command::SessionList => "No delegated sessions found.".into(),
         Command::SessionNew { .. } => "Delegated session creation accepted.".into(),
         Command::SessionSend { .. } => "Delegated prompt queued.".into(),
@@ -1245,6 +1397,7 @@ fn transport_error_result(err: &TransportError) -> Value {
     // Mirrors describe() in main.rs so agents and humans read the same words.
     let message = match err {
         TransportError::Malformed => "malformed response from Alas",
+        TransportError::RequestTooLarge => "request to Alas exceeded 64 KiB",
         TransportError::ResponseTooLarge => "response from Alas exceeded 12 MiB",
         TransportError::Connect | TransportError::Io => "could not reach Alas",
     };
@@ -1883,10 +2036,10 @@ fn build_http_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, build_http_response,
-        cancellation_command_for_message, command_for_tool, dispatch, env_from, handle_line,
-        handle_line_with_parent, http_response, is_initialize_message, parse_http_request,
-        tools_call_command,
+        HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, MAX_SCHEDULE_REPORT_ITEMS,
+        MAX_SCHEDULE_REPORT_TEXT_BYTES, build_http_response, cancellation_command_for_message,
+        command_for_tool, dispatch, env_from, handle_line, handle_line_with_parent, http_response,
+        is_initialize_message, parse_http_request, tools_call_command,
     };
     use alas_client::{Command, Response};
     use serde_json::{Value, json};
@@ -2094,6 +2247,7 @@ mod tests {
             [
                 "open",
                 "notify",
+                "schedule_complete",
                 "session_list",
                 "session_new",
                 "session_send",
@@ -2134,6 +2288,18 @@ mod tests {
             assert_eq!(tool["inputSchema"]["type"], json!("object"));
         }
         let open_schema = &reply["result"]["tools"][0]["inputSchema"];
+        let schedule_tool = tools
+            .iter()
+            .find(|tool| tool["name"] == json!("schedule_complete"))
+            .unwrap();
+        assert_eq!(
+            schedule_tool["inputSchema"]["properties"]["status"]["enum"],
+            json!(["succeeded", "failed", "needs_attention"])
+        );
+        assert_eq!(
+            schedule_tool["inputSchema"]["properties"]["checks"]["maxItems"],
+            json!(100)
+        );
         assert!(open_schema.get("oneOf").is_none());
         assert!(open_schema.get("anyOf").is_none());
     }
@@ -2635,6 +2801,138 @@ mod tests {
                 "/wt"
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn schedule_complete_validates_and_maps_report() {
+        let command = command_for_tool(
+            "schedule_complete",
+            &json!({
+                "status": "needs_attention",
+                "summary": "Approval is needed.",
+                "checks": [{ "name": "tests", "result": "12 passed" }],
+                "links": [{ "label": "Run log", "url": "file:///tmp/run.log" }]
+            }),
+            "/wt",
+        )
+        .unwrap();
+
+        assert_eq!(
+            command,
+            alas_client::Command::ScheduleComplete {
+                status: "needs_attention".into(),
+                summary: "Approval is needed.".into(),
+                checks: vec![alas_client::ScheduleReportCheck {
+                    name: "tests".into(),
+                    result: "12 passed".into(),
+                }],
+                links: vec![alas_client::ScheduleReportLink {
+                    label: "Run log".into(),
+                    url: "file:///tmp/run.log".into(),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn schedule_complete_rejects_invalid_and_oversized_reports() {
+        assert!(command_for_tool(
+            "schedule_complete",
+            &json!({ "status": "unknown", "summary": "Done" }),
+            "/wt"
+        )
+        .is_err());
+        assert!(command_for_tool(
+            "schedule_complete",
+            &json!({ "status": "succeeded" }),
+            "/wt"
+        )
+        .is_err());
+        assert!(command_for_tool(
+            "schedule_complete",
+            &json!({ "status": "succeeded", "summary": "Done", "checks": "tests passed" }),
+            "/wt"
+        )
+        .is_err());
+        assert!(command_for_tool(
+            "schedule_complete",
+            &json!({
+                "status": "succeeded",
+                "summary": "Done",
+                "checks": [{ "name": "tests", "result": " " }]
+            }),
+            "/wt"
+        )
+        .is_err());
+
+        let too_many_checks = (0..=MAX_SCHEDULE_REPORT_ITEMS)
+            .map(|_| json!({ "name": "check", "result": "passed" }))
+            .collect::<Vec<_>>();
+        assert!(command_for_tool(
+            "schedule_complete",
+            &json!({
+                "status": "succeeded",
+                "summary": "Done",
+                "checks": too_many_checks
+            }),
+            "/wt"
+        )
+        .is_err());
+
+        let at_limit = "x".repeat(MAX_SCHEDULE_REPORT_TEXT_BYTES);
+        assert!(command_for_tool(
+            "schedule_complete",
+            &json!({ "status": "succeeded", "summary": at_limit }),
+            "/wt"
+        )
+        .is_ok());
+        let too_large = "x".repeat(MAX_SCHEDULE_REPORT_TEXT_BYTES + 1);
+        assert!(command_for_tool(
+            "schedule_complete",
+            &json!({ "status": "succeeded", "summary": too_large }),
+            "/wt"
+        )
+        .is_err());
+        assert!(command_for_tool(
+            "schedule_complete",
+            &json!({
+                "status": "succeeded",
+                "summary": "x".repeat(MAX_SCHEDULE_REPORT_TEXT_BYTES - 4),
+                "links": [{ "label": "log", "url": "file:///tmp/run.log" }]
+            }),
+            "/wt"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn schedule_complete_rejects_json_expansion_over_socket_limit() {
+        let env = McpEnv {
+            socket: std::env::temp_dir().join(format!(
+                "alas-mcp-oversized-schedule-{}-{}.sock",
+                std::process::id(),
+                line!()
+            )),
+            worktree_dir: "/wt".into(),
+            session_id: "session".into(),
+            parent_session_id: None,
+            workspace_only: false,
+        };
+        let summary = "\"".repeat(40_000);
+        let reply = handle_line(
+            &call(
+                "schedule_complete",
+                json!({ "status": "succeeded", "summary": summary }),
+            ),
+            "/wt",
+            |command| dispatch(&env, command),
+        )
+        .unwrap();
+        assert_eq!(reply["result"]["isError"], json!(true));
+        assert_eq!(
+            reply["result"]["content"][0]["text"],
+            json!("request to Alas exceeded 64 KiB")
         );
     }
 

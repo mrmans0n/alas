@@ -136,7 +136,7 @@ struct ACPMCPPromptPreambleTests {
         // The Rust unit test asserting name order is the authority; update
         // BOTH when tools change.
         #expect(ACPMCPPromptPreamble.builtInToolNames == [
-            "open", "notify",
+            "open", "notify", "schedule_complete",
             "session_list", "session_new", "session_send",
             "worktree_list", "worktree_switch", "worktree_new", "worktree_delete",
             "review", "review_comments", "review_reply", "review_resolve",

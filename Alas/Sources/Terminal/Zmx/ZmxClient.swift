@@ -88,15 +88,14 @@ final class ZmxClient: Sendable {
         return false
     }
 
-    /// Parse `zmx ls --short` into session names. Returns `[]` on any error
-    /// or when zmx is unavailable. Same blocking-up-to-5s caveat as
-    /// `killSession`.
+    /// Parse `zmx ls --short` into session names. Returns `nil` when
+    /// enumeration fails or zmx is unavailable.
     ///
     /// `--short` is required: the default `zmx ls` output is tab-separated
     /// key=value fields (`  name=alas-X\tpid=123\t…`), not bare names, so
     /// orphan-sweep callers would otherwise miss every `alas-*` session.
-    func listSessions() -> [String] {
-        guard env.isAvailable, let binary = env.binaryURL else { return [] }
+    func listSessionsIfAvailable() -> [String]? {
+        guard env.isAvailable, let binary = env.binaryURL else { return nil }
         let result = runner.run(binary, ["ls", "--short"], zmxEnv(), 5.0)
         guard result.exitCode == 0 else {
             if let code = result.exitCode {
@@ -104,12 +103,42 @@ final class ZmxClient: Sendable {
             } else {
                 logger.warning("zmx ls timed out")
             }
-            return []
+            return nil
         }
         return result.stdout
             .split(separator: "\n", omittingEmptySubsequences: true)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+    }
+
+    /// Best-effort form for callers that treat enumeration failures as empty.
+    func listSessions() -> [String] {
+        listSessionsIfAvailable() ?? []
+    }
+
+    /// Parses full `zmx ls` key-value rows. Throws when zmx is unavailable or
+    /// enumeration fails: callers that must prove a session stopped (e.g.
+    /// scheduled worktree cleanup) cannot treat "could not enumerate" as
+    /// "nothing to kill".
+    func listSessionInfosThrowing() throws -> [ZmxSessionInfo] {
+        guard env.isAvailable, let binary = env.binaryURL else {
+            throw SessionEnumerationError.unavailable
+        }
+        let result = runner.run(binary, ["ls"], zmxEnv(), 5.0)
+        guard result.exitCode == 0 else {
+            if let code = result.exitCode {
+                logger.warning("zmx ls exited \(code, privacy: .public): \(result.stderr, privacy: .public)")
+            } else {
+                logger.warning("zmx ls timed out")
+            }
+            throw SessionEnumerationError.failed
+        }
+        return Self.parseSessionInfos(result.stdout)
+    }
+
+    enum SessionEnumerationError: Error {
+        case unavailable
+        case failed
     }
 
     /// Parse full `zmx ls` key-value rows. Used for legacy session migration,

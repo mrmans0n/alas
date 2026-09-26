@@ -47,6 +47,9 @@ struct AlasCLICommandRouter {
     var sendDelegatedSessionMessage: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionMessageRequest) async -> AlasCLIResponse = { _, _ in
         .error("Session orchestration is not available yet.")
     }
+    var completeScheduledTask: (ACPOrchestrationSessionOrigin, ScheduledAgentCompletion) async -> AlasCLIResponse = { _, _ in
+        .error("No active scheduled ACP run accepts this completion.")
+    }
     var workspaceCommand: (AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse = { _ in
         .error("Workspace automation is not available yet.")
     }
@@ -103,6 +106,12 @@ struct AlasCLICommandRouter {
             return await previewCommand(command, owner, request.sessionId)
         case .workspace(let command):
             return await workspaceCommand(command)
+        case .scheduleComplete(let completion):
+            guard let sessionId = request.sessionId,
+                  let acpOrigin = resolveACPSessionOrigin(sessionId) else {
+                return .error("schedule_complete requires a live ACP session.")
+            }
+            return await completeScheduledTask(acpOrigin, completion)
         case .sessionList, .sessionNew, .sessionSend:
             guard let sessionId = request.sessionId,
                   let acpOrigin = resolveACPSessionOrigin(sessionId) else {
@@ -247,7 +256,7 @@ struct AlasCLICommandRouter {
                 origin: origin, sessionID: sessionID, verdict: verdict, summary: summary,
                 projectWorktrees: projectWorktrees
             )
-        case .sessionList, .sessionNew, .sessionSend:
+        case .sessionList, .sessionNew, .sessionSend, .scheduleComplete:
             preconditionFailure("Session commands are handled before generic origin resolution")
         }
     }

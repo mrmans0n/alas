@@ -47,7 +47,7 @@ enum ACPMCPPromptPreamble {
     /// AlasCLI/crates/alas/src/mcp.rs (its unit test asserts this order).
     /// Update both sides together.
     static let builtInToolNames: [String] = [
-        "open", "notify",
+        "open", "notify", "schedule_complete",
         "session_list", "session_new", "session_send",
         "worktree_list", "worktree_switch", "worktree_new", "worktree_delete",
         "review", "review_comments", "review_reply", "review_resolve",
@@ -112,6 +112,7 @@ enum ACPMCPPromptPreamble {
             var line = "The MCP server \"alas\" (built-in) drives the Alas UI: "
                 + "open (reveal files to the user), notify (macOS notification), "
                 + "worktree_list/worktree_switch/worktree_new/worktree_delete, "
+                + "schedule_complete (final report for an active scheduled task), "
                 + "review, review_comments/review_reply/review_resolve/"
                 + "review_comment_add/review_finish, \(sessionTools)."
             if isDelegated {
@@ -138,7 +139,9 @@ enum ACPMCPPromptPreamble {
                 + "restrict MCP servers by policy), the same actions are available via "
                 + "the `alas` CLI in your shell: `alas open`, `alas notify`, "
                 + "`alas wt …`, `alas review …` (comments/reply/resolve/finish), "
-                + "`alas session …`, and `alas preview …`.")
+                + "`alas session …`, and `alas preview …`. Scheduled task completion "
+                + "requires the built-in MCP `schedule_complete` tool."
+            )
         }
         if !userServerNames.isEmpty {
             lines.append("Additional MCP servers attached: "

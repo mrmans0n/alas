@@ -43,6 +43,7 @@ struct RunSchedulerTests {
         var runs: [RunScheduleFiring.RunReference] = []
         var gate: CheckedContinuation<Void, Never>?
         var holdsRuns = false
+        var firingIDs: [String] = []
     }
 
     private let fileURL = URL(fileURLWithPath: "/memory/run-schedules.json")
@@ -62,8 +63,9 @@ struct RunSchedulerTests {
             tickInterval: 30,
             grace: 120
         )
-        scheduler.runner = { schedule, invocation in
+        scheduler.runner = { schedule, invocation, firingID in
             log.fired.append(schedule.id)
+            log.firingIDs.append(firingID)
             log.invocations.append(invocation)
             if log.holdsRuns {
                 await withCheckedContinuation { continuation in
@@ -92,7 +94,7 @@ struct RunSchedulerTests {
     @Test func schedulesAndStateSurviveRelaunch() async throws {
         let store = MemoryStore()
         let clock = Clock(Date(timeIntervalSince1970: 1_800_000_000))
-        let (first, _) = makeScheduler(store: store, clock: clock)
+        let (first, log) = makeScheduler(store: store, clock: clock)
         var schedule = interval("a", seconds: 600, at: clock.now)
         schedule.composition = RunScheduleComposition(branchTemplate: "sched/{date}", agentId: "claude")
         first.add(schedule)
@@ -107,6 +109,7 @@ struct RunSchedulerTests {
         let state = second.state(for: "a")
         #expect(state.lastOutcome == .succeeded)
         #expect(state.lastFiredAt != nil)
+        #expect(state.firings.first?.id == log.firingIDs.first)
         #expect(state.nextFireAt != nil)
     }
 

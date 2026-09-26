@@ -1,5 +1,16 @@
 import SwiftUI
 
+struct ScheduledAgentReportSummaryRefresh {
+    static func apply(
+        _ report: ScheduledAgentReport,
+        to summaries: inout [String: ScheduledAgentReport]
+    ) -> Bool {
+        guard summaries[report.id] != report else { return false }
+        summaries[report.id] = report
+        return true
+    }
+}
+
 /// Schedules relevant to one worktree: the ones aimed at it, plus, on the
 /// project's main worktree, every schedule for the project. Rows carry live
 /// state (last outcome, next fire, running) and the header owns pausing and
@@ -10,7 +21,7 @@ struct SchedulesTabView: View {
     let worktree: Worktree
 
     @Environment(\.theme) private var theme
-    @State private var editing: EditTarget?
+    @State private var presentation: Presentation?
     @State private var now = Date()
     @State private var ticker = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
@@ -21,6 +32,20 @@ struct SchedulesTabView: View {
             switch self {
             case .existing(let id): return id
             case .new: return "__new__"
+            }
+        }
+    }
+
+    enum Presentation: Identifiable {
+        case edit(EditTarget)
+        case reports(projectID: String)
+        case report(projectID: String, reportID: String)
+
+        var id: String {
+            switch self {
+            case .edit(let target): "edit:\(target.id)"
+            case .reports(let projectID): "reports:\(projectID)"
+            case .report(_, let reportID): "report:\(reportID)"
             }
         }
     }
@@ -41,7 +66,8 @@ struct SchedulesTabView: View {
                             state: state,
                             schedule: schedule,
                             now: now,
-                            onEdit: { editing = .existing(schedule.id) }
+                            onEdit: { presentation = .edit(.existing(schedule.id)) },
+                            onOpenReport: { openScheduledReport($0) }
                         )
                     }
                 }
@@ -55,18 +81,31 @@ struct SchedulesTabView: View {
         .task(id: historyPrimingToken) {
             await state.primeScheduleRunReportIDs(historyWorktreeIDs)
         }
-        .sheet(item: $editing) { target in
+        .task(id: "\(worktree.projectId)|\(state.scheduledAgentReportRoute?.reportID ?? "")") {
+            guard let route = state.scheduledAgentReportRoute,
+                  route.projectID == worktree.projectId
+            else {
+                return
+            }
+            presentation = .report(projectID: route.projectID, reportID: route.reportID)
+            state.scheduledAgentReportRoute = nil
+        }
+        .sheet(item: $presentation) { target in
             switch target {
-            case .new:
-                RunScheduleEditorView(state: state, originWorktree: worktree, schedule: nil) { editing = nil }
-                .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
-            case .existing(let id):
+            case .edit(.new):
+                RunScheduleEditorView(state: state, originWorktree: worktree, schedule: nil) { presentation = nil }
+                    .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
+            case .edit(.existing(let id)):
                 RunScheduleEditorView(
                     state: state,
                     originWorktree: worktree,
                     schedule: state.runScheduler.schedule(id: id)
-                ) { editing = nil }
+                ) { presentation = nil }
                     .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
+            case .reports(let projectID):
+                ScheduledAgentReportsSheet(state: state, projectID: projectID)
+            case .report(let projectID, let reportID):
+                ScheduledAgentReportsSheet(state: state, projectID: projectID, initialReportID: reportID)
             }
         }
     }
@@ -113,6 +152,18 @@ struct SchedulesTabView: View {
         return ordered
     }
 
+    private func openScheduledReport(_ reportID: String) {
+        Task { @MainActor in
+            let reportProjectID: String
+            do {
+                reportProjectID = try await state.scheduledAgentReport(id: reportID)?.projectID ?? worktree.projectId
+            } catch {
+                reportProjectID = worktree.projectId
+            }
+            presentation = .report(projectID: reportProjectID, reportID: reportID)
+        }
+    }
+
     private var header: some View {
         HStack(spacing: 6) {
             Text(isMainWorktree ? "PROJECT SCHEDULES" : "SCHEDULES")
@@ -127,7 +178,17 @@ struct SchedulesTabView: View {
                 .foregroundColor(theme.color("fg-muted"))
             Spacer(minLength: 8)
             pauseMenu
-            Button { editing = .new } label: {
+            Button {
+                presentation = .reports(projectID: worktree.projectId)
+            } label: {
+                Icon(name: "doc.text", size: 12, color: theme.color("fg-muted"))
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.plain)
+            .help("Scheduled reports")
+            .accessibilityLabel("Scheduled reports")
+            .accessibilityIdentifier("scheduled-agent-reports")
+            Button { presentation = .edit(.new) } label: {
                 Icon(name: "plus", size: 12, color: theme.color("fg-muted"))
                     .frame(width: 20, height: 20)
                     .contentShape(Rectangle())
@@ -191,7 +252,7 @@ struct SchedulesTabView: View {
                 .font(.system(size: 11))
                 .foregroundColor(theme.color("fg-faint"))
                 .multilineTextAlignment(.center)
-            Button("New Schedule") { editing = .new }
+            Button("New Schedule") { presentation = .edit(.new) }
                 .controlSize(.small)
         }
         .frame(maxWidth: .infinity)
@@ -206,8 +267,13 @@ private struct ScheduleCard: View {
     let schedule: RunSchedule
     let now: Date
     let onEdit: () -> Void
+    let onOpenReport: (String) -> Void
 
     @Environment(\.theme) private var theme
+    @State private var reportSummaries: [String: ScheduledAgentReport] = [:]
+    /// Whether a `loadReportSummaries()` pass has completed: without it, a
+    /// nil `reportSummaries[id]` means "still fetching", not "deleted".
+    @State private var hasLoadedReportSummaries = false
     @State private var hovering = false
     @State private var menuHovered = false
     @State private var isConfirmingDelete = false
@@ -297,6 +363,21 @@ private struct ScheduleCard: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
         .onHover { hovering = $0 }
+        .task(id: reportHistoryToken) {
+            await loadReportSummaries()
+        }
+        .task(id: isShowingHistory ? schedule.id : "") {
+            // Deletions by another Alas process never touch the firing IDs
+            // or this process's deletion generation, so poll while the
+            // history is open: the shared store is the only cross-instance
+            // signal for a report that vanished.
+            guard isShowingHistory else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled, isShowingHistory else { return }
+                await refreshReportSummaries()
+            }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("schedule-card-\(schedule.id)")
         .confirmationDialog(
@@ -379,11 +460,53 @@ private struct ScheduleCard: View {
             ForEach(firing.runs, id: \.runID) { run in
                 runLink(run)
             }
+            ForEach(firing.reportIDs, id: \.self) { reportID in
+                scheduledReportLink(reportID)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, 8)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("schedule-firing-\(firing.id)")
+    }
+
+    /// A report link becomes inert once its report is known to be gone:
+    /// `reportSummaries` only holds loaded reports, so a missing entry after
+    /// loading means the report was deleted (or purged) — the history still
+    /// names it, but it is no longer something to open.
+    @ViewBuilder
+    private func scheduledReportLink(_ reportID: String) -> some View {
+        let isMissing = hasLoadedReportSummaries && reportSummaries[reportID] == nil
+        let label = reportSummaries[reportID]
+            .map(RunSchedulePresentation.scheduledAgentReportHistoryLabel)
+            ?? (isMissing ? "Deleted scheduled report" : "Scheduled agent report")
+        if isMissing {
+            Text(label)
+                .font(.system(size: 9.5))
+                .foregroundColor(theme.color("fg-faint"))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .accessibilityLabel(label)
+                .accessibilityIdentifier("schedule-firing-report-\(reportID)")
+        } else {
+            Button {
+                onOpenReport(reportID)
+            } label: {
+                HStack(spacing: 3) {
+                    Icon(name: "doc.text", size: 8, color: theme.color("accent"))
+                    Text(label)
+                        .font(.system(size: 9.5))
+                        .foregroundColor(theme.color("accent"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Open the scheduled agent report")
+            .accessibilityLabel(label)
+            .accessibilityIdentifier("schedule-firing-report-\(reportID)")
+        }
     }
 
     /// A run whose report has been purged, or whose worktree has since been
@@ -417,6 +540,82 @@ private struct ScheduleCard: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
+    }
+
+    private var reportHistoryToken: String {
+        guard isShowingHistory else { return "" }
+        let reportIDs = Array(Set(state.runScheduler.firings(for: schedule.id).flatMap(\.reportIDs)))
+            .sorted()
+            .joined(separator: "|")
+        // A deletion keeps the firing history's IDs identical, so the token
+        // needs the deletion generation to re-run `loadReportSummaries` and
+        // flip the affected links to their unavailable rendering.
+        return "\(reportIDs)|gen=\(state.scheduledAgentReportDeletionGeneration)"
+    }
+
+    private func loadReportSummaries() async {
+        guard isShowingHistory else {
+            reportSummaries = [:]
+            hasLoadedReportSummaries = false
+            return
+        }
+        let ids = Array(Set(state.runScheduler.firings(for: schedule.id).flatMap(\.reportIDs))).sorted()
+        // A thrown lookup (e.g. the SQLite write lock held by another
+        // process) is not proof the report is gone. `.task(id:)` re-runs
+        // only when the token changes, so retry here until it succeeds —
+        // bounded only by the task's cancellation — instead of leaving
+        // stale or generic links displayed indefinitely.
+        var attempt = 0
+        while !Task.isCancelled {
+            if attempt > 0 {
+                try? await Task.sleep(for: .seconds(min(1 << min(attempt - 1, 4), 16)))
+            }
+            attempt += 1
+            var loaded: [String: ScheduledAgentReport] = [:]
+            var sawReadError = false
+            for id in ids {
+                guard !Task.isCancelled else { return }
+                do {
+                    if let report = try await state.scheduledAgentReport(id: id) {
+                        loaded[id] = report
+                    }
+                } catch {
+                    sawReadError = true
+                }
+            }
+            guard !Task.isCancelled else { return }
+            if sawReadError { continue }
+            reportSummaries = loaded
+            hasLoadedReportSummaries = true
+            return
+        }
+    }
+
+    /// Lighter pass for the cross-instance poll: only downgrades a link when
+    /// the shared store confirms the row is gone (a successful nil lookup),
+    /// never on read errors — those leave the current rendering in place.
+    private func refreshReportSummaries() async {
+        guard isShowingHistory, hasLoadedReportSummaries else { return }
+        let ids = Array(Set(state.runScheduler.firings(for: schedule.id).flatMap(\.reportIDs))).sorted()
+        var summaries = reportSummaries
+        var changed = false
+        for id in ids {
+            guard !Task.isCancelled else { return }
+            do {
+                if let report = try await state.scheduledAgentReport(id: id) {
+                    if ScheduledAgentReportSummaryRefresh.apply(report, to: &summaries) {
+                        changed = true
+                    }
+                } else if summaries[id] != nil {
+                    summaries[id] = nil
+                    changed = true
+                }
+            } catch {
+                continue
+            }
+        }
+        guard !Task.isCancelled, changed else { return }
+        reportSummaries = summaries
     }
 
     private var actionLabel: String {

@@ -463,6 +463,139 @@ struct RunSchedulePresentationTests {
         #expect(RunSchedulePresentation.firingRunLabel(run) == "build.sh (repo) in sched/nightly")
     }
 
+    @Test func oldCompositionDecodesWithResourceRetention() throws {
+        let legacy = Data("""
+        {
+          "branchTemplate": "scheduled/{name}",
+          "agentId": "claude",
+          "sendsPromptAutomatically": true
+        }
+        """.utf8)
+
+        let decoded = try JSONDecoder().decode(RunScheduleComposition.self, from: legacy)
+
+        #expect(decoded.afterExecution == .keep)
+    }
+
+    @Test func cleanupPolicySurvivesCompositionAndDraftRoundTrip() throws {
+        let composition = RunScheduleComposition(
+            agentId: "claude",
+            prompt: "Run checks",
+            sendsPromptAutomatically: true,
+            afterExecution: .reportAndCleanupOnSuccess
+        )
+        let encoded = try JSONEncoder().encode(composition)
+        let decoded = try JSONDecoder().decode(RunScheduleComposition.self, from: encoded)
+        #expect(decoded == composition)
+
+        let schedule = RunSchedule(
+            id: "scheduled-agent",
+            name: "Nightly",
+            target: .project(id: "project"),
+            scriptKey: nil,
+            trigger: .interval(seconds: 3_600),
+            composition: composition
+        )
+        let draft = RunScheduleDraft(schedule: schedule)
+        #expect(draft.afterExecution == .reportAndCleanupOnSuccess)
+        #expect(draft.makeSchedule(existing: schedule) == schedule)
+    }
+
+    @Test func firingReportIDsRoundTripAndLegacyFiringsDefaultToNone() throws {
+        let original = RunScheduleFiring(
+            id: "occurrence",
+            firedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            finishedAt: Date(timeIntervalSince1970: 1_800_000_030),
+            wasManual: false,
+            outcome: .succeeded,
+            reportIDs: ["target-run-a", "target-run-b"]
+        )
+        let encoded = try JSONEncoder().encode(original)
+        #expect(try JSONDecoder().decode(RunScheduleFiring.self, from: encoded) == original)
+
+        var legacy = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacy.removeValue(forKey: "reportIDs")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacy)
+        let decodedLegacy = try JSONDecoder().decode(RunScheduleFiring.self, from: legacyData)
+        #expect(decodedLegacy.reportIDs.isEmpty)
+    }
+
+    @Test func automaticCleanupRequiresAnExplicitACPAgentAndSubmittedPrompt() {
+        var draft = RunScheduleDraft(projectID: "project", worktreeID: "origin", isMainWorktree: false)
+        draft.name = "Nightly"
+        draft.createsWorktree = true
+        draft.afterExecution = .reportAndCleanupOnSuccess
+        #expect(draft.validationError == "Choose an ACP-capable agent for automatic cleanup.")
+
+        draft.agentID = "claude"
+        #expect(draft.validationError == "Automatic cleanup requires a prompt.")
+
+        draft.prompt = "Run the checks."
+        draft.sendsPromptAutomatically = false
+        #expect(draft.validationError == "Automatic cleanup requires automatic prompt submission.")
+
+        draft.sendsPromptAutomatically = true
+        #expect(draft.validationError == nil)
+    }
+
+    @Test func scriptOnlyScheduleIgnoresDisabledCompositionCleanupPolicy() throws {
+        var draft = RunScheduleDraft(projectID: "project", worktreeID: "origin", isMainWorktree: false)
+        draft.name = "Nightly"
+        draft.scriptKey = "repo:test.sh"
+        draft.createsWorktree = false
+        draft.afterExecution = .reportAndCleanupOnSuccess
+
+        #expect(draft.validationError == nil)
+        let schedule = try #require(draft.makeSchedule())
+        #expect(schedule.composition == nil)
+    }
+
+    @Test func scheduledReportHistoryDistinguishesTaskAndCleanupOutcomes() {
+        var report = ScheduledAgentReport(
+            id: "target-run",
+            occurrenceID: "occurrence",
+            scheduleID: "schedule",
+            scheduleName: "Nightly",
+            projectID: "project",
+            projectName: "Project",
+            agentID: "claude",
+            request: "Run checks",
+            startedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            taskState: .succeeded,
+            cleanupRequested: true,
+            cleanupState: .removed
+        )
+        #expect(RunSchedulePresentation.scheduledAgentReportHistoryLabel(report) == "Nightly · Succeeded · Cleaned up")
+
+        report.cleanupState = .retained
+        #expect(RunSchedulePresentation.scheduledAgentReportHistoryLabel(report) == "Nightly · Succeeded · Retained")
+
+        report.taskState = .needsAttention
+        #expect(RunSchedulePresentation.scheduledAgentReportHistoryLabel(report) == "Nightly · Needs attention · Retained")
+        #expect(RunSchedulePresentation.scheduledAgentTaskLabel(.failed) == "Failed")
+        #expect(RunSchedulePresentation.scheduledAgentTaskLabel(.interrupted) == "Interrupted")
+    }
+
+    @Test func automaticCleanupRejectsAnExplicitTerminalAgent() {
+        var draft = RunScheduleDraft(projectID: "project", worktreeID: "origin", isMainWorktree: false)
+        draft.name = "Nightly"
+        draft.createsWorktree = true
+        draft.afterExecution = .reportAndCleanupOnSuccess
+        draft.agentID = "shell"
+        draft.prompt = "Run checks."
+        #expect(draft.validationError == "Automatic cleanup requires an ACP-capable agent.")
+    }
+
+    @Test func automaticCleanupRejectsAnACPAgentWithoutNativeCompletionTool() {
+        var draft = RunScheduleDraft(projectID: "project", worktreeID: "origin", isMainWorktree: false)
+        draft.name = "Nightly"
+        draft.createsWorktree = true
+        draft.afterExecution = .reportAndCleanupOnSuccess
+        draft.agentID = ACPManagedAdapterDescriptor.pi.agentID
+        draft.prompt = "Run checks."
+        #expect(draft.validationError == "Automatic cleanup requires an agent that accepts the built-in ACP completion tool.")
+    }
+
     private func firing(duration: TimeInterval, wasManual: Bool = false) -> RunScheduleFiring {
         // 2027-01-15 08:00 UTC.
         let firedAt = Date(timeIntervalSince1970: 1_800_000_000)

@@ -119,6 +119,19 @@ pub struct Response {
     pub exit_code: Option<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScheduleReportCheck {
+    pub name: String,
+    pub result: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScheduleReportLink {
+    pub label: String,
+    pub url: String,
+}
+
+
 /// The parsed CLI intent, independent of transport. `Open` paths are already
 /// absolutized by the caller.
 #[derive(Debug, Clone, PartialEq)]
@@ -178,6 +191,12 @@ pub enum Command {
         session_id: Option<String>,
         verdict: Option<String>,
         summary: Option<String>,
+    },
+    ScheduleComplete {
+        status: String,
+        summary: String,
+        checks: Vec<ScheduleReportCheck>,
+        links: Vec<ScheduleReportLink>,
     },
     SessionList,
     SessionNew {
@@ -485,6 +504,27 @@ pub fn build_request(
             r.params = Some(serde_json::Value::Object(params));
             r
         }
+        Command::ScheduleComplete {
+            status,
+            summary,
+            checks,
+            links,
+        } => {
+            let mut r = Request::new("schedule_complete");
+            r.params = Some(serde_json::json!({
+                "status": status,
+                "summary": summary,
+                "checks": checks.iter().map(|check| serde_json::json!({
+                    "name": check.name,
+                    "result": check.result
+                })).collect::<Vec<_>>(),
+                "links": links.iter().map(|link| serde_json::json!({
+                    "label": link.label,
+                    "url": link.url
+                })).collect::<Vec<_>>()
+            }));
+            r
+        }
         Command::SessionList => {
             let mut r = Request::new("session_list");
             r.params = Some(serde_json::json!({}));
@@ -788,6 +828,7 @@ pub enum TransportError {
     Connect,
     Io,
     Malformed,
+    RequestTooLarge,
     ResponseTooLarge,
 }
 
@@ -797,6 +838,8 @@ pub enum TransportError {
 /// forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RESPONSE_BYTES: usize = 12 * 1024 * 1024;
+/// Must match `AgentHookSocketServer.maxPayloadSize` in the app.
+const MAX_REQUEST_BYTES: usize = 65_536;
 
 /// Bound on how long a single non-mutating `resolve` probe (used to find the
 /// owning instance among several live sockets) may take. Kept short and
@@ -819,6 +862,9 @@ fn send_with_timeout(
     read_timeout: Duration,
 ) -> Result<Response, TransportError> {
     let payload = serde_json::to_vec(req).map_err(|_| TransportError::Malformed)?;
+    if payload.len() > MAX_REQUEST_BYTES {
+        return Err(TransportError::RequestTooLarge);
+    }
     let mut stream = UnixStream::connect(socket).map_err(|_| TransportError::Connect)?;
     stream
         .set_read_timeout(Some(read_timeout))
@@ -1309,6 +1355,39 @@ mod tests {
                 "body": "Blocked on input",
                 "title": "Need input",
                 "level": "attention"
+            }))
+        );
+    }
+
+    #[test]
+    fn builds_schedule_complete_with_authenticated_session_addressing() {
+        let req = build_request(
+            &Command::ScheduleComplete {
+                status: "succeeded".into(),
+                summary: "Tests pass.".into(),
+                checks: vec![ScheduleReportCheck {
+                    name: "tests".into(),
+                    result: "12 passed".into(),
+                }],
+                links: vec![ScheduleReportLink {
+                    label: "Run log".into(),
+                    url: "file:///tmp/run.log".into(),
+                }],
+            },
+            Some("scheduled-session".into()),
+            Some("/scheduled/worktree".into()),
+        );
+
+        assert_eq!(req.command, "schedule_complete");
+        assert_eq!(req.session_id.as_deref(), Some("scheduled-session"));
+        assert_eq!(req.cwd.as_deref(), Some("/scheduled/worktree"));
+        assert_eq!(
+            req.params,
+            Some(serde_json::json!({
+                "status": "succeeded",
+                "summary": "Tests pass.",
+                "checks": [{ "name": "tests", "result": "12 passed" }],
+                "links": [{ "label": "Run log", "url": "file:///tmp/run.log" }]
             }))
         );
     }

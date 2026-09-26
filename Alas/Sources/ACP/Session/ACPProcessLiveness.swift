@@ -20,6 +20,15 @@ enum ACPProcessLiveness {
         return startedAt <= createdAt.addingTimeInterval(1)
     }
 
+    /// A stale heartbeat is still active when its original process is alive.
+    /// If start-time inspection fails, preserve the lease rather than deleting
+    /// a worktree that a live process may still own.
+    static func pidCouldOwnLease(_ pid: Int64, lastHeartbeatAt: Date) -> Bool {
+        guard pidAlive(pid), pid <= Int64(Int32.max) else { return false }
+        guard let startedAt = processStartTime(pid: Int32(pid)) else { return true }
+        return startedAt <= lastHeartbeatAt.addingTimeInterval(1)
+    }
+
     private static func processStartTime(pid: Int32) -> Date? {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
         var info = kinfo_proc()
