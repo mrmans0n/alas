@@ -1067,6 +1067,59 @@ struct ACPComposerDraftBridgeTests {
         #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "keep/review @File.swift  tail")
     }
 
+    @Test("the image cap counts adjacent chips sharing the same URI as separate images")
+    func imageCapCountsAdjacentDuplicateURIsSeparately() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        // Nine adjacent chips with no separating text, all pointing at the
+        // SAME content-addressed file — `enumerateAttribute` would coalesce
+        // these into a single run of equal `.imageAttachmentURI` values if
+        // the cap were still counting runs instead of characters.
+        let sameURI = "file:///tmp/same-image.png"
+        let storage = NSMutableAttributedString(string: "")
+        for _ in 0..<(ACPNSTextView.maxImagesPerMessage - 1) {
+            let attachment = ACPImageChipAttachment(fileURL: URL(string: sameURI)!, mimeType: "image/png")
+            let chip = NSMutableAttributedString(attachment: attachment)
+            chip.addAttributes([
+                .imageAttachmentURI: sameURI,
+                .imageAttachmentMime: "image/png",
+            ], range: NSRange(location: 0, length: chip.length))
+            storage.append(chip)
+        }
+        textView.textStorage?.setAttributedString(storage)
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+
+        // One more copy of that same image: exactly fits the one remaining
+        // slot if the existing nine are all counted.
+        let draft = ACPComposerDraft(segments: [.image(uri: sameURI, mimeType: "image/png")])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        // Ten distinct chip CHARACTERS even though they'd collapse into
+        // fewer attribute runs (the whole point of the fix).
+        #expect(textView.string.count == ACPNSTextView.maxImagesPerMessage)
+        let errors = await reported.snapshot()
+        #expect(errors.isEmpty)
+
+        // An eleventh copy is correctly rejected now that ten are present.
+        let board2 = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board2.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board2)
+        #expect(textView.readSelection(from: board2, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(textView.string.count == ACPNSTextView.maxImagesPerMessage)
+        let errors2 = await reported.snapshot()
+        #expect(errors2 == [.tooManyImages])
+    }
+
     @Test("pasting a chip draft with images enforces the per-message image cap")
     func pastedDraftEnforcesImageCap() async throws {
         let (textView, coordinator, window) = makeSlashTextView()
@@ -1187,7 +1240,7 @@ struct ACPComposerDraftBridgeTests {
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == Self.chipDraft)
     }
 
-    @Test("a forged pasteboard payload without the authentic token is not trusted")
+    @Test("a forged pasteboard payload without a valid MAC is not trusted")
     func forgedPasteboardPayloadIsRejected() throws {
         let (textView, coordinator, window) = makeSlashTextView()
         defer { withExtendedLifetime((coordinator, window)) {} }
@@ -1195,8 +1248,8 @@ struct ACPComposerDraftBridgeTests {
         defer { board.releaseGlobally() }
         // Simulates another unsandboxed application publishing the same
         // named pasteboard type with attacker-controlled JSON — no way to
-        // know Alas's in-process token, so this is exactly what a forged
-        // payload looks like: the raw draft, unwrapped.
+        // sign it with Alas's in-process MAC key, so this is exactly what a
+        // forged payload looks like: the raw draft, unsigned.
         board.declareTypes([ACPNSTextView.composerDraftPasteboardType, .string], owner: nil)
         board.setData(try JSONEncoder().encode(Self.chipDraft), forType: ACPNSTextView.composerDraftPasteboardType)
         board.setString("/review @File.swift tail", forType: .string)

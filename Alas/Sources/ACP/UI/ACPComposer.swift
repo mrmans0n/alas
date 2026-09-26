@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CryptoKit
 import UniformTypeIdentifiers
 
 typealias ACPComposerSubmitCompletion = @MainActor (_ succeeded: Bool) -> Void
@@ -1715,13 +1716,26 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     static let maxImagesPerMessage = 10
 
-    private func currentImageChipCount() -> Int {
-        guard let storage = textStorage else { return 0 }
+    /// Counts image-attachment CHARACTERS, not attribute runs: two adjacent
+    /// image chips sharing the same content-addressed URI (the same file
+    /// pasted twice with no text between them) have equal `.imageAttachmentURI`
+    /// string values, and `enumerateAttribute` coalesces equal adjacent
+    /// values into a single run — undercounting them as one chip instead of
+    /// two, and letting the message grow past `maxImagesPerMessage`.
+    private func imageChipCount(in range: NSRange) -> Int {
+        guard let storage = textStorage, range.length > 0 else { return 0 }
         var count = 0
-        storage.enumerateAttribute(.imageAttachmentURI, in: NSRange(location: 0, length: storage.length)) { v, _, _ in
-            if v != nil { count += 1 }
+        for index in range.location..<NSMaxRange(range) {
+            if storage.attribute(.imageAttachmentURI, at: index, effectiveRange: nil) != nil {
+                count += 1
+            }
         }
         return count
+    }
+
+    private func currentImageChipCount() -> Int {
+        guard let storage = textStorage else { return 0 }
+        return imageChipCount(in: NSRange(location: 0, length: storage.length))
     }
 
     @discardableResult
@@ -1956,25 +1970,49 @@ final class ACPNSTextView: PairedDelimiterTextView {
     // MARK: Chip-preserving copy / paste
 
     /// Private pasteboard type carrying a composer selection as a JSON,
-    /// token-authenticated payload, so chips keep their identity across
-    /// copy, cut, paste, and drag within the app. Written alongside a
-    /// readable `.string` form for every other destination.
+    /// MAC-authenticated payload, so chips keep their identity across copy,
+    /// cut, paste, and drag within the app. Written alongside a readable
+    /// `.string` form for every other destination.
     static let composerDraftPasteboardType = NSPasteboard.PasteboardType("io.alas.acp.composer-draft")
 
-    /// Generated once per process launch and never written anywhere but the
-    /// private payload below. NSPasteboard has no per-app read protection —
-    /// any unsandboxed process on the machine can publish the exact same
-    /// named pasteboard type — so decoding untrusted JSON there as trusted
-    /// composer state would let a forged payload point an `.image` or
-    /// `.mention` chip's URI at an arbitrary local file the user never
-    /// picked, which submission then reads or forwards to the agent.
-    /// Requiring this token on read means only a payload this same running
-    /// instance wrote is ever restored as chips.
-    private static let pasteboardAuthToken = UUID().uuidString
+    /// Generated once per process launch and NEVER serialized anywhere,
+    /// including the pasteboard payload itself. NSPasteboard has no
+    /// per-app read protection — any unsandboxed process on the machine can
+    /// publish the exact same named pasteboard type — so decoding untrusted
+    /// JSON there as trusted composer state would let a forged payload
+    /// point an `.image` or `.mention` chip's URI at an arbitrary local
+    /// file the user never picked, which submission then reads or forwards
+    /// to the agent. An earlier version of this fix put a bearer token
+    /// inside the payload it authenticated, which any application reading
+    /// one legitimate copy could scrape and replay in a forgery. Signing
+    /// with an HMAC keyed by a secret that never leaves the process closes
+    /// that: forging a valid signature for chosen content requires the key
+    /// itself, not just an observed (content, signature) pair.
+    private static let pasteboardMACKey = SymmetricKey(size: .bits256)
 
     private struct AuthenticatedDraftPayload: Codable {
-        let token: String
-        let draft: ACPComposerDraft
+        let draftJSON: Data
+        let mac: Data
+    }
+
+    /// Signs `draft`'s JSON encoding with the process-local MAC key.
+    private static func signedDraftPayload(_ draft: ACPComposerDraft) -> Data? {
+        guard let draftJSON = try? JSONEncoder().encode(draft) else { return nil }
+        let mac = HMAC<SHA256>.authenticationCode(for: draftJSON, using: pasteboardMACKey)
+        return try? JSONEncoder().encode(AuthenticatedDraftPayload(draftJSON: draftJSON, mac: Data(mac)))
+    }
+
+    /// Verifies and decodes a payload written by `signedDraftPayload`.
+    /// Returns nil for anything else — including a well-formed JSON draft
+    /// with no signature, which is exactly what a forged pasteboard payload
+    /// from another application looks like.
+    private static func verifiedDraft(from data: Data) -> ACPComposerDraft? {
+        guard let payload = try? JSONDecoder().decode(AuthenticatedDraftPayload.self, from: data),
+              HMAC<SHA256>.isValidAuthenticationCode(
+                  payload.mac, authenticating: payload.draftJSON, using: pasteboardMACKey
+              )
+        else { return nil }
+        return try? JSONDecoder().decode(ACPComposerDraft.self, from: payload.draftJSON)
     }
 
     /// The single selected range as a draft, when it contains at least one
@@ -1998,14 +2036,12 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// A chip is a U+FFFC attachment character, so NSTextView's own
     /// `.string` representation of it is that placeholder. Selections with
     /// chips write the chips' text form instead (`/command`, `@filename`),
-    /// plus the private, token-authenticated draft type so a paste back
-    /// into a composer restores the chips themselves.
+    /// plus the private, MAC-authenticated draft type so a paste back into
+    /// a composer restores the chips themselves.
     override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
         guard types.contains(.string),
               let draft = selectedChipDraft,
-              let data = try? JSONEncoder().encode(
-                  AuthenticatedDraftPayload(token: Self.pasteboardAuthToken, draft: draft)
-              )
+              let data = Self.signedDraftPayload(draft)
         else { return super.writeSelection(to: pboard, types: types) }
         pboard.declareTypes([Self.composerDraftPasteboardType, .string], owner: nil)
         pboard.setData(data, forType: Self.composerDraftPasteboardType)
@@ -2015,11 +2051,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     #if DEBUG
     /// Test seam: writes a draft to `pboard` through the same
-    /// token-authenticated payload `writeSelection` produces, so tests can
+    /// MAC-authenticated payload `writeSelection` produces, so tests can
     /// exercise `readSelection`/`paste` without reaching into the private
-    /// token that guards against pasteboard forgery.
+    /// key that guards against pasteboard forgery.
     static func writeComposerDraftForTesting(_ draft: ACPComposerDraft, to pboard: NSPasteboard) {
-        let data = try! JSONEncoder().encode(AuthenticatedDraftPayload(token: pasteboardAuthToken, draft: draft))
+        let data = signedDraftPayload(draft)!
         pboard.declareTypes([composerDraftPasteboardType, .string], owner: nil)
         pboard.setData(data, forType: composerDraftPasteboardType)
         pboard.setString(draft.plainText, forType: .string)
@@ -2033,16 +2069,6 @@ final class ACPNSTextView: PairedDelimiterTextView {
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
         if type == Self.composerDraftPasteboardType, insertComposerDraft(from: pboard) { return true }
         return super.readSelection(from: pboard, type: type)
-    }
-
-    /// Number of image chips inside `range`.
-    private func imageChipCount(in range: NSRange) -> Int {
-        guard let storage = textStorage, range.length > 0 else { return 0 }
-        var count = 0
-        storage.enumerateAttribute(.imageAttachmentURI, in: range) { v, _, _ in
-            if v != nil { count += 1 }
-        }
-        return count
     }
 
     /// Drops `.image` segments once the message would exceed
@@ -2077,21 +2103,20 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// under the same rule as a hand-typed one: it has to be followed by
     /// whitespace, from the pasted text or the text already after it.
     ///
-    /// Only accepts the payload when its token matches this process's own
-    /// — see `pasteboardAuthToken` — so a payload forged by another
-    /// application (the pasteboard type name is not access-controlled) is
-    /// never trusted as composer state; `paste(_:)` falls back to that
-    /// application's plain, readable `.string` instead.
+    /// Only accepts the payload when its MAC verifies against this
+    /// process's own key — see `pasteboardMACKey` — so a payload forged by
+    /// another application (the pasteboard type name is not
+    /// access-controlled) is never trusted as composer state; `paste(_:)`
+    /// falls back to that application's plain, readable `.string` instead.
     @discardableResult
     private func insertComposerDraft(from pboard: NSPasteboard) -> Bool {
         guard let data = pboard.data(forType: Self.composerDraftPasteboardType),
-              let payload = try? JSONDecoder().decode(AuthenticatedDraftPayload.self, from: data),
-              payload.token == Self.pasteboardAuthToken,
-              !payload.draft.isEmpty,
+              let decoded = Self.verifiedDraft(from: data),
+              !decoded.isEmpty,
               let textStorage
         else { return false }
         let replacementRange = boundedSelectedRange(in: textStorage)
-        let draft = capImages(in: payload.draft, replacementRange: replacementRange)
+        let draft = capImages(in: decoded, replacementRange: replacementRange)
         // The whole draft was one or more images already at the cap: the
         // error was reported, and there's nothing left to insert, but the
         // paste itself was still handled — falling through would let
