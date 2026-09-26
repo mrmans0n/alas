@@ -1262,6 +1262,59 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.string == "keep me")
     }
 
+    @Test("a missing image doesn't consume the one remaining slot a later real image needs")
+    func missingImageDoesNotStealBudgetFromRealImageAfterIt() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        // Exactly one slot left.
+        let storage = NSMutableAttributedString(string: "")
+        for index in 0..<(ACPNSTextView.maxImagesPerMessage - 1) {
+            let attachment = ACPImageChipAttachment(
+                fileURL: URL(string: "file:///tmp/existing-\(index).png")!,
+                mimeType: "image/png"
+            )
+            let chip = NSMutableAttributedString(attachment: attachment)
+            chip.addAttributes([
+                .imageAttachmentURI: "file:///tmp/existing-\(index).png",
+                .imageAttachmentMime: "image/png",
+            ], range: NSRange(location: 0, length: chip.length))
+            storage.append(chip)
+        }
+        textView.textStorage?.setAttributedString(storage)
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+
+        // A missing image ahead of a real one: the missing one must not
+        // consume the last slot the real image needs.
+        let missingURI = "file:///tmp/alas-deleted-\(UUID().uuidString).png"
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-real-\(UUID().uuidString).png")
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
+            .write(to: temp)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let draft = ACPComposerDraft(segments: [
+            .image(uri: missingURI, mimeType: "image/png"),
+            .image(uri: temp.absoluteString, mimeType: "image/png"),
+        ])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        var imageCount = 0
+        let full = NSRange(location: 0, length: textView.attributedString().length)
+        textView.attributedString().enumerateAttribute(.imageAttachmentURI, in: full) { v, _, _ in
+            if v != nil { imageCount += 1 }
+        }
+        #expect(imageCount == ACPNSTextView.maxImagesPerMessage)
+        let errors = await reported.snapshot()
+        #expect(errors.isEmpty)
+    }
+
     @Test("pasting over a selection that itself holds an image chip does not double-count it against the cap")
     func pastedDraftExcludesReplacedImagesFromBudget() async throws {
         let (textView, coordinator, window) = makeSlashTextView()

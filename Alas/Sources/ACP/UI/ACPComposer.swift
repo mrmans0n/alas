@@ -2170,12 +2170,21 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// attachment directly and bypass the cap `insertImage` enforces.
     /// `replacementRange` is excluded from the existing count: those images
     /// are about to be removed by this same edit, not kept alongside it.
+    ///
+    /// An `.image` whose staged file no longer exists is skipped WITHOUT
+    /// charging it against the budget: `attributedString(from:)` is going to
+    /// drop it anyway, so charging it here would waste a slot on nothing,
+    /// causing a real image later in the same draft to be rejected as
+    /// overflow even though it would have fit.
     private func capImages(in draft: ACPComposerDraft, replacementRange: NSRange) -> ACPComposerDraft {
         let existing = currentImageChipCount() - imageChipCount(in: replacementRange)
         var budget = Self.maxImagesPerMessage - existing
         var overflowed = false
         let segments = draft.segments.filter { segment in
-            guard case .image = segment else { return true }
+            guard case .image(let uri, _) = segment else { return true }
+            guard let fileURL = URL(string: uri), FileManager.default.fileExists(atPath: fileURL.path) else {
+                return false
+            }
             guard budget > 0 else {
                 overflowed = true
                 return false
