@@ -8,6 +8,7 @@ enum LocalTextJobPriority: Int, Sendable {
 enum LocalTextCaller: Hashable, Sendable {
     case nextPrompt
     case sessionSummary(UUID)
+    case worktreeName
 }
 
 struct LocalTextMessage: Equatable, Sendable {
