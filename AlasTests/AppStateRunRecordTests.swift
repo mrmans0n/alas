@@ -1220,9 +1220,9 @@ struct AppStateRunRecordTests {
         let other = secondWorktree(fixture)
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitUntilRunning(fixture)
         fixture.state.runOrFocusScript(fixture.script, in: other)
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitUntilRunning(fixture, worktree: other)
 
         #expect(runRecord(fixture, worktree: other)?.portConflict == .ownedByRun(
             worktreeID: fixture.worktree.id,
