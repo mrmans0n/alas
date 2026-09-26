@@ -93,7 +93,12 @@ enum AlasHookCommand {
         // flaps these hooks fast enough that the duplicate cost contributed
         // to runaway system load. $PPID is passed as argv because python's
         // os.getppid() returns the surrounding shell, not the harness.
+        //
+        // The envelope is captured before `nc` starts. Piping python3 straight
+        // into `nc -w1` let nc's one-second idle timeout run while python was
+        // still starting, so a slow (cold or loaded) interpreter delivered
+        // nothing and the body-bearing idle/awaiting-input event was lost.
         let script = bodyEnvelopePythonScript(event: event, agent: agent)
-        return #"printf '%s' "$payload" | /usr/bin/python3 -c '\#(script)' "$PPID" 2>/dev/null | /usr/bin/nc -U -w1 "$ALAS_SOCKET_PATH""#
+        return #"envelope=$(printf '%s' "$payload" | /usr/bin/python3 -c '\#(script)' "$PPID" 2>/dev/null) && printf '%s\n' "$envelope" | /usr/bin/nc -U -w1 "$ALAS_SOCKET_PATH""#
     }
 }
