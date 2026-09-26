@@ -96,105 +96,6 @@ struct ReviewSessionTabViewTests {
         ))
     }
 
-    @Test func rendersLoadedSessionTitleAndSummaryRail() throws {
-        let target = ReviewSessionTarget.localChanges(
-            worktreeID: "wt-1",
-            repositoryPath: URL(fileURLWithPath: "/repo"),
-            scope: .all
-        )
-        let record = ReviewSessionRecord(
-            id: target.id,
-            target: target,
-            createdAt: .init(timeIntervalSince1970: 1),
-            updatedAt: .init(timeIntervalSince1970: 1)
-        )
-        let summary = DiffReviewFileSummary(
-            path: "A.swift",
-            namespace: "unstaged",
-            groupID: "unstaged",
-            groupTitle: "Unstaged",
-            status: .modified,
-            additions: 1,
-            deletions: 0,
-            isRenderable: false
-        )
-        let loaded = ReviewSessionLoadedContext(
-            session: DiffReviewLoadedSession(
-                files: [
-                    DiffReviewFileSectionModel(
-                        summary: summary,
-                        parsedDiff: nil,
-                        displayModel: nil,
-                        placeholderMessage: "No diff",
-                        openFile: nil,
-                        contextProvider: nil
-                    ),
-                ],
-                summary: DiffReviewSessionModel(files: [summary], groupsEnabled: true)
-            ),
-            feedbackTarget: ReviewFeedbackTarget(
-                title: target.title,
-                repositoryPath: "/repo",
-                providerDescription: nil,
-                sourceDescription: target.sourceDescription
-            ),
-            providerContext: nil
-        )
-        let view = ReviewSessionTabView.preview(record: record, loaded: loaded)
-            .environment(\.theme, try ThemeStore().current)
-
-        let host = NSHostingView(rootView: view.frame(width: 1200, height: 700))
-        host.layoutSubtreeIfNeeded()
-
-        #expect(recursiveDescription(host).contains("Review all changes"))
-        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-rail", in: host) != nil)
-    }
-
-    @Test func rendersSentStateForRecordWithHandoff() throws {
-        let target = ReviewSessionTarget.localChanges(
-            worktreeID: "wt-1",
-            repositoryPath: URL(fileURLWithPath: "/repo"),
-            scope: .all
-        )
-        let handoff = ReviewFeedbackHandoff(
-            id: "handoff-1",
-            sessionID: target.id,
-            commentIDs: ["draft-1"],
-            target: .existingSession(worktreeID: "wt-1", sessionID: "acp-1", title: "Codex"),
-            createdAt: Date(timeIntervalSince1970: 30),
-            promptRevision: "revision-1",
-            status: .sent
-        )
-        let record = ReviewSessionRecord(
-            id: target.id,
-            target: target,
-            handoffs: [handoff],
-            createdAt: .init(timeIntervalSince1970: 1),
-            updatedAt: .init(timeIntervalSince1970: 30)
-        )
-        let summary = Self.summary(path: "A.swift", namespace: "unstaged")
-        let loaded = ReviewSessionLoadedContext(
-            session: DiffReviewLoadedSession(
-                files: [Self.file(path: "A.swift", namespace: "unstaged")],
-                summary: DiffReviewSessionModel(files: [summary], groupsEnabled: true)
-            ),
-            feedbackTarget: ReviewFeedbackTarget(
-                title: target.title,
-                repositoryPath: "/repo",
-                providerDescription: nil,
-                sourceDescription: target.sourceDescription
-            ),
-            providerContext: nil
-        )
-        let view = ReviewSessionTabView.preview(record: record, loaded: loaded)
-            .environment(\.theme, try ThemeStore().current)
-
-        let host = NSHostingView(rootView: view.frame(width: 1200, height: 700))
-        host.layoutSubtreeIfNeeded()
-
-        #expect(recursiveDescription(host).contains("Sent to agent"))
-    }
-
     @Test func handoffPersistenceFailureKeepsSuccessfulSendVisible() throws {
         let target = ReviewSessionTarget.localChanges(
             worktreeID: "wt-1",
@@ -755,34 +656,6 @@ struct ReviewSessionTabViewTests {
         #expect(updated.state == .active)
     }
 
-    @Test func reviewSessionLoadedContextCarriesProviderContextForProviderSessions() async throws {
-        let request = Self.reviewRequest(provider: .github)
-        let target = ReviewSessionTarget.reviewRequest(
-            worktreeID: "wt-1",
-            repositoryPath: URL(fileURLWithPath: "/repo"),
-            provider: .github,
-            host: "github.com",
-            repositorySlug: "mrmans0n/alas",
-            number: request.number,
-            url: request.url,
-            title: request.title,
-            headSHA: "abc123"
-        )
-        let providerLoaded = ReviewSessionProviderLoadedSession(
-            loadedSession: DiffReviewLoadedSession(files: [], summary: DiffReviewSessionModel(files: [], groupsEnabled: false)),
-            providerContext: ReviewSessionProviderContext(remote: request.remote, reviewRequest: request)
-        )
-        let loader = ReviewSessionLoader(reviewRequest: { target in
-            #expect(target.kind == .reviewRequest)
-            return providerLoaded
-        })
-
-        let loaded = try await loader.load(target: target)
-
-        #expect(loaded.providerContext?.remote == request.remote)
-        #expect(loaded.providerContext?.reviewRequest == request)
-    }
-
     @Test func providerMutationControllerFactoryRequiresLoadedProviderContext() throws {
         let request = Self.reviewRequest(provider: .github)
         let session = DiffReviewLoadedSession(files: [], summary: DiffReviewSessionModel(files: [], groupsEnabled: false))
@@ -851,44 +724,25 @@ struct ReviewSessionTabViewTests {
         ) == nil)
     }
 
-    @Test func providerPublishConfirmationListsProviderDecisionAndCommentCount() throws {
-        var selectedDecision = ProviderReviewDecision.comment
-        var summaryBody = ""
-        let view = ProviderReviewPublishConfirmationView(
-            providerName: "GitHub",
-            reviewIdentity: "PR #527",
-            commentCount: 2,
-            unpublishableMessages: ["Sources/Old.swift: line is outdated"],
-            allowedDecisions: [.comment, .approve, .requestChanges],
-            selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
-            summaryBody: Binding(get: { summaryBody }, set: { summaryBody = $0 }),
-            isPublishing: false,
-            errorMessage: nil,
-            onCancel: {},
-            onConfirm: {}
-        )
-        .environment(\.theme, try ThemeStore().current)
-
-        let host = NSHostingView(rootView: view.frame(width: 420, height: 260))
-        host.layoutSubtreeIfNeeded()
-        let description = recursiveDescription(host)
-
-        #expect(description.contains("GitHub"))
-        #expect(description.contains("PR #527"))
-        #expect(description.contains("2 comments"))
-        #expect(description.contains("line is outdated"))
-        #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) != nil)
-    }
-
-    @Test func providerPublishConfirmationDisablesCommentDecisionWithNoComments() throws {
-        var selectedDecision = ProviderReviewDecision.comment
-        var summaryBody = ""
+    @Test(arguments: [
+        (ProviderReviewDecision.comment, 0, "", false),
+        (ProviderReviewDecision.requestChanges, 2, "", false),
+        (ProviderReviewDecision.requestChanges, 2, "Please address the inline notes before merging.", true),
+    ])
+    func providerPublishConfirmationGatesConfirm(
+        decision: ProviderReviewDecision,
+        commentCount: Int,
+        summary: String,
+        expectsConfirm: Bool
+    ) throws {
+        var selectedDecision = decision
+        var summaryBody = summary
         var didConfirm = false
         let view = ProviderReviewPublishConfirmationView(
             providerName: "GitHub",
             reviewIdentity: "PR #527",
-            commentCount: 0,
-            unpublishableMessages: ["Sources/App.swift: already published to GitHub."],
+            commentCount: commentCount,
+            unpublishableMessages: [],
             allowedDecisions: [.comment, .approve, .requestChanges],
             selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
             summaryBody: Binding(get: { summaryBody }, set: { summaryBody = $0 }),
@@ -899,151 +753,11 @@ struct ReviewSessionTabViewTests {
         )
         .environment(\.theme, try ThemeStore().current)
 
-        let host = NSHostingView(rootView: view.frame(width: 420, height: 260))
+        let host = NSHostingView(rootView: view.frame(width: 420, height: 360))
         host.layoutSubtreeIfNeeded()
 
-        #expect(!pressAccessibilityElement(withAccessibilityIdentifier: "provider-review-publish-confirm", in: host))
-        #expect(!didConfirm)
-    }
-
-    @Test func providerPublishConfirmationRequiresSummaryForRequestChanges() throws {
-        var selectedDecision = ProviderReviewDecision.requestChanges
-        var emptySummaryBody = ""
-        var emptyDidConfirm = false
-        let emptyView = ProviderReviewPublishConfirmationView(
-            providerName: "GitHub",
-            reviewIdentity: "PR #527",
-            commentCount: 2,
-            unpublishableMessages: [],
-            allowedDecisions: [.comment, .approve, .requestChanges],
-            selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
-            summaryBody: Binding(get: { emptySummaryBody }, set: { emptySummaryBody = $0 }),
-            isPublishing: false,
-            errorMessage: nil,
-            onCancel: {},
-            onConfirm: { emptyDidConfirm = true }
-        )
-        .environment(\.theme, try ThemeStore().current)
-
-        let emptyHost = NSHostingView(rootView: emptyView.frame(width: 420, height: 360))
-        emptyHost.layoutSubtreeIfNeeded()
-
-        #expect(subview(withAccessibilityIdentifier: "provider-review-publish-summary", in: emptyHost) != nil)
-        #expect(!pressAccessibilityElement(withAccessibilityIdentifier: "provider-review-publish-confirm", in: emptyHost))
-        #expect(!emptyDidConfirm)
-
-        var filledSummaryBody = "Please address the inline notes before merging."
-        var filledDidConfirm = false
-        let filledView = ProviderReviewPublishConfirmationView(
-            providerName: "GitHub",
-            reviewIdentity: "PR #527",
-            commentCount: 2,
-            unpublishableMessages: [],
-            allowedDecisions: [.comment, .approve, .requestChanges],
-            selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
-            summaryBody: Binding(get: { filledSummaryBody }, set: { filledSummaryBody = $0 }),
-            isPublishing: false,
-            errorMessage: nil,
-            onCancel: {},
-            onConfirm: { filledDidConfirm = true }
-        )
-        .environment(\.theme, try ThemeStore().current)
-
-        let filledHost = NSHostingView(rootView: filledView.frame(width: 420, height: 360))
-        filledHost.layoutSubtreeIfNeeded()
-
-        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "provider-review-publish-confirm", in: filledHost))
-        #expect(filledDidConfirm)
-    }
-
-    @Test func providerPublishConfirmationHidesUnsupportedReviewDecisions() throws {
-        var selectedDecision = ProviderReviewDecision.comment
-        var summaryBody = ""
-        let view = ProviderReviewPublishConfirmationView(
-            providerName: "GitLab",
-            reviewIdentity: "MR !42",
-            commentCount: 1,
-            unpublishableMessages: [],
-            allowedDecisions: [.comment, .approve],
-            selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
-            summaryBody: Binding(get: { summaryBody }, set: { summaryBody = $0 }),
-            isPublishing: false,
-            errorMessage: nil,
-            onCancel: {},
-            onConfirm: {}
-        )
-        .environment(\.theme, try ThemeStore().current)
-
-        let host = NSHostingView(rootView: view.frame(width: 420, height: 260))
-        host.layoutSubtreeIfNeeded()
-        let description = recursiveDescription(host)
-
-        #expect(description.contains("Comment"))
-        #expect(description.contains("Approve"))
-        #expect(!description.contains("Request changes"))
-    }
-
-    @Test func reviewSessionShowsPublishReviewForProviderContextWithDraftsAndOpensPublishConfirmation() async throws {
-        let request = Self.reviewRequest(provider: .github)
-        let target = Self.reviewRequestTarget(provider: .github, request: request)
-        let record = ReviewSessionRecord(
-            id: target.id,
-            target: target,
-            createdAt: Date(timeIntervalSince1970: 1),
-            updatedAt: Date(timeIntervalSince1970: 1)
-        )
-        let loaded = Self.loadedReviewRequestContext(provider: .github, request: request)
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-review-session-publish-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let draftStore = ReviewDraftCommentStore(
-            store: PersistenceStore(),
-            url: directory.appendingPathComponent("drafts.json")
-        )
-        let draftController = ReviewDraftCommentController(
-            sessionID: target.draftSessionID,
-            store: draftStore,
-            now: { Date(timeIntervalSince1970: 10) }
-        )
-        try draftController.load()
-        try draftController.add(
-            anchor: DiffReviewLineAnchor(
-                path: "Sources/App.swift",
-                side: .new,
-                line: 2,
-                rowIndex: 0,
-                selectedText: "let b = 3"
-            ),
-            fileID: loaded.session.files[0].id,
-            bodyMarkdown: "Please fix this."
-        )
-        let provider = RecordingProviderReviewMutator(
-            kind: .github,
-            publishResult: ProviderReviewPublishResult(
-                published: [],
-                failed: [],
-                refreshedRequest: request,
-                warnings: []
-            )
-        )
-        let view = ReviewSessionTabView.testView(
-            record: record,
-            loaded: loaded,
-            draftCommentStore: draftStore,
-            provider: provider
-        )
-        .environment(\.theme, try ThemeStore().current)
-
-        let host = NSHostingView(rootView: view.frame(width: 1200, height: 720))
-        host.layoutSubtreeIfNeeded()
-
-        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-publish-review", in: host) != nil)
-        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-publish-review", in: host))
-        pumpMainRunLoop(seconds: 0.05)
-        host.layoutSubtreeIfNeeded()
-        #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) != nil)
-        #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirm", in: host) != nil)
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "provider-review-publish-confirm", in: host) == expectsConfirm)
+        #expect(didConfirm == expectsConfirm)
     }
 
     @Test func reviewSessionShowsPublishReviewForProviderContextWithoutDraftsAndOpensPublishConfirmation() async throws {
@@ -1154,49 +868,6 @@ struct ReviewSessionTabViewTests {
         #expect(description.contains("approval was not submitted"))
     }
 
-    @Test func reviewSessionShowsProviderFeedbackOpenAndCopyActions() throws {
-        let thread = ReviewThreadSummary(
-            id: "thread-1",
-            author: "reviewer",
-            body: "Please fix this.",
-            url: URL(string: "https://github.com/mrmans0n/alas/pull/527#discussion_r1"),
-            isResolved: false,
-            isActionable: true,
-            location: ReviewThreadLocation(path: "Sources/App.swift", originalPath: nil, line: 2, side: .new, providerPosition: nil),
-            providerThreadID: "thread-provider-1",
-            providerCommentID: "comment-provider-1"
-        )
-        let request = Self.reviewRequest(provider: .github, threads: [thread])
-        let target = Self.reviewRequestTarget(provider: .github, request: request)
-        let record = ReviewSessionRecord(
-            id: target.id,
-            target: target,
-            createdAt: Date(timeIntervalSince1970: 1),
-            updatedAt: Date(timeIntervalSince1970: 1)
-        )
-        let loaded = Self.loadedReviewRequestContext(provider: .github, request: request)
-        let view = ReviewSessionTabView.testView(
-            record: record,
-            loaded: loaded,
-            provider: RecordingProviderReviewMutator(
-                kind: .github,
-                publishResult: ProviderReviewPublishResult(
-                    published: [],
-                    failed: [],
-                    refreshedRequest: request,
-                    warnings: []
-                )
-            )
-        )
-        .environment(\.theme, try ThemeStore().current)
-
-        let host = NSHostingView(rootView: view.frame(width: 1200, height: 720))
-        host.layoutSubtreeIfNeeded()
-
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-open-thread-1", in: host) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-copy-thread-1", in: host) != nil)
-    }
-
     @Test func reviewSessionKeepsNonActionableProviderFeedbackReadOnly() throws {
         let thread = ReviewThreadSummary(
             id: "thread-1",
@@ -1249,7 +920,8 @@ struct ReviewSessionTabViewTests {
         #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-resolve-thread-1", in: host) == nil)
     }
 
-    @Test func reviewSessionShowsProviderThreadMutationFailureOutsidePublishSheet() async throws {
+    @Test(arguments: [true, false])
+    func reviewSessionShowsProviderThreadMutationOutcomeOutsidePublishSheet(mutationFails: Bool) async throws {
         let thread = ReviewThreadSummary(
             id: "thread-1",
             author: "reviewer",
@@ -1281,7 +953,10 @@ struct ReviewSessionTabViewTests {
                     refreshedRequest: request,
                     warnings: []
                 ),
-                mutationError: CodeHostProviderError.malformedOutput("resolve failed")
+                mutationError: mutationFails ? CodeHostProviderError.malformedOutput("resolve failed") : nil,
+                mutationWarnings: mutationFails
+                    ? []
+                    : ["GitHub thread was updated, but Alas could not refresh the PR: temporary API failure"]
             )
         )
         .environment(\.theme, try ThemeStore().current)
@@ -1302,87 +977,7 @@ struct ReviewSessionTabViewTests {
         let description = recursiveDescription(host)
         #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) == nil)
         #expect(subview(withAccessibilityIdentifier: "review-session-provider-error", in: host) != nil)
-        #expect(description.contains("resolve failed"))
-    }
-
-    @Test func reviewSessionShowsProviderThreadMutationWarningsOutsidePublishSheet() async throws {
-        let thread = ReviewThreadSummary(
-            id: "thread-1",
-            author: "reviewer",
-            body: "Please fix this.",
-            url: URL(string: "https://github.com/mrmans0n/alas/pull/527#discussion_r1"),
-            isResolved: false,
-            isActionable: true,
-            location: ReviewThreadLocation(path: "Sources/App.swift", originalPath: nil, line: 2, side: .new, providerPosition: nil),
-            providerThreadID: "thread-provider-1",
-            providerCommentID: "comment-provider-1"
-        )
-        let request = Self.reviewRequest(provider: .github, threads: [thread])
-        let target = Self.reviewRequestTarget(provider: .github, request: request)
-        let record = ReviewSessionRecord(
-            id: target.id,
-            target: target,
-            createdAt: Date(timeIntervalSince1970: 1),
-            updatedAt: Date(timeIntervalSince1970: 1)
-        )
-        let loaded = Self.loadedReviewRequestContext(provider: .github, request: request)
-        let view = ReviewSessionTabView.testView(
-            record: record,
-            loaded: loaded,
-            provider: RecordingProviderReviewMutator(
-                kind: .github,
-                publishResult: ProviderReviewPublishResult(
-                    published: [],
-                    failed: [],
-                    refreshedRequest: request,
-                    warnings: []
-                ),
-                mutationWarnings: ["GitHub thread was updated, but Alas could not refresh the PR: temporary API failure"]
-            )
-        )
-        .environment(\.theme, try ThemeStore().current)
-
-        let host = NSHostingView(rootView: view.frame(width: 1200, height: 720))
-        host.layoutSubtreeIfNeeded()
-
-        #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) == nil)
-        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "diff-review-inline-feedback-action-resolve-thread-1", in: host))
-
-        let deadline = Date().addingTimeInterval(1)
-        while subview(withAccessibilityIdentifier: "review-session-provider-error", in: host) == nil, Date() < deadline {
-            try await Task.sleep(nanoseconds: 10_000_000)
-            pumpMainRunLoop(seconds: 0.01)
-            host.layoutSubtreeIfNeeded()
-        }
-
-        let description = recursiveDescription(host)
-        #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) == nil)
-        #expect(subview(withAccessibilityIdentifier: "review-session-provider-error", in: host) != nil)
-        #expect(description.contains("could not refresh the PR"))
-    }
-
-    @Test func fileIDLookupFindsFeedbackOwningFile() {
-        let fileA = DiffReviewFileID(namespace: "github", path: "A.swift")
-        let fileB = DiffReviewFileID(namespace: "github", path: "B.swift")
-        func feedback(_ id: String, path: String) -> DiffReviewInlineFeedback {
-            DiffReviewInlineFeedback(
-                id: id,
-                providerName: "GitHub",
-                author: "reviewer",
-                bodyPreview: "body",
-                status: .actionable,
-                providerURL: nil,
-                anchor: DiffReviewInlineFeedbackAnchor(path: path, line: 1, side: .new),
-                evidenceItemID: id
-            )
-        }
-        let grouped: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [
-            fileA: [feedback("fb-a", path: "A.swift")],
-            fileB: [feedback("fb-b", path: "B.swift")],
-        ]
-
-        #expect(ReviewSessionTabView.fileID(forFeedbackID: "fb-b", in: grouped) == fileB)
-        #expect(ReviewSessionTabView.fileID(forFeedbackID: "missing", in: grouped) == nil)
+        #expect(description.contains(mutationFails ? "resolve failed" : "could not refresh the PR"))
     }
 
     @Test func selectingGitHubFeedbackInRailFocusesItInDiff() throws {

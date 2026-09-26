@@ -2,222 +2,80 @@ import Testing
 @testable import Alas
 
 struct GitNameValidatorTests {
-    // MARK: - Accepted names
-    @Test func acceptsSimpleBranchName() {
-        let result = GitNameValidator.validateBranchName("feat-x")
-        #expect(result == .valid)
+    // MARK: - Branch names
+
+    @Test("Accepts valid branch name", arguments: [
+        "feat-x",              // simple
+        "feature/foo-bar",     // path style
+        "release/v1/0",        // multiple slashes
+        "bug-fix-correct",     // hyphens
+        "bug_fix_correct",     // underscores
+        "v1.2.3",              // numbers and dots
+        "foo./bar",            // intermediate component ending in '.'
+        "user@branch",         // '@' inside a component
+        "feature/{foo}",       // braces without '@'
+        "feature/-dash",       // hyphen starting a non-first component
+    ])
+    func acceptsBranchName(_ name: String) {
+        #expect(GitNameValidator.validateBranchName(name) == .valid)
     }
 
-    @Test func acceptsPathStyleBranchName() {
-        let result = GitNameValidator.validateBranchName("feature/foo-bar")
-        #expect(result == .valid)
-    }
-
-    @Test func acceptsBranchWithMultipleSlashes() {
-        let result = GitNameValidator.validateBranchName("release/v1/0")
-        #expect(result == .valid)
-    }
-
-    @Test func acceptsBranchWithHyphens() {
-        let result = GitNameValidator.validateBranchName("bug-fix-correct")
-        #expect(result == .valid)
-    }
-
-    @Test func acceptsBranchWithUnderscores() {
-        let result = GitNameValidator.validateBranchName("bug_fix_correct")
-        #expect(result == .valid)
-    }
-
-    @Test func acceptsBranchWithNumbers() {
-        let result = GitNameValidator.validateBranchName("v1.2.3")
-        #expect(result == .valid)
-    }
-
-    // MARK: - Rejected names
-    @Test func rejectsEmptyName() {
-        let result = GitNameValidator.validateBranchName("")
-        #expect(result == .invalid("Name cannot be empty."))
-    }
-
-    @Test func rejectsWhitespaceOnlyName() {
-        let result = GitNameValidator.validateBranchName("   ")
-        #expect(result == .invalid("Name cannot contain spaces."))
-    }
-
-    @Test func rejectsNameWithSpaces() {
-        let result = GitNameValidator.validateBranchName("bad name")
-        #expect(result == .invalid("Name cannot contain spaces."))
-    }
-
-    @Test func rejectsLeadingSpace() {
-        let result = GitNameValidator.validateBranchName(" leading")
-        #expect(result == .invalid("Name cannot contain spaces."))
-    }
-
-    @Test func rejectsTrailingSpace() {
-        let result = GitNameValidator.validateBranchName("trailing ")
-        #expect(result == .invalid("Name cannot contain spaces."))
-    }
-
-    @Test func rejectsDotComponent() {
-        let result = GitNameValidator.validateBranchName("feature/.secret")
-        #expect(result == .invalid("Path components cannot start with '.'."))
-    }
-
-    @Test func acceptsIntermediateDotSuffix() {
-        let result = GitNameValidator.validateBranchName("foo./bar")
-        #expect(result == .valid)
-    }
-
-    @Test func rejectsFinalDotSuffix() {
-        let result = GitNameValidator.validateBranchName("foo/bar.")
-        #expect(result == .invalid("Name cannot end with '.'."))
-    }
-
-    @Test func rejectsDotDotComponent() {
-        let result = GitNameValidator.validateBranchName("feature/..")
-        #expect(result == .invalid("Name cannot contain '.' or '..' as a path component."))
-    }
-
-    @Test func rejectsPathTraversal() {
-        let result = GitNameValidator.validateBranchName("../escape")
-        #expect(result == .invalid("Name cannot contain '.' or '..' as a path component."))
-    }
-
-    @Test func rejectsLeadingSlash() {
-        let result = GitNameValidator.validateBranchName("/leading")
-        #expect(result == .invalid("Name cannot start or end with '/' ."))
-    }
-
-    @Test func rejectsTrailingSlash() {
-        let result = GitNameValidator.validateBranchName("trailing/")
-        #expect(result == .invalid("Name cannot start or end with '/' ."))
-    }
-
-    @Test func rejectDoubleSlash() {
-        let result = GitNameValidator.validateBranchName("feature//double")
-        #expect(result == .invalid("Name cannot contain consecutive '/' ."))
-    }
-
-    @Test func rejectsTilde() {
-        let result = GitNameValidator.validateBranchName("fix~backup")
-        #expect(result == .invalid("Name contains unsupported characters."))
-    }
-
-    @Test func rejectsCaret() {
-        let result = GitNameValidator.validateBranchName("v1^2")
-        #expect(result == .invalid("Name contains unsupported characters."))
-    }
-
-    @Test func rejectsColon() {
-        let result = GitNameValidator.validateBranchName("feat:new")
-        #expect(result == .invalid("Name contains unsupported characters."))
-    }
-
-    @Test func rejectsBackslash() {
-        let result = GitNameValidator.validateBranchName("feat\\new")
-        #expect(result == .invalid("Name contains unsupported characters."))
-    }
-
-    @Test func rejectsQuestionMark() {
-        let result = GitNameValidator.validateBranchName("what?")
-        #expect(result == .invalid("Name contains unsupported characters."))
-    }
-
-    @Test func rejectsAsterisk() {
-        let result = GitNameValidator.validateBranchName("feat/*")
-        #expect(result == .invalid("Name contains unsupported characters."))
-    }
-
-    @Test func rejectsBracket() {
-        let result = GitNameValidator.validateBranchName("feature/[wip]")
-        #expect(result == .invalid("Name contains unsupported characters."))
-    }
-
-    @Test func rejectsAtCurly() {
-        let result = GitNameValidator.validateBranchName("stash@{1}")
-        #expect(result == .invalid("Name cannot contain '@{' ."))
-    }
-
-    @Test func rejectsStandaloneAt() {
-        let result = GitNameValidator.validateBranchName("@")
-        #expect(result == .invalid("'@' is not a valid branch name."))
-    }
-
-    @Test func acceptsAtInComponent() {
-        let result = GitNameValidator.validateBranchName("user@branch")
-        #expect(result == .valid)
-    }
-
-    @Test func acceptsBracesWithoutAt() {
-        let result = GitNameValidator.validateBranchName("feature/{foo}")
-        #expect(result == .valid)
-    }
-
-    @Test func acceptsHyphenInPathComponent() {
-        let result = GitNameValidator.validateBranchName("feature/-dash")
-        #expect(result == .valid)
-    }
-
-    @Test func rejectsLeadingDashShorthand() {
-        let result = GitNameValidator.validateBranchName("-dash")
-        #expect(result == .invalid("Name cannot start with '-' ."))
-    }
-
-    @Test func rejectsDotLock() {
-        let result = GitNameValidator.validateBranchName("fix.lock")
-        #expect(result == .invalid("Name cannot end with '.lock' ."))
-    }
-
-    @Test func rejectsVeryLongName() {
-        let result = GitNameValidator.validateBranchName(String(repeating: "a", count: 251))
-        #expect(result == .invalid("Name is too long (max 250 characters)."))
+    @Test("Rejects invalid branch name", arguments: [
+        ("", "Name cannot be empty."),
+        ("   ", "Name cannot contain spaces."),
+        ("bad name", "Name cannot contain spaces."),
+        (" leading", "Name cannot contain spaces."),
+        ("trailing ", "Name cannot contain spaces."),
+        ("feature/.secret", "Path components cannot start with '.'."),
+        ("foo/bar.", "Name cannot end with '.'."),
+        ("feature/..", "Name cannot contain '.' or '..' as a path component."),
+        ("../escape", "Name cannot contain '.' or '..' as a path component."),
+        ("/leading", "Name cannot start or end with '/' ."),
+        ("trailing/", "Name cannot start or end with '/' ."),
+        ("feature//double", "Name cannot contain consecutive '/' ."),
+        ("fix~backup", "Name contains unsupported characters."),
+        ("v1^2", "Name contains unsupported characters."),
+        ("feat:new", "Name contains unsupported characters."),
+        ("feat\\new", "Name contains unsupported characters."),
+        ("what?", "Name contains unsupported characters."),
+        ("feat/*", "Name contains unsupported characters."),
+        ("feature/[wip]", "Name contains unsupported characters."),
+        ("stash@{1}", "Name cannot contain '@{' ."),
+        ("@", "'@' is not a valid branch name."),
+        ("-dash", "Name cannot start with '-' ."),
+        ("fix.lock", "Name cannot end with '.lock' ."),
+        (String(repeating: "a", count: 251), "Name is too long (max 250 characters)."),
+    ])
+    func rejectsBranchName(_ name: String, message: String) {
+        #expect(GitNameValidator.validateBranchName(name) == .invalid(message))
     }
 
     // MARK: - Worktree name alias
+
     @Test func worktreeNameDelegatesToBranchValidator() {
         let result = GitNameValidator.validateWorktreeName("feature/foo")
         #expect(result == .valid)
     }
 
     // MARK: - Branch prefix validation
-    @Test func acceptsFeatureSlashPrefix() {
-        let result = GitNameValidator.validateBranchPrefix("feature/")
-        #expect(result == .valid)
+
+    @Test("Accepts valid branch prefix", arguments: [
+        "feature/",
+        "feature",       // no trailing slash
+        "",              // empty prefix
+        "release/v1/",   // nested with trailing slash
+    ])
+    func acceptsBranchPrefix(_ prefix: String) {
+        #expect(GitNameValidator.validateBranchPrefix(prefix) == .valid)
     }
 
-    @Test func acceptsPrefixWithoutSlash() {
-        let result = GitNameValidator.validateBranchPrefix("feature")
-        #expect(result == .valid)
-    }
-
-    @Test func acceptsEmptyPrefix() {
-        let result = GitNameValidator.validateBranchPrefix("")
-        #expect(result == .valid)
-    }
-
-    @Test func acceptsNestedPrefixWithTrailingSlash() {
-        let result = GitNameValidator.validateBranchPrefix("release/v1/")
-        #expect(result == .valid)
-    }
-
-    @Test func rejectsSlashOnlyPrefix() {
-        let result = GitNameValidator.validateBranchPrefix("/")
-        #expect(result == .invalid("Prefix cannot be '/' only."))
-    }
-
-    @Test func rejectsDoubleTrailingSlash() {
-        let result = GitNameValidator.validateBranchPrefix("feature//")
-        #expect(result == .invalid("Prefix cannot contain consecutive '/'."))
-    }
-
-    @Test func rejectsPrefixWithSpaces() {
-        let result = GitNameValidator.validateBranchPrefix("bad name/")
-        #expect(result == .invalid("Name cannot contain spaces."))
-    }
-
-    @Test func rejectsPrefixWithTraversal() {
-        let result = GitNameValidator.validateBranchPrefix("../")
-        #expect(result == .invalid("Name cannot contain '.' or '..' as a path component."))
+    @Test("Rejects invalid branch prefix", arguments: [
+        ("/", "Prefix cannot be '/' only."),
+        ("feature//", "Prefix cannot contain consecutive '/'."),
+        ("bad name/", "Name cannot contain spaces."),
+        ("../", "Name cannot contain '.' or '..' as a path component."),
+    ])
+    func rejectsBranchPrefix(_ prefix: String, message: String) {
+        #expect(GitNameValidator.validateBranchPrefix(prefix) == .invalid(message))
     }
 }
