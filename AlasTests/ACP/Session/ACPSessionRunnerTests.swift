@@ -4308,6 +4308,52 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.messages.count == before + 1)
     }
 
+    @Test("awaited delegated notice reports failure when its own row is rejected")
+    func awaitedDelegatedNoticeIgnoresUnrelatedPersistedCount() async throws {
+        // The answer must come from this notice's own write, not from the
+        // global persisted high-water mark, which any later index can
+        // advance. Here the store already holds rows this transcript never
+        // replayed, so the mark starts ahead of the notice's index while the
+        // notice's write is rejected by a stale fence. Reporting `true` would
+        // make the caller delete the inbox row holding the only other copy.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-awaited-notice-rejected-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        try store.seizeLease(
+            sessionId: sid,
+            instanceId: "ME",
+            pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970),
+            leaseToken: "new"
+        )
+
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME",
+            persistedMessageCount: 5,
+            canWrite: { true },
+            leaseFenceProvider: {
+                ACPSessionLeaseFence(sessionId: sid, ownerInstance: "ME", token: "old")
+            }
+        )
+
+        let persisted = await runner.appendAndPersistSystemNoticeAwaitingResult(
+            "Delegated session child (codex) finished its turn."
+        )
+
+        #expect(persisted == false)
+        #expect(try store.messageCount(sessionId: sid) == 0)
+    }
+
     @Test("awaited delegated notice reports failure when the runner cannot write")
     func awaitedDelegatedNoticeReportsFailureWithoutLease() async throws {
         // Without the write lease nothing can be persisted, so the caller —

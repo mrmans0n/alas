@@ -181,6 +181,12 @@ final class ACPSessionRunner {
     private var latestPromptTask: Task<Void, Never>?
     private var appliedUpdateCount = 0
     private var persistedMessageCount: Int
+    /// Row ids whose individual write outcome a caller is awaiting, and the
+    /// ones among them a confirmed write actually stored. Both are populated
+    /// only while an `appendAndPersistSystemNoticeAwaitingResult` call is in
+    /// flight, so the fire-and-forget persistence path pays nothing.
+    private var awaitedNoticeRowIDs: Set<String> = []
+    private var writtenAwaitedNoticeRowIDs: Set<String> = []
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
     /// Outcome of the most recently COMPLETED write queued via
@@ -3534,18 +3540,32 @@ extension ACPSessionRunner {
     ///
     /// Deliberately goes through the same fire-and-forget path rather than
     /// writing directly, so the notice keeps its place in the serialized
-    /// persistence queue, and reads the result from `persistedMessageCount`
+    /// persistence queue, and reads the outcome from a recorded row id
     /// rather than awaiting a completion: `enqueuePersistence` skips its
     /// completion when the task is cancelled, so a continuation waiting on
-    /// it could hang forever. `persistedMessageCount` only advances through
-    /// `commitPersistedMessageRows`, which runs solely on a successful
-    /// write.
+    /// it could hang forever.
+    ///
+    /// The answer has to name THIS row. `persistedMessageCount` is a global
+    /// high-water mark that any later index can advance — a queued agent
+    /// update committing while this flush awaits, or the streaming path,
+    /// which raises it optimistically at enqueue time — so it reports
+    /// success for a notice whose own write was rejected by the fence or
+    /// failed in SQLite, and the caller then deletes the inbox row that was
+    /// the notice's only other copy. `writtenAwaitedNoticeRowIDs` is
+    /// populated solely by `commitPersistedMessageRows`, which runs only on
+    /// a confirmed write of these exact rows, so an unwritten notice always
+    /// reports `false` and is retried from the inbox.
     func appendAndPersistSystemNoticeAwaitingResult(_ text: String) async -> Bool {
         guard holdsLeaseForWrite() else { return false }
-        let index = session.transcript.messages.count
+        let rowID = messageRowID(session.transcript.messages.count)
+        awaitedNoticeRowIDs.insert(rowID)
+        defer {
+            awaitedNoticeRowIDs.remove(rowID)
+            writtenAwaitedNoticeRowIDs.remove(rowID)
+        }
         appendAndPersistSystemNotice(text)
         await flushPersistence()
-        return persistedMessageCount > index
+        return writtenAwaitedNoticeRowIDs.contains(rowID)
     }
 
     /// Append a file-edit card to the session AND persist it.
@@ -3650,7 +3670,7 @@ extension ACPSessionRunner {
               let fence = leaseFenceProvider()
         else { return }
         capturingPersistedBaseIndices.insert(index)
-        let id = "msg-\(sessionId)-\(index)"
+        let id = messageRowID(index)
         enqueuePersistence({ persistence in
             try await persistence.loadMessagePayload(id: id, fence: fence)
         }, completion: { [weak self] payload in
@@ -3792,7 +3812,7 @@ extension ACPSessionRunner {
         let snapshots = pendingStreamingPersistSnapshots
         for i in snapshots.keys.sorted() {
             guard let snapshot = snapshots[i] else { continue }
-            let id = "msg-\(sessionId)-\(i)"
+            let id = messageRowID(i)
             // Both writes below are best-effort salvage attempts that can
             // legitimately lose the race — a CAS whose base payload no
             // longer matches, or an insert onto a row the new owner already
@@ -3868,7 +3888,7 @@ extension ACPSessionRunner {
             guard i >= 0, i < messages.count else { continue }
             let m = messageForPersistence(messages[i])
             guard let payload = try? ACPMessageCodec.encode(m) else { continue }
-            let id = "msg-\(sessionId)-\(i)"
+            let id = messageRowID(i)
             rows.append(ACPStoredMessage(
                 id: id,
                 sessionId: sessionId,
@@ -3933,11 +3953,22 @@ extension ACPSessionRunner {
             ?? Date().timeIntervalSince1970)
     }
 
+    /// The store's row id for the message at `index`. Single source of truth:
+    /// `awaitedNoticeRowIDs` matches on this, so a divergence between how a
+    /// row is written and how its write is confirmed would silently report
+    /// every awaited notice as unwritten.
+    private func messageRowID(_ index: Int) -> String {
+        "msg-\(sessionId)-\(index)"
+    }
+
     private func commitPersistedMessageRows(_ rows: [ACPStoredMessage]) {
         for row in rows {
             let index = Int(row.seq)
             persistedMessageCount = max(persistedMessageCount, index + 1)
             lastPersistedPayloads[index] = row.payload
+            if awaitedNoticeRowIDs.contains(row.id) {
+                writtenAwaitedNoticeRowIDs.insert(row.id)
+            }
         }
         trimLastPersistedPayloads()
         onPersist?()
@@ -3981,7 +4012,7 @@ extension ACPSessionRunner {
         for i in lowerBound..<messages.count {
             let m = messages[i]
             guard let payload = try? ACPMessageCodec.encode(m) else { continue }
-            let id = "msg-\(sessionId)-\(i)"
+            let id = messageRowID(i)
             rows.append(ACPStoredMessage(
                 id: id,
                 sessionId: sessionId,
