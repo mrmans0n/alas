@@ -1078,8 +1078,16 @@ struct ACPComposerDraftBridgeTests {
         // Nine adjacent chips with no separating text, all pointing at the
         // SAME content-addressed file — `enumerateAttribute` would coalesce
         // these into a single run of equal `.imageAttachmentURI` values if
-        // the cap were still counting runs instead of characters.
-        let sameURI = "file:///tmp/same-image.png"
+        // the cap were still counting runs instead of characters. The file
+        // has to actually exist: `attributedString(from:)` drops an
+        // `.image` segment whose URI doesn't resolve to a real file, which
+        // would otherwise mask the very undercount this test checks for.
+        let sameFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-same-image-\(UUID().uuidString).png")
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
+            .write(to: sameFile)
+        defer { try? FileManager.default.removeItem(at: sameFile) }
+        let sameURI = sameFile.absoluteString
         let storage = NSMutableAttributedString(string: "")
         for _ in 0..<(ACPNSTextView.maxImagesPerMessage - 1) {
             let attachment = ACPImageChipAttachment(fileURL: URL(string: sameURI)!, mimeType: "image/png")

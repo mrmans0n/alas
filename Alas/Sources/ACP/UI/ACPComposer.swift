@@ -2038,9 +2038,17 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// chips write the chips' text form instead (`/command`, `@filename`),
     /// plus the private, MAC-authenticated draft type so a paste back into
     /// a composer restores the chips themselves.
+    ///
+    /// Deliberately does NOT gate on `types.contains(.string)`: NSTextView's
+    /// own `writablePasteboardTypes` is not a reliable signal of what a
+    /// caller actually wants written — it can report an empty array
+    /// (observed outside a full interactive AppKit session, e.g. under a
+    /// test host) while `super.writeSelection` still populates `.string`
+    /// regardless of the `types` it was given. Requiring `.string` to
+    /// appear in that array made this override silently never run in
+    /// exactly that situation.
     override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
-        guard types.contains(.string),
-              let draft = selectedChipDraft,
+        guard let draft = selectedChipDraft,
               let data = Self.signedDraftPayload(draft)
         else { return super.writeSelection(to: pboard, types: types) }
         pboard.declareTypes([Self.composerDraftPasteboardType, .string], owner: nil)
