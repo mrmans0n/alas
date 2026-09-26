@@ -36,6 +36,7 @@ extension ACPNSTextView {
     /// Chips references in a fragment about to replace `range`. The
     /// characters on either side of `range` decide whether the fragment's
     /// edges are boundaries, so `#12` pasted right after `abc` stays text.
+    /// A pasted same-repository PR/MR/issue URL also becomes a chip.
     @discardableResult
     func chipUpstreamReferences(in fragment: NSMutableAttributedString, replacing range: NSRange) -> Bool {
         guard let textStorage, let context = upstreamReferenceContext else { return false }
@@ -43,7 +44,8 @@ extension ACPNSTextView {
         let before: unichar? = range.location > 0 ? string.character(at: range.location - 1) : nil
         let after: unichar? = NSMaxRange(range) < string.length ? string.character(at: NSMaxRange(range)) : nil
         return ACPUpstreamReferenceChip.chipify(
-            fragment, host: context.host, store: context.store, precededBy: before, followedBy: after
+            fragment, host: context.host, store: context.store,
+            precededBy: before, followedBy: after, urlRemote: context.store.remote
         ) > 0
     }
 

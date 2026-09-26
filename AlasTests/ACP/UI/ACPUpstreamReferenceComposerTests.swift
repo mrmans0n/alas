@@ -152,4 +152,21 @@ struct ACPUpstreamReferenceComposerTests {
         }
         #expect(chipSpellings(textView) == ["#12"])
     }
+
+    @Test("pasting a same-repo PR URL inserts its chip; a comment link pastes unchanged")
+    func pastedURLBecomesChip() async {
+        let store = await UpstreamReferenceFixtures.store()
+        let (textView, coordinator, window) = makeTextView(store: store)
+        defer { withExtendedLifetime((coordinator, window)) {} }
+
+        #expect(textView.insertPlainText("landed in https://github.com/mrmans0n/alas/pull/1506."))
+        #expect(chipSpellings(textView) == ["#1506"])
+        #expect(wireText(textView) == "landed in #1506.")
+
+        textView.string = ""
+        let comment = "https://github.com/mrmans0n/alas/pull/1506#issuecomment-1"
+        #expect(textView.insertPlainText(comment))
+        #expect(chipSpellings(textView).isEmpty)
+        #expect(textView.string == comment)
+    }
 }

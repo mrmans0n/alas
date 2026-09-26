@@ -52,6 +52,64 @@ enum ACPUpstreamReferenceDetector {
         return matches
     }
 
+    private static let urlCandidate = try! NSRegularExpression(pattern: #"https?://[^\s<>()\[\]{}"'`]+"#, options: [.caseInsensitive])
+    private static let urlTrailingPunctuation = Set(".,;:!?".utf16)
+
+    /// Exact PR / MR / issue URLs for `remote`'s repository, mapped to the
+    /// reference they name: GitHub `/pull/N` and `/issues/N` to `#N`, GitLab
+    /// `/-/merge_requests/N` to `!N` and `/-/issues/N` to `#N`. Anything
+    /// more specific (extra path, query, fragment) stays a URL so the link
+    /// to a file or comment isn't lost, as do other repositories' URLs and
+    /// markdown link targets.
+    static func urlReferences(
+        in text: String,
+        remote: CodeHostRemote,
+        precededBy: unichar? = nil,
+        followedBy: unichar? = nil
+    ) -> [Match] {
+        let string = text as NSString
+        let code = codeRanges(in: string, unclosedRunsExtendToEnd: false)
+        var matches: [Match] = []
+        for result in urlCandidate.matches(in: text, range: NSRange(location: 0, length: string.length)) {
+            var range = result.range
+            while range.length > 0, urlTrailingPunctuation.contains(string.character(at: NSMaxRange(range) - 1)) {
+                range.length -= 1
+            }
+            let before: unichar? = range.location > 0 ? string.character(at: range.location - 1) : precededBy
+            let beforeThat: unichar? = range.location > 1 ? string.character(at: range.location - 2) : nil
+            let after: unichar? = NSMaxRange(range) < string.length ? string.character(at: NSMaxRange(range)) : followedBy
+            guard isLeadingBoundary(before),
+                  !(before == 0x28 && beforeThat == 0x5D), // "](": a markdown link target
+                  isTrailingBoundary(after),
+                  !code.contains(where: { NSLocationInRange(range.location, $0) }),
+                  let reference = reference(forURL: string.substring(with: range), remote: remote)
+            else { continue }
+            matches.append(Match(range: range, reference: reference))
+        }
+        return matches
+    }
+
+    private static func reference(forURL string: String, remote: CodeHostRemote) -> CodeHostReference? {
+        guard let components = URLComponents(string: string),
+              let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              components.host?.caseInsensitiveCompare(remote.host) == .orderedSame,
+              components.query == nil, components.fragment == nil
+        else { return nil }
+        var path = components.path
+        if path.hasSuffix("/") { path.removeLast() }
+        let repoPath = remote.webURL.path
+        guard path.lowercased().hasPrefix(repoPath.lowercased() + "/") else { return nil }
+        let rest = path.dropFirst(repoPath.count + 1).split(separator: "/", omittingEmptySubsequences: false)
+        let parsed: (sigil: CodeHostReference.Sigil, digits: Substring)? = switch (remote.kind, rest.count) {
+        case (.github, 2) where rest[0] == "pull" || rest[0] == "issues": (.hash, rest[1])
+        case (.gitlab, 3) where rest[0] == "-" && rest[1] == "merge_requests": (.bang, rest[2])
+        case (.gitlab, 3) where rest[0] == "-" && rest[1] == "issues": (.hash, rest[2])
+        default: nil
+        }
+        guard let parsed else { return nil }
+        return CodeHostReference(spelling: "\(parsed.sigil.rawValue)\(parsed.digits)")
+    }
+
     /// The token a single typed whitespace character completes. Chips form
     /// on whitespace only: intercepting punctuation would bypass the text
     /// view's delimiter pairing (a typed `)` skipping over an auto-inserted

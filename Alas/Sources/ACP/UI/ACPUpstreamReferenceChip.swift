@@ -146,7 +146,9 @@ enum ACPUpstreamReferenceChip {
     /// Replaces every reference token in `storage` with a chip, last to
     /// first so earlier ranges stay valid, and starts each lookup. Returns
     /// how many were replaced. `excluding` lets the transcript skip matches
-    /// inside rendered inline code or links.
+    /// inside rendered inline code or links. `urlRemote`, when set, also
+    /// turns that repository's exact PR/MR/issue URLs into chips; only paste
+    /// paths pass it.
     @MainActor
     @discardableResult
     static func chipify(
@@ -155,11 +157,23 @@ enum ACPUpstreamReferenceChip {
         store: ACPUpstreamReferenceStore?,
         precededBy: unichar? = nil,
         followedBy: unichar? = nil,
-        excluding: (NSRange) -> Bool = { _ in false }
+        excluding: (NSRange) -> Bool = { _ in false },
+        urlRemote: CodeHostRemote? = nil
     ) -> Int {
-        let matches = ACPUpstreamReferenceDetector
+        let tokens = ACPUpstreamReferenceDetector
             .references(in: storage.string, host: host, precededBy: precededBy, followedBy: followedBy)
-            .filter { !excluding($0.range) }
+        let urls = urlRemote.map {
+            ACPUpstreamReferenceDetector.urlReferences(
+                in: storage.string, remote: $0, precededBy: precededBy, followedBy: followedBy
+            )
+        } ?? []
+        // A token inside a URL (a `#` fragment) is already rejected by the
+        // URL rules; drop any overlap anyway so ranges never collide.
+        let matches = (urls + tokens.filter { token in
+            !urls.contains { NSIntersectionRange($0.range, token.range).length > 0 }
+        })
+        .filter { !excluding($0.range) }
+        .sorted { $0.range.location < $1.range.location }
         for match in matches.reversed() {
             let attributes = storage.attributes(at: match.range.location, effectiveRange: nil)
             storage.replaceCharacters(

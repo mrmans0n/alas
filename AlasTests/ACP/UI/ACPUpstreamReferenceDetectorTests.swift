@@ -72,4 +72,41 @@ struct ACPUpstreamReferenceDetectorTests {
         #expect(!target(" ", "`see #12"))
         #expect(!target(" ", "see #"))
     }
+
+    private static let github = CodeHostRemote(
+        kind: .github, host: "github.com", owner: "mrmans0n", repository: "alas",
+        remoteName: "origin", webURL: URL(string: "https://github.com/mrmans0n/alas")!
+    )
+    private static let gitlab = CodeHostRemote(
+        kind: .gitlab, host: "gitlab.example.com", owner: "platform/mobile", repository: "alas",
+        remoteName: "origin", webURL: URL(string: "https://gitlab.example.com/platform/mobile/alas")!
+    )
+
+    private func urls(_ text: String, _ remote: CodeHostRemote = Self.github) -> [String] {
+        ACPUpstreamReferenceDetector.urlReferences(in: text, remote: remote).map(\.reference.spelling)
+    }
+
+    @Test("same-repo PR and issue URLs map to their reference, keeping trailing punctuation outside")
+    func urlMatches() {
+        let text = "see https://github.com/mrmans0n/alas/pull/1506. and (HTTP://GitHub.com/MrMans0n/Alas/issues/12/)"
+        let matches = ACPUpstreamReferenceDetector.urlReferences(in: text, remote: Self.github)
+        #expect(matches.map(\.reference.spelling) == ["#1506", "#12"])
+        let first = (text as NSString).substring(with: matches[0].range)
+        #expect(first == "https://github.com/mrmans0n/alas/pull/1506")
+        #expect(urls("https://gitlab.example.com/platform/mobile/alas/-/merge_requests/9 https://gitlab.example.com/platform/mobile/alas/-/issues/3", Self.gitlab)
+            == ["!9", "#3"])
+    }
+
+    @Test("URLs into a PR, for another repo, inside a markdown link, or in code stay URLs")
+    func urlMisses() {
+        #expect(urls("https://github.com/mrmans0n/alas/pull/1506/files") == [])
+        #expect(urls("https://github.com/mrmans0n/alas/pull/1506#issuecomment-1") == [])
+        #expect(urls("https://github.com/mrmans0n/alas/pull/1506?w=1") == [])
+        #expect(urls("https://github.com/someone/else/pull/1506") == [])
+        #expect(urls("https://github.com/mrmans0n/alas-fork/pull/1506") == [])
+        #expect(urls("[the fix](https://github.com/mrmans0n/alas/pull/1506)") == [])
+        #expect(urls("`https://github.com/mrmans0n/alas/pull/1506`") == [])
+        #expect(urls("xhttps://github.com/mrmans0n/alas/pull/1506") == [])
+        #expect(urls("https://github.com/mrmans0n/alas/pull/0150") == [])
+    }
 }
