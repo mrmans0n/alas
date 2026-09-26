@@ -28,7 +28,10 @@ struct ACPUpstreamReferenceStoreTests {
     func resolveRemoteRetriesAfterFailure() async {
         actor CallCount {
             private(set) var count = 0
-            func increment() -> Int { count += 1; return count }
+            func increment() -> Int {
+                count += 1
+                return count
+            }
         }
         struct RemotesError: Error {}
         let calls = CallCount()
