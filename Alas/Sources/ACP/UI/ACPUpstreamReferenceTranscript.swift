@@ -36,15 +36,17 @@ extension EnvironmentValues {
 
 extension ACPUpstreamReferenceChip {
     /// Chips references in rendered inline markdown. Backticks are gone by
-    /// now, so inline code is recognised by its fixed-pitch font. Linked
-    /// text keeps its link.
+    /// now, so inline code is recognised via the `NSInlinePresentationIntent`
+    /// code-span bit the renderer leaves on the attributed string — not by
+    /// font, since a user's chat font can itself be monospaced. Linked text
+    /// keeps its link.
     @MainActor
     @discardableResult
     static func chipifyRendered(_ rendered: NSMutableAttributedString, chipping: ACPUpstreamReferenceChipping) -> Int {
         chipify(rendered, host: chipping.host, store: chipping.store, excluding: { range in
             let attributes = rendered.attributes(at: range.location, effectiveRange: nil)
             if attributes[.link] != nil { return true }
-            return (attributes[.font] as? NSFont)?.isFixedPitch == true
+            return ACPMarkdownInlineRenderer.isInlineCode(attributes)
         })
     }
 }

@@ -169,4 +169,18 @@ struct ACPUpstreamReferenceComposerTests {
         #expect(chipSpellings(textView).isEmpty)
         #expect(textView.string == comment)
     }
+
+    @Test("pasting inside an open code fence does not chip a reference")
+    func pastedReferenceInsideCodeFenceStaysText() async {
+        let store = await UpstreamReferenceFixtures.store()
+        let (textView, coordinator, window) = makeTextView(store: store)
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.string = "```\nlog: "
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+
+        #expect(textView.insertPlainText("failed in #123"))
+
+        #expect(chipSpellings(textView).isEmpty)
+        #expect(textView.string == "```\nlog: failed in #123")
+    }
 }

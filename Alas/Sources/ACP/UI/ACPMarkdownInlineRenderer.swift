@@ -365,7 +365,7 @@ enum ACPMarkdownInlineRenderer {
         return traits
     }
 
-    private static func isInlineCode(_ attributes: [NSAttributedString.Key: Any]) -> Bool {
+    static func isInlineCode(_ attributes: [NSAttributedString.Key: Any]) -> Bool {
         guard let intent = attributes[NSAttributedString.Key("NSInlinePresentationIntent")] as? Int else {
             return false
         }

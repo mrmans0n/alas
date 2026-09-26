@@ -309,11 +309,29 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
                 .dropFirst()
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] _ in
-                    MainActor.assumeIsolated { self?.needsDisplay = true }
+                    MainActor.assumeIsolated { self?.invalidateUpstreamReferenceChips() }
                 }
             if upstreamReferences == nil { upstreamReferenceHover.hide() }
             updateTrackingAreas()
         }
+    }
+
+    /// Marks every reference-chip attachment range as attribute-edited.
+    /// Under TextKit 2 (used for transcript paragraphs), `needsDisplay =
+    /// true` alone does not cause an `NSTextAttachment`'s lazy drawing
+    /// handler to re-run once a lookup lands; only re-marking the storage
+    /// does. The composer uses TextKit 1, where `needsDisplay` is enough,
+    /// so it does not need this.
+    private func invalidateUpstreamReferenceChips() {
+        guard let textStorage, textStorage.length > 0 else { return }
+        let full = NSRange(location: 0, length: textStorage.length)
+        textStorage.beginEditing()
+        textStorage.enumerateAttribute(.upstreamReference, in: full) { value, range, _ in
+            guard value != nil else { return }
+            textStorage.edited(.editedAttributes, range: range, changeInLength: 0)
+        }
+        textStorage.endEditing()
+        needsDisplay = true
     }
 
     override func updateTrackingAreas() {
