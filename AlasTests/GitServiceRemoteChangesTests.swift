@@ -432,28 +432,23 @@ struct GitServiceRemoteChangesTests {
     /// section ever appears, and `sliceDiffForFile` finds nothing to return
     /// for it — indistinguishable from a genuinely empty diff unless this is
     /// treated as a failure instead.
+    ///
+    /// The cap is soft: `gitCapped` stops git only after a whole pipe read
+    /// arrives. aaa.txt's section must therefore be larger than one read
+    /// (64 KB on macOS), or the entire diff, zzz.txt's section included, is
+    /// captured in one read and correctly returned. See
+    /// `copySourceFixture` for the sizes.
     @Test func diffAgainstRef_throwsWhenACopySourceSectionAloneExceedsTheOutputCap() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let original = (1 ... 100).map { "line\($0)\n" }.joined()
-        try original.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
+        let fixture = Self.copySourceFixture()
+        try fixture.original.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "aaa.txt"], cwd: repo)
         _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
         _ = try await Process.git(["branch", "start"], cwd: repo)
 
-        // Append enough new content to aaa.txt that its OWN diff section
-        // (measured at ~611 bytes for this exact fixture) exceeds the
-        // test's small cap below, while staying similar enough to its prior
-        // version for git's default (no --find-copies-harder) copy
-        // detection to still recognize zzz.txt as a copy of it — appending
-        // materially more than 10 lines here drops the similarity score
-        // below git's 50% threshold and the fixture stops producing a copy
-        // at all, defeating the point of the test.
-        let appended = original + (1 ... 10).map { "appended-line-\($0)-with-enough-padding-to-add-up\n" }.joined()
-        try appended.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
-        // zzz.txt: a copy of the now-appended aaa.txt, sorting AFTER it, with
-        // one more line so it's a distinct file highly similar to its source.
-        try (appended + "zzz-marker\n").write(to: repo.appendingPathComponent("zzz.txt"), atomically: true, encoding: .utf8)
+        try fixture.modified.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
+        try fixture.copy.write(to: repo.appendingPathComponent("zzz.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "-A"], cwd: repo)
         _ = try await Process.git(["commit", "-m", "copy with modification"], cwd: repo)
 
@@ -466,7 +461,7 @@ struct GitServiceRemoteChangesTests {
 
         await #expect(throws: (any Error).self) {
             _ = try await GitService().diff(
-                worktreePath: repo, againstRef: "start", file: "zzz.txt", maxOutputBytes: 300)
+                worktreePath: repo, againstRef: "start", file: "zzz.txt", maxOutputBytes: 1000)
         }
     }
 
@@ -759,14 +754,13 @@ struct GitServiceRemoteChangesTests {
     @Test func remoteDiff_throwsWhenAStagedCopySourceSectionAloneExceedsTheOutputCap() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let original = (1 ... 100).map { "line\($0)\n" }.joined()
-        try original.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
+        let fixture = Self.copySourceFixture()
+        try fixture.original.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "aaa.txt"], cwd: repo)
         _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
 
-        let appended = original + (1 ... 10).map { "appended-line-\($0)-with-enough-padding-to-add-up\n" }.joined()
-        try appended.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
-        try (appended + "zzz-marker\n").write(to: repo.appendingPathComponent("zzz.txt"), atomically: true, encoding: .utf8)
+        try fixture.modified.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
+        try fixture.copy.write(to: repo.appendingPathComponent("zzz.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "-A"], cwd: repo)
 
         await #expect(throws: (any Error).self) {
@@ -775,9 +769,24 @@ struct GitServiceRemoteChangesTests {
                 file: "zzz.txt",
                 staged: true,
                 originalPath: "aaa.txt",
-                maxOutputBytes: 300
+                maxOutputBytes: 1000
             )
         }
+    }
+
+    /// aaa.txt has 20,000 lines, and the modified version rewrites the first
+    /// 4,000. That keeps zzz.txt (the modified text plus one line) about 73%
+    /// similar to aaa.txt, above git's 50% copy threshold, while aaa.txt's
+    /// own diff section is about 158 KB. That is more than twice the 64 KB
+    /// pipe read, so a 1,000-byte cap always stops git before zzz.txt's
+    /// section is captured.
+    private static func copySourceFixture() -> (original: String, modified: String, copy: String) {
+        let lines = (1 ... 20000).map { "base-line-\($0)" }
+        let original = lines.map { $0 + "\n" }.joined()
+        let modified = lines.enumerated().map { index, line in
+            (index < 4000 ? "changed-" + line : line) + "\n"
+        }.joined()
+        return (original, modified, modified + "zzz-marker\n")
     }
 
     /// A file declared binary purely via `.gitattributes` (content that
