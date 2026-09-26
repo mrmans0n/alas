@@ -70,7 +70,7 @@ struct NextPromptInferenceTests {
         let first = Task { try await inference.generate(request) }
         await entered.wait()
         clock.advance(.seconds(15))
-        #expect(await inference.state == .running)
+        try await eventually { await inference.state == .unloading }
         #expect(!fixture.canLockExclusively())
         await finish.open()
         #expect(try await first.value == nil)
@@ -113,6 +113,26 @@ struct NextPromptInferenceTests {
         #expect(try await first.value == nil)
         #expect(await inference.state == .ready)
         #expect(fixture.canLockExclusively())
+    }
+
+    @Test func retryVerifiesModelAvailabilityBeforeClearingFailure() async throws {
+        let fixture = try LeaseFixture()
+        let acquisitions = Mutex(0)
+        let inference = NextPromptInference(acquireLease: {
+            let attempt = acquisitions.withLock {
+                $0 += 1
+                return $0
+            }
+            if attempt == 1 { return try fixture.acquire() }
+            throw POSIXError(.ENOENT)
+        }, load: { _ in throw POSIXError(.ENOMEM) })
+        _ = try await inference.generate(request)
+        #expect(await inference.state == .failed)
+
+        await inference.retryAfterFailure()
+
+        #expect(await inference.state == .failed)
+        #expect(acquisitions.withLock { $0 } == 2)
     }
 
     @Test func invalidOutputConsumesOnlyItsTurn() async throws {
@@ -174,12 +194,80 @@ struct NextPromptInferenceTests {
         let task = Task { try await inference.generate(request) }
         await entered.wait()
         task.cancel()
-        #expect(await inference.state == .running)
+        do { try await eventually { await inference.state == .unloading } }
+        catch {
+            await finish.open()
+            _ = try await task.value
+            throw error
+        }
         #expect(!fixture.canLockExclusively())
         await finish.open()
         #expect(try await task.value == nil)
         try await eventually { await inference.state == .ready }
         #expect(fixture.canLockExclusively())
+    }
+
+    @Test func replacedRequestCannotPublishTerminalStateWhileReplacementRuns() async throws {
+        let fixture = try LeaseFixture()
+        let starts = [Gate(), Gate()]
+        let finishes = [Gate(), Gate()]
+        let calls = Mutex(0)
+        let inference = NextPromptInference(acquireLease: { try fixture.acquire() }, load: { _ in
+            return { _ in
+                let index = calls.withLock {
+                    let index = $0
+                    $0 += 1
+                    return index
+                }
+                await starts[index].open()
+                await finishes[index].wait()
+                return #"{"suggestion":"Show an example."}"#
+            }
+        })
+        let first = Task { try await inference.generate(request) }
+        await starts[0].wait()
+        let replacement = Task { try await inference.generate(request) }
+        await finishes[0].open()
+        await starts[1].wait()
+
+        #expect(try await first.value == nil)
+        #expect(await inference.state == .running)
+        await finishes[1].open()
+        #expect(try await replacement.value == "Show an example.")
+        await inference.cancelAndUnload()
+    }
+
+    @Test func cancelAndUnloadCannotPublishTerminalStateWhileReplacementRuns() async throws {
+        let fixture = try LeaseFixture()
+        let starts = [Gate(), Gate()]
+        let finishes = [Gate(), Gate()]
+        let calls = Mutex(0)
+        let inference = NextPromptInference(acquireLease: { try fixture.acquire() }, load: { _ in
+            return { _ in
+                let index = calls.withLock {
+                    let index = $0
+                    $0 += 1
+                    return index
+                }
+                await starts[index].open()
+                await finishes[index].wait()
+                return #"{"suggestion":"Show an example."}"#
+            }
+        })
+        let first = Task { try await inference.generate(request) }
+        await starts[0].wait()
+        let stop = Task { await inference.cancelAndUnload() }
+        try await eventually { await inference.state == .unloading }
+        let replacement = Task { try await inference.generate(request) }
+        await finishes[0].open()
+        await starts[1].wait()
+
+        await stop.value
+        #expect(try await first.value == nil)
+        #expect(await inference.state == .running)
+        await finishes[1].open()
+        #expect(try await replacement.value == "Show an example.")
+        await inference.cancelAndUnload()
     }
 
     @Test func containerIsReleasedBeforeLeaseOnUnloadAndOwnerDeinit() async throws {

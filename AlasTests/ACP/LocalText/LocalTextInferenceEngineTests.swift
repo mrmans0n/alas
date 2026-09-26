@@ -82,19 +82,31 @@ struct LocalTextInferenceEngineTests {
         #expect(probe.leaseIsClosed)
     }
 
+    @Test func callerCancellationAfterCompletionReleasesLeaseBeforeReturning() async throws {
+        let probe = try LocalTextEngineProbe()
+        let engine = probe.engine()
+        let task = Task {
+            try await engine.generate(request, caller: .nextPrompt, priority: .automatic)
+        }
+        await probe.waitUntilEvaluationStarts(0)
+
+        task.cancel()
+        probe.finishEvaluation(0, with: "completed")
+
+        await #expect(throws: LocalTextInferenceFailure.cancelled) { try await task.value }
+        #expect(probe.leaseIsClosed)
+    }
+
     @Test func selectsFirstCandidateWithinTokenLimit() async throws {
         let fixture = try EngineLeaseFixture()
         let engine = LocalTextInferenceEngine(
             acquireLease: { try fixture.acquire() },
             load: { _ in
                 { request in
-                    let counts = request.messageCandidates.map { Int($0[0].content)! }
-                    guard let index = counts.firstIndex(where: { $0 <= request.inputTokenLimit }) else {
-                        throw LocalTextInferenceFailure.inputTooLarge
-                    }
-                    return .init(text: "selected", selectedCandidateIndex: index)
+                    .init(text: request.messageCandidates[0][0].content, selectedCandidateIndex: 0)
                 }
             },
+            tokenCount: { Int($0[0].content)! },
             supported: { true }
         )
         let result = try await engine.generate(
@@ -105,6 +117,7 @@ struct LocalTextInferenceEngineTests {
             priority: .automatic
         )
         #expect(result.selectedCandidateIndex == 1)
+        #expect(result.text == "7000")
         await engine.cancelAndUnload()
     }
 
