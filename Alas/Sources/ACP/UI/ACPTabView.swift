@@ -212,10 +212,11 @@ private struct ACPSessionView: View {
                     state: state,
                     worktree: worktree,
                     sessionSummaryCoordinator: state.sessionSummaryCoordinator,
-                    sessionSummariesEnabled: state.sessionSummariesRuntimeEnabled,
+                    sessionSummariesRequested: state.config.sessionSummariesEnabled
+                        && !state.sessionSummaryDisableSavePending,
+                    sessionSummariesRuntimeEnabled: state.sessionSummariesRuntimeEnabled,
                     localTextSupported: state.localTextSupported,
                     localTextModelState: state.localTextModelState,
-                    sessionSummaryIdle: sessionSummaryIdle,
                     owner: owner,
                     onOpenPreview: onOpenPreview
                 )
@@ -295,10 +296,6 @@ private struct ACPSessionView: View {
         if session.lastError != nil { return false }
         if session.agentState == .disconnected { return false }
         return session.transcript.messages.isEmpty
-    }
-
-    private var sessionSummaryIdle: Bool {
-        SessionSummaryContext.snapshot(session: session)?.revision.idleFacts.isIdle == true
     }
 
     private var firstRunConnectingPhase: ACPFirstRunConnectingPhase? {

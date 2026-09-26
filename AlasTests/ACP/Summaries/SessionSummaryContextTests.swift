@@ -188,6 +188,18 @@ import Testing
         #expect(SessionSummaryContext.snapshot(session: oversized) == nil)
     }
 
+    @Test func currentIdleFactsReadTheSeparateComposerWithoutBuildingContext() {
+        let session = makeSession(messages: [])
+        session.agentState = .ready
+
+        #expect(SessionSummaryContext.snapshot(session: session) == nil)
+        #expect(SessionSummaryIdleFacts.current(session: session, composer: session.composer).isIdle)
+
+        session.composer.replaceDraft(.init(segments: [.text("draft")]))
+
+        #expect(!SessionSummaryIdleFacts.current(session: session, composer: session.composer).isIdle)
+    }
+
     private func makeSession(messages: [ACPMessage]) -> ACPSession {
         let session = ACPSession(id: "summary-test", agentId: "codex", worktreeId: "worktree", title: "Test")
         for message in messages { session.transcript.appendMessage(message) }

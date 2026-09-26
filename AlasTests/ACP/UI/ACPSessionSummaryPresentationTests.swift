@@ -5,14 +5,16 @@ import Testing
 struct ACPSessionSummaryPresentationTests {
     @Test func hiddenWhenDisabledOrUnsupported() {
         #expect(!ACPSessionSummaryPresentation(
-            enabled: false,
+            requested: false,
+            runtimeEnabled: false,
             supported: true,
             model: .ready,
             idle: true,
             phase: .idle
         ).isVisible)
         #expect(!ACPSessionSummaryPresentation(
-            enabled: true,
+            requested: true,
+            runtimeEnabled: true,
             supported: false,
             model: .ready,
             idle: true,
@@ -22,7 +24,8 @@ struct ACPSessionSummaryPresentationTests {
 
     @Test func visibleButDisabledWhileModelUnavailableOrSessionBusy() {
         let unavailable = ACPSessionSummaryPresentation(
-            enabled: true,
+            requested: true,
+            runtimeEnabled: false,
             supported: true,
             model: .notInstalled,
             idle: true,
@@ -33,7 +36,8 @@ struct ACPSessionSummaryPresentationTests {
         #expect(unavailable.help == "Install the on-device model in Settings to summarize this session.")
 
         let busy = ACPSessionSummaryPresentation(
-            enabled: true,
+            requested: true,
+            runtimeEnabled: true,
             supported: true,
             model: .ready,
             idle: false,
@@ -42,6 +46,21 @@ struct ACPSessionSummaryPresentationTests {
         #expect(busy.isVisible)
         #expect(!busy.isEnabled)
         #expect(busy.help == "Wait until the session is idle to summarize it.")
+    }
+
+    @Test func requestedCapabilityStaysVisibleWhileRuntimeAndModelAreNotReady() {
+        let presentation = ACPSessionSummaryPresentation(
+            requested: true,
+            runtimeEnabled: false,
+            supported: true,
+            model: .downloading(received: 50, expected: 100),
+            idle: true,
+            phase: .idle
+        )
+
+        #expect(presentation.isVisible)
+        #expect(!presentation.isEnabled)
+        #expect(presentation.help == "The on-device model is downloading.")
     }
 
     @Test func loadingResultFirstFailureAndRefreshFailureMapToDistinctAccessibleStatus() {
@@ -97,7 +116,8 @@ struct ACPSessionSummaryPresentationTests {
         phase: SessionSummaryCoordinator.Phase
     ) -> ACPSessionSummaryPresentation {
         ACPSessionSummaryPresentation(
-            enabled: true,
+            requested: true,
+            runtimeEnabled: true,
             supported: true,
             model: .ready,
             idle: true,

@@ -25,7 +25,11 @@ struct ACPSessionSummaryPopover: View {
                         .foregroundStyle(theme.color("fg-muted"))
                 }
 
-                phaseContent
+                ScrollView {
+                    phaseContent
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 420)
             }
             .padding(12)
         }

@@ -2,11 +2,12 @@ import SwiftUI
 
 struct ACPSessionSummaryControl: View {
     @ObservedObject var coordinator: SessionSummaryCoordinator
-    let session: ACPSession
-    let enabled: Bool
+    @ObservedObject var session: ACPSession
+    @ObservedObject private var composer: ACPComposerState
+    let requested: Bool
+    let runtimeEnabled: Bool
     let supported: Bool
     let model: LocalTextModelState
-    let idle: Bool
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -15,9 +16,28 @@ struct ACPSessionSummaryControl: View {
 
     private var isLit: Bool { hovering || popoverOpen }
 
+    init(
+        coordinator: SessionSummaryCoordinator,
+        session: ACPSession,
+        requested: Bool,
+        runtimeEnabled: Bool,
+        supported: Bool,
+        model: LocalTextModelState
+    ) {
+        self.coordinator = coordinator
+        self.session = session
+        _composer = ObservedObject(wrappedValue: session.composer)
+        self.requested = requested
+        self.runtimeEnabled = runtimeEnabled
+        self.supported = supported
+        self.model = model
+    }
+
     var body: some View {
+        let idle = SessionSummaryIdleFacts.current(session: session, composer: composer).isIdle
         let presentation = ACPSessionSummaryPresentation(
-            enabled: enabled,
+            requested: requested,
+            runtimeEnabled: runtimeEnabled,
             supported: supported,
             model: model,
             idle: idle,

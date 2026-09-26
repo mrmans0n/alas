@@ -12,11 +12,12 @@ struct SessionSummaryContext: Equatable, Sendable {
 
     @MainActor
     static func snapshot(session: ACPSession) -> SessionSummaryContext? {
+        let revision = SessionSummarySourceRevision.current(session: session, composer: session.composer)
         let allTurns = completeTurns(in: session.transcript.messages)
         guard !allTurns.isEmpty else { return nil }
 
-        let goal = session.currentGoal
-        let currentPlan = session.transcript.currentPlan
+        let goal = revision.goal
+        let currentPlan = revision.plan
         let plan = currentPlan ?? []
         var lowerBound = 0
         var upperBound = allTurns.count
@@ -36,38 +37,8 @@ struct SessionSummaryContext: Equatable, Sendable {
         let firstTurn = lowerBound
         guard firstTurn < allTurns.count else { return nil }
 
-        let transcript = session.transcript
-        let idleFacts = SessionSummaryIdleFacts(
-            agentReady: session.agentState == .ready,
-            hydrationReady: session.hydrationState == .ready,
-            streamingIsIdle: transcript.streamingState == .idle,
-            composerIsEmpty: session.composerDraft.isEmpty,
-            queuedPromptCount: session.queue.count,
-            pendingQueuePersistenceCount: session.pendingQueuePersistenceCount,
-            pendingPermission: transcript.pendingPermission != nil,
-            pendingQuestion: transcript.pendingQuestion != nil,
-            pendingPlan: transcript.pendingPlan != nil,
-            pendingUserInputCount: transcript.pendingUserInputs.count,
-            urlElicitationCount: transcript.urlElicitationWaits.count,
-            pendingWorkCount: session.nextPromptWorkCount,
-            hasPendingDelegatedMessages: session.hasPendingDelegatedMessages,
-            hasRunningSubagent: session.subagents.values.contains(where: \.isRunning),
-            retrying: session.retryStatus != nil,
-            recovering: session.connectionRecoveryState != nil
-                || session.contextRestoreWarning != nil
-                || (session.contextRecoveryStatus != nil && session.contextRecoveryStatus != .restored)
-                || session.forkRecord?.phase == .negotiatingNative
-                || session.forkRecord?.contextDeliveryPending == true,
-            autoRunEnabled: session.autoRunEnabled
-        )
         return .init(
-            revision: .init(
-                incarnation: session.incarnation,
-                transcriptGeneration: transcript.messagesGeneration,
-                goal: goal,
-                plan: currentPlan,
-                idleFacts: idleFacts
-            ),
+            revision: revision,
             goal: goal,
             plan: plan,
             turns: Array(allTurns[firstTurn...]),

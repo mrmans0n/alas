@@ -89,6 +89,33 @@ struct SessionSummaryCoordinatorTests {
         #expect(await fixture.engine.requestCount == 1)
     }
 
+    @Test func unchangedBroadActivityPreservesCachedSummary() async {
+        let fixture = SummaryCoordinatorFixture()
+        await fixture.finishSummary()
+
+        fixture.session.nextPromptActivity.send()
+        await Task.yield()
+        await fixture.coordinator.summary(for: fixture.session)
+
+        #expect(fixture.coordinator.phase == .result(fixture.summary))
+        #expect(await fixture.engine.requestCount == 1)
+    }
+
+    @Test func changedBroadActivityInvalidatesCachedSummary() async {
+        let fixture = SummaryCoordinatorFixture()
+        await fixture.finishSummary()
+
+        fixture.session.transcript.appendMessage(.systemNotice(id: UUID(), text: "changed"))
+        await Task.yield()
+        let regenerated = fixture.start()
+        await fixture.engine.waitUntilRequested(count: 2)
+        await fixture.engine.complete(with: fixture.result)
+        await regenerated.value
+
+        #expect(fixture.coordinator.phase == .result(fixture.summary))
+        #expect(await fixture.engine.requestCount == 2)
+    }
+
     @Test func replacementIncarnationCannotReusePersistedSessionIDCache() async {
         let fixture = SummaryCoordinatorFixture()
         await fixture.finishSummary()

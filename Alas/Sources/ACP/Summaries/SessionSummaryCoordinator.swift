@@ -13,12 +13,19 @@ final class SessionSummaryCoordinator: ObservableObject {
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var presentationGeneration: UInt64 = 0
 
+    private struct CacheEntry {
+        let summary: SessionSummary
+        let revision: SessionSummarySourceRevision
+    }
+
     private let engine: any LocalTextGenerating
-    private var cache: [UUID: SessionSummary] = [:]
+    private var cache: [UUID: CacheEntry] = [:]
     private var generationTask: Task<Void, Never>?
     private var cancellationBarrier: Task<Void, Never>?
+    private var activityReconciliationTask: Task<Void, Never>?
     private var requestGeneration: UInt64 = 0
     private var currentIncarnation: UUID?
+    private var currentRevision: SessionSummarySourceRevision?
     private weak var boundSession: ACPSession?
     private var observations: Set<AnyCancellable> = []
 
@@ -28,6 +35,7 @@ final class SessionSummaryCoordinator: ObservableObject {
 
     deinit {
         generationTask?.cancel()
+        activityReconciliationTask?.cancel()
         guard let incarnation = currentIncarnation else { return }
         let engine = engine
         let previous = cancellationBarrier
@@ -51,7 +59,7 @@ final class SessionSummaryCoordinator: ObservableObject {
         session.nextPromptActivity
             .sink { [weak self, weak session] in
                 guard let self, let session, self.boundSession === session else { return }
-                self.invalidateForActivity(session)
+                self.handleActivity(session)
             }
             .store(in: &observations)
         session.nextPromptTeardown
@@ -89,6 +97,8 @@ final class SessionSummaryCoordinator: ObservableObject {
     func teardown() {
         requestGeneration &+= 1
         cancelCurrentGeneration()
+        activityReconciliationTask?.cancel()
+        activityReconciliationTask = nil
         observations.removeAll()
         boundSession = nil
         cache.removeAll()
@@ -102,14 +112,18 @@ final class SessionSummaryCoordinator: ObservableObject {
     ) -> Task<Void, Never>? {
         if boundSession !== session { bind(to: session) }
         if !bypassingCache, let cached = cache[session.incarnation] {
-            _ = publishPhase(.result(cached), generation: requestGeneration, session: session)
-            return nil
+            let revision = SessionSummarySourceRevision.current(session: session, composer: session.composer)
+            if cached.revision == revision {
+                _ = publishPhase(.result(cached.summary), generation: requestGeneration, session: session)
+                return nil
+            }
+            cache[session.incarnation] = nil
         }
 
         requestGeneration &+= 1
         cancelCurrentGeneration()
         let generation = requestGeneration
-        let previous = cache[session.incarnation]
+        let previous = cache[session.incarnation]?.summary
         guard let context = SessionSummaryContext.snapshot(session: session),
               context.revision.idleFacts.isIdle else {
             _ = publishPhase(
@@ -132,6 +146,7 @@ final class SessionSummaryCoordinator: ObservableObject {
         let barrier = cancellationBarrier
         let engine = engine
         currentIncarnation = incarnation
+        currentRevision = context.revision
         guard publishPhase(
             .loading,
             generation: generation,
@@ -203,7 +218,7 @@ final class SessionSummaryCoordinator: ObservableObject {
             return
         }
 
-        cache[session.incarnation] = summary
+        cache[session.incarnation] = .init(summary: summary, revision: context.revision)
         guard publishPhase(
             .result(summary),
             generation: generation,
@@ -268,18 +283,43 @@ final class SessionSummaryCoordinator: ObservableObject {
         guard requestGeneration == generation else { return }
         generationTask = nil
         currentIncarnation = nil
+        currentRevision = nil
     }
 
-    private func invalidateForActivity(_ session: ACPSession) {
+    private func handleActivity(_ session: ACPSession) {
+        let retainedRevision = currentRevision ?? cache[session.incarnation]?.revision
         requestGeneration &+= 1
         cancelCurrentGeneration()
-        cache[session.incarnation] = nil
         phase = .idle
         presentationGeneration &+= 1
+
+        activityReconciliationTask?.cancel()
+        activityReconciliationTask = Task { @MainActor [weak self, weak session] in
+            guard !Task.isCancelled, let self, let session, self.boundSession === session else { return }
+            self.reconcileCache(for: session, retainedRevision: retainedRevision)
+        }
+    }
+
+    private func reconcileCache(
+        for session: ACPSession,
+        retainedRevision: SessionSummarySourceRevision?
+    ) {
+        guard let retainedRevision,
+              let cached = cache[session.incarnation],
+              cached.revision == retainedRevision else { return }
+        let revision = SessionSummaryContext.snapshot(session: session)?.revision
+        if revision != cached.revision {
+            cache[session.incarnation] = nil
+        }
+        activityReconciliationTask = nil
     }
 
     private func endSession(_ session: ACPSession) {
-        invalidateForActivity(session)
+        cache[session.incarnation] = nil
+        requestGeneration &+= 1
+        cancelCurrentGeneration()
+        phase = .idle
+        presentationGeneration &+= 1
         observations.removeAll()
         boundSession = nil
     }
@@ -287,11 +327,13 @@ final class SessionSummaryCoordinator: ObservableObject {
     private func cancelCurrentGeneration() {
         guard let incarnation = currentIncarnation else {
             generationTask = nil
+            currentRevision = nil
             return
         }
         generationTask?.cancel()
         generationTask = nil
         currentIncarnation = nil
+        currentRevision = nil
         let previous = cancellationBarrier
         let engine = engine
         cancellationBarrier = Task {

@@ -7,10 +7,10 @@ struct ACPToolbar: View {
     let state: AppState
     let worktree: Worktree
     @ObservedObject var sessionSummaryCoordinator: SessionSummaryCoordinator
-    let sessionSummariesEnabled: Bool
+    let sessionSummariesRequested: Bool
+    let sessionSummariesRuntimeEnabled: Bool
     let localTextSupported: Bool
     let localTextModelState: LocalTextModelState
-    let sessionSummaryIdle: Bool
     var owner: SessionOwnerID? = nil
     var onOpenPreview: (() -> Void)? = nil
     @Environment(\.theme) private var theme
@@ -68,10 +68,10 @@ struct ACPToolbar: View {
             ACPSessionSummaryControl(
                 coordinator: sessionSummaryCoordinator,
                 session: session,
-                enabled: sessionSummariesEnabled,
+                requested: sessionSummariesRequested,
+                runtimeEnabled: sessionSummariesRuntimeEnabled,
                 supported: localTextSupported,
-                model: localTextModelState,
-                idle: sessionSummaryIdle
+                model: localTextModelState
             )
             Spacer(minLength: 0)
             if let onOpenPreview {
