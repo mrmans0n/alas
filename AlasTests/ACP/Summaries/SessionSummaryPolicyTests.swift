@@ -131,6 +131,8 @@ import Testing
         #"Execute "git clean -fdx""#,
         #"Execute the command "git clean -fdx""#,
         #"Proceed by running "rm -rf /""#,
+        #"Execute: "git clean -fdx""#,
+        #"Run this command: "rm -rf /""#,
         #"Run "git reset --hard""#,
         #"Execute "format the production disk""#,
         #""rm -rf /""#,
