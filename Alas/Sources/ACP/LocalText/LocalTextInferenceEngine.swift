@@ -9,7 +9,9 @@ import MLXLMCommon
 import Tokenizers
 
 actor LocalTextInferenceEngine: LocalTextGenerating {
-    typealias LoadedEvaluation = @Sendable (LocalTextGenerationRequest) async throws -> LocalTextGenerationResult
+    typealias Evaluation = @Sendable (
+        [[LocalTextMessage]], Int, GenerateParameters
+    ) async throws -> LocalTextGenerationResult
 
     struct Clock: Sendable {
         var now: @Sendable () -> ContinuousClock.Instant = { .now }
@@ -20,7 +22,7 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
 
     private struct LoadedModel: Sendable {
         let tokenCount: @Sendable ([LocalTextMessage]) async throws -> Int
-        let evaluate: LoadedEvaluation
+        let evaluate: Evaluation
     }
 
     private struct Job {
@@ -55,7 +57,7 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
     }
 
     init(acquireLease: @escaping @Sendable () async throws -> LocalTextModelLease,
-         load: @escaping @Sendable (URL) async throws -> LoadedEvaluation,
+         load: @escaping @Sendable (URL) async throws -> Evaluation,
          tokenCount: @escaping @Sendable ([LocalTextMessage]) async throws -> Int = { _ in 0 },
          supported: @escaping @Sendable () -> Bool = { true },
          clock: Clock = Clock(), observeMemoryPressure: Bool = true) {
@@ -173,7 +175,16 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
             let (selectedRequest, selectedCandidateIndex) = try await fittedRequest(
                 request, tokenCount: evaluation.tokenCount
             )
-            let worker = Task.detached { try await evaluation.evaluate(selectedRequest) }
+            let parameters = GenerateParameters(
+                maxTokens: selectedRequest.maxTokens,
+                temperature: selectedRequest.temperature,
+                prefillStepSize: selectedRequest.prefillStepSize
+            )
+            let worker = Task.detached {
+                try await evaluation.evaluate(
+                    selectedRequest.messageCandidates, selectedRequest.inputTokenLimit, parameters
+                )
+            }
             let result = try await withTaskCancellationHandler {
                 do { return try await worker.value }
                 catch {
@@ -317,24 +328,26 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
                     return try context.tokenizer.applyChatTemplate(messages: native).count
                 }
             },
-            evaluate: { request in
-                let parameters = GenerateParameters(
-                    maxTokens: request.maxTokens,
-                    temperature: request.temperature,
-                    prefillStepSize: request.prefillStepSize
-                )
+            evaluate: { candidates, inputTokenLimit, parameters in
                 return try await container.perform { context in
                     defer { MLX.Stream().synchronize() }
                     try Task.checkCancellation()
-                    guard let messages = request.messageCandidates.first else {
-                        throw LocalTextInferenceFailure.inputTooLarge
+                    var selected: (Int, [MLXLMCommon.Message])?
+                    for (index, messages) in candidates.enumerated() {
+                        let native: [MLXLMCommon.Message] = messages.map {
+                            ["role": $0.role.rawValue, "content": $0.content]
+                        }
+                        if try context.tokenizer.applyChatTemplate(messages: native).count <= inputTokenLimit {
+                            selected = (index, native)
+                            break
+                        }
                     }
-                    let native: [MLXLMCommon.Message] = messages.map {
-                        ["role": $0.role.rawValue, "content": $0.content]
+                    guard let (selectedCandidateIndex, native) = selected else {
+                        throw LocalTextInferenceFailure.inputTooLarge
                     }
                     let input = try await context.processor.prepare(input: UserInput(prompt: .messages(native)))
                     try Task.checkCancellation()
-                    guard input.text.tokens.size <= request.inputTokenLimit else {
+                    guard input.text.tokens.size <= inputTokenLimit else {
                         throw LocalTextInferenceFailure.inputTooLarge
                     }
                     var remaining = input.text
@@ -371,18 +384,18 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
                             await worker.value
                             try Task.checkCancellation()
                             guard let completion, case .stop = completion.stopReason else {
-                                return .init(text: "", selectedCandidateIndex: 0)
+                                return .init(text: "", selectedCandidateIndex: selectedCandidateIndex)
                             }
                             let text = context.tokenizer.decode(tokenIds: tokens, skipSpecialTokens: false)
                             guard !text.contains("<tool_call>"), !text.contains("</tool_call>") else {
-                                return .init(text: "", selectedCandidateIndex: 0)
+                                return .init(text: "", selectedCandidateIndex: selectedCandidateIndex)
                             }
-                            return .init(text: text, selectedCandidateIndex: 0)
+                            return .init(text: text, selectedCandidateIndex: selectedCandidateIndex)
                         } catch {
                             worker.cancel()
                             await worker.value
                             if error is IncompleteOutput {
-                                return .init(text: "", selectedCandidateIndex: 0)
+                                return .init(text: "", selectedCandidateIndex: selectedCandidateIndex)
                             }
                             throw error
                         }

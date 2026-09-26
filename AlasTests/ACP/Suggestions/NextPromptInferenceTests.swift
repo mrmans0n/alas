@@ -207,6 +207,75 @@ struct NextPromptInferenceTests {
         #expect(fixture.canLockExclusively())
     }
 
+    @Test func delayedCancellationCallbackCannotOverwriteTerminalState() async throws {
+        let fixture = try LeaseFixture()
+        let entered = Gate(), finish = Gate()
+        let callback = Mutex<(@Sendable () async -> Void)?>(nil)
+        let inference = NextPromptInference(
+            acquireLease: { try fixture.acquire() },
+            load: { _ in
+                return { _ in
+                    await entered.open()
+                    await finish.wait()
+                    return #"{"suggestion":"Late candidate."}"#
+                }
+            },
+            scheduleCancellation: { action in callback.withLock { $0 = action } }
+        )
+        let task = Task { try await inference.generate(request) }
+        await entered.wait()
+
+        task.cancel()
+        try await eventually { callback.withLock { $0 != nil } }
+        await finish.open()
+        #expect(try await task.value == nil)
+        #expect(await inference.state == .ready)
+
+        let delayed = callback.withLock { action in
+            defer { action = nil }
+            return action
+        }
+        await delayed?()
+        #expect(await inference.state == .ready)
+        #expect(fixture.canLockExclusively())
+    }
+
+    @Test func rejectedReplacementCancelsBlockedRequestAndSuppressesItsResult() async throws {
+        let fixture = try LeaseFixture()
+        let entered = Gate(), finish = Gate()
+        let cancelled = Mutex(false)
+        let inference = NextPromptInference(acquireLease: { try fixture.acquire() }, load: { _ in
+            return { _ in
+                await entered.open()
+                return await withTaskCancellationHandler {
+                    await finish.wait()
+                    return #"{"suggestion":"Stale candidate."}"#
+                } onCancel: {
+                    cancelled.withLock { $0 = true }
+                }
+            }
+        })
+        let first = Task { try await inference.generate(request) }
+        await entered.wait()
+
+        let replacement = Task { try await inference.generate(rejectedRequest) }
+        do {
+            try await eventually { cancelled.withLock { $0 } }
+        } catch {
+            await finish.open()
+            _ = try await first.value
+            _ = try await replacement.value
+            throw error
+        }
+        #expect(await inference.state == .unloading)
+        await finish.open()
+
+        #expect(try await first.value == nil)
+        #expect(try await replacement.value == nil)
+        #expect(await inference.state == .ready)
+        #expect(fixture.canLockExclusively())
+    }
+
     @Test func replacedRequestCannotPublishTerminalStateWhileReplacementRuns() async throws {
         let fixture = try LeaseFixture()
         let starts = [Gate(), Gate()]
@@ -310,6 +379,12 @@ struct NextPromptInferenceTests {
         .init(id: .init(sessionID: "test", incarnation: UUID(), promptID: 1, transcriptRevision: 1,
                         draftRevision: 0, composerEpoch: 0, settingsGeneration: 0, modelGeneration: 0),
               turns: [.init(user: "Explain binary search.", assistant: "It halves a sorted list.")])
+    }
+
+    private var rejectedRequest: NextPromptRequest {
+        .init(id: .init(sessionID: "test", incarnation: UUID(), promptID: 2, transcriptRevision: 2,
+                        draftRevision: 0, composerEpoch: 0, settingsGeneration: 0, modelGeneration: 0),
+              turns: [])
     }
 }
 

@@ -18,13 +18,16 @@ enum NextPromptInferenceState: Equatable, Sendable {
 actor NextPromptInference: NextPromptRuntime {
     typealias Evaluation = @Sendable (LocalTextGenerationRequest) async throws -> String?
     typealias Clock = LocalTextInferenceEngine.Clock
+    typealias CancellationScheduler = @Sendable (@escaping @Sendable () async -> Void) -> Void
 
     private(set) var state: NextPromptInferenceState = .ready
     private let engine: any LocalTextGenerating
     private let supported: @Sendable () -> Bool
     private let verifyAvailability: @Sendable () async throws -> Void
     private let clock: Clock
+    private let scheduleCancellation: CancellationScheduler
     private var generation: UInt64 = 0
+    private var activeRequestID: UInt64?
     private var failures = 0
     private var observers: [UUID: AsyncStream<NextPromptInferenceState>.Continuation] = [:]
 
@@ -38,27 +41,39 @@ actor NextPromptInference: NextPromptRuntime {
             lease.close()
         }
         clock = Clock()
+        scheduleCancellation = { action in _ = Task { await action() } }
     }
 
     init(engine: any LocalTextGenerating,
          supported: @escaping @Sendable () -> Bool = { true },
          verifyAvailability: @escaping @Sendable () async throws -> Void,
-         clock: Clock = Clock()) {
+         clock: Clock = Clock(),
+         scheduleCancellation: @escaping CancellationScheduler = { action in _ = Task { await action() } }) {
         self.engine = engine
         self.supported = supported
         self.verifyAvailability = verifyAvailability
         self.clock = clock
+        self.scheduleCancellation = scheduleCancellation
     }
 
     init(acquireLease: @escaping @Sendable () async throws -> LocalTextModelLease,
          load: @escaping @Sendable (URL) async throws -> Evaluation,
-         supported: @escaping @Sendable () -> Bool = { true }, clock: Clock = Clock()) {
+         supported: @escaping @Sendable () -> Bool = { true }, clock: Clock = Clock(),
+         scheduleCancellation: @escaping CancellationScheduler = { action in _ = Task { await action() } }) {
         engine = LocalTextInferenceEngine(
             acquireLease: acquireLease,
             load: { directory in
                 let evaluation = try await load(directory)
-                return { request in
-                    .init(text: try await evaluation(request) ?? "", selectedCandidateIndex: 0)
+                return { candidates, inputTokenLimit, parameters in
+                    let request = LocalTextGenerationRequest(
+                        messageCandidates: candidates,
+                        inputTokenLimit: inputTokenLimit,
+                        maxTokens: parameters.maxTokens ?? 0,
+                        temperature: parameters.temperature,
+                        prefillStepSize: parameters.prefillStepSize,
+                        timeout: .seconds(15)
+                    )
+                    return .init(text: try await evaluation(request) ?? "", selectedCandidateIndex: 0)
                 }
             },
             supported: supported,
@@ -71,6 +86,7 @@ actor NextPromptInference: NextPromptRuntime {
             lease.close()
         }
         self.clock = clock
+        self.scheduleCancellation = scheduleCancellation
     }
 
     deinit {
@@ -89,20 +105,25 @@ actor NextPromptInference: NextPromptRuntime {
     }
 
     func generate(_ request: NextPromptRequest) async throws -> String? {
-        guard failures < 2 else { return nil }
+        generation &+= 1
+        let id = generation
+        activeRequestID = nil
+        guard failures < 2 else {
+            await abstain(id: id, state: restingState)
+            return nil
+        }
         guard supported() else {
-            publish(.unavailable)
+            await abstain(id: id, state: .unavailable)
             return nil
         }
         guard request.turns.reduce(0, { $0 + $1.user.utf8.count + $1.assistant.utf8.count })
                 <= NextPromptContext.sourceLimit,
               NextPromptPolicy.permitsInput(request.turns) else {
-            publish(.ready)
+            await abstain(id: id, state: restingState)
             return nil
         }
 
-        generation &+= 1
-        let id = generation
+        activeRequestID = id
         let deadline = clock.now().advanced(by: .seconds(15))
         publish(.running)
         let deadlineTask = Task { [weak self, clock] in
@@ -118,10 +139,10 @@ actor NextPromptInference: NextPromptRuntime {
                     generationRequest(for: request), caller: .nextPrompt, priority: .automatic
                 )
             } onCancel: {
-                Task { await self.beginUnloading(id) }
+                scheduleCancellation { await self.beginUnloading(id) }
             }
             deadlineTask.cancel()
-            guard generation == id else { return nil }
+            guard finishRequest(id) else { return nil }
             try Task.checkCancellation()
             failures = 0
             publish(.ready)
@@ -130,7 +151,7 @@ actor NextPromptInference: NextPromptRuntime {
             return candidate
         } catch let failure as LocalTextInferenceFailure {
             deadlineTask.cancel()
-            guard generation == id else { return nil }
+            guard finishRequest(id) else { return nil }
             switch failure {
             case .unsupported:
                 publish(.unavailable)
@@ -143,12 +164,12 @@ actor NextPromptInference: NextPromptRuntime {
             return nil
         } catch is CancellationError {
             deadlineTask.cancel()
-            guard generation == id else { return nil }
+            guard finishRequest(id) else { return nil }
             publish(restingState)
             return nil
         } catch {
             deadlineTask.cancel()
-            guard generation == id else { return nil }
+            guard finishRequest(id) else { return nil }
             failures += 1
             publish(restingState)
             return nil
@@ -158,6 +179,7 @@ actor NextPromptInference: NextPromptRuntime {
     func cancelAndUnload() async {
         generation &+= 1
         let id = generation
+        activeRequestID = nil
         publish(.unloading)
         await engine.cancelAndUnload()
         guard generation == id else { return }
@@ -167,6 +189,7 @@ actor NextPromptInference: NextPromptRuntime {
     func retryAfterFailure() async {
         generation &+= 1
         let id = generation
+        activeRequestID = nil
         publish(.unloading)
         await engine.cancelAndUnload()
         guard generation == id else { return }
@@ -207,8 +230,21 @@ actor NextPromptInference: NextPromptRuntime {
     private func removeObserver(_ id: UUID) { observers[id] = nil }
 
     private func beginUnloading(_ id: UInt64) {
-        guard generation == id else { return }
+        guard generation == id, activeRequestID == id else { return }
         publish(.unloading)
+    }
+
+    private func finishRequest(_ id: UInt64) -> Bool {
+        guard generation == id, activeRequestID == id else { return false }
+        activeRequestID = nil
+        return true
+    }
+
+    private func abstain(id: UInt64, state: NextPromptInferenceState) async {
+        publish(.unloading)
+        await engine.cancel(caller: .nextPrompt)
+        guard generation == id else { return }
+        publish(state)
     }
 
     private func publish(_ value: NextPromptInferenceState) {
