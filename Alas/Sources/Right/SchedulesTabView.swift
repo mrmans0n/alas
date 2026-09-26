@@ -1,5 +1,16 @@
 import SwiftUI
 
+struct ScheduledAgentReportSummaryRefresh {
+    static func apply(
+        _ report: ScheduledAgentReport,
+        to summaries: inout [String: ScheduledAgentReport]
+    ) -> Bool {
+        guard summaries[report.id] != report else { return false }
+        summaries[report.id] = report
+        return true
+    }
+}
+
 /// Schedules relevant to one worktree: the ones aimed at it, plus, on the
 /// project's main worktree, every schedule for the project. Rows carry live
 /// state (last outcome, next fire, running) and the header owns pausing and
@@ -592,8 +603,7 @@ private struct ScheduleCard: View {
             guard !Task.isCancelled else { return }
             do {
                 if let report = try await state.scheduledAgentReport(id: id) {
-                    if summaries[id]?.id != report.id {
-                        summaries[id] = report
+                    if ScheduledAgentReportSummaryRefresh.apply(report, to: &summaries) {
                         changed = true
                     }
                 } else if summaries[id] != nil {

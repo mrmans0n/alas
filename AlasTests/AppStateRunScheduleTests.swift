@@ -606,6 +606,37 @@ struct AppStateRunScheduleTests {
         })
     }
 
+    @Test func recordedEligibilityFailureNotifiesTheUser() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let posted = NotificationBox()
+        fixture.state.harness.notifications.notificationAdder = { posted.append($0) }
+
+        let result = await fixture.state.runSchedule(schedule(
+            target: .project(id: fixture.project.id),
+            composition: RunScheduleComposition(
+                agentId: "term-agent",
+                prompt: "Run the scheduled task.",
+                afterExecution: .reportAndCleanupOnSuccess
+            )
+        ))
+
+        guard case .launchFailed(let reason) = result.outcome else {
+            Issue.record("Expected an ineligible saved agent to fail, got \(result.outcome)")
+            return
+        }
+        let reportID = try #require(result.reportIDs.first)
+        let report = try #require(try await fixture.state.scheduledAgentReport(id: reportID))
+        #expect(report.taskState == .needsAttention)
+        #expect(fixture.state.inAppNotifications.notifications(in: fixture.worktree.id).contains {
+            $0.severity == .error && $0.message.contains(reason)
+        })
+        #expect(posted.values.contains {
+            $0.content.title.contains("Nightly")
+                && $0.content.body.contains(reason)
+        })
+    }
+
     @Test func reportCompletionRetryKeepsItsOwnerUntilPersistenceRecovers() async throws {
         struct FinalizationFailure: Error {}
         let fixture = try makeFixture()

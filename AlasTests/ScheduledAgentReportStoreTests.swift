@@ -375,6 +375,21 @@ struct ScheduledAgentReportStoreTests {
         #expect(refreshed.hasMore)
     }
 
+    @Test func historySummaryRefreshReplacesUpdatedReportWithSameID() {
+        let running = report(id: "history-report")
+        var settled = running
+        settled.taskState = .succeeded
+        settled.finishedAt = epoch.addingTimeInterval(12)
+        var summaries = [running.id: running]
+
+        let didRefresh = ScheduledAgentReportSummaryRefresh.apply(settled, to: &summaries)
+
+        #expect(didRefresh)
+        #expect(summaries[running.id] == settled)
+        #expect(summaries[running.id]?.taskState == .succeeded)
+        #expect(!ScheduledAgentReportSummaryRefresh.apply(settled, to: &summaries))
+    }
+
     @Test func acceptedCompletionStaysRunningUntilThePromptSettlesAndRejectsDuplicates() async throws {
         let path = temporaryPath()
         defer { try? FileManager.default.removeItem(atPath: path) }
