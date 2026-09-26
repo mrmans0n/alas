@@ -24,6 +24,39 @@ struct ACPUpstreamReferenceStoreTests {
         #expect(none.remoteResolved)
     }
 
+    @Test("a failed remote resolution does not stick; the next call retries")
+    func resolveRemoteRetriesAfterFailure() async {
+        actor CallCount {
+            private(set) var count = 0
+            func increment() -> Int { count += 1; return count }
+        }
+        struct RemotesError: Error {}
+        let calls = CallCount()
+        let store = ACPUpstreamReferenceStore(
+            worktreeRoot: URL(fileURLWithPath: "/tmp/alas-retry"),
+            environment: .init(
+                remotes: { _ in
+                    let attempt = await calls.increment()
+                    if attempt == 1 { throw RemotesError() }
+                    return [GitRemote(name: "origin", url: "git@github.com:mrmans0n/alas.git")]
+                },
+                providers: .live(),
+                now: { Date() }
+            )
+        )
+
+        store.resolveRemote()
+        await store.waitForRemote()
+        #expect(store.remote == nil)
+        #expect(!store.remoteResolved)
+
+        store.resolveRemote()
+        await store.waitForRemote()
+        #expect(store.remote?.kind == .github)
+        #expect(store.remoteResolved)
+        #expect(await calls.count == 2)
+    }
+
     @Test("concurrent loads share one lookup and publish the loaded summary")
     func sharedLoad() async {
         let provider = StubReferenceProvider()

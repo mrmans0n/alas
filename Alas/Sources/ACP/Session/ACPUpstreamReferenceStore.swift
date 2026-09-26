@@ -60,21 +60,34 @@ final class ACPUpstreamReferenceStore: ObservableObject {
 
     var hostKind: CodeHostKind? { remote?.kind }
 
-    /// Idempotent. Only `git remote -v` runs here; CLI availability and auth
-    /// are checked lazily when a lookup fails.
+    /// Idempotent while a resolution is in flight. Only `git remote -v` runs
+    /// here; CLI availability and auth are checked lazily when a lookup
+    /// fails. A failed `git remote -v` (a locked repo, a transient error)
+    /// leaves `remote`/`remoteResolved` untouched and clears the in-flight
+    /// task, so the NEXT call retries instead of giving up for the store's
+    /// lifetime. A successful call that finds no supported host also clears
+    /// the task once done — `remote` stays `nil`, but `remoteResolved`
+    /// becomes `true` and a later call (e.g. `attachUpstreamReferences` on
+    /// each composer attach) re-runs the cheap `git remote -v` again, which
+    /// picks up a remote added after this worktree first opened.
     func resolveRemote() {
         guard remoteTask == nil else { return }
         let root = worktreeRoot
         let environment = environment
         remoteTask = Task { [weak self] in
-            let remotes = (try? await environment.remotes(root)) ?? []
-            let detected = CodeHostRemoteDetector.detect(
-                from: remotes,
-                supportedKinds: environment.providers.supportedKinds
-            )
-            guard let self else { return }
-            self.remote = detected
-            self.remoteResolved = true
+            do {
+                let remotes = try await environment.remotes(root)
+                let detected = CodeHostRemoteDetector.detect(
+                    from: remotes,
+                    supportedKinds: environment.providers.supportedKinds
+                )
+                guard let self else { return }
+                self.remote = detected
+                self.remoteResolved = true
+                self.remoteTask = nil
+            } catch {
+                self?.remoteTask = nil
+            }
         }
     }
 
