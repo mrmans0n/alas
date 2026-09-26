@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.12] - 2026-09-26
+
+### ✨ Features
+
+- Add on-device ACP session summaries and resume cards, backed by a shared local text model runtime (#1506).
+- Recognize GitHub and GitLab pull request, merge request, and issue references in the composer and transcript, with inline chips and previews (#1522).
+- Render ACP skills and slash commands as pills in the composer and transcript (#1474).
+- Notify parent sessions automatically when delegated children finish or fail (#1499).
+- Tell parent sessions when a delegated child blocks on a human decision (#1524).
+- Redesign the native peer sidebar to match the repository tree (#1493).
+
+### 🐛 Fixes
+
+- Preserve typed reference chips through editing, copy, paste, and undo (#1497, #1529).
+- Close deferred delegated-outcome gaps (#1507).
+- Remove the checkpoint staging tree after a completed restore (#1528).
+- Fix ACP composer sizing and a duplicate `insertText` override that broke the main build (#1494, #1496).
+- Compile memory-pressure cancellation under Swift 6.3 strict concurrency.
+
+### 🏗️ Internal
+
+- Replace timing sleeps with deterministic waits across the test suites (#1500, #1501, #1502, #1505, #1511, #1514, #1515, #1516, #1517, #1518, #1520, #1521).
+- Prune oversized suites, speed up Git-heavy suites, add test-growth reporting, and document the Swift test cost policy (#1503, #1504, #1510, #1512, #1519, #1530).
+- Add the Swift Testing expert skill and fix nightly macro validation (#1508, #1509).
+
 ## [0.19.11] - 2026-09-25
 
 ### ✨ Features
