@@ -40,7 +40,7 @@ Memory 60 seconds after unload: Blocked. No model was loaded or unloaded.
 | VoiceOver order and labels | Blocked | The automation environment does not expose VoiceOver speech or rotor order, and no safe disposable ACP session was configured. |
 | Escape cancels unfinished generation | Blocked | No native generation could be started. |
 | Reduce Motion | Blocked | No safe disposable ACP session was configured for an interactive presentation check. |
-| Toolbar is absent when disabled or unsupported | Blocked for manual UI | No isolated ACP session was configured. The focused `ACPSessionSummaryPresentationTests.hiddenWhenDisabledOrUnsupported` check passed as part of the 193-test run. |
+| Toolbar is absent when disabled or unsupported | Blocked for manual UI | No isolated ACP session was configured. The focused `ACPSessionSummaryPresentationTests.hiddenWhenDisabledOrUnsupported` check passed in the run with 193 test declarations and 309 expanded successful executions across 15 requested suites. |
 
 The existing application-support directory contains app configuration and an ACP session store. Those files were not read or reused because they may contain private data. `CFFIXED_USER_HOME` can isolate application support, but the isolated root has no configured ACP adapter, disposable session, or installed model.
 
@@ -60,7 +60,7 @@ Session summaries remain disabled by default. Native groundedness and memory acc
 
 - `xcodegen`: exit 0, no tracked generated changes.
 - `LocalTextModelManifest.json`: one resource build-file declaration and one Resources phase entry.
-- Affected focused tests: exit 0, 193 tests in 15 suites.
+- Affected focused tests: exit 0, 193 test declarations and 309 expanded executions, all successful, in 15 requested suites.
 - Debug arm64 build: exit 0.
 - Release arm64 build: exit 0.
 - Debug x86_64 build: exit 0.
