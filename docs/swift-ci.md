@@ -242,3 +242,26 @@ layout releases the builder before either test runner queues. Queue measurements
 whether repository demand, account limits, or hosted-runner supply caused a delay.
 Likewise, compare compiler hit/miss counters on source-changing commits rather
 than extrapolating from unchanged-revision cache replay.
+
+## Per-suite balancing
+
+Ordinary batches used to be filled round-robin by suite name, so adding or
+removing any suite reshuffled every later suite and the recorded invocation
+timings stopped matching. Estimates then fell back to an equal share of each
+invocation's time per suite, and the two runners drifted minutes apart.
+
+Each invocation report now records measured `suite_seconds`, summed from the
+result bundle's per-test durations. The coverage audit exports them in
+`timings.json` as `suites`, together with `invocation_overhead_seconds`, the
+median gap between an invocation's wall time and its tests. When the committed
+baseline has `suites`, planning fills the eight ordinary batches longest-first
+into the lightest batch, and invocations without an exact timing are estimated
+as the sum of their suites plus that overhead. A new suite weighs the median
+suite until measured. Without `suites` the planner keeps the previous
+round-robin behavior.
+
+Replaying run 36231832336's per-suite times against run 36252321940's
+inventory: round-robin planning left the runners 324s apart (all eight ordinary
+batches between 106s and 252s); per-suite planning leaves 88s, with every
+ordinary batch at 177s. Refresh `scripts/ci-swift-test-timings.json` from a
+green run's `swift-test-summary-<attempt>` artifact as before.
