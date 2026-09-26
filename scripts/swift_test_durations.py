@@ -5,9 +5,11 @@ Download a green run's test plan and both `swift-test-results-*` artifacts
 into a fresh directory used only for that run, then point this script at it:
 
     run=<run-id>
-    gh run download "$run" -n swift-test-plan-1 -D "/tmp/alas-run-$run/plan"
+    # Artifact names carry the attempt number; use the attempt that went green.
+    attempt=$(gh run view "$run" --json attempt --jq .attempt)
+    gh run download "$run" -n "swift-test-plan-$attempt" -D "/tmp/alas-run-$run/plan"
     for s in 1 2; do
-      gh run download "$run" -n swift-test-results-1-$s -D "/tmp/alas-run-$run/shard-$s"
+      gh run download "$run" -n "swift-test-results-$attempt-$s" -D "/tmp/alas-run-$run/shard-$s"
     done
     python3 scripts/swift_test_durations.py "/tmp/alas-run-$run" --tsv "/tmp/alas-run-$run/durations.tsv"
 
