@@ -601,7 +601,27 @@ struct ACPInputField: NSViewRepresentable {
             storage.setAttributedString(Self.attributedString(from: draft, typography: typography))
             ACPLeadingCommand.chipify(storage, suggestions: promptSuggestions, font: typography.appKitFont())
             if let store = upstreamReferences, let host = store.hostKind {
-                ACPUpstreamReferenceChip.chipify(storage, host: host, store: store)
+                // A restored draft has no real selection yet, so the "still
+                // being typed" caret-skip guard uses the end of the
+                // restored text instead — the last reference in a draft
+                // that was persisted mid-keystroke (e.g. "#12" of an
+                // intended "#123") stays plain text rather than chipping
+                // into something the user didn't finish typing. Shares the
+                // exact same match-finding as `chipUpstreamReferencesIfNeeded()`.
+                let end = (storage.string as NSString).length
+                let matches = ACPUpstreamReferenceDetector.chippableMatches(
+                    in: storage.string, host: host, caret: NSRange(location: end, length: 0)
+                )
+                for match in matches.reversed() {
+                    let attributes = storage.attributes(at: match.range.location, effectiveRange: nil)
+                    storage.replaceCharacters(
+                        in: match.range,
+                        with: ACPUpstreamReferenceChip.chip(
+                            for: match.reference, host: host, store: store, attributes: attributes
+                        )
+                    )
+                    store.ensureLoaded(match.reference)
+                }
             }
             // `restoringDraft` short-circuits `textDidChange`, where the fence
             // cache is normally refreshed, so refresh it here or it keeps

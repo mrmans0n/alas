@@ -35,6 +35,21 @@ struct ACPUpstreamReferenceDetectorTests {
         #expect(spellings("`#12") == ["#12"])
     }
 
+    @Test(
+        "an open fence extends to the end of the text only when asked",
+        arguments: [
+            (unclosedRunsExtendToEnd: false, expected: ["#13"]),
+            (unclosedRunsExtendToEnd: true, expected: [] as [String]),
+        ]
+    )
+    func openFenceExtendsOnlyWhenRequested(unclosedRunsExtendToEnd: Bool, expected: [String]) {
+        let text = "```\nsee #13"
+        let spellings = ACPUpstreamReferenceDetector.references(
+            in: text, host: .github, unclosedRunsExtendToEnd: unclosedRunsExtendToEnd
+        ).map(\.reference.spelling)
+        #expect(spellings == expected)
+    }
+
     @Test("a fragment's edges are boundaries only where its neighbours allow")
     func fragmentContext() {
         #expect(spellings("#12", precededBy: 0x61) == [])        // "a"

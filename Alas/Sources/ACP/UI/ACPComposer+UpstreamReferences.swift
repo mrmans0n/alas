@@ -37,13 +37,14 @@ extension ACPNSTextView {
     }
 
     /// Chips references already sitting in the composer once the remote
-    /// resolves. The token ending at the caret is skipped, because the user
-    /// may still be typing its digits.
+    /// resolves, a draft restores, or the message is about to send. The
+    /// token ending at the caret is skipped, because the user may still be
+    /// typing its digits.
     func chipUpstreamReferencesIfNeeded() {
         guard let textStorage, let context = upstreamReferenceContext else { return }
-        let caret = selectedRange()
-        let matches = ACPUpstreamReferenceDetector.references(in: textStorage.string, host: context.host)
-            .filter { !(caret.length == 0 && NSMaxRange($0.range) == caret.location) }
+        let matches = ACPUpstreamReferenceDetector.chippableMatches(
+            in: textStorage.string, host: context.host, caret: selectedRange()
+        )
         for match in matches.reversed() {
             let attributes = textStorage.attributes(at: match.range.location, effectiveRange: nil)
             replaceClearingUndo(

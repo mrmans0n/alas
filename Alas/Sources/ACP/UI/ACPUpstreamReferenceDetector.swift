@@ -19,11 +19,12 @@ enum ACPUpstreamReferenceDetector {
         in text: String,
         host: CodeHostKind,
         precededBy: unichar? = nil,
-        followedBy: unichar? = nil
+        followedBy: unichar? = nil,
+        unclosedRunsExtendToEnd: Bool = false
     ) -> [Match] {
         let string = text as NSString
         let length = string.length
-        let code = codeRanges(in: string, unclosedRunsExtendToEnd: false)
+        let code = codeRanges(in: string, unclosedRunsExtendToEnd: unclosedRunsExtendToEnd)
         var matches: [Match] = []
         var index = 0
         while index < length {
@@ -50,6 +51,19 @@ enum ACPUpstreamReferenceDetector {
             index = max(end, index + 1)
         }
         return matches
+    }
+
+    /// References chippable right now in the composer: every completed
+    /// match, treating an unclosed fenced block as extending to the end of
+    /// `text` (so an in-progress code block at the end of the message isn't
+    /// chipped into), and skipping the token — if any — whose end sits
+    /// exactly at `caret`, since the user may still be typing its digits.
+    /// Shared by the live-typing sweep (`chipUpstreamReferencesIfNeeded`)
+    /// and by draft restore, which passes the end of the restored text as
+    /// `caret` since a freshly restored draft has no real selection yet.
+    static func chippableMatches(in text: String, host: CodeHostKind, caret: NSRange) -> [Match] {
+        references(in: text, host: host, unclosedRunsExtendToEnd: true)
+            .filter { !(caret.length == 0 && NSMaxRange($0.range) == caret.location) }
     }
 
     private static let urlCandidate = try! NSRegularExpression(pattern: #"https?://[^\s<>()\[\]{}"'`]+"#, options: [.caseInsensitive])

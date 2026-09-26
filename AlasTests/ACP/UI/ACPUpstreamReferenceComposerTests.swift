@@ -195,6 +195,36 @@ struct ACPUpstreamReferenceComposerTests {
         #expect(chipSpellings(textView) == ["#12"])
     }
 
+    @Test("restoring a draft ending in a reference leaves it as text, not a chip cut off mid-digit")
+    func restoreSkipsReferenceAtEndOfText() async {
+        let store = await UpstreamReferenceFixtures.store()
+        let (textView, coordinator, window) = makeTextView(store: store)
+        defer { withExtendedLifetime((coordinator, window)) {} }
+
+        coordinator.restoreDraftForTesting(ACPComposerDraft(segments: [.text("see #12")]), into: textView)
+
+        #expect(chipSpellings(textView).isEmpty)
+        #expect(textView.string == "see #12")
+
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        type("3 ", into: textView)
+        #expect(textView.string == "see #123 ")
+    }
+
+    @Test("restoring a draft chips every completed reference except one ending at the text's end")
+    func restoreChipsCompletedReferences() async {
+        let store = await UpstreamReferenceFixtures.store()
+        let (textView, coordinator, window) = makeTextView(store: store)
+        defer { withExtendedLifetime((coordinator, window)) {} }
+
+        coordinator.restoreDraftForTesting(ACPComposerDraft(segments: [.text("see #12 then #13")]), into: textView)
+
+        // "#13" sits at the very end of the restored text, so it stays
+        // plain text — same "might still be mid-keystroke" guard as above.
+        #expect(chipSpellings(textView) == ["#12"])
+        #expect(wireText(textView) == "see #12 then #13")
+    }
+
     @Test("pasting a same-repo PR URL inserts its chip; a comment link pastes unchanged")
     func pastedURLBecomesChip() async {
         let store = await UpstreamReferenceFixtures.store()
