@@ -4,10 +4,19 @@ import Foundation
 final class ACPPermissionPolicy {
     let session: ACPSession
     let log: ACPPermissionDecisionLog
+    /// Fires as a permission parks for a human decision — the one point where
+    /// a permission actually blocks. Auto-run and remembered decisions return
+    /// earlier in `evaluate` and deliberately never reach this.
+    private let onBlocked: (JSONRPCID, ACPPermissionRequestParams) -> Void
 
-    init(session: ACPSession, log: ACPPermissionDecisionLog) {
+    init(
+        session: ACPSession,
+        log: ACPPermissionDecisionLog,
+        onBlocked: @escaping (JSONRPCID, ACPPermissionRequestParams) -> Void = { _, _ in }
+    ) {
         self.session = session
         self.log = log
+        self.onBlocked = onBlocked
     }
 
     /// Decides how to respond to a permission request. If the UI must be
@@ -50,9 +59,19 @@ final class ACPPermissionPolicy {
     private var pendingRequestID: JSONRPCID?
     private var cancelledBeforeParked = false
 
+    /// The real JSON-RPC id of the permission currently parked for a human,
+    /// or nil when nothing is parked. `session.transcript.pendingPermission`
+    /// cannot answer this: it is published with a hardcoded `.number(0)`.
+    var pendingPermissionRequestID: JSONRPCID? {
+        pendingContinuation == nil ? nil : pendingRequestID
+    }
+
     private func awaitUserDecision(scopeKey: String, params: ACPPermissionRequestParams) async -> ACPPermissionResponse {
         session.transcript.streamingState = .awaitingPermission
         session.transcript.pendingPermission = .init(id: .number(0), params: params)
+        if let requestID = pendingRequestID {
+            onBlocked(requestID, params)
+        }
         return await withCheckedContinuation { (c: CheckedContinuation<ACPPermissionResponse, Never>) in
             pendingContinuation = c
         }
