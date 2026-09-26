@@ -2022,11 +2022,20 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// publishing our captured (draftJSON, mac) bytes there. Requiring the
     /// specific pasteboard OBJECT we wrote to also be the one being read
     /// from closes that: an attacker's own pasteboard, however they tune
-    /// its count, was never in this table. Entries accumulate for the
-    /// process's lifetime, one Int per distinct pasteboard object touched —
-    /// bounded by how many times the user actually copies/drags a chip in a
-    /// session, not worth adding eviction for.
-    private static var trustedPasteboardWrites: [ObjectIdentifier: Int] = [:]
+    /// its count, was never in this table.
+    ///
+    /// The dictionary value RETAINS the pasteboard itself, not just its
+    /// `ObjectIdentifier` — an identifier is only unique for the lifetime of
+    /// the object it names, and once that object deallocates, a later,
+    /// entirely unrelated `NSPasteboard` (an attacker's own, say) can be
+    /// allocated at the same freed address and collide with a stale
+    /// identifier still sitting in this table. Holding a strong reference
+    /// keeps every tracked pasteboard alive for the rest of the process, so
+    /// its address can never be reused while its entry exists. Entries
+    /// accumulate for the process's lifetime — bounded by how many times
+    /// the user actually copies/drags a chip in a session, not worth adding
+    /// eviction for.
+    private static var trustedPasteboardWrites: [ObjectIdentifier: (pasteboard: NSPasteboard, changeCount: Int)] = [:]
 
     /// Signs `draft`'s JSON encoding, bound to `changeCount`, with the
     /// process-local MAC key, and records `pboard` as the one this specific
@@ -2036,7 +2045,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         var signedBytes = draftJSON
         withUnsafeBytes(of: changeCount) { signedBytes.append(contentsOf: $0) }
         let mac = HMAC<SHA256>.authenticationCode(for: signedBytes, using: pasteboardMACKey)
-        trustedPasteboardWrites[ObjectIdentifier(pboard)] = changeCount
+        trustedPasteboardWrites[ObjectIdentifier(pboard)] = (pboard, changeCount)
         return try? JSONEncoder().encode(
             AuthenticatedDraftPayload(draftJSON: draftJSON, changeCount: changeCount, mac: Data(mac))
         )
@@ -2052,7 +2061,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
     private static func verifiedDraft(from data: Data, on pboard: NSPasteboard) -> ACPComposerDraft? {
         guard let payload = try? JSONDecoder().decode(AuthenticatedDraftPayload.self, from: data),
               payload.changeCount == pboard.changeCount,
-              trustedPasteboardWrites[ObjectIdentifier(pboard)] == payload.changeCount
+              let trusted = trustedPasteboardWrites[ObjectIdentifier(pboard)],
+              trusted.pasteboard === pboard,
+              trusted.changeCount == payload.changeCount
         else { return nil }
         var signedBytes = payload.draftJSON
         withUnsafeBytes(of: payload.changeCount) { signedBytes.append(contentsOf: $0) }
