@@ -485,12 +485,9 @@ struct ACPInputField: NSViewRepresentable {
             flushPendingRestyleNow()
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
-                // Hand-typed references were left as plain text (see
-                // `ACPNSTextView.insertText`'s doc comment) to avoid
-                // wiping undo history on every `#N `; chip them now, in an
-                // edit whose undo-clearing no longer matters because the
-                // visible draft is about to be cleared regardless.
-                tv.chipUpstreamReferencesIfNeeded()
+                // A reference never followed by whitespace (`fix #12⏎`) was
+                // never completed by a keystroke; it is final now.
+                tv.chipUpstreamReferencesIfNeeded(includingCaretToken: true)
             }
             let attributed = textView.attributedString()
             let (text, attachments) = Self.extract(attributed)
@@ -1254,23 +1251,13 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     /// Any edit invalidates a pending next-prompt ghost-text offer, then
     /// intercepts the single whitespace character that completes a
-    /// hand-typed leading command, turning it into a pill in the SAME edit
-    /// as the keystroke instead of a follow-up one — see
+    /// hand-typed leading command or upstream reference (`#12`, etc.),
+    /// turning it into a chip in the SAME edit as the keystroke instead of
+    /// a follow-up one — see
     /// `ACPLeadingCommand.chipTarget(completingWith:at:in:suggestions:)` for
     /// why a follow-up edit is unsafe here. Everything else (fenced-block
     /// pairing, IME composition, plain typing) still goes through
     /// `PairedDelimiterTextView`'s own `insertText`.
-    ///
-    /// A hand-typed upstream reference (`#12`, etc.) is deliberately NOT
-    /// completed here the way the command pill is: a message references at
-    /// most one leading command, but can carry many `#N`/`!N` tokens, and
-    /// `replaceClearingUndo`'s undo-wipe — an accepted, one-time cost for
-    /// the command pill — would otherwise fire on every single reference
-    /// typed, leaving undo effectively disabled for anyone who writes about
-    /// PRs. Typed references instead stay plain text until
-    /// `chipUpstreamReferencesIfNeeded()` sweeps them in an undo-safe
-    /// moment: when the remote resolves, when a draft restores, and right
-    /// before the message is sent (`Coordinator.submit`).
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
         invalidateNextPromptSuggestion()
         let range = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
@@ -1284,7 +1271,12 @@ final class ACPNSTextView: PairedDelimiterTextView {
                 attributedString: ACPLeadingCommand.chip(for: target.command, font: chatTypography.appKitFont())
             )
             chip.append(NSAttributedString(string: text, attributes: baseTypingAttributes))
-            replaceClearingUndo(range: target.range, with: chip)
+            replaceUndoably(range: target.range, with: chip)
+            return
+        }
+        if let text = insertString as? String,
+           let target = upstreamReferenceChipTarget(completing: text, at: range) {
+            replaceUndoably(range: target.range, with: target.replacement)
             return
         }
         super.insertText(insertString, replacementRange: replacementRange)
@@ -1297,71 +1289,56 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// inside another edit, unlike the reentrancy the `insertText` override
     /// above guards against.
     func pillLeadingCommandIfNeeded() {
-        guard let textStorage, let coordinator,
+        guard let textStorage, let coordinator, !hasMarkedText(),
               let target = ACPLeadingCommand.chipTarget(in: textStorage, suggestions: coordinator.promptSuggestions)
         else { return }
         let chip = ACPLeadingCommand.chip(for: target.command, font: chatTypography.appKitFont())
-        replaceClearingUndo(range: target.range, with: chip)
+        replaceUndoably(range: target.range, with: chip)
     }
 
-    /// Replaces `range` with `replacement`, deliberately WITHOUT registering
-    /// an undo action.
+    /// Replaces `range` with `replacement` as an ordinary undoable edit and
+    /// puts the selection back where it was, shifted around the edit.
     ///
-    /// This transformation only ever runs once the plain-text command
-    /// already sitting in storage is complete — right as the user finishes
-    /// typing it, or once a late `available_commands_update` recognizes it —
-    /// so there is always a PRE-EXISTING undo record from the typing that
-    /// put that text there. Every attempt to also make this specific edit
-    /// undoable (`shouldChangeText`/`didChangeText`'s automatic rich-text
-    /// synthesis, a manually registered inverse, breaking typing-coalescing
-    /// first, bracketing it in its own undo group, reordering it against
-    /// `didChangeText()`) still corrupted that earlier record when the user
-    /// undid afterward — `NSTextStorage` throws `NSRangeException` out of an
-    /// internal post-edit attribute-fixing pass, reproducibly, regardless of
-    /// mechanism. Clearing the undo stack here is the one option that is
-    /// actually safe: it costs the user one step of undo history (the
-    /// letters they just typed collapse into a pill they can no longer type
-    /// back out via Cmd-Z; deleting the chip and retyping still works), in
-    /// exchange for never risking a crash. The chip still round-trips to
-    /// identical plain text for drafts, queued prompts, and the outgoing
-    /// message — only interactive undo of this specific transformation is
-    /// given up.
-    func replaceClearingUndo(range: NSRange, with replacement: NSAttributedString) {
-        guard let textStorage else { return }
+    /// The chip transformations that call this run once the plain text they
+    /// replace is already in storage with its own typing-undo record. Every
+    /// earlier attempt to make such a shrinking edit undoable by mutating
+    /// `textStorage` directly — bracketed by `shouldChangeText`/
+    /// `didChangeText`, with a hand-registered inverse, after
+    /// `breakUndoCoalescing()`, inside its own undo group — corrupted that
+    /// record: `NSTextStorage` threw `NSRangeException` from its post-edit
+    /// attribute fixing on the next ⌘Z, and the only safe workaround was to
+    /// wipe the undo stack. Going through `NSTextView`'s own attributed
+    /// `insertText(_:replacementRange:)` instead — the same call the
+    /// fenced-block expansion uses to rewrite a range — lets the text view
+    /// keep its coalescing bookkeeping consistent itself, so undo walks
+    /// cleanly back through the chip to the typed text (pinned by
+    /// `ACPUpstreamReferenceComposerTests`). Delimiter pairing is bypassed
+    /// because the replacement is already final.
+    ///
+    /// The selection is preserved rather than always collapsed to a caret
+    /// right after the chip, which is where `insertText` leaves it: a late
+    /// `available_commands_update` or remote resolution can land while the
+    /// user has kept typing past the token, has a selection past it, or
+    /// simply left their caret before it (`/init body` with the caret still
+    /// at position 0) — forcing any of those to jump would yank the cursor
+    /// out from under them. Each endpoint maps independently: at or after
+    /// the replaced range, it survives shifted by the length delta; at or
+    /// before its start — ONLY for a zero-length caret, which touches none
+    /// of the token's own characters — it's untouched; anywhere else was
+    /// inside the replaced text and lands at the chip's end (also where the
+    /// typed-completion paths above always find their caret).
+    func replaceUndoably(range: NSRange, with replacement: NSAttributedString) {
         let selectionBefore = selectedRange()
-        undoManager?.removeAllActions()
-        textStorage.replaceCharacters(in: range, with: replacement)
-        let replacedRange = NSRange(location: range.location, length: replacement.length)
-        // `didChangeText()` must run before the selection is touched — it's
-        // what tells the layout manager the storage changed shape, and
-        // reading/writing the selection first operates against layout that
-        // still describes the pre-edit text. Mutating `textStorage` directly
-        // bypasses `NSTextView`'s own selection bookkeeping, so the
-        // selection must be clamped back into range explicitly here too.
-        didChangeText()
-        // Preserve the selection outside the command rather than always
-        // collapsing it to a caret right after the chip: a late
-        // `available_commands_update` can land while the user has kept
-        // typing past the command, has a selection past it, or simply left
-        // their caret sitting before it (`/init body` with the caret still
-        // at position 0) — forcing any of those to jump to right after the
-        // pill would yank the user's cursor out from under them. Each
-        // endpoint maps independently: at or after the replaced range, it
-        // survives shifted by the length delta; at or before its start —
-        // ONLY for a zero-length caret, which touches none of the
-        // command's own characters — it's untouched, since nothing before
-        // the edit moved; anywhere else was inside the text the chip just
-        // replaced and has nowhere sensible to land but the chip's end
-        // (also where the typed-completion path above always finds its
-        // caret, since typing the completing space puts it exactly at the
-        // command's end).
+        performNativeTextInsertion {
+            super.insertText(replacement, replacementRange: range)
+        }
         let delta = replacement.length - range.length
         let rangeEnd = NSMaxRange(range)
         let isEmptySelection = selectionBefore.length == 0
         func map(_ location: Int) -> Int {
             if location >= rangeEnd { return location + delta }
             if isEmptySelection, location <= range.location { return location }
-            return NSMaxRange(replacedRange)
+            return range.location + replacement.length
         }
         let newStart = map(selectionBefore.location)
         let newEnd = map(NSMaxRange(selectionBefore))
@@ -2532,8 +2509,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // that one becomes a pill; mid-message picks stay plain text. The
         // picked token can be several characters longer than its one-glyph
         // chip (e.g. accepting `/read-jira-ticket` while `/read-j` is still
-        // live) — the same shrinking edit `replaceClearingUndo` exists for,
-        // so the leading branch goes through it too instead of a direct
+        // live) — the same shrinking edit `replaceUndoably` exists for, so
+        // the leading branch goes through it too instead of a direct
         // `replaceCharacters` that would leave this keystroke's own typing
         // undo record targeting a range that no longer exists.
         if isLeadingCommand {
@@ -2541,7 +2518,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
                 attributedString: ACPLeadingCommand.chip(for: suggestion.command, font: chatTypography.appKitFont())
             )
             chip.append(NSAttributedString(string: " ", attributes: baseTypingAttributes))
-            replaceClearingUndo(range: range, with: chip)
+            replaceUndoably(range: range, with: chip)
         } else {
             ts.replaceCharacters(in: range, with: NSAttributedString(string: replacement, attributes: baseTypingAttributes))
             // `range.location`, not `slashStart` — `closeSlashPanel()` above

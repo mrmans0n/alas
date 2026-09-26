@@ -58,12 +58,16 @@ enum ACPUpstreamReferenceDetector {
     /// `text` (so an in-progress code block at the end of the message isn't
     /// chipped into), and skipping the token — if any — whose end sits
     /// exactly at `caret`, since the user may still be typing its digits.
-    /// Shared by the live-typing sweep (`chipUpstreamReferencesIfNeeded`)
+    /// Shared by the late-resolution sweep (`chipUpstreamReferencesIfNeeded`)
     /// and by draft restore, which passes the end of the restored text as
     /// `caret` since a freshly restored draft has no real selection yet.
-    static func chippableMatches(in text: String, host: CodeHostKind, caret: NSRange) -> [Match] {
+    /// A `nil` caret skips nothing: at send time the token is final.
+    static func chippableMatches(in text: String, host: CodeHostKind, caret: NSRange?) -> [Match] {
         references(in: text, host: host, unclosedRunsExtendToEnd: true)
-            .filter { !(caret.length == 0 && NSMaxRange($0.range) == caret.location) }
+            .filter { match in
+                guard let caret else { return true }
+                return !(caret.length == 0 && NSMaxRange(match.range) == caret.location)
+            }
     }
 
     private static let urlCandidate = try! NSRegularExpression(pattern: #"https?://[^\s<>()\[\]{}"'`]+"#, options: [.caseInsensitive])
@@ -122,6 +126,47 @@ enum ACPUpstreamReferenceDetector {
         }
         guard let parsed else { return nil }
         return CodeHostReference(spelling: "\(parsed.sigil.rawValue)\(parsed.digits)")
+    }
+
+    /// The token a single typed whitespace character completes. Chips form
+    /// on whitespace only: intercepting punctuation would bypass the text
+    /// view's delimiter pairing (a typed `)` skipping over an auto-inserted
+    /// one). Punctuation typed between the digits and the caret is instead
+    /// carried inside `replaceRange`, so the caller re-inserts it after the
+    /// chip.
+    static func chipTarget(
+        completingWith insertedText: String,
+        at range: NSRange,
+        in text: String,
+        host: CodeHostKind
+    ) -> (match: Match, replaceRange: NSRange)? {
+        guard range.length == 0,
+              insertedText.utf16.count == 1,
+              let typed = insertedText.utf16.first,
+              isWhitespace(typed)
+        else { return nil }
+        let string = text as NSString
+        guard range.location <= string.length else { return nil }
+        var tokenEnd = range.location
+        while tokenEnd > 0, trailingPunctuation.contains(string.character(at: tokenEnd - 1)) { tokenEnd -= 1 }
+        var digitsStart = tokenEnd
+        while digitsStart > 0, isASCIIDigit(string.character(at: digitsStart - 1)) { digitsStart -= 1 }
+        guard digitsStart > 0, digitsStart < tokenEnd else { return nil }
+        let sigilIndex = digitsStart - 1
+        let token = string.substring(with: NSRange(location: sigilIndex, length: tokenEnd - sigilIndex))
+        let before: unichar? = sigilIndex > 0 ? string.character(at: sigilIndex - 1) : nil
+        let after: unichar = tokenEnd < range.location ? string.character(at: tokenEnd) : typed
+        guard let local = references(in: token, host: host, precededBy: before, followedBy: after).first,
+              local.range == NSRange(location: 0, length: (token as NSString).length)
+        else { return nil }
+        let prefix = string.substring(to: range.location) as NSString
+        guard !codeRanges(in: prefix, unclosedRunsExtendToEnd: true)
+            .contains(where: { NSLocationInRange(sigilIndex, $0) })
+        else { return nil }
+        return (
+            Match(range: NSRange(location: sigilIndex, length: local.range.length), reference: local.reference),
+            NSRange(location: sigilIndex, length: range.location - sigilIndex)
+        )
     }
 
     /// Ranges enclosed by matching backtick runs. This covers inline code
