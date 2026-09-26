@@ -1,5 +1,30 @@
 import Foundation
 
+enum ACPSessionSummaryBindingPolicy {
+    struct Input: Equatable {
+        let requested: Bool
+        let supported: Bool
+        let incarnation: UUID
+
+        var isActive: Bool { requested && supported }
+    }
+
+    enum Action: Equatable {
+        case none
+        case bind
+        case teardown
+    }
+
+    static func action(from previous: Input?, to current: Input) -> Action {
+        guard current.isActive else {
+            return previous?.isActive == true ? .teardown : .none
+        }
+        guard previous?.isActive == true,
+              previous?.incarnation == current.incarnation else { return .bind }
+        return .none
+    }
+}
+
 struct ACPSessionSummaryPresentation: Equatable {
     struct SectionDescriptor: Equatable, Identifiable {
         enum Kind: String {

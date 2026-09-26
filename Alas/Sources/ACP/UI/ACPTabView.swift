@@ -212,8 +212,7 @@ private struct ACPSessionView: View {
                     state: state,
                     worktree: worktree,
                     sessionSummaryCoordinator: state.sessionSummaryCoordinator,
-                    sessionSummariesRequested: state.config.sessionSummariesEnabled
-                        && !state.sessionSummaryDisableSavePending,
+                    sessionSummariesRequested: sessionSummariesRequested,
                     sessionSummariesRuntimeEnabled: state.sessionSummariesRuntimeEnabled,
                     localTextSupported: state.localTextSupported,
                     localTextModelState: state.localTextModelState,
@@ -249,10 +248,14 @@ private struct ACPSessionView: View {
             )
         }
         .onAppear {
-            state.sessionSummaryCoordinator.bind(to: session)
+            applySessionSummaryBinding(
+                ACPSessionSummaryBindingPolicy.action(from: nil, to: sessionSummaryBindingInput)
+            )
         }
-        .onChange(of: session.incarnation) {
-            state.sessionSummaryCoordinator.bind(to: session)
+        .onChange(of: sessionSummaryBindingInput) { previous, current in
+            applySessionSummaryBinding(
+                ACPSessionSummaryBindingPolicy.action(from: previous, to: current)
+            )
         }
         .task(id: sessionId) {
             await hydrateAndAttach()
@@ -260,6 +263,29 @@ private struct ACPSessionView: View {
         }
         .onExitCommand {
             handleEscape()
+        }
+    }
+
+    private var sessionSummariesRequested: Bool {
+        state.config.sessionSummariesEnabled && !state.sessionSummaryDisableSavePending
+    }
+
+    private var sessionSummaryBindingInput: ACPSessionSummaryBindingPolicy.Input {
+        .init(
+            requested: sessionSummariesRequested,
+            supported: state.localTextSupported,
+            incarnation: session.incarnation
+        )
+    }
+
+    private func applySessionSummaryBinding(_ action: ACPSessionSummaryBindingPolicy.Action) {
+        switch action {
+        case .none:
+            break
+        case .bind:
+            state.sessionSummaryCoordinator.bind(to: session)
+        case .teardown:
+            state.sessionSummaryCoordinator.teardown()
         }
     }
 

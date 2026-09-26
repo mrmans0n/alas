@@ -1,8 +1,37 @@
+import Foundation
 import Testing
 @testable import Alas
 
 @Suite("ACPSessionSummaryPresentation")
 struct ACPSessionSummaryPresentationTests {
+    @Test func bindingRequiresRequestedAndSupportedCapability() {
+        let incarnation = UUID()
+        let inactive = ACPSessionSummaryBindingPolicy.Input(
+            requested: false,
+            supported: true,
+            incarnation: incarnation
+        )
+        let active = ACPSessionSummaryBindingPolicy.Input(
+            requested: true,
+            supported: true,
+            incarnation: incarnation
+        )
+
+        #expect(ACPSessionSummaryBindingPolicy.action(from: nil, to: inactive) == .none)
+        #expect(ACPSessionSummaryBindingPolicy.action(from: nil, to: active) == .bind)
+        #expect(ACPSessionSummaryBindingPolicy.action(from: inactive, to: active) == .bind)
+        #expect(ACPSessionSummaryBindingPolicy.action(from: active, to: inactive) == .teardown)
+        #expect(ACPSessionSummaryBindingPolicy.action(from: active, to: active) == .none)
+        #expect(ACPSessionSummaryBindingPolicy.action(
+            from: active,
+            to: .init(requested: true, supported: true, incarnation: UUID())
+        ) == .bind)
+        #expect(ACPSessionSummaryBindingPolicy.action(
+            from: inactive,
+            to: .init(requested: true, supported: false, incarnation: UUID())
+        ) == .none)
+    }
+
     @Test func hiddenWhenDisabledOrUnsupported() {
         #expect(!ACPSessionSummaryPresentation(
             requested: false,
