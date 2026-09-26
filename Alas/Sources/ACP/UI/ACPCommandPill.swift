@@ -359,6 +359,8 @@ struct ACPUserMessageText: View {
     let typography: ACPChatTypography
     let session: ACPSession
     @State private var suggestions: [ACPPromptSuggestion]
+    @Environment(\.acpUpstreamReferenceStore) private var upstreamReferences
+    @State private var upstreamHost: CodeHostKind?
 
     init(text: String, attachments: [ACPMessage.Attachment], typography: ACPChatTypography, session: ACPSession) {
         self.text = text
@@ -370,9 +372,20 @@ struct ACPUserMessageText: View {
 
     var body: some View {
         content
+            .environment(\.acpUpstreamReferenceChipping, chipping)
             .onReceive(session.$promptSuggestions) { latest in
                 if latest != suggestions { suggestions = latest }
             }
+            .onReceive(upstreamReferences?.$remote.eraseToAnyPublisher()
+                ?? Just<CodeHostRemote?>(nil).eraseToAnyPublisher()) { remote in
+                if remote?.kind != upstreamHost { upstreamHost = remote?.kind }
+            }
+            .onAppear { upstreamReferences?.resolveRemote() }
+    }
+
+    private var chipping: ACPUpstreamReferenceChipping? {
+        guard let upstreamReferences, let upstreamHost else { return nil }
+        return ACPUpstreamReferenceChipping(store: upstreamReferences, host: upstreamHost)
     }
 
     @ViewBuilder

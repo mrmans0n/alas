@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import AppKit
 
@@ -35,7 +36,8 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             typography: typography,
             role: role,
             theme: theme,
-            memoizesInlineMarkdown: memoizesInlineMarkdown
+            memoizesInlineMarkdown: memoizesInlineMarkdown,
+            chipping: context.environment.acpUpstreamReferenceChipping
         )
         guard context.coordinator.shouldRender(renderState) else { return }
 
@@ -46,6 +48,11 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             role: role,
             memoizeInlineMarkdown: memoizesInlineMarkdown
         )
+        let chipping = context.environment.acpUpstreamReferenceChipping
+        if let chipping {
+            ACPUpstreamReferenceChip.chipifyRendered(rendered, chipping: chipping)
+        }
+        (textView as? ACPMarkdownInlineNSTextView)?.upstreamReferences = chipping?.store
         textView.textStorage?.setAttributedString(rendered)
         // The rendered text changed, so any memoized width→height
         // measurements are stale; drop them before SwiftUI re-queries
@@ -212,6 +219,7 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
         let role: ACPMarkdownInlineRole
         let theme: Theme
         let memoizesInlineMarkdown: Bool
+        let chipping: ACPUpstreamReferenceChipping?
     }
 }
 
@@ -287,6 +295,72 @@ struct ACPMarkdownScrollRoutingState {
 
 final class ACPMarkdownInlineNSTextView: NSTextView {
     private var scrollRoutingState = ACPMarkdownScrollRoutingState()
+
+    private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
+    private var upstreamRevisionObservation: AnyCancellable?
+    private static let upstreamHoverTrackingKind = "alas.acp.upstreamReferenceHover"
+
+    /// Set on user-message paragraphs that render reference chips. A lookup
+    /// landing repaints the chips, and hover tracking is installed only here.
+    var upstreamReferences: ACPUpstreamReferenceStore? {
+        didSet {
+            guard upstreamReferences !== oldValue else { return }
+            upstreamRevisionObservation = upstreamReferences?.$revision
+                .dropFirst()
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated { self?.needsDisplay = true }
+                }
+            if upstreamReferences == nil { upstreamReferenceHover.hide() }
+            updateTrackingAreas()
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas
+        where area.owner === self && area.userInfo?[Self.upstreamHoverTrackingKind] != nil {
+            removeTrackingArea(area)
+        }
+        guard upstreamReferences != nil else { return }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: [Self.upstreamHoverTrackingKind: true]
+        ))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        upstreamReferenceHover.update(
+            at: convert(event.locationInWindow, from: nil), in: self, store: upstreamReferences
+        )
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        upstreamReferenceHover.hide()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if openUpstreamReference(at: convert(event.locationInWindow, from: nil), event: event) { return }
+        super.mouseDown(with: event)
+    }
+
+    /// Selections containing reference chips copy their spelling instead
+    /// of the U+FFFC attachment placeholder.
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard let textStorage, selectedRanges.count == 1 else {
+            return super.writeSelection(to: pboard, types: types)
+        }
+        let range = selectedRange()
+        guard range.length > 0, NSMaxRange(range) <= textStorage.length,
+              let text = ACPUpstreamReferenceChip.plainText(of: textStorage.attributedSubstring(from: range))
+        else { return super.writeSelection(to: pboard, types: types) }
+        pboard.declareTypes([.string], owner: nil)
+        return pboard.setString(text, forType: .string)
+    }
 
     private let minimumFittingWidth: CGFloat = 80
     private let maximumNaturalFittingWidth: CGFloat = 10_000
