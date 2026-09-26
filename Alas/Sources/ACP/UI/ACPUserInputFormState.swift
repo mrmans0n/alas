@@ -58,6 +58,12 @@ final class ACPUserInputFormState {
             if !selected.isSubset(of: Set(field.schema.options.map(\.const))) {
                 return "Choose a listed option."
             }
+            // A listed option is still a string value: the schema's length,
+            // pattern and format constraints apply to it exactly as the
+            // gateway enforces them on a forwarded reply.
+            if let value = selected.first, let error = stringConstraintError(value, for: field) {
+                return error
+            }
         case "string":
             if field.schema.format == "date" || field.schema.format == "date-time" {
                 if dateValues[field.key] == nil, field.required {
@@ -67,22 +73,8 @@ final class ACPUserInputFormState {
             }
             let value = textValues[field.key] ?? ""
             if value.isEmpty, !field.required { return nil }
-            if let min = field.schema.minLength, value.count < min {
-                return "Enter at least \(min) characters."
-            }
-            if let max = field.schema.maxLength, value.count > max {
-                return "Enter no more than \(max) characters."
-            }
-            if let pattern = field.schema.pattern,
-               let regex = try? NSRegularExpression(pattern: pattern),
-               regex.firstMatch(
-                    in: value,
-                    range: NSRange(value.startIndex..., in: value)
-               ) == nil {
-                return "The value does not match the requested format."
-            }
-            if let formatError = formatError(value, format: field.schema.format) {
-                return formatError
+            if let error = stringConstraintError(value, for: field) {
+                return error
             }
         case "number", "integer":
             let raw = textValues[field.key] ?? ""
@@ -100,8 +92,10 @@ final class ACPUserInputFormState {
                 return "Enter \(maximum) or less."
             }
         case "array":
+            // `required` only means the property must be present in the
+            // response; an empty array satisfies it. Only an explicit
+            // `minItems` constrains the selection count.
             let count = selectionValues[field.key]?.count ?? 0
-            if field.required && count == 0 { return "Choose at least one option." }
             if let minimum = field.schema.minItems, count < minimum {
                 return "Choose at least \(minimum) options."
             }
@@ -238,6 +232,26 @@ final class ACPUserInputFormState {
         selectionValues[field.key] = nil
         dateValues[field.key] = nil
         presentByDefault.remove(field.key)
+    }
+
+    /// Length, pattern and format checks shared by free-form strings and
+    /// enumerated selections.
+    private func stringConstraintError(_ value: String, for field: ACPUserInputField) -> String? {
+        if let min = field.schema.minLength, value.count < min {
+            return "Enter at least \(min) characters."
+        }
+        if let max = field.schema.maxLength, value.count > max {
+            return "Enter no more than \(max) characters."
+        }
+        if let pattern = field.schema.pattern,
+           let regex = try? NSRegularExpression(pattern: pattern),
+           regex.firstMatch(
+                in: value,
+                range: NSRange(value.startIndex..., in: value)
+           ) == nil {
+            return "The value does not match the requested format."
+        }
+        return formatError(value, format: field.schema.format)
     }
 
     private func formatError(_ value: String, format: String?) -> String? {

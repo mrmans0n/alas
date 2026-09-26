@@ -29,6 +29,28 @@ struct ACPElicitationRequestParams: Codable, Equatable {
         case meta = "_meta"
     }
 
+    init(
+        sessionId: String? = nil,
+        requestId: JSONRPCID? = nil,
+        toolCallId: String? = nil,
+        mode: String,
+        message: String,
+        requestedSchema: ACPElicitationSchema? = nil,
+        elicitationId: String? = nil,
+        url: String? = nil,
+        meta: AnyCodable? = nil
+    ) {
+        self.sessionId = sessionId
+        self.requestId = requestId
+        self.toolCallId = toolCallId
+        self.mode = mode
+        self.message = message
+        self.requestedSchema = requestedSchema
+        self.elicitationId = elicitationId
+        self.url = url
+        self.meta = meta
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         sessionId = try c.decodeIfPresent(String.self, forKey: .sessionId)

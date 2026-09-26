@@ -190,7 +190,10 @@ struct ACPUserInputField: Identifiable, Equatable {
     var isSupported: Bool {
         switch schema.type {
         case "string", "number", "integer", "boolean": return true
-        case "array": return !schema.options.isEmpty
+        // An array with nothing to pick from can still be answered with an
+        // empty selection, which JSON Schema accepts unless `minItems`
+        // demands entries the form has no way to supply.
+        case "array": return !schema.options.isEmpty || (schema.minItems ?? 0) == 0
         default: return false
         }
     }

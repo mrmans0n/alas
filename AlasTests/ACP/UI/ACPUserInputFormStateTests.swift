@@ -203,6 +203,72 @@ struct ACPUserInputFormStateTests {
         #expect(ACPUserInputPrompt.shouldShowMessage(for: request))
     }
 
+    @Test("required arrays without minItems submit an empty selection, even with no options to pick")
+    func requiredArrayWithoutMinItemsSubmitsEmptySelection() throws {
+        let request = try formRequest(#"""
+        {
+          "requestId":1,"mode":"form","message":"Pick",
+          "requestedSchema":{"properties":{
+            "scopes":{"type":"array","items":{"type":"string","enum":["read","write"]}},
+            "tags":{"type":"array"},
+            "targets":{"type":"array","minItems":1,"items":{"type":"string","enum":["mac"]}}
+          },"required":["scopes","tags","targets"]}
+        }
+        """#)
+        let state = ACPUserInputFormState(request: request)
+        let scopes = try #require(request.fields.first { $0.key == "scopes" })
+        let tags = try #require(request.fields.first { $0.key == "tags" })
+        let targets = try #require(request.fields.first { $0.key == "targets" })
+
+        #expect(state.validationError(for: scopes) == nil)
+        #expect(state.validationError(for: tags) == nil)
+        #expect(state.validationError(for: targets) != nil)
+
+        state.toggle("mac", for: targets)
+        #expect(state.submittedContent() == [
+            "scopes": .strings([]), "tags": .strings([]), "targets": .strings(["mac"]),
+        ])
+    }
+
+    @Test("enumerated strings still honor pattern and length constraints")
+    func enumeratedStringsHonorConstraints() throws {
+        let request = try formRequest(#"""
+        {
+          "requestId":1,"mode":"form","message":"Deploy",
+          "requestedSchema":{"properties":{
+            "target":{"type":"string","enum":["dev","prod"],"pattern":"^prod$"}
+          },"required":["target"]}
+        }
+        """#)
+        let state = ACPUserInputFormState(request: request)
+        let target = try #require(request.fields.first)
+
+        state.toggle("dev", for: target)
+        #expect(state.validationError(for: target) != nil)
+        #expect(state.submittedContent() == nil)
+
+        state.toggle("prod", for: target)
+        #expect(state.submittedContent() == ["target": .string("prod")])
+    }
+
+    @Test("plan approval checklist lists top-level todos and every phase")
+    func planApprovalChecklistIncludesPhases() {
+        let plan = ACPCursorCreatePlanParams(
+            toolCallId: "tool-1", name: "Ship it", overview: "", plan: "",
+            todos: [.init(id: "t1", content: "Update the sidebar", status: "pending")],
+            isProject: true,
+            phases: [
+                .init(name: "Verification", todos: [.init(id: "t2", content: "Run tests", status: "pending")]),
+                .init(name: "Empty", todos: []),
+            ]
+        )
+
+        #expect(ACPPlanApprovalPrompt.checklistSections(for: plan) == [
+            .init(title: nil, items: [.init(content: "Update the sidebar", status: "pending")]),
+            .init(title: "Verification", items: [.init(content: "Run tests", status: "pending")]),
+        ])
+    }
+
     private func formRequest(_ json: String) throws -> ACPUserInputRequest {
         let params = try JSONDecoder().decode(
             ACPElicitationRequestParams.self,

@@ -19,6 +19,22 @@ struct NativePeerTranscript: Equatable {
     private(set) var pendingQuestion: RemoteQuestionPayload?
     private(set) var pendingPlan: RemotePlanPayload?
     private(set) var pendingElicitation: RemoteElicitationPayload?
+    /// One counter per request kind, bumped when a request frame carries a
+    /// request that is not the one already pending for that kind. Wire
+    /// request ids can repeat back to back (string JSON-RPC ids all forward
+    /// as the same int), so views key their per-request state on this
+    /// instead of the id alone. A resubscribe replaying the identical
+    /// outstanding request, or an unrelated kind arriving alongside, leaves
+    /// a counter untouched so the user's half-filled form survives.
+    private var requestGenerations: [PendingRequestKind: Int] = [:]
+
+    enum PendingRequestKind: Hashable {
+        case permission, question, plan, elicitation
+    }
+
+    func requestGeneration(for kind: PendingRequestKind) -> Int {
+        requestGenerations[kind] ?? 0
+    }
 
     init(sessionId: String) { self.sessionId = sessionId }
 
@@ -80,16 +96,24 @@ struct NativePeerTranscript: Equatable {
             firstIndex = first
             return false
 
-        case .permissionRequest(_, let payload): pendingPermission = payload
+        case .permissionRequest(_, let payload):
+            if pendingPermission != payload { requestGenerations[.permission, default: 0] += 1 }
+            pendingPermission = payload
         case .permissionResolved(_, let requestId):
             if pendingPermission?.requestId == requestId { pendingPermission = nil }
-        case .questionRequest(_, let payload): pendingQuestion = payload
+        case .questionRequest(_, let payload):
+            if pendingQuestion != payload { requestGenerations[.question, default: 0] += 1 }
+            pendingQuestion = payload
         case .questionResolved(_, let requestId):
             if pendingQuestion?.requestId == requestId { pendingQuestion = nil }
-        case .planRequest(_, let payload): pendingPlan = payload
+        case .planRequest(_, let payload):
+            if pendingPlan != payload { requestGenerations[.plan, default: 0] += 1 }
+            pendingPlan = payload
         case .planResolved(_, let requestId):
             if pendingPlan?.requestId == requestId { pendingPlan = nil }
-        case .elicitationRequest(_, let payload): pendingElicitation = payload
+        case .elicitationRequest(_, let payload):
+            if pendingElicitation != payload { requestGenerations[.elicitation, default: 0] += 1 }
+            pendingElicitation = payload
         case .elicitationResolved(_, let requestId):
             if pendingElicitation?.requestId == requestId { pendingElicitation = nil }
         case .sessionClosed:

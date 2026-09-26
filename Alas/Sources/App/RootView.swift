@@ -307,8 +307,14 @@ struct RootView: View {
         rightPaneStartupSuppressed: Bool
     ) -> some View {
         if let client = state.nativePeerSessions, client.selectedSessionId != nil {
-            NativePeerSessionView(client: client)
-                .id(client.selectedSessionId)
+            NativePeerSessionView(
+                client: client,
+                typography: ACPChatTypography(
+                    fontFamily: state.config.agents.chatFontFamily,
+                    fontSize: state.config.agents.chatFontSize
+                )
+            )
+            .id(client.selectedSessionId)
         } else {
             worktreeCenterContent(
                 effectiveRightPaneVisible: effectiveRightPaneVisible,

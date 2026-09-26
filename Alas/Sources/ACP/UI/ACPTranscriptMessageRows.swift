@@ -52,33 +52,47 @@ struct UserMessageRow: View {
                     typography: typography,
                     session: session
                 )
-                    .padding(.vertical, 9)
-                    .padding(.horizontal, 13)
-                    .background(
-                        LinearGradient(
-                            colors: [
-                                theme.color("accent").opacity(0.32),
-                                theme.color("accent").opacity(0.20)
-                            ],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                    )
-                    .clipShape(
-                        UnevenRoundedRectangle(
-                            cornerRadii: .init(topLeading: 12, bottomLeading: 12, bottomTrailing: 4, topTrailing: 12)
-                        )
-                    )
-                    .overlay(
-                        UnevenRoundedRectangle(
-                            cornerRadii: .init(topLeading: 12, bottomLeading: 12, bottomTrailing: 4, topTrailing: 12)
-                        )
-                        .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
-                    )
-                    .shadow(color: .black.opacity(0.2), radius: 8, y: 2)
+                .acpUserBubble()
             }
             .frame(maxWidth: contentMaxWidth * 0.75, alignment: .trailing)
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// The accent bubble that wraps a user's prompt. Shared with the mirrored
+/// peer transcript so a forwarded prompt reads exactly like a local one.
+struct ACPUserBubbleChrome: ViewModifier {
+    @Environment(\.theme) private var theme
+
+    private var shape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            cornerRadii: .init(topLeading: 12, bottomLeading: 12, bottomTrailing: 4, topTrailing: 12)
+        )
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.vertical, 9)
+            .padding(.horizontal, 13)
+            .background(
+                LinearGradient(
+                    colors: [
+                        theme.color("accent").opacity(0.32),
+                        theme.color("accent").opacity(0.20)
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
+            )
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.2), radius: 8, y: 2)
+    }
+}
+
+extension View {
+    func acpUserBubble() -> some View {
+        modifier(ACPUserBubbleChrome())
     }
 }
 

@@ -4,7 +4,8 @@ struct InlineDiffView: View {
     let diff: ParsedDiff
     let relativePath: String
     let maxLines: Int
-    let onShowAll: () -> Void
+    /// Nil hides the "Show all" affordance when no full diff can be opened.
+    let onShowAll: (() -> Void)?
     @Environment(\.theme) private var theme
 
     private static let codeFontSize: CGFloat = 11
@@ -66,7 +67,7 @@ struct InlineDiffView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            if truncated {
+            if truncated, let onShowAll {
                 Button(action: onShowAll) {
                     HStack(spacing: 4) {
                         Text("Show all \(allLines.count) lines")
