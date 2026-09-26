@@ -272,4 +272,22 @@ struct ACPMCPPromptPreambleTests {
         #expect(mcp.contains(expected))
         #expect(cli.contains(expected))
     }
+
+    @Test("root preamble tells parents they will be notified about delegated children")
+    func rootMentionsOutcomeNotifications() throws {
+        let mcp = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: false, userServerNames: [], mode: .mcp))
+        #expect(mcp.contains("you do not need to poll session_list"))
+        let cli = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: false, userServerNames: [],
+            mode: .cli(serverAvailability: .notInstalled)))
+        #expect(cli.contains("you do not need to poll `alas session list`"))
+    }
+
+    @Test("delegated preamble does not mention outcome notifications")
+    func delegatedOmitsOutcomeNotifications() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: true, userServerNames: []))
+        #expect(!text.contains("you do not need to poll"))
+    }
 }

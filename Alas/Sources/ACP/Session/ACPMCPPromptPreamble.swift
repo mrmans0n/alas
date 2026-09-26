@@ -118,6 +118,10 @@ enum ACPMCPPromptPreamble {
                 line += " This session was delegated by a parent session: it "
                     + "cannot create descendants; return results or questions "
                     + "through session_send."
+            } else {
+                line += " When a delegated session finishes without reporting "
+                    + "back, or fails, you will receive a system message; "
+                    + "you do not need to poll session_list."
             }
             line += " Prefer these tools when the user asks to open/show files, "
                 + "manage worktrees, run or respond to reviews, or be notified."
@@ -177,6 +181,10 @@ enum ACPMCPPromptPreamble {
                 line += " This session was delegated by a parent session: it cannot "
                     + "create descendants; return results or questions through "
                     + "`alas session send`."
+            } else {
+                line += " When a delegated session finishes without reporting back, "
+                    + "or fails, you will receive a system message; "
+                    + "you do not need to poll `alas session list`."
             }
             line += " Prefer these commands when the user asks to open/show files, "
                 + "manage worktrees, run or respond to reviews, or be notified."
