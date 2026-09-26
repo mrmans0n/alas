@@ -152,14 +152,8 @@ struct NextPromptInferenceTests {
     }
 
     @Test func longSessionsUseBoundedFallbackCandidates() async throws {
-        let fixture = try LeaseFixture()
-        let candidateCount = Mutex(0)
-        let inference = NextPromptInference(acquireLease: { try fixture.acquire() }, load: { _ in
-            return { request in
-                candidateCount.withLock { $0 = request.messageCandidates.count }
-                return #"{"suggestion":"Show an example."}"#
-            }
-        })
+        let engine = CountingNextPromptEngine()
+        let inference = NextPromptInference(engine: engine, verifyAvailability: {})
         let longRequest = NextPromptRequest(
             id: .init(sessionID: "test", incarnation: UUID(), promptID: 1, transcriptRevision: 1,
                       draftRevision: 0, composerEpoch: 0, settingsGeneration: 0, modelGeneration: 0),
@@ -167,7 +161,8 @@ struct NextPromptInferenceTests {
         )
 
         #expect(try await inference.generate(longRequest) == "Show an example.")
-        #expect(candidateCount.withLock { $0 } <= 10)
+        let candidateCount = await engine.candidateCount
+        #expect(candidateCount > 1 && candidateCount <= 10)
         await inference.cancelAndUnload()
     }
 
@@ -484,6 +479,19 @@ private final class ContainerLifetime: Sendable {
     let onRelease: @Sendable () -> Void
     init(_ onRelease: @escaping @Sendable () -> Void) { self.onRelease = onRelease }
     deinit { onRelease() }
+}
+
+private actor CountingNextPromptEngine: LocalTextGenerating {
+    private(set) var candidateCount = 0
+
+    func generate(_ request: LocalTextGenerationRequest, caller: LocalTextCaller,
+                  priority: LocalTextJobPriority) async throws -> LocalTextGenerationResult {
+        candidateCount = request.messageCandidates.count
+        return .init(text: #"{"suggestion":"Show an example."}"#, selectedCandidateIndex: 0)
+    }
+
+    func cancel(caller: LocalTextCaller) async {}
+    func cancelAndUnload() async {}
 }
 
 private final class CancellationResistantNextPromptEngine: LocalTextGenerating {
