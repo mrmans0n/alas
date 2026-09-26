@@ -47,16 +47,22 @@ struct SessionSummaryContext: Equatable, Sendable {
     }
 
     func messageCandidates() -> [[LocalTextMessage]] {
-        turns.indices.map { first in
-            [
+        var retainedTurnCount = turns.count
+        var candidates: [[LocalTextMessage]] = []
+        while retainedTurnCount > 0 {
+            let first = turns.count - retainedTurnCount
+            candidates.append([
                 .init(role: .system, content: SessionSummaryPolicy.systemPrompt),
                 .init(role: .user, content: Self.renderedInput(
                     goal: goal,
                     plan: plan,
                     turns: Array(turns[first...])
                 ))
-            ]
+            ])
+            if retainedTurnCount == 1 { break }
+            retainedTurnCount = (retainedTurnCount + 1) / 2
         }
+        return candidates
     }
 
     @MainActor

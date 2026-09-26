@@ -157,6 +157,22 @@ import Testing
         #expect(context.revision.transcriptGeneration == session.transcript.messagesGeneration)
     }
 
+    @Test func boundsRenderedCandidateCountForLongSessions() throws {
+        let turns = (0..<256).map {
+            SessionSummaryTurn(user: "user \($0)", assistant: "assistant \($0)")
+        }
+        let session = makeSession(messages: turns.flatMap {
+            [
+                .user(id: UUID(), messageId: nil, text: $0.user, attachments: []),
+                .agent(id: UUID(), messageId: nil, StreamingText($0.assistant))
+            ]
+        })
+
+        let context = try #require(SessionSummaryContext.snapshot(session: session))
+
+        #expect(context.messageCandidates().count <= 10)
+    }
+
     @Test func marksPartialWhenSourceLimitDropsOlderTurns() throws {
         let session = makeSession(messages: [
             .user(id: UUID(), messageId: nil, text: String(repeating: "x", count: 131_000), attachments: []),

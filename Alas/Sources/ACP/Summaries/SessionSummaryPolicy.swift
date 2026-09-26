@@ -87,7 +87,7 @@ enum SessionSummaryPolicy {
             includingQuotedCommands: true
         ) && !LocalTextSafety.containsActiveAction(
             nextAction,
-            pattern: #"(?i)\b(?:git\s+)?(?:reset\s+--hard|push\b[^;\n]{0,80}\s+--force(?:-with-lease)?|clean\b(?=[^;\n]{0,40}(?:-[A-Za-z]*f[A-Za-z]*|--force)\b))"#,
+            pattern: #"(?i)\b(?:git\s+)?(?:reset\s+--hard|push\b[^;\n]{0,80}\s+(?:-f\b|--force(?:-with-lease)?)|clean\b(?=[^;\n]{0,40}(?:-[A-Za-z]*f[A-Za-z]*|--force)\b))"#,
             includingQuotedCommands: true
         ) && !LocalTextSafety.containsActiveAction(
             nextAction,
@@ -109,6 +109,10 @@ enum SessionSummaryPolicy {
             })
             && text.range(
                 of: #"\b[A-Za-z][A-Za-z0-9+.-]*:[^\s]"#,
+                options: .regularExpression
+            ) == nil
+            && text.range(
+                of: #"(?i)\b(?:www\.[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/[^\s]*)"#,
                 options: .regularExpression
             ) == nil
             && text.range(of: #"</?[A-Za-z][^>]*>"#, options: .regularExpression) == nil

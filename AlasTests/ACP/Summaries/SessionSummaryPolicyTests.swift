@@ -65,7 +65,9 @@ import Testing
         "Embed data:text/plain,hello",
         "Call tel:+15551234567",
         "Find urn:isbn:9780143127741",
-        "Use custom+demo.value:payload"
+        "Use custom+demo.value:payload",
+        "See www.example.com/result",
+        "Open example.com/path"
     ])
     func rejectsEmbeddedURLSchemes(_ value: String) {
         let json = "{\"goal\":\(jsonString(value)),\"completed\":[],\"blockers\":[],\"next_action\":null}"
@@ -127,6 +129,7 @@ import Testing
         "Run rm -rf -- '/'",
         "Format the production disk",
         "git clean -fdx",
+        "git push -f origin main",
         #"Run "rm -rf /""#,
         #"Run "git clean -fdx""#,
         #"Execute "git clean -fdx""#,
