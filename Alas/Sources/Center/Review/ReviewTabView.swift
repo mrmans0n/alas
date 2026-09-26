@@ -110,12 +110,21 @@ struct ReviewTabView: View {
     @State private var showVerdictSheet = false
     @State private var wrapLines = false
     @State private var showWhitespace = false
+    @State private var showCreationConfirmation = false
 
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 toolbar
                 Divider().overlay(theme.color("line"))
+                if showCreationConfirmation {
+                    Text("\(tabState.provider.reviewRequestLabel) \(tabState.provider == .gitlab ? "!" : "#")\(tabState.number) created")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(theme.color("bg-2"))
+                }
                 CIStatusStrip(checks: reviewRequest?.checks ?? [], onExpand: { check in
                     Task { await fetchAnnotations(for: check) }
                 })
@@ -130,6 +139,13 @@ struct ReviewTabView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(theme.color("bg-1"))
+        .task(id: tabState.createdAt) {
+            guard let createdAt = tabState.createdAt,
+                  Date().timeIntervalSince(createdAt) < 5 else { return }
+            showCreationConfirmation = true
+            try? await Task.sleep(for: .seconds(4))
+            showCreationConfirmation = false
+        }
         .overlay(alignment: .bottom) {
             if let msg = errorMessage {
                 Text(msg)

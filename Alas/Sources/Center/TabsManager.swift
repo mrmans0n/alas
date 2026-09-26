@@ -1486,6 +1486,36 @@ final class TabsManager {
         return tab
     }
 
+    @discardableResult
+    func transitionToCreatedReview(worktreeId: String, replacing tabId: TabID, snapshot: ReviewLoopSnapshot) -> Tab? {
+        guard snapshot.reviewRequest != nil,
+              var file = byWorktree[worktreeId],
+              let index = file.tabs.firstIndex(where: { $0.id == tabId })
+        else { return nil }
+        switch file.tabs[index] {
+        case .draftReviewRequest, .commitEditor: break
+        default: return nil
+        }
+        var state = ReviewPRTabState(worktreeId: worktreeId, snapshot: snapshot)
+        state.createdAt = Date()
+        let review = Tab.reviewPR(state)
+        if let existingIndex = file.tabs.firstIndex(where: { $0.id == review.id && $0.id != tabId }) {
+            file.tabs[existingIndex] = review
+            file.tabs.remove(at: index)
+            if file.activeTabId == tabId { file.activeTabId = review.id }
+        } else {
+            file.tabs[index] = review
+            if file.activeTabId == tabId { file.activeTabId = review.id }
+        }
+        do {
+            try persistThrowing(file, worktreeId: worktreeId)
+            byWorktree[worktreeId] = file
+            return review
+        } catch {
+            return nil
+        }
+    }
+
     /// Clear any stashed draft commit state for the given worktree.
     /// Used when the user explicitly discards the draft (via tab context
     /// menu) or after a successful commit consumes the draft.
@@ -1565,7 +1595,7 @@ final class TabsManager {
             let tab = Tab.commitEditor(existing)
             file.tabs[existingIdx] = tab
             file.tabs.remove(at: idx)
-            file.activeTabId = tab.id
+            if file.activeTabId == draftTabId { file.activeTabId = tab.id }
             file.stashedDraft = nil
             return tab
         }

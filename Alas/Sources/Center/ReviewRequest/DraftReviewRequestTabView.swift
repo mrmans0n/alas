@@ -671,6 +671,10 @@ struct DraftReviewRequestTabView: View {
                     worktreeId: worktreeId,
                     forceReviewLoopRemote: true
                 )
+                if let snapshot = appState.rightPaneStore.activeState(worktreeId: worktreeId)?.reviewLoop.snapshot,
+                   snapshot.reviewRequest?.url == url {
+                    _ = appState.tabs.transitionToCreatedReview(worktreeId: worktreeId, replacing: tabState.id, snapshot: snapshot)
+                }
             } catch {
                 self.error = (error as NSError).localizedDescription
             }

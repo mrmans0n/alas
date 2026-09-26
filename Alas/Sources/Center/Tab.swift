@@ -399,6 +399,7 @@ struct ReviewPRTabState: Codable, Equatable, Identifiable {
     let number: Int
     var url: URL
     var title: String
+    var createdAt: Date?
 
     var displayTitle: String {
         "\(provider.reviewRequestLabel) Review"
@@ -413,6 +414,7 @@ struct ReviewPRTabState: Codable, Equatable, Identifiable {
         self.number = request?.number ?? 0
         self.url = request?.url ?? remote?.webURL ?? URL(fileURLWithPath: "/")
         self.title = request?.title ?? ""
+        self.createdAt = nil
         let host = remote?.host ?? self.url.host ?? ""
         self.id = [
             "review-pr",
