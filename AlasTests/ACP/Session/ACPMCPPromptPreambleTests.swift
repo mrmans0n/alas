@@ -290,4 +290,19 @@ struct ACPMCPPromptPreambleTests {
             builtInInjected: true, isDelegated: true, userServerNames: []))
         #expect(!text.contains("you do not need to poll"))
     }
+
+    @Test("root preamble explains blocked children and the approval boundary")
+    func rootMentionsBlockedChildren() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: false, userServerNames: [], mode: .mcp))
+        #expect(text.contains("blocked"))
+        #expect(text.contains("cannot answer"))
+    }
+
+    @Test("delegated preamble does not mention blocked children")
+    func delegatedOmitsBlockedChildren() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: true, userServerNames: []))
+        #expect(!text.contains("cannot answer"))
+    }
 }

@@ -282,6 +282,10 @@ struct AppConfig: Codable, Equatable {
     struct Harness: Codable, Equatable {
         var notifyOnFinish: Bool
         var notifyOnAwaiting: Bool
+        /// Seconds a delegated child may stay blocked on a human decision
+        /// before its parent is woken. The parent always gets a passive
+        /// notice immediately. 0 disables escalation. Default: 30.
+        var acpDelegatedBlockerEscalationSeconds: Int
         var dismissedHookInstallNudges: [String]
         var dismissedACPSetupNudges: [String]
         var confirmCloseChatTabs: Bool
@@ -312,7 +316,7 @@ struct AppConfig: Codable, Equatable {
         var acpDictationLocale: String
 
         enum CodingKeys: String, CodingKey {
-            case notifyOnFinish, notifyOnAwaiting,
+            case notifyOnFinish, notifyOnAwaiting, acpDelegatedBlockerEscalationSeconds,
                  dismissedHookInstallNudges, dismissedACPSetupNudges,
                  confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault, acpLocalTitlesEnabled, acpShowMinimap,
                  acpCollapseFinishedToolCalls,
@@ -320,6 +324,7 @@ struct AppConfig: Codable, Equatable {
         }
 
         init(notifyOnFinish: Bool = true, notifyOnAwaiting: Bool = true,
+             acpDelegatedBlockerEscalationSeconds: Int = 30,
              dismissedHookInstallNudges: [String] = [],
              dismissedACPSetupNudges: [String] = [],
              confirmCloseChatTabs: Bool = false,
@@ -334,6 +339,7 @@ struct AppConfig: Codable, Equatable {
         {
             self.notifyOnFinish = notifyOnFinish
             self.notifyOnAwaiting = notifyOnAwaiting
+            self.acpDelegatedBlockerEscalationSeconds = acpDelegatedBlockerEscalationSeconds
             self.dismissedHookInstallNudges = dismissedHookInstallNudges
             self.dismissedACPSetupNudges = dismissedACPSetupNudges
             self.confirmCloseChatTabs = confirmCloseChatTabs
@@ -351,6 +357,8 @@ struct AppConfig: Codable, Equatable {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             notifyOnFinish = (try? c.decode(Bool.self, forKey: .notifyOnFinish)) ?? true
             notifyOnAwaiting = (try? c.decode(Bool.self, forKey: .notifyOnAwaiting)) ?? true
+            acpDelegatedBlockerEscalationSeconds =
+                (try? c.decode(Int.self, forKey: .acpDelegatedBlockerEscalationSeconds)) ?? 30
             dismissedHookInstallNudges = (try? c.decode([String].self, forKey: .dismissedHookInstallNudges)) ?? []
             dismissedACPSetupNudges = (try? c.decode([String].self, forKey: .dismissedACPSetupNudges)) ?? []
             confirmCloseChatTabs = (try? c.decode(Bool.self, forKey: .confirmCloseChatTabs)) ?? false

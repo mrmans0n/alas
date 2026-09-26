@@ -244,4 +244,30 @@ struct ACPSessionOrchestrationPolicyTests {
         #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
             result: .cancelled, lastParentReportAt: nil, turnStartedAt: 100) == .notice)
     }
+
+    private func blocker(_ key: String = "n42") -> ACPChildBlocker {
+        .init(sessionId: "child", requestKey: key, kind: .permission, summary: "Write file")
+    }
+
+    @Test("escalates only while the same request is still blocked")
+    func escalatesOnlyForTheSameRequest() {
+        #expect(ACPSessionOrchestrationPolicy.escalation(
+            blocker: blocker(), liveBlockedRequestKeys: ["n42"]) == .wake)
+        #expect(ACPSessionOrchestrationPolicy.escalation(
+            blocker: blocker(), liveBlockedRequestKeys: ["n42", "u123"]) == .wake)
+    }
+
+    @Test("does not escalate once the request is resolved")
+    func doesNotEscalateWhenResolved() {
+        #expect(ACPSessionOrchestrationPolicy.escalation(
+            blocker: blocker(), liveBlockedRequestKeys: []) == .stillHandled)
+    }
+
+    @Test("a different pending request is not proof the original still blocks")
+    func differentKeyDoesNotEscalate() {
+        // The child cleared n42 and is now blocked on something else. Waking
+        // about n42 would tell the parent the wrong thing.
+        #expect(ACPSessionOrchestrationPolicy.escalation(
+            blocker: blocker(), liveBlockedRequestKeys: ["n99"]) == .stillHandled)
+    }
 }

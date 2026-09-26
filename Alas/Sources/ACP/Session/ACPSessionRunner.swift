@@ -86,6 +86,12 @@ final class ACPSessionRunner {
     /// truth that previously caused the "tool calls stuck on pending"
     /// bug — the UI was creating its own copy with no continuation.
     let policy: ACPPermissionPolicy
+    /// Key of the permission this session is parked on, or nil. Read by the
+    /// manager when deciding whether a blocked child is still blocked on the
+    /// same request.
+    var blockedPermissionRequestKey: String? {
+        policy.pendingPermissionRequestID.map(ACPChildBlocker.requestKey)
+    }
     /// Optional hook called before each agent file-write to check whether the
     /// target path has a live, dirty editor buffer. When it returns `true` a
     /// `systemNotice` is appended to the session so the user is aware the
@@ -124,6 +130,10 @@ final class ACPSessionRunner {
     /// while it was still the active prompt. Recovery-context prompts and
     /// superseded prompts do not fire.
     private let onTurnCompleted: ((ACPTurnCompletion) -> Void)?
+    /// Fires when this session's permission policy parks for a human. Only
+    /// meaningful for a delegated child, whose parent is told; the manager
+    /// decides that, not the runner.
+    private let onPermissionBlocked: ((ACPChildBlocker) -> Void)?
     private var activePromptStartedAt: Int64?
     private var activePromptDelegatedSource: ACPDelegatedPromptSource?
     /// Transcript message count when this turn's prompt was recorded. Bounds
@@ -302,6 +312,7 @@ final class ACPSessionRunner {
          onPromptWorkChanged: (() -> Void)? = nil,
          onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
          onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
+         onPermissionBlocked: ((ACPChildBlocker) -> Void)? = nil,
          onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
@@ -337,6 +348,7 @@ final class ACPSessionRunner {
         self.onMessageActivity = onMessageActivity
         self.onPromptWorkChanged = onPromptWorkChanged
         self.onTurnCompleted = onTurnCompleted
+        self.onPermissionBlocked = onPermissionBlocked
         self.onQueuedPromptDispatchRegistration = onQueuedPromptDispatchRegistration
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.localTitlesEnabled = localTitlesEnabled
@@ -382,13 +394,25 @@ final class ACPSessionRunner {
             )
         }
         self.leaseFenceProvider = leaseFenceProvider ?? { initialLease }
+        let permissionBlocked = onPermissionBlocked
+        let policySessionId = sessionId
         self.policy = ACPPermissionPolicy(
             session: session,
             log: ACPPermissionDecisionLog(
                 persistence: resolvedPersistence,
                 canWrite: canWrite ?? defaultCanWrite,
                 leaseFence: leaseFenceProvider
-            )
+            ),
+            onBlocked: { requestID, params in
+                permissionBlocked?(ACPChildBlocker(
+                    sessionId: policySessionId,
+                    requestKey: ACPChildBlocker.requestKey(requestID),
+                    kind: .permission,
+                    summary: params.toolCall.title
+                        ?? params.toolCall.name
+                        ?? "a tool call"
+                ))
+            }
         )
     }
 

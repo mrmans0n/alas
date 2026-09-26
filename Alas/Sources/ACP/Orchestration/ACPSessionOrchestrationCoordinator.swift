@@ -22,6 +22,19 @@ final class ACPSessionOrchestrationCoordinator {
         /// to a real millisecond clock so existing call sites that don't
         /// care about this comparison don't need to supply one.
         let nowMillis: () -> Int64
+        /// Every request the given session is currently blocked on. Supplied
+        /// by `ACPSessionManager`, which is the only place that can see a
+        /// parked permission's real id.
+        let blockedRequestKeys: (String) -> Set<String>
+        /// Seconds before a still-blocked child escalates from notice to wake.
+        /// 0 disables escalation.
+        let escalationDelaySeconds: () -> Int
+        /// Arranges for `work` to run after `delay` seconds. Defaults to a
+        /// no-op, so `childBlocked` schedules nothing in any fixture that
+        /// doesn't override this — every test drives the re-check by calling
+        /// `escalateBlockerIfStillBlocked` directly instead of waiting out a
+        /// real delay. Only `AppState`'s construction (Task 7) sleeps for real.
+        let scheduleEscalationCheck: (Int, @escaping @Sendable () async -> Void) -> Void
         let makeID: () -> String
         let worktree: (String) -> Worktree?
         let existingWorktree: (String, String) -> Worktree?
@@ -40,6 +53,9 @@ final class ACPSessionOrchestrationCoordinator {
             instanceId: String,
             now: @escaping () -> Int64,
             nowMillis: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
+            blockedRequestKeys: @escaping (String) -> Set<String> = { _ in [] },
+            escalationDelaySeconds: @escaping () -> Int = { 30 },
+            scheduleEscalationCheck: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in },
             makeID: @escaping () -> String,
             worktree: @escaping (String) -> Worktree?,
             existingWorktree: @escaping (String, String) -> Worktree?,
@@ -57,6 +73,9 @@ final class ACPSessionOrchestrationCoordinator {
             self.instanceId = instanceId
             self.now = now
             self.nowMillis = nowMillis
+            self.blockedRequestKeys = blockedRequestKeys
+            self.escalationDelaySeconds = escalationDelaySeconds
+            self.scheduleEscalationCheck = scheduleEscalationCheck
             self.makeID = makeID
             self.worktree = worktree
             self.existingWorktree = existingWorktree
@@ -456,6 +475,63 @@ final class ACPSessionOrchestrationCoordinator {
             callerParent: record,
             targetParent: nil
         )
+    }
+
+    /// A delegated child stopped on something only a human can resolve. The
+    /// parent is noticed at once, then woken only if the same request is still
+    /// unresolved after the configured delay.
+    func childBlocked(_ blocker: ACPChildBlocker) async {
+        guard let record = try? await environment.persistence.delegation(childSessionId: blocker.sessionId),
+              record.phase != .failed, record.phase != .closed
+        else { return }
+        var context = outcomeContext(for: record)
+        context.blockerSummary = blocker.summary
+        await enqueueOutcome(.init(
+            id: "blocker-\(blocker.sessionId)-\(blocker.requestKey)-notice",
+            sourceSessionId: blocker.sessionId,
+            targetSessionId: record.parentSessionId,
+            prompt: ACPDelegatedOutcomeText.blocker(
+                context, kindLabel: blocker.kind.rawValue, waitedSeconds: 0, escalated: false
+            ),
+            createdAt: environment.now(),
+            kind: .notice
+        ), child: record)
+
+        let delay = environment.escalationDelaySeconds()
+        guard delay > 0 else { return }
+        environment.scheduleEscalationCheck(delay) { [weak self] in
+            await self?.escalateBlockerIfStillBlocked(blocker)
+        }
+    }
+
+    /// The delayed re-check, reached in production through
+    /// `scheduleEscalationCheck` and called directly by tests. Reads live
+    /// state rather than tracking timers, so a block the human already
+    /// cleared simply produces nothing and no cancellation is required.
+    func escalateBlockerIfStillBlocked(_ blocker: ACPChildBlocker) async {
+        guard environment.escalationDelaySeconds() > 0,
+              let record = try? await environment.persistence.delegation(childSessionId: blocker.sessionId),
+              record.phase != .failed, record.phase != .closed,
+              case .wake = ACPSessionOrchestrationPolicy.escalation(
+                  blocker: blocker,
+                  liveBlockedRequestKeys: environment.blockedRequestKeys(blocker.sessionId)
+              )
+        else { return }
+        var context = outcomeContext(for: record)
+        context.blockerSummary = blocker.summary
+        await enqueueOutcome(.init(
+            id: "blocker-\(blocker.sessionId)-\(blocker.requestKey)",
+            sourceSessionId: blocker.sessionId,
+            targetSessionId: record.parentSessionId,
+            prompt: ACPDelegatedOutcomeText.blocker(
+                context,
+                kindLabel: blocker.kind.rawValue,
+                waitedSeconds: environment.escalationDelaySeconds(),
+                escalated: true
+            ),
+            createdAt: environment.now(),
+            kind: .prompt
+        ), child: record)
     }
 
     private func outcomeContext(for record: ACPDelegationRecord) -> ACPDelegatedOutcomeText.Context {

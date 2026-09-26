@@ -6556,6 +6556,23 @@ final class AppState {
                 instanceId: instanceId,
                 now: { Int64(Date().timeIntervalSince1970) },
                 nowMillis: { Int64(Date().timeIntervalSince1970 * 1000) },
+                blockedRequestKeys: { [weak self] sessionId in
+                    guard let self,
+                          let (_, manager) = self.acpManagers.first(where: { _, manager in
+                              manager.liveSession(for: sessionId) != nil
+                          })
+                    else { return [] }
+                    return manager.blockedRequestKeys(for: sessionId)
+                },
+                escalationDelaySeconds: { [weak self] in
+                    self?.config.harness.acpDelegatedBlockerEscalationSeconds ?? 30
+                },
+                scheduleEscalationCheck: { delay, work in
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(delay))
+                        await work()
+                    }
+                },
                 makeID: { UUID().uuidString },
                 worktree: { [weak self] id in self?.worktree(withId: id) },
                 existingWorktree: { [weak self] projectId, worktreeId in
@@ -12022,6 +12039,11 @@ final class AppState {
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }
             },
+            onChildBlocked: { [weak self] blocker in
+                Task { @MainActor [weak self] in
+                    await self?.acpOrchestration.childBlocked(blocker)
+                }
+            },
             onCheckpointCapture: { [weak self] prompt, hasAttachments in
                 guard let self, let target = self.checkpointTarget(for: worktree) else { return nil }
                 do {
@@ -12451,6 +12473,11 @@ final class AppState {
             onTurnCompleted: { [weak self] completion in
                 Task { @MainActor [weak self] in
                     await self?.acpOrchestration.childTurnCompleted(completion)
+                }
+            },
+            onChildBlocked: { [weak self] blocker in
+                Task { @MainActor [weak self] in
+                    await self?.acpOrchestration.childBlocked(blocker)
                 }
             },
             launchSpecTransformer: { [weak self] spec in

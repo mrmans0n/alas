@@ -5015,6 +5015,12 @@ struct ACPSessionRunnerTests {
         }
         #expect(condition())
     }
+
+    @Test("runner exposes no blocked permission key when nothing is parked")
+    func noBlockedPermissionKeyWhenIdle() throws {
+        let (runner, _) = try makeRunner()
+        #expect(runner.blockedPermissionRequestKey == nil)
+    }
 }
 
 private final class PermissionOrderingClient: ACPClient {
