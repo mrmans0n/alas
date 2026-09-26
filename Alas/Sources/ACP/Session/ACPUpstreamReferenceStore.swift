@@ -1,0 +1,163 @@
+import Combine
+import Foundation
+
+/// Per-worktree cache behind reference chips: resolves the code host remote
+/// once, then looks up each `#N` / `!N` at most once per `staleAfter`.
+/// Composer and transcript share one store per worktree through `Registry`.
+@MainActor
+final class ACPUpstreamReferenceStore: ObservableObject {
+    struct Environment: Sendable {
+        var remotes: @Sendable (URL) async throws -> [GitRemote]
+        var providers: CodeHostProviderRegistry
+        var now: @Sendable () -> Date
+
+        static var live: Environment {
+            Environment(
+                remotes: { try await GitService().remotes(worktreePath: $0) },
+                providers: .live(),
+                now: { Date() }
+            )
+        }
+    }
+
+    enum Entry: Equatable {
+        case idle
+        case loading
+        case loaded(CodeHostReferenceSummary)
+        case failed(CodeHostReferenceFailure)
+    }
+
+    @MainActor
+    final class Registry {
+        private var stores: [String: ACPUpstreamReferenceStore] = [:]
+
+        func store(for worktreeRoot: URL) -> ACPUpstreamReferenceStore {
+            let root = worktreeRoot.standardizedFileURL
+            if let existing = stores[root.path] { return existing }
+            let store = ACPUpstreamReferenceStore(worktreeRoot: root)
+            stores[root.path] = store
+            return store
+        }
+    }
+
+    static let staleAfter: TimeInterval = 300
+
+    let worktreeRoot: URL
+    @Published private(set) var remote: CodeHostRemote?
+    @Published private(set) var remoteResolved = false
+    /// Bumps on every entry change so chips and open cards repaint.
+    @Published private(set) var revision: UInt64 = 0
+
+    private let environment: Environment
+    private var entries: [CodeHostReference: (entry: Entry, at: Date)] = [:]
+    private var loads: [CodeHostReference: Task<Void, Never>] = [:]
+    private var remoteTask: Task<Void, Never>?
+
+    init(worktreeRoot: URL, environment: Environment = .live) {
+        self.worktreeRoot = worktreeRoot
+        self.environment = environment
+    }
+
+    var hostKind: CodeHostKind? { remote?.kind }
+
+    /// Idempotent. Only `git remote -v` runs here; CLI availability and auth
+    /// are checked lazily when a lookup fails.
+    func resolveRemote() {
+        guard remoteTask == nil else { return }
+        let root = worktreeRoot
+        let environment = environment
+        remoteTask = Task { [weak self] in
+            let remotes = (try? await environment.remotes(root)) ?? []
+            let detected = CodeHostRemoteDetector.detect(
+                from: remotes,
+                supportedKinds: environment.providers.supportedKinds
+            )
+            guard let self else { return }
+            self.remote = detected
+            self.remoteResolved = true
+        }
+    }
+
+    func waitForRemote() async {
+        await remoteTask?.value
+    }
+
+    func entry(for reference: CodeHostReference) -> Entry {
+        entries[reference]?.entry ?? .idle
+    }
+
+    /// The fetched kind, or on GitLab the kind the sigil already implies.
+    /// `nil` means the chip draws neutral gray.
+    func resolvedKind(for reference: CodeHostReference) -> CodeHostReferenceSummary.Kind? {
+        if case .loaded(let summary) = entry(for: reference) { return summary.kind }
+        guard remote?.kind == .gitlab else { return nil }
+        return reference.sigil == .bang ? .reviewRequest : .issue
+    }
+
+    func url(for reference: CodeHostReference) -> URL? {
+        if case .loaded(let summary) = entry(for: reference) { return summary.url }
+        return remote.map { reference.webURL(on: $0) }
+    }
+
+    func ensureLoaded(_ reference: CodeHostReference) {
+        guard let remote,
+              let provider = environment.providers.provider(for: remote.kind),
+              loads[reference] == nil
+        else { return }
+        if let cached = entries[reference],
+           environment.now().timeIntervalSince(cached.at) < Self.staleAfter {
+            return
+        }
+        if entries[reference] == nil {
+            set(reference, .loading)
+        }
+        let root = worktreeRoot
+        loads[reference] = Task { [weak self] in
+            let outcome: Entry
+            do {
+                outcome = .loaded(try await provider.referenceSummary(remote: remote, reference: reference, cwd: root))
+            } catch {
+                outcome = .failed(await Self.failure(for: error, provider: provider, remote: remote, cwd: root))
+            }
+            guard let self else { return }
+            self.loads[reference] = nil
+            guard self.remote == remote else { return }
+            self.set(reference, outcome)
+        }
+    }
+
+    func waitForPendingLoads() async {
+        while let task = loads.values.first {
+            await task.value
+        }
+    }
+
+    private func set(_ reference: CodeHostReference, _ entry: Entry) {
+        entries[reference] = (entry, environment.now())
+        revision &+= 1
+    }
+
+    private nonisolated static func failure(
+        for error: Error,
+        provider: any CodeHostProvider,
+        remote: CodeHostRemote,
+        cwd: URL
+    ) async -> CodeHostReferenceFailure {
+        let executable = remote.kind.cliExecutable
+        if case CodeHostIssueProviderError.notFound = error {
+            return .notFound(repository: "\(remote.host)/\(remote.repositorySlug)")
+        }
+        if let error = error as? CodeHostProviderError {
+            switch error {
+            case .cliMissing: return .cliMissing(executable: executable)
+            case .unauthenticated(let host): return .unauthenticated(executable: executable, host: host)
+            default: break
+            }
+        }
+        if !(await provider.isAvailable(cwd: cwd)) { return .cliMissing(executable: executable) }
+        if !(await provider.isAuthenticated(remote: remote, cwd: cwd)) {
+            return .unauthenticated(executable: executable, host: remote.host)
+        }
+        return .other(error.localizedDescription)
+    }
+}

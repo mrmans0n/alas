@@ -125,6 +125,8 @@ final class ACPSessionManager: ObservableObject {
     let usesRemoteHostRegistry: Bool
     let persistence: ACPSessionPersistence
     let changeNotifier: ACPChangeNotifier
+    /// Reference-chip caches, one per worktree, shared by composer and transcript.
+    let upstreamReferences = ACPUpstreamReferenceStore.Registry()
     private let delegatedMessageNotifier: ACPChangeNotifier
     /// Called by each runner's write handler to check whether the target path
     /// has an open, dirty editor buffer. `nil` disables the check (no notices).
