@@ -2,12 +2,12 @@ import CryptoKit
 import Foundation
 import Synchronization
 
-protocol NextPromptModelTransport: Sendable {
+protocol LocalTextModelTransport: Sendable {
     /// Return only after all writes have stopped, including on cancellation.
-    func download(_ url: URL, into sink: NextPromptModelSink) async throws
+    func download(_ url: URL, into sink: LocalTextModelSink) async throws
 }
 
-final class NextPromptModelSink: Sendable {
+final class LocalTextModelSink: Sendable {
     private struct State {
         var hash = SHA256()
         var received: Int64 = 0
@@ -15,10 +15,10 @@ final class NextPromptModelSink: Sendable {
     }
     private let state = Mutex(State())
     private let handle: FileHandle
-    private let asset: NextPromptModelAsset
+    private let asset: LocalTextModelAsset
     private let progress: @Sendable (Int64) -> Void
 
-    init(handle: FileHandle, asset: NextPromptModelAsset, progress: @escaping @Sendable (Int64) -> Void) {
+    init(handle: FileHandle, asset: LocalTextModelAsset, progress: @escaping @Sendable (Int64) -> Void) {
         self.handle = handle
         self.asset = asset
         self.progress = progress
@@ -26,7 +26,7 @@ final class NextPromptModelSink: Sendable {
 
     func receive(_ data: Data) throws {
         let received = try state.withLock { value -> Int64? in
-            guard Int64(data.count) <= asset.bytes - value.received else { throw NextPromptModelFailure.integrity }
+            guard Int64(data.count) <= asset.bytes - value.received else { throw LocalTextModelFailure.integrity }
             try handle.write(contentsOf: data)
             value.hash.update(data: data)
             value.received += Int64(data.count)
@@ -40,13 +40,13 @@ final class NextPromptModelSink: Sendable {
     func finish() throws {
         try state.withLock { value in
             let digest = value.hash.finalize().map { String(format: "%02x", $0) }.joined()
-            guard value.received == asset.bytes, digest == asset.sha256 else { throw NextPromptModelFailure.integrity }
+            guard value.received == asset.bytes, digest == asset.sha256 else { throw LocalTextModelFailure.integrity }
             try handle.synchronize()
         }
     }
 }
 
-struct NextPromptModelDownload: NextPromptModelTransport {
+struct LocalTextModelDownload: LocalTextModelTransport {
     let configuration: URLSessionConfiguration
 
     init(configuration: URLSessionConfiguration = .ephemeral) {
@@ -57,14 +57,14 @@ struct NextPromptModelDownload: NextPromptModelTransport {
         guard url.scheme == "https", url.user == nil, url.password == nil, url.fragment == nil,
               url.port == nil || url.port == 443,
               ["huggingface.co", "us.aws.cdn.hf.co"].contains(url.host ?? "") else {
-            throw NextPromptModelFailure.network
+            throw LocalTextModelFailure.network
         }
-        let model = NextPromptModelManifest.pinnedModel
-        let revision = NextPromptModelManifest.pinnedRevision
+        let model = LocalTextModelManifest.pinnedModel
+        let revision = LocalTextModelManifest.pinnedRevision
         if url.host == "huggingface.co" {
             let prefixes = ["/\(model)/resolve/\(revision)/", "/api/resolve-cache/models/\(model)/\(revision)/"]
             guard prefixes.contains(where: { url.path.hasPrefix($0) && !url.path.dropFirst($0.count).contains("/") && !url.lastPathComponent.isEmpty }) else {
-                throw NextPromptModelFailure.network
+                throw LocalTextModelFailure.network
             }
         } else {
             // Exact paths observed by HEAD at the pinned revision. These are Xet object IDs,
@@ -72,15 +72,15 @@ struct NextPromptModelDownload: NextPromptModelTransport {
             let prefix = "/xet-bridge-us/68939c367fb5d97aea556aa6/"
             let objects = ["4ae82815c30780b930535c80899215a15651b182544ed87eda312d596abd6983",
                            "6aec39639a0a2d1ca966356b8c2b8426a484f80ff80731f44fa8482040713bdf"]
-            guard objects.contains(where: { url.path == prefix + $0 }) else { throw NextPromptModelFailure.network }
+            guard objects.contains(where: { url.path == prefix + $0 }) else { throw LocalTextModelFailure.network }
         }
     }
 
     static func validateStatus(_ status: Int) throws {
-        guard status == 200 else { throw NextPromptModelFailure.network }
+        guard status == 200 else { throw LocalTextModelFailure.network }
     }
 
-    func download(_ url: URL, into sink: NextPromptModelSink) async throws {
+    func download(_ url: URL, into sink: LocalTextModelSink) async throws {
         try Self.validate(url)
         try await Transfer(sink: sink, configuration: configuration).run(url)
     }
@@ -91,14 +91,14 @@ struct NextPromptModelDownload: NextPromptModelTransport {
             var cancelled = false
         }
         private let control = Mutex(Control())
-        private let sink: NextPromptModelSink
+        private let sink: LocalTextModelSink
         private let configuration: URLSessionConfiguration
         // These properties are accessed only on the serial delegate queue after run starts.
         private var continuation: CheckedContinuation<Void, Error>?
         private var failure: Error?
         private var accepted = false
 
-        init(sink: NextPromptModelSink, configuration: URLSessionConfiguration) {
+        init(sink: LocalTextModelSink, configuration: URLSessionConfiguration) {
             self.sink = sink
             self.configuration = configuration.copy() as! URLSessionConfiguration
         }
@@ -138,8 +138,8 @@ struct NextPromptModelDownload: NextPromptModelTransport {
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
             do {
-                guard let url = request.url else { throw NextPromptModelFailure.network }
-                try NextPromptModelDownload.validate(url)
+                guard let url = request.url else { throw LocalTextModelFailure.network }
+                try LocalTextModelDownload.validate(url)
                 // Rebuild the request so credentials and cookies cannot cross a redirect.
                 var clean = URLRequest(url: url)
                 clean.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
@@ -160,8 +160,8 @@ struct NextPromptModelDownload: NextPromptModelTransport {
         func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
             do {
-                guard let response = response as? HTTPURLResponse else { throw NextPromptModelFailure.network }
-                try NextPromptModelDownload.validateStatus(response.statusCode)
+                guard let response = response as? HTTPURLResponse else { throw LocalTextModelFailure.network }
+                try LocalTextModelDownload.validateStatus(response.statusCode)
                 accepted = true
                 completionHandler(.allow)
             } catch {
@@ -184,7 +184,7 @@ struct NextPromptModelDownload: NextPromptModelTransport {
             session.finishTasksAndInvalidate()
             control.withLock { $0.task = nil }
             if let error = failure ?? error { continuation?.resume(throwing: error) }
-            else if !accepted { continuation?.resume(throwing: NextPromptModelFailure.network) }
+            else if !accepted { continuation?.resume(throwing: LocalTextModelFailure.network) }
             else { continuation?.resume() }
             continuation = nil
         }

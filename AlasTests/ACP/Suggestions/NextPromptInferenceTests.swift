@@ -115,6 +115,26 @@ struct NextPromptInferenceTests {
         #expect(fixture.canLockExclusively())
     }
 
+    @Test func retryVerifiesModelAvailabilityBeforeClearingFailure() async throws {
+        let fixture = try LeaseFixture()
+        let acquisitions = Mutex(0)
+        let inference = NextPromptInference(acquireLease: {
+            let attempt = acquisitions.withLock {
+                $0 += 1
+                return $0
+            }
+            if attempt == 1 { return try fixture.acquire() }
+            throw POSIXError(.ENOENT)
+        }, load: { _ in throw POSIXError(.ENOMEM) })
+        _ = try await inference.generate(request)
+        #expect(await inference.state == .failed)
+
+        await inference.retryAfterFailure()
+
+        #expect(await inference.state == .failed)
+        #expect(acquisitions.withLock { $0 } == 2)
+    }
+
     @Test func invalidOutputConsumesOnlyItsTurn() async throws {
         let fixture = try LeaseFixture()
         let outputs = Mutex([#"{"suggestion":null}"#, "bad json", #"{"suggestion":"Delete the backup."}"#,
@@ -187,29 +207,127 @@ struct NextPromptInferenceTests {
         #expect(fixture.canLockExclusively())
     }
 
-    @Test func callerCancellationAfterCompletionReleasesLeaseBeforeReturning() async throws {
+    @Test func delayedCancellationCallbackCannotOverwriteTerminalState() async throws {
+        let engine = CancellationResistantNextPromptEngine()
+        let callback = Mutex<(@Sendable () async -> Void)?>(nil)
+        let inference = NextPromptInference(
+            engine: engine,
+            verifyAvailability: {},
+            scheduleCancellation: { action in callback.withLock { $0 = action } }
+        )
+        let task = Task { try await inference.generate(request) }
+        await engine.waitUntilEvaluationStarts()
+
+        task.cancel()
+        try await eventually { callback.withLock { $0 != nil } }
+        await engine.finishEvaluation()
+        #expect(try await task.value == nil)
+        #expect(await inference.state == .ready)
+
+        let delayed = callback.withLock { action in
+            defer { action = nil }
+            return action
+        }
+        await delayed?()
+        #expect(await inference.state == .ready)
+    }
+
+    @Test func rejectedReplacementCancelsBlockedRequestAndSuppressesItsResult() async throws {
         let fixture = try LeaseFixture()
-        let completed = Mutex(false)
-        let clock = NextPromptInference.Clock(now: {
-            if CompletionCancellation.isCaller && completed.withLock({ $0 }) {
-                // The caller has joined evaluation and is about to retain it for idle reuse.
-                withUnsafeCurrentTask { $0?.cancel() }
-            }
-            return .now
-        })
+        let entered = Gate(), finish = Gate()
+        let cancelled = Mutex(false)
         let inference = NextPromptInference(acquireLease: { try fixture.acquire() }, load: { _ in
             return { _ in
-                completed.withLock { $0 = true }
-                return #"{"suggestion":"Completed candidate."}"#
+                await entered.open()
+                return await withTaskCancellationHandler {
+                    await finish.wait()
+                    return #"{"suggestion":"Stale candidate."}"#
+                } onCancel: {
+                    cancelled.withLock { $0 = true }
+                }
             }
-        }, clock: clock)
-        try await Task {
-            try await CompletionCancellation.$isCaller.withValue(true) {
-                let result = try await inference.generate(request)
-                #expect(result == nil)
-                #expect(fixture.canLockExclusively())
+        })
+        let first = Task { try await inference.generate(request) }
+        await entered.wait()
+
+        let replacement = Task { try await inference.generate(rejectedRequest) }
+        do {
+            try await eventually { cancelled.withLock { $0 } }
+        } catch {
+            await finish.open()
+            _ = try await first.value
+            _ = try await replacement.value
+            throw error
+        }
+        #expect(await inference.state == .unloading)
+        await finish.open()
+
+        #expect(try await first.value == nil)
+        #expect(try await replacement.value == nil)
+        #expect(await inference.state == .ready)
+        #expect(fixture.canLockExclusively())
+    }
+
+    @Test func replacedRequestCannotPublishTerminalStateWhileReplacementRuns() async throws {
+        let fixture = try LeaseFixture()
+        let starts = [Gate(), Gate()]
+        let finishes = [Gate(), Gate()]
+        let calls = Mutex(0)
+        let inference = NextPromptInference(acquireLease: { try fixture.acquire() }, load: { _ in
+            return { _ in
+                let index = calls.withLock {
+                    let index = $0
+                    $0 += 1
+                    return index
+                }
+                await starts[index].open()
+                await finishes[index].wait()
+                return #"{"suggestion":"Show an example."}"#
             }
-        }.value
+        })
+        let first = Task { try await inference.generate(request) }
+        await starts[0].wait()
+        let replacement = Task { try await inference.generate(request) }
+        await finishes[0].open()
+        await starts[1].wait()
+
+        #expect(try await first.value == nil)
+        #expect(await inference.state == .running)
+        await finishes[1].open()
+        #expect(try await replacement.value == "Show an example.")
+        await inference.cancelAndUnload()
+    }
+
+    @Test func cancelAndUnloadCannotPublishTerminalStateWhileReplacementRuns() async throws {
+        let fixture = try LeaseFixture()
+        let starts = [Gate(), Gate()]
+        let finishes = [Gate(), Gate()]
+        let calls = Mutex(0)
+        let inference = NextPromptInference(acquireLease: { try fixture.acquire() }, load: { _ in
+            return { _ in
+                let index = calls.withLock {
+                    let index = $0
+                    $0 += 1
+                    return index
+                }
+                await starts[index].open()
+                await finishes[index].wait()
+                return #"{"suggestion":"Show an example."}"#
+            }
+        })
+        let first = Task { try await inference.generate(request) }
+        await starts[0].wait()
+        let stop = Task { await inference.cancelAndUnload() }
+        try await eventually { await inference.state == .unloading }
+        let replacement = Task { try await inference.generate(request) }
+        await finishes[0].open()
+        await starts[1].wait()
+
+        await stop.value
+        #expect(try await first.value == nil)
+        #expect(await inference.state == .running)
+        await finishes[1].open()
+        #expect(try await replacement.value == "Show an example.")
         await inference.cancelAndUnload()
     }
 
@@ -254,6 +372,12 @@ struct NextPromptInferenceTests {
                         draftRevision: 0, composerEpoch: 0, settingsGeneration: 0, modelGeneration: 0),
               turns: [.init(user: "Explain binary search.", assistant: "It halves a sorted list.")])
     }
+
+    private var rejectedRequest: NextPromptRequest {
+        .init(id: .init(sessionID: "test", incarnation: UUID(), promptID: 2, transcriptRevision: 2,
+                        draftRevision: 0, composerEpoch: 0, settingsGeneration: 0, modelGeneration: 0),
+              turns: [])
+    }
 }
 
 private final class LeaseFixture: Sendable {
@@ -265,10 +389,10 @@ private final class LeaseFixture: Sendable {
         path = directory.appendingPathComponent("lock").path
         FileManager.default.createFile(atPath: path, contents: Data())
     }
-    func acquire() throws -> NextPromptModelLease {
+    func acquire() throws -> LocalTextModelLease {
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
         guard flock(handle.fileDescriptor, LOCK_SH | LOCK_NB) == 0 else { throw POSIXError(.EWOULDBLOCK) }
-        return NextPromptModelLease(directory: directory, generation: 1, handle: handle)
+        return LocalTextModelLease(directory: directory, generation: 1, handle: handle)
     }
     func canLockExclusively() -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path)) else { return false }
@@ -342,6 +466,19 @@ private final class ContainerLifetime: Sendable {
     deinit { onRelease() }
 }
 
-private enum CompletionCancellation {
-    @TaskLocal static var isCaller = false
+private final class CancellationResistantNextPromptEngine: LocalTextGenerating {
+    private let entered = Gate()
+    private let finish = Gate()
+
+    func generate(_ request: LocalTextGenerationRequest, caller: LocalTextCaller,
+                  priority: LocalTextJobPriority) async throws -> LocalTextGenerationResult {
+        await entered.open()
+        await finish.wait()
+        return .init(text: #"{"suggestion":"Late candidate."}"#, selectedCandidateIndex: 0)
+    }
+
+    func cancel(caller: LocalTextCaller) async {}
+    func cancelAndUnload() async {}
+    func waitUntilEvaluationStarts() async { await entered.wait() }
+    func finishEvaluation() async { await finish.open() }
 }

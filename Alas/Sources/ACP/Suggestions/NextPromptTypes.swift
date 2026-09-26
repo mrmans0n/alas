@@ -28,13 +28,3 @@ struct NextPromptRequest: Sendable {
     let id: NextPromptRequestID
     let turns: [NextPromptTurn]
 }
-
-struct NextPromptChatMessage: Equatable, Sendable {
-    enum Role: String, Sendable {
-        case system
-        case user
-    }
-
-    let role: Role
-    let content: String
-}

@@ -70,7 +70,7 @@ enum NextPromptContext {
 
     /// The counter must tokenize the full rendered chat template from these messages.
     static func fit(_ turns: [NextPromptTurn], tokenLimit: Int = tokenLimit,
-                    tokenCount: ([NextPromptChatMessage]) -> Int) -> [NextPromptTurn]? {
+                    tokenCount: ([LocalTextMessage]) -> Int) -> [NextPromptTurn]? {
         guard !turns.isEmpty else { return nil }
         for first in turns.indices {
             let candidate = Array(turns[first...])

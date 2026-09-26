@@ -1842,7 +1842,7 @@ Source/Cmlx/metal-cpp/LICENSE.txt
 
 Pinned model asset manifest
 ---------------------------
-NextPromptModelManifest.json lists the required files from
+LocalTextModelManifest.json lists the required files from
 mlx-community/Qwen3-4B-Instruct-2507-4bit at revision
 50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b. Every file has a SHA-256 digest
 and byte count. LFS files were checked against the revision's upstream LFS

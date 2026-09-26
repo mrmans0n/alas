@@ -3,7 +3,7 @@ import Foundation
 import Synchronization
 
 /// The descriptor remains open until the model container has finished using its files.
-final class NextPromptModelLease: Sendable {
+final class LocalTextModelLease: Sendable {
     let directory: URL
     let generation: UInt64
     private let handle: Mutex<FileHandle?>
@@ -26,16 +26,16 @@ final class NextPromptModelLease: Sendable {
 
 /// All traversal and deletion is relative to held directory descriptors.
 /// Checkpoint publication uses the same no-follow, chunked-I/O and fsync pattern.
-enum NextPromptModelFiles {
+enum LocalTextModelFiles {
     static func posix() -> POSIXError { POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
 
     static func openRoot(_ root: URL) throws -> FileHandle {
         guard root.isFileURL, root.path.hasPrefix("/"), !root.path.contains("\0") else {
-            throw NextPromptModelFailure.invalidPath
+            throw LocalTextModelFailure.invalidPath
         }
         let components = root.path.split(separator: "/", omittingEmptySubsequences: true)
         guard !components.isEmpty, components.allSatisfy({ $0 != "." && $0 != ".." }) else {
-            throw NextPromptModelFailure.invalidPath
+            throw LocalTextModelFailure.invalidPath
         }
         var current = try directory(parent: AT_FDCWD, name: "/")
         for component in components {
@@ -51,7 +51,7 @@ enum NextPromptModelFiles {
     static func directory(parent: Int32, name: String) throws -> FileHandle {
         let fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else {
-            if errno == ELOOP || errno == ENOTDIR { throw NextPromptModelFailure.invalidPath }
+            if errno == ELOOP || errno == ENOTDIR { throw LocalTextModelFailure.invalidPath }
             throw posix()
         }
         return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
@@ -61,30 +61,30 @@ enum NextPromptModelFiles {
         let flags = (create ? O_RDWR | O_CREAT | O_EXCL : O_RDONLY) | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK
         let fd = openat(parent, name, flags, 0o600)
         guard fd >= 0 else {
-            if errno == ELOOP { throw NextPromptModelFailure.invalidPath }
+            if errno == ELOOP { throw LocalTextModelFailure.invalidPath }
             throw posix()
         }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         var info = stat()
         guard fstat(fd, &info) == 0 else { throw posix() }
-        guard info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1 else { throw NextPromptModelFailure.invalidPath }
+        guard info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1 else { throw LocalTextModelFailure.invalidPath }
         return handle
     }
 
     static func lock(root: Int32, exclusive: Bool) throws -> FileHandle {
         let fd = openat(root, ".lock", O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
         guard fd >= 0 else {
-            if errno == ELOOP { throw NextPromptModelFailure.invalidPath }
+            if errno == ELOOP { throw LocalTextModelFailure.invalidPath }
             throw posix()
         }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         var info = stat()
         guard fstat(fd, &info) == 0 else { throw posix() }
-        guard info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1 else { throw NextPromptModelFailure.invalidPath }
+        guard info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1 else { throw LocalTextModelFailure.invalidPath }
         let operation = exclusive ? LOCK_EX | LOCK_NB : LOCK_SH | LOCK_NB
         if flock(fd, operation) != 0 {
             let code = errno
-            if code == EWOULDBLOCK || code == EAGAIN { throw NextPromptModelFailure.busy }
+            if code == EWOULDBLOCK || code == EAGAIN { throw LocalTextModelFailure.busy }
             throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
         }
         return handle
