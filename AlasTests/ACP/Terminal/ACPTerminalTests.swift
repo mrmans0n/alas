@@ -62,14 +62,17 @@ struct ACPTerminalTests {
     func releaseReachesOrphans() async throws {
         // Backgrounded sleep inherits the pipe write end, so the root
         // can exit but the EOF on our read end never fires. The parent
-        // stays alive for ~3 s after the fork so the periodic
-        // descendant tracker can capture the BG sleep before exit; once
-        // the root exits, kill() relies on that captured set to reach
-        // the orphan and let EOF finally arrive.
+        // stays alive for ~8 s after the fork so the periodic descendant
+        // tracker — a `.utility`-priority background task polling roughly
+        // once a second — gets several chances to capture the BG sleep
+        // before exit even under CI-loaded scheduling delays (a 3s window
+        // left only 2-3 attempts and has been observed missing all of
+        // them); once the root exits, kill() relies on that captured set
+        // to reach the orphan and let EOF finally arrive.
         let t = try ACPTerminal(
             id: "torphan",
             command: "/bin/sh",
-            args: ["-c", "sleep 60 & echo $!; sleep 3"],
+            args: ["-c", "sleep 60 & echo $!; sleep 8"],
             env: [:],
             cwd: "/tmp",
             outputByteLimit: 1024
@@ -84,9 +87,9 @@ struct ACPTerminalTests {
             }
         }
         #expect(sleepPid != 0)
-        // Wait long enough for sh to finish its `sleep 3` and exit, so
+        // Wait long enough for sh to finish its `sleep 8` and exit, so
         // we're genuinely in the orphaned-pipe state when release runs.
-        try await Task.sleep(nanoseconds: 3_500_000_000)
+        try await Task.sleep(nanoseconds: 8_500_000_000)
         #expect(t.exitStatus == nil)
         t.release()
         _ = await t.waitForExit()
