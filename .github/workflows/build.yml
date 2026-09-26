@@ -644,6 +644,9 @@ jobs:
       - name: Test Swift build measurements
         run: bash scripts/tests/swift-build-metrics/run.sh
 
+      - name: Test the test growth report
+        run: bash scripts/tests/test-growth/run.sh
+
   rust-tests:
     name: Rust tests (${{ matrix.project }})
     runs-on: ubuntu-26.04

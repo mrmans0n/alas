@@ -1,0 +1,30 @@
+name: Test growth
+
+# Report how each pull request changes the Swift test suite relative to the
+# app, so the testing policy in AGENTS.md is visible during review. This job
+# only reports: it never fails a pull request.
+on:
+  pull_request:
+    paths:
+      - "Alas/**"
+      - "AlasTests/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-growth:
+    name: Test growth report
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Compare the test suite with the base branch
+        run: python3 scripts/test_growth.py "origin/${{ github.base_ref }}" HEAD

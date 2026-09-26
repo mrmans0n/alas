@@ -63,6 +63,11 @@ Coverage is not a goal. Fewer, sharper tests beat many shallow ones.
 touch a suite with overlapping tests, remove or merge them in the same PR.
 A net reduction in test count is a fine outcome.
 
+Every pull request that touches `Alas/` or `AlasTests/` gets a **Test growth**
+check comparing its net test lines and `@Test` definitions with its app
+changes. It never fails the build, but a PR whose tests grow faster than the
+code they cover should be able to justify it.
+
 ## Before finishing a change
 
 - For documentation-only changes, do not build or run tests.
