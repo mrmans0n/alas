@@ -172,24 +172,49 @@ final class AppState {
     /// session-lease layer so two running Alas builds don't fight over a
     /// shared per-worktree database.
     let instanceId: String = UUID().uuidString
-    @ObservationIgnored let nextPromptModelStore: LocalTextModelStore
-    @ObservationIgnored let nextPromptReadModelState: @Sendable () async -> LocalTextModelState
-    @ObservationIgnored let nextPromptInference: any NextPromptRuntime
+    @ObservationIgnored let localTextModelStore: LocalTextModelStore
+    @ObservationIgnored let localTextReadModelState: @Sendable () async -> LocalTextModelState
+    @ObservationIgnored private let localTextInferenceOverride: (any LocalTextGenerating)?
+    @ObservationIgnored let nextPromptInferenceOverride: (any NextPromptRuntime)?
+    @ObservationIgnored lazy var localTextInference: any LocalTextGenerating =
+        localTextInferenceOverride ?? LocalTextInferenceEngine(store: localTextModelStore, observeMemoryPressure: false)
+    @ObservationIgnored lazy var nextPromptInference: any NextPromptRuntime = makeNextPromptInference()
+    private func makeNextPromptInference() -> any NextPromptRuntime {
+        if let nextPromptInferenceOverride { return nextPromptInferenceOverride }
+        let store = localTextModelStore
+        return NextPromptInference(
+            engine: localTextInference,
+            supported: { [localTextSupported] in localTextSupported },
+            verifyAvailability: {
+                let lease = try await store.acquireVerifiedLease()
+                lease.close()
+            },
+            clock: .init(),
+            scheduleCancellation: { action in _ = Task { await action() } }
+        )
+    }
     @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] in
         self?.nextPromptSnapshot()
     }
-    @ObservationIgnored let nextPromptObservers = NextPromptObservers()
-    @ObservationIgnored var nextPromptInstallation: Task<Void, Never>?
-    let nextPromptSupported: Bool
-    var nextPromptModelState: LocalTextModelState = .notInstalled
+    @ObservationIgnored lazy var sessionSummaryCoordinator = SessionSummaryCoordinator(engine: localTextInference)
+    @ObservationIgnored let localTextObservers = LocalTextObservers()
+    @ObservationIgnored var localTextInstallation: Task<Void, Never>?
+    let localTextSupported: Bool
+    var localTextModelState: LocalTextModelState = .notInstalled
     var nextPromptInferenceState: NextPromptInferenceState = .ready
     var nextPromptRuntimeEnabled = false
     var nextPromptDisableSavePending = false
     var nextPromptSettingsError: String?
-    var nextPromptRemovalFailure: LocalTextModelFailure?
+    var sessionSummariesRuntimeEnabled = false
+    var sessionSummaryDisableSavePending = false
+    var sessionSummarySettingsError: String?
+    var localTextRemovalFailure: LocalTextModelFailure?
     var nextPromptOffer: String?
     @ObservationIgnored var nextPromptSettingsGeneration: UInt64 = 0
-    @ObservationIgnored var nextPromptModelGeneration: UInt64 = 0
+    @ObservationIgnored var sessionSummarySettingsGeneration: UInt64 = 0
+    @ObservationIgnored var localTextModelGeneration: UInt64 = 0
+    @ObservationIgnored var localTextSettingsInspected = false
+    @ObservationIgnored var localTextRuntimeStarted = false
     @ObservationIgnored var nextPromptComposerEpoch: UInt64 = 0
     @ObservationIgnored var nextPromptShuttingDown = false
     @ObservationIgnored var nextPromptOwner: SessionOwnerID?
@@ -1359,17 +1384,19 @@ final class AppState {
         attentionStore: AttentionStore? = nil,
         attentionNavigationEnvironment: AttentionNavigationEnvironment? = nil,
         harnessAttentionSettleInterval: TimeInterval = 1.5,
-        nextPromptModelStore: LocalTextModelStore? = nil,
-        nextPromptReadModelState: (@Sendable () async -> LocalTextModelState)? = nil,
+        localTextModelStore: LocalTextModelStore? = nil,
+        localTextReadModelState: (@Sendable () async -> LocalTextModelState)? = nil,
+        localTextInference: (any LocalTextGenerating)? = nil,
         nextPromptInference: (any NextPromptRuntime)? = nil,
-        nextPromptSupported: Bool = NextPromptInference.isSupported()
+        localTextSupported: Bool = NextPromptInference.isSupported()
     ) {
         self.store = store
-        let suggestionStore = nextPromptModelStore ?? LocalTextModelStore()
-        self.nextPromptModelStore = suggestionStore
-        self.nextPromptReadModelState = nextPromptReadModelState ?? { await suggestionStore.state }
-        self.nextPromptInference = nextPromptInference ?? NextPromptInference(store: suggestionStore)
-        self.nextPromptSupported = nextPromptSupported
+        let suggestionStore = localTextModelStore ?? LocalTextModelStore()
+        self.localTextModelStore = suggestionStore
+        self.localTextReadModelState = localTextReadModelState ?? { await suggestionStore.state }
+        self.localTextInferenceOverride = localTextInference
+        self.nextPromptInferenceOverride = nextPromptInference
+        self.localTextSupported = localTextSupported
         self.workspaceStore = workspaceStore
         self.workspaceRemoteTransport = workspaceRemoteTransport
         self.attentionStore = attentionStore ?? AttentionStore()
@@ -1487,9 +1514,9 @@ final class AppState {
             self?.persistenceErrorHandler("Schedules Save Failed", message)
         }
         installRunScheduleRunner()
-        startNextPromptObservers()
+        startLocalTextObservers()
         AlasTerminationCoordinator.shared.flush = { [weak self] in
-            await self?.shutdownNextPromptSuggestions()
+            await self?.shutdownLocalTextFeatures()
             self?.runScheduler.stop()
             await GGLandingStore.shared.cancelAllAndWait()
             self?.cancelPendingRunScriptLaunches()
@@ -12730,7 +12757,7 @@ final class AppState {
         // must be torn down explicitly to stop the 2.5s backstop polls and
         // notifier subscriptions from outliving the manager.
         manager.shutdownBackgroundTasks()
-        nextPromptObservers.managers[owner] = nil
+        localTextObservers.managers[owner] = nil
     }
 
     private func finishDisposingACPManager(_ manager: ACPSessionManager) async {

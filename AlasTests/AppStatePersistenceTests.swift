@@ -179,15 +179,41 @@ struct AppStatePersistenceTests {
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
         let store = RecordingStore(initialProjectsFile: .init(projects: []))
-        let state = AppState(store: store, nextPromptModelStore: fixture.store,
+        let state = AppState(store: store, localTextModelStore: fixture.store,
                              nextPromptInference: NextPromptInference(acquireLease: { try await fixture.store.acquireVerifiedLease() }, load: { _ in { _ in nil } }),
-                             nextPromptSupported: true)
+                             localTextSupported: true)
         await state.enableNextPromptSuggestions()
         #expect(store.writtenConfig?.nextPromptSuggestionsEnabled == true)
         await state.disableNextPromptSuggestions()
         #expect(store.writtenConfig?.nextPromptSuggestionsEnabled == false)
         #expect(fixture.transport.requestCount == 0)
         await state.shutdownNextPromptSuggestions()
+    }
+
+    @Test func sessionSummaryOptInAndDisablePersistThroughTheConfigStore() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let previous = AlasTerminationCoordinator.shared.flush
+        defer { AlasTerminationCoordinator.shared.flush = previous }
+        let store = RecordingStore(initialProjectsFile: .init(projects: []))
+        let engine = LocalTextInferenceEngine(
+            acquireLease: { try await fixture.store.acquireVerifiedLease() },
+            load: { _ in { _ in .init(text: "", selectedCandidateIndex: 0) } },
+            observeMemoryPressure: false
+        )
+        let state = AppState(
+            store: store,
+            localTextModelStore: fixture.store,
+            localTextInference: engine,
+            localTextSupported: true
+        )
+
+        await state.enableSessionSummaries()
+        #expect(store.writtenConfig?.sessionSummariesEnabled == true)
+        await state.disableSessionSummaries()
+        #expect(store.writtenConfig?.sessionSummariesEnabled == false)
+        #expect(fixture.transport.requestCount == 0)
+        await state.shutdownLocalTextFeatures()
     }
 
     @Test func saveConfigReportsWriteFailure() {

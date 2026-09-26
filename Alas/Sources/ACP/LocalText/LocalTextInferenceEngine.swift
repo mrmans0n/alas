@@ -49,15 +49,17 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
     private var idleTask: Task<Void, Never>?
     private var pressure: DispatchSourceMemoryPressure?
 
-    init(store: LocalTextModelStore) {
+    init(store: LocalTextModelStore, observeMemoryPressure: Bool = true) {
         acquireLease = { try await store.acquireVerifiedLease() }
         load = Self.loadNative
         supported = Self.isSupported
         clock = Clock()
-        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
-        pressure = source
-        source.setEventHandler { [weak self] in Task { await self?.cancelAndUnload() } }
-        source.resume()
+        if observeMemoryPressure {
+            let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+            pressure = source
+            source.setEventHandler { [weak self] in Task { await self?.cancelAndUnload() } }
+            source.resume()
+        }
     }
 
     init(acquireLease: @escaping @Sendable () async throws -> LocalTextModelLease,

@@ -3,12 +3,14 @@ import Combine
 import Foundation
 
 /// Owns observer lifetimes, without retaining AppState through long-lived streams.
-final class NextPromptObservers {
+final class LocalTextObservers {
     var tasks: [Task<Void, Never>] = []
     var notifications: [AnyCancellable] = []
     var managers: [SessionOwnerID: AnyCancellable] = [:]
     var sessions: [UUID: [AnyCancellable]] = [:]
     var pressure: DispatchSourceMemoryPressure?
+    var modelStarted = false
+    var nextPromptStarted = false
 
     func cancel() {
         tasks.forEach { $0.cancel() }
@@ -18,68 +20,118 @@ final class NextPromptObservers {
         sessions.removeAll()
         pressure?.cancel()
         pressure = nil
+        modelStarted = false
+        nextPromptStarted = false
     }
 
     deinit { cancel() }
 }
 
 extension AppState {
-    func startNextPromptObservers() {
-        nextPromptRuntimeEnabled = config.nextPromptSuggestionsEnabled && nextPromptSupported
-        guard nextPromptSupported else { return }
-        let model = nextPromptModelStore, runtime = nextPromptInference
-        nextPromptObservers.tasks.append(Task { [weak self] in
-            for await value in await model.states() {
-                guard !Task.isCancelled else { return }
-                self?.updateNextPromptModelState(value)
-            }
+    func startLocalTextObservers() {
+        nextPromptRuntimeEnabled = false
+        sessionSummariesRuntimeEnabled = false
+        guard localTextSupported else { return }
+        guard config.nextPromptSuggestionsEnabled || config.sessionSummariesEnabled else { return }
+
+        ensureLocalTextObserversStarted()
+
+        localTextObservers.tasks.append(Task { [weak self] in
+            guard let self else { return }
+            await self.inspectLocalTextModel()
+            guard self.localTextModelState == .ready else { return }
+            self.nextPromptRuntimeEnabled = self.config.nextPromptSuggestionsEnabled
+            self.sessionSummariesRuntimeEnabled = self.config.sessionSummariesEnabled
+            if self.sessionSummariesRuntimeEnabled { self.localTextRuntimeStarted = true }
         })
-        nextPromptObservers.tasks.append(Task { [weak self] in
-            for await value in await runtime.states() {
-                guard !Task.isCancelled else { return }
-                guard let self else { return }
-                if value == .unavailable || value == .retryRequired {
-                    self.nextPromptCoordinator.invalidate()
+    }
+
+    func ensureLocalTextObserversStarted() {
+        guard localTextSupported else { return }
+
+        if !localTextObservers.modelStarted {
+            localTextObservers.modelStarted = true
+            let model = localTextModelStore
+            localTextObservers.tasks.append(Task { [weak self] in
+                for await value in await model.states() {
+                    guard !Task.isCancelled else { return }
+                    self?.updateLocalTextModelState(value)
                 }
-                self.nextPromptInferenceState = value
+            })
+
+            let pressure = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+            pressure.setEventHandler { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.invalidateNextPromptContext()
+                    self.sessionSummaryCoordinator.teardown()
+                    Task { await self.localTextInference.cancelAndUnload() }
+                }
             }
-        })
-        nextPromptObservers.tasks.append(Task { [weak self] in await self?.inspectNextPromptModel() })
-        nextPromptObservers.notifications.append(nextPromptCoordinator.$offer.sink { [weak self] value in
-            self?.nextPromptOffer = value
-        })
-        for name in [NSApplication.didResignActiveNotification, NSWindow.didResignKeyNotification] {
-            let token = NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.invalidateNextPromptContext() }
-            }
-            nextPromptObservers.notifications.append(AnyCancellable { NotificationCenter.default.removeObserver(token) })
+            localTextObservers.pressure = pressure
+            pressure.resume()
         }
-        let pressure = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
-        pressure.setEventHandler { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.invalidateNextPromptContext()
-                Task { await self.nextPromptInference.cancelAndUnload() }
+
+        if config.nextPromptSuggestionsEnabled, !localTextObservers.nextPromptStarted {
+            localTextObservers.nextPromptStarted = true
+            localTextRuntimeStarted = true
+            let runtime = nextPromptInference
+            localTextObservers.tasks.append(Task { [weak self] in
+                for await value in await runtime.states() {
+                    guard !Task.isCancelled else { return }
+                    guard let self else { return }
+                    if value == .unavailable || value == .retryRequired {
+                        self.nextPromptCoordinator.invalidate()
+                    }
+                    self.nextPromptInferenceState = value
+                }
+            })
+            localTextObservers.notifications.append(nextPromptCoordinator.$offer.sink { [weak self] value in
+                self?.nextPromptOffer = value
+            })
+            for name in [NSApplication.didResignActiveNotification, NSWindow.didResignKeyNotification] {
+                let token = NotificationCenter.default.addObserver(
+                    forName: name, object: nil, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.invalidateNextPromptContext() }
+                }
+                localTextObservers.notifications.append(
+                    AnyCancellable { NotificationCenter.default.removeObserver(token) }
+                )
             }
         }
-        nextPromptObservers.pressure = pressure
-        pressure.resume()
     }
 
-    func inspectNextPromptModel() async {
-        await nextPromptModelStore.inspect() // Relaunch never resumes a missing/interrupted install.
-        updateNextPromptModelState(await nextPromptReadModelState())
+    func inspectLocalTextModel() async {
+        await localTextModelStore.inspect() // Relaunch never resumes a missing/interrupted install.
+        updateLocalTextModelState(await localTextReadModelState())
     }
 
-    private func updateNextPromptModelState(_ value: LocalTextModelState) {
-        guard value != nextPromptModelState else { return }
-        nextPromptCoordinator.invalidate()
-        nextPromptModelGeneration &+= 1
-        nextPromptModelState = value
+    func inspectLocalTextModelOnSettingsAppearance() async {
+        guard localTextSupported, !localTextSettingsInspected else { return }
+        localTextSettingsInspected = true
+        await inspectLocalTextModel()
+    }
+
+    func updateLocalTextModelState(_ value: LocalTextModelState) {
+        guard value != localTextModelState else { return }
+        if config.nextPromptSuggestionsEnabled || nextPromptRuntimeEnabled {
+            nextPromptCoordinator.invalidate()
+        }
+        if config.sessionSummariesEnabled || sessionSummariesRuntimeEnabled {
+            sessionSummaryCoordinator.teardown()
+        }
+        localTextModelGeneration &+= 1
+        localTextModelState = value
+        if value != .ready {
+            nextPromptRuntimeEnabled = false
+            sessionSummariesRuntimeEnabled = false
+        }
     }
 
     func enableNextPromptSuggestions() async {
-        guard nextPromptSupported, !nextPromptShuttingDown, !nextPromptDisableSavePending else { return }
+        guard localTextSupported, !nextPromptShuttingDown, !nextPromptDisableSavePending else { return }
+        localTextRuntimeStarted = true
         let previous = config.nextPromptSuggestionsEnabled
         beginNextPromptSettingsChange()
         let generation = nextPromptSettingsGeneration
@@ -89,6 +141,7 @@ extension AppState {
             nextPromptSettingsError = "Could not save next-prompt settings. Suggestions remain off."
             return
         }
+        ensureLocalTextObserversStarted()
         await prepareNextPromptSuggestions(generation: generation)
     }
 
@@ -97,7 +150,7 @@ extension AppState {
             await disableNextPromptSuggestions()
             return
         }
-        guard config.nextPromptSuggestionsEnabled, nextPromptSupported, !nextPromptShuttingDown else { return }
+        guard config.nextPromptSuggestionsEnabled, localTextSupported, !nextPromptShuttingDown else { return }
         beginNextPromptSettingsChange()
         await prepareNextPromptSuggestions(generation: nextPromptSettingsGeneration)
     }
@@ -105,38 +158,50 @@ extension AppState {
     private func prepareNextPromptSuggestions(generation: UInt64) async {
         await drainNextPromptWork()
         guard generation == nextPromptSettingsGeneration, !nextPromptShuttingDown else { return }
-        await inspectNextPromptModel()
+        await inspectLocalTextModel()
         guard generation == nextPromptSettingsGeneration, !nextPromptShuttingDown else { return }
-        if nextPromptModelState != .ready {
-            let install = Task { await nextPromptModelStore.install() }
-            nextPromptInstallation = install
+        if localTextModelState != .ready {
+            let install = localTextInstallation ?? Task { await localTextModelStore.install() }
+            localTextInstallation = install
             await install.value
             guard generation == nextPromptSettingsGeneration, !nextPromptShuttingDown else { return }
-            nextPromptInstallation = nil
-            let modelGeneration = nextPromptModelGeneration
-            let modelState = await nextPromptReadModelState()
+            localTextInstallation = nil
+            let modelGeneration = localTextModelGeneration
+            let modelState = await localTextReadModelState()
             guard generation == nextPromptSettingsGeneration, !nextPromptShuttingDown else { return }
             // The installation's own notification may have already delivered this state.
-            guard modelGeneration == nextPromptModelGeneration || modelState == nextPromptModelState else { return }
-            updateNextPromptModelState(modelState)
+            guard modelGeneration == localTextModelGeneration || modelState == localTextModelState else { return }
+            updateLocalTextModelState(modelState)
         }
         guard generation == nextPromptSettingsGeneration, !nextPromptShuttingDown,
-              config.nextPromptSuggestionsEnabled, nextPromptModelState == .ready else { return }
-        let modelGeneration = nextPromptModelGeneration
+              config.nextPromptSuggestionsEnabled, localTextModelState == .ready else { return }
+        let modelGeneration = localTextModelGeneration
         await nextPromptInference.retryAfterFailure()
         guard generation == nextPromptSettingsGeneration,
-              modelGeneration == nextPromptModelGeneration, !nextPromptShuttingDown else { return }
+              modelGeneration == localTextModelGeneration, !nextPromptShuttingDown else { return }
         let inferenceState = await nextPromptInference.state
         guard generation == nextPromptSettingsGeneration,
-              modelGeneration == nextPromptModelGeneration, !nextPromptShuttingDown else { return }
+              modelGeneration == localTextModelGeneration, !nextPromptShuttingDown else { return }
         nextPromptInferenceState = inferenceState
         nextPromptRuntimeEnabled = inferenceState == .ready
     }
 
-    func cancelNextPromptDownload() async {
-        beginNextPromptSettingsChange()
-        await drainNextPromptWork()
-        updateNextPromptModelState(await nextPromptReadModelState())
+    func cancelLocalTextDownload() async {
+        nextPromptSettingsGeneration &+= 1
+        sessionSummarySettingsGeneration &+= 1
+        nextPromptRuntimeEnabled = false
+        sessionSummariesRuntimeEnabled = false
+        let installation = localTextInstallation
+        localTextInstallation = nil
+        installation?.cancel()
+        await localTextModelStore.cancelDownload()
+        await installation?.value
+        updateLocalTextModelState(await localTextReadModelState())
+    }
+
+    func retryLocalTextModel() async {
+        if config.nextPromptSuggestionsEnabled { await retryNextPromptSuggestions() }
+        if config.sessionSummariesEnabled { await retrySessionSummarySettings() }
     }
 
     func disableNextPromptSuggestions() async {
@@ -147,23 +212,35 @@ extension AppState {
             ? "Could not save disabling. Retry before quitting or suggestions may turn on again after relaunch."
             : nil
         await drainNextPromptWork()
-        updateNextPromptModelState(await nextPromptReadModelState())
+        updateLocalTextModelState(await localTextReadModelState())
     }
 
-    func removeNextPromptModel() async {
-        await disableNextPromptSuggestions()
-        let generation = nextPromptSettingsGeneration
-        guard !nextPromptRuntimeEnabled, !config.nextPromptSuggestionsEnabled else { return }
+    func removeLocalTextModel() async {
+        guard canRemoveLocalTextModel else { return }
+        let nextPromptGeneration = nextPromptSettingsGeneration
+        let summaryGeneration = sessionSummarySettingsGeneration
+        await nextPromptCoordinator.shutdown()
+        sessionSummaryCoordinator.teardown()
+        if localTextRuntimeStarted { await localTextInference.cancelAndUnload() }
         do {
-            try await nextPromptModelStore.remove()
-            guard generation == nextPromptSettingsGeneration else { return }
-            nextPromptRemovalFailure = nil
-            updateNextPromptModelState(await nextPromptReadModelState())
+            try await localTextModelStore.remove()
+            guard nextPromptGeneration == nextPromptSettingsGeneration,
+                  summaryGeneration == sessionSummarySettingsGeneration else { return }
+            localTextRemovalFailure = nil
+            updateLocalTextModelState(await localTextReadModelState())
         } catch {
-            guard generation == nextPromptSettingsGeneration else { return }
+            guard nextPromptGeneration == nextPromptSettingsGeneration,
+                  summaryGeneration == sessionSummarySettingsGeneration else { return }
             let failure = LocalTextModelFailure.safe(error)
-            nextPromptRemovalFailure = failure == .busy ? .inUse : failure
+            localTextRemovalFailure = failure == .busy ? .inUse : failure
         }
+    }
+
+    var canRemoveLocalTextModel: Bool {
+        !config.nextPromptSuggestionsEnabled
+            && !config.sessionSummariesEnabled
+            && !nextPromptRuntimeEnabled
+            && !sessionSummariesRuntimeEnabled
     }
 
     private func beginNextPromptSettingsChange() {
@@ -171,34 +248,40 @@ extension AppState {
         nextPromptSettingsGeneration &+= 1
         nextPromptRuntimeEnabled = false
         if !nextPromptDisableSavePending { nextPromptSettingsError = nil }
-        nextPromptRemovalFailure = nil
-        nextPromptInstallation?.cancel()
+        localTextRemovalFailure = nil
     }
 
     private func drainNextPromptWork() async {
-        let installation = nextPromptInstallation
-        nextPromptInstallation = nil
-        installation?.cancel()
-        await nextPromptModelStore.cancelDownload()
-        await installation?.value
         await nextPromptCoordinator.shutdown()
-        await nextPromptInference.cancelAndUnload()
     }
 
-    func shutdownNextPromptSuggestions() async {
+    func shutdownLocalTextFeatures() async {
         nextPromptShuttingDown = true
         beginNextPromptSettingsChange()
-        await drainNextPromptWork()
-        nextPromptObservers.cancel()
+        sessionSummariesRuntimeEnabled = false
+        sessionSummaryCoordinator.teardown()
+        let installation = localTextInstallation
+        localTextInstallation = nil
+        installation?.cancel()
+        await localTextModelStore.cancelDownload()
+        await installation?.value
+        await nextPromptCoordinator.shutdown()
+        if localTextRuntimeStarted {
+            await nextPromptInference.cancelAndUnload()
+            if nextPromptInferenceOverride != nil { await localTextInference.cancelAndUnload() }
+        }
+        localTextObservers.cancel()
     }
 
+    func shutdownNextPromptSuggestions() async { await shutdownLocalTextFeatures() }
+
     func observeNextPromptSessions(_ manager: ACPSessionManager, owner: SessionOwnerID) {
-        nextPromptObservers.managers[owner] = manager.$sessions.sink { [weak self] sessions in
+        localTextObservers.managers[owner] = manager.$sessions.sink { [weak self] sessions in
             guard let self else { return }
-            for session in sessions.values where self.nextPromptObservers.sessions[session.incarnation] == nil {
+            for session in sessions.values where self.localTextObservers.sessions[session.incarnation] == nil {
                 let incarnation = session.incarnation
                 let sessionID = session.id
-                self.nextPromptObservers.sessions[incarnation] = [
+                self.localTextObservers.sessions[incarnation] = [
                     session.nextPromptActivity.sink { [weak self] in
                         guard let self,
                               self.nextPromptActiveIncarnation == incarnation ||
@@ -209,7 +292,7 @@ extension AppState {
                     session.nextPromptTeardown.sink { [weak self] in
                         guard let self else { return }
                         self.nextPromptCoordinator.sessionEnded(incarnation: incarnation)
-                        self.nextPromptObservers.sessions[incarnation] = nil
+                        self.localTextObservers.sessions[incarnation] = nil
                         if self.nextPromptActiveIncarnation == incarnation { self.invalidateNextPromptContext() }
                     }
                 ]
@@ -255,7 +338,7 @@ extension AppState {
     }
 
     func nextPromptInputBlocked(owner: SessionOwnerID, sessionID: String) -> Bool {
-        guard !nextPromptShuttingDown, nextPromptRuntimeEnabled, nextPromptSupported,
+        guard !nextPromptShuttingDown, nextPromptRuntimeEnabled, localTextSupported,
               config.nextPromptSuggestionsEnabled, NSApp.isActive,
               let manager = acpManager(for: owner), manager.isWriter(for: sessionID),
               let worktreeID = selectedWorktreeId else { return true }
@@ -282,13 +365,13 @@ extension AppState {
                             environment: NextPromptEligibilitySnapshot.Environment) -> NextPromptEligibilitySnapshot? {
         var environment = environment
         environment.isEnabled = nextPromptRuntimeEnabled && config.nextPromptSuggestionsEnabled
-        environment.hasVerifiedModel = nextPromptModelState == .ready
+        environment.hasVerifiedModel = localTextModelState == .ready
         environment.isRuntimeAvailable = nextPromptInferenceState == .ready ||
             nextPromptInferenceState == .running || nextPromptInferenceState == .failed
         environment.hasForkOrDelegationWork = environment.hasForkOrDelegationWork || nextPromptHasDelegatedWork(parentID: session.id)
         environment.composerEpoch = nextPromptComposerEpoch
         environment.settingsGeneration = nextPromptSettingsGeneration
-        environment.modelGeneration = nextPromptModelGeneration
+        environment.modelGeneration = localTextModelGeneration
         return .live(session: session, turn: turn, environment: environment)
     }
 }

@@ -95,7 +95,7 @@ final class NextPromptCoordinator: ObservableObject {
             let engine = engine, previous = drainTask
             Task {
                 await previous?.value
-                await engine.cancelAndUnload()
+                await engine.cancel()
             }
         }
     }
@@ -158,7 +158,7 @@ final class NextPromptCoordinator: ObservableObject {
             let previous = drainTask
             drainTask = Task { [engine] in
                 await previous?.value
-                await engine.cancelAndUnload()
+                await engine.cancel()
             }
         }
         offer = nil

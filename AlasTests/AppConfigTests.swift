@@ -3,6 +3,29 @@ import Foundation
 @testable import Alas
 
 struct AppConfigTests {
+    @Test func sessionSummariesDefaultsOffAndRoundTrips() throws {
+        var object = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(AppConfig.defaults)
+        ) as? [String: Any])
+        object.removeValue(forKey: "sessionSummariesEnabled")
+        let absent = try JSONDecoder().decode(
+            AppConfig.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+        #expect(!absent.sessionSummariesEnabled)
+
+        object["sessionSummariesEnabled"] = true
+        let enabled = try JSONDecoder().decode(
+            AppConfig.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+        let encoded = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(enabled)
+        ) as? [String: Any])
+        #expect(enabled.sessionSummariesEnabled)
+        #expect(encoded["sessionSummariesEnabled"] as? Bool == true)
+    }
+
     @Test func nextPromptPreferenceRoundTripsEnabled() throws {
         var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(AppConfig.defaults)) as? [String: Any])
         object["nextPromptSuggestionsEnabled"] = true

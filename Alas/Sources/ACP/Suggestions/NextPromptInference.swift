@@ -2,8 +2,13 @@ import Foundation
 
 protocol NextPromptGenerating: Sendable {
     func generate(_ request: NextPromptRequest) async throws -> String?
+    func cancel() async
     func cancelAndUnload() async
     func retryAfterFailure() async
+}
+
+extension NextPromptGenerating {
+    func cancel() async { await cancelAndUnload() }
 }
 
 protocol NextPromptRuntime: NextPromptGenerating {
@@ -175,6 +180,16 @@ actor NextPromptInference: NextPromptRuntime {
         activeRequestID = nil
         publish(.unloading)
         await engine.cancelAndUnload()
+        guard generation == id else { return }
+        publish(restingState)
+    }
+
+    func cancel() async {
+        generation &+= 1
+        let id = generation
+        activeRequestID = nil
+        publish(.unloading)
+        await engine.cancel(caller: .nextPrompt)
         guard generation == id else { return }
         publish(restingState)
     }
