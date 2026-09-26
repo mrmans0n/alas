@@ -931,6 +931,491 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.string == "before after")
     }
 
+    // MARK: Chip copy / paste (#1491)
+
+    private static let chipDraft = ACPComposerDraft(segments: [
+        .text("/review "),
+        .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+        .text(" tail"),
+    ])
+
+    /// A composer holding a command pill, a mention chip, and plain text.
+    private func makeChipTextView() -> (ACPNSTextView, ACPInputField.Coordinator, NSWindow) {
+        let (textView, coordinator, window) = makeSlashTextView()
+        textView.textStorage?.setAttributedString(
+            ACPInputField.Coordinator.attributedString(from: Self.chipDraft)
+        )
+        textView.pillLeadingCommandIfNeeded()
+        return (textView, coordinator, window)
+    }
+
+    private func chipKinds(in textView: NSTextView) -> [String] {
+        var kinds: [String] = []
+        let storage = textView.attributedString()
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, _, _ in
+            switch value {
+            case is ACPCommandChipAttachment: kinds.append("command")
+            case is ACPMentionChipAttachment: kinds.append("mention")
+            case .some: kinds.append("other")
+            case nil: break
+            }
+        }
+        return kinds
+    }
+
+    @Test("copying chips writes their text instead of the attachment placeholder")
+    func copyingChipsWritesReadableText() {
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        #expect(chipKinds(in: textView) == ["command", "mention"])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.selectAll(nil)
+
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+
+        #expect(board.string(forType: .string) == "/review @File.swift tail")
+        #expect(board.data(forType: ACPNSTextView.composerDraftPasteboardType) != nil)
+    }
+
+    @Test("copying a chip-free selection keeps NSTextView's own pasteboard output")
+    func copyingPlainTextIsUnchanged() {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.string = "just text"
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.selectAll(nil)
+
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+
+        #expect(board.string(forType: .string) == "just text")
+        #expect(board.data(forType: ACPNSTextView.composerDraftPasteboardType) == nil)
+    }
+
+    @Test("copy then paste into an empty composer restores the command pill and mention chip")
+    func copyPasteRoundTripRestoresChips() {
+        // A private pasteboard, not `.general`: `.general` is a process-wide
+        // singleton other test suites in this same run also read and write,
+        // and an intervening write from one of them between this test's
+        // copy and paste steps would corrupt what gets pasted back. Going
+        // through `writeSelection`/`readSelection` directly exercises the
+        // exact same code `copy(_:)`/`paste(_:)` call, just against a board
+        // only this test touches.
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.selectAll(nil)
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+        #expect(board.string(forType: .string) == "/review @File.swift tail")
+
+        textView.string = ""
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView) == ["command", "mention"])
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == Self.chipDraft)
+        #expect(!textView.string.isEmpty)
+        #expect(textView.selectedRange() == NSRange(location: textView.string.utf16.count, length: 0))
+    }
+
+    @Test("a pasted command away from the message start stays plain text; mentions stay chips")
+    func pastedCommandMidMessageStaysText() {
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.selectAll(nil)
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+
+        // `textView.string = "hi "` would inherit the attributes of the text
+        // it replaces — here, position 0's command chip — via
+        // NSMutableAttributedString's plain-String replace, corrupting "hi "
+        // with a phantom `.commandChipName`. Replacing the whole attributed
+        // string instead gives it no attributes at all.
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "hi "))
+        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView) == ["mention"])
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == ACPComposerDraft(segments: [
+            .text("hi /review "),
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .text(" tail"),
+        ]))
+    }
+
+    @Test("a lone copied command pill pasted before existing text becomes a pill again")
+    func lonePillPastedBeforeWhitespaceRepills() {
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.setSelectedRange(NSRange(location: 0, length: 1))
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+        #expect(board.string(forType: .string) == "/review")
+
+        // See the note in `pastedCommandMidMessageStaysText`: replace the
+        // whole attributed string, not just `.string`, so the new text
+        // doesn't inherit the command chip's attributes it's overwriting.
+        textView.textStorage?.setAttributedString(NSAttributedString(string: " the parser"))
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView) == ["command"])
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/review the parser")
+    }
+
+    @Test("pasting chips is one undoable edit and redo brings the chips back")
+    func chipPasteUndoRedo() {
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.selectAll(nil)
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+        // See the note in `pastedCommandMidMessageStaysText`: replace the
+        // whole attributed string, not just `.string`, so the new text
+        // doesn't inherit the just-copied chip's attributes it's overwriting.
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "keep"))
+        textView.setSelectedRange(NSRange(location: 4, length: 0))
+        textView.undoManager?.removeAllActions()
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        #expect(chipKinds(in: textView) == ["mention"])
+
+        textView.undoManager?.undo()
+        #expect(textView.string == "keep")
+        #expect(chipKinds(in: textView).isEmpty)
+
+        textView.undoManager?.redo()
+        #expect(chipKinds(in: textView) == ["mention"])
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "keep/review @File.swift  tail")
+    }
+
+    @Test("the image cap counts adjacent chips sharing the same URI as separate images")
+    func imageCapCountsAdjacentDuplicateURIsSeparately() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        // Nine adjacent chips with no separating text, all pointing at the
+        // SAME content-addressed file — `enumerateAttribute` would coalesce
+        // these into a single run of equal `.imageAttachmentURI` values if
+        // the cap were still counting runs instead of characters. The file
+        // has to actually exist: `attributedString(from:)` drops an
+        // `.image` segment whose URI doesn't resolve to a real file, which
+        // would otherwise mask the very undercount this test checks for.
+        let sameFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-same-image-\(UUID().uuidString).png")
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
+            .write(to: sameFile)
+        defer { try? FileManager.default.removeItem(at: sameFile) }
+        let sameURI = sameFile.absoluteString
+        let storage = NSMutableAttributedString(string: "")
+        for _ in 0..<(ACPNSTextView.maxImagesPerMessage - 1) {
+            let attachment = ACPImageChipAttachment(fileURL: URL(string: sameURI)!, mimeType: "image/png")
+            let chip = NSMutableAttributedString(attachment: attachment)
+            chip.addAttributes([
+                .imageAttachmentURI: sameURI,
+                .imageAttachmentMime: "image/png",
+            ], range: NSRange(location: 0, length: chip.length))
+            storage.append(chip)
+        }
+        textView.textStorage?.setAttributedString(storage)
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+
+        // One more copy of that same image: exactly fits the one remaining
+        // slot if the existing nine are all counted.
+        let draft = ACPComposerDraft(segments: [.image(uri: sameURI, mimeType: "image/png")])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        // Ten distinct chip CHARACTERS even though they'd collapse into
+        // fewer attribute runs (the whole point of the fix).
+        #expect(textView.string.count == ACPNSTextView.maxImagesPerMessage)
+        let errors = await reported.snapshot()
+        #expect(errors.isEmpty)
+
+        // An eleventh copy is correctly rejected now that ten are present.
+        let board2 = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board2.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board2)
+        #expect(textView.readSelection(from: board2, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(textView.string.count == ACPNSTextView.maxImagesPerMessage)
+        let errors2 = await reported.snapshot()
+        #expect(errors2 == [.tooManyImages])
+    }
+
+    @Test("pasting a chip draft with images enforces the per-message image cap")
+    func pastedDraftEnforcesImageCap() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        // Pre-fill the composer with 9 image chips (dummy URIs — only their
+        // presence, not their file, is what the cap counts) so one more
+        // slot remains.
+        let storage = NSMutableAttributedString(string: "")
+        for index in 0..<(ACPNSTextView.maxImagesPerMessage - 1) {
+            let attachment = ACPImageChipAttachment(
+                fileURL: URL(string: "file:///tmp/existing-\(index).png")!,
+                mimeType: "image/png"
+            )
+            let chip = NSMutableAttributedString(attachment: attachment)
+            chip.addAttributes([
+                .imageAttachmentURI: "file:///tmp/existing-\(index).png",
+                .imageAttachmentMime: "image/png",
+            ], range: NSRange(location: 0, length: chip.length))
+            storage.append(chip)
+        }
+        textView.textStorage?.setAttributedString(storage)
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+
+        // A copied draft offering two more images: only one fits in the
+        // remaining slot.
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-cap-\(UUID().uuidString).png")
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
+            .write(to: temp)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let draft = ACPComposerDraft(segments: [
+            .image(uri: temp.absoluteString, mimeType: "image/png"),
+            .image(uri: temp.absoluteString, mimeType: "image/png"),
+            .text(" tail"),
+        ])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        var imageCount = 0
+        let full = NSRange(location: 0, length: textView.attributedString().length)
+        textView.attributedString().enumerateAttribute(.imageAttachmentURI, in: full) { v, _, _ in
+            if v != nil { imageCount += 1 }
+        }
+        #expect(imageCount == ACPNSTextView.maxImagesPerMessage)
+        #expect(textView.string.hasSuffix(" tail"))
+        let errors = await reported.snapshot()
+        #expect(errors == [.tooManyImages])
+    }
+
+    @Test("pasting a draft whose only image no longer exists on disk leaves a nonempty selection untouched")
+    func pastedDraftWithMissingImageFileDoesNotDeleteSelection() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "keep me"))
+        textView.setSelectedRange(NSRange(location: 0, length: 4))
+
+        // A copied image chip whose staged file has since been deleted:
+        // `attributedString(from:)` drops it silently, leaving nothing to
+        // insert even though the draft is structurally non-empty.
+        let missingURI = "file:///tmp/alas-deleted-\(UUID().uuidString).png"
+        let draft = ACPComposerDraft(segments: [.image(uri: missingURI, mimeType: "image/png")])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(textView.string == "keep me")
+    }
+
+    @Test("pasting a draft with a missing image plus its trailing separator space leaves a nonempty selection untouched")
+    func pastedDraftWithMissingImageAndSeparatorDoesNotLeaveOrphanSpace() throws {
+        // `insertImage` always appends a trailing space after the chip, so a
+        // draft copied from a real image chip commonly looks like this: the
+        // image segment plus a lone separator space. If the image is
+        // dropped (missing file), the space alone must not survive as a
+        // 1-character "paste" that still overwrites the selection.
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "keep me"))
+        textView.setSelectedRange(NSRange(location: 0, length: 4))
+
+        let missingURI = "file:///tmp/alas-deleted-\(UUID().uuidString).png"
+        let draft = ACPComposerDraft(segments: [.image(uri: missingURI, mimeType: "image/png"), .text(" ")])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(textView.string == "keep me")
+    }
+
+    @Test("a missing image doesn't consume the one remaining slot a later real image needs")
+    func missingImageDoesNotStealBudgetFromRealImageAfterIt() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        // Exactly one slot left.
+        let storage = NSMutableAttributedString(string: "")
+        for index in 0..<(ACPNSTextView.maxImagesPerMessage - 1) {
+            let attachment = ACPImageChipAttachment(
+                fileURL: URL(string: "file:///tmp/existing-\(index).png")!,
+                mimeType: "image/png"
+            )
+            let chip = NSMutableAttributedString(attachment: attachment)
+            chip.addAttributes([
+                .imageAttachmentURI: "file:///tmp/existing-\(index).png",
+                .imageAttachmentMime: "image/png",
+            ], range: NSRange(location: 0, length: chip.length))
+            storage.append(chip)
+        }
+        textView.textStorage?.setAttributedString(storage)
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+
+        // A missing image ahead of a real one: the missing one must not
+        // consume the last slot the real image needs.
+        let missingURI = "file:///tmp/alas-deleted-\(UUID().uuidString).png"
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-real-\(UUID().uuidString).png")
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
+            .write(to: temp)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let draft = ACPComposerDraft(segments: [
+            .image(uri: missingURI, mimeType: "image/png"),
+            .image(uri: temp.absoluteString, mimeType: "image/png"),
+        ])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        var imageCount = 0
+        let full = NSRange(location: 0, length: textView.attributedString().length)
+        textView.attributedString().enumerateAttribute(.imageAttachmentURI, in: full) { v, _, _ in
+            if v != nil { imageCount += 1 }
+        }
+        #expect(imageCount == ACPNSTextView.maxImagesPerMessage)
+        let errors = await reported.snapshot()
+        #expect(errors.isEmpty)
+    }
+
+    @Test("pasting over a selection that itself holds an image chip does not double-count it against the cap")
+    func pastedDraftExcludesReplacedImagesFromBudget() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        // Fill the composer to the cap (10 image chips), then select the
+        // first one: that selection is about to be replaced by this same
+        // paste, so it must not count against the incoming budget.
+        let storage = NSMutableAttributedString(string: "")
+        for index in 0..<ACPNSTextView.maxImagesPerMessage {
+            let attachment = ACPImageChipAttachment(
+                fileURL: URL(string: "file:///tmp/existing-\(index).png")!,
+                mimeType: "image/png"
+            )
+            let chip = NSMutableAttributedString(attachment: attachment)
+            chip.addAttributes([
+                .imageAttachmentURI: "file:///tmp/existing-\(index).png",
+                .imageAttachmentMime: "image/png",
+            ], range: NSRange(location: 0, length: chip.length))
+            storage.append(chip)
+        }
+        textView.textStorage?.setAttributedString(storage)
+        textView.setSelectedRange(NSRange(location: 0, length: 1))
+
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-cap-\(UUID().uuidString).png")
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
+            .write(to: temp)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let draft = ACPComposerDraft(segments: [.image(uri: temp.absoluteString, mimeType: "image/png")])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        var imageCount = 0
+        let full = NSRange(location: 0, length: textView.attributedString().length)
+        textView.attributedString().enumerateAttribute(.imageAttachmentURI, in: full) { v, _, _ in
+            if v != nil { imageCount += 1 }
+        }
+        #expect(imageCount == ACPNSTextView.maxImagesPerMessage)
+        let errors = await reported.snapshot()
+        #expect(errors.isEmpty)
+    }
+
+    @Test("dropping a dragged chip selection reads the draft type and rebuilds the chips")
+    func readSelectionRebuildsChipsFromDraftType() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        #expect(textView.readablePasteboardTypes.first == ACPNSTextView.composerDraftPasteboardType)
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(Self.chipDraft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView) == ["command", "mention"])
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == Self.chipDraft)
+    }
+
+    @Test("a forged pasteboard payload without a valid MAC is not trusted")
+    func forgedPasteboardPayloadIsRejected() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        // Simulates another unsandboxed application publishing the same
+        // named pasteboard type with attacker-controlled JSON — no way to
+        // sign it with Alas's in-process MAC key, so this is exactly what a
+        // forged payload looks like: the raw draft, unsigned.
+        board.declareTypes([ACPNSTextView.composerDraftPasteboardType, .string], owner: nil)
+        board.setData(try JSONEncoder().encode(Self.chipDraft), forType: ACPNSTextView.composerDraftPasteboardType)
+        board.setString("/review @File.swift tail", forType: .string)
+
+        #expect(!textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView).isEmpty)
+        #expect(textView.string.isEmpty)
+    }
+
+    @Test("a signature replayed onto a different pasteboard with a matching change count is not trusted")
+    func replayedSignatureOnDifferentPasteboardIsRejected() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        // Bytes that verify (correct MAC, current change count matches) but
+        // were signed and recorded against a DIFFERENT pasteboard object —
+        // the scenario a bare change-count comparison alone would miss.
+        ACPNSTextView.writeReplayedSignedDraftForTesting(Self.chipDraft, onto: board)
+
+        #expect(!textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView).isEmpty)
+        #expect(textView.string.isEmpty)
+    }
+
     @Test("file drop router inserts the relative path at the retained selection")
     func fileDropRouterInsertsRelativePathAtSelection() throws {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 40))
