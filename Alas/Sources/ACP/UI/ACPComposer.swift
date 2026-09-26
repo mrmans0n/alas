@@ -687,6 +687,8 @@ struct ACPInputField: NSViewRepresentable {
             attributed.enumerateAttributes(in: full) { keys, range, _ in
                 if let command = keys[.commandChipName] as? String {
                     appendText(command)
+                } else if let spelling = keys[.upstreamReference] as? String {
+                    appendText(spelling)
                 } else if let uri = keys[.imageAttachmentURI] as? String {
                     let mime = (keys[.imageAttachmentMime] as? String) ?? "image/png"
                     segments.append(.image(uri: uri, mimeType: mime))
@@ -759,6 +761,8 @@ struct ACPInputField: NSViewRepresentable {
             attributed.enumerateAttributes(in: full) { keys, range, _ in
                 if let command = keys[.commandChipName] as? String {
                     text += command
+                } else if let spelling = keys[.upstreamReference] as? String {
+                    text += spelling
                 } else if let uri = keys[.imageAttachmentURI] as? String {
                     let mime = (keys[.imageAttachmentMime] as? String) ?? "image/png"
                     let name = URL(string: uri)?.lastPathComponent
@@ -784,10 +788,12 @@ struct ACPInputField: NSViewRepresentable {
 }
 
 extension Dictionary where Key == NSAttributedString.Key, Value == Any {
-    /// A composer chip run (mention, image, or command) that restyling must
-    /// leave alone: resetting its attributes strips the attachment cell.
+    /// A composer chip run (mention, image, command, or upstream reference)
+    /// that restyling must leave alone: resetting its attributes strips the
+    /// attachment.
     var isComposerChip: Bool {
-        self[.attachmentURI] != nil || self[.imageAttachmentURI] != nil || self[.commandChipName] != nil
+        self[.attachmentURI] != nil || self[.imageAttachmentURI] != nil
+            || self[.commandChipName] != nil || self[.upstreamReference] != nil
     }
 }
 
