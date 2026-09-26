@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """Rank Swift test durations from the result bundles of one CI run.
 
-Download a run's `swift-test-results-*` artifacts, then point this script at
-the directory that contains them:
+Download a run's `swift-test-results-*` artifacts into a fresh directory used
+only for that run, then point this script at it:
 
+    run=<run-id>
     for s in 1 2; do
-      gh run download <run-id> -n swift-test-results-1-$s -D /tmp/results-$s
+      gh run download "$run" -n swift-test-results-1-$s -D "/tmp/alas-run-$run/shard-$s"
     done
-    python3 scripts/swift_test_durations.py /tmp --tsv /tmp/durations.tsv
+    python3 scripts/swift_test_durations.py "/tmp/alas-run-$run" --tsv "/tmp/alas-run-$run/durations.tsv"
 
-It reads every `*.xcresult` bundle with `xcrun xcresulttool`, writes one TSV row
-per test case, and prints how test time is distributed.
+It reads every `*.xcresult` bundle under that directory with
+`xcrun xcresulttool`, writes one TSV row per test case, and prints how test
+time is distributed. Invocation names are unique within one run, so a repeated
+name means bundles from several runs were mixed and the script refuses to
+continue.
 """
 
 import argparse
@@ -61,7 +65,13 @@ def main():
     args = parser.parse_args()
 
     bundles = sorted(p for p in args.root.rglob("*.xcresult") if p.is_dir())
-    rows = [row for bundle in bundles for row in collect(bundle)]
+    seen = {}
+    for bundle in bundles:
+        if bundle.stem in seen:
+            sys.exit(f"invocation {bundle.stem} appears twice ({seen[bundle.stem]} and {bundle}); "
+                     "point the script at a directory holding a single run")
+        seen[bundle.stem] = bundle
+    rows =[row for bundle in bundles for row in collect(bundle)]
     if not rows:
         sys.exit("no test cases found")
 
