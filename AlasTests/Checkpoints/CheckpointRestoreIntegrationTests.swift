@@ -65,6 +65,30 @@ struct CheckpointRestoreIntegrationTests {
         #expect(!FileManager.default.fileExists(atPath: main.linkedGitDirectory(linked).appendingPathComponent("index.lock").path))
     }
 
+    @Test func restoreStagesEveryPathThatSharesOneBlob() async throws {
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
+        defer { repo.remove() }
+        let root = URL(fileURLWithPath: "/private/tmp/checkpoint-shared-blob-store-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = ["a.txt", "b.txt", "nested/c.txt"]
+        for path in paths { try repo.write("baseline \(path)\n", to: path) }
+        try await repo.commitAll("baseline")
+        for path in paths { try repo.write("shared\n", to: path) }
+        try await repo.git(["add", "-A"])
+        let service = WorktreeCheckpointService(store: .init(root: root))
+        let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
+        try await repo.git(["restore", "--source=HEAD", "--staged", "--worktree", "."])
+
+        let preview = try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear)
+        _ = try await service.restore(target: repo.target, preview: preview, selectedGroupIDs: preview.selectedGroupIDs,
+                                      coordination: .clear)
+
+        for path in paths {
+            #expect(try await repo.index(path) == Data("shared\n".utf8))
+            #expect(try repo.disk(path) == Data("shared\n".utf8))
+        }
+    }
+
     @Test func restoreReplacesTrackedFileToDirectoryTransition() async throws {
         let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }

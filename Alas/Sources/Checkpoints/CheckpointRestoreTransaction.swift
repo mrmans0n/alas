@@ -750,20 +750,38 @@ struct CheckpointRestoreTransaction: Sendable {
             guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
         }
         let saved = Dictionary(uniqueKeysWithValues: manifest.paths.map { ($0.relativePath, $0) })
-        for path in selectedPaths {
+        let desired = try selectedPaths.map { path -> (path: String, state: CheckpointFileState) in
             guard let now = current.paths[path] else { throw CheckpointRestoreError.missingCurrentPath(path) }
-            let state = saved[path]?.index ?? now.head
+            return (path, saved[path]?.index ?? now.head)
+        }
+        // Materialize each distinct blob once and hash them all in one process.
+        var blobs: [CheckpointBlobReference] = []
+        var seen = Set<CheckpointBlobReference>()
+        for (path, state) in desired where state.kind != .absent {
+            guard let blob = state.blob, state.mode != nil else { throw CheckpointRestoreError.missingDesiredPath(path) }
+            if seen.insert(blob).inserted { blobs.append(blob) }
+        }
+        let stagingRoot = preparedIndex.deletingLastPathComponent()
+        var materialized: [URL] = []
+        defer { for url in materialized { try? fileSystem.removeIfPresent(url) } }
+        for blob in blobs {
+            let url = stagingRoot.appendingPathComponent("index-\(UUID().uuidString.lowercased())")
+            materialized.append(url)
+            try await store.materializeBlob(blob, lineageID: target.lineageID, to: url, mode: 0o600)
+        }
+        // The staging root is a direct child of the worktree root, which is
+        // where `hash-object --stdin-paths` resolves relative paths from.
+        let oids = try await git.writeBlobs(relativePaths: materialized.map { "\(stagingRoot.lastPathComponent)/\($0.lastPathComponent)" },
+                                            cwd: target.path)
+        let oidByBlob = Dictionary(uniqueKeysWithValues: zip(blobs, oids))
+        for (path, state) in desired {
             if state.kind == .absent {
                 try await runGit(["update-index", "--force-remove", "--", path], target: target, index: preparedIndex)
                 continue
             }
-            guard let blob = state.blob, let mode = state.mode else { throw CheckpointRestoreError.missingDesiredPath(path) }
-            let materialized = preparedIndex.deletingLastPathComponent().appendingPathComponent("index-\(UUID().uuidString.lowercased())")
-            try await store.materializeBlob(blob, lineageID: target.lineageID, to: materialized, mode: 0o600)
-            defer { try? fileSystem.removeIfPresent(materialized) }
-            let hash = try await git.run(["hash-object", "-w", materialized.path], cwd: target.path, environment: [:])
-            guard hash.exitCode == 0 else { throw ProcessError.nonZeroExit(hash.exitCode, hash.stderr) }
-            let oid = hash.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let blob = state.blob, let mode = state.mode, let oid = oidByBlob[blob] else {
+                throw CheckpointRestoreError.missingDesiredPath(path)
+            }
             try await runGit(["update-index", "--add", "--cacheinfo", mode, oid, path], target: target, index: preparedIndex)
         }
     }

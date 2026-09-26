@@ -86,13 +86,19 @@ struct WorktreeStateSnapshotter: Sendable {
         else { indexPath = try await CheckpointGitPaths.resolve(git: git, cwd: target.path).index }
         let indexChecksum = try checksum(indexPath)
         let status = try await data(["status", "--porcelain=v2", "-z", "--untracked-files=all"], target)
-        let index = try entries(try await data(["ls-files", "--stage", "-z"], target), tree: false)
-        let headEntries = try entries(try await data(["ls-tree", "-r", "-z", head], target), tree: true)
-        // Lowercase tags identify assume-unchanged entries, whose disk edits
-        // can be hidden from both status and diff. S marks skip-worktree.
-        let hidden = try records(try await data(["ls-files", "-v", "-z"], target))
-            .filter { $0.hasPrefix("S ") || $0.first?.isLowercase == true }
-            .map { String($0.dropFirst(2)) }
+        // `-v` prefixes each staged record with a tag. Lowercase tags identify
+        // assume-unchanged entries, whose disk edits can be hidden from both
+        // status and diff. S marks skip-worktree.
+        let taggedIndex = try records(try await data(["ls-files", "-v", "--stage", "-z"], target))
+            .map { record -> (tag: Character, record: String) in
+                guard let tag = record.first, record.dropFirst().first == " " else { throw CheckpointSnapshotError.invalidGitOutput }
+                return (tag, String(record.dropFirst(2)))
+            }
+        let index = try entries(taggedIndex.map { $0.record }, tree: false)
+        let headEntries = try entries(try records(try await data(["ls-tree", "-r", "-z", head], target)), tree: true)
+        let hidden = try taggedIndex
+            .filter { $0.tag == "S" || $0.tag.isLowercase }
+            .map { try entryPath(of: $0.record) }
         let intentToAdd = try await intentToAddPaths(target)
         let unsupported = Set(hidden + intentToAdd + index.unsupported + headEntries.unsupported)
         guard unsupported.isEmpty else { throw CheckpointSnapshotError.unsupportedPaths(unsupported.sorted()) }
@@ -196,13 +202,13 @@ struct WorktreeStateSnapshotter: Sendable {
     private struct Entries { var values: [String: Entry] = [:]
     var unsupported: [String] = [] }
 
-    private func entries(_ bytes: Data, tree: Bool) throws -> Entries {
+    private func entries(_ records: [String], tree: Bool) throws -> Entries {
         var result = Entries()
-        for record in try records(bytes) {
+        for record in records {
             guard let tab = record.firstIndex(of: "\t") else { throw CheckpointSnapshotError.invalidGitOutput }
             let fields = record[..<tab].split(separator: " ")
             guard fields.count == 3 else { throw CheckpointSnapshotError.invalidGitOutput }
-            let path = String(record[record.index(after: tab)...])
+            let path = try entryPath(of: record)
             let mode = String(fields[0])
             if !["100644", "100755", "120000"].contains(mode) || (!tree && fields[2] != "0") {
                 result.unsupported.append(path)
@@ -210,6 +216,11 @@ struct WorktreeStateSnapshotter: Sendable {
             result.values[path] = Entry(mode: mode, oid: String(fields[tree ? 2 : 1]))
         }
         return result
+    }
+
+    private func entryPath(of record: String) throws -> String {
+        guard let tab = record.firstIndex(of: "\t") else { throw CheckpointSnapshotError.invalidGitOutput }
+        return String(record[record.index(after: tab)...])
     }
 
     private func statusPaths(_ bytes: Data) throws -> Set<String> {

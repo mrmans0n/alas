@@ -6,7 +6,7 @@ import Testing
 /// real; the runner only counts. Lower a budget when a change removes spawns,
 /// and justify any increase.
 struct CheckpointGitSpawnBudgetTests {
-    @Test(arguments: [(true, 14), (false, 13)])
+    @Test(arguments: [(true, 13), (false, 12)])
     func snapshotSpawnBudget(retainingPayloads: Bool, budget: Int) async throws {
         let fixture = try await Fixture.make()
         defer { fixture.remove() }
@@ -21,17 +21,17 @@ struct CheckpointGitSpawnBudgetTests {
         defer { fixture.remove() }
 
         let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
-        #expect(fixture.git.drain().count == 27)
+        #expect(fixture.git.drain().count == 25)
 
         for path in Fixture.paths { try fixture.repo.write("later \(path)\n", to: path) }
         let preview = try await fixture.service.restorePreview(target: fixture.repo.target, id: checkpoint.id, coordination: .clear)
         #expect(preview.blocker == nil)
-        #expect(fixture.git.drain().count == 15)
+        #expect(fixture.git.drain().count == 14)
 
         let result = try await fixture.service.restore(target: fixture.repo.target, preview: preview,
                                                        selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
         #expect(result.restoredPaths == Fixture.paths)
-        #expect(fixture.git.drain().count == 64)
+        #expect(fixture.git.drain().count == 58)
     }
 
     /// Three committed files, each modified only in the worktree, so every
@@ -107,5 +107,10 @@ final class CountingCheckpointGitRunner: CheckpointGitRunning, @unchecked Sendab
     func blobReferences(oids: [String], cwd: URL) async throws -> [String: CheckpointBlobReference] {
         if !oids.isEmpty { record(["cat-file", "--batch"]) }
         return try await live.blobReferences(oids: oids, cwd: cwd)
+    }
+
+    func writeBlobs(relativePaths: [String], cwd: URL) async throws -> [String] {
+        if !relativePaths.isEmpty { record(["hash-object", "-w", "--stdin-paths"]) }
+        return try await live.writeBlobs(relativePaths: relativePaths, cwd: cwd)
     }
 }
