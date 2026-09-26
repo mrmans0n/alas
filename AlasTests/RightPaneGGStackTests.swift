@@ -700,7 +700,7 @@ struct RightPaneGGStackTests {
     }
 
     @Test func commitPublishSyncRefusesConcurrentMutation() async throws {
-        let state = await makeMutationReadyState()
+        let state = await makeMutationReadyState(syncJSONL: true)
         let runner = ReentrantSyncFakeGGRunner(suspendSync: true)
         state.ggService = GGService(runner: runner)
         let first = try #require(state.runGGMutation(.sync))
@@ -760,7 +760,10 @@ struct RightPaneGGStackTests {
         return state
     }
 
-    private func makeMutationReadyState(worktree: Worktree? = nil) async -> RightPaneState {
+    private func makeMutationReadyState(
+        worktree: Worktree? = nil,
+        syncJSONL: Bool = false
+    ) async -> RightPaneState {
         let worktree = worktree ?? makeWorktree()
         let state = RightPaneState(
             worktree: worktree,
@@ -778,16 +781,20 @@ struct RightPaneGGStackTests {
                 workspaceName: nil
             )
         }
-        installFakeGGStackLoader(on: state)
+        installFakeGGStackLoader(on: state, syncJSONL: syncJSONL)
         #expect(!(await state.checkpointMutationsDisabledAfterJournalRevalidation()))
         return state
     }
 
-    private func installFakeGGStackLoader(on state: RightPaneState) {
+    /// `syncJSONL` selects the streaming `gg sync --jsonl` path. The capability
+    /// is cached at startup rather than probed per sync, so a fake runner's
+    /// `sync --help` answer no longer selects it.
+    private func installFakeGGStackLoader(on state: RightPaneState, syncJSONL: Bool = false) {
         state.ggCapabilities = {
             GGCapabilities(
                 structuredSplit: false,
                 keepCurrentUnstack: false,
+                syncJSONL: syncJSONL,
                 localStackSnapshot: false
             )
         }
@@ -2611,7 +2618,7 @@ struct RightPaneGGStackTests {
             id: Worktree.makeId(path: dir), projectId: "p", name: "feature",
             branch: "feature", path: dir, status: .clean, lastActivity: Date()
         )
-        let state = await makeMutationReadyState(worktree: wt)
+        let state = await makeMutationReadyState(worktree: wt, syncJSONL: true)
         state.ggService = GGService(runner: ConflictAfterSyncRunner())
         state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
@@ -2765,7 +2772,7 @@ struct RightPaneGGStackTests {
     @Test func repeatedSyncInvocationIsSilentlyIgnoredAtUIBoundary() async throws {
         let wt = makeWorktree()
         let runner = ReentrantSyncFakeGGRunner()
-        let state = await makeMutationReadyState(worktree: wt)
+        let state = await makeMutationReadyState(worktree: wt, syncJSONL: true)
         state.ggService = GGService(runner: runner)
         state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
@@ -2787,7 +2794,7 @@ struct RightPaneGGStackTests {
 
     @Test func syncErrorSuppressesSuccessSummary() async throws {
         let wt = makeWorktree()
-        let state = await makeMutationReadyState(worktree: wt)
+        let state = await makeMutationReadyState(worktree: wt, syncJSONL: true)
         let ndjson = [
             #"{"event":"start","total_entries":1}"#,
             #"{"event":"push_done","position":1,"forced":false}"#,

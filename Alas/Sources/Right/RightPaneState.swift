@@ -628,6 +628,7 @@ final class RightPaneState: GGSplitCommitServicing {
             worktreePath: worktree.path.path,
             service: ggService,
             actionState: ggActionState,
+            syncJSONLCapability: { [weak self] in self?.ggCapabilities().syncJSONL ?? false },
             landJSONLCapability: { [weak self] in self?.ggCapabilities().landJSONL ?? false },
             context: GGMutationContext(
                 loadFreshStack: { [weak self] in
