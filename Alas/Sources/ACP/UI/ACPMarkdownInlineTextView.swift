@@ -352,6 +352,16 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
         ))
     }
 
+    /// Transcript rows are pooled and re-hosted for different messages as
+    /// the user scrolls, so a paragraph can lose its window (and be
+    /// recycled onto different content) while its hover card is still
+    /// open. Close it before that happens rather than leaving it
+    /// orphaned over whatever now occupies this row.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { upstreamReferenceHover.hide() }
+    }
+
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
         upstreamReferenceHover.update(
@@ -452,7 +462,12 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     /// Forward vertical scrolling to the transcript's AppKit scroller.
     /// Markdown cells are NSTextViews, so without this override they consume
     /// wheel events even though they cannot scroll vertically themselves.
+    /// Also hides a hover card left open at its old screen position: the
+    /// card only updates on `mouseMoved`/`mouseExited`, so scrolling with
+    /// the trackpad while the pointer stays still would otherwise leave it
+    /// floating over content it's no longer anchored to.
     override func scrollWheel(with event: NSEvent) {
+        if upstreamReferences != nil { upstreamReferenceHover.hide() }
         if let transcriptScroller {
             var routingState = transcriptScroller.markdownScrollRoutingState
             routeScrollWheel(
