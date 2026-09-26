@@ -105,6 +105,13 @@ jobs:
           # credential helpers (system + global) for the test run.
           git config --global --unset-all credential.helper || true
           git config --global credential.helper ""
+          # Tests build template repositories once and copy them per test.
+          # Background auto-maintenance and auto-gc, which git starts after
+          # commits and pushes, create and delete lock files such as
+          # objects/maintenance.lock mid-copy and fail the copy.
+          git config --global maintenance.auto false
+          git config --global gc.auto 0
+          git config --global receive.autogc false
 
       - name: Install xcodegen + zig@0.15 + SwiftFormat
         # Homebrew's zig@0.15 ships the patch for Zig 0.15.2 + Xcode 26.4
@@ -499,6 +506,11 @@ jobs:
           git config --global advice.detachedHead false
           git config --global --unset-all credential.helper || true
           git config --global credential.helper ""
+          # Template repositories are copied per test; background
+          # auto-maintenance and auto-gc would race those copies.
+          git config --global maintenance.auto false
+          git config --global gc.auto 0
+          git config --global receive.autogc false
 
       - name: Install test runtime tools
         # ContentSearcherTests require rg and treat a missing binary as a
