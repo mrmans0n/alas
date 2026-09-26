@@ -794,7 +794,6 @@ struct ACPInputField: NSViewRepresentable {
                     let chip = NSMutableAttributedString(attachment: attachment)
                     chip.addAttributes([
                         .attachmentURI: uri,
-                        .toolTip: URL(string: uri)?.path ?? uri,
                     ], range: NSRange(location: 0, length: chip.length))
                     result.append(chip)
                 case .image(let uri, let mimeType):
@@ -1573,6 +1572,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     // MARK: - Image chip hover preview
 
     private var imageChipHover: ACPImageChipHoverController?
+    private let fileMentionHover = ACPFileMentionHoverController()
     private let commandChipHover = ACPCommandChipHoverController()
     private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
 
@@ -1585,6 +1585,13 @@ final class ACPNSTextView: PairedDelimiterTextView {
               let uri = hit.value as? String,
               let fileURL = URL(string: uri) else { return nil }
         return (range: hit.range, fileURL: fileURL)
+    }
+
+    func fileMentionHit(at point: NSPoint) -> (range: NSRange, attachment: ACPMentionChipAttachment)? {
+        guard let hit = chipHit(at: point, key: .attachmentURI),
+              let attachment = textStorage?.attribute(.attachment, at: hit.range.location, effectiveRange: nil)
+                as? ACPMentionChipAttachment else { return nil }
+        return (range: hit.range, attachment: attachment)
     }
 
     /// Range + suggestion when `point` sits on a leading command chip.
@@ -1681,6 +1688,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
         } else {
             imageChipHoverController().hide()
         }
+        if let chip = fileMentionHit(at: point) {
+            fileMentionHover.scheduleShow(range: chip.range, attachment: chip.attachment, in: self)
+        } else {
+            fileMentionHover.hide()
+        }
         if let chip = commandChipHit(at: point) {
             commandChipHover.scheduleShow(range: chip.range, suggestion: chip.suggestion, in: self)
         } else {
@@ -1692,6 +1704,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         imageChipHoverController().hide()
+        fileMentionHover.hide()
         commandChipHover.hide()
         upstreamReferenceHover.hide()
     }
@@ -1717,6 +1730,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         ) { [weak self] in
             guard let self, self.window != nil else { return }
             self.commandChipHover.hide()
+            self.fileMentionHover.hide()
             self.upstreamReferenceHover.hide()
             // The pointer's current position decides the post-scroll state:
             // still over a chip re-schedules (no-op while it stays there);
@@ -1763,6 +1777,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// preview can never linger over a chip the user just changed.
     func dismissImageChipHover() {
         imageChipHover?.hide()
+        fileMentionHover.hide()
         commandChipHover.hide()
         upstreamReferenceHover.hide()
     }
@@ -2452,7 +2467,6 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // recover the mention.
         chipString.addAttributes([
             .attachmentURI: url.absoluteString,
-            .toolTip: url.path,
         ], range: NSRange(location: 0, length: chipString.length))
         let baseAttrs = baseTypingAttributes
         chipString.append(NSAttributedString(string: " ", attributes: baseAttrs))
