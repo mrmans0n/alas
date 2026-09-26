@@ -282,6 +282,19 @@ struct SessionSummarySettingsTests {
         await engine.finishUnloading()
         await removal.value
 
+        // The store's own exclusive lock can still be transiently busy right
+        // after the excluded concurrent call tears its work down (the same
+        // advisory-lock contention the product's own "retry when it
+        // finishes" UI already expects) — retry like a user clicking that
+        // button would, same as waitUntilRemoved in NextPromptSettingsTests.
+        var attempts = 0
+        while state.localTextRemovalFailure != nil {
+            attempts += 1
+            try #require(attempts < 20)
+            await Task.yield()
+            await state.removeLocalTextModel()
+        }
+
         #expect(state.localTextModelState == .notInstalled)
         #expect(fixture.transport.requestCount == 0)
         await state.shutdownLocalTextFeatures()
