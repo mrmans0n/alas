@@ -185,11 +185,15 @@ struct NativePeerSessionView: View {
 
     // MARK: - Pending requests
 
-    /// Identity for a pending request's prompt. Includes the transcript's
-    /// request generation because consecutive requests can reuse a wire id,
-    /// and a reused `.id` would carry the previous request's form state.
-    private func requestKey(_ kind: String, _ requestId: Any, in transcript: NativePeerTranscript) -> String {
-        "\(sessionKey):\(kind):\(transcript.requestGeneration):\(requestId)"
+    /// Identity for a pending request's prompt. Includes that kind's request
+    /// generation because consecutive requests can reuse a wire id, and a
+    /// reused `.id` would carry the previous request's form state.
+    private func requestKey(
+        _ kind: NativePeerTranscript.PendingRequestKind,
+        _ requestId: Any,
+        in transcript: NativePeerTranscript
+    ) -> String {
+        "\(sessionKey):\(kind):\(transcript.requestGeneration(for: kind)):\(requestId)"
     }
 
     @ViewBuilder
@@ -205,7 +209,7 @@ struct NativePeerSessionView: View {
                 let reply = NativePeerRequestBridge.planReply(response)
                 client.respondToPlan(requestId: request.requestId, action: reply.action, reason: reply.reason)
             }
-            .id(requestKey("plan", request.requestId, in: transcript))
+            .id(requestKey(.plan, request.requestId, in: transcript))
             .disabled(!canDrive)
         }
         if let request = transcript.pendingQuestion {
@@ -219,7 +223,7 @@ struct NativePeerSessionView: View {
                 onOpenURL: { _ in false },
                 showsDismissActions: false
             )
-            .id(requestKey("question", request.requestId, in: transcript))
+            .id(requestKey(.question, request.requestId, in: transcript))
             .disabled(!canDrive)
         }
         if let request = transcript.pendingElicitation {
@@ -234,7 +238,7 @@ struct NativePeerSessionView: View {
                     },
                     onOpenURL: { _ in await openElicitationURL(request.requestId) }
                 )
-                .id(requestKey("elicitation", request.requestId, in: transcript))
+                .id(requestKey(.elicitation, request.requestId, in: transcript))
                 .disabled(!canDrive)
             } else {
                 unsupportedElicitation(request)

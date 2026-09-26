@@ -120,20 +120,27 @@ struct NativePeerTranscriptTests {
         }
 
         transcript.apply(.questionRequest(sessionId: "B:s", payload: question("Which?")))
-        let first = transcript.requestGeneration
+        let first = transcript.requestGeneration(for: .question)
         // A resubscribe replays the still-pending request verbatim; the
         // prompt must keep whatever the user has already selected.
         transcript.apply(.questionRequest(sessionId: "B:s", payload: question("Which?")))
-        #expect(transcript.requestGeneration == first)
+        #expect(transcript.requestGeneration(for: .question) == first)
+
+        // An unrelated request arriving alongside must not disturb the
+        // question the user is filling in.
+        transcript.apply(.permissionRequest(sessionId: "B:s", payload: .init(
+            requestId: 9, toolName: "bash", options: []
+        )))
+        #expect(transcript.requestGeneration(for: .question) == first)
 
         // Same wire id, different question: a new request.
         transcript.apply(.questionRequest(sessionId: "B:s", payload: question("Which one?")))
-        let second = transcript.requestGeneration
+        let second = transcript.requestGeneration(for: .question)
         #expect(second != first)
 
         // Same wire id and content again, but after the previous one resolved.
         transcript.apply(.questionResolved(sessionId: "B:s", requestId: 1))
         transcript.apply(.questionRequest(sessionId: "B:s", payload: question("Which one?")))
-        #expect(transcript.requestGeneration != second)
+        #expect(transcript.requestGeneration(for: .question) != second)
     }
 }
