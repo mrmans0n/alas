@@ -1210,6 +1210,31 @@ struct ACPComposerDraftBridgeTests {
         #expect(errors == [.tooManyImages])
     }
 
+    @Test("pasting a draft whose only image no longer exists on disk leaves a nonempty selection untouched")
+    func pastedDraftWithMissingImageFileDoesNotDeleteSelection() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "keep me"))
+        textView.setSelectedRange(NSRange(location: 0, length: 4))
+
+        // A copied image chip whose staged file has since been deleted:
+        // `attributedString(from:)` drops it silently, leaving nothing to
+        // insert even though the draft is structurally non-empty.
+        let missingURI = "file:///tmp/alas-deleted-\(UUID().uuidString).png"
+        let draft = ACPComposerDraft(segments: [.image(uri: missingURI, mimeType: "image/png")])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(textView.string == "keep me")
+    }
+
     @Test("pasting over a selection that itself holds an image chip does not double-count it against the cap")
     func pastedDraftExcludesReplacedImagesFromBudget() async throws {
         let (textView, coordinator, window) = makeSlashTextView()

@@ -2220,6 +2220,14 @@ final class ACPNSTextView: PairedDelimiterTextView {
         let fragment = NSMutableAttributedString(
             attributedString: ACPInputField.Coordinator.attributedString(from: draft, typography: chatTypography)
         )
+        // `draft` was structurally non-empty (it has an `.image` segment),
+        // but `attributedString(from:)` silently drops an `.image` whose
+        // staged file no longer exists on disk. If that was every segment,
+        // the realized fragment is empty even though `draft.isEmpty` said
+        // otherwise — inserting it would delete a nonempty selection and
+        // paste nothing in its place. Treat this the same as the all-images-
+        // capped case: handled, nothing to insert.
+        guard fragment.length > 0 else { return true }
         if replacementRange.location == 0, let coordinator {
             let tail = NSMaxRange(replacementRange)
             let combined = NSMutableAttributedString(attributedString: fragment)
