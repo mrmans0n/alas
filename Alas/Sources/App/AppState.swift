@@ -203,12 +203,12 @@ final class AppState {
     var localTextModelState: LocalTextModelState = .notInstalled
     var nextPromptInferenceState: NextPromptInferenceState = .ready
     var nextPromptRuntimeEnabled = false {
-        didSet { cancelIssueWorktreeNameSuggestionIfUnavailable(wasEnabled: oldValue) }
+        didSet { cancelBorrowedLocalTextRequestsIfUnavailable(wasEnabled: oldValue) }
     }
     var nextPromptDisableSavePending = false
     var nextPromptSettingsError: String?
     var sessionSummariesRuntimeEnabled = false {
-        didSet { cancelIssueWorktreeNameSuggestionIfUnavailable(wasEnabled: oldValue) }
+        didSet { cancelBorrowedLocalTextRequestsIfUnavailable(wasEnabled: oldValue) }
     }
     var sessionSummaryDisableSavePending = false
     var sessionSummarySettingsError: String?
@@ -1604,6 +1604,16 @@ final class AppState {
     /// already consented to. Without one, or while the model is not verified
     /// ready, the suggester never touches the engine or the model assets.
     var issueWorktreeNameSuggestionsAvailable: Bool {
+        borrowedLocalTextConsentAvailable
+    }
+
+    /// Qwen titles borrow the same consent as worktree names and only apply
+    /// where Foundation Models is unavailable (see `ACPLocalTitleGenerator`).
+    var qwenFallbackTitlesAvailable: Bool {
+        config.harness.acpLocalTitlesEnabled && borrowedLocalTextConsentAvailable
+    }
+
+    private var borrowedLocalTextConsentAvailable: Bool {
         localTextSupported
             && !nextPromptShuttingDown
             && !localTextRemovalInProgress
@@ -1611,13 +1621,22 @@ final class AppState {
             && (nextPromptRuntimeEnabled || sessionSummariesRuntimeEnabled)
     }
 
-    /// Worktree names borrow consent from the other local-text capabilities,
-    /// so turning the last one off must also stop an in-flight name request.
-    /// The suggester rechecks availability too; this frees the engine early.
-    private func cancelIssueWorktreeNameSuggestionIfUnavailable(wasEnabled: Bool) {
+    /// Worktree names and Qwen titles borrow consent from the other local-text capabilities,
+    /// so turning the last one off must also stop their in-flight requests.
+    /// Both recheck availability too; this frees the engine early.
+    private func cancelBorrowedLocalTextRequestsIfUnavailable(wasEnabled: Bool) {
         guard wasEnabled, !nextPromptRuntimeEnabled, !sessionSummariesRuntimeEnabled else { return }
         let engine = localTextInference
-        Task { await engine.cancel(caller: .worktreeName) }
+        Task {
+            await engine.cancel(caller: .worktreeName)
+            await engine.cancel(caller: .sessionTitle)
+        }
+    }
+
+    func makeQwenTitleFallback() -> ACPQwenTitleFallback {
+        ACPQwenTitleFallback(engine: localTextInference) { [weak self] in
+            self?.qwenFallbackTitlesAvailable ?? false
+        }
     }
 
     func makeIssueWorktreeNameSuggester() -> IssueWorktreeNameSuggester {
@@ -12016,6 +12035,7 @@ final class AppState {
             localTitlesEnabled: { [weak self] in
                 self?.config.harness.acpLocalTitlesEnabled ?? false
             },
+            qwenTitleFallback: makeQwenTitleFallback(),
             onInputAwaiting: { [weak self] session, request in
                 guard let self,
                       self.config.harness.notifyOnAwaiting,
@@ -12462,6 +12482,7 @@ final class AppState {
             localTitlesEnabled: { [weak self] in
                 self?.config.harness.acpLocalTitlesEnabled ?? false
             },
+            qwenTitleFallback: makeQwenTitleFallback(),
             onInputAwaiting: { [weak self] session, request in
                 guard let self,
                       self.config.harness.notifyOnAwaiting
