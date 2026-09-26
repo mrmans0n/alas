@@ -83,17 +83,20 @@ struct IssueWorktreeNameSuggester {
     let isAppleIntelligenceAvailable: @MainActor @Sendable () -> Bool
     let generateWithAppleIntelligence: AppleGenerator
     let isMLXAvailable: @MainActor @Sendable () -> Bool
+    let timeout: Duration
 
     init(
         engine: any LocalTextGenerating,
         isAppleIntelligenceAvailable: @escaping @MainActor @Sendable () -> Bool = { false },
         generateWithAppleIntelligence: @escaping AppleGenerator = { _ in nil },
-        isMLXAvailable: @escaping @MainActor @Sendable () -> Bool
+        isMLXAvailable: @escaping @MainActor @Sendable () -> Bool,
+        timeout: Duration = IssueWorktreeNamePolicy.timeout
     ) {
         self.engine = engine
         self.isAppleIntelligenceAvailable = isAppleIntelligenceAvailable
         self.generateWithAppleIntelligence = generateWithAppleIntelligence
         self.isMLXAvailable = isMLXAvailable
+        self.timeout = timeout
     }
 
     @MainActor
@@ -104,7 +107,7 @@ struct IssueWorktreeNameSuggester {
             maxTokens: IssueWorktreeNamePolicy.maxTokens,
             temperature: 0,
             prefillStepSize: 512,
-            timeout: IssueWorktreeNamePolicy.timeout
+            timeout: timeout
         )
 
         if isAppleIntelligenceAvailable() {
@@ -123,21 +126,62 @@ struct IssueWorktreeNameSuggester {
         return IssueWorktreeNamePolicy.parse(result.text, displayReference: source.displayReference)
     }
 
+    @MainActor
     private func generateAppleIntelligenceWithTimeout(_ request: LocalTextGenerationRequest) async -> String? {
-        await withTaskGroup(of: String?.self) { group in
-            group.addTask { await generateWithAppleIntelligence(request) }
-            group.addTask {
-                do {
-                    try await ContinuousClock().sleep(for: request.timeout)
-                    return nil
-                } catch {
-                    return nil
-                }
+        let race = AppleGenerationRace()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                race.start(
+                    request: request,
+                    generator: generateWithAppleIntelligence,
+                    continuation: continuation
+                )
             }
-            let output = await group.next() ?? nil
-            group.cancelAll()
-            return output
+        } onCancel: {
+            Task { @MainActor in race.finish(nil) }
         }
+    }
+}
+
+@MainActor
+private final class AppleGenerationRace {
+    private var continuation: CheckedContinuation<String?, Never>?
+    private var generationTask: Task<Void, Never>?
+    private var timeoutTask: Task<Void, Never>?
+    private var finished = false
+
+    func start(
+        request: LocalTextGenerationRequest,
+        generator: @escaping IssueWorktreeNameSuggester.AppleGenerator,
+        continuation: CheckedContinuation<String?, Never>
+    ) {
+        guard !finished else {
+            continuation.resume(returning: nil)
+            return
+        }
+        self.continuation = continuation
+        generationTask = Task { [weak self] in
+            let output = await generator(request)
+            self?.finish(output)
+        }
+        timeoutTask = Task { [weak self] in
+            do {
+                try await ContinuousClock().sleep(for: request.timeout)
+                self?.finish(nil)
+            } catch {}
+        }
+    }
+
+    func finish(_ output: String?) {
+        guard !finished else { return }
+        finished = true
+        let continuation = self.continuation
+        self.continuation = nil
+        generationTask?.cancel()
+        timeoutTask?.cancel()
+        generationTask = nil
+        timeoutTask = nil
+        continuation?.resume(returning: output)
     }
 }
 

@@ -117,6 +117,34 @@ struct IssueWorktreeNameSuggestionTests {
     }
 
     @Test @MainActor
+    func appleTimeoutReachesMLXWhileGenerationIsStillSuspended() async {
+        let gate = GenerationGate()
+        let engine = CannedEngine(outcome: .success(#"{"name": "mlx-generated-name"}"#))
+        let suggester = IssueWorktreeNameSuggester(
+            engine: engine,
+            isAppleIntelligenceAvailable: { true },
+            generateWithAppleIntelligence: { _ in
+                await gate.wait()
+                return nil
+            },
+            isMLXAvailable: { true },
+            timeout: .milliseconds(20)
+        )
+        let suggestion = Task { await suggester.suggestName(for: Self.source) }
+        await gate.waitUntilStarted()
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while await engine.calls == 0 && ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        let reachedMLXBeforeRelease = await engine.calls == 1
+        await gate.release()
+
+        #expect(reachedMLXBeforeRelease)
+        #expect(await suggestion.value == "mlx-generated-name")
+    }
+
+    @Test @MainActor
     func unavailableBackendsLeaveTheDeterministicSeedUnchanged() async {
         let availability = Availability()
         availability.isAppleAvailable = false
@@ -212,6 +240,31 @@ private actor CannedAppleGenerator {
         calls += 1
         await beforeReturning()
         return output
+    }
+}
+
+private actor GenerationGate {
+    private var started = false
+    private var startedWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            releaseWaiter = continuation
+            started = true
+            startedWaiter?.resume()
+            startedWaiter = nil
+        }
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { startedWaiter = $0 }
+    }
+
+    func release() {
+        releaseWaiter?.resume()
+        releaseWaiter = nil
     }
 }
 
