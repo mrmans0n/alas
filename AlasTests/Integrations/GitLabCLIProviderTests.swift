@@ -2324,6 +2324,58 @@ struct GitLabCLIProviderTests {
         ])
     }
 
+    @Test func referenceSummaryUsesTheSigilToPickMergeRequestOrIssue() async throws {
+        let mrRunner = FakeRunner(results: [ProcessResult(
+            exitCode: 0,
+            stdout: """
+            {"iid":842,"title":"Draft: speed up sync","state":"opened","draft":true,
+             "author":{"username":"nacho"},"created_at":"2026-09-20T08:00:00.000Z","updated_at":"2026-09-25T08:00:00.000Z",
+             "closed_at":null,"merged_at":null,"web_url":"https://gitlab.example.com/platform/mobile/alas/-/merge_requests/842"}
+            """,
+            stderr: ""
+        )])
+        let mr = try await GitLabCLIProvider(runner: mrRunner).referenceSummary(
+            remote: Self.remote, reference: CodeHostReference(sigil: .bang, number: 842), cwd: Self.cwd
+        )
+        #expect(mr.kind == .reviewRequest)
+        #expect(mr.state == .draft)
+        #expect(mr.author == "nacho")
+        #expect(await mrRunner.commands.first?.args == [
+            "api", "projects/platform%2Fmobile%2Falas/merge_requests/842",
+            "--hostname", "gitlab.example.com", "--output", "json",
+        ])
+
+        let issueRunner = FakeRunner(results: [ProcessResult(
+            exitCode: 0,
+            stdout: """
+            {"iid":77,"title":"Crash on launch","state":"closed","author":{"username":"nacho"},
+             "created_at":"2026-09-01T08:00:00Z","closed_at":"2026-09-02T08:00:00Z",
+             "web_url":"https://gitlab.example.com/platform/mobile/alas/-/issues/77"}
+            """,
+            stderr: ""
+        )])
+        let issue = try await GitLabCLIProvider(runner: issueRunner).referenceSummary(
+            remote: Self.remote, reference: CodeHostReference(sigil: .hash, number: 77), cwd: Self.cwd
+        )
+        #expect(issue.kind == .issue)
+        #expect(issue.state == .closed)
+        #expect(await issueRunner.commands.first?.args.first(where: { $0.hasPrefix("projects/") })
+            == "projects/platform%2Fmobile%2Falas/issues/77")
+    }
+
+    @Test func referenceSummaryMapsMergedAndLockedStates() throws {
+        func json(_ state: String) -> String {
+            """
+            {"iid":9,"title":"T","state":"\(state)","author":{"username":"a"},
+             "merged_at":\(state == "merged" ? "\"2026-09-02T08:00:00Z\"" : "null"),
+             "web_url":"https://gitlab.example.com/platform/mobile/alas/-/merge_requests/9"}
+            """
+        }
+        #expect(try GitLabCLIProvider.parseReferenceSummary(json("merged"), kind: .reviewRequest, requestedNumber: 9).state == .merged)
+        #expect(try GitLabCLIProvider.parseReferenceSummary(json("locked"), kind: .reviewRequest, requestedNumber: 9).state == .closed)
+        #expect(try GitLabCLIProvider.parseReferenceSummary(json("opened"), kind: .reviewRequest, requestedNumber: 9).state == .open)
+    }
+
     private static func makeThread(isResolved: Bool = false) -> ReviewThread {
         ReviewThread(
             id: "discussion-1",

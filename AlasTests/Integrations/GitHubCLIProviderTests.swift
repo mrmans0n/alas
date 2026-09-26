@@ -1875,6 +1875,72 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    @Test func referenceSummaryMapsPullRequestStatesFromTheIssuesEndpoint() async throws {
+        func output(state: String, draft: Bool, mergedAt: String?) -> String {
+            let merged = mergedAt.map { "\"\($0)\"" } ?? "null"
+            return """
+            {"number":1497,"title":"fix(acp): preserve chips","state":"\(state)","draft":\(draft),
+             "user":{"login":"mrmans0n"},"created_at":"2026-09-25T22:31:36Z","updated_at":"2026-09-26T06:51:00Z",
+             "closed_at":\(state == "closed" ? "\"2026-09-26T06:50:59Z\"" : "null"),
+             "html_url":"https://github.com/mrmans0n/alas/pull/1497",
+             "pull_request":{"merged_at":\(merged)}}
+            """
+        }
+        let cases: [(String, Bool, String?, CodeHostReferenceSummary.State)] = [
+            ("closed", false, "2026-09-26T06:50:59Z", .merged),
+            ("closed", true, nil, .closed),
+            ("open", true, nil, .draft),
+            ("open", false, nil, .open),
+        ]
+        for (state, draft, mergedAt, expected) in cases {
+            let runner = FakeRunner(results: [
+                ProcessResult(exitCode: 0, stdout: output(state: state, draft: draft, mergedAt: mergedAt), stderr: ""),
+            ])
+            let summary = try await GitHubCLIProvider(runner: runner).referenceSummary(
+                remote: Self.remote,
+                reference: CodeHostReference(sigil: .hash, number: 1497),
+                cwd: Self.cwd
+            )
+            #expect(summary.kind == .reviewRequest)
+            #expect(summary.state == expected, "state=\(state) draft=\(draft) merged=\(mergedAt ?? "nil")")
+            #expect(summary.author == "mrmans0n")
+            #expect(summary.url == URL(string: "https://github.com/mrmans0n/alas/pull/1497"))
+            #expect(await runner.commands.first?.args == [
+                "api", "--hostname", "github.com", "repos/mrmans0n/alas/issues/1497",
+            ])
+        }
+    }
+
+    @Test func referenceSummaryMapsAnIssueAndClassifiesNotFound() async throws {
+        let issueRunner = FakeRunner(results: [ProcessResult(
+            exitCode: 0,
+            stdout: """
+            {"number":1491,"title":"Copying a pill pastes U+FFFC","state":"closed","draft":null,
+             "user":{"login":"mrmans0n"},"created_at":"2026-09-22T10:00:00Z","updated_at":null,
+             "closed_at":"2026-09-26T06:51:00Z","html_url":"https://github.com/mrmans0n/alas/issues/1491",
+             "pull_request":null}
+            """,
+            stderr: ""
+        )])
+        let issue = try await GitHubCLIProvider(runner: issueRunner).referenceSummary(
+            remote: Self.remote, reference: CodeHostReference(sigil: .hash, number: 1491), cwd: Self.cwd
+        )
+        #expect(issue.kind == .issue)
+        #expect(issue.state == .closed)
+        #expect(issue.title == "Copying a pill pastes U+FFFC")
+
+        let missingRunner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "{\"message\":\"Not Found\",\"status\":404}", stderr: "gh: Not Found (HTTP 404)"),
+        ])
+        await #expect(throws: CodeHostIssueProviderError.notFound(
+            provider: .github, repositorySlug: "mrmans0n/alas", number: 98765
+        )) {
+            try await GitHubCLIProvider(runner: missingRunner).referenceSummary(
+                remote: Self.remote, reference: CodeHostReference(sigil: .hash, number: 98765), cwd: Self.cwd
+            )
+        }
+    }
+
     private static let checkAnnotationsOutput = """
     [
       [
