@@ -170,6 +170,17 @@ struct CheckpointRestorePreviewTests {
         #expect(try repo.disk(".git/index.lock") == Data("locked".utf8))
     }
 
+    @Test func repositoryPathContainingNewlineStillPreviewsAndBlocksOnMarkers() async throws {
+        let repo = try await CheckpointTestRepository.makeFromTemplate(directorySuffix: "\nline")
+        defer { repo.remove() }
+        try repo.write("saved", to: "file.txt")
+        let service = WorktreeCheckpointService(store: .init(root: repo.root.appendingPathComponent(".git/checkpoints")))
+        let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
+        #expect(try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear).blocker == nil)
+        try repo.write("merging", to: ".git/MERGE_HEAD")
+        #expect(try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear).blocker == .gitOperation)
+    }
+
     @Test(arguments: CheckpointGitPaths.operationMarkerNames)
     func gitOperationMarkerBlocksOnlyItsOwnLinkedWorktree(marker: String) async throws {
         let main = try await CheckpointTestRepository.makeFromTemplate()

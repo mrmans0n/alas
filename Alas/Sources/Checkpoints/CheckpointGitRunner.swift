@@ -28,17 +28,28 @@ struct CheckpointGitPaths: Equatable, Sendable {
 
     static func resolve(git: any CheckpointGitRunning, cwd: URL) async throws -> Self {
         let names = ["index", "index.lock"] + operationMarkerNames
+        let lines = try await gitPaths(names, git: git, cwd: cwd).split(separator: "\n", omittingEmptySubsequences: false)
+        var paths = lines.map(String.init)
+        // Every path shares the git dir, so a newline in it (legal in a
+        // directory name) always yields extra lines. Resolve each path alone,
+        // which keeps embedded newlines intact.
+        if paths.count != names.count || paths.contains(where: \.isEmpty) {
+            paths = []
+            for name in names { paths.append(try await gitPaths([name], git: git, cwd: cwd)) }
+        }
+        let urls = paths.map { URL(fileURLWithPath: $0) }
+        return .init(index: urls[0], indexLock: urls[1], operationMarkers: Array(urls[2...]))
+    }
+
+    /// `rev-parse` output for `names`, without its final newline.
+    private static func gitPaths(_ names: [String], git: any CheckpointGitRunning, cwd: URL) async throws -> String {
         let result = try await git.run(["rev-parse", "--path-format=absolute"] + names.flatMap { ["--git-path", $0] },
                                        cwd: cwd, environment: [:])
         guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
         var output = result.stdout
         if output.hasSuffix("\n") { output.removeLast() }
-        let lines = output.split(separator: "\n", omittingEmptySubsequences: false)
-        guard lines.count == names.count, !lines.contains(where: { $0.isEmpty }) else {
-            throw CheckpointSnapshotError.invalidGitOutput
-        }
-        let urls = lines.map { URL(fileURLWithPath: String($0)) }
-        return .init(index: urls[0], indexLock: urls[1], operationMarkers: Array(urls[2...]))
+        guard !output.isEmpty else { throw CheckpointSnapshotError.invalidGitOutput }
+        return output
     }
 }
 

@@ -242,9 +242,9 @@ extension CheckpointTestRepository {
     /// Equivalent to `make()` — a real repository with the same config and seed
     /// commit, and a fresh lineage — but copied from a template instead of
     /// spawning seven `git` processes per test.
-    static func makeFromTemplate() async throws -> Self {
+    static func makeFromTemplate(directorySuffix: String = "") async throws -> Self {
         let template = try await CheckpointRepositoryTemplate.ready.value
-        let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-test-\(UUID().uuidString)")
+        let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-test-\(UUID().uuidString)\(directorySuffix)")
         do {
             try FileManager.default.copyItem(at: template, to: root)
             let lineage = try #require(WorktreeService.localLineageID(forWorktreeAt: root))
