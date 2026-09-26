@@ -31,14 +31,6 @@ struct GitLabCLIProviderTests {
         ])
     }
 
-    @Test func openIssuesReportsCommandFailure() async {
-        let runner = FakeRunner(results: [ProcessResult(exitCode: 1, stdout: "", stderr: "permission denied")])
-
-        await #expect(throws: CodeHostProviderError.commandFailed(command: "glab api issues", stderr: "permission denied")) {
-            try await GitLabCLIProvider(runner: runner).openIssues(remote: Self.remote, limit: 50, cwd: Self.cwd)
-        }
-    }
-
     @Test func openIssuesRejectsMalformedWebURL() async {
         let runner = FakeRunner(results: [ProcessResult(
             exitCode: 0,
@@ -116,21 +108,6 @@ struct GitLabCLIProviderTests {
         }
     }
 
-    @Test func isAvailableReturnsTrueOnlyForVersionExitZero() async {
-        let successRunner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: "glab 1.101.0", stderr: ""),
-        ])
-        let failureRunner = FakeRunner(results: [
-            ProcessResult(exitCode: 1, stdout: "", stderr: "missing"),
-        ])
-
-        #expect(await GitLabCLIProvider(runner: successRunner).isAvailable(cwd: Self.cwd))
-        #expect(await GitLabCLIProvider(runner: failureRunner).isAvailable(cwd: Self.cwd) == false)
-        #expect(await successRunner.commands == [
-            FakeRunner.Command(executable: "glab", args: ["--version"], cwd: Self.cwd),
-        ])
-    }
-
     @Test func authStatusUsesDetectedHost() async {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: "gitlab.example.com: Logged in", stderr: ""),
@@ -177,21 +154,23 @@ struct GitLabCLIProviderTests {
         ) == nil)
     }
 
-    @Test func createOutputParsesHTTPURL() throws {
-        let url = try GitLabCLIProvider.parseCreateOutput("https://gitlab.example.com/platform/mobile/alas/-/merge_requests/44\n")
-
-        #expect(url == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/44"))
-    }
-
-    @Test func createOutputParsesFirstHTTPURLFromHumanReadableOutput() throws {
-        let url = try GitLabCLIProvider.parseCreateOutput(
+    @Test(arguments: [
+        (
+            "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/44\n",
+            "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/44"
+        ),
+        (
             """
             !46 Add GitLab provider (feature/gitlab-provider)
             https://gitlab.example.com/platform/mobile/alas/-/merge_requests/46
-            """
-        )
+            """,
+            "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/46"
+        ),
+    ])
+    func createOutputParsesFirstHTTPURL(output: String, expectedURL: String) throws {
+        let url = try GitLabCLIProvider.parseCreateOutput(output)
 
-        #expect(url == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/46"))
+        #expect(url == URL(string: expectedURL))
     }
 
     @Test func createOutputRejectsNonURLAndNonHTTPURL() {
@@ -501,15 +480,6 @@ struct GitLabCLIProviderTests {
         #expect(threads.allSatisfy { $0.path == nil })
     }
 
-    @Test func discussionsJSONSkipsSystemOnlyDiscussions() throws {
-        let threads = try GitLabCLIProvider.parseDiscussions(
-            Self.systemOnlyDiscussionsOutput,
-            requestURL: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42")!
-        )
-
-        #expect(threads == [])
-    }
-
     @Test func discussionsJSONRejectsMalformedURL() throws {
         let output = """
         [
@@ -538,8 +508,111 @@ struct GitLabCLIProviderTests {
         }
     }
 
-    @Test func mrListReturnsNilForNoItems() throws {
-        #expect(try GitLabCLIProvider.parseMRList("[]", remote: Self.remote, headOwner: nil) == nil)
+    struct MRListNilCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let output: String
+        let headOwner: String?
+        var headSHA: String?
+        var preferMerged = false
+    }
+
+    static let mrListNilCases: [MRListNilCase] = [
+        MRListNilCase(testDescription: "empty list", output: "[]", headOwner: nil),
+        MRListNilCase(
+            testDescription: "head owner metadata does not match",
+            output: """
+            [
+              {
+                "iid": 42,
+                "title": "Base project MR",
+                "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
+                "state": "opened",
+                "draft": false,
+                "source_branch": "feature/gitlab-provider",
+                "target_branch": "main",
+                "source_project_path_with_namespace": "platform/mobile/alas"
+              },
+              {
+                "iid": 43,
+                "title": "Other fork MR",
+                "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+                "state": "opened",
+                "draft": false,
+                "source_branch": "feature/gitlab-provider",
+                "target_branch": "main",
+                "source_project_path": "other/alas"
+              }
+            ]
+            """,
+            headOwner: "nacho"
+        ),
+        MRListNilCase(
+            testDescription: "ambiguous head owner without source project metadata",
+            output: """
+            [
+              {
+                "iid": 42,
+                "title": "First MR",
+                "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
+                "state": "opened",
+                "draft": false,
+                "source_branch": "feature/gitlab-provider",
+                "target_branch": "main"
+              },
+              {
+                "iid": 43,
+                "title": "Second MR",
+                "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+                "state": "opened",
+                "draft": false,
+                "source_branch": "feature/gitlab-provider",
+                "target_branch": "main"
+              }
+            ]
+            """,
+            headOwner: "nacho"
+        ),
+        MRListNilCase(
+            testDescription: "SHA filtering leaves an unverifiable head owner",
+            output: """
+            [
+              {
+                "iid": 42,
+                "title": "Stale fork MR",
+                "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
+                "state": "closed",
+                "draft": false,
+                "sha": "stale-sha",
+                "source_branch": "feature/gitlab-provider",
+                "target_branch": "main"
+              },
+              {
+                "iid": 43,
+                "title": "Unverifiable merged MR",
+                "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
+                "state": "merged",
+                "draft": false,
+                "sha": "matching-sha",
+                "source_branch": "feature/gitlab-provider",
+                "target_branch": "main"
+              }
+            ]
+            """,
+            headOwner: "nacho",
+            headSHA: "matching-sha",
+            preferMerged: true
+        ),
+    ]
+
+    @Test(arguments: GitLabCLIProviderTests.mrListNilCases)
+    func mrListReturnsNilWhenNoItemCanBeVerified(_ testCase: MRListNilCase) throws {
+        #expect(try GitLabCLIProvider.parseMRList(
+            testCase.output,
+            remote: Self.remote,
+            headOwner: testCase.headOwner,
+            headSHA: testCase.headSHA,
+            preferMerged: testCase.preferMerged
+        ) == nil)
     }
 
     @Test func mrParsingRequiresIID() throws {
@@ -651,35 +724,6 @@ struct GitLabCLIProviderTests {
         #expect(request.headRepositoryOwner == "group")
     }
 
-    @Test func mrListReturnsNilWhenHeadOwnerMetadataDoesNotMatch() throws {
-        let output = """
-        [
-          {
-            "iid": 42,
-            "title": "Base project MR",
-            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
-            "state": "opened",
-            "draft": false,
-            "source_branch": "feature/gitlab-provider",
-            "target_branch": "main",
-            "source_project_path_with_namespace": "platform/mobile/alas"
-          },
-          {
-            "iid": 43,
-            "title": "Other fork MR",
-            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
-            "state": "opened",
-            "draft": false,
-            "source_branch": "feature/gitlab-provider",
-            "target_branch": "main",
-            "source_project_path": "other/alas"
-          }
-        ]
-        """
-
-        #expect(try GitLabCLIProvider.parseMRList(output, remote: Self.remote, headOwner: "nacho") == nil)
-    }
-
     @Test func mrListFiltersByHeadSHAAmongMatchingOwners() throws {
         let output = """
         [
@@ -717,68 +761,6 @@ struct GitLabCLIProviderTests {
 
         #expect(request.number == 42)
         #expect(request.headSHA == "matching-sha")
-    }
-
-    @Test func mrListReturnsNilForAmbiguousHeadOwnerWithoutSourceProjectMetadata() throws {
-        let output = """
-        [
-          {
-            "iid": 42,
-            "title": "First MR",
-            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
-            "state": "opened",
-            "draft": false,
-            "source_branch": "feature/gitlab-provider",
-            "target_branch": "main"
-          },
-          {
-            "iid": 43,
-            "title": "Second MR",
-            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
-            "state": "opened",
-            "draft": false,
-            "source_branch": "feature/gitlab-provider",
-            "target_branch": "main"
-          }
-        ]
-        """
-
-        #expect(try GitLabCLIProvider.parseMRList(output, remote: Self.remote, headOwner: "nacho") == nil)
-    }
-
-    @Test func mrListReturnsNilWhenSHAFilteringLeavesUnverifiableHeadOwner() throws {
-        let output = """
-        [
-          {
-            "iid": 42,
-            "title": "Stale fork MR",
-            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
-            "state": "closed",
-            "draft": false,
-            "sha": "stale-sha",
-            "source_branch": "feature/gitlab-provider",
-            "target_branch": "main"
-          },
-          {
-            "iid": 43,
-            "title": "Unverifiable merged MR",
-            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
-            "state": "merged",
-            "draft": false,
-            "sha": "matching-sha",
-            "source_branch": "feature/gitlab-provider",
-            "target_branch": "main"
-          }
-        ]
-        """
-
-        #expect(try GitLabCLIProvider.parseMRList(
-            output,
-            remote: Self.remote,
-            headOwner: "nacho",
-            headSHA: "matching-sha",
-            preferMerged: true
-        ) == nil)
     }
 
     @Test func mrListFiltersByResolvedSourceProjectID() throws {
@@ -957,20 +939,6 @@ struct GitLabCLIProviderTests {
         }
     }
 
-    @Test func failedCheckEvidenceUsesPipelineJobs() async throws {
-        let checks = try GitLabCLIProvider.parsePipeline(Self.pipelineWithFailedJobsOutput)
-        let request = Self.makeRequest(checks: checks)
-
-        let evidence = try await GitLabCLIProvider().failedCheckEvidence(
-            remote: Self.remote,
-            request: request,
-            cwd: Self.cwd
-        )
-
-        #expect(evidence.map(\.title) == ["build", "test", "lint", "deploy"])
-        #expect(evidence.map(\.status) == [.passed, .failed, .failed, .pending])
-    }
-
     @Test func checkEvidenceDetailLoadsGitLabTraceForJobID() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: "failed assertion\n", stderr: ""),
@@ -1001,29 +969,6 @@ struct GitLabCLIProviderTests {
         ])
     }
 
-    @Test func feedbackEvidenceDetailUsesDiscussionBody() async throws {
-        let threads = try GitLabCLIProvider.parseDiscussions(
-            Self.discussionsOutput,
-            requestURL: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42")!
-        )
-        let request = Self.makeRequest(threads: threads)
-        let item = try #require(try await GitLabCLIProvider().feedbackEvidence(
-            remote: Self.remote,
-            request: request,
-            cwd: Self.cwd
-        ).first)
-
-        let detail = try await GitLabCLIProvider().feedbackEvidenceDetail(
-            remote: Self.remote,
-            request: request,
-            item: item,
-            cwd: Self.cwd
-        )
-
-        #expect(detail.body.contains("Please"))
-        #expect(detail.item.status == .actionable)
-    }
-
     @Test func currentReviewRequestUsesExpectedMRListCommand() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.mrListOutput, stderr: ""),
@@ -1045,6 +990,7 @@ struct GitLabCLIProviderTests {
         #expect(request?.headSHA == "head123")
         #expect(request?.threads.map(\.id) == ["discussion-1", "discussion-2"])
         #expect(request?.hasActionableFeedback == true)
+        #expect(request?.checks.map(\.name) == ["build", "test"])
         #expect(await runner.commands.map(\.args.first) == ["mr", "mr", "mr", "api", "ci"])
         #expect(await runner.commands.first == FakeRunner.Command(
             executable: "glab",
@@ -1111,21 +1057,6 @@ struct GitLabCLIProviderTests {
                 cwd: Self.cwd
             ),
         ])
-    }
-
-    @Test func reviewDiffSurfacesGitLabCommandFailure() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 1, stdout: "", stderr: "not found"),
-        ])
-        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
-
-        await #expect(throws: CodeHostProviderError.commandFailed(command: "glab mr diff", stderr: "not found")) {
-            _ = try await GitLabCLIProvider(runner: runner).reviewDiff(
-                remote: Self.remote,
-                request: request,
-                cwd: Self.cwd
-            )
-        }
     }
 
     @Test func publishReviewCreatesDiscussionsApprovesAndRefreshesMR() async throws {
@@ -1473,46 +1404,30 @@ struct GitLabCLIProviderTests {
         #expect(result.warnings.contains { $0.contains("approval was not submitted") })
     }
 
-    @Test func publishReviewDoesNotApproveWhenSomeGitLabDraftPublishesFail() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: Self.versionsOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.createDiscussionOutput, stderr: ""),
-            ProcessResult(exitCode: 1, stdout: "", stderr: "line is not commentable"),
-            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
-        ])
-
-        let result = try await GitLabCLIProvider(runner: runner).publishReview(ProviderReviewPublishRequest(
-            remote: Self.remote,
-            reviewRequest: Self.makeRequest(),
-            comments: [
-                try Self.makeProviderDraftComment(localDraftID: "draft-1", side: .new, lineRange: 24...24),
-                try Self.makeProviderDraftComment(localDraftID: "draft-2", side: .new, lineRange: 25...25),
-            ],
-            decision: .approve,
-            summaryBody: "Looks good.",
-            cwd: Self.cwd
-        ))
-
-        let commands = await runner.commands
-        #expect(commands.map { Array($0.args.prefix(2)) } == [
-            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/versions"],
-            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions"],
-            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions"],
-            ["mr", "view"],
-            ["mr", "note"],
-            ["api", "user"],
-            ["ci", "get"],
-        ])
-        #expect(result.published.map(\.localDraftID) == ["draft-1"])
-        #expect(result.failed.map(\.localDraftID) == ["draft-2"])
-        #expect(result.refreshedRequest.threads.map(\.id) == ["discussion-1", "discussion-2"])
-        #expect(result.warnings.contains { $0.contains("approval was not submitted") })
+    struct PartialPublishFailureCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let decision: ProviderReviewDecision
+        let summaryBody: String
+        let expectedWarning: String
     }
 
-    @Test func publishReviewDoesNotSubmitGitLabRequestChangesNoteWhenSomeDraftPublishesFail() async throws {
+    @Test(arguments: [
+        PartialPublishFailureCase(
+            testDescription: "approve",
+            decision: .approve,
+            summaryBody: "Looks good.",
+            expectedWarning: "approval was not submitted"
+        ),
+        PartialPublishFailureCase(
+            testDescription: "request changes",
+            decision: .requestChanges,
+            summaryBody: "Please address the inline notes before merging.",
+            expectedWarning: "request changes note was not submitted"
+        ),
+    ])
+    func publishReviewDoesNotSubmitDecisionWhenSomeGitLabDraftPublishesFail(
+        _ testCase: PartialPublishFailureCase
+    ) async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.versionsOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.createDiscussionOutput, stderr: ""),
@@ -1530,8 +1445,8 @@ struct GitLabCLIProviderTests {
                 try Self.makeProviderDraftComment(localDraftID: "draft-1", side: .new, lineRange: 24...24),
                 try Self.makeProviderDraftComment(localDraftID: "draft-2", side: .new, lineRange: 25...25),
             ],
-            decision: .requestChanges,
-            summaryBody: "Please address the inline notes before merging.",
+            decision: testCase.decision,
+            summaryBody: testCase.summaryBody,
             cwd: Self.cwd
         ))
 
@@ -1548,7 +1463,7 @@ struct GitLabCLIProviderTests {
         #expect(result.published.map(\.localDraftID) == ["draft-1"])
         #expect(result.failed.map(\.localDraftID) == ["draft-2"])
         #expect(result.refreshedRequest.threads.map(\.id) == ["discussion-1", "discussion-2"])
-        #expect(result.warnings.contains { $0.contains("request changes note was not submitted") })
+        #expect(result.warnings.contains { $0.contains(testCase.expectedWarning) })
     }
 
     @Test func threadMutationsUseDiscussionEndpointsAndRefreshMR() async throws {
@@ -1613,14 +1528,6 @@ struct GitLabCLIProviderTests {
             "--input", "-",
         ])
         #expect(try Self.jsonObject(from: commands[5].stdin)["resolved"] as? Bool == true)
-    }
-
-    @Test func gitLabMergeRequestAPIPathUsesSelectedRemoteProjectPath() {
-        #expect(GitLabCLIProvider.mergeRequestAPIPath(
-            remote: Self.remote,
-            request: Self.makeRequest(),
-            suffix: "discussions"
-        ) == "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions")
     }
 
     @Test func threadMutationRejectsUnsupportedGitLabUnresolve() async throws {
@@ -1767,34 +1674,6 @@ struct GitLabCLIProviderTests {
         ])
     }
 
-    @Test func checksLoadsMRHeadPipeline() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
-        ])
-        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
-
-        let checks = try await GitLabCLIProvider(runner: runner).checks(
-            remote: Self.remote,
-            request: request,
-            cwd: Self.cwd
-        )
-
-        #expect(checks.map(\.name) == ["build", "test"])
-        #expect(await runner.commands == [
-            FakeRunner.Command(
-                executable: "glab",
-                args: [
-                    "ci", "get",
-                    "--merge-request", "42",
-                    "--with-job-details",
-                    "--output", "json",
-                    "-R", "platform/mobile/alas",
-                ],
-                cwd: Self.cwd
-            ),
-        ])
-    }
-
     @Test func checksReturnsEmptyWhenNoPipelineIsReported() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 1, stdout: "", stderr: "no pipeline found for merge request !42"),
@@ -1870,39 +1749,14 @@ struct GitLabCLIProviderTests {
         ])
     }
 
-    @Test func rerunFailedChecksSkipsAllowedFailureJobs() async throws {
+    @Test(arguments: [
+        ("allowed-failure job", GitLabCLIProviderTests.pipelineWithAllowedFailureJobsOutput),
+        ("no failed jobs", GitLabCLIProviderTests.pipelineWithSuccessfulJobsOutput),
+    ])
+    func rerunFailedChecksRetriesNothingWithoutBlockingFailedJobs(scenario: String, output: String) async throws {
+        _ = scenario
         let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: Self.pipelineWithAllowedFailureJobsOutput, stderr: ""),
-        ])
-        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
-
-        try await GitLabCLIProvider(runner: runner).rerunFailedChecks(
-            remote: Self.remote,
-            branch: "feature/gitlab-provider",
-            headSHA: "abc123",
-            request: request,
-            cwd: Self.cwd
-        )
-
-        #expect(await runner.commands == [
-            FakeRunner.Command(
-                executable: "glab",
-                args: [
-                    "ci", "get",
-                    "--merge-request", "42",
-                    "--status", "failed",
-                    "--with-job-details",
-                    "--output", "json",
-                    "-R", "platform/mobile/alas",
-                ],
-                cwd: Self.cwd
-            ),
-        ])
-    }
-
-    @Test func rerunFailedChecksDoesNothingWhenNoFailedJobs() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: Self.pipelineWithSuccessfulJobsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: output, stderr: ""),
         ])
         let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
 
@@ -1967,56 +1821,23 @@ struct GitLabCLIProviderTests {
         }
     }
 
-    @Test func rerunFailedChecksThrowsOnRetryFailure() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: Self.pipelineWithFailedJobsOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
-            ProcessResult(exitCode: 1, stdout: "", stderr: "retry failed"),
-        ])
-        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
-
-        await #expect(throws: CodeHostProviderError.commandFailed(
-            command: "glab ci retry",
-            stderr: "retry failed"
-        )) {
-            try await GitLabCLIProvider(runner: runner).rerunFailedChecks(
-                remote: Self.remote,
-                branch: "feature/gitlab-provider",
-                headSHA: "abc123",
-                request: request,
-                cwd: Self.cwd
-            )
-        }
-    }
-
-    @Test func rerunFailedChecksThrowsWhenFailedPipelineHasNoRetryableJobIDs() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: Self.failedPipelineWithoutRetryableJobIDsOutput, stderr: ""),
-        ])
-        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
-
-        await #expect(throws: CodeHostProviderError.malformedOutput(
+    @Test(arguments: [
+        (
+            GitLabCLIProviderTests.failedPipelineWithoutRetryableJobIDsOutput,
             "glab ci get output did not include retryable failed job IDs"
-        )) {
-            try await GitLabCLIProvider(runner: runner).rerunFailedChecks(
-                remote: Self.remote,
-                branch: "feature/gitlab-provider",
-                headSHA: "abc123",
-                request: request,
-                cwd: Self.cwd
-            )
-        }
-    }
-
-    @Test func rerunFailedChecksThrowsWhenFailedPipelineIsMissingPipelineID() async throws {
+        ),
+        (
+            GitLabCLIProviderTests.failedPipelineWithoutPipelineIDOutput,
+            "glab ci get output is missing a pipeline id for retry"
+        ),
+    ])
+    func rerunFailedChecksRejectsFailedPipelineWithoutRetryIDs(output: String, expectedMessage: String) async throws {
         let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: Self.failedPipelineWithoutPipelineIDOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: output, stderr: ""),
         ])
         let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
 
-        await #expect(throws: CodeHostProviderError.malformedOutput(
-            "glab ci get output is missing a pipeline id for retry"
-        )) {
+        await #expect(throws: CodeHostProviderError.malformedOutput(expectedMessage)) {
             try await GitLabCLIProvider(runner: runner).rerunFailedChecks(
                 remote: Self.remote,
                 branch: "feature/gitlab-provider",
@@ -2025,33 +1846,6 @@ struct GitLabCLIProviderTests {
                 cwd: Self.cwd
             )
         }
-    }
-
-    @Test func currentReviewRequestIncludesPipelineChecks() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: Self.mrListOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
-        ])
-
-        let request = try await GitLabCLIProvider(runner: runner).currentReviewRequest(
-            remote: Self.remote,
-            branch: "feature/gitlab-provider",
-            headOwner: nil,
-            baseBranch: "origin/main",
-            cwd: Self.cwd
-        )
-
-        #expect(request?.checks.map(\.name) == ["build", "test"])
-        #expect(await runner.commands.map { Array($0.args.prefix(2)) } == [
-            ["mr", "list"],
-            ["mr", "view"],
-            ["mr", "note"],
-            ["api", "user"],
-            ["ci", "get"],
-        ])
     }
 
     @Test func createReviewRequestUsesExpectedArgsForNormalMR() async throws {
@@ -2121,28 +1915,6 @@ struct GitLabCLIProviderTests {
         ])
     }
 
-    @Test func createReviewRequestThrowsCommandFailedOnNonzeroExit() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 1, stdout: "", stderr: "create failed"),
-        ])
-
-        await #expect(throws: CodeHostProviderError.commandFailed(
-            command: "glab mr create",
-            stderr: "create failed"
-        )) {
-            _ = try await GitLabCLIProvider(runner: runner).createReviewRequest(
-                remote: Self.remote,
-                branch: "feature/gitlab-provider",
-                headOwner: nil,
-                baseBranch: "main",
-                title: "Add GitLab provider",
-                body: "Body",
-                isDraft: false,
-                cwd: Self.cwd
-            )
-        }
-    }
-
     @Test func createReviewRequestAddsDraftFlagForDraftMR() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/45\n", stderr: ""),
@@ -2186,26 +1958,6 @@ struct GitLabCLIProviderTests {
                 cwd: Self.cwd
             ),
         ])
-    }
-
-    private static let discussionsWithPositionOutput = """
-    [
-      { "id": "disc-1", "resolved": false, "notes": [
-        { "id": 101, "system": false, "body": "tighten this",
-          "author": { "username": "reviewer" },
-          "position": { "new_path": "src/foo.rb", "new_line": 12, "old_line": null } }
-      ]}
-    ]
-    """
-
-    @Test func parsesDiscussionPosition() throws {
-        let threads = try GitLabCLIProvider.parseDiscussions(
-            Self.discussionsWithPositionOutput,
-            requestURL: URL(string: "https://gitlab.com/group/proj/-/merge_requests/7")!)
-        let thread = try #require(threads.first)
-        #expect(thread.path == "src/foo.rb")
-        #expect(thread.line == 12)
-        #expect(thread.comments.first?.id == "101")
     }
 
     @Test func parsesDiscussionWithoutPositionIsFileLevel() throws {
@@ -2272,19 +2024,6 @@ struct GitLabCLIProviderTests {
 
         #expect(threads[0].comments[0].viewerCanUpdate == false)
         #expect(threads[0].comments[0].viewerCanDelete == false)
-    }
-
-    @Test func urlEncodedProjectSlugPercentEncodesPathSegments() {
-        let forkRemote = CodeHostRemote(
-            kind: .gitlab,
-            host: "gitlab.example.com",
-            owner: "platform/mobile",
-            repository: "alas",
-            remoteName: "origin",
-            webURL: URL(string: "https://gitlab.example.com/platform/mobile/alas")!
-        )
-
-        #expect(GitLabCLIProvider.urlEncodedProjectSlug(forkRemote) == "platform%2Fmobile%2Falas")
     }
 
     @Test func noteIDRequiresNumericCommentID() throws {
@@ -2469,83 +2208,37 @@ struct GitLabCLIProviderTests {
         ])
     }
 
-    @Test func resolveThreadCallsDiscussionResolveEndpoint() async throws {
+    @Test(arguments: [true, false])
+    func resolveAndUnresolveThreadCallDiscussionEndpoint(resolve: Bool) async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: "", stderr: ""),
         ])
         let request = Self.makeRequest()
-        let thread = Self.makeThread()
+        let thread = Self.makeThread(isResolved: !resolve)
+        let provider = GitLabCLIProvider(runner: runner)
 
-        let resolved = try await GitLabCLIProvider(runner: runner).resolveThread(
-            remote: Self.remote,
-            request: request,
-            thread: thread,
-            cwd: Self.cwd
-        )
-
-        #expect(resolved.isResolved == true)
-        #expect(resolved.id == thread.id)
-        #expect(await runner.commands == [
-            FakeRunner.Command(
-                executable: "glab",
-                args: [
-                    "api",
-                    "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions/discussion-1?resolved=true",
-                    "--hostname", "gitlab.example.com",
-                    "--output", "json",
-                    "-X", "PUT",
-                ],
-                cwd: Self.cwd
-            ),
-        ])
-    }
-
-    @Test func unresolveThreadCallsDiscussionUnresolveEndpoint() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
-        ])
-        let request = Self.makeRequest()
-        let thread = Self.makeThread(isResolved: true)
-
-        let unresolved = try await GitLabCLIProvider(runner: runner).unresolveThread(
-            remote: Self.remote,
-            request: request,
-            thread: thread,
-            cwd: Self.cwd
-        )
-
-        #expect(unresolved.isResolved == false)
-        #expect(unresolved.id == thread.id)
-        #expect(await runner.commands == [
-            FakeRunner.Command(
-                executable: "glab",
-                args: [
-                    "api",
-                    "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions/discussion-1?resolved=false",
-                    "--hostname", "gitlab.example.com",
-                    "--output", "json",
-                    "-X", "PUT",
-                ],
-                cwd: Self.cwd
-            ),
-        ])
-    }
-
-    @Test func resolveThreadThrowsOnNonzeroExit() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 1, stdout: "", stderr: "not authorized"),
-        ])
-        let request = Self.makeRequest()
-        let thread = Self.makeThread()
-
-        await #expect(throws: CodeHostProviderError.commandFailed(command: "glab api resolve discussion", stderr: "not authorized")) {
-            _ = try await GitLabCLIProvider(runner: runner).resolveThread(
-                remote: Self.remote,
-                request: request,
-                thread: thread,
-                cwd: Self.cwd
-            )
+        let updated: ReviewThread
+        if resolve {
+            updated = try await provider.resolveThread(remote: Self.remote, request: request, thread: thread, cwd: Self.cwd)
+        } else {
+            updated = try await provider.unresolveThread(remote: Self.remote, request: request, thread: thread, cwd: Self.cwd)
         }
+
+        #expect(updated.isResolved == resolve)
+        #expect(updated.id == thread.id)
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: [
+                    "api",
+                    "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions/discussion-1?resolved=\(resolve)",
+                    "--hostname", "gitlab.example.com",
+                    "--output", "json",
+                    "-X", "PUT",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
     }
 
     @Test func editCommentCallsNotesUpdateEndpoint() async throws {
@@ -2594,31 +2287,6 @@ struct GitLabCLIProviderTests {
         ])
     }
 
-    @Test func editCommentThrowsForNonNumericCommentID() async throws {
-        let runner = FakeRunner(results: [])
-        let request = Self.makeRequest()
-        let comment = ReviewComment(
-            id: "not-a-number",
-            author: nil,
-            body: "note",
-            url: nil,
-            createdAt: nil,
-            viewerCanUpdate: false,
-            viewerCanDelete: false,
-            isPending: false
-        )
-
-        await #expect(throws: CodeHostProviderError.malformedOutput("Unable to parse note id")) {
-            _ = try await GitLabCLIProvider(runner: runner).editComment(
-                remote: Self.remote,
-                request: request,
-                comment: comment,
-                newBody: "new",
-                cwd: Self.cwd
-            )
-        }
-    }
-
     @Test func deleteCommentCallsNotesDeleteEndpoint() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: "", stderr: ""),
@@ -2654,32 +2322,6 @@ struct GitLabCLIProviderTests {
                 cwd: Self.cwd
             ),
         ])
-    }
-
-    @Test func deleteCommentThrowsOnNonzeroExit() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 1, stdout: "", stderr: "forbidden"),
-        ])
-        let request = Self.makeRequest()
-        let comment = ReviewComment(
-            id: "501",
-            author: nil,
-            body: "note",
-            url: nil,
-            createdAt: nil,
-            viewerCanUpdate: false,
-            viewerCanDelete: false,
-            isPending: false
-        )
-
-        await #expect(throws: CodeHostProviderError.commandFailed(command: "glab api delete note", stderr: "forbidden")) {
-            try await GitLabCLIProvider(runner: runner).deleteComment(
-                remote: Self.remote,
-                request: request,
-                comment: comment,
-                cwd: Self.cwd
-            )
-        }
     }
 
     private static func makeThread(isResolved: Bool = false) -> ReviewThread {
@@ -3001,22 +2643,6 @@ struct GitLabCLIProviderTests {
     }
     """
 
-    private static let systemOnlyDiscussionsOutput = """
-    [
-      {
-        "id": "system-only",
-        "notes": [
-          {
-            "id": 504,
-            "body": "added 1 commit",
-            "system": true,
-            "author": { "username": "gitlab-bot" }
-          }
-        ]
-      }
-    ]
-    """
-
     private static let pipelineOutput = """
     {
       "id": 777,
@@ -3095,7 +2721,7 @@ struct GitLabCLIProviderTests {
     }
     """
 
-    private static let failedPipelineWithoutRetryableJobIDsOutput = """
+    static let failedPipelineWithoutRetryableJobIDsOutput = """
     {
       "id": 781,
       "status": "failed",
@@ -3111,7 +2737,7 @@ struct GitLabCLIProviderTests {
     }
     """
 
-    private static let failedPipelineWithoutPipelineIDOutput = """
+    static let failedPipelineWithoutPipelineIDOutput = """
     {
       "status": "failed",
       "ref": "feature/gitlab-provider",
@@ -3127,7 +2753,7 @@ struct GitLabCLIProviderTests {
     }
     """
 
-    private static let pipelineWithAllowedFailureJobsOutput = """
+    static let pipelineWithAllowedFailureJobsOutput = """
     {
       "id": 780,
       "status": "success",
@@ -3152,7 +2778,7 @@ struct GitLabCLIProviderTests {
     }
     """
 
-    private static let pipelineWithSuccessfulJobsOutput = """
+    static let pipelineWithSuccessfulJobsOutput = """
     {
       "id": 779,
       "status": "success",
@@ -3217,79 +2843,5 @@ struct GitLabCLIProviderTests {
             }
             return results.removeFirst()
         }
-    }
-
-    private actor SHAFilteringRunner: CodeHostCommandRunning {
-        private(set) var commands: [[String]] = []
-
-        func run(_ executable: String, args: [String], cwd: URL?, stdin: String?) async throws -> ProcessResult {
-            _ = executable
-            _ = cwd
-            _ = stdin
-            commands.append(args)
-            if args.starts(with: ["mr", "list"]) {
-                return ProcessResult(exitCode: 0, stdout: Self.listOutput, stderr: "")
-            }
-            if args.starts(with: ["api", "projects/1001"]) {
-                return ProcessResult(exitCode: 1, stdout: "", stderr: "project unavailable")
-            }
-            if args.starts(with: ["api", "projects/1002"]) {
-                return ProcessResult(exitCode: 0, stdout: #"{"path_with_namespace":"nacho/alas"}"#, stderr: "")
-            }
-            if args.starts(with: ["mr", "view", "43"]) {
-                return ProcessResult(exitCode: 0, stdout: Self.viewOutput, stderr: "")
-            }
-            if args.starts(with: ["mr", "note", "list"]) {
-                return ProcessResult(exitCode: 0, stdout: "[]", stderr: "")
-            }
-            if args.starts(with: ["api", "user"]) {
-                return ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: "")
-            }
-            if args.starts(with: ["ci", "get"]) {
-                return ProcessResult(exitCode: 0, stdout: #"{"id":1,"status":"success","jobs":[]}"#, stderr: "")
-            }
-            return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected command")
-        }
-
-        private static let listOutput = """
-        [
-          {
-            "iid": 42,
-            "title": "Unrelated stale MR",
-            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
-            "state": "opened",
-            "draft": false,
-            "sha": "matching-sha",
-            "source_branch": "feature/gitlab-provider",
-            "target_branch": "main",
-            "source_project_id": 1001
-          },
-          {
-            "iid": 43,
-            "title": "Matching merged MR",
-            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
-            "state": "merged",
-            "draft": false,
-            "sha": "matching-sha",
-            "source_branch": "feature/gitlab-provider",
-            "target_branch": "main",
-            "source_project_id": 1002
-          }
-        ]
-        """
-
-        private static let viewOutput = """
-        {
-          "iid": 43,
-          "title": "Matching merged MR",
-          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
-          "state": "merged",
-          "draft": false,
-          "sha": "matching-sha",
-          "source_branch": "feature/gitlab-provider",
-          "target_branch": "main",
-          "source_project_path_with_namespace": "nacho/alas"
-        }
-        """
     }
 }

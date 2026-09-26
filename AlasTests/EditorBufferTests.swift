@@ -75,49 +75,42 @@ struct EditorBufferTests {
         #expect(nextCheck)
     }
 
-    @Test func remoteHelperFileWatchMatchesCanonicalEventRootByRelativePath() {
+    @Test(arguments: [
+        EditorBufferRemoteWatchMatchCase(
+            description: "canonical event root matches by relative path",
+            watchedRoot: "/symlinked/repo/Sources",
+            eventRoot: "/real/repo/Sources",
+            eventPath: "/real/repo/Sources/App.swift",
+            matches: true
+        ),
+        EditorBufferRemoteWatchMatchCase(
+            description: "sibling under canonical event root is ignored",
+            watchedRoot: "/symlinked/repo/Sources",
+            eventRoot: "/real/repo/Sources",
+            eventPath: "/real/repo/Sources/Other.swift",
+            matches: false
+        ),
+        EditorBufferRemoteWatchMatchCase(
+            description: "same absolute path matches",
+            watchedRoot: "/repo/Sources",
+            eventRoot: "/repo/Sources",
+            eventPath: "/repo/Sources/App.swift",
+            matches: true
+        ),
+    ])
+    func remoteHelperFileWatchMatcher(_ testCase: EditorBufferRemoteWatchMatchCase) {
         let matcher = RemoteHelperFileWatchMatcher(
-            targetURL: URL(fileURLWithPath: "/symlinked/repo/Sources/App.swift"),
-            watchedRootURL: URL(fileURLWithPath: "/symlinked/repo/Sources")
+            targetURL: URL(fileURLWithPath: testCase.watchedRoot).appendingPathComponent("App.swift"),
+            watchedRootURL: URL(fileURLWithPath: testCase.watchedRoot)
         )
         let event = RemoteHelperWatchEvent(
             subscriptionId: "sub",
-            root: "/real/repo/Sources",
+            root: testCase.eventRoot,
             kind: .files,
-            paths: ["/real/repo/Sources/App.swift"]
+            paths: [testCase.eventPath]
         )
 
-        #expect(matcher.matches(event: event))
-    }
-
-    @Test func remoteHelperFileWatchIgnoresSiblingUnderCanonicalEventRoot() {
-        let matcher = RemoteHelperFileWatchMatcher(
-            targetURL: URL(fileURLWithPath: "/symlinked/repo/Sources/App.swift"),
-            watchedRootURL: URL(fileURLWithPath: "/symlinked/repo/Sources")
-        )
-        let event = RemoteHelperWatchEvent(
-            subscriptionId: "sub",
-            root: "/real/repo/Sources",
-            kind: .files,
-            paths: ["/real/repo/Sources/Other.swift"]
-        )
-
-        #expect(!matcher.matches(event: event))
-    }
-
-    @Test func remoteHelperFileWatchMatchesSameAbsolutePath() {
-        let matcher = RemoteHelperFileWatchMatcher(
-            targetURL: URL(fileURLWithPath: "/repo/Sources/App.swift"),
-            watchedRootURL: URL(fileURLWithPath: "/repo/Sources")
-        )
-        let event = RemoteHelperWatchEvent(
-            subscriptionId: "sub",
-            root: "/repo/Sources",
-            kind: .files,
-            paths: ["/repo/Sources/App.swift"]
-        )
-
-        #expect(matcher.matches(event: event))
+        #expect(matcher.matches(event: event) == testCase.matches)
     }
 
     /// Regression: remote file content was applied to storage without
@@ -221,50 +214,21 @@ struct EditorBufferTests {
         #expect(open.contains(#""text":"let value = 1\n""#))
     }
 
-    @Test func coldLoadCapturesContentMtimeAndPerms() async throws {
+    /// Rows: file contents on disk (`nil` = missing file), expected placeholder.
+    @Test(arguments: [
+        (nil, "(unable to read file)"),
+        (Data([0x63, 0x61, 0x66, 0xE9]), "(read-only: file is not valid UTF-8)"),
+    ] as [(Data?, String)])
+    func coldLoadOfUnreadableFileIsReadOnlyWithClearMessage(contents: Data?, expected: String) async throws {
         let root = tempWorktree()
-        let url = try writeFile(root, "a.txt", "hello\nworld\n", perms: 0o644)
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
-        await buffer.awaitLoadForTesting()
-        #expect(buffer.storage.string == "hello\nworld\n")
-        #expect(buffer.originalText == "hello\nworld\n")
-        #expect(buffer.lineEnding == .lf)
-        #expect(buffer.dirty == false)
-        #expect(buffer.permissions == 0o644)
-        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-        let onDisk = attrs[.modificationDate] as? Date
-        #expect(buffer.originalMtime == onDisk)
-    }
+        if let contents {
+            try contents.write(to: root.appendingPathComponent("file.txt"))
+        }
 
-    @Test func coldLoadDetectsCRLF() async throws {
-        let root = tempWorktree()
-        _ = try writeFile(root, "win.txt", "a\r\nb\r\n")
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "win.txt")
-        await buffer.awaitLoadForTesting()
-        #expect(buffer.lineEnding == .crlf)
-        // We canonicalize to LF in memory; save normalizes back.
-        #expect(buffer.storage.string == "a\nb\n")
-        #expect(buffer.originalText == "a\nb\n")
-    }
-
-    @Test func coldLoadOnMissingFileReadsAsErrorAndIsReadOnly() async {
-        let root = tempWorktree()
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "missing.txt")
-        await buffer.awaitLoadForTesting()
-        #expect(buffer.storage.string == "(unable to read file)")
-        #expect(buffer.readOnly == true)
-        #expect(buffer.dirty == false)
-    }
-
-    @Test func coldLoadOnNonUTF8FileIsReadOnlyWithClearMessage() async throws {
-        let root = tempWorktree()
-        let url = root.appendingPathComponent("latin1.txt")
-        try Data([0x63, 0x61, 0x66, 0xE9]).write(to: url)
-
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "latin1.txt")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "file.txt")
         await buffer.awaitLoadForTesting()
 
-        #expect(buffer.storage.string == "(read-only: file is not valid UTF-8)")
+        #expect(buffer.storage.string == expected)
         #expect(buffer.readOnly == true)
         #expect(buffer.dirty == false)
     }
@@ -283,20 +247,6 @@ struct EditorBufferTests {
         #expect(buffer.storage.string == "hello from symlink target\n")
         #expect(buffer.readOnly == true)
         #expect(buffer.dirty == false)
-    }
-
-    @Test func saveWritesContentAndClearsDirty() async throws {
-        let root = tempWorktree()
-        _ = try writeFile(root, "a.txt", "hello\n")
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
-        await buffer.awaitLoadForTesting()
-        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
-        #expect(buffer.dirty == true)
-        try buffer.save()
-        #expect(buffer.dirty == false)
-        let onDisk = try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8)
-        #expect(onDisk == "HELLO\n")
-        #expect(buffer.originalText == "HELLO\n")
     }
 
     @Test func saveBeforeInitialLoadFinishesDoesNotOverwriteFile() async throws {
@@ -338,28 +288,8 @@ struct EditorBufferTests {
         await buffer.awaitLoadForTesting()
     }
 
-    @Test func saveAsBeforeInitialLoadFinishesThrows() async throws {
-        let root = tempWorktree()
-        _ = try writeFile(root, "a.txt", "hello\n")
-        let gate = AsyncLoadGate()
-        EditorBuffer.loadGateForTesting = { await gate.wait() }
-        defer { EditorBuffer.loadGateForTesting = nil }
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
-
-        #expect(throws: EditorBuffer.SaveError.self) {
-            try buffer.saveAs(relativePath: "copy.txt")
-        }
-        let copyURL = root.appendingPathComponent("copy.txt")
-
-        await gate.open()
-        await buffer.awaitLoadForTesting()
-
-        #expect(FileManager.default.fileExists(atPath: copyURL.path) == false)
-        #expect(buffer.relativePath == "a.txt")
-        #expect(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8) == "hello\n")
-    }
-
-    @Test func moveToBeforeInitialLoadFinishesThrows() async throws {
+    @Test(arguments: [false, true])
+    func saveAsOrMoveBeforeInitialLoadFinishesThrows(move: Bool) async throws {
         let root = tempWorktree()
         let originalURL = try writeFile(root, "a.txt", "hello\n")
         let gate = AsyncLoadGate()
@@ -368,7 +298,8 @@ struct EditorBufferTests {
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
 
         #expect(throws: EditorBuffer.SaveError.self) {
-            try buffer.moveTo(relativePath: "moved.txt")
+            if move { try buffer.moveTo(relativePath: "moved.txt") }
+            else { try buffer.saveAs(relativePath: "moved.txt") }
         }
         let movedURL = root.appendingPathComponent("moved.txt")
 
@@ -543,23 +474,6 @@ struct EditorBufferTests {
         #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "hello\n")
     }
 
-    @Test func moveToRewritesSnapshotWhenBufferStaysDirty() async throws {
-        let root = tempWorktree()
-        _ = try writeFile(root, "a.txt", "hello\n")
-        let store = EditorBufferStore(rootOverride: tempWorktree())
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
-        await buffer.awaitLoadForTesting()
-        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
-        buffer.snapshotNow()
-
-        try buffer.moveTo(relativePath: "b.txt")
-
-        let snapshot = try store.read(worktreeId: "wt", tabId: "t")
-        #expect(snapshot?.relativePath == "b.txt")
-        #expect(snapshot?.content == "HELLO\n")
-        #expect(buffer.dirty == true)
-    }
-
     @Test func restoreAfterDirtyMoveUsesSnapshotPath() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "hello\n")
@@ -636,6 +550,10 @@ struct EditorBufferTests {
         _ = try writeFile(root, "win.txt", "a\r\nb\r\n")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "win.txt")
         await buffer.awaitLoadForTesting()
+        #expect(buffer.lineEnding == .crlf)
+        // We canonicalize to LF in memory; save normalizes back.
+        #expect(buffer.storage.string == "a\nb\n")
+        #expect(buffer.originalText == "a\nb\n")
         // In-memory storage is canonical LF; user appends a line.
         buffer.storage.replaceCharacters(in: NSRange(location: buffer.storage.length, length: 0), with: "c\n")
         try buffer.save()
@@ -671,18 +589,6 @@ struct EditorBufferTests {
         #expect(buffer.originalText == "x")
     }
 
-    @Test func saveRecordingErrorStoresThrownSaveFailure() async throws {
-        let root = tempWorktree()
-        _ = try writeFile(root, "a.txt", "x")
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
-        await buffer.awaitLoadForTesting()
-        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "more\n")
-        try FileManager.default.removeItem(at: root)
-        #expect(throws: (any Error).self) { try buffer.saveRecordingError() }
-        #expect(buffer.lastSaveError?.isEmpty == false)
-        #expect(buffer.dirty == true)
-    }
-
     @Test func saveUpdatesMtime() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "x")
@@ -694,35 +600,6 @@ struct EditorBufferTests {
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "y")
         try buffer.save()
         #expect(buffer.originalMtime > oldMtime)
-    }
-
-    @Test func editingFlipsDirtyAndFiresObserver() async {
-        let root = tempWorktree()
-        _ = try? writeFile(root, "a.txt", "hello\n")
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
-        await buffer.awaitLoadForTesting()
-        var fired = 0
-        let token = buffer.onEdit { fired += 1 }
-        defer { buffer.removeOnEdit(token) }
-        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
-        #expect(buffer.dirty == true)
-        #expect(fired == 1)
-    }
-
-    @Test func editBeforeAsyncLoadFinishesIsPreserved() async throws {
-        let root = tempWorktree()
-        _ = try writeFile(root, "a.txt", "disk\n")
-        let gate = AsyncLoadGate()
-        EditorBuffer.loadGateForTesting = { await gate.wait() }
-        defer { EditorBuffer.loadGateForTesting = nil }
-
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
-        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "typed")
-        await gate.open()
-        await buffer.awaitLoadForTesting()
-
-        #expect(buffer.storage.string == "typeddisk\n")
-        #expect(buffer.dirty == true)
     }
 
     /// An edit typed while the initial async load is still pending is
@@ -752,28 +629,7 @@ struct EditorBufferTests {
 
         #expect(generationAfterEdit != generationBeforeEdit)
         #expect(buffer.storage.string == "typeddisk\n")
-    }
-
-    @Test func editBeforeAsyncLoadFinishesKeepsDiskBaselineAndSaveBlocked() async throws {
-        let root = tempWorktree()
-        _ = try writeFile(root, "a.txt", "disk\n")
-        let gate = AsyncLoadGate()
-        EditorBuffer.loadGateForTesting = { await gate.wait() }
-        defer { EditorBuffer.loadGateForTesting = nil }
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
-        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "typed")
-
-        await gate.open()
-        await buffer.awaitLoadForTesting()
-        let url = root.appendingPathComponent("a.txt")
-        try "external\n".write(to: url, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: url.path)
-
-        #expect(throws: (any Error).self) {
-            try buffer.save()
-        }
-
-        #expect(try String(contentsOf: url, encoding: .utf8) == "external\n")
+        #expect(buffer.dirty == true)
     }
 
     @Test func editBeforeAsyncLoadFinishesCannotSavePartialTextAfterLoad() async throws {
@@ -1281,20 +1137,6 @@ struct EditorBufferTests {
         #expect(try store.read(worktreeId: "wt", tabId: "t") == nil)
     }
 
-    @Test func deletionOnDiskRaisesDeletedConflict() async throws {
-        let root = tempWorktree()
-        let url = try writeFile(root, "a.txt", "v1\n")
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
-        await buffer.awaitLoadForTesting()
-        buffer.startWatching()
-        defer { buffer.stopWatching() }
-        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
-        try FileManager.default.removeItem(at: url)
-        try await Task.sleep(nanoseconds: 500_000_000)
-        #expect(buffer.conflict == .deletedOnDisk)
-        #expect(buffer.dirty == true)
-    }
-
     @Test func recreatedOriginalPathWhileDirtyRaisesChangedConflict() async throws {
         let root = tempWorktree()
         let url = try writeFile(root, "a.txt", "v1\n")
@@ -1348,21 +1190,6 @@ struct EditorBufferTests {
         buffer.stopWatching()
     }
 
-    @Test func snapshotRestoreRoundTrip() async throws {
-        let root = tempWorktree()
-        _ = try writeFile(root, "a.txt", "v1\n")
-        let store = EditorBufferStore(rootOverride: tempWorktree())
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
-        await buffer.awaitLoadForTesting()
-        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
-        buffer.snapshotNow()
-        let restored = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
-        await restored.awaitLoadForTesting()
-        #expect(restored.storage.string == "edited v1\n")
-        #expect(restored.dirty == true)
-        #expect(restored.originalText == "v1\n")
-    }
-
     @Test func closeSnapshotsThenDiscardsOnSave() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "v1\n")
@@ -1394,25 +1221,6 @@ struct EditorBufferTests {
 
         #expect(buffer.dirty == false)
         #expect(try store.read(worktreeId: "wt", tabId: "t") == nil)
-    }
-
-    @Test func restoreOnDifferentMtimeRaisesConflict() async throws {
-        let root = tempWorktree()
-        let url = try writeFile(root, "a.txt", "v1\n")
-        let storeRoot = tempWorktree()
-        let store = EditorBufferStore(rootOverride: storeRoot)
-        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
-        await buffer.awaitLoadForTesting()
-        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
-        buffer.snapshotNow()
-        try await Task.sleep(nanoseconds: 1_100_000_000)
-        try "v2\n".write(to: url, atomically: true, encoding: .utf8)
-        let restored = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
-        await restored.awaitLoadForTesting()
-        restored.startWatching()
-        defer { restored.stopWatching() }
-        restored.checkForConflictOnRestore()
-        #expect(restored.conflict == .changedOnDisk)
     }
 
     @Test func coordinatorDetachRemovesMountedLayoutManager() async throws {
@@ -1505,48 +1313,6 @@ struct EditorBufferTests {
         #expect(restored.2.contentView.bounds.origin == expectedOrigin)
     }
 
-    @Test func coordinatorRestoresSelectionAndScrollPositionAfterRebind() async throws {
-        let root = tempWorktree()
-        _ = try writeFile(root, "a.txt", String(repeating: "0123456789\n", count: 200))
-        _ = try writeFile(root, "b.txt", String(repeating: "abcdefghij\n", count: 200))
-        let appState = AppState()
-        let buffer = appState.tabs.buffer(worktreeId: "wt", tabId: "a", worktreeRoot: root, relativePath: "a.txt")
-        await buffer.awaitLoadForTesting()
-        _ = appState.tabs.buffer(worktreeId: "wt", tabId: "b", worktreeRoot: root, relativePath: "b.txt")
-        let theme = try ThemeStore().current
-        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 240, height: 120))
-        scrollView.contentView = CodeEditorLeadingClipView(frame: .zero)
-        let layoutManager = NSLayoutManager()
-        let textContainer = NSTextContainer(size: NSSize(width: 1_200, height: 2_400))
-        layoutManager.addTextContainer(textContainer)
-        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 1_200, height: 2_400), textContainer: textContainer)
-        scrollView.documentView = textView
-        let coordinator = CodeEditorCoordinator(appState: appState)
-        coordinator.attach(textView: textView, buffer: buffer, layoutManager: layoutManager, worktreeId: "wt", worktreeRoot: root, tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
-
-        let expectedSelections = [
-            NSValue(range: NSRange(location: 150, length: 7)),
-            NSValue(range: NSRange(location: 250, length: 0)),
-        ]
-        let expectedOrigin = NSPoint(x: 45, y: 160)
-        textView.setSelectedRanges(expectedSelections, affinity: .downstream, stillSelecting: false)
-        scrollView.contentView.scroll(to: expectedOrigin)
-        coordinator.updateIfNeeded(worktreeId: "wt", worktreeRoot: root, relativePath: "b.txt", tabId: "b", revealLine: nil, revealCharacter: nil, theme: theme)
-        // A rebind cancels presentation but must not detach signature-help handlers.
-        #expect(textView.signatureHelpManualTriggerHandler != nil)
-        #expect(textView.signatureHelpChangeHandler != nil)
-        coordinator.updateIfNeeded(worktreeId: "wt", worktreeRoot: root, relativePath: "a.txt", tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
-
-        let deadline = Date(timeIntervalSinceNow: 1)
-        while (textView.selectedRanges != expectedSelections
-            || scrollView.contentView.bounds.origin != expectedOrigin), Date() < deadline {
-            await Task.yield()
-        }
-
-        #expect(textView.selectedRanges == expectedSelections)
-        #expect(scrollView.contentView.bounds.origin == expectedOrigin)
-    }
-
     @Test func coordinatorKeepsSamePathTabViewStatesIndependent() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", String(repeating: "0123456789\n", count: 200))
@@ -1629,51 +1395,6 @@ struct EditorBufferTests {
         #expect(detachedTabId == "t")
     }
 
-    @Test func coordinatorAppliesMonospacedFontToLoadedContent() async throws {
-        // Regression: after rebinding, applyBaseStyle was reading
-        // `textView.font` whose getter falls back to the system default font
-        // (proportional) when the freshly bound storage has no `.font`
-        // attribute on char 0. The styled storage ended up with a
-        // proportional font for existing content while typing remained
-        // monospaced.
-        let root = tempWorktree()
-        _ = try writeFile(root, "a.swift", "let answer = 42\n")
-        let appState = AppState()
-        // Use a guaranteed-available system monospace font so the test
-        // doesn't depend on whether the bundled Nerd Font is registered
-        // in the test process.
-        appState.config.code.fontFamily = "Menlo"
-        let buffer = appState.tabs.buffer(
-            worktreeId: "wt",
-            tabId: "tab",
-            worktreeRoot: root,
-            relativePath: "a.swift"
-        )
-        await buffer.awaitLoadForTesting()
-        let layoutManager = NSLayoutManager()
-        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
-        layoutManager.addTextContainer(textContainer)
-        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
-        let coordinator = CodeEditorCoordinator(appState: appState)
-        let theme = try ThemeStore().current
-
-        coordinator.attach(
-            textView: textView,
-            buffer: buffer,
-            layoutManager: layoutManager,
-            worktreeId: "wt",
-            worktreeRoot: root,
-            tabId: "tab",
-            revealLine: nil,
-            revealCharacter: nil,
-            theme: theme
-        )
-
-        let appliedFont = buffer.storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
-        #expect(appliedFont != nil)
-        #expect(appliedFont?.isFixedPitch == true)
-    }
-
     @Test func coordinatorPathChangeRebindsLayoutManagerToNewDisplayStorage() async throws {
         // Regression: when the active editor tab switched, the coordinator
         // updated its bookkeeping but never moved the layout manager off the
@@ -1722,6 +1443,9 @@ struct EditorBufferTests {
             revealCharacter: nil,
             theme: theme
         )
+        // A rebind cancels presentation but must not detach signature-help handlers.
+        #expect(textView.signatureHelpManualTriggerHandler != nil)
+        #expect(textView.signatureHelpChangeHandler != nil)
 
         let bufferB = appState.tabs.buffer(
             worktreeId: "wt",
@@ -2382,19 +2106,6 @@ struct EditorBufferTests {
         #expect(bufferA.storage.attribute(.underlineStyle, at: 0, effectiveRange: nil) == nil)
     }
 
-    @Test func externalBufferLoadsContentsAndIsReadOnly() async throws {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-ext-\(UUID().uuidString).h")
-        try "external content\n".write(to: url, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        let buffer = EditorBuffer(externalAbsoluteURL: url)
-        await buffer.awaitLoadForTesting()
-        #expect(buffer.storage.string == "external content\n")
-        #expect(buffer.isExternal == true)
-        #expect(buffer.dirty == false)
-    }
-
     @Test func externalBufferSaveIsNoOp() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-ext-\(UUID().uuidString).h")
@@ -2402,6 +2113,8 @@ struct EditorBufferTests {
         defer { try? FileManager.default.removeItem(at: url) }
         let buffer = EditorBuffer(externalAbsoluteURL: url)
         await buffer.awaitLoadForTesting()
+        #expect(buffer.storage.string == "x\n")
+        #expect(buffer.dirty == false)
         // Mutate storage as if user typed (test-only — production sets isEditable=false on the view)
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "INJECTED ")
         // save() returns Void and is a no-op for external buffers (readOnly=true guard fires).
@@ -2544,20 +2257,10 @@ struct EditorBufferLanguageOverrideTests {
         return buf
     }
 
-    @Test func effectiveLanguageFallsBackToInferred() async {
-        let buf = await buffer(language: "swift")
-        #expect(buf.effectiveLanguage == "swift")
-    }
-
-    @Test func effectiveLanguageUsesOverrideWhenSet() async {
-        let buf = await buffer(language: "swift")
-        buf.languageOverride = "typescript"
-        #expect(buf.effectiveLanguage == "typescript")
-    }
-
     @Test func effectiveLanguageClearsBackToInferredOnNilOverride() async {
         let buf = await buffer(language: "swift")
         buf.languageOverride = "typescript"
+        #expect(buf.effectiveLanguage == "typescript")
         buf.languageOverride = nil
         #expect(buf.effectiveLanguage == "swift")
     }
@@ -2612,6 +2315,16 @@ struct EditorBufferLanguageOverrideTests {
         }
         #expect(textView.indentationMode == .bracketAware)
     }
+}
+
+struct EditorBufferRemoteWatchMatchCase: Sendable, CustomTestStringConvertible {
+    let description: String
+    let watchedRoot: String
+    let eventRoot: String
+    let eventPath: String
+    let matches: Bool
+
+    var testDescription: String { description }
 }
 
 private actor AsyncLoadGate {

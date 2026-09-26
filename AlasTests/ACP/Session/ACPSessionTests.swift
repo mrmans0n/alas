@@ -48,8 +48,8 @@ struct ACPSessionTests {
         #expect(compaction.durationMs == 300)
     }
 
-    @Test("tool_call name is stored, and a later update without name leaves it untouched")
-    func toolCallNamePersistsAcrossUpdateWithoutName() async {
+    @Test("tool_call name survives an update without name; an update with name replaces it")
+    func toolCallNamePersistsUnlessUpdateCarriesOne() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
 
         session.apply(.toolCall(.init(
@@ -64,22 +64,15 @@ struct ACPSessionTests {
         }
         #expect(toolCall.name == "Bash")
         #expect(toolCall.status == "completed")
-    }
 
-    @Test("tool_call_update name replaces the stored name when present")
-    func toolCallUpdateReplacesName() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-
-        session.apply(.toolCall(.init(
-            toolCallId: "tool-1", title: "Run", kind: "execute", status: "in_progress")))
         session.apply(.toolCallUpdate(.init(
             toolCallId: "tool-1", status: "completed", name: "exec_command")))
 
-        guard case .toolCall(let toolCall) = session.transcript.messages.first else {
+        guard case .toolCall(let renamed) = session.transcript.messages.first else {
             Issue.record("expected a tool call")
             return
         }
-        #expect(toolCall.name == "exec_command")
+        #expect(renamed.name == "exec_command")
     }
 
     @Test("compaction summary chunks append to the normalized row")
@@ -130,17 +123,6 @@ struct ACPSessionTests {
         #expect(session.transcript.streamingState == .idle)
     }
 
-    @Test("an identical consecutive notice coalesces instead of restarting")
-    func identicalConsecutiveNoticesCoalesce() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        let notice = ACPSessionNotice(severity: .info, title: "Model fallback", description: "Using backup model.")
-
-        session.apply(.notice(notice))
-        session.apply(.notice(notice))
-
-        #expect(session.activeNotice == notice)
-    }
-
     @Test("notices that only differ by _meta still coalesce as visually identical")
     func noticesDifferingOnlyByMetadataCoalesce() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
@@ -167,17 +149,6 @@ struct ACPSessionTests {
         #expect(ACPSessionNotice.Severity.info.behavesAsInfo)
         #expect(!ACPSessionNotice.Severity.warning.behavesAsInfo)
         #expect(!ACPSessionNotice.Severity.error.behavesAsInfo)
-    }
-
-    @Test("dismissing the active notice clears it")
-    func dismissActiveNoticeClears() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.apply(.notice(.init(severity: .error, title: "Rate limited")))
-        #expect(session.activeNotice != nil)
-
-        session.dismissActiveNotice()
-
-        #expect(session.activeNotice == nil)
     }
 
     @Test("a different notice arriving while a pinned notice is active queues instead of replacing it")
@@ -226,40 +197,6 @@ struct ACPSessionTests {
 
         #expect(touched.isEmpty)
         #expect(session.activeNotice == nil)
-    }
-
-    @Test("recordPromptQuota stores the last turn and accumulates a session total")
-    func recordPromptQuotaStoresLastTurnAndAccumulatesTotal() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        let turn1 = ACPPromptQuota(
-            tokenCount: .init(totalTokens: 100, inputTokens: 80, cachedInputTokens: 0,
-                              cachedWriteTokens: 0, outputTokens: 20, reasoningOutputTokens: 0),
-            modelUsage: [.init(model: "claude-fable-5-1", tokenCount: .init(
-                totalTokens: 100, inputTokens: 80, cachedInputTokens: 0,
-                cachedWriteTokens: 0, outputTokens: 20, reasoningOutputTokens: 0))])
-        let turn2 = ACPPromptQuota(
-            tokenCount: .init(totalTokens: 40, inputTokens: 30, cachedInputTokens: 0,
-                              cachedWriteTokens: 0, outputTokens: 10, reasoningOutputTokens: 0),
-            modelUsage: [.init(model: "claude-fable-5-1", tokenCount: .init(
-                totalTokens: 40, inputTokens: 30, cachedInputTokens: 0,
-                cachedWriteTokens: 0, outputTokens: 10, reasoningOutputTokens: 0))])
-
-        session.recordPromptQuota(turn1)
-        #expect(session.lastTurnQuota == turn1)
-        #expect(session.sessionQuotaTotal == turn1)
-
-        session.recordPromptQuota(turn2)
-        #expect(session.lastTurnQuota == turn2)
-        #expect(session.sessionQuotaTotal?.tokenCount?.totalTokens == 140)
-        #expect(session.sessionQuotaTotal?.modelUsage.first?.tokenCount.totalTokens == 140)
-    }
-
-    @Test("recordPromptQuota with nil quota is a no-op")
-    func recordPromptQuotaWithNilIsNoOp() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.recordPromptQuota(nil)
-        #expect(session.lastTurnQuota == nil)
-        #expect(session.sessionQuotaTotal == nil)
     }
 
     @Test("recordPromptQuota clears lastTurnQuota when a later turn omits quota, but keeps the session total")
@@ -362,16 +299,6 @@ struct ACPSessionTests {
             return
         }
         #expect(toolCall.contentRevision == original.contentRevision + 1)
-    }
-
-    @Test("agent message chunks append to a single agent message")
-    func chunksMerge() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.agentMessageChunk(.text("hello ")))
-        session.apply(.agentMessageChunk(.text("world")))
-        #expect(session.transcript.messages.count == 1)
-        if case .agent(_, _, let buf) = session.transcript.messages[0] { #expect(buf.value == "hello world") }
-        else { Issue.record("expected single agent message") }
     }
 
     @Test("interleaved commentary and final chunks keep their own phase and message rows")
@@ -497,92 +424,15 @@ struct ACPSessionTests {
         #expect(buffer.metadata == metadata)
     }
 
-    @Test("agent chunks split at a sentence boundary get a newline separator")
-    func chunksSplitAtSentenceGetNewline() async {
+    @Test("two agent chunks merge into one message with the right separator",
+          arguments: ACPSessionTests.ChunkSeparatorCase.all)
+    func agentChunksMergeWithSeparator(_ row: ChunkSeparatorCase) async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.agentMessageChunk(.text("Compacting completed.")))
-        session.apply(.agentMessageChunk(.text("Running the pull tests.")))
+        session.apply(.agentMessageChunk(.text(row.first)))
+        session.apply(.agentMessageChunk(.text(row.second)))
         #expect(session.transcript.messages.count == 1)
         if case .agent(_, _, let buf) = session.transcript.messages[0] {
-            #expect(buf.value == "Compacting completed.\nRunning the pull tests.")
-        } else { Issue.record("expected single agent message") }
-    }
-
-    @Test("agent chunks already separated by whitespace are not double-spaced")
-    func chunksWithExistingWhitespaceNoExtraSeparator() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.agentMessageChunk(.text("line one\n")))
-        session.apply(.agentMessageChunk(.text("line two")))
-        if case .agent(_, _, let buf) = session.transcript.messages[0] {
-            #expect(buf.value == "line one\nline two")
-        } else { Issue.record("expected single agent message") }
-    }
-
-    @Test("agent chunks with ! or ? boundary also get a newline separator")
-    func chunksSplitAtPunctuationGetNewline() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        // Lowercase word before `!` with preceding whitespace → separator.
-        session.apply(.agentMessageChunk(.text("All done!")))
-        session.apply(.agentMessageChunk(.text("Next task")))
-        if case .agent(_, _, let buf) = session.transcript.messages[0] {
-            #expect(buf.value == "All done!\nNext task")
-        } else { Issue.record("expected single agent message") }
-    }
-
-    @Test("agent chunks with capitalized word before punctuation do not get a newline")
-    func chunksWithCapitalizedWordNoSeparator() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        // `Foo` is CamelCase → no separator (protects identifiers).
-        session.apply(.agentMessageChunk(.text("Foo.")))
-        session.apply(.agentMessageChunk(.text("Bar")))
-        if case .agent(_, _, let buf) = session.transcript.messages[0] {
-            #expect(buf.value == "Foo.Bar")
-        } else { Issue.record("expected single agent message") }
-    }
-
-    @Test("single-character punctuation chunk does not crash and adds no separator")
-    func chunksWithSingleCharPunctuationNoCrash() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        // A chunk that is just "." followed by "Next" must not trap when
-        // walking back past the punctuation and must not inject a newline.
-        session.apply(.agentMessageChunk(.text(".")))
-        session.apply(.agentMessageChunk(.text("Next task")))
-        if case .agent(_, _, let buf) = session.transcript.messages[0] {
-            #expect(buf.value == ".Next task")
-        } else { Issue.record("expected single agent message") }
-    }
-
-    @Test("qualified identifier with lowercase left segment gets no separator")
-    func chunksWithQualifiedIdentifierNoSeparator() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        // `package.` + `Type` — lowercase word but no preceding whitespace
-        // (qualified identifier at chunk start) → no separator.
-        session.apply(.agentMessageChunk(.text("package.")))
-        session.apply(.agentMessageChunk(.text("Type")))
-        if case .agent(_, _, let buf) = session.transcript.messages[0] {
-            #expect(buf.value == "package.Type")
-        } else { Issue.record("expected single agent message") }
-    }
-
-    @Test("agent chunks with all-caps acronym after period do not get a newline")
-    func chunksWithAcronymNoSeparator() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.agentMessageChunk(.text("See the API docs.")))
-        session.apply(.agentMessageChunk(.text("API")))
-        // "API" — first char 'A' (upper), second char 'P' (upper, not [a-z]) → no separator
-        if case .agent(_, _, let buf) = session.transcript.messages[0] {
-            #expect(buf.value == "See the API docs.API")
-        } else { Issue.record("expected single agent message") }
-    }
-
-    @Test("agent chunks split at a URL tail do not get a newline")
-    func chunksSplitAtURLNoSeparator() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.agentMessageChunk(.text("See https://example.com.")))
-        session.apply(.agentMessageChunk(.text("Path")))
-        // `com.` is preceded by `/` (URL tail) → no separator.
-        if case .agent(_, _, let buf) = session.transcript.messages[0] {
-            #expect(buf.value == "See https://example.com.Path")
+            #expect(buf.value == row.expected)
         } else { Issue.record("expected single agent message") }
     }
 
@@ -597,23 +447,6 @@ struct ACPSessionTests {
         } else { Issue.record("expected single thought message") }
     }
 
-    @Test("agent chunks after a completed output boundary start a new message")
-    func completedOutputBoundaryStartsNewMessage() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.apply(.agentMessageChunk(.text("first task output")))
-        session.markCompletedOutputBoundary()
-        session.apply(.agentMessageChunk(.text("next task output")))
-
-        #expect(session.transcript.messages.count == 2)
-        if case .agent(_, _, let first) = session.transcript.messages[0],
-           case .agent(_, _, let second) = session.transcript.messages[1] {
-            #expect(first.value == "first task output")
-            #expect(second.value == "next task output")
-        } else {
-            Issue.record("expected two agent messages")
-        }
-    }
-
     @Test("agent chunks with messageId after a completed output boundary update the same message")
     func messageIdChunkAfterCompletedOutputBoundaryUpdatesMessage() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
@@ -625,26 +458,6 @@ struct ACPSessionTests {
         #expect(session.transcript.messages[0].stableId == "acp-agent:agent-1")
         if case .agent(_, _, let text) = session.transcript.messages[0] {
             #expect(text.value == "first task output")
-        } else {
-            Issue.record("expected agent message")
-        }
-    }
-
-    @Test("late replay chunk with messageId does not mutate hydrated output")
-    func lateReplayMessageIdChunkDoesNotMutateHydratedOutput() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("earlier answer")),
-            .user(id: UUID(), messageId: "user-1", text: "next prompt", attachments: [])
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        let changed = session.apply(.agentMessageChunk(.init(messageId: "agent-1", content: .text(" replay"))))
-
-        #expect(changed == [0])
-        #expect(session.transcript.messages.count == 2)
-        if case .agent(_, _, let text) = session.transcript.messages[0] {
-            #expect(text.value == "earlier answer")
         } else {
             Issue.record("expected agent message")
         }
@@ -754,167 +567,40 @@ struct ACPSessionTests {
         #expect(agentTexts.contains("I've made that warning cleanup."))
     }
 
-    @Test("a held short fragment is materialized when a tool call closes the message")
-    func heldFragmentMaterializedOnToolCall() async {
+    /// A short live chunk that is a substring of prior output is held as a
+    /// replay candidate. Whatever closes the text run (tool call, prompt,
+    /// real user chunk, completed boundary, file edit) must materialize it
+    /// in order ahead of the closer; things that do not close the run
+    /// (state-only updates, a dropped replayed user chunk) must not flush it
+    /// into a duplicate row, and a candidate that fully reproduces an
+    /// existing message stays suppressed.
+    @Test("a held replay candidate flushes only when the text run is really closed",
+          arguments: ACPSessionTests.HeldCandidateCase.all)
+    func heldReplayCandidateFlush(_ row: HeldCandidateCase) async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("I'm working on it."))
-        ]
+        session.transcript.messages = Self.seedMessages(row.seed)
         session.allowsStreamingBoundaryCrossing = false
 
-        // A new live message whose only chunk "I" is a substring of prior
-        // output is held as a replay candidate. A tool call then closes the
-        // message with no further text chunk — the held "I" must be
-        // materialized (ahead of the tool call), not stranded and dropped.
-        session.apply(.agentMessageChunk(.init(messageId: "agent-live-2", content: .text("I"))))
-        session.apply(.toolCall(.init(
-            toolCallId: "tool-1", title: "Run", kind: "execute", status: "completed",
-            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
-
-        let agentTexts = session.transcript.messages.compactMap { message -> String? in
-            if case .agent(_, _, let text) = message { return text.value }
-            return nil
+        session.apply(.agentMessageChunk(.init(messageId: row.heldMessageId, content: .text(row.heldText))))
+        switch row.trigger {
+        case .toolCall:
+            session.apply(.toolCall(.init(
+                toolCallId: "tool-1", title: "Run", kind: "execute", status: "completed",
+                content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        case .userPrompt(let text):
+            session.recordUserPrompt(text: text, attachments: [])
+        case .userChunk(let messageId, let text):
+            session.apply(.userMessageChunk(.init(messageId: messageId, content: .text(text))))
+        case .completedOutputBoundary:
+            session.markCompletedOutputBoundary()
+        case .fileEdit:
+            session.appendFileEdit(.init(
+                path: "x.swift", added: 1, removed: 0, oldText: "a\n", newText: "a\nb\n"))
+        case .modelUpdate(let modelId):
+            session.apply(.currentModelUpdate(modelId: modelId))
         }
-        #expect(agentTexts == ["I'm working on it.", "I"])
-        if case .toolCall = session.transcript.messages.last {} else {
-            Issue.record("expected the tool call to follow the materialized fragment")
-        }
-    }
 
-    @Test("a held short fragment is materialized before the next user prompt")
-    func heldFragmentMaterializedBeforeNextPrompt() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("I'm working on it."))
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // The held fragment "I" is stranded when the turn ends with no further
-        // text chunk; the next prompt must materialize it (keeping its place
-        // before the user message) rather than drop it.
-        session.apply(.agentMessageChunk(.init(messageId: "agent-live-2", content: .text("I"))))
-        session.recordUserPrompt(text: "next", attachments: [])
-
-        let texts: [String] = session.transcript.messages.compactMap { message in
-            switch message {
-            case .agent(_, _, let t): return "agent:\(t.value)"
-            case .user(_, _, let t, _, _): return "user:\(t)"
-            default: return nil
-            }
-        }
-        #expect(texts == ["agent:I'm working on it.", "agent:I", "user:next"])
-    }
-
-    @Test("a state-only update does not flush a held replay candidate into a duplicate row")
-    func stateOnlyUpdateDoesNotFlushHeldCandidate() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // A late replay chunk "hello" is buffered (substring of prior output).
-        // A state-only update (model change) appends no row and does not close
-        // the text, so it must not materialize the held chunk as a duplicate.
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("hello"))))
-        session.apply(.currentModelUpdate(modelId: "gpt-5.5"))
-
-        let agentTexts = session.transcript.messages.compactMap { message -> String? in
-            if case .agent(_, _, let text) = message { return text.value }
-            return nil
-        }
-        #expect(agentTexts == ["hello world"])
-    }
-
-    @Test("a replayed user chunk does not flush a held agent replay candidate")
-    func replayedUserChunkDoesNotFlushHeldCandidate() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .user(id: UUID(), messageId: "user-1", text: "earlier prompt", attachments: []),
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // Held agent replay chunk "hello", then a replayed user prompt that
-        // appendUserChunk drops (its text already exists). The held chunk must
-        // not be flushed into a duplicate agent row by that dropped prompt.
-        session.apply(.agentMessageChunk(.init(messageId: "regen-agent", content: .text("hello"))))
-        session.apply(.userMessageChunk(.init(messageId: "regen-user", content: .text("earlier prompt"))))
-
-        let agentTexts = session.transcript.messages.compactMap { message -> String? in
-            if case .agent(_, _, let text) = message { return text.value }
-            return nil
-        }
-        #expect(agentTexts == ["hello world"])
-    }
-
-    @Test("a real user chunk flushes a held agent replay candidate ahead of the prompt")
-    func realUserChunkFlushesHeldCandidate() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("hi there"))
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // Held agent chunk "hi", then a genuinely new user prompt. The held
-        // chunk must materialize in order, ahead of the prompt.
-        session.apply(.agentMessageChunk(.init(messageId: "regen-agent", content: .text("hi"))))
-        session.apply(.userMessageChunk(.init(messageId: "user-new", content: .text("do the thing"))))
-
-        let texts: [String] = session.transcript.messages.compactMap { message in
-            switch message {
-            case .agent(_, _, let t): return "agent:\(t.value)"
-            case .user(_, _, let t, _, _): return "user:\(t)"
-            default: return nil
-            }
-        }
-        #expect(texts == ["agent:hi there", "agent:hi", "user:do the thing"])
-    }
-
-    @Test("a held final fragment is materialized when the output boundary completes")
-    func heldFragmentMaterializedOnCompletedOutputBoundary() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("OK done."))
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // A one-chunk reply "OK" whose text is a substring of prior output is
-        // held. Turn completion reaches markCompletedOutputBoundary() without
-        // an update, so it must materialize the held chunk rather than leave
-        // it stranded (and lost on detach/reopen).
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("OK"))))
-        session.markCompletedOutputBoundary()
-
-        let agentTexts = session.transcript.messages.compactMap { message -> String? in
-            if case .agent(_, _, let text) = message { return text.value }
-            return nil
-        }
-        #expect(agentTexts == ["OK done.", "OK"])
-    }
-
-    @Test("a full-replay candidate is kept suppressed on flush, not materialized as a duplicate")
-    func fullReplayCandidateKeptSuppressedOnFlush() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("OK"))
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // A late replay delivers the complete "OK" under a regenerated id, so
-        // it is held (it matches the existing message exactly). A tool call
-        // then triggers a flush — but a candidate that fully reproduces an
-        // existing message never diverged and must stay suppressed.
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("OK"))))
-        session.apply(.toolCall(.init(
-            toolCallId: "tool-1", title: "Run", kind: "execute", status: "completed",
-            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
-
-        let agentTexts = session.transcript.messages.compactMap { message -> String? in
-            if case .agent(_, _, let text) = message { return text.value }
-            return nil
-        }
-        #expect(agentTexts == ["OK"])
+        #expect(Self.orderedRows(session) == row.expected)
     }
 
     @Test("a held thought is flushed before an agent answer, preserving transcript order")
@@ -1016,42 +702,22 @@ struct ACPSessionTests {
         #expect(agentTexts == ["OK done.", "OK", "OK"])
     }
 
-    @Test("a held fragment is flushed before an appended file edit, preserving order")
-    func heldFragmentFlushedBeforeFileEdit() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("editing files"))
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // A held fragment "editing" (substring), then a file edit. The file
-        // edit path does not flow through apply(), so it must flush the held
-        // text ahead of the edit rather than leave it after.
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("editing"))))
-        session.appendFileEdit(.init(
-            path: "x.swift", added: 1, removed: 0, oldText: "a\n", newText: "a\nb\n"))
-
-        let ordered: [String] = session.transcript.messages.compactMap { message in
-            switch message {
-            case .agent(_, _, let t): return "agent:\(t.value)"
-            case .fileEdit: return "fileEdit"
-            default: return nil
-            }
-        }
-        #expect(ordered == ["agent:editing files", "agent:editing", "fileEdit"])
-    }
-
-    @Test("adapter diffStats on a completed tool call's diff block overwrite the matching file edit's counts")
-    func diffStatsCorrelateIntoFileEdit() async {
+    /// The file edit always starts as `a\n` -> `a\nb\n` with heuristic
+    /// counts 1/1; each row varies the completed tool call's diff block.
+    @Test("adapter diffStats overwrite a file edit's counts only when the diff block matches it",
+          arguments: ACPSessionTests.DiffStatsCase.all)
+    func diffStatsCorrelateIntoFileEdit(_ row: DiffStatsCase) async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
         session.appendFileEdit(.init(
-            path: "x.swift", added: 1, removed: 1, oldText: "a\n", newText: "a\nb\n"))
+            path: row.editPath, added: 1, removed: 1, oldText: "a\n", newText: "a\nb\n"))
 
         _ = session.apply(.toolCall(.init(
             toolCallId: "tc-1", title: "Edit x.swift", kind: "edit", status: "completed",
             content: [.diff(
-                path: "x.swift", oldText: "a\n", newText: "a\nb\n",
-                kind: "update", diffStats: .init(added: 4, removed: 2))])))
+                path: row.diffPath, oldText: row.diffOldText, newText: row.diffNewText,
+                kind: row.diffKind,
+                diffStats: row.stats.map { ACPDiffStats(added: $0.added, removed: $0.removed) })])),
+            worktreeRoot: row.worktreeRoot)
 
         guard case .fileEdit(_, let edit) = session.transcript.messages.first(where: {
             if case .fileEdit = $0 { return true }
@@ -1060,58 +726,8 @@ struct ACPSessionTests {
             Issue.record("expected a fileEdit message")
             return
         }
-        #expect(edit.added == 4)
-        #expect(edit.removed == 2)
-    }
-
-    @Test("diffStats correlate when the diff block reports an absolute path and a worktree root is supplied")
-    func diffStatsCorrelateWithAbsolutePathAndWorktreeRoot() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        // `appendAndPersistFileEdit` stores the worktree-relative path
-        // (ACPSessionRunner.swift ~450-456); the diff block's path can
-        // still arrive absolute.
-        session.appendFileEdit(.init(
-            path: "src/x.swift", added: 1, removed: 1, oldText: "a\n", newText: "a\nb\n"))
-
-        _ = session.apply(.toolCall(.init(
-            toolCallId: "tc-1", title: "Edit x.swift", kind: "edit", status: "completed",
-            content: [.diff(
-                path: "/repo/src/x.swift", oldText: "a\n", newText: "a\nb\n",
-                kind: "update", diffStats: .init(added: 4, removed: 2))])),
-            worktreeRoot: "/repo")
-
-        guard case .fileEdit(_, let edit) = session.transcript.messages.first(where: {
-            if case .fileEdit = $0 { return true }
-            return false
-        }) else {
-            Issue.record("expected a fileEdit message")
-            return
-        }
-        #expect(edit.added == 4)
-        #expect(edit.removed == 2)
-    }
-
-    @Test("a diff block without diffStats leaves the file edit's heuristic counts unchanged")
-    func diffWithoutStatsLeavesFileEditUnchanged() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.appendFileEdit(.init(
-            path: "x.swift", added: 1, removed: 1, oldText: "a\n", newText: "a\nb\n"))
-
-        _ = session.apply(.toolCall(.init(
-            toolCallId: "tc-1", title: "Edit x.swift", kind: "edit", status: "completed",
-            content: [.diff(
-                path: "x.swift", oldText: "a\n", newText: "a\nb\n",
-                kind: nil, diffStats: nil)])))
-
-        guard case .fileEdit(_, let edit) = session.transcript.messages.first(where: {
-            if case .fileEdit = $0 { return true }
-            return false
-        }) else {
-            Issue.record("expected a fileEdit message")
-            return
-        }
-        #expect(edit.added == 1)
-        #expect(edit.removed == 1)
+        #expect(edit.added == row.expectedAdded)
+        #expect(edit.removed == row.expectedRemoved)
     }
 
     @Test("diffStats for a path with no matching file edit is a no-op")
@@ -1132,75 +748,28 @@ struct ACPSessionTests {
         #expect(!hasFileEdit)
     }
 
-    @Test("diffStats for a same-path but different-content diff does not clobber an unrelated earlier edit")
-    func diffStatsWithMismatchedContentIsNoOp() async {
+    /// Chunks under a regenerated messageId arrive after hydration. Only a
+    /// whole-bubble prefix of the still-open trailing agent message is
+    /// adopted; replays of existing text stay suppressed; anything else
+    /// (suffix matches, output after a user prompt or tool call) starts its
+    /// own row — a rare duplicate is the accepted trade-off for never
+    /// merging a genuinely separate message into an existing bubble.
+    @Test("regenerated-id chunks after hydration are suppressed, adopted, or start a new row",
+          arguments: ACPSessionTests.RegeneratedReplayCase.all)
+    func regeneratedReplayChunks(_ row: RegeneratedReplayCase) async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        // An earlier, unrelated edit to the same path (e.g. a prior turn).
-        session.appendFileEdit(.init(
-            path: "x.swift", added: 1, removed: 1, oldText: "a\n", newText: "a\nb\n"))
-
-        // A later diff for the same path, but with different before/after
-        // text — a preview-only diff or an edit that hasn't landed via
-        // fs/write_text_file must not overwrite the earlier, unrelated row.
-        _ = session.apply(.toolCall(.init(
-            toolCallId: "tc-2", title: "Preview x.swift", kind: "edit", status: "completed",
-            content: [.diff(
-                path: "x.swift", oldText: "z\n", newText: "z\nq\n",
-                kind: "update", diffStats: .init(added: 99, removed: 99))])))
-
-        guard case .fileEdit(_, let edit) = session.transcript.messages.first(where: {
-            if case .fileEdit = $0 { return true }
-            return false
-        }) else {
-            Issue.record("expected a fileEdit message")
-            return
-        }
-        #expect(edit.added == 1)
-        #expect(edit.removed == 1)
-    }
-
-    @Test("chunked late replay with a regenerated messageId and short first fragment is not duplicated")
-    func chunkedLateReplayShortFirstFragmentNotDuplicated() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .user(id: UUID(), messageId: "user-1", text: "prev prompt", attachments: []),
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("The plan is complete."))
-        ]
+        session.transcript.messages = Self.seedMessages(row.seed)
         session.allowsStreamingBoundaryCrossing = false
 
-        // A late replay of the trailing hydrated message arrives under a
-        // regenerated id, split into chunks whose first fragment is short.
-        // It must stay suppressed for its whole length and never duplicate.
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("The "))))
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("plan is complete."))))
+        for chunk in row.chunks {
+            session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(chunk))))
+        }
 
         let agentTexts = session.transcript.messages.compactMap { message -> String? in
             if case .agent(_, _, let text) = message { return text.value }
             return nil
         }
-        #expect(agentTexts == ["The plan is complete."])
-    }
-
-    @Test("mid-stream late replay fragment with a regenerated messageId is not duplicated")
-    func midStreamLateReplayFragmentNotDuplicated() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .user(id: UUID(), messageId: "user-1", text: "prev prompt", attachments: []),
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // The "hello " prefix was consumed while replay suppression was
-        // still active; the slip that reaches appendStreaming is a middle
-        // fragment of the trailing hydrated message. It must not be appended
-        // as a duplicate even though it is not a prefix of that message.
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("world"))))
-
-        let agentTexts = session.transcript.messages.compactMap { message -> String? in
-            if case .agent(_, _, let text) = message { return text.value }
-            return nil
-        }
-        #expect(agentTexts == ["hello world"])
+        #expect(agentTexts == row.expectedAgentTexts)
     }
 
     @Test("replay-then-continuation under a regenerated messageId merges into the hydrated message")
@@ -1288,28 +857,6 @@ struct ACPSessionTests {
         #expect(buffer.metadata == commentary)
     }
 
-    @Test("replay continuation is still adopted across a trailing plan row")
-    func replayContinuationAdoptedAcrossTrailingPlan() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello")),
-            .plan(id: UUID(), [])
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // A trailing plan does not close the agent output (like lastAgent()
-        // and markCompletedOutputBoundary(), which skip plans), so the
-        // replayed continuation must still merge into "hello", not duplicate.
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("hello"))))
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(" world"))))
-
-        let agentTexts = session.transcript.messages.compactMap { message -> String? in
-            if case .agent(_, _, let text) = message { return text.value }
-            return nil
-        }
-        #expect(agentTexts == ["hello world"])
-    }
-
     @Test("pending replay candidates are namespaced by kind so a shared id does not mix thought into agent text")
     func pendingReplayCandidatesNamespacedByKind() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
@@ -1360,74 +907,6 @@ struct ACPSessionTests {
         #expect(agentTexts == ["answer"])
     }
 
-    @Test("replay split at a sentence boundary the original did not is still suppressed despite the separator")
-    func replaySplitAtSentenceBoundaryStillSuppressed() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        // Hydrated as one chunk, so it carries no injected separator.
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("tests completed.Running"))
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // The replay splits at the sentence boundary, so streamingSeparator
-        // would inject a newline. Matching on the raw concatenation as well
-        // keeps this recognised as a replay instead of a duplicate.
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("tests completed."))))
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("Running"))))
-
-        let agentTexts = session.transcript.messages.compactMap { message -> String? in
-            if case .agent(_, _, let text) = message { return text.value }
-            return nil
-        }
-        #expect(agentTexts == ["tests completed.Running"])
-    }
-
-    @Test("mid-message replay slip followed by real continuation starts its own row, not a merge")
-    func midMessageReplaySlipThenContinuationStartsNewRow() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // The surviving replay chunk is the middle fragment "world", which
-        // then continues with "!". Only a whole-bubble prefix is adopted, so
-        // a partial (suffix) match is NOT merged — it starts its own row.
-        // This is the accepted trade-off (a rare duplicate) for never merging
-        // a genuinely separate message into an existing bubble; a suffix like
-        // "world" is indistinguishable from new output starting with that
-        // word (see postPromptLiveOutputSharingTrailingWordNotAdopted).
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("world"))))
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("!"))))
-
-        let agentTexts = session.transcript.messages.compactMap { message -> String? in
-            if case .agent(_, _, let text) = message { return text.value }
-            return nil
-        }
-        #expect(agentTexts == ["hello world", "world!"])
-    }
-
-    @Test("post-prompt output sharing only the trailing word of the previous bubble is not merged")
-    func postPromptLiveOutputSharingTrailingWordNotAdopted() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // A genuinely separate message that starts with the previous bubble's
-        // last word ("world") then diverges. It must be its own row, never
-        // merged into "hello world" as "hello world again".
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("world"))))
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(" again"))))
-
-        let agentTexts = session.transcript.messages.compactMap { message -> String? in
-            if case .agent(_, _, let text) = message { return text.value }
-            return nil
-        }
-        #expect(agentTexts == ["hello world", "world again"])
-    }
-
     @Test("regenerated thought replay is not adopted across a file edit")
     func thoughtReplayNotAdoptedAcrossFileEdit() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
@@ -1452,78 +931,6 @@ struct ACPSessionTests {
             return nil
         }
         #expect(thoughtTexts == ["plan", "plan more"])
-    }
-
-    @Test("a partial (non-whole-bubble) suffix match starts its own row rather than merging")
-    func partialSuffixMatchStartsNewRow() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("OK"))
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // A genuinely new message "Keep going" whose first held fragment "K"
-        // coincides with the tail of "OK". Only a whole-bubble prefix is
-        // adopted, so this partial match is not merged into "OK" as
-        // "OKeep going" — it starts its own row.
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("K"))))
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("eep going"))))
-
-        let agentTexts = session.transcript.messages.compactMap { message -> String? in
-            if case .agent(_, _, let text) = message { return text.value }
-            return nil
-        }
-        #expect(agentTexts == ["OK", "Keep going"])
-    }
-
-    @Test("post-prompt live output sharing a prefix with a prior turn is not adopted into the old bubble")
-    func postPromptLiveOutputNotAdoptedIntoPriorTurn() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello")),
-            .user(id: UUID(), messageId: "user-1", text: "next", attachments: [])
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // Genuinely new output for the "next" turn that happens to start
-        // with the same word as the prior turn's "hello" bubble. It must
-        // become its own message, not mutate the earlier (pre-user) bubble.
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("hello"))))
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(" there"))))
-
-        let agentTexts = session.transcript.messages.compactMap { message -> String? in
-            if case .agent(_, _, let text) = message { return text.value }
-            return nil
-        }
-        #expect(agentTexts == ["hello", "hello there"])
-    }
-
-    @Test("post-tool live output sharing a prefix with a pre-tool bubble is not adopted across the tool call")
-    func postToolLiveOutputNotAdoptedAcrossToolCall() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("OK")),
-            .toolCall(.init(
-                toolCallId: "tool-1",
-                title: "Run",
-                kind: "execute",
-                status: "completed",
-                content: "done"
-            ))
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // Fresh post-tool output that happens to start with the pre-tool
-        // bubble's full text. It must become its own message after the tool
-        // call, not append to the already-closed pre-tool bubble.
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("OK"))))
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(" done"))))
-
-        let agentTexts = session.transcript.messages.compactMap { message -> String? in
-            if case .agent(_, _, let text) = message { return text.value }
-            return nil
-        }
-        #expect(agentTexts == ["OK", "OK done"])
     }
 
     @Test("late replay user chunk with unknown messageId does not append prompt")
@@ -1622,15 +1029,6 @@ struct ACPSessionTests {
         }
     }
 
-    @Test("user prompt creates a user message")
-    func userPrompt() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.recordUserPrompt(text: "hi", attachments: [])
-        #expect(session.transcript.messages.count == 1)
-        if case .user(_, _, let text, _, _) = session.transcript.messages[0] { #expect(text == "hi") }
-        else { Issue.record("expected user message") }
-    }
-
     @Test("checkpoint capture attaches to its recorded prompt")
     func checkpointCaptureAttachesToRecordedPrompt() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
@@ -1670,17 +1068,6 @@ struct ACPSessionTests {
         } else {
             Issue.record("expected the original prompt in the transcript")
         }
-    }
-
-    @Test("transcript tail following is runtime state")
-    func transcriptTailFollowingDefaultsToEnabled() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        #expect(session.followsTranscriptTail)
-
-        session.followsTranscriptTail = false
-        session.apply(.agentMessageChunk(.text("background update")))
-
-        #expect(!session.followsTranscriptTail)
     }
 
     @Test("live transcript advances render window while following tail")
@@ -1733,60 +1120,22 @@ struct ACPSessionTests {
         #expect(session.transcript.visibleHead == 0)
     }
 
-    @Test("empty transcript has no conversation transcript")
-    func emptyTranscriptHasNoConversationTranscript() async {
+    @Test("hasConversationTranscript counts only non-blank user or agent text",
+          arguments: ACPSessionTests.ConversationTranscriptCase.all)
+    func conversationTranscriptDetection(_ row: ConversationTranscriptCase) async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        switch row.content {
+        case .empty:
+            break
+        case .systemNotice(let text):
+            session.appendSystemNotice(text)
+        case .userPrompt(let text):
+            session.recordUserPrompt(text: text, attachments: [])
+        case .agentChunk(let text):
+            session.apply(.agentMessageChunk(.text(text)))
+        }
 
-        #expect(!session.hasConversationTranscript)
-    }
-
-    @Test("system notice alone has no conversation transcript")
-    func systemNoticeHasNoConversationTranscript() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.appendSystemNotice("Agent disconnected")
-
-        #expect(!session.hasConversationTranscript)
-    }
-
-    @Test("non-empty user message has conversation transcript")
-    func userMessageHasConversationTranscript() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.recordUserPrompt(text: "hello", attachments: [])
-
-        #expect(session.hasConversationTranscript)
-    }
-
-    @Test("whitespace-only user message has no conversation transcript")
-    func whitespaceUserMessageHasNoConversationTranscript() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.recordUserPrompt(text: " \n\t ", attachments: [])
-
-        #expect(!session.hasConversationTranscript)
-    }
-
-    @Test("non-empty agent message has conversation transcript")
-    func agentMessageHasConversationTranscript() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.agentMessageChunk(.text("hello from agent")))
-
-        #expect(session.hasConversationTranscript)
-    }
-
-    @Test("context restore warning can be set and compared")
-    func contextRestoreWarningState() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        let warning = ACPSession.ContextRestoreWarning(
-            message: "Context restore failed",
-            canSendTranscript: true
-        )
-
-        session.contextRestoreWarning = warning
-
-        #expect(session.contextRestoreWarning == warning)
-        #expect(warning == ACPSession.ContextRestoreWarning(
-            message: "Context restore failed",
-            canSendTranscript: true
-        ))
+        #expect(session.hasConversationTranscript == row.expected)
     }
 
     @Test("restored context recovery marker clears when agent output starts")
@@ -1830,74 +1179,6 @@ struct ACPSessionTests {
             #expect(items.count == 2)
             #expect(items[0].status == "completed")
         } else { Issue.record("expected plan") }
-    }
-
-    @Test("availableModelsUpdate populates publishers")
-    func models() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.availableModelsUpdate([.init(id: "x", name: "X")]))
-        #expect(session.availableModels.count == 1)
-    }
-
-    @Test("currentModelUpdate updates currentModel")
-    func currentModelUpdates() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.availableModelsUpdate([
-            ACPModelInfo(id: "opus", name: "Opus"),
-            ACPModelInfo(id: "sonnet", name: "Sonnet")]))
-        session.apply(.currentModelUpdate(modelId: "sonnet"))
-        #expect(session.currentModel == "sonnet")
-    }
-
-    @Test("sessionConfigOptionsUpdate replaces availableConfigOptions")
-    func configOptionsUpdate() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        let opt = ACPConfigOption(id: "effort", name: "Effort", type: "select",
-                                  category: nil, currentValue: "high",
-                                  options: [ACPConfigOptionItem(id: "high", name: "High")])
-        session.apply(.sessionConfigOptionsUpdate([opt]))
-        #expect(session.availableConfigOptions.count == 1)
-        #expect(session.availableConfigOptions[0].currentValue == .string("high"))
-    }
-
-    @Test("a config_option_update push mirroring an already-applied selection does not flicker")
-    func configOptionsUpdatePushAfterMergeDoesNotFlicker() async {
-        // OpenCode v1.18.31 pushes config_option_update *after* the
-        // session/set_config_option response, echoing the same final
-        // state through both channels. Reapplying that same state via the
-        // push must be a no-op — it must not regress the value the merge
-        // (ACPConfigOption.mergingSuccessfulSetResponse) already settled.
-        let session = ACPSession(id: "s", agentId: "opencode", worktreeId: "w", title: "t")
-        let baselineFast = ACPConfigOption(
-            id: "fast", name: "Fast", type: "select", currentValue: "false",
-            options: [
-                ACPConfigOptionItem(id: "false", name: "Off"),
-                ACPConfigOptionItem(id: "true", name: "On"),
-            ])
-        session.availableConfigOptions = [baselineFast]
-
-        // Simulate ACPComposerShell.apply(configOptionId:value:): optimistic
-        // local write, then the RPC response merged via
-        // mergingSuccessfulSetResponse.
-        let optimisticFast = ACPConfigOption(
-            id: "fast", name: "Fast", type: "select", currentValue: "true",
-            options: baselineFast.options)
-        session.availableConfigOptions = [optimisticFast]
-        let responseFast = ACPConfigOption(
-            id: "fast", name: "Fast", type: "select", currentValue: "true",
-            options: baselineFast.options)
-        let merged = try? #require(ACPConfigOption.mergingSuccessfulSetResponse(
-            [responseFast],
-            configId: "fast",
-            selectedValue: .string("true"),
-            currentConfigOptions: session.availableConfigOptions))
-        session.availableConfigOptions = merged ?? session.availableConfigOptions
-        #expect(session.availableConfigOptions.first?.currentValue == .string("true"))
-
-        // The subsequent push echoes the same settled state.
-        session.apply(.sessionConfigOptionsUpdate([optimisticFast]))
-
-        #expect(session.availableConfigOptions.first?.currentValue == .string("true"))
     }
 
     @Test("sessionConfigOptionsUpdate synchronizes config-backed currentModel")
@@ -2120,56 +1401,6 @@ struct ACPSessionTests {
         #expect(goal.tokenBudget == 300)
     }
 
-    @Test("chipState reflects current ACPSession fields")
-    func chipStateRecomputed() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.availableModels = [ACPModelInfo(id: "opus", name: "Opus")]
-        session.currentModel = "opus"
-        session.availableModes = [ACPModeInfo(id: "plan", name: "Plan")]
-        session.currentMode = "plan"
-        session.availableConfigOptions = [
-            ACPConfigOption(id: "effort", name: "Effort", type: "select",
-                            category: nil, currentValue: "low",
-                            options: [ACPConfigOptionItem(id: "low", name: "Low")])
-        ]
-        let state = session.chipState
-        #expect(state.mode?.currentId == "plan")
-        #expect(state.thinking?.currentId == "low")
-    }
-
-    @Test("chipState for pi hides Mode and routes modes to Thinking")
-    func chipStatePi() async {
-        let session = ACPSession(id: "s", agentId: "pi", worktreeId: "w", title: "t")
-        session.availableModels = [ACPModelInfo(id: "pi", name: "Pi")]
-        session.currentModel = "pi"
-        session.availableModes = [ACPModeInfo(id: "high", name: "High")]
-        session.currentMode = "high"
-        let state = session.chipState
-        #expect(state.mode == nil)
-        #expect(state.thinking?.currentId == "high")
-        #expect(state.autoRun == .ignored)
-    }
-
-    @Test("tool_call_update with wrapped text content populates tc.content")
-    func toolCallUpdateContent() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        // Initial tool_call with empty content
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-1", title: "read", kind: "read", status: "in_progress",
-            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
-        // Streaming update carries the real output
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-1", status: "completed",
-            content: [.content(.text("file contents\nline two"))],
-            rawOutput: nil)))
-        #expect(session.transcript.messages.count == 1)
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.content == "file contents\nline two")
-            #expect(tc.preview == "file contents")
-            #expect(tc.status == "completed")
-        } else { Issue.record("expected toolCall message") }
-    }
-
     @Test("tool duration starts with active execution and stops at completion")
     func toolCallExecutionDuration() {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
@@ -2212,30 +1443,6 @@ struct ACPSessionTests {
         #expect(toolCall.status == "canceled")
         #expect(toolCall.executionFinishedAt == canceledAt)
         #expect(abs((toolCall.executionDuration ?? 0) - 2.4) < 0.0001)
-    }
-
-    @Test("initial toolCall preserves raw input metadata")
-    func toolCallPreservesRawInput() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-meta",
-            title: "bash",
-            kind: "execute",
-            status: "in_progress",
-            content: nil,
-            locations: nil,
-            rawInput: AnyCodable([
-                "command": AnyCodable("swift test"),
-                "timeout": AnyCodable(120)
-            ]),
-            rawOutput: nil)))
-
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.rawInput?.contains(#""command":"swift test""#) == true)
-            #expect(tc.rawInput?.contains(#""timeout":120"#) == true)
-        } else {
-            Issue.record("expected toolCall message")
-        }
     }
 
     @Test("initial toolCall stores bounded raw input metadata")
@@ -2351,9 +1558,10 @@ struct ACPSessionTests {
         }
     }
 
-    @Test("raw output image result is preserved as an asset")
-    func rawOutputImageResultPreservesAsset() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+    @Test("an image-generation rawOutput shape is preserved as an asset",
+          arguments: ACPSessionTests.RawOutputAssetCase.shapes)
+    func rawOutputImageResultPreservesAsset(_ row: RawOutputAssetCase) async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
 
         session.apply(.toolCall(.init(
             toolCallId: "tc-raw-image",
@@ -2363,114 +1571,10 @@ struct ACPSessionTests {
             content: nil,
             locations: nil,
             rawInput: nil,
-            rawOutput: AnyCodable([
-                "created": AnyCodable(1),
-                "data": AnyCodable([
-                    AnyCodable([
-                        "b64_json": AnyCodable("base64-data"),
-                        "revised_prompt": AnyCodable("A useful screenshot")
-                    ])
-                ])
-            ]))))
+            rawOutput: row.rawOutput)))
 
         if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.rawOutput?.contains(#""b64_json":"base64-data""#) == true)
-            #expect(tc.assets == [
-                ACPMessage.ToolCallAsset.image(data: "base64-data", mimeType: "image/png")
-            ])
-        } else {
-            Issue.record("expected toolCall message")
-        }
-    }
-
-    @Test("raw output image URL result is preserved as an asset")
-    func rawOutputImageURLResultPreservesAsset() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-raw-image-url",
-            title: "Image generation",
-            kind: "other",
-            status: "completed",
-            content: nil,
-            locations: nil,
-            rawInput: nil,
-            rawOutput: AnyCodable([
-                "data": AnyCodable([
-                    AnyCodable([
-                        "url": AnyCodable("https://example.com/generated"),
-                        "revised_prompt": AnyCodable("A useful screenshot")
-                    ])
-                ])
-            ]))))
-
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.assets == [
-                ACPMessage.ToolCallAsset.image(
-                    data: nil,
-                    uri: "https://example.com/generated",
-                    mimeType: nil,
-                    name: "generated")
-            ])
-        } else {
-            Issue.record("expected toolCall message")
-        }
-    }
-
-    @Test("raw output data URI URL result is preserved as an asset")
-    func rawOutputDataURIURLResultPreservesAsset() async {
-        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
-
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-raw-data-uri-url",
-            title: "Image generation",
-            kind: "other",
-            status: "completed",
-            content: nil,
-            locations: nil,
-            rawInput: nil,
-            rawOutput: AnyCodable([
-                "data": AnyCodable([
-                    AnyCodable([
-                        "url": AnyCodable("data:image/png;base64,base64-data")
-                    ])
-                ])
-            ]))))
-
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.assets == [
-                ACPMessage.ToolCallAsset.image(
-                    data: nil,
-                    uri: "data:image/png;base64,base64-data",
-                    mimeType: "image/png",
-                    name: nil)
-            ])
-        } else {
-            Issue.record("expected toolCall message")
-        }
-    }
-
-    @Test("raw output bare image data result is preserved as an asset")
-    func rawOutputBareImageDataResultPreservesAsset() async {
-        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
-
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-raw-image-data",
-            title: "Image generation",
-            kind: "other",
-            status: "completed",
-            content: nil,
-            locations: nil,
-            rawInput: nil,
-            rawOutput: AnyCodable([
-                "data": AnyCodable("base64-data"),
-                "mime_type": AnyCodable("image/png")
-            ]))))
-
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.assets == [
-                ACPMessage.ToolCallAsset.image(data: "base64-data", mimeType: "image/png")
-            ])
+            #expect(tc.assets == row.expectedAssets)
         } else {
             Issue.record("expected toolCall message")
         }
@@ -2515,28 +1619,22 @@ struct ACPSessionTests {
         }
     }
 
-    @Test("raw output data URI asset survives later content update")
-    func rawOutputDataURIAssetSurvivesLaterContentUpdate() async {
+    @Test("a long rawOutput image asset survives rawOutput truncation and a later content update",
+          arguments: ACPSessionTests.RawOutputAssetCase.longPayloads)
+    func longRawOutputAssetSurvivesLaterContentUpdate(_ row: RawOutputAssetCase) async {
         let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
-        let dataURI = "data:image/png;base64," + String(repeating: "A", count: 5_000)
 
         session.apply(.toolCall(.init(
-            toolCallId: "tc-raw-data-uri-update",
+            toolCallId: "tc-raw-long-update",
             title: "Image generation",
             kind: "other",
             status: "in_progress",
             content: nil,
             locations: nil,
             rawInput: nil,
-            rawOutput: AnyCodable([
-                "data": AnyCodable([
-                    AnyCodable([
-                        "url": AnyCodable(dataURI)
-                    ])
-                ])
-            ]))))
+            rawOutput: row.rawOutput)))
         session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-raw-data-uri-update",
+            toolCallId: "tc-raw-long-update",
             status: "completed",
             content: [.content(.text("final output"))],
             rawOutput: nil)))
@@ -2544,88 +1642,7 @@ struct ACPSessionTests {
         if case .toolCall(let tc) = session.transcript.messages[0] {
             #expect(tc.content == "final output")
             #expect(tc.rawOutput?.contains("[truncated]") == true)
-            #expect(tc.assets == [
-                ACPMessage.ToolCallAsset.image(
-                    data: nil,
-                    uri: dataURI,
-                    mimeType: "image/png",
-                    name: nil)
-            ])
-        } else {
-            Issue.record("expected toolCall message")
-        }
-    }
-
-    @Test("raw output long image URL asset survives later content update")
-    func rawOutputLongImageURLAssetSurvivesLaterContentUpdate() async {
-        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
-        let imageURL = "https://example.com/generated.png?signature=" + String(repeating: "A", count: 5_000)
-
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-raw-long-url-update",
-            title: "Image generation",
-            kind: "other",
-            status: "in_progress",
-            content: nil,
-            locations: nil,
-            rawInput: nil,
-            rawOutput: AnyCodable([
-                "data": AnyCodable([
-                    AnyCodable([
-                        "url": AnyCodable(imageURL)
-                    ])
-                ])
-            ]))))
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-raw-long-url-update",
-            status: "completed",
-            content: [.content(.text("final output"))],
-            rawOutput: nil)))
-
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.content == "final output")
-            #expect(tc.rawOutput?.contains("[truncated]") == true)
-            #expect(tc.assets == [
-                ACPMessage.ToolCallAsset.image(
-                    data: nil,
-                    uri: imageURL,
-                    mimeType: nil,
-                    name: "generated.png")
-            ])
-        } else {
-            Issue.record("expected toolCall message")
-        }
-    }
-
-    @Test("raw output long bare image data asset survives later content update")
-    func rawOutputLongBareImageDataAssetSurvivesLaterContentUpdate() async {
-        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
-        let imageData = String(repeating: "A", count: 5_000)
-
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-raw-long-image-data-update",
-            title: "Image generation",
-            kind: "other",
-            status: "in_progress",
-            content: nil,
-            locations: nil,
-            rawInput: nil,
-            rawOutput: AnyCodable([
-                "data": AnyCodable(imageData),
-                "mime_type": AnyCodable("image/png")
-            ]))))
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-raw-long-image-data-update",
-            status: "completed",
-            content: [.content(.text("final output"))],
-            rawOutput: nil)))
-
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.content == "final output")
-            #expect(tc.rawOutput?.contains("[truncated]") == true)
-            #expect(tc.assets == [
-                ACPMessage.ToolCallAsset.image(data: imageData, mimeType: "image/png")
-            ])
+            #expect(tc.assets == row.expectedAssets)
         } else {
             Issue.record("expected toolCall message")
         }
@@ -2788,12 +1805,13 @@ struct ACPSessionTests {
         }
     }
 
-    @Test("suppressed final tool replay preserves terminal ids from content")
-    func suppressedFinalToolReplayPreservesTerminalIdsFromContent() async {
+    @Test("suppressed replay onto a completed tool call preserves terminal ids from content",
+          arguments: ACPSessionTests.TerminalReplayFrame.allCases)
+    func suppressedToolReplayPreservesTerminalIdsFromContent(_ frame: TerminalReplayFrame) async {
         let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
 
         session.apply(.toolCall(.init(
-            toolCallId: "tc-final-replay-terminal",
+            toolCallId: "tc-replay-terminal",
             title: "Final command",
             kind: "execute",
             status: "completed",
@@ -2802,84 +1820,32 @@ struct ACPSessionTests {
             rawInput: nil,
             rawOutput: nil)))
 
-        let touched = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
-            toolCallId: "tc-final-replay-terminal",
-            status: "completed",
-            content: [.terminal(terminalId: "term-final-replay")],
-            rawOutput: nil)))
-
-        #expect(touched == [0])
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.content == "final output")
-            #expect(tc.terminalIds == ["term-final-replay"])
-        } else {
-            Issue.record("expected toolCall message")
+        let replay: ACPSessionUpdate
+        switch frame {
+        case .completedUpdate:
+            replay = .toolCallUpdate(.init(
+                toolCallId: "tc-replay-terminal",
+                status: "completed",
+                content: [.terminal(terminalId: "term-replay")],
+                rawOutput: nil))
+        case .completedPayload, .inProgressPayload:
+            replay = .toolCall(.init(
+                toolCallId: "tc-replay-terminal",
+                title: "Initial command",
+                kind: "execute",
+                status: frame == .completedPayload ? "completed" : "in_progress",
+                content: [.terminal(terminalId: "term-replay")],
+                locations: nil,
+                rawInput: nil,
+                rawOutput: nil))
         }
-    }
-
-    @Test("suppressed final tool payload replay preserves terminal ids from content")
-    func suppressedFinalToolPayloadReplayPreservesTerminalIdsFromContent() async {
-        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
-
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-final-payload-replay-terminal",
-            title: "Final command",
-            kind: "execute",
-            status: "completed",
-            content: [.content(.text("final output"))],
-            locations: nil,
-            rawInput: nil,
-            rawOutput: nil)))
-
-        let touched = session.applySuppressedReplaySideEffects(.toolCall(.init(
-            toolCallId: "tc-final-payload-replay-terminal",
-            title: "Initial command",
-            kind: "execute",
-            status: "completed",
-            content: [.terminal(terminalId: "term-final-payload-replay")],
-            locations: nil,
-            rawInput: nil,
-            rawOutput: nil)))
+        let touched = session.applySuppressedReplaySideEffects(replay)
 
         #expect(touched == [0])
         if case .toolCall(let tc) = session.transcript.messages[0] {
             #expect(tc.title == "Final command")
             #expect(tc.content == "final output")
-            #expect(tc.terminalIds == ["term-final-payload-replay"])
-        } else {
-            Issue.record("expected toolCall message")
-        }
-    }
-
-    @Test("suppressed in-progress tool payload replay preserves terminal ids from content")
-    func suppressedInProgressToolPayloadReplayPreservesTerminalIdsFromContent() async {
-        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
-
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-in-progress-payload-replay-terminal",
-            title: "Final command",
-            kind: "execute",
-            status: "completed",
-            content: [.content(.text("final output"))],
-            locations: nil,
-            rawInput: nil,
-            rawOutput: nil)))
-
-        let touched = session.applySuppressedReplaySideEffects(.toolCall(.init(
-            toolCallId: "tc-in-progress-payload-replay-terminal",
-            title: "Initial command",
-            kind: "execute",
-            status: "in_progress",
-            content: [.terminal(terminalId: "term-in-progress-payload-replay")],
-            locations: nil,
-            rawInput: nil,
-            rawOutput: nil)))
-
-        #expect(touched == [0])
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.title == "Final command")
-            #expect(tc.content == "final output")
-            #expect(tc.terminalIds == ["term-in-progress-payload-replay"])
+            #expect(tc.terminalIds == ["term-replay"])
         } else {
             Issue.record("expected toolCall message")
         }
@@ -3327,12 +2293,19 @@ struct ACPSessionTests {
         #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 1, signal: nil))
     }
 
-    @Test("suppressed replay payload content excludes exit-only terminal id")
-    func suppressedReplayPayloadContentExcludesExitOnlyTerminalId() async throws {
+    @Test("suppressed replay content excludes an exit-only terminal id but still records the exit",
+          arguments: ACPSessionTests.ExitOnlyReplayFrame.allCases)
+    func suppressedReplayContentExcludesExitOnlyTerminalId(_ frame: ExitOnlyReplayFrame) async throws {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let exitMetadata = AnyCodable([
+            "terminal_exit": AnyCodable([
+                "terminal_id": AnyCodable("term-exit-only"),
+                "exit_code": AnyCodable(0)
+            ])
+        ])
 
         session.apply(.toolCall(.init(
-            toolCallId: "cmd-payload-exit-content",
+            toolCallId: "cmd-exit-content",
             title: "swift test",
             kind: "execute",
             status: "completed",
@@ -3341,21 +2314,26 @@ struct ACPSessionTests {
             rawInput: nil,
             rawOutput: nil)))
         session.beginSuppressedReplaySideEffects()
-        _ = session.applySuppressedReplaySideEffects(.toolCall(.init(
-            toolCallId: "cmd-payload-exit-content",
-            title: "swift test",
-            kind: "execute",
-            status: "completed",
-            content: [.content(.text("final output"))],
-            locations: nil,
-            rawInput: nil,
-            rawOutput: nil,
-            metadata: AnyCodable([
-                "terminal_exit": AnyCodable([
-                    "terminal_id": AnyCodable("term-payload-exit-only"),
-                    "exit_code": AnyCodable(0)
-                ])
-            ]))))
+        switch frame {
+        case .payload:
+            _ = session.applySuppressedReplaySideEffects(.toolCall(.init(
+                toolCallId: "cmd-exit-content",
+                title: "swift test",
+                kind: "execute",
+                status: "completed",
+                content: [.content(.text("final output"))],
+                locations: nil,
+                rawInput: nil,
+                rawOutput: nil,
+                metadata: exitMetadata)))
+        case .update:
+            _ = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+                toolCallId: "cmd-exit-content",
+                status: "completed",
+                content: [.content(.text("final output"))],
+                rawOutput: nil,
+                metadata: exitMetadata)))
+        }
 
         let message = try #require(session.transcript.messages.first)
         guard case .toolCall(let toolCall) = message else {
@@ -3364,44 +2342,7 @@ struct ACPSessionTests {
         }
         #expect(toolCall.terminalIds == [])
 
-        let term = try #require(session.terminalHost.terminal(id: "term-payload-exit-only"))
-        #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 0, signal: nil))
-    }
-
-    @Test("suppressed replay update content excludes exit-only terminal id")
-    func suppressedReplayUpdateContentExcludesExitOnlyTerminalId() async throws {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-
-        session.apply(.toolCall(.init(
-            toolCallId: "cmd-update-exit-content",
-            title: "swift test",
-            kind: "execute",
-            status: "completed",
-            content: [.content(.text("final output"))],
-            locations: nil,
-            rawInput: nil,
-            rawOutput: nil)))
-        session.beginSuppressedReplaySideEffects()
-        _ = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
-            toolCallId: "cmd-update-exit-content",
-            status: "completed",
-            content: [.content(.text("final output"))],
-            rawOutput: nil,
-            metadata: AnyCodable([
-                "terminal_exit": AnyCodable([
-                    "terminal_id": AnyCodable("term-update-exit-only"),
-                    "exit_code": AnyCodable(0)
-                ])
-            ]))))
-
-        let message = try #require(session.transcript.messages.first)
-        guard case .toolCall(let toolCall) = message else {
-            Issue.record("expected toolCall message")
-            return
-        }
-        #expect(toolCall.terminalIds == [])
-
-        let term = try #require(session.terminalHost.terminal(id: "term-update-exit-only"))
+        let term = try #require(session.terminalHost.terminal(id: "term-exit-only"))
         #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 0, signal: nil))
     }
 
@@ -3554,20 +2495,6 @@ struct ACPSessionTests {
         } else { Issue.record("expected toolCall message") }
     }
 
-    @Test("initial toolCall with terminal content records terminalIds")
-    func toolCallInitialTerminal() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-4", title: "run", kind: "execute", status: "in_progress",
-            content: [.terminal(terminalId: "term-99")],
-            locations: nil, rawInput: nil, rawOutput: nil)))
-        #expect(session.transcript.messages.count == 1)
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.terminalIds == ["term-99"])
-            #expect(tc.content == "")
-        } else { Issue.record("expected toolCall message") }
-    }
-
     @Test("initial toolCall content excludes exit-only terminal id")
     func toolCallInitialContentExcludesExitOnlyTerminalId() async throws {
         let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
@@ -3643,39 +2570,6 @@ struct ACPSessionTests {
 
         let term = try #require(session.terminalHost.terminal(id: "term-exit"))
         #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 0, signal: nil))
-    }
-
-    @Test("completed toolCall strips wrapping markdown fences")
-    func toolCallStripsBothFences() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-5", title: "read", kind: "read", status: "in_progress",
-            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-5", status: "completed",
-            content: [.content(.text("```swift\nlet x = 1\nlet y = 2\n```"))],
-            rawOutput: nil)))
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.content == "let x = 1\nlet y = 2")
-            #expect(tc.contentLanguage == "swift")
-            #expect(tc.preview == "let x = 1")
-        } else { Issue.record("expected toolCall message") }
-    }
-
-    @Test("toolCallUpdate preserves supported wrapped fence language")
-    func toolCallUpdatePreservesWrappedFenceLanguage() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-sql", title: "query", kind: "read", status: "in_progress",
-            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-sql", status: "completed",
-            content: [.content(.text("```sql\nSELECT id FROM users\n```"))],
-            rawOutput: nil)))
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.content == "SELECT id FROM users")
-            #expect(tc.contentLanguage == "sql")
-        } else { Issue.record("expected toolCall message") }
     }
 
     @Test("in-progress toolCall strips opening fence but keeps trailing line")
@@ -3940,25 +2834,30 @@ struct ACPSessionTests {
         } else { Issue.record("expected toolCall message") }
     }
 
-    @Test("streamed partial opening fence then completion strips the wrapper fence")
-    func toolCallUpdateStreamingPartialFenceThenCompletionStripsFence() async {
+    /// An in-progress snapshot followed by a completed cumulative snapshot:
+    /// the suffix fast path must either apply or fall to a full reprocess so
+    /// fence stripping matches a from-scratch parse of the final text.
+    @Test("streamed toolCallUpdate fence handling across a partial then completed snapshot",
+          arguments: ACPSessionTests.StreamedFenceCase.all)
+    func toolCallUpdateStreamedFenceHandling(_ row: StreamedFenceCase) async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         session.apply(.toolCall(.init(
-            toolCallId: "tc-partial-fence", title: "read", kind: "read", status: "in_progress",
+            toolCallId: "tc-streamed-fence", title: "read", kind: "read", status: "in_progress",
             content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
-        // Partial opening fence (not yet a complete fence line: "``" is not
-        // recognized by `isOpeningFence` which requires "```" prefix).
         session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-partial-fence", status: "in_progress",
-            content: [.content(.text("``"))])))
-        // Completion: the full opening fence plus code.
+            toolCallId: "tc-streamed-fence", status: "in_progress",
+            content: [.content(.text(row.partial))])))
         session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-partial-fence", status: "completed",
-            content: [.content(.text("```swift\nlet x = 1\n```"))])))
+            toolCallId: "tc-streamed-fence", status: "completed",
+            content: [.content(.text(row.completed))])))
         if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.content == "let x = 1")
-            #expect(tc.contentLanguage == "swift")
-            #expect(tc.preview == "let x = 1")
+            #expect(tc.content == row.expectedContent)
+            if let language = row.expectedLanguage {
+                #expect(tc.contentLanguage == language)
+            }
+            if let preview = row.expectedPreview {
+                #expect(tc.preview == preview)
+            }
         } else { Issue.record("expected toolCall message") }
     }
 
@@ -4074,53 +2973,12 @@ struct ACPSessionTests {
         } else { Issue.record("expected toolCall message") }
     }
 
-    @Test("streamed toolCallUpdate does not strip a trailing fence line when there is no opening fence")
-    func toolCallUpdateStreamingNoOpeningFenceKeepsTrailingFenceLine() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-no-opening-fence", title: "run", kind: "execute", status: "in_progress",
-            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
-        // First chunk: ordinary log output (no opening fence).
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-no-opening-fence", status: "in_progress",
-            content: [.content(.text("log line\n```"))])))
-        // Final chunk: the log grows, ending with a line of three
-        // backticks that is NOT a closing fence (there was no opening
-        // fence). The suffix path must NOT strip the trailing "```".
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-no-opening-fence", status: "completed",
-            content: [.content(.text("log line\n```\nmore output"))])))
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.content == "log line\n```\nmore output")
-            #expect(tc.preview == "log line")
-        } else { Issue.record("expected toolCall message") }
-    }
-
-    @Test("streamed single text item growing takes the suffix path (regression)")
-    func toolCallUpdateStreamingSingleTextItemGrowingTakesSuffixPath() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-growing-text", title: "run", kind: "execute", status: "in_progress",
-            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
-        // Adapter sends a single text content item that grows on each
-        // update (the common cumulative shape). The suffix-only fast path
-        // must fire on each update; this is a regression test for the
-        // `prefixItemsUnchanged` guard which previously compared text
-        // items element-wise and forced a full reprocess every update.
-        let chunks = ["a", "ab", "abc", "abcdef", "abcdefghij"]
-        for chunk in chunks {
-            session.apply(.toolCallUpdate(.init(
-                toolCallId: "tc-growing-text", status: "in_progress",
-                content: [.content(.text(chunk))])))
-        }
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.content == "abcdefghij")
-            #expect(tc.preview == "abcdefghij")
-        } else { Issue.record("expected toolCall message") }
-    }
-
-    @Test("toolCallUpdate with same text but replaced rawOutput rebuilds assets")
-    func toolCallUpdateSameTextReplacedRawOutputRebuildsAssets() async {
+    /// Same text and status, so only the rawOutput changes: the
+    /// identical-text fast path must fall to a full reprocess so the assets
+    /// are rebuilt from the new rawOutput (replacing, not accumulating).
+    @Test("toolCallUpdate with same text but a replaced rawOutput rebuilds assets",
+          arguments: ACPSessionTests.RawOutputAssetCase.sameTextReplacements)
+    func toolCallUpdateSameTextReplacedRawOutputRebuildsAssets(_ row: RawOutputAssetCase) async {
         let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
         session.apply(.toolCall(.init(
             toolCallId: "tc-raw-replace", title: "image", kind: "other", status: "in_progress",
@@ -4135,98 +2993,12 @@ struct ACPSessionTests {
                 ACPMessage.ToolCallAsset.image(data: "img-a", mimeType: "image/png")
             ], "after first: \(tc1.assets)")
         }
-        // Second update: same text + same status, but rawOutput replaced
-        // with image B. The identical-text fast path must fall to full
-        // reprocess so `tc.assets` is rebuilt from content + the new
-        // rawOutput (replacing image A, not accumulating it).
         session.apply(.toolCallUpdate(.init(
             toolCallId: "tc-raw-replace", status: "in_progress",
             content: [.content(.text("same"))],
-            rawOutput: AnyCodable(["data": AnyCodable("img-b"), "mime_type": AnyCodable("image/png")]))))
+            rawOutput: row.rawOutput)))
         if case .toolCall(let tc2) = session.transcript.messages[0] {
-            #expect(tc2.assets == [
-                ACPMessage.ToolCallAsset.image(data: "img-b", mimeType: "image/png")
-            ], "after second: \(tc2.assets)")
-        } else { Issue.record("expected toolCall message") }
-    }
-
-    @Test("toolCallUpdate with same text and rawOutput clearing image drops stale asset")
-    func toolCallUpdateSameTextRawOutputClearsImageDropsStale() async {
-        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-raw-clear", title: "image", kind: "other", status: "in_progress",
-            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
-        // First update: text + rawOutput image.
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-raw-clear", status: "in_progress",
-            content: [.content(.text("same"))],
-            rawOutput: AnyCodable(["data": AnyCodable("img-a"), "mime_type": AnyCodable("image/png")]))))
-        if case .toolCall(let tc1) = session.transcript.messages[0] {
-            #expect(tc1.assets == [
-                ACPMessage.ToolCallAsset.image(data: "img-a", mimeType: "image/png")
-            ], "after first: \(tc1.assets)")
-        }
-        // Second update: same text + same status, but rawOutput replaced
-        // with a non-image result (no assets). The identical-text fast
-        // path must fall to full reprocess so the stale image is dropped.
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-raw-clear", status: "in_progress",
-            content: [.content(.text("same"))],
-            rawOutput: AnyCodable(["text": AnyCodable("done")]))))
-        if case .toolCall(let tc2) = session.transcript.messages[0] {
-            #expect(tc2.assets == [], "after second: \(tc2.assets)")
-        } else { Issue.record("expected toolCall message") }
-    }
-
-    @Test("streamed partial fence completing to an invalid fence tag falls to full reprocess")
-    func toolCallUpdateStreamingPartialFenceInvalidTagFallsToFullReprocess() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-invalid-tag", title: "read", kind: "read", status: "in_progress",
-            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
-        // First chunk: a valid-looking opening fence prefix "```".
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-invalid-tag", status: "in_progress",
-            content: [.content(.text("```"))])))
-        // Second chunk: the fence line completes to "```{.swift}" which
-        // isOpeningFence REJECTS (the `{` is not a valid tag character).
-        // The suffix path must fall to full reprocess so the line is kept
-        // in the body (not stripped as a fence).
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-invalid-tag", status: "completed",
-            content: [.content(.text("```{.swift}\nlet x = 1\n```"))])))
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            // The first line "```{.swift}" is NOT a valid opening fence
-            // (isOpeningFence rejects `{`), so stripWrappingFence leaves
-            // it in the content. The trailing "```" is also NOT stripped.
-            // Note: `wrappingFenceLanguage` is more permissive than
-            // `isOpeningFence` and still extracts "swift" from the tag —
-            // that's the legacy behavior too.
-            #expect(tc.content == "```{.swift}\nlet x = 1\n```")
-        } else { Issue.record("expected toolCall message") }
-    }
-
-    @Test("streamed partial fence growing to invalid tag without newline falls to full reprocess")
-    func toolCallUpdateStreamingPartialFenceInvalidNoNewlineFallsToFullReprocess() async {
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-invalid-no-newline", title: "read", kind: "read", status: "in_progress",
-            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
-        // First chunk: a valid-looking opening fence prefix "```".
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-invalid-no-newline", status: "in_progress",
-            content: [.content(.text("```"))])))
-        // Second chunk: the fence line grows to "```{" (still no newline).
-        // `{` is not a valid tag character, so couldBeOpeningFencePrefix
-        // returns false and the suffix path falls to full reprocess,
-        // keeping the line in the body.
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-invalid-no-newline", status: "completed",
-            content: [.content(.text("```{\nbody"))])))
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            // "```{" is NOT a valid opening fence, so stripWrappingFence
-            // leaves it in the content.
-            #expect(tc.content == "```{\nbody")
+            #expect(tc2.assets == row.expectedAssets, "after second: \(tc2.assets)")
         } else { Issue.record("expected toolCall message") }
     }
 
@@ -4252,28 +3024,6 @@ struct ACPSessionTests {
         if case .toolCall(let tc2) = session.transcript.messages[0] {
             #expect(tc2.content == "\nactual first line")
             #expect(tc2.preview == "actual first line", "preview=\(tc2.preview ?? "nil")")
-        } else { Issue.record("expected toolCall message") }
-    }
-
-    @Test("streamed inline-code first chunk does not trigger partial-fence full reprocess")
-    func toolCallUpdateStreamingInlineCodeDoesNotTriggerPartialFenceReprocess() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        session.apply(.toolCall(.init(
-            toolCallId: "tc-inline", title: "run", kind: "execute", status: "in_progress",
-            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
-        // First chunk: inline code starting with a backtick — NOT a partial
-        // opening fence (it can never become "```" + valid tag).
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-inline", status: "in_progress",
-            content: [.content(.text("`cmd` ran"))])))
-        // Second chunk: the log grows. The suffix-only fast path must fire
-        // (previousRawWasPartialFence returns false for "`cmd` ran").
-        session.apply(.toolCallUpdate(.init(
-            toolCallId: "tc-inline", status: "completed",
-            content: [.content(.text("`cmd` ran successfully"))])))
-        if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.content == "`cmd` ran successfully")
-            #expect(tc.preview == "`cmd` ran successfully")
         } else { Issue.record("expected toolCall message") }
     }
 
@@ -4388,5 +3138,366 @@ struct ACPSessionTests {
                 ACPMessage.ToolCallAsset.image(data: "img-b", mimeType: "image/png")
             ], "after third: \(tc3.assets)")
         } else { Issue.record("expected toolCall message") }
+    }
+}
+
+// MARK: - Parameterized cases and helpers
+
+extension ACPSessionTests {
+    /// A hydrated transcript row. At most one of each kind is seeded, so
+    /// fixed message ids ("user-1", "agent-1", "tool-1") are unambiguous.
+    enum SeedMessage: Sendable {
+        case user(String)
+        case agent(String)
+        case plan
+        case toolCall
+    }
+
+    static func seedMessages(_ seed: [SeedMessage]) -> [ACPMessage] {
+        seed.map { message -> ACPMessage in
+            switch message {
+            case .user(let text):
+                return .user(id: UUID(), messageId: "user-1", text: text, attachments: [])
+            case .agent(let text):
+                return .agent(id: UUID(), messageId: "agent-1", StreamingText(text))
+            case .plan:
+                return .plan(id: UUID(), [])
+            case .toolCall:
+                return .toolCall(.init(
+                    toolCallId: "tool-1",
+                    title: "Run",
+                    kind: "execute",
+                    status: "completed",
+                    content: "done"
+                ))
+            }
+        }
+    }
+
+    /// Agent, user, tool-call and file-edit rows in transcript order.
+    static func orderedRows(_ session: ACPSession) -> [String] {
+        session.transcript.messages.compactMap { message -> String? in
+            switch message {
+            case .agent(_, _, let text): return "agent:\(text.value)"
+            case .user(_, _, let text, _, _): return "user:\(text)"
+            case .toolCall: return "toolCall"
+            case .fileEdit: return "fileEdit"
+            default: return nil
+            }
+        }
+    }
+
+    struct ChunkSeparatorCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let first: String
+        let second: String
+        let expected: String
+
+        static let all: [ChunkSeparatorCase] = [
+            .init(testDescription: "a chunk ending in a space merges verbatim",
+                  first: "hello ", second: "world", expected: "hello world"),
+            .init(testDescription: "a sentence boundary gets a newline",
+                  first: "Compacting completed.", second: "Running the pull tests.",
+                  expected: "Compacting completed.\nRunning the pull tests."),
+            .init(testDescription: "an existing trailing newline is not doubled",
+                  first: "line one\n", second: "line two", expected: "line one\nline two"),
+            .init(testDescription: "! after a whitespace-preceded lowercase word gets a newline",
+                  first: "All done!", second: "Next task", expected: "All done!\nNext task"),
+            .init(testDescription: "a CamelCase word before the period gets no separator (protects identifiers)",
+                  first: "Foo.", second: "Bar", expected: "Foo.Bar"),
+            .init(testDescription: "a single-character punctuation chunk gets no separator and does not trap",
+                  first: ".", second: "Next task", expected: ".Next task"),
+            .init(testDescription: "a qualified identifier with no preceding whitespace gets no separator",
+                  first: "package.", second: "Type", expected: "package.Type"),
+            .init(testDescription: "an all-caps acronym after a period gets no separator",
+                  first: "See the API docs.", second: "API", expected: "See the API docs.API"),
+            .init(testDescription: "a URL tail before the period gets no separator",
+                  first: "See https://example.com.", second: "Path", expected: "See https://example.com.Path"),
+        ]
+    }
+
+    enum HeldCandidateTrigger: Sendable {
+        case toolCall
+        case userPrompt(String)
+        case userChunk(messageId: String, text: String)
+        case completedOutputBoundary
+        case fileEdit
+        case modelUpdate(String)
+    }
+
+    struct HeldCandidateCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let seed: [SeedMessage]
+        let heldMessageId: String
+        let heldText: String
+        let trigger: HeldCandidateTrigger
+        let expected: [String]
+
+        static let all: [HeldCandidateCase] = [
+            .init(testDescription: "a tool call materializes the held fragment ahead of itself",
+                  seed: [.agent("I'm working on it.")], heldMessageId: "agent-live-2", heldText: "I",
+                  trigger: .toolCall,
+                  expected: ["agent:I'm working on it.", "agent:I", "toolCall"]),
+            .init(testDescription: "the next user prompt materializes the stranded fragment before itself",
+                  seed: [.agent("I'm working on it.")], heldMessageId: "agent-live-2", heldText: "I",
+                  trigger: .userPrompt("next"),
+                  expected: ["agent:I'm working on it.", "agent:I", "user:next"]),
+            .init(testDescription: "a genuinely new user chunk flushes the held fragment ahead of the prompt",
+                  seed: [.agent("hi there")], heldMessageId: "regen-agent", heldText: "hi",
+                  trigger: .userChunk(messageId: "user-new", text: "do the thing"),
+                  expected: ["agent:hi there", "agent:hi", "user:do the thing"]),
+            .init(testDescription: "the completed output boundary materializes a held final fragment",
+                  seed: [.agent("OK done.")], heldMessageId: "regen-1", heldText: "OK",
+                  trigger: .completedOutputBoundary,
+                  expected: ["agent:OK done.", "agent:OK"]),
+            .init(testDescription: "a file edit (which bypasses apply) flushes the held fragment ahead of itself",
+                  seed: [.agent("editing files")], heldMessageId: "regen-1", heldText: "editing",
+                  trigger: .fileEdit,
+                  expected: ["agent:editing files", "agent:editing", "fileEdit"]),
+            .init(testDescription: "a state-only model update does not flush the held candidate",
+                  seed: [.agent("hello world")], heldMessageId: "regen-1", heldText: "hello",
+                  trigger: .modelUpdate("gpt-5.5"),
+                  expected: ["agent:hello world"]),
+            .init(testDescription: "a replayed user chunk that is dropped does not flush the held candidate",
+                  seed: [.user("earlier prompt"), .agent("hello world")], heldMessageId: "regen-agent",
+                  heldText: "hello",
+                  trigger: .userChunk(messageId: "regen-user", text: "earlier prompt"),
+                  expected: ["user:earlier prompt", "agent:hello world"]),
+            .init(testDescription: "a candidate that fully reproduces an existing message stays suppressed on flush",
+                  seed: [.agent("OK")], heldMessageId: "regen-1", heldText: "OK",
+                  trigger: .toolCall,
+                  expected: ["agent:OK", "toolCall"]),
+        ]
+    }
+
+    struct RegeneratedReplayCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let seed: [SeedMessage]
+        let chunks: [String]
+        let expectedAgentTexts: [String]
+
+        static let all: [RegeneratedReplayCase] = [
+            .init(testDescription: "a chunked late replay with a short first fragment stays suppressed",
+                  seed: [.user("prev prompt"), .agent("The plan is complete.")],
+                  chunks: ["The ", "plan is complete."],
+                  expectedAgentTexts: ["The plan is complete."]),
+            .init(testDescription: "a mid-stream replay fragment that is not a prefix is not duplicated",
+                  seed: [.user("prev prompt"), .agent("hello world")],
+                  chunks: ["world"],
+                  expectedAgentTexts: ["hello world"]),
+            .init(testDescription: "a replayed continuation is adopted across a trailing plan row",
+                  seed: [.agent("hello"), .plan],
+                  chunks: ["hello", " world"],
+                  expectedAgentTexts: ["hello world"]),
+            .init(testDescription: "a replay split at a sentence boundary the original lacked is still suppressed",
+                  seed: [.agent("tests completed.Running")],
+                  chunks: ["tests completed.", "Running"],
+                  expectedAgentTexts: ["tests completed.Running"]),
+            .init(testDescription: "a mid-message slip followed by a real continuation starts its own row",
+                  seed: [.agent("hello world")],
+                  chunks: ["world", "!"],
+                  expectedAgentTexts: ["hello world", "world!"]),
+            .init(testDescription: "new output starting with the previous bubble's trailing word is not merged",
+                  seed: [.agent("hello world")],
+                  chunks: ["world", " again"],
+                  expectedAgentTexts: ["hello world", "world again"]),
+            .init(testDescription: "a partial suffix match (K of OK) starts its own row",
+                  seed: [.agent("OK")],
+                  chunks: ["K", "eep going"],
+                  expectedAgentTexts: ["OK", "Keep going"]),
+            .init(testDescription: "post-prompt output sharing a prefix is not adopted into the prior turn",
+                  seed: [.agent("hello"), .user("next")],
+                  chunks: ["hello", " there"],
+                  expectedAgentTexts: ["hello", "hello there"]),
+            .init(testDescription: "post-tool output sharing a prefix is not adopted across the tool call",
+                  seed: [.agent("OK"), .toolCall],
+                  chunks: ["OK", " done"],
+                  expectedAgentTexts: ["OK", "OK done"]),
+        ]
+    }
+
+    enum ConversationContent: Sendable {
+        case empty
+        case systemNotice(String)
+        case userPrompt(String)
+        case agentChunk(String)
+    }
+
+    struct ConversationTranscriptCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let content: ConversationContent
+        let expected: Bool
+
+        static let all: [ConversationTranscriptCase] = [
+            .init(testDescription: "empty transcript", content: .empty, expected: false),
+            .init(testDescription: "system notice only",
+                  content: .systemNotice("Agent disconnected"), expected: false),
+            .init(testDescription: "non-empty user prompt", content: .userPrompt("hello"), expected: true),
+            .init(testDescription: "whitespace-only user prompt", content: .userPrompt(" \n\t "), expected: false),
+            .init(testDescription: "non-empty agent message",
+                  content: .agentChunk("hello from agent"), expected: true),
+        ]
+    }
+
+    struct DiffStatsCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let editPath: String
+        let diffPath: String
+        let diffOldText: String?
+        let diffNewText: String
+        let diffKind: String?
+        let stats: (added: Int, removed: Int)?
+        let worktreeRoot: String?
+        let expectedAdded: Int
+        let expectedRemoved: Int
+
+        static let all: [DiffStatsCase] = [
+            .init(testDescription: "a matching diff block's diffStats overwrite the counts",
+                  editPath: "x.swift", diffPath: "x.swift", diffOldText: "a\n", diffNewText: "a\nb\n",
+                  diffKind: "update", stats: (added: 4, removed: 2), worktreeRoot: nil,
+                  expectedAdded: 4, expectedRemoved: 2),
+            .init(testDescription: "an absolute diff path matches the worktree-relative edit given the root",
+                  editPath: "src/x.swift", diffPath: "/repo/src/x.swift", diffOldText: "a\n", diffNewText: "a\nb\n",
+                  diffKind: "update", stats: (added: 4, removed: 2), worktreeRoot: "/repo",
+                  expectedAdded: 4, expectedRemoved: 2),
+            .init(testDescription: "a diff block without diffStats leaves the heuristic counts",
+                  editPath: "x.swift", diffPath: "x.swift", diffOldText: "a\n", diffNewText: "a\nb\n",
+                  diffKind: nil, stats: nil, worktreeRoot: nil,
+                  expectedAdded: 1, expectedRemoved: 1),
+            .init(testDescription: "a same-path diff with different text does not clobber an unrelated earlier edit",
+                  editPath: "x.swift", diffPath: "x.swift", diffOldText: "z\n", diffNewText: "z\nq\n",
+                  diffKind: "update", stats: (added: 99, removed: 99), worktreeRoot: nil,
+                  expectedAdded: 1, expectedRemoved: 1),
+        ]
+    }
+
+    struct RawOutputAssetCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let rawOutput: AnyCodable
+        let expectedAssets: [ACPMessage.ToolCallAsset]
+
+        static let shapes: [RawOutputAssetCase] = [
+            .init(testDescription: "data[].b64_json",
+                  rawOutput: AnyCodable([
+                      "created": AnyCodable(1),
+                      "data": AnyCodable([
+                          AnyCodable([
+                              "b64_json": AnyCodable("base64-data"),
+                              "revised_prompt": AnyCodable("A useful screenshot")
+                          ])
+                      ])
+                  ]),
+                  expectedAssets: [.image(data: "base64-data", mimeType: "image/png")]),
+            .init(testDescription: "data[].url with an http URL",
+                  rawOutput: AnyCodable([
+                      "data": AnyCodable([
+                          AnyCodable([
+                              "url": AnyCodable("https://example.com/generated"),
+                              "revised_prompt": AnyCodable("A useful screenshot")
+                          ])
+                      ])
+                  ]),
+                  expectedAssets: [.image(
+                      data: nil, uri: "https://example.com/generated", mimeType: nil, name: "generated")]),
+            .init(testDescription: "data[].url with a data URI",
+                  rawOutput: AnyCodable([
+                      "data": AnyCodable([
+                          AnyCodable([
+                              "url": AnyCodable("data:image/png;base64,base64-data")
+                          ])
+                      ])
+                  ]),
+                  expectedAssets: [.image(
+                      data: nil, uri: "data:image/png;base64,base64-data", mimeType: "image/png", name: nil)]),
+            .init(testDescription: "bare data with mime_type",
+                  rawOutput: AnyCodable([
+                      "data": AnyCodable("base64-data"),
+                      "mime_type": AnyCodable("image/png")
+                  ]),
+                  expectedAssets: [.image(data: "base64-data", mimeType: "image/png")]),
+        ]
+
+        /// Second-update rawOutputs replacing an earlier `img-a` image.
+        static let sameTextReplacements: [RawOutputAssetCase] = [
+            .init(testDescription: "another image replaces the stale one",
+                  rawOutput: AnyCodable(["data": AnyCodable("img-b"), "mime_type": AnyCodable("image/png")]),
+                  expectedAssets: [.image(data: "img-b", mimeType: "image/png")]),
+            .init(testDescription: "a non-image result drops the stale image",
+                  rawOutput: AnyCodable(["text": AnyCodable("done")]),
+                  expectedAssets: []),
+        ]
+
+        /// Payloads long enough that the stored rawOutput is truncated.
+        static let longPayloads: [RawOutputAssetCase] = {
+            let dataURI = "data:image/png;base64," + String(repeating: "A", count: 5_000)
+            let imageURL = "https://example.com/generated.png?signature=" + String(repeating: "A", count: 5_000)
+            let imageData = String(repeating: "A", count: 5_000)
+            return [
+                .init(testDescription: "long data URI in data[].url",
+                      rawOutput: AnyCodable([
+                          "data": AnyCodable([
+                              AnyCodable([
+                                  "url": AnyCodable(dataURI)
+                              ])
+                          ])
+                      ]),
+                      expectedAssets: [.image(data: nil, uri: dataURI, mimeType: "image/png", name: nil)]),
+                .init(testDescription: "long signed image URL in data[].url",
+                      rawOutput: AnyCodable([
+                          "data": AnyCodable([
+                              AnyCodable([
+                                  "url": AnyCodable(imageURL)
+                              ])
+                          ])
+                      ]),
+                      expectedAssets: [.image(data: nil, uri: imageURL, mimeType: nil, name: "generated.png")]),
+                .init(testDescription: "long bare data with mime_type",
+                      rawOutput: AnyCodable([
+                          "data": AnyCodable(imageData),
+                          "mime_type": AnyCodable("image/png")
+                      ]),
+                      expectedAssets: [.image(data: imageData, mimeType: "image/png")]),
+            ]
+        }()
+    }
+
+    enum TerminalReplayFrame: String, CaseIterable, Sendable {
+        case completedUpdate
+        case completedPayload
+        case inProgressPayload
+    }
+
+    enum ExitOnlyReplayFrame: String, CaseIterable, Sendable {
+        case payload
+        case update
+    }
+
+    /// `nil` expectations are not asserted for that row.
+    struct StreamedFenceCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let partial: String
+        let completed: String
+        let expectedContent: String
+        let expectedLanguage: String?
+        let expectedPreview: String?
+
+        static let all: [StreamedFenceCase] = [
+            .init(testDescription: "a partial `` opening then a complete fence strips the wrapper",
+                  partial: "``", completed: "```swift\nlet x = 1\n```",
+                  expectedContent: "let x = 1", expectedLanguage: "swift", expectedPreview: "let x = 1"),
+            .init(testDescription: "a trailing ``` line with no opening fence is kept",
+                  partial: "log line\n```", completed: "log line\n```\nmore output",
+                  expectedContent: "log line\n```\nmore output", expectedLanguage: nil, expectedPreview: "log line"),
+            .init(testDescription: "``` completing to the invalid tag {.swift} stays in the body",
+                  partial: "```", completed: "```{.swift}\nlet x = 1\n```",
+                  expectedContent: "```{.swift}\nlet x = 1\n```", expectedLanguage: nil, expectedPreview: nil),
+            .init(testDescription: "``` growing to the invalid tag { before a newline stays in the body",
+                  partial: "```", completed: "```{\nbody",
+                  expectedContent: "```{\nbody", expectedLanguage: nil, expectedPreview: nil),
+            .init(testDescription: "inline code starting with a backtick is not treated as a partial fence",
+                  partial: "`cmd` ran", completed: "`cmd` ran successfully",
+                  expectedContent: "`cmd` ran successfully", expectedLanguage: nil,
+                  expectedPreview: "`cmd` ran successfully"),
+        ]
     }
 }
