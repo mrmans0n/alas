@@ -26,6 +26,17 @@ final class SessionSummaryCoordinator: ObservableObject {
         self.engine = engine
     }
 
+    deinit {
+        generationTask?.cancel()
+        guard let incarnation = currentIncarnation else { return }
+        let engine = engine
+        let previous = cancellationBarrier
+        Task {
+            await previous?.value
+            await engine.cancel(caller: .sessionSummary(incarnation))
+        }
+    }
+
     func bind(to session: ACPSession) {
         guard boundSession !== session else { return }
 
@@ -52,11 +63,11 @@ final class SessionSummaryCoordinator: ObservableObject {
     }
 
     func summary(for session: ACPSession) async {
-        await generate(for: session, bypassingCache: false)
+        await Self.wait(for: startGeneration(for: session, bypassingCache: false))
     }
 
     func refresh(_ session: ACPSession) async {
-        await generate(for: session, bypassingCache: true)
+        await Self.wait(for: startGeneration(for: session, bypassingCache: true))
     }
 
     func cancelPresentation() {
@@ -85,11 +96,14 @@ final class SessionSummaryCoordinator: ObservableObject {
         presentationGeneration &+= 1
     }
 
-    private func generate(for session: ACPSession, bypassingCache: Bool) async {
+    private func startGeneration(
+        for session: ACPSession,
+        bypassingCache: Bool
+    ) -> Task<Void, Never>? {
         if boundSession !== session { bind(to: session) }
         if !bypassingCache, let cached = cache[session.incarnation] {
-            phase = .result(cached)
-            return
+            _ = publishPhase(.result(cached), generation: requestGeneration, session: session)
+            return nil
         }
 
         requestGeneration &+= 1
@@ -98,8 +112,12 @@ final class SessionSummaryCoordinator: ObservableObject {
         let previous = cache[session.incarnation]
         guard let context = SessionSummaryContext.snapshot(session: session),
               context.revision.idleFacts.isIdle else {
-            phase = .failed("There is not enough idle session context to summarize.", previous: previous)
-            return
+            _ = publishPhase(
+                .failed("There is not enough idle session context to summarize.", previous: previous),
+                generation: generation,
+                session: session
+            )
+            return nil
         }
 
         let incarnation = session.incarnation
@@ -113,21 +131,26 @@ final class SessionSummaryCoordinator: ObservableObject {
         )
         let barrier = cancellationBarrier
         let engine = engine
-        phase = .loading
         currentIncarnation = incarnation
+        guard publishPhase(
+            .loading,
+            generation: generation,
+            session: session,
+            currentIncarnation: incarnation
+        ) else { return nil }
 
         let task = Task { @MainActor [weak self, weak session] in
             if let barrier { await barrier.value }
-            guard let self, let session,
+            guard let session,
                   !Task.isCancelled,
-                  self.requestGeneration == generation,
-                  self.currentIncarnation == incarnation else { return }
+                  self?.requestIsCurrent(generation, session: session) == true else { return }
             do {
                 let raw = try await engine.generate(
                     request,
                     caller: .sessionSummary(incarnation),
                     priority: .userInitiated
                 )
+                guard let self else { return }
                 self.publish(
                     raw,
                     context: context,
@@ -136,6 +159,7 @@ final class SessionSummaryCoordinator: ObservableObject {
                     generation: generation
                 )
             } catch {
+                guard let self else { return }
                 self.publishFailure(
                     error,
                     context: context,
@@ -146,7 +170,11 @@ final class SessionSummaryCoordinator: ObservableObject {
             }
         }
         generationTask = task
-        await task.value
+        return task
+    }
+
+    private nonisolated static func wait(for task: Task<Void, Never>?) async {
+        await task?.value
     }
 
     private func publish(
@@ -165,13 +193,23 @@ final class SessionSummaryCoordinator: ObservableObject {
             Data(raw.text.utf8),
             isPartial: context.omittedOlderTurns || raw.selectedCandidateIndex > 0
         ) else {
-            phase = .failed("Alas could not produce a usable session summary.", previous: previous)
+            guard publishPhase(
+                .failed("Alas could not produce a usable session summary.", previous: previous),
+                generation: generation,
+                session: session,
+                currentIncarnation: session.incarnation
+            ) else { return }
             finishRequest(generation)
             return
         }
 
         cache[session.incarnation] = summary
-        phase = .result(summary)
+        guard publishPhase(
+            .result(summary),
+            generation: generation,
+            session: session,
+            currentIncarnation: session.incarnation
+        ) else { return }
         finishRequest(generation)
     }
 
@@ -187,8 +225,30 @@ final class SessionSummaryCoordinator: ObservableObject {
             finishStaleRequest(generation)
             return
         }
-        phase = .failed(Self.message(for: error), previous: previous)
+        guard publishPhase(
+            .failed(Self.message(for: error), previous: previous),
+            generation: generation,
+            session: session,
+            currentIncarnation: session.incarnation
+        ) else { return }
         finishRequest(generation)
+    }
+
+    @discardableResult
+    private func publishPhase(
+        _ newPhase: Phase,
+        generation: UInt64,
+        session: ACPSession,
+        currentIncarnation: UUID? = nil
+    ) -> Bool {
+        phase = newPhase
+        guard requestGeneration == generation,
+              boundSession === session,
+              currentIncarnation == nil || self.currentIncarnation == currentIncarnation else {
+            phase = .idle
+            return false
+        }
+        return true
     }
 
     private func requestIsCurrent(_ generation: UInt64, session: ACPSession) -> Bool {

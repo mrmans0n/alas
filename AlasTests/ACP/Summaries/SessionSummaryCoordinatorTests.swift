@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 @testable import Alas
@@ -18,6 +19,64 @@ struct SessionSummaryCoordinatorTests {
         #expect(fixture.coordinator.phase == .idle)
         #expect(fixture.coordinator.presentationGeneration == 1)
         #expect(await fixture.engine.cancelledCallers == [.sessionSummary(fixture.session.incarnation)])
+    }
+
+    @Test func loadingSubscriberActivityPreventsGenerationAndRestoresIdle() async {
+        let fixture = SummaryCoordinatorFixture()
+        fixture.coordinator.bind(to: fixture.session)
+        var mutated = false
+        let observation = fixture.coordinator.$phase.sink { phase in
+            guard phase == .loading, !mutated else { return }
+            mutated = true
+            _ = fixture.session.allocatePromptID()
+        }
+
+        await fixture.coordinator.summary(for: fixture.session)
+
+        #expect(fixture.coordinator.phase == .idle)
+        #expect(await fixture.engine.requestCount == 0)
+        withExtendedLifetime(observation) {}
+    }
+
+    @Test func resultSubscriberActivityCannotRestoreOrCacheStaleResult() async {
+        let fixture = SummaryCoordinatorFixture()
+        fixture.coordinator.bind(to: fixture.session)
+        var mutated = false
+        let observation = fixture.coordinator.$phase.sink { phase in
+            guard case .result = phase, !mutated else { return }
+            mutated = true
+            _ = fixture.session.allocatePromptID()
+        }
+        let generation = fixture.start()
+        await fixture.engine.waitUntilRequested()
+
+        await fixture.engine.complete(with: fixture.result)
+        await generation.value
+
+        #expect(fixture.coordinator.phase == .idle)
+        await fixture.engine.enqueue(fixture.result)
+        await fixture.coordinator.summary(for: fixture.session)
+        #expect(await fixture.engine.requestCount == 2)
+        withExtendedLifetime(observation) {}
+    }
+
+    @Test func failureSubscriberActivityCannotRestoreStaleError() async {
+        let fixture = SummaryCoordinatorFixture()
+        fixture.coordinator.bind(to: fixture.session)
+        var mutated = false
+        let observation = fixture.coordinator.$phase.sink { phase in
+            guard case .failed = phase, !mutated else { return }
+            mutated = true
+            _ = fixture.session.allocatePromptID()
+        }
+        let generation = fixture.start()
+        await fixture.engine.waitUntilRequested()
+
+        await fixture.engine.fail(with: LocalTextInferenceFailure.unavailable)
+        await generation.value
+
+        #expect(fixture.coordinator.phase == .idle)
+        withExtendedLifetime(observation) {}
     }
 
     @Test func reopensCurrentIncarnationFromMemoryWithoutGeneratingAgain() async {
@@ -271,6 +330,7 @@ private actor SessionSummaryEngine: LocalTextGenerating {
     private var requestPriorities: [LocalTextJobPriority] = []
     private var cancellations: [LocalTextCaller] = []
     private var pending: [(LocalTextCaller, CheckedContinuation<LocalTextGenerationResult, Error>)] = []
+    private var queuedResults: [LocalTextGenerationResult] = []
     private var waiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
     var requestCount: Int { requests.count }
@@ -289,6 +349,7 @@ private actor SessionSummaryEngine: LocalTextGenerating {
         requestPriorities.append(priority)
         for (count, waiter) in waiters where requests.count >= count { waiter.resume() }
         waiters.removeAll { requests.count >= $0.0 }
+        if !queuedResults.isEmpty { return queuedResults.removeFirst() }
         return try await withCheckedThrowingContinuation { continuation in
             pending.append((caller, continuation))
         }
@@ -302,6 +363,10 @@ private actor SessionSummaryEngine: LocalTextGenerating {
     func complete(with result: LocalTextGenerationResult) {
         guard !pending.isEmpty else { return }
         pending.removeFirst().1.resume(returning: result)
+    }
+
+    func enqueue(_ result: LocalTextGenerationResult) {
+        queuedResults.append(result)
     }
 
     func fail(with error: Error) {
