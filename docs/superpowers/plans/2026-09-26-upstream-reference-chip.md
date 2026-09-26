@@ -26,6 +26,7 @@
 - Card badges: open `systemGreen`, draft `systemGray`, merged `systemPurple`, closed `systemRed`. Card width 340pt.
 - Cache staleness: 300 seconds. Refresh on hover only, never in the background.
 - Transcript chips render in user messages only, never in agent messages.
+- Pasted same-repo PR/MR/issue URLs become chips spelled `#N` / `!N`. Only exact URLs convert: no extra path, query, or fragment, and never a markdown link target.
 
 ### Local test and build commands
 
@@ -55,8 +56,9 @@ Before the final commit of the branch, restore zmx: `git submodule update --init
 1. **Closing punctuation under auto-pairing.** Typing `(#12)` then a space must produce `(`, a chip, `)`, and a space, never a doubled `)`. Chips form only on whitespace, and trailing punctuation typed before it is carried over as text. Pinned in Task 5.
 2. **Paste glued to a word.** Pasting `#12` directly after `abc` must stay plain text, because the character before the paste is not a boundary. Pinned in Task 5.
 3. **Remote resolving mid-typing.** When the remote resolves while the caret sits right after `#12`, that token must not chip under the caret. Pinned in Task 5.
-4. **Copying transcript text.** Selecting and copying a user message that contains a chip must put `#12` on the pasteboard, not U+FFFC. Pinned in Task 7.
-5. **Code and links in user messages.** `` `#12` `` and `[#12](https://x)` in a sent message must stay plain. Pinned in Task 7.
+4. **Copying transcript text.** Selecting and copying a user message that contains a chip must put `#12` on the pasteboard, not U+FFFC. Pinned in Task 8.
+5. **Pasted URLs that point inside a PR.** `…/pull/1506/files`, `…/pull/1506#issuecomment-1`, another repository's URL, and a URL inside `[text](url)` must all paste unchanged. Pinned in Task 6.
+6. **Code and links in user messages.** `` `#12` `` and `[#12](https://x)` in a sent message must stay plain. Pinned in Task 8.
 
 ---
 
@@ -67,7 +69,7 @@ Before the final commit of the branch, restore zmx: `git submodule update --init
 | File | Responsibility |
 |---|---|
 | `Alas/Sources/Integrations/CodeHost/CodeHostReference.swift` | `CodeHostReference`, `CodeHostReferenceSummary`, `CodeHostReferenceFailure`, `CodeHostKind.cliExecutable`. Provider-layer value types, no ACP dependency. |
-| `Alas/Sources/ACP/UI/ACPUpstreamReferenceDetector.swift` | Pure token scanning: whole-text scan, keystroke check, code-span ranges. |
+| `Alas/Sources/ACP/UI/ACPUpstreamReferenceDetector.swift` | Pure token scanning: whole-text scan, keystroke check, code-span ranges, and same-repo URL matching. |
 | `Alas/Sources/ACP/Session/ACPUpstreamReferenceStore.swift` | Per-worktree remote resolution, lookup cache, failure mapping, plus the `Registry`. |
 | `Alas/Sources/ACP/UI/ACPUpstreamReferenceChip.swift` | Attribute key, chip style and drawing, attachment, chip builder, `chipify`, plain-text flattening. |
 | `Alas/Sources/ACP/UI/ACPUpstreamReferenceHover.swift` | Card model, SwiftUI card, hover controller, `NSTextView` hit-test and anchor helpers, ⌘-click opener. |
@@ -2080,7 +2082,210 @@ git commit -m "feat(acp): Chip upstream references typed or pasted in the compos
 
 ---
 
-### Task 6: Hover card and ⌘-click in the composer
+### Task 6: Pasted URLs become chips
+
+**Files:**
+- Modify: `Alas/Sources/ACP/UI/ACPUpstreamReferenceDetector.swift`
+- Modify: `Alas/Sources/ACP/UI/ACPUpstreamReferenceChip.swift` (`chipify`)
+- Modify: `Alas/Sources/ACP/UI/ACPComposer+UpstreamReferences.swift` (`chipUpstreamReferences(in:replacing:)`)
+- Test: `AlasTests/ACP/UI/ACPUpstreamReferenceDetectorTests.swift`, `AlasTests/ACP/UI/ACPUpstreamReferenceComposerTests.swift`
+
+**Interfaces:**
+- Consumes: Tasks 1, 2, 4, 5. `CodeHostRemote.webURL` is always `https://<host>/<owner>/<repo>` with `.git` stripped.
+- Produces:
+  - `static func ACPUpstreamReferenceDetector.urlReferences(in text: String, remote: CodeHostRemote, precededBy: unichar? = nil, followedBy: unichar? = nil) -> [Match]`
+  - `ACPUpstreamReferenceChip.chipify` gains a final parameter `urlRemote: CodeHostRemote? = nil`. When it is set, same-repo URLs chip too.
+
+- [ ] **Step 1: Write the failing detector tests**
+
+Append inside `struct ACPUpstreamReferenceDetectorTests`:
+
+```swift
+    private static let github = CodeHostRemote(
+        kind: .github, host: "github.com", owner: "mrmans0n", repository: "alas",
+        remoteName: "origin", webURL: URL(string: "https://github.com/mrmans0n/alas")!
+    )
+    private static let gitlab = CodeHostRemote(
+        kind: .gitlab, host: "gitlab.example.com", owner: "platform/mobile", repository: "alas",
+        remoteName: "origin", webURL: URL(string: "https://gitlab.example.com/platform/mobile/alas")!
+    )
+
+    private func urls(_ text: String, _ remote: CodeHostRemote = Self.github) -> [String] {
+        ACPUpstreamReferenceDetector.urlReferences(in: text, remote: remote).map(\.reference.spelling)
+    }
+
+    @Test("same-repo PR and issue URLs map to their reference, keeping trailing punctuation outside")
+    func urlMatches() {
+        let text = "see https://github.com/mrmans0n/alas/pull/1506. and (HTTP://GitHub.com/MrMans0n/Alas/issues/12/)"
+        let matches = ACPUpstreamReferenceDetector.urlReferences(in: text, remote: Self.github)
+        #expect(matches.map(\.reference.spelling) == ["#1506", "#12"])
+        let first = (text as NSString).substring(with: matches[0].range)
+        #expect(first == "https://github.com/mrmans0n/alas/pull/1506")
+        #expect(urls("https://gitlab.example.com/platform/mobile/alas/-/merge_requests/9 https://gitlab.example.com/platform/mobile/alas/-/issues/3", Self.gitlab)
+            == ["!9", "#3"])
+    }
+
+    @Test("URLs into a PR, for another repo, inside a markdown link, or in code stay URLs")
+    func urlMisses() {
+        #expect(urls("https://github.com/mrmans0n/alas/pull/1506/files") == [])
+        #expect(urls("https://github.com/mrmans0n/alas/pull/1506#issuecomment-1") == [])
+        #expect(urls("https://github.com/mrmans0n/alas/pull/1506?w=1") == [])
+        #expect(urls("https://github.com/someone/else/pull/1506") == [])
+        #expect(urls("https://github.com/mrmans0n/alas-fork/pull/1506") == [])
+        #expect(urls("[the fix](https://github.com/mrmans0n/alas/pull/1506)") == [])
+        #expect(urls("`https://github.com/mrmans0n/alas/pull/1506`") == [])
+        #expect(urls("xhttps://github.com/mrmans0n/alas/pull/1506") == [])
+        #expect(urls("https://github.com/mrmans0n/alas/pull/0150") == [])
+    }
+```
+
+- [ ] **Step 2: Write the failing composer test**
+
+Append inside `struct ACPUpstreamReferenceComposerTests`:
+
+```swift
+    @Test("pasting a same-repo PR URL inserts its chip; a comment link pastes unchanged")
+    func pastedURLBecomesChip() async {
+        let store = await UpstreamReferenceFixtures.store()
+        let (textView, coordinator, window) = makeTextView(store: store)
+        defer { withExtendedLifetime((coordinator, window)) {} }
+
+        #expect(textView.insertPlainText("landed in https://github.com/mrmans0n/alas/pull/1506."))
+        #expect(chipSpellings(textView) == ["#1506"])
+        #expect(wireText(textView) == "landed in #1506.")
+
+        textView.string = ""
+        let comment = "https://github.com/mrmans0n/alas/pull/1506#issuecomment-1"
+        #expect(textView.insertPlainText(comment))
+        #expect(chipSpellings(textView).isEmpty)
+        #expect(textView.string == comment)
+    }
+```
+
+- [ ] **Step 3: Run to verify failure**
+
+Run the test command with `-only-testing AlasTests/ACPUpstreamReferenceDetectorTests -only-testing AlasTests/ACPUpstreamReferenceComposerTests`.
+Expected: build failure, `type 'ACPUpstreamReferenceDetector' has no member 'urlReferences'`.
+
+- [ ] **Step 4: Implement URL matching**
+
+Add inside `enum ACPUpstreamReferenceDetector`, after `references(in:host:precededBy:followedBy:)`:
+
+```swift
+    private static let urlCandidate = try! NSRegularExpression(pattern: #"https?://[^\s<>()\[\]{}"'`]+"#, options: [.caseInsensitive])
+    private static let urlTrailingPunctuation = Set(".,;:!?".utf16)
+
+    /// Exact PR / MR / issue URLs for `remote`'s repository, mapped to the
+    /// reference they name: GitHub `/pull/N` and `/issues/N` to `#N`, GitLab
+    /// `/-/merge_requests/N` to `!N` and `/-/issues/N` to `#N`. Anything
+    /// more specific (extra path, query, fragment) stays a URL so the link
+    /// to a file or comment isn't lost, as do other repositories' URLs and
+    /// markdown link targets.
+    static func urlReferences(
+        in text: String,
+        remote: CodeHostRemote,
+        precededBy: unichar? = nil,
+        followedBy: unichar? = nil
+    ) -> [Match] {
+        let string = text as NSString
+        let code = codeRanges(in: string, unclosedRunsExtendToEnd: false)
+        var matches: [Match] = []
+        for result in urlCandidate.matches(in: text, range: NSRange(location: 0, length: string.length)) {
+            var range = result.range
+            while range.length > 0, urlTrailingPunctuation.contains(string.character(at: NSMaxRange(range) - 1)) {
+                range.length -= 1
+            }
+            let before: unichar? = range.location > 0 ? string.character(at: range.location - 1) : precededBy
+            let beforeThat: unichar? = range.location > 1 ? string.character(at: range.location - 2) : nil
+            let after: unichar? = NSMaxRange(range) < string.length ? string.character(at: NSMaxRange(range)) : followedBy
+            guard isLeadingBoundary(before),
+                  !(before == 0x28 && beforeThat == 0x5D), // "](": a markdown link target
+                  isTrailingBoundary(after),
+                  !code.contains(where: { NSLocationInRange(range.location, $0) }),
+                  let reference = reference(forURL: string.substring(with: range), remote: remote)
+            else { continue }
+            matches.append(Match(range: range, reference: reference))
+        }
+        return matches
+    }
+
+    private static func reference(forURL string: String, remote: CodeHostRemote) -> CodeHostReference? {
+        guard let components = URLComponents(string: string),
+              let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              components.host?.caseInsensitiveCompare(remote.host) == .orderedSame,
+              components.query == nil, components.fragment == nil
+        else { return nil }
+        var path = components.path
+        if path.hasSuffix("/") { path.removeLast() }
+        let repoPath = remote.webURL.path
+        guard path.lowercased().hasPrefix(repoPath.lowercased() + "/") else { return nil }
+        let rest = path.dropFirst(repoPath.count + 1).split(separator: "/", omittingEmptySubsequences: false)
+        let parsed: (sigil: CodeHostReference.Sigil, digits: Substring)? = switch (remote.kind, rest.count) {
+        case (.github, 2) where rest[0] == "pull" || rest[0] == "issues": (.hash, rest[1])
+        case (.gitlab, 3) where rest[0] == "-" && rest[1] == "merge_requests": (.bang, rest[2])
+        case (.gitlab, 3) where rest[0] == "-" && rest[1] == "issues": (.hash, rest[2])
+        default: nil
+        }
+        guard let parsed else { return nil }
+        return CodeHostReference(spelling: "\(parsed.sigil.rawValue)\(parsed.digits)")
+    }
+```
+
+The candidate regex stops at `(`, `)`, brackets, and quotes, so a URL wrapped in parentheses ends before the `)`. `CodeHostReference(spelling:)` enforces the digit grammar, which rejects `0150`.
+
+- [ ] **Step 5: Let `chipify` include URLs**
+
+In `ACPUpstreamReferenceChip.chipify`, add a final parameter `urlRemote: CodeHostRemote? = nil`, and replace the `let matches = …` statement with:
+
+```swift
+        let tokens = ACPUpstreamReferenceDetector
+            .references(in: storage.string, host: host, precededBy: precededBy, followedBy: followedBy)
+        let urls = urlRemote.map {
+            ACPUpstreamReferenceDetector.urlReferences(
+                in: storage.string, remote: $0, precededBy: precededBy, followedBy: followedBy
+            )
+        } ?? []
+        // A token inside a URL (a `#` fragment) is already rejected by the
+        // URL rules; drop any overlap anyway so ranges never collide.
+        let matches = (urls + tokens.filter { token in
+            !urls.contains { NSIntersectionRange($0.range, token.range).length > 0 }
+        })
+        .filter { !excluding($0.range) }
+        .sorted { $0.range.location < $1.range.location }
+```
+
+Update the doc comment to say that `urlRemote` also turns that repository's exact PR/MR/issue URLs into chips, and that only paste paths pass it.
+
+- [ ] **Step 6: Pass the remote from the paste helper**
+
+In `ACPComposer+UpstreamReferences.swift`, `chipUpstreamReferences(in:replacing:)`, change the `chipify` call to:
+
+```swift
+        return ACPUpstreamReferenceChip.chipify(
+            fragment, host: context.host, store: context.store,
+            precededBy: before, followedBy: after, urlRemote: context.store.remote
+        ) > 0
+```
+
+Update its doc comment: pasted same-repo PR/MR/issue URLs become chips too.
+
+- [ ] **Step 7: Run the tests to verify they pass**
+
+Run the test command with `-only-testing AlasTests/ACPUpstreamReferenceDetectorTests -only-testing AlasTests/ACPUpstreamReferenceComposerTests -only-testing AlasTests/ACPUpstreamReferenceChipTests`.
+Expected: `** TEST SUCCEEDED **`, all three suites listed.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add Alas/Sources/ACP/UI/ACPUpstreamReferenceDetector.swift Alas/Sources/ACP/UI/ACPUpstreamReferenceChip.swift \
+  Alas/Sources/ACP/UI/ACPComposer+UpstreamReferences.swift \
+  AlasTests/ACP/UI/ACPUpstreamReferenceDetectorTests.swift AlasTests/ACP/UI/ACPUpstreamReferenceComposerTests.swift
+git commit -m "feat(acp): Turn pasted same-repo PR/MR/issue URLs into reference chips"
+```
+
+---
+
+### Task 7: Hover card and ⌘-click in the composer
 
 **Files:**
 - Create: `Alas/Sources/ACP/UI/ACPUpstreamReferenceHover.swift`
@@ -2182,14 +2387,11 @@ struct ACPUpstreamReferenceCardModel: Equatable {
         case .failed(let failure):
             return Self(spelling: reference.spelling, kind: nil, badge: nil, title: nil, detail: message(for: failure))
         case .loaded(let summary):
-            let badge: Badge
-            let verb: String
-            let date: Date?
-            switch summary.state {
-            case .open: (badge, verb, date) = (.open, "opened", summary.createdAt)
-            case .draft: (badge, verb, date) = (.draft, "opened", summary.createdAt)
-            case .merged: (badge, verb, date) = (.merged, "merged", summary.mergedAt)
-            case .closed: (badge, verb, date) = (.closed, "closed", summary.closedAt)
+            let (badge, verb, date): (Badge, String, Date?) = switch summary.state {
+            case .open: (.open, "opened", summary.createdAt)
+            case .draft: (.draft, "opened", summary.createdAt)
+            case .merged: (.merged, "merged", summary.mergedAt)
+            case .closed: (.closed, "closed", summary.closedAt)
             }
             var parts: [String] = []
             if let author = summary.author { parts.append(author) }
@@ -2391,7 +2593,7 @@ git commit -m "feat(acp): Show a hover card for upstream reference chips"
 
 ---
 
-### Task 7: Transcript chips in user messages
+### Task 8: Transcript chips in user messages
 
 **Files:**
 - Create: `Alas/Sources/ACP/UI/ACPUpstreamReferenceTranscript.swift`
@@ -2401,7 +2603,7 @@ git commit -m "feat(acp): Show a hover card for upstream reference chips"
 - Test: `AlasTests/ACP/UI/ACPUpstreamReferenceTranscriptTests.swift`
 
 **Interfaces:**
-- Consumes: Tasks 3, 4, 6, and `ACPMarkdownInlineRenderer.makeAttributedString(source:theme:typography:role:)`.
+- Consumes: Tasks 3, 4, 7, and `ACPMarkdownInlineRenderer.makeAttributedString(source:theme:typography:role:)`.
 - Produces:
   - `EnvironmentValues.acpUpstreamReferenceStore: ACPUpstreamReferenceStore?`
   - `EnvironmentValues.acpUpstreamReferenceChipping: ACPUpstreamReferenceChipping?`
@@ -2690,7 +2892,7 @@ git commit -m "feat(acp): Render upstream reference chips in sent user messages"
 
 ---
 
-### Task 8: Branch verification
+### Task 9: Branch verification
 
 **Files:** none new.
 

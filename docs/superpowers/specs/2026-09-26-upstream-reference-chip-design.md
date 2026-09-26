@@ -28,11 +28,15 @@ an attribute key on an attachment character, not a new draft segment.
 - Transcript chips: user messages only.
 - Hover card: compact layout.
 - ⌘-click on a chip opens the reference in the browser.
+- Pasting a URL for the current repository's PR, MR, or issue into the
+  composer replaces it with the matching chip (see "Pasted URLs").
 
 **Out of scope (v1):**
 
 - Chips in agent messages.
-- Full PR/MR/issue URLs becoming chips.
+- Typed URLs becoming chips. Only pasted ones convert.
+- URLs for other repositories, and URLs pointing inside a PR or issue
+  (a file tab, a comment anchor, a query string).
 - Cross-repo references (`owner/repo#123`, `group/project!123`).
 - A detailed hover card (branches, checks, labels, assignees).
 
@@ -386,3 +390,34 @@ authoritative where it differs from the sections above.
   it. The value is part of the inline view's render state, and chipping
   runs on the fresh copy the renderer returns, so the memoized markdown
   cache is never mutated.
+
+## Pasted URLs
+
+Added after plan review, at the user's request.
+
+Pasting `https://github.com/mrmans0n/alas/pull/1506` into the composer
+inserts the `#1506` chip in place of the URL.
+
+- **Recognised URLs.** They must use `http` or `https`, the remote's host,
+  and the remote's `owner/repo` path, all compared case-insensitively. The
+  path must then end in exactly one of these forms, with an optional
+  trailing slash:
+  - GitHub `/pull/N` or `/issues/N` becomes `#N`.
+  - GitLab `/-/merge_requests/N` becomes `!N`.
+  - GitLab `/-/issues/N` becomes `#N`.
+  `N` follows the same 1–9 digit, no-leading-zero grammar as typed tokens.
+- **Left as URLs.** URLs with extra path segments (`/pull/1506/files`), a
+  query, or a fragment (`#issuecomment-…`) stay as they are. Collapsing
+  them would drop the specific file or comment they point to. URLs for
+  other repositories also stay, because chips are same-repo only.
+- **Boundaries.** The URL must sit at a token boundary, like typed
+  references. Trailing sentence punctuation such as `.` or `)` stays
+  outside the chip. A URL that is the target of a markdown link,
+  `[text](url)`, stays a URL, so the link keeps working.
+- **Wire text.** The chip spells `#1506`, so the agent receives `#1506`
+  instead of the URL. The agent runs in the same repository, so the short
+  form carries the same meaning. Copying the chip back out also yields
+  `#1506`.
+- **Where it applies.** Plain-text paste, composer-draft paste, and drops
+  handled by the drop router all go through the same helper. Typing,
+  restoring a draft, and the transcript do not convert URLs.
