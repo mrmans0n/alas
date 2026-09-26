@@ -2001,18 +2001,42 @@ final class ACPNSTextView: PairedDelimiterTextView {
         /// a stale chip they don't expect. `NSPasteboard.changeCount` bumps
         /// on every `declareTypes`/`clearContents` call to ANY pasteboard
         /// content, ours or an attacker's, so a payload is only ever valid
-        /// against the exact write that produced it.
+        /// against the exact write that produced it — PROVIDED it's also
+        /// checked against the pasteboard that write actually happened on;
+        /// see `trustedPasteboardWrites`, which closes the gap a bare
+        /// integer comparison leaves (a change count is only unique per
+        /// pasteboard OBJECT, not globally, and another process can pump an
+        /// unrelated pasteboard — e.g. a drag pasteboard — to any small
+        /// target count cheaply).
         let changeCount: Int
         let mac: Data
     }
 
+    /// Tracks, per pasteboard OBJECT (keyed by identity, not by name/type —
+    /// `NSPasteboard.general` is a shared singleton, but a drag session's
+    /// pasteboard is a fresh object each time), the change count established
+    /// by OUR most recent write to it. `changeCount` alone only proves "this
+    /// pasteboard's current count equals this number" — trivial for another
+    /// process to fake by declaring types on its OWN pasteboard repeatedly
+    /// until its independent counter reaches a leaked value, then
+    /// publishing our captured (draftJSON, mac) bytes there. Requiring the
+    /// specific pasteboard OBJECT we wrote to also be the one being read
+    /// from closes that: an attacker's own pasteboard, however they tune
+    /// its count, was never in this table. Entries accumulate for the
+    /// process's lifetime, one Int per distinct pasteboard object touched —
+    /// bounded by how many times the user actually copies/drags a chip in a
+    /// session, not worth adding eviction for.
+    private static var trustedPasteboardWrites: [ObjectIdentifier: Int] = [:]
+
     /// Signs `draft`'s JSON encoding, bound to `changeCount`, with the
-    /// process-local MAC key.
-    private static func signedDraftPayload(_ draft: ACPComposerDraft, changeCount: Int) -> Data? {
+    /// process-local MAC key, and records `pboard` as the one this specific
+    /// signature is valid against.
+    private static func signedDraftPayload(_ draft: ACPComposerDraft, changeCount: Int, writtenTo pboard: NSPasteboard) -> Data? {
         guard let draftJSON = try? JSONEncoder().encode(draft) else { return nil }
         var signedBytes = draftJSON
         withUnsafeBytes(of: changeCount) { signedBytes.append(contentsOf: $0) }
         let mac = HMAC<SHA256>.authenticationCode(for: signedBytes, using: pasteboardMACKey)
+        trustedPasteboardWrites[ObjectIdentifier(pboard)] = changeCount
         return try? JSONEncoder().encode(
             AuthenticatedDraftPayload(draftJSON: draftJSON, changeCount: changeCount, mac: Data(mac))
         )
@@ -2020,13 +2044,15 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     /// Verifies and decodes a payload written by `signedDraftPayload`,
     /// rejecting it unless `pboard`'s CURRENT change count still matches the
-    /// one it was signed against — see `AuthenticatedDraftPayload.changeCount`.
-    /// Returns nil for anything else, including a well-formed JSON draft
-    /// with no signature, which is exactly what a forged pasteboard payload
-    /// from another application looks like.
+    /// one it was signed against AND `pboard` is the exact object that
+    /// signature was recorded against — see `AuthenticatedDraftPayload` and
+    /// `trustedPasteboardWrites`. Returns nil for anything else, including a
+    /// well-formed JSON draft with no signature, which is exactly what a
+    /// forged pasteboard payload from another application looks like.
     private static func verifiedDraft(from data: Data, on pboard: NSPasteboard) -> ACPComposerDraft? {
         guard let payload = try? JSONDecoder().decode(AuthenticatedDraftPayload.self, from: data),
-              payload.changeCount == pboard.changeCount
+              payload.changeCount == pboard.changeCount,
+              trustedPasteboardWrites[ObjectIdentifier(pboard)] == payload.changeCount
         else { return nil }
         var signedBytes = payload.draftJSON
         withUnsafeBytes(of: payload.changeCount) { signedBytes.append(contentsOf: $0) }
@@ -2074,7 +2100,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // exactly the one this write produces — nothing else can race it
         // in between, since setData/setString below don't bump it further.
         let changeCount = pboard.declareTypes([Self.composerDraftPasteboardType, .string], owner: nil)
-        guard let data = Self.signedDraftPayload(draft, changeCount: changeCount) else {
+        guard let data = Self.signedDraftPayload(draft, changeCount: changeCount, writtenTo: pboard) else {
             return super.writeSelection(to: pboard, types: types)
         }
         pboard.setData(data, forType: Self.composerDraftPasteboardType)
@@ -2090,7 +2116,28 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// forgery.
     static func writeComposerDraftForTesting(_ draft: ACPComposerDraft, to pboard: NSPasteboard) {
         let changeCount = pboard.declareTypes([composerDraftPasteboardType, .string], owner: nil)
-        let data = signedDraftPayload(draft, changeCount: changeCount)!
+        let data = signedDraftPayload(draft, changeCount: changeCount, writtenTo: pboard)!
+        pboard.setData(data, forType: composerDraftPasteboardType)
+        pboard.setString(draft.plainText, forType: .string)
+    }
+
+    /// Test seam: publishes onto `pboard` a payload that is byte-for-byte
+    /// valid (correct MAC, matching `pboard`'s CURRENT change count) but was
+    /// signed and recorded against a different pasteboard entirely — i.e.
+    /// exactly what an attacker gets by declaring types on their OWN
+    /// pasteboard until its independent counter reaches a number leaked
+    /// from a legitimate copy, then republishing the captured bytes on the
+    /// pasteboard the composer actually reads from (e.g. a drag session's).
+    static func writeReplayedSignedDraftForTesting(_ draft: ACPComposerDraft, onto pboard: NSPasteboard) {
+        let targetCount = pboard.declareTypes([composerDraftPasteboardType, .string], owner: nil)
+        let scratch = NSPasteboard(name: .init("alas-replay-source-\(UUID().uuidString)"))
+        defer { scratch.releaseGlobally() }
+        var scratchCount = scratch.declareTypes([composerDraftPasteboardType], owner: nil)
+        while scratchCount < targetCount {
+            scratchCount = scratch.declareTypes([composerDraftPasteboardType], owner: nil)
+        }
+        precondition(scratchCount == targetCount, "test setup could not align pasteboard change counts")
+        let data = signedDraftPayload(draft, changeCount: targetCount, writtenTo: scratch)!
         pboard.setData(data, forType: composerDraftPasteboardType)
         pboard.setString(draft.plainText, forType: .string)
     }

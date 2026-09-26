@@ -1268,6 +1268,23 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.string.isEmpty)
     }
 
+    @Test("a signature replayed onto a different pasteboard with a matching change count is not trusted")
+    func replayedSignatureOnDifferentPasteboardIsRejected() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        // Bytes that verify (correct MAC, current change count matches) but
+        // were signed and recorded against a DIFFERENT pasteboard object —
+        // the scenario a bare change-count comparison alone would miss.
+        ACPNSTextView.writeReplayedSignedDraftForTesting(Self.chipDraft, onto: board)
+
+        #expect(!textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView).isEmpty)
+        #expect(textView.string.isEmpty)
+    }
+
     @Test("file drop router inserts the relative path at the retained selection")
     func fileDropRouterInsertsRelativePathAtSelection() throws {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 40))
