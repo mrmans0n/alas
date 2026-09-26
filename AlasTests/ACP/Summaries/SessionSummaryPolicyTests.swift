@@ -31,7 +31,9 @@ import Testing
     @Test func rejectsMarkupURLsMultilineControlsAndOverlongStrings() {
         let invalidValues = [
             "**Finished**",
+            "1. Restart the service",
             "<strong>Finished</strong>",
+            "<!-- hidden -->",
             "See https://example.com/result",
             "first\nsecond",
             "bell \u{0007}",
@@ -86,6 +88,26 @@ import Testing
 
     @Test func negatedDestructiveDiscussionIsAllowed() {
         let json = #"{"goal":null,"completed":["Explained why deleting backups is unsafe"],"blockers":[],"next_action":"Do not delete the production database"}"#
+        #expect(SessionSummaryPolicy.parse(Data(json.utf8), isPartial: false) != nil)
+    }
+
+    @Test(arguments: [
+        "Run rm -rf /",
+        "Format the production disk",
+        "git clean -fdx"
+    ])
+    func rejectsCommonDestructiveActions(_ nextAction: String) {
+        let json = "{\"goal\":null,\"completed\":[],\"blockers\":[],\"next_action\":\(jsonString(nextAction))}"
+        #expect(SessionSummaryPolicy.parse(Data(json.utf8), isPartial: false) == nil)
+    }
+
+    @Test(arguments: [
+        "Do not run rm -rf /",
+        "Never format the production disk",
+        #"Explain why "git clean -fdx" is destructive"#
+    ])
+    func allowsNegatedOrDescriptiveDestructiveActions(_ nextAction: String) {
+        let json = "{\"goal\":null,\"completed\":[],\"blockers\":[],\"next_action\":\(jsonString(nextAction))}"
         #expect(SessionSummaryPolicy.parse(Data(json.utf8), isPartial: false) != nil)
     }
 

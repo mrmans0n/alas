@@ -87,6 +87,47 @@ import Testing
         #expect(middle.lowerBound < newest.lowerBound)
     }
 
+    @Test func keepsTheMaximalFittingSuffixInChronologicalOrder() throws {
+        let first = SessionSummaryTurn(
+            user: "first-" + String(repeating: "a", count: 71_000),
+            assistant: "first answer"
+        )
+        let second = SessionSummaryTurn(
+            user: "second-" + String(repeating: "b", count: 60_000),
+            assistant: "second answer"
+        )
+        let third = SessionSummaryTurn(user: "third", assistant: "third answer")
+        let fourth = SessionSummaryTurn(user: "fourth", assistant: "fourth answer")
+        let allTurns = [first, second, third, fourth]
+        let session = makeSession(messages: allTurns.flatMap {
+            [
+                .user(id: UUID(), messageId: nil, text: $0.user, attachments: []),
+                .agent(id: UUID(), messageId: nil, StreamingText($0.assistant))
+            ]
+        })
+
+        let context = try #require(SessionSummaryContext.snapshot(session: session))
+        #expect(context.turns == [second, third, fourth])
+        #expect(context.omittedOlderTurns)
+        let selectedInput = try #require(context.messageCandidates().first?[1].content)
+        #expect(selectedInput.utf8.count <= SessionSummaryContext.sourceLimit)
+
+        let expanded = SessionSummaryContext(
+            revision: context.revision,
+            goal: context.goal,
+            plan: context.plan,
+            turns: allTurns,
+            omittedOlderTurns: false
+        )
+        let expandedInput = try #require(expanded.messageCandidates().first?[1].content)
+        #expect(expandedInput.utf8.count > SessionSummaryContext.sourceLimit)
+        let secondRange = try #require(selectedInput.range(of: "second-"))
+        let thirdRange = try #require(selectedInput.range(of: "third"))
+        let fourthRange = try #require(selectedInput.range(of: "fourth"))
+        #expect(secondRange.lowerBound < thirdRange.lowerBound)
+        #expect(thirdRange.lowerBound < fourthRange.lowerBound)
+    }
+
     @Test func keepsGoalPlanAndNewestTurnInEveryCandidate() throws {
         let session = makeSession(messages: [
             .user(id: UUID(), messageId: nil, text: "first", attachments: []),

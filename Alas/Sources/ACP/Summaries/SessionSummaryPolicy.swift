@@ -79,10 +79,13 @@ enum SessionSummaryPolicy {
         guard let nextAction = summary.nextAction else { return true }
         return !LocalTextSafety.containsActiveAction(
             nextAction,
-            pattern: #"(?i)\b(?:delete|remove|wipe|erase|destroy|drop|rm)\b\s+(?:(?:the|a|my|our|all|entire|whole|old|local|protected|production)\s+){0,3}(?:projects?|repositories|repos?|backups?|databases?|data|disks?|volumes?)\b"#
+            pattern: #"(?i)\b(?:delete|remove|wipe|erase|destroy|drop|format)\b\s+(?:(?:the|a|my|our|all|entire|whole|old|local|protected|production)\s+){0,3}(?:projects?|repositories|repos?|backups?|databases?|data|disks?|volumes?)\b"#
         ) && !LocalTextSafety.containsActiveAction(
             nextAction,
-            pattern: #"(?i)\b(?:git\s+)?(?:reset\s+--hard|push\b[^;\n]{0,80}\s+--force(?:-with-lease)?)\b"#
+            pattern: #"(?i)\brm\b\s+(?:-[A-Za-z]+\s+)*(?:/(?:\s|$)|~(?:/|\s|$))"#
+        ) && !LocalTextSafety.containsActiveAction(
+            nextAction,
+            pattern: #"(?i)\b(?:git\s+)?(?:reset\s+--hard|push\b[^;\n]{0,80}\s+--force(?:-with-lease)?|clean\b(?=[^;\n]{0,40}(?:-[A-Za-z]*f[A-Za-z]*|--force)\b))"#
         )
     }
 
@@ -96,7 +99,7 @@ enum SessionSummaryPolicy {
             && text.range(of: #"(?i)https?://"#, options: .regularExpression) == nil
             && text.range(of: #"</?[A-Za-z][^>]*>"#, options: .regularExpression) == nil
             && text.range(
-                of: #"(?:^|\s)(?:#{1,6}\s|[-+*]\s|>\s)|[*_~`]|\[[^\]]*\]\([^)]*\)"#,
+                of: #"(?:^|\s)(?:#{1,6}\s|[-+*]\s|>\s|\d+[.)]\s)|[*_~`]|\[[^\]]*\]\([^)]*\)|<!--.*?-->"#,
                 options: .regularExpression
             ) == nil
     }

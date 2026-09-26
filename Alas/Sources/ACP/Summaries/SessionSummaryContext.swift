@@ -18,11 +18,22 @@ struct SessionSummaryContext: Equatable, Sendable {
         let goal = session.currentGoal
         let currentPlan = session.transcript.currentPlan
         let plan = currentPlan ?? []
-        var firstTurn = 0
-        while firstTurn < allTurns.count,
-              renderedInput(goal: goal, plan: plan, turns: Array(allTurns[firstTurn...])).utf8.count > sourceLimit {
-            firstTurn += 1
+        var lowerBound = 0
+        var upperBound = allTurns.count
+        while lowerBound < upperBound {
+            let candidate = lowerBound + (upperBound - lowerBound) / 2
+            let fits = renderedInput(
+                goal: goal,
+                plan: plan,
+                turns: Array(allTurns[candidate...])
+            ).utf8.count <= sourceLimit
+            if fits {
+                upperBound = candidate
+            } else {
+                lowerBound = candidate + 1
+            }
         }
+        let firstTurn = lowerBound
         guard firstTurn < allTurns.count else { return nil }
 
         let transcript = session.transcript
