@@ -413,6 +413,11 @@ struct ACPUserInputPrompt: View {
     }
 }
 
+struct ACPPlanApprovalSection: Equatable {
+    let title: String?
+    let items: [ACPMessage.PlanItem]
+}
+
 struct ACPPlanApprovalPrompt: View {
     let plan: ACPCursorCreatePlanParams
     let onRespond: (ACPCursorPlanResponse) -> Void
@@ -420,8 +425,21 @@ struct ACPPlanApprovalPrompt: View {
     @State private var rejectionReason = ""
     @FocusState private var isRejectionReasonFocused: Bool
 
-    private var checklistItems: [ACPMessage.PlanItem] {
-        plan.todos.map { .init(content: $0.content, status: $0.status) }
+    /// Top-level todos first (untitled), then one titled section per phase
+    /// that has todos, so a phased plan is reviewed in full before approval.
+    static func checklistSections(for plan: ACPCursorCreatePlanParams) -> [ACPPlanApprovalSection] {
+        var sections: [ACPPlanApprovalSection] = []
+        if !plan.todos.isEmpty {
+            sections.append(.init(title: nil, items: plan.todos.map(Self.item)))
+        }
+        for phase in plan.phases where !phase.todos.isEmpty {
+            sections.append(.init(title: phase.name, items: phase.todos.map(Self.item)))
+        }
+        return sections
+    }
+
+    private static func item(_ todo: ACPCursorTodo) -> ACPMessage.PlanItem {
+        .init(content: todo.content, status: todo.status)
     }
 
     private var trimmedRejectionReason: String {
@@ -438,9 +456,16 @@ struct ACPPlanApprovalPrompt: View {
                         .foregroundStyle(theme.color("fg"))
                 }
                 ACPMarkdownText(raw: plan.plan, typography: .default)
-                if !checklistItems.isEmpty {
-                    ACPPlanChecklist(items: checklistItems)
-                        .clipShape(.rect(cornerRadius: 6))
+                ForEach(Array(Self.checklistSections(for: plan).enumerated()), id: \.offset) { _, section in
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let title = section.title {
+                            Text(title)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(theme.color("fg-muted"))
+                        }
+                        ACPPlanChecklist(items: section.items)
+                            .clipShape(.rect(cornerRadius: 6))
+                    }
                 }
             }
             .padding(12)

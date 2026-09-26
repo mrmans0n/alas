@@ -203,6 +203,46 @@ struct ACPUserInputFormStateTests {
         #expect(ACPUserInputPrompt.shouldShowMessage(for: request))
     }
 
+    @Test("required array without minItems submits an empty selection")
+    func requiredArrayWithoutMinItemsSubmitsEmptySelection() throws {
+        let request = try formRequest(#"""
+        {
+          "requestId":1,"mode":"form","message":"Pick",
+          "requestedSchema":{"properties":{
+            "scopes":{"type":"array","items":{"type":"string","enum":["read","write"]}},
+            "targets":{"type":"array","minItems":1,"items":{"type":"string","enum":["mac"]}}
+          },"required":["scopes","targets"]}
+        }
+        """#)
+        let state = ACPUserInputFormState(request: request)
+        let scopes = try #require(request.fields.first { $0.key == "scopes" })
+        let targets = try #require(request.fields.first { $0.key == "targets" })
+
+        #expect(state.validationError(for: scopes) == nil)
+        #expect(state.validationError(for: targets) != nil)
+
+        state.toggle("mac", for: targets)
+        #expect(state.submittedContent() == ["scopes": .strings([]), "targets": .strings(["mac"])])
+    }
+
+    @Test("plan approval checklist lists top-level todos and every phase")
+    func planApprovalChecklistIncludesPhases() {
+        let plan = ACPCursorCreatePlanParams(
+            toolCallId: "tool-1", name: "Ship it", overview: "", plan: "",
+            todos: [.init(id: "t1", content: "Update the sidebar", status: "pending")],
+            isProject: true,
+            phases: [
+                .init(name: "Verification", todos: [.init(id: "t2", content: "Run tests", status: "pending")]),
+                .init(name: "Empty", todos: []),
+            ]
+        )
+
+        #expect(ACPPlanApprovalPrompt.checklistSections(for: plan) == [
+            .init(title: nil, items: [.init(content: "Update the sidebar", status: "pending")]),
+            .init(title: "Verification", items: [.init(content: "Run tests", status: "pending")]),
+        ])
+    }
+
     private func formRequest(_ json: String) throws -> ACPUserInputRequest {
         let params = try JSONDecoder().decode(
             ACPElicitationRequestParams.self,

@@ -155,7 +155,7 @@ struct NativePeerSessionView: View {
         case .fileEdit(let edit):
             // The edited file lives on the peer, so there is no local diff
             // to open; the card still shows the inline hunk.
-            ACPFileEditCard(edit: edit, onOpenDiff: { _ in })
+            ACPFileEditCard(edit: edit, onOpenDiff: nil)
         case .plan(let items):
             ACPPlanChecklist(items: items)
         case .systemNotice(let text):

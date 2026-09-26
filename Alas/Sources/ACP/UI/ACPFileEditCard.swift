@@ -2,7 +2,11 @@ import SwiftUI
 
 struct ACPFileEditCard: View {
     let edit: ACPMessage.FileEdit
-    let onOpenDiff: (String) -> Void
+    /// Opens the full diff for `edit.path`. Nil when the file is not
+    /// reachable from this Mac (a mirrored peer or child session), which
+    /// hides the "Open diff" and "Show all" actions instead of leaving
+    /// buttons that do nothing.
+    let onOpenDiff: ((String) -> Void)?
     @Environment(\.theme) private var theme
     @State private var expanded = false
 
@@ -65,13 +69,15 @@ struct ACPFileEditCard: View {
             }
             .buttonStyle(.plain)
 
-            Button("Open diff") {
-                onOpenDiff(edit.path)
-            }
+            if let onOpenDiff {
+                Button("Open diff") {
+                    onOpenDiff(edit.path)
+                }
                 .buttonStyle(.plain)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(theme.color("accent"))
                 .padding(.horizontal, 10).padding(.vertical, 8)
+            }
         }
         .background(theme.color("bg-1").opacity(0.5))
     }
@@ -91,7 +97,7 @@ private struct _InlineDiffPanel: View {
     let oldText: String?
     let newText: String
     let relativePath: String
-    let onShowAll: (String) -> Void
+    let onShowAll: ((String) -> Void)?
     @Environment(\.theme) private var theme
     @State private var diff: ParsedDiff?
     @State private var loading = true
@@ -113,7 +119,7 @@ private struct _InlineDiffPanel: View {
                     diff: diff,
                     relativePath: relativePath,
                     maxLines: 15,
-                    onShowAll: { onShowAll(relativePath) }
+                    onShowAll: onShowAll.map { showAll in { showAll(relativePath) } }
                 )
             } else {
                 Text("No changes")

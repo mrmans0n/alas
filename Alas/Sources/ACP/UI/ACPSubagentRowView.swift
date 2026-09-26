@@ -194,7 +194,7 @@ private struct ACPSubagentMessageRow: View {
         case .toolCall(let toolCall):
             ACPToolCallCard(toolCall: toolCall, trustedImageRoot: trustedImageRoot)
         case .fileEdit(_, let edit):
-            ACPFileEditCard(edit: edit, onOpenDiff: { _ in })
+            ACPFileEditCard(edit: edit, onOpenDiff: nil)
         case .plan(_, let items):
             ACPPlanChecklist(items: items)
         case .systemNotice(_, let text):

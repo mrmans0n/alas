@@ -100,8 +100,10 @@ final class ACPUserInputFormState {
                 return "Enter \(maximum) or less."
             }
         case "array":
+            // `required` only means the property must be present in the
+            // response; an empty array satisfies it. Only an explicit
+            // `minItems` constrains the selection count.
             let count = selectionValues[field.key]?.count ?? 0
-            if field.required && count == 0 { return "Choose at least one option." }
             if let minimum = field.schema.minItems, count < minimum {
                 return "Choose at least \(minimum) options."
             }
