@@ -32,8 +32,8 @@ def collect(bundle):
         text=True,
     )
     if proc.returncode != 0:
-        print(f"skipping {bundle.name}: {proc.stderr.strip()[:200]}", file=sys.stderr)
-        return []
+        # A partial run understates every total, so never report one as complete.
+        sys.exit(f"cannot read {bundle}: {proc.stderr.strip()[:200]}")
 
     rows = []
 
