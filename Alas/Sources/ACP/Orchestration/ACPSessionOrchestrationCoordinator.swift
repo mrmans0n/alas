@@ -414,6 +414,15 @@ final class ACPSessionOrchestrationCoordinator {
     /// Idempotent: the outcome id is fixed per child, so repeated calls
     /// update the phase but enqueue nothing new.
     func markChildFailed(childSessionId: String, message: String) async {
+        // The fixed outcome id (`outcome-<childId>-failed`) only dedupes
+        // via INSERT OR IGNORE while the row is still in the inbox — once
+        // the parent's outcome is delivered, the row is deleted and a later
+        // call for the same already-failed child would re-enqueue and wake
+        // the parent a second time for one failure. Read the phase BEFORE
+        // writing it: `.failed` is persisted durably (shared SQLite, not
+        // per-instance memory), so this also closes the gap across
+        // instances, not just repeated calls within one.
+        let alreadyFailed = (try? await environment.persistence.delegation(childSessionId: childSessionId))?.phase == .failed
         try? await environment.persistence.updatePhase(
             childSessionId: childSessionId,
             phase: .failed,
@@ -421,7 +430,9 @@ final class ACPSessionOrchestrationCoordinator {
             updatedAt: environment.now()
         )
         environment.notifyChanged()
-        guard let record = try? await environment.persistence.delegation(childSessionId: childSessionId) else { return }
+        guard !alreadyFailed,
+              let record = try? await environment.persistence.delegation(childSessionId: childSessionId)
+        else { return }
         await enqueueOutcome(.init(
             id: "outcome-\(childSessionId)-failed",
             sourceSessionId: childSessionId,
