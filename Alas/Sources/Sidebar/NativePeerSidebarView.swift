@@ -32,6 +32,10 @@ struct NativePeerSidebarView: View {
     var onAddPeer: (() -> Void)?
     @Environment(\.theme) private var theme
     @State private var expandedPeerIDs: Set<String> = []
+    /// Peer ids this view has already decided an expansion state for. Lets a
+    /// peer that pairs after the section first appears still default open,
+    /// without re-expanding one the user explicitly collapsed earlier.
+    @State private var knownPeerIDs: Set<String> = []
     @State private var collapsedRepoIDs: Set<String> = []
     @State private var headerHovering = false
     @State private var plusHovering = false
@@ -47,9 +51,20 @@ struct NativePeerSidebarView: View {
                 peerGroup(group)
             }
         }
-        .onAppear {
-            expandedPeerIDs.formUnion(client.snapshot.groups.map(\.id))
-        }
+        .onAppear { expandNewPeers() }
+        .onChange(of: client.snapshot.groups.map(\.id)) { expandNewPeers() }
+    }
+
+    /// Default-expands any peer id seen for the first time — covering both
+    /// the section's initial appearance and a peer pairing later — while
+    /// leaving already-known peers' expansion state (including an explicit
+    /// collapse) untouched.
+    private func expandNewPeers() {
+        let currentIDs = Set(client.snapshot.groups.map(\.id))
+        let newIDs = currentIDs.subtracting(knownPeerIDs)
+        guard !newIDs.isEmpty else { return }
+        expandedPeerIDs.formUnion(newIDs)
+        knownPeerIDs.formUnion(newIDs)
     }
 
     private var sectionHeader: some View {
@@ -455,7 +470,20 @@ private struct NativePeerWorktreeRow: View {
                 let hidden = Array(worktree.sessions.dropFirst(visible))
                 Menu {
                     ForEach(hidden, id: \.id) { session in
-                        Button(session.title) { onSelect(session.id) }
+                        Button {
+                            onSelect(session.id)
+                        } label: {
+                            Label {
+                                Text(session.title)
+                            } icon: {
+                                if let agent = AgentKind(rawValue: session.agentId) {
+                                    Image(agent.logoAssetName)
+                                } else {
+                                    Image(systemName: "sparkles")
+                                }
+                            }
+                        }
+                        .badge(Self.overflowBadgeText(for: session).map(Text.init))
                     }
                 } label: {
                     Text("+\(hidden.count)")
@@ -466,6 +494,13 @@ private struct NativePeerWorktreeRow: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
+                // Same aggregate surface `HarnessSessionOverflowBadge` uses
+                // locally, so a hidden session needing attention still shows
+                // through the collapsed chip.
+                .modifier(HarnessSessionBadgeChrome(
+                    surface: Self.overflowSurface(for: hidden),
+                    isSelected: hidden.contains { $0.id == selectedSessionId }
+                ))
                 .accessibilityLabel("\(hidden.count) more sessions")
             }
         }
@@ -474,6 +509,28 @@ private struct NativePeerWorktreeRow: View {
     private var accessibilityLabel: String {
         let detail = NativePeerSessionRowPresentation(row: worktree.primarySession).detail
         return "\(worktree.title), \(detail), \(peerName) peer session"
+    }
+
+    /// The overflow chip's aggregate surface: mixed when the hidden sessions
+    /// span both running and waiting, otherwise whichever of the two they
+    /// share — mirrors `HarnessSessionBadgeSurface.init(sessions:)`.
+    private static func overflowSurface(for sessions: [RemoteSessionSummary]) -> HarnessSessionBadgeSurface {
+        let hasRunning = sessions.contains { $0.status == "streaming" }
+        let hasWaiting = sessions.contains { NativePeerWorktreeGroup.waitingStatuses.contains($0.status) }
+        switch (hasRunning, hasWaiting) {
+        case (true, true): return .mixed
+        case (true, false): return .running
+        case (false, true), (false, false): return .awaiting
+        }
+    }
+
+    /// A hidden session's own badge in the overflow menu, so a waiting
+    /// session doesn't read as indistinguishable from an idle one once it
+    /// falls past the visible-badge limit.
+    private static func overflowBadgeText(for session: RemoteSessionSummary) -> String? {
+        if NativePeerWorktreeGroup.waitingStatuses.contains(session.status) { return "Waiting" }
+        if session.status == "streaming" { return "Running" }
+        return nil
     }
 
     private static func relative(_ seconds: Int64) -> String {
