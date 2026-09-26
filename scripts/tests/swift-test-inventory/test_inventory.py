@@ -191,6 +191,16 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(sorted(plan["shard_seconds"]), [50, 75])
         self.assertEqual(plan["timing_sources"]["suites"], 2)
 
+    def test_split_suite_invocations_share_the_suite_time(self):
+        ids = [f"AlasTests/Slow/t{i}()" for i in range(9)]
+        plan = self.module.make_plan(enumeration(*ids), [
+            ("AlasTests/Slow", "slow-subprocess", "slow", "#23")], 1)
+        self.module.assign_shards(plan, [], {"AlasTests/Slow": 90}, 0)
+        estimates = sorted(seconds for batch in plan["batches"] for seconds in batch["estimated_seconds"])
+        # Four-method chunks of a nine-test, 90 s suite: 10 s per test, not 90 s each.
+        self.assertEqual(estimates, [10, 40, 40])
+        self.assertEqual(sum(plan["shard_seconds"]), 90)
+
     def test_audit_exports_suite_seconds_and_launch_overhead(self):
         plan = self.module.make_plan(enumeration("AlasTests/A/a()", "AlasTests/B/b()"), [], 2)
         self.module.assign_shards(plan, [])

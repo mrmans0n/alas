@@ -213,6 +213,23 @@ def assign_shards(plan, timings, suite_seconds=None, invocation_overhead=0.0):
     unknown = statistics.median(suite_weights.values()) if suite_weights else 10.0
     measured = [seconds for seconds in (suite_seconds or {}).values() if seconds > 0]
     measured_default = statistics.median(measured) if measured else None
+    # A suite may be split across invocations (slow-subprocess method chunks,
+    # partial quarantine), so each invocation gets its share of the suite's
+    # scheduled tests rather than the whole suite's time.
+    scheduled_by_suite = {}
+    for test in set(plan["tests"]) - set(plan["excluded"]):
+        scheduled_by_suite.setdefault(suite_of(test), set()).add(test)
+
+    def estimated_from_suites(selectors):
+        shares = {}
+        for selector in selectors:
+            if selector in scheduled_by_suite:
+                shares[selector] = shares.get(selector, 0) + len(scheduled_by_suite[selector])
+            else:
+                suite = suite_of(selector)
+                shares[suite] = shares.get(suite, 0) + 1
+        return sum(suite_seconds.get(suite, measured_default) * count / max(len(scheduled_by_suite.get(suite, ())), 1)
+                   for suite, count in shares.items()) + invocation_overhead
     sources = dict.fromkeys(("exact", "suite-group", "suites", "estimated") if suite_seconds
                             else ("exact", "suite-group", "estimated"), 0)
     pending = []
@@ -226,8 +243,7 @@ def assign_shards(plan, timings, suite_seconds=None, invocation_overhead=0.0):
             elif group in groups:
                 seconds, source = statistics.median(groups[group]), "suite-group"
             elif measured_default is not None:
-                seconds = sum(suite_seconds.get(suite, measured_default) for suite in group) + invocation_overhead
-                source = "suites"
+                seconds, source = estimated_from_suites(selectors), "suites"
             else:
                 seconds = sum(suite_weights.get(suite, unknown) for suite in group)
                 source = "estimated"
