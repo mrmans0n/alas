@@ -151,18 +151,19 @@ struct NextPromptInferenceTests {
         await inference.cancelAndUnload()
     }
 
-    @Test func longSessionsUseBoundedFallbackCandidates() async throws {
+    @Test(arguments: [1, 9, 10, 11, 19, 256])
+    func fallbackCandidateCountIsBounded(turnCount: Int) async throws {
         let engine = CountingNextPromptEngine()
         let inference = NextPromptInference(engine: engine, verifyAvailability: {})
-        let longRequest = NextPromptRequest(
+
+        let request = NextPromptRequest(
             id: .init(sessionID: "test", incarnation: UUID(), promptID: 1, transcriptRevision: 1,
                       draftRevision: 0, composerEpoch: 0, settingsGeneration: 0, modelGeneration: 0),
-            turns: (0..<256).map { .init(user: "Question \($0)", assistant: "Answer \($0)") }
+            turns: (0..<turnCount).map { .init(user: "Question \($0)", assistant: "Answer \($0)") }
         )
 
-        #expect(try await inference.generate(longRequest) == "Show an example.")
-        let candidateCount = await engine.candidateCount
-        #expect(candidateCount > 1 && candidateCount <= 10)
+        #expect(try await inference.generate(request) == "Show an example.")
+        #expect(await engine.candidateCount == min(10, turnCount))
         await inference.cancelAndUnload()
     }
 
