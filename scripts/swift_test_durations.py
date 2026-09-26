@@ -12,10 +12,9 @@ only for that run, then point this script at it:
 
 It reads every `*.xcresult` bundle under that directory with
 `xcrun xcresulttool`, writes one TSV row per test case, and prints how test
-time is distributed. Invocation names are unique within one run, so a repeated
-name means bundles from several runs were mixed and the script refuses to
-continue. It also refuses bundles whose invocation report shows missing tests,
-a timeout, or an extraction error, because those totals would be understated.
+time is distributed. It refuses to continue unless every bundle has a runner
+report marking its invocation successful and all reports share one plan ID,
+because mixed or partial runs would distort the totals.
 """
 
 import argparse
@@ -36,13 +35,15 @@ def require_complete(bundle):
     if not report_path.exists():
         sys.exit(f"missing {report_path.name}; cannot confirm {bundle.name} is complete")
     report = json.loads(report_path.read_text())
-    if report.get("missing") or report.get("exit_status") == 124 or report.get("error"):
-        sys.exit(f"{bundle.name} is incomplete (missing tests, timeout, or extraction error); "
-                 "use the result artifacts of a run whose invocations all finished")
+    # The runner writes `ok: false` before an invocation starts and only flips
+    # it after the bundle is fully accounted, so anything else is partial.
+    if report.get("ok") is not True:
+        sys.exit(f"{bundle.name} did not finish successfully; "
+                 "use the result artifacts of a run whose invocations all passed")
+    return report.get("plan_id")
 
 
 def collect(bundle):
-    require_complete(bundle)
     proc = subprocess.run(
         ["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", str(bundle)],
         capture_output=True,
@@ -88,7 +89,13 @@ def main():
             sys.exit(f"invocation {bundle.stem} appears twice ({seen[bundle.stem]} and {bundle}); "
                      "point the script at a directory holding a single run")
         seen[bundle.stem] = bundle
-    rows = [row for bundle in bundles for row in collect(bundle)]
+    # Shards of different runs have complementary invocation names, so the
+    # runner's plan ID is what proves every bundle came from one run.
+    plans = {require_complete(bundle) for bundle in bundles}
+    if len(plans) > 1 or None in plans:
+        sys.exit(f"bundles come from {len(plans)} different CI plans; "
+                 "point the script at a directory holding a single run")
+    rows =[row for bundle in bundles for row in collect(bundle)]
     if not rows:
         sys.exit("no test cases found")
 
