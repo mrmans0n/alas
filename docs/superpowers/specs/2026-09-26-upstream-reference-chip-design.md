@@ -61,8 +61,10 @@ The chip repaints in place when metadata arrives.
 
 Header: kind icon (PR or issue glyph, tinted by kind), the reference
 spelling, and a state badge. States are Open, Draft, Merged, and Closed.
-Badge colors follow `GGStackChipModel`'s palette: open uses `add`, draft
-uses `fg-muted`, merged uses `accent`, and closed uses `del`.
+Badge colors are system colors, because an `NSPopover`'s hosting
+controller does not inherit the app's theme environment: open is
+`systemGreen`, draft is `systemGray`, merged is `systemPurple`, and
+closed is `systemRed`.
 
 Body: the title, up to three lines. Then a muted line with the author,
 a middle dot, and a relative time such as "opened 4 days ago",
@@ -85,7 +87,7 @@ ACP composer / transcript
         │
         ▼
 ACPUpstreamReferenceDetector      pure scanning, host-aware
-        │  ranges + ACPUpstreamReference
+        │  ranges + CodeHostReference
         ▼
 ACPUpstreamReferenceChipAttachment + cell   drawing, tinted by resolved kind
         │  hover / ⌘-click
@@ -101,10 +103,10 @@ gh api / glab api
 
 ### Units
 
-**`ACPUpstreamReference`** (value type, new)
+**`CodeHostReference`** (value type, new, in `Integrations/CodeHost`; provider-layer types carry code-host names so that layer never depends on ACP)
 
 ```swift
-struct ACPUpstreamReference: Hashable, Sendable {
+struct CodeHostReference: Hashable, Sendable {
     enum Sigil: Character { case hash = "#", bang = "!" }
     let sigil: Sigil
     let number: Int
@@ -114,7 +116,7 @@ struct ACPUpstreamReference: Hashable, Sendable {
 
 **`ACPUpstreamReferenceDetector`** (new, pure, no AppKit)
 
-- `static func references(in text: String, host: CodeHostKind) -> [(range: NSRange, reference: ACPUpstreamReference)]`
+- `static func references(in text: String, host: CodeHostKind) -> [(range: NSRange, reference: CodeHostReference)]`
   scans the whole string.
 - `static func chipTarget(completingWith:at:in:host:)` is the per-keystroke
   check, mirroring `ACPLeadingCommand.chipTarget(completingWith:...)`.
@@ -156,9 +158,10 @@ struct ACPUpstreamReference: Hashable, Sendable {
   `ACPSessionManager.upstreamReferenceStore(forWorktreeRoot:)` creates
   them lazily and keeps them in a dictionary keyed by the standardized
   path.
-- `ACPTabView` already has both `manager` and `worktree.path`. It passes
-  the store to `ACPComposer` as an init parameter and to
-  `ACPTranscriptScroller` as a property.
+- The composer shell already holds `manager` and `worktreeRoot`, so it
+  looks the store up itself and hands it to `ACPInputField`. `ACPTabView`
+  has `manager` and `worktree.path`, and passes the store through
+  `ACPMessageList` to `ACPTranscriptScroller` as a property.
 - Transcript rows live in pooled `NSHostingView`s that do not inherit
   SwiftUI environment. So `ACPTranscriptScroller`'s `wrapRow` re-injects
   the store through a new `\.upstreamReferenceStore` environment key,
@@ -169,9 +172,9 @@ struct ACPUpstreamReference: Hashable, Sendable {
   steps as `IssueSuggestionLoader`: git remotes, then
   `CodeHostRemoteDetector.detect(from:supportedKinds:preferredRemoteName:)`.
   Publishes `remote: CodeHostRemote?` and `remoteResolved: Bool`.
-- `func state(for reference: ACPUpstreamReference) -> Entry`, where
-  `Entry` is `.idle`, `.loading`, `.loaded(ACPUpstreamReferenceSummary)`,
-  or `.failed(ACPUpstreamReferenceFailure)`.
+- `func entry(for reference: CodeHostReference) -> Entry`, where
+  `Entry` is `.idle`, `.loading`, `.loaded(CodeHostReferenceSummary)`,
+  or `.failed(CodeHostReferenceFailure)`.
 - `func ensureLoaded(_ reference:)` fetches if idle, or if loaded and older
   than 5 minutes. Concurrent calls for the same reference share one task.
 - `@Published private(set) var revision: UInt64` bumps on every entry
@@ -180,10 +183,10 @@ struct ACPUpstreamReference: Hashable, Sendable {
   the same way `IssueSuggestionLoader.Environment` does, so tests use
   stubs.
 
-**`ACPUpstreamReferenceSummary`** (value type, new)
+**`CodeHostReferenceSummary`** (value type, new)
 
 ```swift
-struct ACPUpstreamReferenceSummary: Equatable, Sendable {
+struct CodeHostReferenceSummary: Equatable, Sendable {
     enum Kind: Equatable, Sendable { case reviewRequest, issue }
     enum State: Equatable, Sendable { case open, draft, merged, closed }
     let kind: Kind
@@ -199,7 +202,7 @@ struct ACPUpstreamReferenceSummary: Equatable, Sendable {
 }
 ```
 
-**`ACPUpstreamReferenceFailure`**: `.notFound`, `.unauthenticated(host)`,
+**`CodeHostReferenceFailure`**: `.notFound`, `.unauthenticated(host)`,
 `.cliMissing(executable)`, `.other(String)`. Mapped from
 `CodeHostProviderError`. A 404 from the CLI maps to `.notFound`.
 
@@ -210,23 +213,23 @@ Added to `CodeHostProvider`:
 ```swift
 func referenceSummary(
     remote: CodeHostRemote,
-    reference: ACPUpstreamReference,
+    reference: CodeHostReference,
     cwd: URL
-) async throws -> ACPUpstreamReferenceSummary
+) async throws -> CodeHostReferenceSummary
 ```
 
 The protocol extension default throws `.unsupportedProvider`, so test
 doubles and other conformers keep compiling.
 
-- **GitHub** (`GitHubCLIProvider`):
-  1. `gh api --hostname <host> repos/<slug>/issues/<N>`. This endpoint
-     returns both issues and PRs. A `pull_request` key marks a PR.
-     Title, state, `user.login`, `created_at`, `updated_at`, `closed_at`,
-     and `html_url` come from here.
-  2. Only if it is a PR: `gh api --hostname <host> repos/<slug>/pulls/<N>`
-     for `draft` and `merged_at`.
-  Mapping: `merged_at != nil` → merged, `draft` → draft, `state == "closed"`
-  → closed, otherwise open.
+- **GitHub** (`GitHubCLIProvider`): one call,
+  `gh api --hostname <host> repos/<slug>/issues/<N>`. This endpoint
+  returns both issues and PRs. For a PR it includes a `pull_request`
+  object carrying `merged_at`, and a top-level `draft` flag (verified
+  against #1497 on 2026-09-26). Title, state, `user.login`,
+  `created_at`, `updated_at`, `closed_at`, and `html_url` come from the
+  same response.
+  Mapping: `pull_request.merged_at != nil` → merged, `draft == true` →
+  draft, `state == "closed"` → closed, otherwise open.
 - **GitLab** (`GitLabCLIProvider`):
   - `!N`: `glab api projects/<url-encoded slug>/merge_requests/<N>`.
   - `#N`: `glab api projects/<url-encoded slug>/issues/<N>`.
@@ -356,6 +359,30 @@ New test files require `xcodegen` before they run.
   edit. It must use the same non-undoable or grouped path the command
   pill uses after paste, or it will hit the `NSUndoManager` crash noted
   in `ACPLeadingCommand.chipTarget(completingWith:)`.
-- **GitHub rate limits.** One or two REST calls per unique reference,
+- **GitHub rate limits.** One REST call per unique reference,
   cached for 5 minutes, fetched only on chip creation and hover. This is
   well below `gh`'s authenticated limits.
+
+## Planning notes
+
+Reading the code during planning changed these details. The plan
+(`docs/superpowers/plans/2026-09-26-upstream-reference-chip.md`) is
+authoritative where it differs from the sections above.
+
+- **Image attachment, not a cell.** The chip is an `NSTextAttachment` whose
+  image has a lazy drawing handler (`cacheMode = .never`). Cells only
+  render under TextKit 1, and transcript paragraphs are TextKit 2 views.
+  The handler reads the resolved kind on every draw, so a redisplay
+  repaints the tint.
+- **Chips form on whitespace only.** Intercepting punctuation would bypass
+  the composer's delimiter pairing and could double an auto-inserted `)`.
+  Punctuation typed between the digits and the space is carried over as
+  text after the chip.
+- **Registry name.** The per-worktree stores live in
+  `ACPSessionManager.upstreamReferences.store(for:)`.
+- **Transcript wiring.** There is no hook parameter on `ACPMarkdownText`.
+  `ACPUserMessageText` sets an `acpUpstreamReferenceChipping` environment
+  value, and `ACPMarkdownInlineTextView` reads it. Agent messages never set
+  it. The value is part of the inline view's render state, and chipping
+  runs on the fresh copy the renderer returns, so the memoized markdown
+  cache is never mutated.
