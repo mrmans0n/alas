@@ -211,6 +211,11 @@ private struct ACPSessionView: View {
                     agentLookup: { state.agent(id: $0) },
                     state: state,
                     worktree: worktree,
+                    sessionSummaryCoordinator: state.sessionSummaryCoordinator,
+                    sessionSummariesEnabled: state.sessionSummariesRuntimeEnabled,
+                    localTextSupported: state.localTextSupported,
+                    localTextModelState: state.localTextModelState,
+                    sessionSummaryIdle: sessionSummaryIdle,
                     owner: owner,
                     onOpenPreview: onOpenPreview
                 )
@@ -241,6 +246,12 @@ private struct ACPSessionView: View {
                 newFirstRunConnecting: newValue,
                 composerReady: composerCanAcceptInput
             )
+        }
+        .onAppear {
+            state.sessionSummaryCoordinator.bind(to: session)
+        }
+        .onChange(of: session.incarnation) {
+            state.sessionSummaryCoordinator.bind(to: session)
         }
         .task(id: sessionId) {
             await hydrateAndAttach()
@@ -284,6 +295,10 @@ private struct ACPSessionView: View {
         if session.lastError != nil { return false }
         if session.agentState == .disconnected { return false }
         return session.transcript.messages.isEmpty
+    }
+
+    private var sessionSummaryIdle: Bool {
+        SessionSummaryContext.snapshot(session: session)?.revision.idleFacts.isIdle == true
     }
 
     private var firstRunConnectingPhase: ACPFirstRunConnectingPhase? {
