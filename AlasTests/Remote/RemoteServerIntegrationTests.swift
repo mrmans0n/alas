@@ -1400,7 +1400,11 @@ struct RemoteServerIntegrationTests {
                     break
                 }
             }
-            queue.asyncAfter(deadline: .now() + 2) {
+            // 2s wasn't always enough for real loopback connection setup on a
+            // loaded CI runner — this file's tests have been observed timing
+            // out here under the same cooperative-pool contention that hits
+            // NextPromptSettingsTests' in-process waits.
+            queue.asyncAfter(deadline: .now() + 10) {
                 completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
             }
             conn.start(queue: queue)
@@ -1421,7 +1425,7 @@ struct RemoteServerIntegrationTests {
 
     private func receiveHTTPResponse(from conn: NWConnection,
                                      on queue: DispatchQueue,
-                                     timeout: TimeInterval = 2) async throws -> Data {
+                                     timeout: TimeInterval = 10) async throws -> Data {
         return try await withCheckedThrowingContinuation { continuation in
             let completion = Completion<Data>()
             let accumulator = DataAccumulator()
@@ -1482,7 +1486,7 @@ struct RemoteServerIntegrationTests {
 
     private func waitForConnectionClose(from conn: NWConnection,
                                         on queue: DispatchQueue,
-                                        timeout: TimeInterval = 2) async throws {
+                                        timeout: TimeInterval = 10) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let completion = Completion<Void>()
 
