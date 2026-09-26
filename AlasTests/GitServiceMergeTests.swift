@@ -4,15 +4,91 @@ import Foundation
 
 @Suite(.serialized)
 struct GitServiceMergeTests {
-    fileprivate static func makeRepo() async throws -> URL {
+    /// Real repositories built once per test process and copied per test, so
+    /// each test starts from the same state the old per-test init/config
+    /// (+ commit) sequence produced without re-spawning those git processes.
+    /// Each template builds on the previous one:
+    /// - `emptyRepoTemplate`: configured `main`, no commits.
+    /// - `baseRepoTemplate`: plus a `base` commit adding `a.txt` ("base\n").
+    /// - `conflictingRepoTemplate`: plus `feature` and `main` tips that both
+    ///   modify the same line of `a.txt`, with `main` checked out.
+    private static let emptyRepoTemplate = Task { try await makeEmptyRepoTemplate() }
+    private static let baseRepoTemplate = Task { try await makeBaseRepoTemplate() }
+    private static let conflictingRepoTemplate = Task { try await makeConflictingRepoTemplate() }
+
+    @discardableResult
+    private static func checkedGit(_ args: [String], cwd: URL) async throws -> String {
+        let result = try await Process.git(args, cwd: cwd)
+        guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func templateDirectory() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-merge-template-\(UUID().uuidString)")
+    }
+
+    private static func makeEmptyRepoTemplate() async throws -> URL {
+        let dir = templateDirectory()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try await checkedGit(["init", "-q", "-b", "main"], cwd: dir)
+        try await checkedGit(["config", "user.email", "t@e"], cwd: dir)
+        try await checkedGit(["config", "user.name", "t"], cwd: dir)
+        try await checkedGit(["config", "commit.gpgsign", "false"], cwd: dir)
+        return dir
+    }
+
+    private static func makeBaseRepoTemplate() async throws -> URL {
+        let dir = templateDirectory()
+        try FileManager.default.copyItem(at: try await emptyRepoTemplate.value, to: dir)
+        try writeFile(dir, "a.txt", "base\n")
+        try await checkedGit(["add", "a.txt"], cwd: dir)
+        try await checkedGit(["commit", "-q", "-m", "base"], cwd: dir)
+        return dir
+    }
+
+    private static func makeConflictingRepoTemplate() async throws -> URL {
+        let dir = templateDirectory()
+        try FileManager.default.copyItem(at: try await baseRepoTemplate.value, to: dir)
+        try await checkedGit(["update-index", "-q", "--refresh"], cwd: dir)
+        try await checkedGit(["checkout", "-q", "-b", "feature"], cwd: dir)
+        try writeFile(dir, "a.txt", "feature change\n")
+        try await checkedGit(["commit", "-q", "-am", "feature change"], cwd: dir)
+        try await checkedGit(["checkout", "-q", "main"], cwd: dir)
+        try writeFile(dir, "a.txt", "main change\n")
+        try await checkedGit(["commit", "-q", "-am", "main change"], cwd: dir)
+        return dir
+    }
+
+    private static func copy(_ template: Task<URL, any Error>) async throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-merge-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: dir)
-        _ = try await Process.git(["config", "user.email", "t@e"], cwd: dir)
-        _ = try await Process.git(["config", "user.name", "t"], cwd: dir)
-        _ = try await Process.git(["config", "commit.gpgsign", "false"], cwd: dir)
+        try FileManager.default.copyItem(at: try await template.value, to: dir)
         return dir
+    }
+
+    /// A configured repo on `main` with no commits.
+    fileprivate static func makeRepo() async throws -> URL {
+        try await copy(emptyRepoTemplate)
+    }
+
+    /// A configured repo whose only commit is `base`, adding `a.txt`
+    /// ("base\n").
+    fileprivate static func makeBaseRepo() async throws -> URL {
+        let repo = try await copy(baseRepoTemplate)
+        // Copied files get new inodes and ctimes; refresh the index's stat
+        // cache so the copy matches a freshly committed repo.
+        try await checkedGit(["update-index", "-q", "--refresh"], cwd: repo)
+        return repo
+    }
+
+    /// Two branches `main` and `feature` whose tips both modify the same line
+    /// of `a.txt` ("main change\n" vs "feature change\n" over "base\n"), so a
+    /// merge will produce a conflict. `main` is checked out.
+    fileprivate static func makeConflictingRepo() async throws -> URL {
+        let repo = try await copy(conflictingRepoTemplate)
+        try await checkedGit(["update-index", "-q", "--refresh"], cwd: repo)
+        return repo
     }
 
     fileprivate static func writeFile(_ repo: URL, _ name: String, _ contents: String) throws {
@@ -23,26 +99,9 @@ struct GitServiceMergeTests {
         )
     }
 
-    /// Creates two branches `main` and `feature` whose tips both modify the
-    /// same line of `a.txt`, so a merge will produce a conflict.
-    fileprivate static func makeConflictingBranches(_ repo: URL) async throws {
-        try writeFile(repo, "a.txt", "base\n")
-        _ = try await Process.git(["add", "a.txt"], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
-        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
-        try writeFile(repo, "a.txt", "feature change\n")
-        _ = try await Process.git(["commit", "-q", "-am", "feature change"], cwd: repo)
-        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
-        try writeFile(repo, "a.txt", "main change\n")
-        _ = try await Process.git(["commit", "-q", "-am", "main change"], cwd: repo)
-    }
-
     @Test func mergeStateIsNilWhenNothingInProgress() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeBaseRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try Self.writeFile(repo, "a.txt", "hi\n")
-        _ = try await Process.git(["add", "a.txt"], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
 
         let svc = GitService()
         let state = try await svc.mergeState(worktreePath: repo)
@@ -50,9 +109,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func mergeStateDetectsMergeInProgress() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeConflictingRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
 
         // Trigger a conflicting merge (exit code non-zero, MERGE_HEAD set).
         _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
@@ -67,9 +125,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func mergeStateDetectsRebaseInProgress() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeConflictingRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
 
         _ = try await Process.git(["checkout", "-q", "feature"], cwd: repo)
         _ = try await Process.git(["rebase", "main"], cwd: repo)
@@ -84,9 +141,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func mergeStateDetectsCherryPickInProgress() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeConflictingRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
 
         // Cherry-pick feature's tip onto main → conflict, CHERRY_PICK_HEAD set.
         let featureSha = try await Process.git(["rev-parse", "feature"], cwd: repo).stdout
@@ -103,12 +159,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func mergeStateDetectsRevertInProgress() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeBaseRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-
-        try Self.writeFile(repo, "a.txt", "base\n")
-        _ = try await Process.git(["add", "a.txt"], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
         try Self.writeFile(repo, "a.txt", "target\n")
         _ = try await Process.git(["commit", "-q", "-am", "target change"], cwd: repo)
         let targetSha = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout
@@ -128,9 +180,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func conflictedFileReadsAllThreeSides() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeConflictingRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
         _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
 
         let svc = GitService()
@@ -167,11 +218,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func mergeReturnsCleanWhenNoConflict() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeBaseRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try Self.writeFile(repo, "a.txt", "base\n")
-        _ = try await Process.git(["add", "a.txt"], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
         _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
         try Self.writeFile(repo, "b.txt", "new\n")
         _ = try await Process.git(["add", "b.txt"], cwd: repo)
@@ -184,9 +232,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func mergeReturnsConflictWhenConflicting() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeConflictingRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
 
         let svc = GitService()
         let result = try await svc.merge(worktreePath: repo, branch: "feature")
@@ -198,9 +245,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func mergeWritesZdiff3MarkersWithBaseSection() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeConflictingRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
         let svc = GitService()
         _ = try await svc.merge(worktreePath: repo, branch: "feature")
         let merged = try String(contentsOf: repo.appendingPathComponent("a.txt"), encoding: .utf8)
@@ -208,9 +254,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func rebaseReturnsConflictOnConflict() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeConflictingRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
         _ = try await Process.git(["checkout", "-q", "feature"], cwd: repo)
 
         let svc = GitService()
@@ -223,9 +268,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func cherryPickReturnsConflictOnConflict() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeConflictingRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
         let featureSha = try await Process.git(["rev-parse", "feature"], cwd: repo).stdout
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -238,9 +282,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func markResolvedStagesFile() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeConflictingRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
         let svc = GitService()
         _ = try await svc.merge(worktreePath: repo, branch: "feature")
 
@@ -258,9 +301,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func continueMergeCommitsAndClearsState() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeConflictingRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
         let svc = GitService()
         _ = try await svc.merge(worktreePath: repo, branch: "feature")
         try Self.writeFile(repo, "a.txt", "main change\n")
@@ -277,9 +319,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func useOursAcceptsHeadContent() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeConflictingRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
         let svc = GitService()
         _ = try await svc.merge(worktreePath: repo, branch: "feature")
 
@@ -289,9 +330,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func useTheirsAcceptsIncomingContent() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeConflictingRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
         let svc = GitService()
         _ = try await svc.merge(worktreePath: repo, branch: "feature")
 
@@ -301,9 +341,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func abortMergeRestoresHead() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeConflictingRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
         let svc = GitService()
         let headBefore = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -322,9 +361,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func mergeStateDetectsRebaseApplyInProgress() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeConflictingRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
 
         _ = try await Process.git(["checkout", "-q", "feature"], cwd: repo)
         _ = try await Process.git(["-c", "rebase.backend=apply", "rebase", "main"], cwd: repo)
@@ -344,11 +382,8 @@ struct GitServiceMergeTests {
         // `rebasing` sentinel is present but `last` is missing/empty, so the
         // commit count is unknown. `mergeState` must not crash — it should
         // return .rebase with an empty plan instead.
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeBaseRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try Self.writeFile(repo, "a.txt", "x\n")
-        _ = try await Process.git(["add", "a.txt"], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
 
         let applyDir = repo.appendingPathComponent(".git/rebase-apply")
         try FileManager.default.createDirectory(at: applyDir, withIntermediateDirectories: true)
@@ -369,11 +404,8 @@ struct GitServiceMergeTests {
         // sentinel instead of `rebasing`. We must not classify it as a rebase
         // (the UI would otherwise drive `rebase --continue/--abort`, which
         // errors with "It looks like 'git am' is in progress").
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeBaseRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try Self.writeFile(repo, "a.txt", "base\n")
-        _ = try await Process.git(["add", "a.txt"], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
 
         // Create a patch that conflicts with the current worktree so `git am`
         // pauses with `.git/rebase-apply/` populated and the `applying` sentinel.
@@ -416,12 +448,9 @@ struct GitServiceMergeTests {
     }
 
     @Test func cherryPickMergeCommitUsesFirstParentMainline() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeBaseRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
         // Build a merge commit on `feature`, then try to cherry-pick it onto `main`.
-        try Self.writeFile(repo, "a.txt", "base\n")
-        _ = try await Process.git(["add", "a.txt"], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
         _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
         try Self.writeFile(repo, "b.txt", "from-feature\n")
         _ = try await Process.git(["add", "b.txt"], cwd: repo)
@@ -448,11 +477,8 @@ struct GitServiceMergeTests {
     }
 
     @Test func keepDeletedRemovesFileAndStages() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.makeBaseRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        try Self.writeFile(repo, "a.txt", "base\n")
-        _ = try await Process.git(["add", "a.txt"], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
         _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
         try Self.writeFile(repo, "a.txt", "feature modification\n")
         _ = try await Process.git(["commit", "-q", "-am", "feature"], cwd: repo)

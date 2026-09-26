@@ -440,14 +440,17 @@ struct AppStateWorktreeCleanupBatchTests {
         _ = try await Process.git(["add", "tracked.txt"], cwd: target.path)
         _ = try await Process.git(["commit", "-q", "-m", "track file"], cwd: target.path)
 
+        // Writing HEAD's bytes back leaves the disk exactly as
+        // `git restore --worktree --source=HEAD` would, without a process:
+        // only the staged content differs between the two fingerprints.
         try "staged one".write(to: tracked, atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "tracked.txt"], cwd: target.path)
-        _ = try await Process.git(["restore", "--worktree", "--source=HEAD", "tracked.txt"], cwd: target.path)
+        try "base".write(to: tracked, atomically: true, encoding: .utf8)
         let firstFingerprint = try await AppState.worktreeDeleteContentFingerprint(worktreePath: target.path)
 
         try "staged two".write(to: tracked, atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "tracked.txt"], cwd: target.path)
-        _ = try await Process.git(["restore", "--worktree", "--source=HEAD", "tracked.txt"], cwd: target.path)
+        try "base".write(to: tracked, atomically: true, encoding: .utf8)
         let secondFingerprint = try await AppState.worktreeDeleteContentFingerprint(worktreePath: target.path)
 
         #expect(secondFingerprint != firstFingerprint)
