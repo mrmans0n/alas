@@ -1530,6 +1530,7 @@
 		B9F75C605157BA01FD10DEE5 /* AppKitDiffRowSpec.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4E9E696C1C8F5817524752F /* AppKitDiffRowSpec.swift */; };
 		BA5D8E327F37D4C84CC80F95 /* CommitPublishModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADC9DC3DFC2DB5006B624937 /* CommitPublishModelsTests.swift */; };
 		BA8A7E107C06C3F9060CE9CA /* WorktreeDirtyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F67FE50E02553ACB2CAC09F /* WorktreeDirtyState.swift */; };
+		BA8E6FE8E05502E2E34B7712 /* CheckpointGitSpawnBudgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8984A9D7C1389126F7FF7E7A /* CheckpointGitSpawnBudgetTests.swift */; };
 		BACDEEE3791E66405294B328 /* ACPFirstRunConnectingPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6EDDD4D22267C26B496A6FF /* ACPFirstRunConnectingPolicyTests.swift */; };
 		BAD5C180E5A68BBEDCDEFE49 /* AgentAvailabilityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 859A1B0683EF1E8078D93411 /* AgentAvailabilityStore.swift */; };
 		BAE4D422FC3950E61FEE1D15 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA43AA9C8462D579E733B46C /* AppIntents.framework */; };
@@ -3238,6 +3239,7 @@
 		891F41FC31EBA0281D9063CC /* RepoHookApprovalQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoHookApprovalQueue.swift; sourceTree = "<group>"; };
 		8942D0F47DBCFFB3549EE775 /* ShortcutReservations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutReservations.swift; sourceTree = "<group>"; };
 		89441B078E6782A1395A34CB /* AppStateRunRecordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateRunRecordTests.swift; sourceTree = "<group>"; };
+		8984A9D7C1389126F7FF7E7A /* CheckpointGitSpawnBudgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointGitSpawnBudgetTests.swift; sourceTree = "<group>"; };
 		89B23F35BE6FD53B74DD84ED /* ZmxSessionName.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZmxSessionName.swift; sourceTree = "<group>"; };
 		89B2725002A4349D9E5D1432 /* AppKitDiffTilingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitDiffTilingController.swift; sourceTree = "<group>"; };
 		89C39470869F27DF2062567D /* NativePeerSidebarSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePeerSidebarSnapshotTests.swift; sourceTree = "<group>"; };
@@ -7191,6 +7193,7 @@
 				38CB485BA93482126CCAA211 /* CheckpointDiffLoaderTests.swift */,
 				166844386117E6A01FDE589E /* CheckpointDiffTabTests.swift */,
 				2342E857ED037E8FF8024BAE /* CheckpointFileSystemTests.swift */,
+				8984A9D7C1389126F7FF7E7A /* CheckpointGitSpawnBudgetTests.swift */,
 				BDCDFEB92EF701A089548A02 /* CheckpointModelTests.swift */,
 				44ABA5347FCD98CABBFE47DE /* CheckpointPresentationTests.swift */,
 				51B81A3BC3C4B5A08A9B8291 /* CheckpointRestoreIntegrationTests.swift */,
@@ -9314,6 +9317,7 @@
 				CFC115C9F16F0ADF90034C4F /* CheckpointDiffLoaderTests.swift in Sources */,
 				E2E444F9EBD231652F7F047C /* CheckpointDiffTabTests.swift in Sources */,
 				F9B7BD2F0A73C31B97E712CB /* CheckpointFileSystemTests.swift in Sources */,
+				BA8E6FE8E05502E2E34B7712 /* CheckpointGitSpawnBudgetTests.swift in Sources */,
 				E48489F352E8AD513310DF2B /* CheckpointModelTests.swift in Sources */,
 				E25FF1C0DD04577A7FE780EF /* CheckpointPresentationTests.swift in Sources */,
 				DB1E6FF32CA24F2F3A386C89 /* CheckpointRestoreIntegrationTests.swift in Sources */,

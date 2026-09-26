@@ -98,17 +98,14 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         if let saved, saved.headOID != head {
             return blocked(.changedHEAD, label: saved.label)
         }
-        for marker in ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"] {
-            let path = try await previewGit(["rev-parse", "--path-format=absolute", "--git-path", marker], target: target)
-            if FileManager.default.fileExists(atPath: path.trimmingCharacters(in: .newlines)) {
-                return blocked(.gitOperation, label: saved?.label ?? "Checkpoint")
-            }
+        let gitPaths = try await CheckpointGitPaths.resolve(git: snapshotter.git, cwd: target.path)
+        for marker in gitPaths.operationMarkers where FileManager.default.fileExists(atPath: marker.path) {
+            return blocked(.gitOperation, label: saved?.label ?? "Checkpoint")
         }
         if try await !previewGit(["ls-files", "--unmerged", "-z"], target: target).isEmpty {
             return blocked(.gitOperation, label: saved?.label ?? "Checkpoint")
         }
-        let lockPath = try await previewGit(["rev-parse", "--path-format=absolute", "--git-path", "index.lock"], target: target)
-        if FileManager.default.fileExists(atPath: lockPath.trimmingCharacters(in: .newlines)) {
+        if FileManager.default.fileExists(atPath: gitPaths.indexLock.path) {
             return blocked(.indexLock, label: saved?.label ?? "Checkpoint")
         }
         guard let saved else {
@@ -121,7 +118,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         do { _ = try await store.load(id: id, lineageID: target.lineageID) }
         catch { blockers.insert(.corruptCheckpoint) }
         let current = try await snapshotter.snapshot(target: target, includingPaths: Set(saved.paths.map(\.relativePath)),
-                                                     retainingPayloads: false)
+                                                     retainingPayloads: false, gitPaths: gitPaths)
         return try .make(manifest: saved, current: current, coordination: coordination, selectedGroupIDs: selectedGroupIDs, blockers: blockers)
     }
 
@@ -538,11 +535,11 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     }
 
     private func previewHeadOID(target: CheckpointWorktreeTarget) async throws -> String {
-        let result = try await LiveCheckpointGitRunner().run(["rev-parse", "--verify", "HEAD"], cwd: target.path, environment: [:])
+        let result = try await snapshotter.git.run(["rev-parse", "--verify", "HEAD"], cwd: target.path, environment: [:])
         if result.exitCode == 0 { return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) }
-        let unborn = try await LiveCheckpointGitRunner().run(["rev-parse", "--verify", "--quiet", "HEAD"], cwd: target.path, environment: [:])
+        let unborn = try await snapshotter.git.run(["rev-parse", "--verify", "--quiet", "HEAD"], cwd: target.path, environment: [:])
         guard unborn.exitCode == 1 else { throw CheckpointRestoreError.invalidGitOutput }
-        let empty = try await LiveCheckpointGitRunner().run(["hash-object", "-t", "tree", "/dev/null"], cwd: target.path, environment: [:])
+        let empty = try await snapshotter.git.run(["hash-object", "-t", "tree", "/dev/null"], cwd: target.path, environment: [:])
         guard empty.exitCode == 0 else { throw CheckpointRestoreError.invalidGitOutput }
         return empty.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
