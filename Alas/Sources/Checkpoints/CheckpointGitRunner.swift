@@ -15,6 +15,33 @@ extension CheckpointGitRunning {
     }
 }
 
+/// Git-dir paths one checkpoint operation reads, resolved by a single
+/// `rev-parse`. Only the path strings are shared; callers still check each
+/// file on disk where the check happens today.
+struct CheckpointGitPaths: Equatable, Sendable {
+    static let operationMarkerNames = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"]
+
+    let index: URL
+    let indexLock: URL
+    /// In `operationMarkerNames` order.
+    let operationMarkers: [URL]
+
+    static func resolve(git: any CheckpointGitRunning, cwd: URL) async throws -> Self {
+        let names = ["index", "index.lock"] + operationMarkerNames
+        let result = try await git.run(["rev-parse", "--path-format=absolute"] + names.flatMap { ["--git-path", $0] },
+                                       cwd: cwd, environment: [:])
+        guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        var output = result.stdout
+        if output.hasSuffix("\n") { output.removeLast() }
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count == names.count, !lines.contains(where: { $0.isEmpty }) else {
+            throw CheckpointSnapshotError.invalidGitOutput
+        }
+        let urls = lines.map { URL(fileURLWithPath: String($0)) }
+        return .init(index: urls[0], indexLock: urls[1], operationMarkers: Array(urls[2...]))
+    }
+}
+
 struct LiveCheckpointGitRunner: CheckpointGitRunning {
     func run(_ args: [String], cwd: URL, environment: [String: String] = [:]) async throws -> ProcessResult {
         let invocation = try invocation(args, cwd: cwd)

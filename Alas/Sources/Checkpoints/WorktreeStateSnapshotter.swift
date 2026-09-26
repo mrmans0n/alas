@@ -72,7 +72,7 @@ struct WorktreeStateSnapshotter: Sendable {
 
     func snapshot(target: CheckpointWorktreeTarget, includingPaths: Set<String> = [],
                   ignoringRestoreOperation: UUID? = nil, onlyIncludedPaths: Bool = false,
-                  retainingPayloads: Bool = true) async throws -> WorktreeStateSnapshot {
+                  retainingPayloads: Bool = true, gitPaths: CheckpointGitPaths? = nil) async throws -> WorktreeStateSnapshot {
         guard !target.path.isRemoteAlasPath else { throw CheckpointSnapshotError.remoteTarget }
         try validateLineage(target)
         let head = try await headOID(target)
@@ -81,7 +81,10 @@ struct WorktreeStateSnapshotter: Sendable {
             throw ProcessError.nonZeroExit(branchResult.exitCode, branchResult.stderr)
         }
         let branch = branchResult.exitCode == 1 ? "(detached)" : try line(branchResult.stdout)
-        let indexChecksum = try await checksum(target)
+        let indexPath: URL
+        if let gitPaths { indexPath = gitPaths.index }
+        else { indexPath = try await CheckpointGitPaths.resolve(git: git, cwd: target.path).index }
+        let indexChecksum = try checksum(indexPath)
         let status = try await data(["status", "--porcelain=v2", "-z", "--untracked-files=all"], target)
         let index = try entries(try await data(["ls-files", "--stage", "-z"], target), tree: false)
         let headEntries = try entries(try await data(["ls-tree", "-r", "-z", head], target), tree: true)
@@ -158,7 +161,7 @@ struct WorktreeStateSnapshotter: Sendable {
         }
         try validateLineage(target)
         guard try await headOID(target) == head,
-              try await checksum(target) == indexChecksum else { throw CheckpointSnapshotError.stateChanged }
+              try checksum(indexPath) == indexChecksum else { throw CheckpointSnapshotError.stateChanged }
         let groups = makeGroups(paths: Set(states.keys), renames: renames)
         // JSON encodes path delimiters unambiguously, including tabs and newlines.
         let fingerprintRecord = Fingerprint(lineageID: target.lineageID, headOID: head, branch: branch,
@@ -365,9 +368,7 @@ struct WorktreeStateSnapshotter: Sendable {
         return reference
     }
 
-    private func checksum(_ target: CheckpointWorktreeTarget) async throws -> String {
-        let path = try await text(["rev-parse", "--path-format=absolute", "--git-path", "index"], target)
-        let url = URL(fileURLWithPath: path)
+    private func checksum(_ url: URL) throws -> String {
         if !FileManager.default.fileExists(atPath: url.path) { return CheckpointBlobReference.make(for: Data()).sha256 }
         return CheckpointBlobReference.make(for: try fileSystem.fileData(url)).sha256
     }

@@ -27,6 +27,22 @@ struct CheckpointTestRepository: Sendable {
     }
 
     func remove() { try? FileManager.default.removeItem(at: root) }
+
+    /// A linked worktree of this repository, on a new branch. Remove it
+    /// before this repository; its git dir lives under `.git/worktrees/`.
+    func addLinkedWorktree() async throws -> Self {
+        let linked = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-test-\(UUID().uuidString)")
+        try await git(["worktree", "add", "-q", "-b", "linked-\(UUID().uuidString)", linked.path])
+        let lineage = try #require(WorktreeService.localLineageID(forWorktreeAt: linked))
+        return Self(root: linked, target: .init(worktreeID: UUID().uuidString, projectID: "test", path: linked,
+                                               lineageID: lineage, branch: "linked", repositoryName: "test", workspaceName: nil))
+    }
+
+    /// The per-worktree git dir of a linked worktree created by `addLinkedWorktree`.
+    func linkedGitDirectory(_ linked: Self) -> URL {
+        root.appendingPathComponent(".git/worktrees").appendingPathComponent(linked.root.lastPathComponent)
+    }
+
     func write(_ text: String, to path: String) throws { try write(Data(text.utf8), to: path) }
     func write(_ data: Data, to path: String) throws {
         let url = root.appendingPathComponent(path)
