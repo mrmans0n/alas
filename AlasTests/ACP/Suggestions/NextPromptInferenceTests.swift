@@ -151,6 +151,26 @@ struct NextPromptInferenceTests {
         await inference.cancelAndUnload()
     }
 
+    @Test func longSessionsUseBoundedFallbackCandidates() async throws {
+        let fixture = try LeaseFixture()
+        let candidateCount = Mutex(0)
+        let inference = NextPromptInference(acquireLease: { try fixture.acquire() }, load: { _ in
+            return { request in
+                candidateCount.withLock { $0 = request.messageCandidates.count }
+                return #"{"suggestion":"Show an example."}"#
+            }
+        })
+        let longRequest = NextPromptRequest(
+            id: .init(sessionID: "test", incarnation: UUID(), promptID: 1, transcriptRevision: 1,
+                      draftRevision: 0, composerEpoch: 0, settingsGeneration: 0, modelGeneration: 0),
+            turns: (0..<256).map { .init(user: "Question \($0)", assistant: "Answer \($0)") }
+        )
+
+        #expect(try await inference.generate(longRequest) == "Show an example.")
+        #expect(candidateCount.withLock { $0 } <= 10)
+        await inference.cancelAndUnload()
+    }
+
     @Test func resourceFailuresSuppressAttemptsUntilRetry() async throws {
         let fixture = try LeaseFixture()
         let attempts = Mutex(0)
