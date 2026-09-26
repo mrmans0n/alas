@@ -56,9 +56,9 @@ targets:
         buildPhase: resources
       - path: Alas/Resources/MCPLogo-LICENSE.txt
         buildPhase: resources
-      - path: Alas/Resources/NextPromptLicenses.txt
+      - path: Alas/Resources/LocalTextModelLicenses.txt
         buildPhase: resources
-      - path: Alas/Resources/NextPromptModelManifest.json
+      - path: Alas/Resources/LocalTextModelManifest.json
         buildPhase: resources
       - path: Alas/Resources/RemoteWeb
         buildPhase: resources
@@ -67,6 +67,7 @@ targets:
       path: Alas/Resources/Info.plist
       properties:
         AlasBuildDate: ""
+        AlasBuildConfiguration: "$(CONFIGURATION)"
         AlasGitSHA: ""
         AlasReleaseTrack: stable
         CFBundleDevelopmentRegion: en

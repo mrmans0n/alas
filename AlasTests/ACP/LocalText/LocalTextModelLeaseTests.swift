@@ -3,14 +3,14 @@ import Foundation
 import Testing
 @testable import Alas
 
-struct NextPromptModelLeaseTests {
+struct LocalTextModelLeaseTests {
     @Test func readerExcludesIndependentWriterAndKeepsStableLock() async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let lease = try await fixture.store.acquireVerifiedLease()
         let before = try FileManager.default.attributesOfItem(atPath: fixture.root.appendingPathComponent(".lock").path)[.systemFileNumber] as? NSNumber
-        let other = NextPromptModelStore(root: fixture.root, manifest: fixture.manifest, transport: fixture.transport)
-        await #expect(throws: NextPromptModelFailure.busy) { try await other.remove() }
+        let other = LocalTextModelStore(root: fixture.root, manifest: fixture.manifest, transport: fixture.transport)
+        await #expect(throws: LocalTextModelFailure.busy) { try await other.remove() }
         await other.install()
         #expect(await other.state == .failed(.busy))
         lease.close()
@@ -23,7 +23,7 @@ struct NextPromptModelLeaseTests {
     }
 
     @Test func childProcessRetainsOriginalLockAcrossRemoveAndRetry() async throws {
-        let fixture = try ModelStoreFixture.verifiedInstall()
+        let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let lease = try await fixture.store.acquireVerifiedLease()
         lease.close()
@@ -55,7 +55,7 @@ struct NextPromptModelLeaseTests {
             String(data: try output.fileHandleForReading.read(upToCount: 2) ?? Data(), encoding: .utf8) ?? ""
         }
         #expect(try response() == "R\n")
-        await #expect(throws: NextPromptModelFailure.busy) { try await fixture.store.remove() }
+        await #expect(throws: LocalTextModelFailure.busy) { try await fixture.store.remove() }
         await fixture.store.install()
         #expect(await fixture.store.state == .failed(.busy))
         try input.fileHandleForWriting.write(contentsOf: Data([1]))
@@ -65,7 +65,7 @@ struct NextPromptModelLeaseTests {
         #expect(try response() == "R\n")
         await fixture.store.install()
         #expect(await fixture.store.state == .failed(.busy))
-        await #expect(throws: NextPromptModelFailure.busy) { try await fixture.store.remove() }
+        await #expect(throws: LocalTextModelFailure.busy) { try await fixture.store.remove() }
         try input.fileHandleForWriting.write(contentsOf: Data([1]))
         process.waitUntilExit()
         #expect(process.terminationStatus == 0)

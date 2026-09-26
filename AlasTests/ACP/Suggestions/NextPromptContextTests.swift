@@ -102,7 +102,7 @@ struct NextPromptContextTests {
             NextPromptTurn(user: "old 😀", assistant: "old result"),
             NextPromptTurn(user: "new", assistant: "latest result")
         ]
-        var counted: [[NextPromptChatMessage]] = []
+        var counted: [[LocalTextMessage]] = []
         let selected = NextPromptContext.fit(turns, tokenLimit: 10) { messages in
             counted.append(messages)
             return messages.last?.content.contains("old 😀") == true ? 11 : 10

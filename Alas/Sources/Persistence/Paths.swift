@@ -136,7 +136,7 @@ extension Paths {
 }
 
 extension Paths {
-    static var nextPromptModelsRoot: URL {
+    static var localTextModelsRoot: URL {
         appSupportRoot.appendingPathComponent("Models/NextPromptSuggestions", isDirectory: true)
     }
 }
