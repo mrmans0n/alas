@@ -1107,9 +1107,7 @@ struct ACPComposerDraftBridgeTests {
         ])
         let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
         defer { board.releaseGlobally() }
-        board.declareTypes([ACPNSTextView.composerDraftPasteboardType, .string], owner: nil)
-        board.setData(try JSONEncoder().encode(draft), forType: ACPNSTextView.composerDraftPasteboardType)
-        board.setString(draft.plainText, forType: .string)
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
 
         #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
         try await Task.sleep(nanoseconds: 100_000_000)
@@ -1125,6 +1123,55 @@ struct ACPComposerDraftBridgeTests {
         #expect(errors == [.tooManyImages])
     }
 
+    @Test("pasting over a selection that itself holds an image chip does not double-count it against the cap")
+    func pastedDraftExcludesReplacedImagesFromBudget() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        // Fill the composer to the cap (10 image chips), then select the
+        // first one: that selection is about to be replaced by this same
+        // paste, so it must not count against the incoming budget.
+        let storage = NSMutableAttributedString(string: "")
+        for index in 0..<ACPNSTextView.maxImagesPerMessage {
+            let attachment = ACPImageChipAttachment(
+                fileURL: URL(string: "file:///tmp/existing-\(index).png")!,
+                mimeType: "image/png"
+            )
+            let chip = NSMutableAttributedString(attachment: attachment)
+            chip.addAttributes([
+                .imageAttachmentURI: "file:///tmp/existing-\(index).png",
+                .imageAttachmentMime: "image/png",
+            ], range: NSRange(location: 0, length: chip.length))
+            storage.append(chip)
+        }
+        textView.textStorage?.setAttributedString(storage)
+        textView.setSelectedRange(NSRange(location: 0, length: 1))
+
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-cap-\(UUID().uuidString).png")
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
+            .write(to: temp)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let draft = ACPComposerDraft(segments: [.image(uri: temp.absoluteString, mimeType: "image/png")])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        var imageCount = 0
+        let full = NSRange(location: 0, length: textView.attributedString().length)
+        textView.attributedString().enumerateAttribute(.imageAttachmentURI, in: full) { v, _, _ in
+            if v != nil { imageCount += 1 }
+        }
+        #expect(imageCount == ACPNSTextView.maxImagesPerMessage)
+        let errors = await reported.snapshot()
+        #expect(errors.isEmpty)
+    }
+
     @Test("dropping a dragged chip selection reads the draft type and rebuilds the chips")
     func readSelectionRebuildsChipsFromDraftType() throws {
         let (textView, coordinator, window) = makeSlashTextView()
@@ -1132,14 +1179,32 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.readablePasteboardTypes.first == ACPNSTextView.composerDraftPasteboardType)
         let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
         defer { board.releaseGlobally() }
-        board.declareTypes([ACPNSTextView.composerDraftPasteboardType, .string], owner: nil)
-        board.setData(try JSONEncoder().encode(Self.chipDraft), forType: ACPNSTextView.composerDraftPasteboardType)
-        board.setString(Self.chipDraft.plainText, forType: .string)
+        ACPNSTextView.writeComposerDraftForTesting(Self.chipDraft, to: board)
 
         #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
 
         #expect(chipKinds(in: textView) == ["command", "mention"])
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == Self.chipDraft)
+    }
+
+    @Test("a forged pasteboard payload without the authentic token is not trusted")
+    func forgedPasteboardPayloadIsRejected() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        // Simulates another unsandboxed application publishing the same
+        // named pasteboard type with attacker-controlled JSON — no way to
+        // know Alas's in-process token, so this is exactly what a forged
+        // payload looks like: the raw draft, unwrapped.
+        board.declareTypes([ACPNSTextView.composerDraftPasteboardType, .string], owner: nil)
+        board.setData(try JSONEncoder().encode(Self.chipDraft), forType: ACPNSTextView.composerDraftPasteboardType)
+        board.setString("/review @File.swift tail", forType: .string)
+
+        #expect(!textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView).isEmpty)
+        #expect(textView.string.isEmpty)
     }
 
     @Test("file drop router inserts the relative path at the retained selection")
