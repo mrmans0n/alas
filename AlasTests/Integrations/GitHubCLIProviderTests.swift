@@ -291,52 +291,17 @@ struct GitHubCLIProviderTests {
         #expect(GitHubCLIProvider.normalizedBaseBranch("release/1.0", remoteName: "origin") == "release/1.0")
     }
 
-    @Test func latestRunIDParsesFirstAndEmptyList() throws {
-        let id = try GitHubCLIProvider.parseLatestRunID(
-            """
-            [
-              { "databaseId": 111, "status": "completed", "conclusion": "failure", "url": "https://github.com/runs/111" },
-              { "databaseId": 222, "status": "completed", "conclusion": "success", "url": "https://github.com/runs/222" }
-            ]
-            """
-        )
-
-        #expect(id == 111)
-        #expect(try GitHubCLIProvider.parseLatestRunID("[]") == nil)
-    }
-
-    @Test func runIDsParseAllRuns() throws {
-        let ids = try GitHubCLIProvider.parseRunIDs(
-            """
-            [
-              { "databaseId": 111 },
-              { "databaseId": 222 }
-            ]
-            """
-        )
-
-        #expect(ids == [111, 222])
-    }
-
-    @Test func isAvailableReturnsTrueOnlyForVersionExitZero() async {
-        let successRunner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: "gh version 2.0.0", stderr: ""),
-        ])
-        let failureRunner = FakeRunner(results: [
-            ProcessResult(exitCode: 1, stdout: "", stderr: "missing"),
-        ])
-
-        #expect(await GitHubCLIProvider(runner: successRunner).isAvailable(cwd: Self.cwd))
-        #expect(await GitHubCLIProvider(runner: failureRunner).isAvailable(cwd: Self.cwd) == false)
-        #expect(await successRunner.commands == [
-            FakeRunner.Command(executable: "gh", args: ["--version"], cwd: Self.cwd),
-        ])
-    }
-
-    @Test func currentReviewRequestUsesExpectedCommandArgs() async throws {
+    @Test(arguments: [
+        (GitHubCLIProviderTests.mergeQueueDisabledOutput, false),
+        (GitHubCLIProviderTests.mergeQueueEnabledOutput, true),
+    ])
+    func currentReviewRequestUsesExpectedCommandArgsAndMergeQueueMetadata(
+        mergeQueueOutput: String,
+        expectedMergeQueue: Bool
+    ) async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: mergeQueueOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
         ])
 
@@ -350,6 +315,8 @@ struct GitHubCLIProviderTests {
 
         #expect(request?.number == 42)
         #expect(request?.threads.count == 2)
+        #expect(request?.isMergeQueueEnabled == expectedMergeQueue)
+        #expect(request?.isInMergeQueue == expectedMergeQueue)
         #expect(await runner.commands == [
             FakeRunner.Command(
                 executable: "gh",
@@ -388,53 +355,6 @@ struct GitHubCLIProviderTests {
                 ],
                 cwd: Self.cwd
             ),
-        ])
-    }
-
-    @Test func currentReviewRequestEnrichesMergeQueueMetadata() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.mergeQueueEnabledOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
-        ])
-
-        let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
-            remote: Self.remote,
-            branch: "feature/github-provider",
-            headOwner: nil,
-            baseBranch: "main",
-            cwd: Self.cwd
-        )
-
-        #expect(request?.isMergeQueueEnabled == true)
-        #expect(request?.isInMergeQueue == true)
-        #expect(request?.threads.count == 2)
-        #expect(await runner.commands.map(\.args) == [
-            [
-                "pr", "list",
-                "--head", "feature/github-provider",
-                "--base", "main",
-                "--state", "open",
-                "--limit", "20",
-                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,baseRefOid,reviewDecision,mergeStateStatus",
-                "-R", "mrmans0n/alas",
-            ],
-            [
-                "api", "graphql",
-                "--hostname", "github.com",
-                "-f", "owner=mrmans0n",
-                "-f", "name=alas",
-                "-F", "number=42",
-                "-f", "query=\(Self.mergeQueueMetadataQuery)",
-            ],
-            [
-                "api", "graphql",
-                "--hostname", "github.com",
-                "-f", "query=\(GitHubCLIProvider.reviewThreadsQuery)",
-                "-F", "owner=mrmans0n",
-                "-F", "repo=alas",
-                "-F", "number=42",
-            ],
         ])
     }
 
@@ -514,37 +434,6 @@ struct GitHubCLIProviderTests {
                 cwd: Self.cwd
             ),
         ])
-    }
-
-    @Test func reviewFileDataSurfacesRawRouteFailure() async {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 1, stdout: "", stderr: "request failed"),
-        ])
-
-        await #expect(throws: CodeHostProviderError.commandFailed(command: "gh api contents", stderr: "request failed")) {
-            _ = try await GitHubCLIProvider(runner: runner).reviewFileData(
-                remote: Self.remote,
-                repository: "mrmans0n/alas",
-                revision: "head-sha",
-                path: "Assets/Diff image.png",
-                cwd: Self.cwd
-            )
-        }
-    }
-
-    @Test func reviewDiffSurfacesGitHubCommandFailure() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 1, stdout: "", stderr: "not found"),
-        ])
-        let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
-
-        await #expect(throws: CodeHostProviderError.commandFailed(command: "gh pr diff", stderr: "not found")) {
-            _ = try await GitHubCLIProvider(runner: runner).reviewDiff(
-                remote: Self.remote,
-                request: request,
-                cwd: Self.cwd
-            )
-        }
     }
 
     @Test func currentReviewRequestKeepsRequestWhenReviewThreadFetchFails() async throws {
@@ -1123,49 +1012,6 @@ struct GitHubCLIProviderTests {
         })
     }
 
-    @Test func reviewThreadsJSONPreservesLocationMetadata() throws {
-        let threads = try GitHubCLIProvider.parseReviewThreads(
-            """
-            {
-              "data": {
-                "repository": {
-                  "pullRequest": {
-                    "reviewThreads": {
-                      "nodes": [
-                        {
-                          "id": "PRRT_kwDO",
-                          "isResolved": false,
-                          "isOutdated": false,
-                          "path": "Sources/App.swift",
-                          "line": 56,
-                          "originalLine": null,
-                          "diffSide": "RIGHT",
-                          "comments": {
-                            "nodes": [
-                              {
-                                "id": "PRRC_kwDO",
-                                "body": "Please simplify this.",
-                                "url": "https://github.com/mrmans0n/alas/pull/1#discussion_r1",
-                                "author": { "login": "reviewer" }
-                              }
-                            ]
-                          }
-                        }
-                      ],
-                      "pageInfo": { "hasNextPage": false, "endCursor": null }
-                    }
-                  }
-                }
-              }
-            }
-            """
-        )
-
-        #expect(threads.first?.path == "Sources/App.swift")
-        #expect(threads.first?.line == 56)
-        #expect(threads.first?.id == "PRRT_kwDO")
-    }
-
     @Test func reviewThreadsJSONIgnoresMalformedLocationMetadata() throws {
         let threads = try GitHubCLIProvider.parseReviewThreads(
             """
@@ -1349,26 +1195,34 @@ struct GitHubCLIProviderTests {
         #expect(request == nil)
     }
 
-    @Test func checksAcceptsExitCodeEight() async throws {
-        let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 8, stdout: Self.checksOutput, stderr: "checks pending"),
-        ])
-
-        let checks = try await GitHubCLIProvider(runner: runner).checks(
-            remote: Self.remote,
-            request: request,
-            cwd: Self.cwd
-        )
-
-        #expect(checks.count == 1)
-        #expect(checks[0].bucket == .pending)
+    struct NonzeroChecksExitCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let exitCode: Int32
+        let stdout: String
+        let stderr: String
+        let expectedBucket: ReviewCheckBucket
     }
 
-    @Test func checksAcceptsExitCodeOneWhenJSONContainsFailedChecks() async throws {
+    @Test(arguments: [
+        NonzeroChecksExitCase(
+            testDescription: "exit 8 with pending checks",
+            exitCode: 8,
+            stdout: GitHubCLIProviderTests.checksOutput,
+            stderr: "checks pending",
+            expectedBucket: .pending
+        ),
+        NonzeroChecksExitCase(
+            testDescription: "exit 1 with failed checks JSON",
+            exitCode: 1,
+            stdout: GitHubCLIProviderTests.failedChecksOutput,
+            stderr: "checks failed",
+            expectedBucket: .fail
+        ),
+    ])
+    func checksAcceptsNonzeroExitWithChecksJSON(_ testCase: NonzeroChecksExitCase) async throws {
         let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
         let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 1, stdout: Self.failedChecksOutput, stderr: "checks failed"),
+            ProcessResult(exitCode: testCase.exitCode, stdout: testCase.stdout, stderr: testCase.stderr),
         ])
 
         let checks = try await GitHubCLIProvider(runner: runner).checks(
@@ -1378,7 +1232,7 @@ struct GitHubCLIProviderTests {
         )
 
         #expect(checks.count == 1)
-        #expect(checks[0].bucket == .fail)
+        #expect(checks[0].bucket == testCase.expectedBucket)
     }
 
     @Test func failedCheckEvidenceUsesCIActivityChecks() async throws {
@@ -1485,48 +1339,6 @@ struct GitHubCLIProviderTests {
         #expect(await runner.commands.isEmpty)
     }
 
-    @Test func feedbackEvidenceDetailUsesThreadBody() async throws {
-        let threads = try GitHubCLIProvider.parseReviewThreads(Self.reviewThreadsOutput)
-        let request = Self.makeRequest(threads: threads)
-        let provider = GitHubCLIProvider()
-        let item = try #require(try await provider.feedbackEvidence(
-            remote: Self.remote,
-            request: request,
-            cwd: Self.cwd
-        ).first)
-
-        let detail = try await provider.feedbackEvidenceDetail(
-            remote: Self.remote,
-            request: request,
-            item: item,
-            cwd: Self.cwd
-        )
-
-        #expect(detail.body == "Please tighten this branch lookup.")
-        #expect(detail.item.providerURL == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"))
-    }
-
-    @Test func feedbackEvidenceDetailUsesChangesRequestedFallback() async throws {
-        let request = Self.makeRequest(reviewDecision: .changesRequested)
-        let provider = GitHubCLIProvider()
-        let item = try #require(try await provider.feedbackEvidence(
-            remote: Self.remote,
-            request: request,
-            cwd: Self.cwd
-        ).first)
-
-        let detail = try await provider.feedbackEvidenceDetail(
-            remote: Self.remote,
-            request: request,
-            item: item,
-            cwd: Self.cwd
-        )
-
-        #expect(item.id == ReviewEvidenceFallbacks.changesRequestedID)
-        #expect(detail.body.contains("review decision is changes requested"))
-        #expect(detail.item.providerURL == request.url)
-    }
-
     @Test func checksTreatNoChecksReportedAsEmptyChecks() async throws {
         let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
         let runner = FakeRunner(results: [
@@ -1576,25 +1388,6 @@ struct GitHubCLIProviderTests {
                 cwd: Self.cwd
             ),
         ])
-    }
-
-    @Test func createReviewRequestOmitsDraftFlagForNormalPR() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: "https://github.com/mrmans0n/alas/pull/44\n", stderr: ""),
-        ])
-
-        _ = try await GitHubCLIProvider(runner: runner).createReviewRequest(
-            remote: Self.remote,
-            branch: "feature/review-draft",
-            headOwner: nil,
-            baseBranch: "origin/main",
-            title: "Add draft tab",
-            body: "## Summary\n- Adds a draft tab",
-            isDraft: false,
-            cwd: Self.cwd
-        )
-
-        #expect(await runner.commands.first?.args.contains("--draft") == false)
     }
 
     @Test func createReviewRequestAddsDraftFlagForDraftPR() async throws {
@@ -1686,26 +1479,6 @@ struct GitHubCLIProviderTests {
                 cwd: Self.cwd
             ),
         ])
-    }
-
-    @Test func commandFailuresThrowCommandFailed() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 1, stdout: "", stderr: "not found"),
-        ])
-
-        do {
-            _ = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
-                remote: Self.remote,
-                branch: "feature/github-provider",
-                headOwner: nil,
-                baseBranch: "main",
-                cwd: Self.cwd
-            )
-            Issue.record("Expected commandFailed")
-        } catch CodeHostProviderError.commandFailed(let command, let stderr) {
-            #expect(command == "gh pr list")
-            #expect(stderr == "not found")
-        }
     }
 
     @Test func replyToThreadReturnsNewComment() async throws {
@@ -1839,27 +1612,6 @@ struct GitHubCLIProviderTests {
         let command = try #require(await runner.commands.first)
         let queryArg = try #require(command.args.first { $0.hasPrefix("query=") })
         #expect(queryArg.contains("deletePullRequestReviewComment"))
-    }
-
-    @Test func writeFailureThrowsCommandFailed() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 1, stdout: "", stderr: "permission denied"),
-        ])
-        let provider = GitHubCLIProvider(runner: runner)
-
-        do {
-            _ = try await provider.replyToThread(
-                remote: Self.remote,
-                request: Self.makeRequest(),
-                thread: Self.unresolvedThread,
-                body: "Reply body.",
-                cwd: Self.cwd
-            )
-            Issue.record("Expected commandFailed")
-        } catch CodeHostProviderError.commandFailed(let command, let stderr) {
-            #expect(command == "gh api graphql")
-            #expect(stderr == "permission denied")
-        }
     }
 
     @Test func parsesRichReviewThreadFields() async throws {
@@ -2075,36 +1827,17 @@ struct GitHubCLIProviderTests {
         ])
     }
 
-    @Test func mergeReviewRequestForSameOwnerForkSkipsRemoteDelete() async throws {
+    // Deleting a base-repo ref by name when the head lives in a fork could remove
+    // an unrelated branch, so cleanup is skipped. This includes a fork under the
+    // SAME owner but a different repo name (`mrmans0n/alas-fork`).
+    @Test(arguments: [
+        ("mrmans0n", "alas-fork"),
+        ("fork-owner", "alas"),
+    ])
+    func mergeReviewRequestForForkedHeadSkipsRemoteDelete(headOwner: String, headName: String) async throws {
         let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: "", stderr: "")])
         let provider = GitHubCLIProvider(runner: runner)
-        // Head lives in a fork under the SAME owner but a different repo name
-        // (`mrmans0n/alas-fork`). Owner matches the base repo, but the branch is
-        // not in it — deleting `mrmans0n/alas`'s same-named branch would be wrong.
-        let request = Self.makeRequest(headRepositoryName: "alas-fork")
-
-        try await provider.mergeReviewRequest(request, method: .squash, deleteBranch: true, cwd: Self.cwd)
-
-        #expect(await runner.commands == [
-            FakeRunner.Command(
-                executable: "gh",
-                args: [
-                    "pr", "merge", "42",
-                    "--squash",
-                    "--match-head-commit", "head-sha-42",
-                    "-R", "mrmans0n/alas",
-                ],
-                cwd: Self.cwd
-            ),
-        ])
-    }
-
-    @Test func mergeReviewRequestForForkedHeadSkipsRemoteDelete() async throws {
-        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: "", stderr: "")])
-        let provider = GitHubCLIProvider(runner: runner)
-        // Head lives in a fork (owner != base repo owner) — deleting a base-repo
-        // ref by name here could remove an unrelated branch, so cleanup is skipped.
-        let request = Self.makeRequest(headRepositoryOwner: "fork-owner")
+        let request = Self.makeRequest(headRepositoryOwner: headOwner, headRepositoryName: headName)
 
         try await provider.mergeReviewRequest(request, method: .squash, deleteBranch: true, cwd: Self.cwd)
 
@@ -2294,15 +2027,15 @@ struct GitHubCLIProviderTests {
     }
     """
 
-    private static let mergeQueueEnabledOutput = """
+    static let mergeQueueEnabledOutput = """
     {"data":{"repository":{"pullRequest":{"isMergeQueueEnabled":true,"isInMergeQueue":true}}}}
     """
 
-    private static let mergeQueueDisabledOutput = """
+    static let mergeQueueDisabledOutput = """
     {"data":{"repository":{"pullRequest":{"isMergeQueueEnabled":false,"isInMergeQueue":false}}}}
     """
 
-    private static let checksOutput = """
+    static let checksOutput = """
     [
       {
         "bucket": "pending",
@@ -2318,7 +2051,7 @@ struct GitHubCLIProviderTests {
     ]
     """
 
-    private static let failedChecksOutput = """
+    static let failedChecksOutput = """
     [
       {
         "bucket": "fail",

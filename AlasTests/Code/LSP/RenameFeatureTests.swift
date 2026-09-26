@@ -15,12 +15,17 @@ struct RenameFeatureTests {
         let origin = EditorDocumentID(host: nil, worktreeID: "w", uri: root.appendingPathComponent("origin").lspURI)
         let context = EditorRequestContext(document: origin, version: 1, serverGeneration: UUID(), range: .init(start: .init(line: 0, character: 0), end: .init(line: 0, character: 0)))
         var changes: [LSPDocumentChange] = []
-        for index in 0..<(tooManyTargets ? 257 : 5) {
+        // Five sparse files one byte over a fifth of the operation budget each:
+        // every file is under the per-file cap, any four fit, and the fifth
+        // crosses the total by one byte. That is close to the smallest read
+        // that can reach the total-bytes guard.
+        let fileSize = UInt64(WorkspaceEditSnapshotBudget.totalBytes / 5 + 1)
+        for index in 0..<(tooManyTargets ? WorkspaceEditSnapshotBudget.targets + 1 : 5) {
             let file = root.appendingPathComponent("target-\(index)")
             if !tooManyTargets {
                 #expect(FileManager.default.createFile(atPath: file.path, contents: nil))
                 let handle = try FileHandle(forWritingTo: file)
-                try handle.truncate(atOffset: 16 * 1024 * 1024)
+                try handle.truncate(atOffset: fileSize)
                 try handle.close()
             }
             changes.append(tooManyTargets ? .create(uri: file.lspURI, options: .init(), annotationID: nil) : .delete(uri: file.lspURI, options: .init(), annotationID: nil))

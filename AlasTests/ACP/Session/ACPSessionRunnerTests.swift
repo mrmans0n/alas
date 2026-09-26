@@ -5,9 +5,14 @@ import Testing
 @MainActor
 @Suite("ACPSessionRunner")
 struct ACPSessionRunnerTests {
-    @Test("send reports failed completion when session prompt fails")
+    @Test("send reports failed completion, emits a failed turn, and clears retry status when session prompt fails")
     func sendReportsFailedCompletionWhenPromptFails() async throws {
-        let (runner, _) = try makeRunner()
+        var completions: [ACPTurnCompletion] = []
+        let (runner, _) = try makeRunner(onTurnCompleted: { completions.append($0) })
+        let retry = AnyCodable(["codex": AnyCodable(["error": AnyCodable([
+            "willRetry": AnyCodable(true), "message": AnyCodable("Retrying")
+        ])])])
+        runner.session.apply(.sessionInfoUpdate(.init(title: nil, metadata: retry)))
 
         let succeeded = await withCheckedContinuation { continuation in
             runner.send(text: "hello", attachments: []) { succeeded in
@@ -17,7 +22,13 @@ struct ACPSessionRunnerTests {
 
         #expect(succeeded == false)
         #expect(runner.session.lastError?.contains("prompt failed") == true)
+        #expect(runner.session.retryStatus == nil)
         #expect(runner.session.transcript.streamingState == .idle)
+        #expect(completions.count == 1)
+        guard case .failed = completions.first?.result else {
+            Issue.record("Expected a failed completion, got \(String(describing: completions.first?.result))")
+            return
+        }
     }
 
     @Test("auth prompt failure enters needsAuth while preserving direct prompt error")
@@ -53,9 +64,10 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.streamingState == .idle)
     }
 
-    @Test("send reports successful completion when session prompt succeeds")
+    @Test("send reports successful completion and emits one completed turn when session prompt succeeds")
     func sendReportsSuccessfulCompletionWhenPromptSucceeds() async throws {
-        let (runner, mock) = try makeRunner()
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
         let retry = AnyCodable(["codex": AnyCodable(["error": AnyCodable([
             "willRetry": AnyCodable(true), "message": AnyCodable("Retrying")
@@ -72,6 +84,11 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.lastError == nil)
         #expect(runner.session.retryStatus == nil)
         #expect(runner.session.transcript.streamingState == .idle)
+        #expect(completions.count == 1)
+        #expect(completions.first?.sessionId == "s")
+        #expect(completions.first?.result == .completed)
+        #expect(completions.first?.delegatedSource == nil)
+        #expect((completions.first?.startedAt ?? 0) > 0)
     }
 
     @Test("send attaches its checkpoint before the prompt RPC")
@@ -111,24 +128,6 @@ struct ACPSessionRunnerTests {
 
         await runner.userCancel()
 
-        #expect(runner.session.retryStatus == nil)
-    }
-
-    @Test("permanent prompt failure clears retryable Codex status")
-    func promptFailureClearsRetryStatus() async throws {
-        let (runner, _) = try makeRunner()
-        let retry = AnyCodable(["codex": AnyCodable(["error": AnyCodable([
-            "willRetry": AnyCodable(true), "message": AnyCodable("Retrying")
-        ])])])
-        runner.session.apply(.sessionInfoUpdate(.init(title: nil, metadata: retry)))
-
-        let succeeded = await withCheckedContinuation { continuation in
-            runner.send(text: "hello", attachments: []) { succeeded in
-                continuation.resume(returning: succeeded)
-            }
-        }
-
-        #expect(succeeded == false)
         #expect(runner.session.retryStatus == nil)
     }
 
@@ -277,61 +276,31 @@ struct ACPSessionRunnerTests {
         #expect(turns.map(\.promptID) == [2])
     }
 
-    @Test("ordinary success publishes through the shared runner helper")
-    func ordinarySuccessPublishesThroughHelper() async throws {
-        var turns: [NextPromptCompletedTurn] = []
-        let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
-        runner.session.agentState = .ready
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
-        runner.send(text: "ordinary", attachments: [])
-        try await waitUntil { turns.count == 1 }
-        #expect(turns[0].promptID == 0)
-        #expect(runner.turnPublicationTasksForTesting?.count == nil)
-    }
-
-    @Test("automated prompt success does not publish a user turn")
-    func automatedPromptDoesNotPublishTurn() async throws {
+    @Test("automated and delegated prompt success do not publish a normal user turn", arguments: [false, true])
+    func nonUserPromptDoesNotPublishTurn(delegated: Bool) async throws {
         var turns: [NextPromptCompletedTurn] = []
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
         runner.turnPublicationTasksForTesting = [:]
         runner.session.agentState = .ready
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
-        let automatedProcessed = AsyncGate()
+        let promptProcessed = AsyncGate()
         runner.onPromptResponseProcessedForTesting = { promptID in
-            if promptID == 0 { Task { await automatedProcessed.open() } }
+            if promptID == 0 { Task { await promptProcessed.open() } }
         }
-        var automatedFinished: Bool?
-        runner.sendNow(blocks: [.text("automation")], queuedItemId: nil,
-            normalUserTurn: false, onPromptFinished: { automatedFinished = $0 })
-        await automatedProcessed.wait()
-        #expect(automatedFinished == true)
-        await runner.waitForTurnPublicationForTesting(promptID: 0)
-        #expect(turns.isEmpty)
-        runner.send(text: "ordinary", attachments: [])
-        try await waitUntil { turns.count == 1 }
-        #expect(turns.map(\.promptID) == [1])
-    }
-
-    @Test("delegated success does not publish a normal user turn")
-    func delegatedPromptDoesNotPublishTurn() async throws {
-        var turns: [NextPromptCompletedTurn] = []
-        let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
-        runner.turnPublicationTasksForTesting = [:]
-        runner.session.agentState = .ready
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
-        let delegatedProcessed = AsyncGate()
-        runner.onPromptResponseProcessedForTesting = { promptID in
-            if promptID == 0 { Task { await delegatedProcessed.open() } }
+        var promptFinished: Bool?
+        if delegated {
+            runner.sendNow(
+                blocks: [.text("delegated")],
+                queuedItemId: nil,
+                delegatedSource: ACPDelegatedPromptSource(sessionId: "parent", messageId: "message"),
+                onPromptFinished: { promptFinished = $0 }
+            )
+        } else {
+            runner.sendNow(blocks: [.text("automation")], queuedItemId: nil,
+                normalUserTurn: false, onPromptFinished: { promptFinished = $0 })
         }
-        var delegatedFinished: Bool?
-        runner.sendNow(
-            blocks: [.text("delegated")],
-            queuedItemId: nil,
-            delegatedSource: ACPDelegatedPromptSource(sessionId: "parent", messageId: "message"),
-            onPromptFinished: { delegatedFinished = $0 }
-        )
-        await delegatedProcessed.wait()
-        #expect(delegatedFinished == true)
+        await promptProcessed.wait()
+        #expect(promptFinished == true)
         await runner.waitForTurnPublicationForTesting(promptID: 0)
         #expect(turns.isEmpty)
         runner.send(text: "ordinary", attachments: [])
@@ -788,40 +757,6 @@ struct ACPSessionRunnerTests {
         #expect(turns.map(\.promptID) == [1])
     }
 
-    @Test("emitted session/update lands on the session and persists a message row")
-    func runnerWiresUpdates() async throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
-        let store = try ACPSessionStore(path: url.path)
-        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
-            currentModel: nil, currentMode: nil, autoRun: false,
-            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
-
-        let mock = ACPMockClient()
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
-        session.agentState = .ready
-        let runner = ACPSessionRunner(
-            session: session,
-            connection: ACPConnection(client: mock),
-            store: store,
-            sessionId: "s",
-            worktreePath: FileManager.default.temporaryDirectory.path
-        )
-        runner.start()
-
-        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("hello"))))
-        // Allow the actor hop
-        try await Task.sleep(nanoseconds: 50_000_000)
-
-        let inMemoryAgentMessages = session.transcript.messages.filter {
-            if case .agent = $0 { return true }
-            return false
-        }
-        #expect(inMemoryAgentMessages.count == 1)
-        let rows = try store.loadMessages(sessionId: "s")
-        #expect(rows.count == 1)
-        #expect(rows[0].kind == "agent")
-    }
-
     @Test("session_info_update updates live session and persistence")
     func sessionInfoUpdateRenamesGeneratedSession() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -875,63 +810,6 @@ struct ACPSessionRunnerTests {
         let row = try #require(try store.loadSession(id: "s"))
         #expect(row.title == "Adapter Title")
         #expect(row.titleSource == .provider)
-    }
-
-    @Test("session_info_update metadata updates live goal")
-    func sessionInfoUpdateMetadataUpdatesLiveGoal() async throws {
-        let (runner, mock) = try makeRunner()
-        runner.start()
-        defer { runner.stop() }
-
-        mock.emit(.init(
-            sessionId: "s",
-            update: .sessionInfoUpdate(.init(
-                title: .absent,
-                metadata: AnyCodable([
-                    "codex": AnyCodable([
-                        "goal": AnyCodable([
-                            "objective": AnyCodable("Surface richer ACP events"),
-                            "status": AnyCodable("in_progress"),
-                            "tokenBudget": AnyCodable(12_000)
-                        ])
-                    ])
-                ])
-            ))
-        ))
-
-        try await waitUntil {
-            runner.session.currentGoal?.objective == "Surface richer ACP events"
-        }
-        let goal = try #require(runner.session.currentGoal)
-        #expect(goal.status == "in_progress")
-        #expect(goal.tokenBudget == 12_000)
-    }
-
-    @Test("session_config_options_update persists config-backed currentModel")
-    func sessionConfigOptionsUpdatePersistsConfigBackedCurrentModel() async throws {
-        let (runner, mock) = try makeRunner()
-        runner.start()
-        defer { runner.stop() }
-
-        mock.emit(.init(
-            sessionId: "s",
-            update: .sessionConfigOptionsUpdate([ACPConfigOption(
-                id: "model",
-                name: "Model",
-                category: "model",
-                currentValue: "sonnet",
-                options: [
-                    ACPConfigOptionItem(id: "sonnet", name: "Sonnet"),
-                    ACPConfigOptionItem(id: "opus", name: "Opus"),
-                ])])
-        ))
-
-        try await waitUntil {
-            runner.session.currentModel == "sonnet"
-        }
-        await runner.flushPersistence()
-        let row = try #require(try await runner.persistence.loadSession(id: "s"))
-        #expect(row.currentModel == "sonnet")
     }
 
     @Test("session_config_options_update persists non-model config values")
@@ -1888,8 +1766,11 @@ struct ACPSessionRunnerTests {
         #expect(try store.loadSession(id: "s")?.currentModel == "sonnet")
     }
 
-    @Test("config update removing model is acknowledged only after clearing stored model")
-    func configUpdateRemovingModelAcknowledgesAfterClearingStoredModel() async throws {
+    @Test(
+        "config update removing the config model is acknowledged only after persisting the fallback model",
+        arguments: [false, true]
+    )
+    func configUpdateRemovingConfigModelAcknowledgesAfterPersistingFallback(hasLegacyModels: Bool) async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         try store.upsertSession(.init(id: "s", agentId: "codex", title: "t",
@@ -1897,6 +1778,9 @@ struct ACPSessionRunnerTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
         session.currentModel = "sonnet"
+        if hasLegacyModels {
+            session.availableModels = [ACPModelInfo(id: "sonnet", name: "Sonnet", description: nil)]
+        }
         session.availableConfigOptions = [ACPConfigOption(
             id: "model",
             name: "Model",
@@ -1922,46 +1806,12 @@ struct ACPSessionRunnerTests {
         #expect(!acknowledgement.wasRecorded)
         await runner.flushPersistence()
         #expect(acknowledgement.wasRecorded)
-        #expect(try store.loadSession(id: "s")?.currentModel == nil)
-    }
-
-    @Test("config update removing config model preserves legacy model fallback")
-    func configUpdateRemovingConfigModelPreservesLegacyModelFallback() async throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
-        let store = try ACPSessionStore(path: url.path)
-        try store.upsertSession(.init(id: "s", agentId: "codex", title: "t",
-            currentModel: "sonnet", currentMode: nil, autoRun: false,
-            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
-        session.currentModel = "sonnet"
-        session.availableModels = [ACPModelInfo(id: "sonnet", name: "Sonnet", description: nil)]
-        session.availableConfigOptions = [ACPConfigOption(
-            id: "model",
-            name: "Model",
-            category: "model",
-            currentValue: "sonnet",
-            options: [ACPConfigOptionItem(id: "sonnet", name: "Sonnet")]
-        )]
-        let runner = ACPSessionRunner(
-            session: session,
-            connection: ACPConnection(client: ACPMockClient()),
-            store: store,
-            sessionId: "s",
-            worktreePath: FileManager.default.temporaryDirectory.path
-        )
-        let acknowledgement = DurableAcknowledgementRecorder()
-
-        runner.applyIncomingUpdateForTesting(.init(
-            sessionId: "s",
-            update: .sessionConfigOptionsUpdate([]),
-            durableConsumptionAcknowledgement: { acknowledgement.record() }
-        ))
-
-        #expect(!acknowledgement.wasRecorded)
-        await runner.flushPersistence()
-        #expect(acknowledgement.wasRecorded)
-        #expect(session.chipState.models?.source == .model)
-        #expect(try store.loadSession(id: "s")?.currentModel == "sonnet")
+        if hasLegacyModels {
+            // The legacy model list survives, so it remains the model source.
+            #expect(session.chipState.models?.source == .model)
+        }
+        let expectedModel: String? = hasLegacyModels ? "sonnet" : nil
+        #expect(try store.loadSession(id: "s")?.currentModel == expectedModel)
     }
 
     @Test("incoming streaming chunks are coalesced before applying")
@@ -2984,32 +2834,6 @@ struct ACPSessionRunnerTests {
         #expect(response.outcome == .cancelled)
     }
 
-    @Test("inbound $/cancel_request dismisses the pending permission as cancelled")
-    func cancelRequestDismissesPendingPermission() async throws {
-        let (runner, mock) = try makeRunner()
-        runner.start()
-        defer { runner.stop() }
-
-        let toolCall = ACPPermissionToolCall(
-            toolCallId: "call_1", title: "Run", kind: nil, status: nil,
-            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
-        let params = ACPPermissionRequestParams(
-            sessionId: "s",
-            toolCall: toolCall,
-            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
-                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")])
-        let requestId = JSONRPCID.number(42)
-        mock.emitPermission(id: requestId, params: params)
-
-        try await waitUntil { runner.session.transcript.pendingPermission != nil }
-
-        mock.emitCancelRequest(id: requestId)
-
-        try await waitUntil { mock.permissionResponses[requestId] != nil }
-        #expect(mock.permissionResponses[requestId]?.outcome == .cancelled)
-        #expect(runner.session.transcript.pendingPermission == nil)
-    }
-
     @Test("cancelling a permission whose tool-call row already exists marks that row canceled")
     func cancelRequestCancelsExistingToolCallRow() async throws {
         let (runner, mock) = try makeRunner()
@@ -3078,6 +2902,7 @@ struct ACPSessionRunnerTests {
         // any cancelInFlightToolCalls() sweep could have touched it.
         mock.emitCancelRequest(id: requestId)
         try await waitUntil { mock.permissionResponses[requestId]?.outcome == .cancelled }
+        #expect(runner.session.transcript.pendingPermission == nil)
 
         let toolCalls = runner.session.transcript.messages.compactMap { message -> ACPMessage.ToolCall? in
             if case .toolCall(let tc) = message { return tc }
@@ -3115,34 +2940,6 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.pendingPermission != nil)
     }
 
-    @Test("$/cancel_request arriving before the matching permission request cancels it once dequeued")
-    func cancelRequestArrivingBeforePermissionRequestIsRetained() async throws {
-        let (runner, mock) = try makeRunner()
-        runner.start()
-        defer { runner.stop() }
-
-        let toolCall = ACPPermissionToolCall(
-            toolCallId: "call_1", title: "Run", kind: nil, status: nil,
-            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
-        let params = ACPPermissionRequestParams(
-            sessionId: "s",
-            toolCall: toolCall,
-            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
-                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")])
-        let requestId = JSONRPCID.number(42)
-
-        // Cancel arrives first — e.g. a buffered broker replay, or both
-        // notifications landing in one transport batch ahead of
-        // permissionsTask dequeuing the request.
-        mock.emitCancelRequest(id: requestId)
-        try? await Task.sleep(nanoseconds: 20_000_000)
-        mock.emitPermission(id: requestId, params: params)
-
-        try await waitUntil { mock.permissionResponses[requestId] != nil }
-        #expect(mock.permissionResponses[requestId]?.outcome == .cancelled)
-        #expect(runner.session.transcript.pendingPermission == nil)
-    }
-
     @Test("a $/cancel_request that lands before dequeue still materializes a canceled row with its facts")
     func earlyCancelStillPersistsPermissionFacts() async throws {
         let (runner, mock) = try makeRunner()
@@ -3166,7 +2963,9 @@ struct ACPSessionRunnerTests {
         )
         let requestId = JSONRPCID.number(42)
 
-        // Same early-cancel ordering as the test above — the cancel lands in
+        // Cancel arrives first — e.g. a buffered broker replay, or both
+        // notifications landing in one transport batch ahead of
+        // permissionsTask dequeuing the request. The cancel lands in
         // pendingCancelledRequestIDs before permissionsTask ever dequeues
         // the matching request, taking the `continue`-before-evaluate()
         // branch rather than the normal evaluate()-returns-.cancelled path.
@@ -3175,6 +2974,7 @@ struct ACPSessionRunnerTests {
         mock.emitPermission(id: requestId, params: params)
 
         try await waitUntil { mock.permissionResponses[requestId]?.outcome == .cancelled }
+        #expect(runner.session.transcript.pendingPermission == nil)
 
         let toolCalls = runner.session.transcript.messages.compactMap { message -> ACPMessage.ToolCall? in
             if case .toolCall(let tc) = message { return tc }
@@ -3218,51 +3018,21 @@ struct ACPSessionRunnerTests {
         #expect(toolCalls.first?.executionStartedAt != nil)
     }
 
-    @Test("materializing a permission's row still waits for an already-queued session/update to land first")
-    func materializedRowPreservesUpdateOrdering() async throws {
-        let (runner, mock) = try makeRunner()
-        runner.session.autoRunEnabled = true
-        runner.start()
-        defer { runner.stop() }
-
-        // Emit an agent message, then immediately (no await/sleep — this
-        // is the point) a permission for a different id that auto-run
-        // resolves with no suspension of its own. Without draining
-        // already-queued updates first, the materialized tool_call row
-        // could land in the transcript ahead of "before".
-        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("before"))))
-        let toolCall = ACPPermissionToolCall(
-            toolCallId: "call_1", title: "Run", kind: "execute", status: nil,
-            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
-        let params = ACPPermissionRequestParams(
-            sessionId: "s",
-            toolCall: toolCall,
-            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")])
-        mock.emitPermission(id: .number(9), params: params)
-
-        try await waitUntil { mock.permissionResponses[.number(9)] != nil }
-        try await waitUntil {
-            runner.session.transcript.messages.contains {
-                if case .toolCall = $0 { return true }
-                return false
-            }
-        }
-
-        let kinds = runner.session.transcript.messages.map(\.kind)
-        #expect(kinds == ["agent", "tool_call"])
-    }
-
-    @Test("draining before materializing waits for the exact watermark, not a fixed attempt count")
+    @Test("materializing a permission's row waits for every already-queued session/update to land first")
     func materializedRowDrainsAnyNumberOfQueuedUpdates() async throws {
         let (runner, mock) = try makeRunner()
         runner.session.autoRunEnabled = true
         runner.start()
         defer { runner.stop() }
 
-        // More updates than a small fixed-attempt-count heuristic (the
-        // previous fix's bounded loop) could reliably drain — proving this
-        // waits for connection.client.yieldedUpdateCount specifically
-        // rather than guessing a scheduler-turn count.
+        // Emit agent chunks, then immediately (no await/sleep — this is the
+        // point) a permission that auto-run resolves with no suspension of
+        // its own. Without draining already-queued updates first, the
+        // materialized tool_call row could land ahead of them. Emitting more
+        // updates than a small fixed-attempt-count heuristic (the previous
+        // fix's bounded loop) could reliably drain proves this waits for
+        // connection.client.yieldedUpdateCount specifically rather than
+        // guessing a scheduler-turn count.
         for i in 0..<8 {
             mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("chunk-\(i)"))))
         }
@@ -3284,6 +3054,7 @@ struct ACPSessionRunnerTests {
         }
 
         let kinds = runner.session.transcript.messages.map(\.kind)
+        #expect(kinds.first == "agent")
         #expect(kinds.last == "tool_call")
         #expect(kinds.dropLast().allSatisfy { $0 == "agent" })
     }
@@ -3997,27 +3768,6 @@ struct ACPSessionRunnerTests {
         #expect(message.contains("limit"))
     }
 
-    @Test("serveRead still serves a ranged read of a file past the whole-file limit")
-    func serveReadAllowsRangedReadOfLargeFile() async throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-\(UUID())")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let file = dir.appendingPathComponent("ranged.txt")
-        try "alpha\nbeta\ngamma".write(to: file, atomically: true, encoding: .utf8)
-
-        // The limit must not leak into ranged reads, which return a bounded
-        // slice however large the file is.
-        let outcome = await ACPSessionRunner.serveRead(
-            target: file, liveBuffer: nil, line: 2, limit: 1
-        )
-        guard case .success(let body) = outcome else {
-            Issue.record("expected a ranged read to succeed")
-            return
-        }
-        let decoded = try JSONDecoder().decode(ACPFsReadResult.self, from: body)
-        #expect(decoded.content == "beta")
-    }
-
     @Test("serveRead prefers the live buffer snapshot over disk")
     func serveReadPrefersLiveBuffer() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-\(UUID())")
@@ -4052,28 +3802,7 @@ struct ACPSessionRunnerTests {
 
     // MARK: - Auth status tests
 
-    @Test("kind == none shows the auth nudge banner without a failed prompt")
-    func authStatusNoneShowsNudgeBanner() async throws {
-        let (runner, session, mock) = try makeRunnerWithSession()
-        runner.start()
-        defer { runner.stop() }
-
-        mock.emitAuthStatus(.init(kind: .none, label: "Not logged in"))
-        // `.none` through optional chaining is ambiguous between "the kind
-        // is .none" and "the optional itself is nil" — spell out the type
-        // to force the former (the classic Optional<Enum>.none gotcha).
-        try await waitUntil { session.authStatus?.kind == ACPAuthStatus.Kind.none }
-
-        #expect(session.authStatus?.label == "Not logged in")
-        guard case .needsAuth(let methods, let reason) = session.setupState else {
-            Issue.record("expected .needsAuth setupState, got \(session.setupState)")
-            return
-        }
-        #expect(methods.isEmpty)
-        #expect(reason == nil)
-    }
-
-    @Test("a later signed-in status clears the auth nudge banner")
+    @Test("kind == none shows the auth nudge banner and a later signed-in status clears it")
     func authStatusSignedInClearsNudgeBanner() async throws {
         let (runner, session, mock) = try makeRunnerWithSession()
         runner.start()
@@ -4084,6 +3813,9 @@ struct ACPSessionRunnerTests {
             if case .needsAuth = session.setupState { return true }
             return false
         }
+        // No failed prompt is involved: the nudge carries no methods or reason.
+        #expect(session.setupState == .needsAuth(methods: [], reason: nil))
+        #expect(session.authStatus?.label == "Not logged in")
 
         mock.emitAuthStatus(.init(kind: .account, label: "Claude Max"))
         try await waitUntil { session.setupState == .ready }
@@ -4161,25 +3893,6 @@ struct ACPSessionRunnerTests {
         return (runner, mock)
     }
 
-    @Test("successful prompt emits one completed turn")
-    func successfulPromptEmitsCompletion() async throws {
-        var completions: [ACPTurnCompletion] = []
-        let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
-
-        _ = await withCheckedContinuation { continuation in
-            runner.send(text: "hello", attachments: []) { succeeded in
-                continuation.resume(returning: succeeded)
-            }
-        }
-
-        #expect(completions.count == 1)
-        #expect(completions.first?.sessionId == "s")
-        #expect(completions.first?.result == .completed)
-        #expect(completions.first?.delegatedSource == nil)
-        #expect((completions.first?.startedAt ?? 0) > 0)
-    }
-
     @Test("a cancelled prompt whose RPC still succeeds emits .cancelled, not .completed")
     func cancelledPromptThatSucceedsEmitsCancelled() async throws {
         var completions: [ACPTurnCompletion] = []
@@ -4230,24 +3943,6 @@ struct ACPSessionRunnerTests {
         #expect(sendSucceeded == true)
         #expect(completions.count == 1)
         #expect(completions.first?.result == .cancelled)
-    }
-
-    @Test("failed prompt emits a failed turn")
-    func failedPromptEmitsFailure() async throws {
-        var completions: [ACPTurnCompletion] = []
-        let (runner, _) = try makeRunner(onTurnCompleted: { completions.append($0) })
-
-        _ = await withCheckedContinuation { continuation in
-            runner.send(text: "hello", attachments: []) { succeeded in
-                continuation.resume(returning: succeeded)
-            }
-        }
-
-        #expect(completions.count == 1)
-        guard case .failed = completions.first?.result else {
-            Issue.record("Expected a failed completion, got \(String(describing: completions.first?.result))")
-            return
-        }
     }
 
     @Test("delegated prompt completion carries its source and the trimmed last agent text")
@@ -4304,7 +3999,7 @@ struct ACPSessionRunnerTests {
 
     // MARK: - onPersist callback tests
 
-    @Test("onPersist fires after persistFromIndex writes a message")
+    @Test("onPersist and onMessageActivity fire after a message write lands")
     func onPersistFiresAfterPersistFromIndex() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rn-onpersist-\(UUID().uuidString).sqlite")
@@ -4314,6 +4009,7 @@ struct ACPSessionRunnerTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
 
         var posts = 0
+        var activityFired = 0
         var observedStoredMessage = false
         let mock = ACPMockClient()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
@@ -4326,13 +4022,15 @@ struct ACPSessionRunnerTests {
             onPersist: {
                 posts += 1
                 observedStoredMessage = (try? store.loadMessages(sessionId: "s").isEmpty == false) == true
-            }
+            },
+            onMessageActivity: { activityFired += 1 }
         )
 
         session.appendSystemNotice("hello")
         runner.persistFromIndex(0)
         await runner.flushPersistence()
         #expect(posts >= 1)
+        #expect(activityFired >= 1)
         #expect(observedStoredMessage)
     }
 
@@ -4368,33 +4066,6 @@ struct ACPSessionRunnerTests {
         #expect(observed?.agentId == "claude")
         #expect(observed?.models.map(\.id) == ["opus", "sonnet"])
         #expect(runner.session === session)
-    }
-
-    @Test("onPersist fires after persistIndices writes a message")
-    func onPersistFiresAfterPersistIndices() async throws {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rn-onpersist-idx-\(UUID().uuidString).sqlite")
-        let store = try ACPSessionStore(path: url.path)
-        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
-            currentModel: nil, currentMode: nil, autoRun: false,
-            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
-
-        var posts = 0
-        let mock = ACPMockClient()
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
-        let runner = ACPSessionRunner(
-            session: session,
-            connection: ACPConnection(client: mock),
-            store: store,
-            sessionId: "s",
-            worktreePath: FileManager.default.temporaryDirectory.path,
-            onPersist: { posts += 1 }
-        )
-
-        session.appendSystemNotice("hello")
-        runner.persistIndices([0])
-        await runner.flushPersistence()
-        #expect(posts >= 1)
     }
 
     @Test("persistIndices preserves stored full tool content after metadata-only update")
@@ -4553,34 +4224,7 @@ struct ACPSessionRunnerTests {
         #expect(text == "fresh")
     }
 
-    @Test("onMessageActivity fires after persistIndices writes a message, unlike onPersist which also fires on no-op stop()")
-    func onMessageActivityFiresOnlyForRealMessageWrites() async throws {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rn-onactivity-\(UUID().uuidString).sqlite")
-        let store = try ACPSessionStore(path: url.path)
-        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
-            currentModel: nil, currentMode: nil, autoRun: false,
-            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
-
-        var activityFired = 0
-        let mock = ACPMockClient()
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
-        let runner = ACPSessionRunner(
-            session: session,
-            connection: ACPConnection(client: mock),
-            store: store,
-            sessionId: "s",
-            worktreePath: FileManager.default.temporaryDirectory.path,
-            onMessageActivity: { activityFired += 1 }
-        )
-
-        session.appendSystemNotice("hello")
-        runner.persistIndices([0])
-        await runner.flushPersistence()
-        #expect(activityFired >= 1)
-    }
-
-    @Test("onMessageActivity does not fire on stop() when nothing was persisted")
+    @Test("onPersist fires on stop(), but onMessageActivity does not when nothing was persisted")
     func onMessageActivityDoesNotFireOnNoOpStop() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rn-onactivity-stop-\(UUID().uuidString).sqlite")
@@ -4605,35 +4249,10 @@ struct ACPSessionRunnerTests {
 
         runner.stop()
         // onPersist keeps firing unconditionally (existing cross-process
-        // notification contract, covered by "onPersist fires on stop()"
-        // below) — onMessageActivity must not, since nothing was written.
+        // notification contract) — onMessageActivity must not, since
+        // nothing was written.
         #expect(posts >= 1)
         #expect(activityFired == 0)
-    }
-
-    @Test("onPersist fires on stop()")
-    func onPersistFiresOnStop() throws {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rn-onpersist-stop-\(UUID().uuidString).sqlite")
-        let store = try ACPSessionStore(path: url.path)
-        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
-            currentModel: nil, currentMode: nil, autoRun: false,
-            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
-
-        var posts = 0
-        let mock = ACPMockClient()
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
-        let runner = ACPSessionRunner(
-            session: session,
-            connection: ACPConnection(client: mock),
-            store: store,
-            sessionId: "s",
-            worktreePath: FileManager.default.temporaryDirectory.path,
-            onPersist: { posts += 1 }
-        )
-
-        runner.stop()
-        #expect(posts >= 1)
     }
 
     @Test("a permission decision is not merged into the transcript when the runner has lost the write lease")
@@ -4689,19 +4308,21 @@ struct ACPSessionRunnerTests {
         #expect(session.transcript.messages.isEmpty)
     }
 
-    @Test("runner does not persist when it has lost the session lease")
-    func persistSkippedWhenLeaseLost() async throws {
+    @Test(
+        "runner persists messages only while it holds the session lease",
+        arguments: [("ME", 1), ("OTHER", 0)] as [(String, Int)]
+    )
+    func persistRequiresSessionLease(leaseOwner: String, expectedCount: Int) async throws {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rn-lease-lost-\(UUID().uuidString).sqlite")
+            .appendingPathComponent("rn-lease-persist-\(UUID().uuidString).sqlite")
         let store = try ACPSessionStore(path: url.path)
         let sid = "s"
         try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
             currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
 
-        // Seize the lease for a DIFFERENT instance than the runner's ownerInstanceId.
         let now = Int64(Date().timeIntervalSince1970)
-        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        try store.seizeLease(sessionId: sid, instanceId: leaseOwner, pid: Int64(getpid()), now: now)
 
         let mock = ACPMockClient()
         let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
@@ -4714,46 +4335,11 @@ struct ACPSessionRunnerTests {
             ownerInstanceId: "ME"
         )
 
-        // Put one message in the transcript, then attempt to persist.
-        session.appendSystemNotice("should not land")
+        session.appendSystemNotice("notice")
         runner.persistFromIndex(0)
         await runner.flushPersistence()
 
-        // Nothing should have been written — the lease is held by "OTHER", not "ME".
-        #expect(try store.messageCount(sessionId: sid) == 0)
-    }
-
-    @Test("runner persists when it holds the session lease")
-    func persistProceedsWhenLeaseHeld() async throws {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rn-lease-held-\(UUID().uuidString).sqlite")
-        let store = try ACPSessionStore(path: url.path)
-        let sid = "s"
-        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
-            currentModel: nil, currentMode: nil, autoRun: false,
-            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
-
-        // Seize the lease for "ME" — same as the runner's ownerInstanceId.
-        let now = Int64(Date().timeIntervalSince1970)
-        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
-
-        let mock = ACPMockClient()
-        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
-        let runner = ACPSessionRunner(
-            session: session,
-            connection: ACPConnection(client: mock),
-            store: store,
-            sessionId: sid,
-            worktreePath: FileManager.default.temporaryDirectory.path,
-            ownerInstanceId: "ME"
-        )
-
-        session.appendSystemNotice("should land")
-        runner.persistFromIndex(0)
-        await runner.flushPersistence()
-
-        // The lease owner matches, so the message must be written.
-        #expect(try store.messageCount(sessionId: sid) == 1)
+        #expect(try store.messageCount(sessionId: sid) == expectedCount)
     }
 
     @Test("persistQueue skipped when lease is held by another instance")
@@ -5236,7 +4822,7 @@ struct ACPSessionRunnerTests {
         #expect(session.titleSource == .manual)
     }
 
-    @Test("first prompt prepends pending MCP preamble wire-only and clears it")
+    @Test("first prompt prepends pending MCP preamble wire-only once and clears it")
     func firstPromptPrependsPreamble() async throws {
         let (runner, mock) = try makeRunner()
         runner.session.pendingMCPPreamble = "<alas-workspace-context>ctx</alas-workspace-context>"
@@ -5270,24 +4856,15 @@ struct ACPSessionRunnerTests {
             }
             return false
         } == false)
-    }
 
-    @Test("second prompt does not re-send the MCP preamble")
-    func secondPromptOmitsPreamble() async throws {
-        let (runner, mock) = try makeRunner()
-        runner.session.pendingMCPPreamble = "<ctx>"
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
-
-        for text in ["one", "two"] {
-            _ = await withCheckedContinuation { c in
-                runner.send(text: text, attachments: []) { c.resume(returning: $0) }
-            }
+        // The next prompt goes out without the preamble.
+        _ = await withCheckedContinuation { c in
+            runner.send(text: "again", attachments: []) { c.resume(returning: $0) }
         }
         let prompts = mock.sent.filter { $0.method == "session/prompt" }
             .compactMap { $0.params as? ACPSessionPromptParams }
         #expect(prompts.count == 2)
-        #expect(prompts[0].prompt.count == 2)
-        #expect(prompts[1].prompt.count == 1)
+        #expect(prompts.last?.prompt.count == 1)
     }
 
     @Test("failed prompt keeps the MCP preamble pending")

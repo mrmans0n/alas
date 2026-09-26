@@ -412,6 +412,13 @@ struct WorkspaceTerminalSessionTests {
         state.config.workspacesEnabled = true
         state.projectsManager.insertOptimisticWorktree(worktree)
         let pane = state.rightPaneStore.state(for: worktree, baseBranch: "main", comparisonMode: .auto)
+        // Activating the pane schedules a real-git base-branch probe that then
+        // starts the watcher, refresh, and sync timer. Quiesce it before the
+        // fixture root is deleted so none of that work runs into later tests.
+        defer {
+            state.rightPaneStore.deactivate()
+            pane.baseBranchProbeTask?.cancel()
+        }
         pane.nonterminalCheckpointJournals = [
             CheckpointRestoreJournal(
                 lineageID: try #require(worktree.lineageID),
@@ -470,6 +477,7 @@ struct WorkspaceTerminalSessionTests {
         state.terminal.registry.register(session)
 
         try await state.stopWorkspaceCheckoutSessions(checkout)
+        drainDispatchedZmxKills(state)
 
         #expect(tabs.tabs(for: owner).isEmpty)
         #expect(state.terminal.registry.session(for: "checkout-leaf") == nil)
@@ -597,6 +605,7 @@ struct WorkspaceTerminalSessionTests {
         }
 
         state.closeComposedCenterTabs(worktreeID: "member", sharedSessionOwner: owner, tabIDs: [tab.id])
+        drainDispatchedZmxKills(state)
 
         #expect(tabs.tabs(for: owner).isEmpty)
         #expect(state.terminal.registry.session(for: "first") == nil)
@@ -618,6 +627,7 @@ struct WorkspaceTerminalSessionTests {
         ))
 
         state.handleTerminalProcessExited(owner: owner, leafId: "leaf", processAlive: false)
+        drainDispatchedZmxKills(state)
 
         #expect(tabs.tabs(for: owner).isEmpty)
         #expect(state.terminal.registry.session(for: "leaf") == nil)
@@ -768,6 +778,15 @@ struct WorkspaceTerminalSessionTests {
         #expect(restored == nil)
         #expect(state.terminal.registry.session(for: "checkout-leaf") == nil)
         #expect(tabs.tabs(for: owner).map(\.id) == [tab.id])
+    }
+
+    /// Closing a terminal leaf dispatches detached `zmx ls`/`zmx kill` work
+    /// against the host's real zmx directory. Drain it inside the test that
+    /// caused it so those subprocesses never overlap a later test in the same
+    /// serial host. The wait is bounded: each zmx call carries its own timeout.
+    @MainActor
+    private func drainDispatchedZmxKills(_ state: AppState) {
+        state.terminal.waitForPendingKills(timeout: 20)
     }
 }
 
