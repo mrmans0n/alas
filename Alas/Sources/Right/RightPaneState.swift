@@ -1206,8 +1206,19 @@ final class RightPaneState: GGSplitCommitServicing {
                 worktreeId: worktree.id,
                 snapshot: snapshot
             )
-        case .pushBranch, .forcePushBranch:
+        case .pushBranch, .pushAndCreateReviewRequest, .forcePushBranch:
             guard let snapshot = reviewLoop.snapshot else { return }
+            if action == .pushAndCreateReviewRequest {
+                guard snapshot.reviewRequest == nil,
+                      snapshot.remote != nil,
+                      snapshot.providerAvailable,
+                      snapshot.providerAuthenticated,
+                      snapshot.local.needsPush,
+                      snapshot.local.pushState != .diverged,
+                      snapshot.local.pushState != .stale,
+                      ReviewReadinessModel.canCreateReviewRequest(snapshot)
+                else { return }
+            }
             guard reviewLoop.beginAction(action) else { return }
             Task { @MainActor in
                 defer { reviewLoop.endAction(action) }
@@ -1223,7 +1234,22 @@ final class RightPaneState: GGSplitCommitServicing {
                         sidebarError = Self.reviewLoopPushFailureMessage(result)
                         return
                     }
-                    await refresh()
+                    let refreshed = await refresh()
+                    if action == .pushAndCreateReviewRequest {
+                        guard refreshed,
+                              let current = reviewLoop.snapshot,
+                              current.local.branchName == snapshot.local.branchName,
+                              current.local.headSHA == snapshot.local.headSHA,
+                              !current.local.needsPush,
+                              current.reviewRequest == nil,
+                              current.errorMessage == nil,
+                              ReviewReadinessModel.canCreateReviewRequest(current)
+                        else {
+                            sidebarError = reviewLoop.lastError ?? "Pushed branch, but could not prepare the review request draft. Refresh and try again."
+                            return
+                        }
+                        appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktree.id, snapshot: current)
+                    }
                 } catch {
                     sidebarError = error.localizedDescription
                 }
