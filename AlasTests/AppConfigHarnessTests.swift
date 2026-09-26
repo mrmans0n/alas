@@ -56,6 +56,17 @@ struct AppConfigHarnessTests {
         #expect(!decoded.harness.acpCollapseFinishedToolCalls)
     }
 
+    @Test("blocker escalation delay defaults to 30 and decodes to 30 when the key is missing")
+    func blockerEscalationDelayDefaultsTo30() throws {
+        #expect(AppConfig.defaults.harness.acpDelegatedBlockerEscalationSeconds == 30)
+        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(AppConfig.defaults)) as? [String: Any])
+        var harness = try #require(object["harness"] as? [String: Any])
+        harness.removeValue(forKey: "acpDelegatedBlockerEscalationSeconds")
+        object["harness"] = harness
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(decoded.harness.acpDelegatedBlockerEscalationSeconds == 30)
+    }
+
     @Test("collapse finished tool calls round-trips when enabled")
     func collapseFinishedToolCallsRoundTrip() throws {
         var cfg = AppConfig.defaults

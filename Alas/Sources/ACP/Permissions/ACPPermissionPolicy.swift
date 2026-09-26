@@ -62,6 +62,12 @@ final class ACPPermissionPolicy {
     /// The real JSON-RPC id of the permission currently parked for a human,
     /// or nil when nothing is parked. `session.transcript.pendingPermission`
     /// cannot answer this: it is published with a hardcoded `.number(0)`.
+    ///
+    /// Not yet set during the synchronous extent of the `onBlocked` callback
+    /// in `awaitUserDecision` below — the continuation that gates this
+    /// accessor is only recorded immediately afterward. A synchronous
+    /// observer of `onBlocked` must use that callback's own `requestID`
+    /// argument, not this accessor.
     var pendingPermissionRequestID: JSONRPCID? {
         pendingContinuation == nil ? nil : pendingRequestID
     }
@@ -70,6 +76,8 @@ final class ACPPermissionPolicy {
         session.transcript.streamingState = .awaitingPermission
         session.transcript.pendingPermission = .init(id: .number(0), params: params)
         if let requestID = pendingRequestID {
+            // `pendingPermissionRequestID` still reads nil here: `pendingContinuation`
+            // is only assigned after this callback returns.
             onBlocked(requestID, params)
         }
         return await withCheckedContinuation { (c: CheckedContinuation<ACPPermissionResponse, Never>) in

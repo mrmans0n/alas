@@ -64,4 +64,15 @@ struct ACPDelegatedOutcomeTextTests {
         #expect(text.contains("waiting for a human decision"))
         #expect(!text.lowercased().contains("acknowledge"))
     }
+
+    @Test("blocker copy caps an oversized summary and strips embedded newlines")
+    func blockerCopySanitizesSummary() {
+        var longContext = context
+        longContext.blockerSummary = String(repeating: "x", count: 500) + "\nsecond line"
+        let text = ACPDelegatedOutcomeText.blocker(
+            longContext, kindLabel: "question", waitedSeconds: 0, escalated: false
+        )
+        #expect(!text.contains("\n"))
+        #expect(text.count < 500)
+    }
 }
