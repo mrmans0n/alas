@@ -11,8 +11,6 @@ AlasTests/LiveLanguageServerVerificationTests	quarantine	Opt-in evidence collect
 AlasTests/RemoteDiscoveryIntegrationTests	quarantine	Requires real multicast DNS; hosted macOS runners did not discover their local advertisement in runs 35711949987 and 35733349340. Run explicitly on a Bonjour-capable host.	#1270
 AlasTests/SSHIntegrationTests	quarantine	Requires a key-authenticated SSH localhost fixture; run explicitly with ALAS_SSH_INTEGRATION=1.	#1270
 AlasTests/AppStateCleanupTests	slow-subprocess	Reinstated from quarantine: repeated creation and deletion waits exceeded the 120s deadline in run 35322676722; split into four-test invocations with a 360s deadline to measure whether they complete.	#1297
-AlasTests/HookCommandShellTests/codexIdleCommand_extractsBody()	quarantine	Hook command does not deliver the Codex idle event in full CI. Evidence: subprocess-3-5 in run 35322676722.	#1297
-AlasTests/HookCommandShellTests/cursorAwaitingCommand_extractsBody()	quarantine	Hook command does not deliver the Cursor awaiting-input event in full CI. Evidence: subprocess-3-5 in run 35322676722.	#1297
 AlasTests/RightPaneGGStackTests	subprocess	Reinstated from quarantine after pruning (run 35322676722 expired the invocation during mutation admission); isolated until CI shows it is stable in an ordinary batch.	#1297
 AlasTests/RightPaneGGStackTests/repeatedSyncInvocationIsSilentlyIgnoredAtUIBoundary()	quarantine	Drifted while quarantined: the fake runner sync is never called. Evidence: run 36236063295 subprocess-2-4.	#1513
 AlasTests/RightPaneGGStackTests/syncErrorSuppressesSuccessSummary()	quarantine	Drifted while quarantined: a sync error no longer surfaces through this path. Evidence: run 36236063295 subprocess-2-4.	#1513
