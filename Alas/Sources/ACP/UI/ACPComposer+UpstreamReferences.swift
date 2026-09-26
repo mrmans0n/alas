@@ -47,15 +47,14 @@ extension ACPNSTextView {
         let prefix = string.substring(to: range.location) as NSString
         // `prefix` ends exactly at the paste point by construction, so a
         // code span still open there never satisfies `NSLocationInRange`
-        // against its own end (the range that reaches the caret has
-        // `NSMaxRange == range.location`). Detect that boundary case by
-        // comparing against the closed-spans-only scan: an extra range only
-        // shows up when the trailing run was left open through the caret.
+        // against its own end (any range this scan finds has
+        // `NSMaxRange <= range.location`). Detect an open span at the caret
+        // by comparing against the closed-spans-only scan instead: an extra
+        // range only shows up when the trailing run was left open through
+        // the caret.
         let closedRanges = ACPUpstreamReferenceDetector.codeRanges(in: prefix, unclosedRunsExtendToEnd: false)
         let rangesThroughCaret = ACPUpstreamReferenceDetector.codeRanges(in: prefix, unclosedRunsExtendToEnd: true)
-        let pastingIntoCode = rangesThroughCaret.count > closedRanges.count
-            || closedRanges.contains(where: { NSLocationInRange(range.location, $0) })
-        guard !pastingIntoCode else { return false }
+        guard rangesThroughCaret.count <= closedRanges.count else { return false }
         let before: unichar? = range.location > 0 ? string.character(at: range.location - 1) : nil
         let after: unichar? = NSMaxRange(range) < string.length ? string.character(at: NSMaxRange(range)) : nil
         return ACPUpstreamReferenceChip.chipify(
