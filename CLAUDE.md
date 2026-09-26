@@ -7,12 +7,58 @@
 
 ## Development rules
 - Keep code, comments, logs, and UI strings in English.
-- Prefer small, reviewable changes with tests when practical.
+- Prefer small, reviewable changes. Add tests where the Testing policy below says they earn their keep.
 - Tests use the Swift Testing framework (`import Testing`), not XCTest.
 - After editing `project.yml`, regenerate the Xcode project with `xcodegen` and commit both files.
 - `Info.plist` keys are pinned in `project.yml` under `info: properties:` — edit there, not the plist.
 - Do not introduce large architectural changes without an explicit plan.
 - Do not add agent attributions of any kind: no `Co-Authored-By: Claude` (or any other model/tool) trailers in commits, no "Generated with Claude Code" footers in PR/MR descriptions, no "🤖" markers, no "this was written by an AI" notes in code, comments, docs, or commit/PR bodies. Commits and PRs should read as if written by the human author.
+
+## Testing policy
+
+The test target is already about the size of the app. Every test costs CI
+time, maintenance, and review attention, so each one has to pay for itself.
+Coverage is not a goal. Fewer, sharper tests beat many shallow ones.
+
+**Write a test when it pins behavior that could silently break:**
+
+- Parsers, formatters, and encoders/decoders with real edge cases.
+- State machines, reducers, schedulers, and concurrency protocols where
+  ordering matters (ACP session lifecycle, broker, checkpoints, worktree ops).
+- Pure decision logic: policies, resolvers, routing, diff and layout math.
+- A bug fix. The regression test must fail without the fix; name it after the
+  behavior, not the issue number.
+
+**Do not write a test for:**
+
+- Default values, memberwise inits, trivial getters, or "does not crash".
+- SwiftUI/AppKit view composition, styling, spacing, or which subview exists.
+  Extract the decision into a plain function and test that instead.
+- Wiring that only forwards a call to something already tested.
+- Behavior already pinned by an existing test at a different layer.
+- The same scenario with a different constant. Parameterize instead.
+
+**How to write it:**
+
+- Extend the existing suite for the type under test before creating a file.
+  Do not add scenario-sliced sibling files (`FooAttachRestoreTests`,
+  `FooAttachRestoreRetryTests`, …) for one type.
+- One behavior per test. Use `@Test(arguments:)` for input variants.
+- Assert on observable outcomes, not on private intermediate state.
+- Never synchronize with a fixed `Task.sleep`. Await the event, inject a
+  clock, or poll a condition with a deadline. Reuse an existing polling or
+  fixture helper instead of writing another private copy.
+- Prefer in-memory fakes over real git repos, processes, sockets, or windows.
+  Reserve real subprocesses and AppKit windows for a small number of
+  integration tests that genuinely need them.
+- Do not add `.serialized`, `@MainActor`, or a `subprocess` entry in
+  `scripts/ci-swift-test-policy.tsv` by default. Add them only with a stated
+  reason: shared global state you cannot remove, main-thread-only API, or a
+  reproduced hang.
+
+**Deleting is part of the job.** When a change makes a test redundant, or you
+touch a suite with overlapping tests, remove or merge them in the same PR.
+A net reduction in test count is a fine outcome.
 
 ## Before finishing a change
 

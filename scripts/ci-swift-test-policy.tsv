@@ -1,172 +1,18 @@
 # Xcode selector	lane	reason	follow-up issue
-# Subprocess entries preserve the conservative isolation baseline from PR #1277.
+# Subprocess entries need CI evidence that the suite fails or hangs in an ordinary batch.
 # Unlisted tests run in ordinary batches.
-AlasTests/ACPProcessLivenessTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ACPRemoteFileServerTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ACPSessionTerminalRoutingTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ACPStdioClientTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ACPStdioTerminalDispatchTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ACPTerminalCRLFTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ACPTerminalHostTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ACPTerminalTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AgentHookSocketServerCLITests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AgentHookSocketServerTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AgentRunnerInvocationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AgentRunnerParseTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AgentTerminalLaunchTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AlasCLICommandRouterTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AlasCLIEnvInjectionTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AlasCLIRequestTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AlasCLIReviewTargetResolverTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AlasCLIWorktreeResolverTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AlasHookCommandTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AppConfigTerminalTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AppStateCLIRoutingTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AppStateCleanupTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AppStateCreateWorktreeLaunchSurfaceTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AppStateCreateWorktreeSymlinkTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AppStateGGACPWorktreeContextTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AppStateKeepSessionsAliveTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AppStatePersistenceTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AppStateRunScriptCreationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AppStateSpacesTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AppStateTabAvailabilityTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/AppStateWorktreeArchiveBatchTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/AppStateWorktreeCleanupBatchTests	slow-subprocess	Real-git deletion buckets (fixture init, worktree add, staged trash, per-item fingerprint and removal) exceed the default 120s aggregate deadline on CI while making progress; the invocation is killed at 120s and the definitions are only accounted on Xcode's restart. Allow 360 seconds per invocation.	#1423
-AlasTests/BeautifulMermaidBackendTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/BeautifulMermaidSmokeTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/CheckpointCoordinationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/CheckpointDiffLoaderTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/CheckpointRestoreIntegrationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/CheckpointRestoreInterruptionTests	slow-subprocess	Parameterized restore fault scenarios exceed the default aggregate deadline while making progress; allow 360 seconds per invocation.	#23
-AlasTests/CheckpointRestorePreparationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/CheckpointRestorePreviewTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ClosedTabAppStateTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/CodeHostProviderTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/CommitDetailsTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/CommitPublishLiveOperationsTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/CommitsAheadTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/CommitsOlderTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ContentSearcherTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/DiffPaneViewTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/FileIndexTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GGCommandRunningStreamingTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GGReorderModelTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GGServiceTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GGWorktreeContextTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitEventFilterTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitHubCLIProviderTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitHubCLIProviderVerdictTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitIgnoreServiceTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitInvocationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitLabCLIProviderTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitLabCLIProviderVerdictTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitNameValidatorTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitServiceBehindStatusTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitServiceCommitEditingTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitServiceDiscardTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitServiceHeadMessageTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitServiceMergeTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitServicePullTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitServiceRemoteChangesTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitServiceRemoteForFetchTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitServiceReviewRequestDraftTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitServiceStackCommitTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitServiceStagedTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitServiceStagingTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitServiceStashTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitServiceUpstreamTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitStatusCacheTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/GitTypesTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/HookCommandShellTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/HookInstallNudgeResolverTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ImageDiffEndToEndTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ImageDiffPairLoaderTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/IssueWorktreeLaunchTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/JSONRPCFramerBoundsTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/JSONRPCStdioFramingFailureTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/LSPInstallerTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/LSPTransportFramingTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/LegacyHookSweepTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/MergeConflictTabModelTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/MergeOperationStateTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/NewRunScriptDialogTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/OpenBinaryRoutingTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ProcessGitDataTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ProcessGitTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ProcessMemoryProbeTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ProcessTransportTerminationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ProjectGitWatcherTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ProjectsManagerGGWorktreeModeTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ProjectsManagerWorktreeOrderingTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RemoteAppStateAccessTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RemoteFileAccessTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RemoteFileStatsTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RemoteTerminalLaunchTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RemoteTerminalScriptTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RemoteZmxInstallerTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RepositoryImportServiceTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/RenameFeatureTests	subprocess	Formatting and shared-undo coverage repeatedly fails or times out in full ordinary batches but passes focused execution. Evidence: run 35733349340.	#1297
-AlasTests/ReviewLoopStateTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ReviewSessionLoaderTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RevisionSnapshotCacheTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RightPaneCheckpointStateTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RightPaneGGStackErrorPresentationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RightPaneGGStackTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RightPaneOptimisticStageTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RightPaneStateBaseBranchTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RightPaneStateDiscardTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RightPaneStateLoadOlderTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RightPaneStatePullTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RightPaneStateSyncStatusTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RightPaneStoreBaseBranchTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RunScriptCompletionMonitorTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RunScriptCreationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RunScriptFailurePresentationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RunScriptFailureTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RunScriptLaunchTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RunScriptMetadataTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RunScriptPaletteModelTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RunScriptStackCatalogTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RunScriptStackDetectorTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RunScriptStoreTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RunScriptTemplateTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RunScriptWritingHelpTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/SSHCommandTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/SSHConfigParserTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/SSHHostSuggestionsTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/SelfUpdaterTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ShellEnvResolverTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/TerminalCLIInjectionTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/TerminalIntegrationActionsTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/TerminalServiceZmxTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/TerminalSplitDragStateTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/TerminalTabStateCodableTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/WebPreviewAutomationBrowserTests	subprocess	Real WKWebView against a loopback HTTP fixture; individual tests time out inside full ordinary batches but the suite passes focused execution. Evidence: ordinary-6-1 in run 35825480817 and shard 2 in run 35786644763.	#1426
-AlasTests/WorkspaceCheckoutLifecycleTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/WorkspaceCheckoutLocalIntegrationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/WorkspaceCheckoutRemoteInvocationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/WorkspaceCheckoutRepairTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/WorkspaceEditExecutorTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/WorkspaceEditRemoteTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/WorkspaceTerminalSessionTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/WorktreeCheckpointCaptureTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/WorktreeCleanupFixtureTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/WorktreeCreateFetchTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/WorktreeStateSnapshotterTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/WorktreeTrashTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ZmxClientTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ZmxEnvTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ZmxSessionNameTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/ZmxSunPathBudgetTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/AlasGhosttySmokeTests	quarantine	Ghostty runtime smoke is manual; hosted test runners do not provide a stable display runtime.	#1270
 AlasTests/ACPGeminiE2ETests	quarantine	Requires a locally installed and authenticated Gemini CLI; run explicitly outside PR CI.	#1270
 AlasTests/LiveLanguageServerVerificationTests	quarantine	Opt-in evidence collector requiring a locally installed language server; see docs/plans/2026-09-13-code-editor-lsp-verification.md.	#1270
 AlasTests/RemoteDiscoveryIntegrationTests	quarantine	Requires real multicast DNS; hosted macOS runners did not discover their local advertisement in runs 35711949987 and 35733349340. Run explicitly on a Bonjour-capable host.	#1270
 AlasTests/SSHIntegrationTests	quarantine	Requires a key-authenticated SSH localhost fixture; run explicitly with ALAS_SSH_INTEGRATION=1.	#1270
-AlasTests/GitServiceTests	quarantine	macos-26 subprocess/git hang quarantine; reassess under #23.	#23
-AlasTests/WorktreeServiceTests	quarantine	macos-26 subprocess/git hang quarantine; reassess under #23.	#23
-AlasTests/ProjectsManagerTests	quarantine	macos-26 subprocess/git hang quarantine; reassess under #23.	#23
+AlasTests/GitServiceTests	subprocess	Reinstated from the macos-26 git hang quarantine after Process+Git gained bounded pipe reads and process-kill escalation; isolated until CI shows it is stable in an ordinary batch.	#23
+AlasTests/WorktreeServiceTests	subprocess	Reinstated from the macos-26 git hang quarantine after Process+Git gained bounded pipe reads and process-kill escalation; isolated until CI shows it is stable in an ordinary batch.	#23
+AlasTests/ProjectsManagerTests	subprocess	Reinstated from the macos-26 git hang quarantine after Process+Git gained bounded pipe reads and process-kill escalation; isolated until CI shows it is stable in an ordinary batch.	#23
 AlasTests/AgentHookSocketServerTests/aliasEnvelope_dispatchesMappedEvent()	quarantine	Socket acknowledgement assertions still fail in full CI. Evidence: subprocess-4-1 in run 35322676722.	#1297
 AlasTests/AgentHookSocketServerTests/malformedJSON_returnsError()	quarantine	Socket acknowledgement assertions still fail in full CI. Evidence: subprocess-4-1 in run 35322676722.	#1297
 AlasTests/AgentHookSocketServerTests/unknownEvent_acksOkButDoesNotDispatch()	quarantine	Socket acknowledgement assertions still fail in full CI. Evidence: subprocess-4-1 in run 35322676722.	#1297

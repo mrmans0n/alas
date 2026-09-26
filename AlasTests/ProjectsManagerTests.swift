@@ -441,7 +441,7 @@ extension ProjectsManagerTests {
         #expect(mgr.worktrees(projectId: projectA.id).isEmpty)
         #expect(mgr.worktrees(projectId: projectB.id).isEmpty)
 
-        let gcDropped = await mgr.refreshAll()
+        await mgr.refreshAll()
 
         let treesA = mgr.worktrees(projectId: projectA.id)
         let treesB = mgr.worktrees(projectId: projectB.id)
@@ -449,7 +449,6 @@ extension ProjectsManagerTests {
         #expect(treesA.first?.branch == "main")
         #expect(treesB.count == 1)
         #expect(treesB.first?.branch == "main")
-        #expect(!gcDropped)
     }
 
     @Test func refreshAllRetainsPerProjectDiscoveryFailure() async {
@@ -492,13 +491,17 @@ extension ProjectsManagerTests {
         #expect(mgr.worktrees(projectId: projectB.id).count == 1)
     }
 
-    @Test func refreshWithNoOrphansReturnsFalse() async throws {
+    @Test func refreshReportsPersistableChangesOnlyWhenSomethingChanged() async throws {
         let repo = try await makeRepo(name: "zeta")
         defer { try? FileManager.default.removeItem(at: repo) }
         let mgr = ProjectsManager(persistedProjects: [])
         let project = try await mgr.addProject(path: repo, displayName: "zeta", color: "#5fb7c4")
-        let gcDropped = try await mgr.refreshWorktrees(projectId: project.id)
-        #expect(!gcDropped)
+        // The first refresh populates the cached worktree list, which must be persisted.
+        let firstRefreshChanged = try await mgr.refreshWorktrees(projectId: project.id)
+        #expect(firstRefreshChanged)
+        // A refresh that finds nothing new has nothing to persist.
+        let secondRefreshChanged = try await mgr.refreshWorktrees(projectId: project.id)
+        #expect(!secondRefreshChanged)
     }
 
     @Test func optimisticWorktreeAppearsImmediately() async throws {
