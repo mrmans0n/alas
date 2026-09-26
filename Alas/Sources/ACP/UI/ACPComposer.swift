@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CryptoKit
 import UniformTypeIdentifiers
 
 typealias ACPComposerSubmitCompletion = @MainActor (_ succeeded: Bool) -> Void
@@ -171,7 +172,14 @@ struct ACPInputField: NSViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
         guard let width = proposal.width, let textView = nsView.documentView as? ACPNSTextView else { return nil }
-        return CGSize(width: width, height: min(140, textView.composerContentHeight(for: width)))
+        let contentHeight = min(140, textView.composerContentHeight(for: width))
+        // Fill the offered height like a plain flexible NSView would. Hugging
+        // the content height lets SwiftUI center a short editor vertically in
+        // the composer, so the caret starts mid-box instead of at the top.
+        guard let proposedHeight = proposal.height else {
+            return CGSize(width: width, height: contentHeight)
+        }
+        return CGSize(width: width, height: min(140, max(proposedHeight, contentHeight)))
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
@@ -1708,13 +1716,26 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     static let maxImagesPerMessage = 10
 
-    private func currentImageChipCount() -> Int {
-        guard let storage = textStorage else { return 0 }
+    /// Counts image-attachment CHARACTERS, not attribute runs: two adjacent
+    /// image chips sharing the same content-addressed URI (the same file
+    /// pasted twice with no text between them) have equal `.imageAttachmentURI`
+    /// string values, and `enumerateAttribute` coalesces equal adjacent
+    /// values into a single run — undercounting them as one chip instead of
+    /// two, and letting the message grow past `maxImagesPerMessage`.
+    private func imageChipCount(in range: NSRange) -> Int {
+        guard let storage = textStorage, range.length > 0 else { return 0 }
         var count = 0
-        storage.enumerateAttribute(.imageAttachmentURI, in: NSRange(location: 0, length: storage.length)) { v, _, _ in
-            if v != nil { count += 1 }
+        for index in range.location..<NSMaxRange(range) {
+            if storage.attribute(.imageAttachmentURI, at: index, effectiveRange: nil) != nil {
+                count += 1
+            }
         }
         return count
+    }
+
+    private func currentImageChipCount() -> Int {
+        guard let storage = textStorage else { return 0 }
+        return imageChipCount(in: NSRange(location: 0, length: storage.length))
     }
 
     @discardableResult
@@ -1937,6 +1958,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     override func paste(_ sender: Any?) {
         invalidateNextPromptSuggestion()
+        if insertComposerDraft(from: NSPasteboard.general) { return }
         if insertImages(from: NSPasteboard.general) { return }
         if let text = NSPasteboard.general.string(forType: .string) {
             insertPlainText(text)
@@ -1945,14 +1967,313 @@ final class ACPNSTextView: PairedDelimiterTextView {
         super.paste(sender)
     }
 
+    // MARK: Chip-preserving copy / paste
+
+    /// Private pasteboard type carrying a composer selection as a JSON,
+    /// MAC-authenticated payload, so chips keep their identity across copy,
+    /// cut, paste, and drag within the app. Written alongside a readable
+    /// `.string` form for every other destination.
+    static let composerDraftPasteboardType = NSPasteboard.PasteboardType("io.alas.acp.composer-draft")
+
+    /// Generated once per process launch and NEVER serialized anywhere,
+    /// including the pasteboard payload itself. NSPasteboard has no
+    /// per-app read protection — any unsandboxed process on the machine can
+    /// publish the exact same named pasteboard type — so decoding untrusted
+    /// JSON there as trusted composer state would let a forged payload
+    /// point an `.image` or `.mention` chip's URI at an arbitrary local
+    /// file the user never picked, which submission then reads or forwards
+    /// to the agent. An earlier version of this fix put a bearer token
+    /// inside the payload it authenticated, which any application reading
+    /// one legitimate copy could scrape and replay in a forgery. Signing
+    /// with an HMAC keyed by a secret that never leaves the process closes
+    /// that: forging a valid signature for chosen content requires the key
+    /// itself, not just an observed (content, signature) pair.
+    private static let pasteboardMACKey = SymmetricKey(size: .bits256)
+
+    private struct AuthenticatedDraftPayload: Codable {
+        let draftJSON: Data
+        /// The pasteboard's own `changeCount` at the moment this payload was
+        /// written, folded into the signed bytes. HMAC integrity alone
+        /// stops tampering but not replay: another application that
+        /// observed one legitimate (draftJSON, mac) pair could republish it
+        /// later — unchanged content, still a valid signature — paired with
+        /// deceptive bait text in `.string`, tricking the user into pasting
+        /// a stale chip they don't expect. `NSPasteboard.changeCount` bumps
+        /// on every `declareTypes`/`clearContents` call to ANY pasteboard
+        /// content, ours or an attacker's, so a payload is only ever valid
+        /// against the exact write that produced it — PROVIDED it's also
+        /// checked against the pasteboard that write actually happened on;
+        /// see `trustedPasteboardWrites`, which closes the gap a bare
+        /// integer comparison leaves (a change count is only unique per
+        /// pasteboard OBJECT, not globally, and another process can pump an
+        /// unrelated pasteboard — e.g. a drag pasteboard — to any small
+        /// target count cheaply).
+        let changeCount: Int
+        let mac: Data
+    }
+
+    /// Tracks, per pasteboard OBJECT (keyed by identity, not by name/type —
+    /// `NSPasteboard.general` is a shared singleton, but a drag session's
+    /// pasteboard is a fresh object each time), the change count established
+    /// by OUR most recent write to it. `changeCount` alone only proves "this
+    /// pasteboard's current count equals this number" — trivial for another
+    /// process to fake by declaring types on its OWN pasteboard repeatedly
+    /// until its independent counter reaches a leaked value, then
+    /// publishing our captured (draftJSON, mac) bytes there. Requiring the
+    /// specific pasteboard OBJECT we wrote to also be the one being read
+    /// from closes that: an attacker's own pasteboard, however they tune
+    /// its count, was never in this table.
+    ///
+    /// The dictionary value RETAINS the pasteboard itself, not just its
+    /// `ObjectIdentifier` — an identifier is only unique for the lifetime of
+    /// the object it names, and once that object deallocates, a later,
+    /// entirely unrelated `NSPasteboard` (an attacker's own, say) can be
+    /// allocated at the same freed address and collide with a stale
+    /// identifier still sitting in this table. Holding a strong reference
+    /// keeps every tracked pasteboard alive for the rest of the process, so
+    /// its address can never be reused while its entry exists. Entries
+    /// accumulate for the process's lifetime — bounded by how many times
+    /// the user actually copies/drags a chip in a session, not worth adding
+    /// eviction for.
+    private static var trustedPasteboardWrites: [ObjectIdentifier: (pasteboard: NSPasteboard, changeCount: Int)] = [:]
+
+    /// Signs `draft`'s JSON encoding, bound to `changeCount`, with the
+    /// process-local MAC key, and records `pboard` as the one this specific
+    /// signature is valid against.
+    private static func signedDraftPayload(_ draft: ACPComposerDraft, changeCount: Int, writtenTo pboard: NSPasteboard) -> Data? {
+        guard let draftJSON = try? JSONEncoder().encode(draft) else { return nil }
+        var signedBytes = draftJSON
+        withUnsafeBytes(of: changeCount) { signedBytes.append(contentsOf: $0) }
+        let mac = HMAC<SHA256>.authenticationCode(for: signedBytes, using: pasteboardMACKey)
+        trustedPasteboardWrites[ObjectIdentifier(pboard)] = (pboard, changeCount)
+        return try? JSONEncoder().encode(
+            AuthenticatedDraftPayload(draftJSON: draftJSON, changeCount: changeCount, mac: Data(mac))
+        )
+    }
+
+    /// Verifies and decodes a payload written by `signedDraftPayload`,
+    /// rejecting it unless `pboard`'s CURRENT change count still matches the
+    /// one it was signed against AND `pboard` is the exact object that
+    /// signature was recorded against — see `AuthenticatedDraftPayload` and
+    /// `trustedPasteboardWrites`. Returns nil for anything else, including a
+    /// well-formed JSON draft with no signature, which is exactly what a
+    /// forged pasteboard payload from another application looks like.
+    private static func verifiedDraft(from data: Data, on pboard: NSPasteboard) -> ACPComposerDraft? {
+        guard let payload = try? JSONDecoder().decode(AuthenticatedDraftPayload.self, from: data),
+              payload.changeCount == pboard.changeCount,
+              let trusted = trustedPasteboardWrites[ObjectIdentifier(pboard)],
+              trusted.pasteboard === pboard,
+              trusted.changeCount == payload.changeCount
+        else { return nil }
+        var signedBytes = payload.draftJSON
+        withUnsafeBytes(of: payload.changeCount) { signedBytes.append(contentsOf: $0) }
+        guard HMAC<SHA256>.isValidAuthenticationCode(payload.mac, authenticating: signedBytes, using: pasteboardMACKey)
+        else { return nil }
+        return try? JSONDecoder().decode(ACPComposerDraft.self, from: payload.draftJSON)
+    }
+
+    /// The single selected range as a draft, when it contains at least one
+    /// chip. Chip-free selections return nil and keep NSTextView's own
+    /// pasteboard behavior.
+    private var selectedChipDraft: ACPComposerDraft? {
+        guard selectedRanges.count == 1, let textStorage else { return nil }
+        let range = selectedRange()
+        guard range.length > 0, NSMaxRange(range) <= textStorage.length else { return nil }
+        let fragment = textStorage.attributedSubstring(from: range)
+        var hasChip = false
+        fragment.enumerateAttributes(in: NSRange(location: 0, length: fragment.length)) { keys, _, stop in
+            if keys.isComposerChip {
+                hasChip = true
+                stop.pointee = true
+            }
+        }
+        return hasChip ? ACPInputField.Coordinator.draft(from: fragment) : nil
+    }
+
+    /// A chip is a U+FFFC attachment character, so NSTextView's own
+    /// `.string` representation of it is that placeholder. Selections with
+    /// chips write the chips' text form instead (`/command`, `@filename`),
+    /// plus the private, MAC-authenticated draft type so a paste back into
+    /// a composer restores the chips themselves.
+    ///
+    /// Deliberately does NOT gate on `types.contains(.string)`: NSTextView's
+    /// own `writablePasteboardTypes` is not a reliable signal of what a
+    /// caller actually wants written — it can report an empty array
+    /// (observed outside a full interactive AppKit session, e.g. under a
+    /// test host) while `super.writeSelection` still populates `.string`
+    /// regardless of the `types` it was given. Requiring `.string` to
+    /// appear in that array made this override silently never run in
+    /// exactly that situation.
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard let draft = selectedChipDraft else { return super.writeSelection(to: pboard, types: types) }
+        // declareTypes both establishes ownership and returns the new
+        // change count in one call, so the count that ends up signed is
+        // exactly the one this write produces — nothing else can race it
+        // in between, since setData/setString below don't bump it further.
+        let changeCount = pboard.declareTypes([Self.composerDraftPasteboardType, .string], owner: nil)
+        guard let data = Self.signedDraftPayload(draft, changeCount: changeCount, writtenTo: pboard) else {
+            return super.writeSelection(to: pboard, types: types)
+        }
+        pboard.setData(data, forType: Self.composerDraftPasteboardType)
+        pboard.setString(draft.plainText, forType: .string)
+        return true
+    }
+
+    #if DEBUG
+    /// Test seam: writes a draft to `pboard` through the same
+    /// MAC-authenticated, change-count-bound payload `writeSelection`
+    /// produces, so tests can exercise `readSelection`/`paste` without
+    /// reaching into the private key that guards against pasteboard
+    /// forgery.
+    static func writeComposerDraftForTesting(_ draft: ACPComposerDraft, to pboard: NSPasteboard) {
+        let changeCount = pboard.declareTypes([composerDraftPasteboardType, .string], owner: nil)
+        let data = signedDraftPayload(draft, changeCount: changeCount, writtenTo: pboard)!
+        pboard.setData(data, forType: composerDraftPasteboardType)
+        pboard.setString(draft.plainText, forType: .string)
+    }
+
+    /// Test seam: publishes onto `pboard` a payload that is byte-for-byte
+    /// valid (correct MAC, matching `pboard`'s CURRENT change count) but was
+    /// signed and recorded against a different pasteboard entirely — i.e.
+    /// exactly what an attacker gets by declaring types on their OWN
+    /// pasteboard until its independent counter reaches a number leaked
+    /// from a legitimate copy, then republishing the captured bytes on the
+    /// pasteboard the composer actually reads from (e.g. a drag session's).
+    static func writeReplayedSignedDraftForTesting(_ draft: ACPComposerDraft, onto pboard: NSPasteboard) {
+        let targetCount = pboard.declareTypes([composerDraftPasteboardType, .string], owner: nil)
+        let scratch = NSPasteboard(name: .init("alas-replay-source-\(UUID().uuidString)"))
+        defer { scratch.releaseGlobally() }
+        var scratchCount = scratch.declareTypes([composerDraftPasteboardType], owner: nil)
+        while scratchCount < targetCount {
+            scratchCount = scratch.declareTypes([composerDraftPasteboardType], owner: nil)
+        }
+        precondition(scratchCount == targetCount, "test setup could not align pasteboard change counts")
+        let data = signedDraftPayload(draft, changeCount: targetCount, writtenTo: scratch)!
+        pboard.setData(data, forType: composerDraftPasteboardType)
+        pboard.setString(draft.plainText, forType: .string)
+    }
+    #endif
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        [Self.composerDraftPasteboardType] + super.readablePasteboardTypes
+    }
+
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if type == Self.composerDraftPasteboardType, insertComposerDraft(from: pboard) { return true }
+        return super.readSelection(from: pboard, type: type)
+    }
+
+    /// Drops `.image` segments once the message would exceed
+    /// `maxImagesPerMessage`, reporting the same `.tooManyImages` error the
+    /// normal image-insertion path does. Without this, repeatedly
+    /// copy/pasting a draft that carries an image chip would recreate the
+    /// attachment directly and bypass the cap `insertImage` enforces.
+    /// `replacementRange` is excluded from the existing count: those images
+    /// are about to be removed by this same edit, not kept alongside it.
+    ///
+    /// An `.image` whose staged file no longer exists is skipped WITHOUT
+    /// charging it against the budget: `attributedString(from:)` is going to
+    /// drop it anyway, so charging it here would waste a slot on nothing,
+    /// causing a real image later in the same draft to be rejected as
+    /// overflow even though it would have fit.
+    private func capImages(in draft: ACPComposerDraft, replacementRange: NSRange) -> ACPComposerDraft {
+        let existing = currentImageChipCount() - imageChipCount(in: replacementRange)
+        var budget = Self.maxImagesPerMessage - existing
+        var overflowed = false
+        let segments = draft.segments.filter { segment in
+            guard case .image(let uri, _) = segment else { return true }
+            guard let fileURL = URL(string: uri), FileManager.default.fileExists(atPath: fileURL.path) else {
+                return false
+            }
+            guard budget > 0 else {
+                overflowed = true
+                return false
+            }
+            budget -= 1
+            return true
+        }
+        if overflowed {
+            coordinator?.reportImageError(.tooManyImages)
+        }
+        return ACPComposerDraft(segments: segments)
+    }
+
+    /// Inserts a copied composer selection over the current selection with
+    /// its chips rebuilt. A leading `/command` pasted at the very start of
+    /// the message becomes a pill again, in the same edit as the paste,
+    /// under the same rule as a hand-typed one: it has to be followed by
+    /// whitespace, from the pasted text or the text already after it.
+    ///
+    /// Only accepts the payload when its MAC verifies against this
+    /// process's own key AND `pboard`'s change count still matches the one
+    /// it was signed against — see `pasteboardMACKey` and
+    /// `AuthenticatedDraftPayload.changeCount` — so neither a payload forged
+    /// by another application (the pasteboard type name is not
+    /// access-controlled) nor a stale, replayed one from an earlier
+    /// legitimate copy is ever trusted as composer state; `paste(_:)` falls
+    /// back to that application's plain, readable `.string` instead.
+    @discardableResult
+    private func insertComposerDraft(from pboard: NSPasteboard) -> Bool {
+        guard let data = pboard.data(forType: Self.composerDraftPasteboardType),
+              let decoded = Self.verifiedDraft(from: data, on: pboard),
+              !decoded.isEmpty,
+              let textStorage
+        else { return false }
+        let replacementRange = boundedSelectedRange(in: textStorage)
+        let draft = capImages(in: decoded, replacementRange: replacementRange)
+        // The whole draft was one or more images already at the cap: the
+        // error was reported, and there's nothing left to insert, but the
+        // paste itself was still handled — falling through would let
+        // `paste(_:)` retry with the general pasteboard's plain-text form.
+        guard !draft.isEmpty else { return true }
+        let fragment = NSMutableAttributedString(
+            attributedString: ACPInputField.Coordinator.attributedString(from: draft, typography: chatTypography)
+        )
+        // `draft` was structurally non-empty (it has an `.image` segment),
+        // but `attributedString(from:)` silently drops an `.image` whose
+        // staged file no longer exists on disk — and a copied image chip
+        // commonly has a trailing separator space next to it (`insertImage`
+        // always appends one), which survives as ordinary text even when
+        // the image itself is dropped. Either way, once every chip is gone,
+        // what's left is whitespace with nothing (a U+FFFC character isn't
+        // whitespace, so a surviving chip always fails this check): inserting
+        // it would delete a nonempty selection and leave an orphan space
+        // behind instead of the paste the user expected. Treat this the same
+        // as the all-images-capped case: handled, nothing to insert.
+        guard !fragment.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
+        if replacementRange.location == 0, let coordinator {
+            let tail = NSMaxRange(replacementRange)
+            let combined = NSMutableAttributedString(attributedString: fragment)
+            combined.append(textStorage.attributedSubstring(
+                from: NSRange(location: tail, length: textStorage.length - tail)
+            ))
+            if let target = ACPLeadingCommand.chipTarget(in: combined, suggestions: coordinator.promptSuggestions),
+               NSMaxRange(target.range) <= fragment.length {
+                fragment.replaceCharacters(
+                    in: target.range,
+                    with: ACPLeadingCommand.chip(for: target.command, font: chatTypography.appKitFont())
+                )
+            }
+        }
+        let attrs = baseTypingAttributes
+        typingAttributes = attrs
+        performNativeTextInsertion {
+            insertText(fragment, replacementRange: replacementRange)
+        }
+        typingAttributes = attrs
+        return true
+    }
+
+    private func boundedSelectedRange(in textStorage: NSTextStorage) -> NSRange {
+        let range = selectedRange()
+        let location = min(range.location, textStorage.length)
+        return NSRange(location: location, length: min(range.length, textStorage.length - location))
+    }
+
     @discardableResult
     func insertPlainText(_ text: String) -> Bool {
         guard let textStorage else { return false }
-        let replacementRange = selectedRange()
-        let boundedRange = NSRange(
-            location: min(replacementRange.location, textStorage.length),
-            length: min(replacementRange.length, max(0, textStorage.length - replacementRange.location))
-        )
+        let boundedRange = boundedSelectedRange(in: textStorage)
         let attrs = baseTypingAttributes
         typingAttributes = attrs
         performNativeTextInsertion {

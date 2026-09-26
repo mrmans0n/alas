@@ -248,6 +248,37 @@ struct AppStateRunRecordTests {
         }
     }
 
+    /// The launch hops through several main-actor turns before a run record
+    /// reaches `.running`; a fixed sleep races that transition on a loaded
+    /// runner. Waits for the precondition each caller actually needs.
+    private func waitUntilRunning(_ fixture: Fixture, worktree: Worktree? = nil) async throws {
+        var budget = 100
+        while runRecord(fixture, worktree: worktree)?.status != .running {
+            budget -= 1
+            guard budget > 0 else {
+                Issue.record("run never reached .running; last status \(String(describing: runRecord(fixture, worktree: worktree)?.status))")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    /// A restart replaces the run record with a new id; waits for that
+    /// replacement to actually land instead of guessing a duration.
+    private func waitUntilRunningWithNewID(_ fixture: Fixture, previousID: String) async throws -> String {
+        var budget = 100
+        while true {
+            let record = runRecord(fixture)
+            if record?.status == .running, let id = record?.id, id != previousID { return id }
+            budget -= 1
+            guard budget > 0 else {
+                Issue.record("restarted run never replaced the previous id; last record \(String(describing: record))")
+                return previousID
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     // MARK: - Launch and completion
 
     @Test func successfulRunIsRecordedWithoutClosingItsShell() async throws {
@@ -523,16 +554,17 @@ struct AppStateRunRecordTests {
         }
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitUntilRunning(fixture)
         let firstRunID = try #require(runRecord(fixture)?.id)
 
         fixture.state.restartScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
-        let secondRunID = try #require(runRecord(fixture)?.id)
-        #expect(secondRunID != firstRunID)
+        let secondRunID = try await waitUntilRunningWithNewID(fixture, previousID: firstRunID)
 
-        // Let the superseded monitor resolve with a success it no longer owns.
-        try await Task.sleep(for: .milliseconds(200))
+        // Let the superseded monitor resolve with a success it no longer
+        // owns. The superseded waiter itself resolves after 150ms, so this
+        // needs real margin above that on a loaded runner rather than the
+        // 200ms this used to be (a mere 50ms of headroom).
+        try await Task.sleep(for: .milliseconds(600))
 
         let current = try #require(runRecord(fixture))
         #expect(current.id == secondRunID)
@@ -556,15 +588,16 @@ struct AppStateRunRecordTests {
         }
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitUntilRunning(fixture)
         let firstRunID = try #require(runRecord(fixture)?.id)
 
         fixture.state.restartScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
-        let secondRunID = try #require(runRecord(fixture)?.id)
-        #expect(secondRunID != firstRunID)
+        let secondRunID = try await waitUntilRunningWithNewID(fixture, previousID: firstRunID)
 
-        try await Task.sleep(for: .milliseconds(200))
+        // See supersededMonitorDoesNotOverwriteTheRestartedRun: the
+        // superseded waiter resolves after 150ms, so this needs real
+        // margin above that on a loaded runner.
+        try await Task.sleep(for: .milliseconds(600))
 
         let current = try #require(runRecord(fixture))
         #expect(current.id == secondRunID)
@@ -1037,7 +1070,7 @@ struct AppStateRunRecordTests {
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitUntilRunning(fixture)
 
         // A monitor is still watching, so reconciliation must not give up yet.
         fixture.state.reconcileRunRecords(worktreeID: fixture.worktree.id)

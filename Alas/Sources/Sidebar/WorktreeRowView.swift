@@ -673,7 +673,7 @@ struct WorktreeRowView: View {
 /// Line 2's status dot. Pulses for a running session, matching E1's
 /// `@keyframes pulse`, and holds still under Reduce Motion — a sidebar full
 /// of running worktrees would otherwise animate continuously.
-private struct StatusDot: View {
+struct StatusDot: View {
     let color: Color
     let pulses: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

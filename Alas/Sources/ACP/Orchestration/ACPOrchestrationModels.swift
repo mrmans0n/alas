@@ -112,6 +112,21 @@ struct ACPDelegationRecord: Equatable, Sendable {
     var failureMessage: String?
     let createdAt: Int64
     var updatedAt: Int64
+    /// Epoch **milliseconds** (not `createdAt`/`updatedAt`'s seconds) of the
+    /// most recent `session_send` this child addressed to its parent. Used
+    /// to decide whether a finished turn already reported; compared against
+    /// `ACPTurnCompletion.startedAt`, which is also milliseconds — whole
+    /// seconds are too coarse to distinguish a report from the tail of one
+    /// turn from the start of the next.
+    var lastParentReportAt: Int64? = nil
+}
+
+/// How the inbox delivers a delegated message to its target session.
+enum ACPDelegatedMessageKind: String, Codable, Equatable, Sendable {
+    /// Queued as a prompt; the target runs a turn.
+    case prompt
+    /// Appended to the target transcript as a system notice; no turn.
+    case notice
 }
 
 struct ACPDelegatedMessage: Equatable, Sendable {
@@ -120,6 +135,7 @@ struct ACPDelegatedMessage: Equatable, Sendable {
     let targetSessionId: String
     let prompt: String
     let createdAt: Int64
+    var kind: ACPDelegatedMessageKind = .prompt
 }
 
 struct ACPDelegatedMessageClaim: Equatable, Sendable {

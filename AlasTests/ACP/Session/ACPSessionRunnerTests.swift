@@ -4132,7 +4132,8 @@ struct ACPSessionRunnerTests {
         isConnectionCurrent: @escaping () -> Bool = { true },
         canWrite: (() -> Bool)? = nil,
         validateLease: (() async -> Bool)? = nil,
-        onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in }
+        onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
+        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil
     ) throws -> (ACPSessionRunner, ACPMockClient) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -4151,12 +4152,141 @@ struct ACPSessionRunnerTests {
             worktreePath: FileManager.default.temporaryDirectory.path,
             onUserCancel: onUserCancel,
             onSuccessfulTurn: onSuccessfulTurn,
+            onTurnCompleted: onTurnCompleted,
             onCheckpointCapture: onCheckpointCapture,
             isConnectionCurrent: isConnectionCurrent,
             canWrite: canWrite,
             validateLease: validateLease
         )
         return (runner, mock)
+    }
+
+    @Test("successful prompt emits one completed turn")
+    func successfulPromptEmitsCompletion() async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+
+        _ = await withCheckedContinuation { continuation in
+            runner.send(text: "hello", attachments: []) { succeeded in
+                continuation.resume(returning: succeeded)
+            }
+        }
+
+        #expect(completions.count == 1)
+        #expect(completions.first?.sessionId == "s")
+        #expect(completions.first?.result == .completed)
+        #expect(completions.first?.delegatedSource == nil)
+        #expect((completions.first?.startedAt ?? 0) > 0)
+    }
+
+    @Test("a cancelled prompt whose RPC still succeeds emits .cancelled, not .completed")
+    func cancelledPromptThatSucceedsEmitsCancelled() async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
+
+        let promptCanFinish = AsyncGate()
+        let cancelStarted = AsyncGate()
+        let cancelCanFinish = AsyncGate()
+        let sendDone = AsyncGate()
+
+        // The prompt RPC does succeed — this is the ACP-conformant reply an
+        // adapter can still send after acknowledging a server-side cancel —
+        // but only once the test lets it, so `activePromptID` stays pinned
+        // to this prompt while `userCancel()` races it below.
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await promptCanFinish.wait()
+            return Data("{}".utf8)
+        }
+        // `session/cancel` is a fire-and-forget notification. Gating it lets
+        // the test hold `userCancel()` right after it has recorded the
+        // prompt as cancelled but before it clears `activePromptID` —
+        // exactly the window in which the real race occurs.
+        mock.scriptNotifyAsync(method: "session/cancel") { _ in
+            await cancelStarted.open()
+            await cancelCanFinish.wait()
+        }
+
+        var sendSucceeded: Bool?
+        runner.send(text: "hello", attachments: []) { succeeded in
+            sendSucceeded = succeeded
+            Task { await sendDone.open() }
+        }
+
+        let userCancelTask = Task { @MainActor in await runner.userCancel() }
+        // Wait until userCancel() has inserted the prompt id into
+        // `cancelledPromptIDs` and is blocked sending the cancel RPC.
+        // `activePromptID` is still this prompt's id at this point.
+        await cancelStarted.wait()
+
+        // Let the original session/prompt RPC "win the race" and succeed
+        // while the turn is still marked cancelled.
+        await promptCanFinish.open()
+        await sendDone.wait()
+
+        await cancelCanFinish.open()
+        await userCancelTask.value
+
+        #expect(sendSucceeded == true)
+        #expect(completions.count == 1)
+        #expect(completions.first?.result == .cancelled)
+    }
+
+    @Test("failed prompt emits a failed turn")
+    func failedPromptEmitsFailure() async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, _) = try makeRunner(onTurnCompleted: { completions.append($0) })
+
+        _ = await withCheckedContinuation { continuation in
+            runner.send(text: "hello", attachments: []) { succeeded in
+                continuation.resume(returning: succeeded)
+            }
+        }
+
+        #expect(completions.count == 1)
+        guard case .failed = completions.first?.result else {
+            Issue.record("Expected a failed completion, got \(String(describing: completions.first?.result))")
+            return
+        }
+    }
+
+    @Test("delegated prompt completion carries its source and the trimmed last agent text")
+    func delegatedPromptCompletionCarriesSource() async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
+        let source = ACPDelegatedPromptSource(sessionId: "parent", messageId: "m1")
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        // Seed an agent message before the turn so the completion has a tail to pick up.
+        runner.session.apply(.agentMessageChunk(.text("  Parser fixed. \n")))
+
+        _ = await withCheckedContinuation { continuation in
+            runner.sendNow(
+                blocks: ACPSessionRunner.blocks(text: "do it", attachments: []),
+                queuedItemId: nil,
+                delegatedSource: source,
+                onPromptFinished: { _ in continuation.resume(returning: ()) }
+            )
+        }
+
+        #expect(completions.count == 1)
+        #expect(completions.first?.delegatedSource == source)
+        #expect(completions.first?.lastAgentText == "Parser fixed.")
+    }
+
+    @Test("system notice appended while streaming still lands and persists")
+    func noticeWhileStreamingLands() async throws {
+        let (runner, _) = try makeRunner()
+        runner.session.transcript.streamingState = .streaming
+        let before = runner.session.transcript.messages.count
+
+        runner.appendAndPersistSystemNotice("Delegated session child (codex) finished its turn.")
+
+        #expect(runner.session.transcript.messages.count == before + 1)
+        guard case .systemNotice(_, let text) = runner.session.transcript.messages.last else {
+            Issue.record("Expected a system notice at the tail")
+            return
+        }
+        #expect(text == "Delegated session child (codex) finished its turn.")
     }
 
     private func createLongRunningTerminal(id: JSONRPCID, using mock: ACPMockClient) async throws -> String? {

@@ -225,7 +225,18 @@ struct SidebarView: View {
                             }
                             if state.config.remote.federationEnabled,
                                let nativePeerSessions = state.nativePeerSessions {
-                                NativePeerSidebarView(client: nativePeerSessions)
+                                NativePeerSidebarView(
+                                    client: nativePeerSessions,
+                                    icon: { name in
+                                        state.projectsManager.projects
+                                            .first { $0.name == name }
+                                            .map { state.effectiveIcon(for: $0) } ?? .default()
+                                    },
+                                    onAddPeer: {
+                                        state.pendingSettingsSection = .remote
+                                        onSettings()
+                                    }
+                                )
                             }
                             Color.clear
                                 .frame(maxWidth: .infinity, minHeight: 40)
