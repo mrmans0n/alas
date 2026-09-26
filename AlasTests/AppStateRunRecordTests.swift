@@ -1143,7 +1143,11 @@ struct AppStateRunRecordTests {
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         fixture.state.runOrFocusScript(fixture.script, in: other)
-        try await Task.sleep(for: .milliseconds(50))
+        // markRunning (and the sessionID it assigns) fires several main-actor
+        // turns after runOrFocusScript, same as elsewhere in this file; a
+        // fixed sleep races that under loaded CI. Wait for both launches.
+        try await waitUntilRunning(fixture)
+        try await waitUntilRunning(fixture, worktree: other)
 
         #expect(runRecord(fixture)?.sessionID == "session-1")
         #expect(runRecord(fixture, worktree: other)?.sessionID == "session-2")
