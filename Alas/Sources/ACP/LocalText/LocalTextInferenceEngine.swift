@@ -57,7 +57,7 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
         if observeMemoryPressure {
             let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
             pressure = source
-            source.setEventHandler { [weak self] in Task { await self?.cancelAndUnload() } }
+            source.setEventHandler { [weak self] in self?.handleMemoryPressure() }
             source.resume()
         }
     }
@@ -86,7 +86,7 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
         if observeMemoryPressure {
             let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
             pressure = source
-            source.setEventHandler { [weak self] in Task { await self?.cancelAndUnload() } }
+            source.setEventHandler { [weak self] in self?.handleMemoryPressure() }
             source.resume()
         }
     }
@@ -98,6 +98,10 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
         active?.task.cancel()
         evaluation = nil
         lease?.close()
+    }
+
+    nonisolated private func handleMemoryPressure() {
+        Task { await cancelAndUnload() }
     }
 
     func generate(_ request: LocalTextGenerationRequest, caller: LocalTextCaller,
