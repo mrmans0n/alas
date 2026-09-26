@@ -279,6 +279,34 @@ struct RunScriptLaunchTests {
         return directory
     }
 
+    /// Awaits every in-flight `launchScript` task. When it returns, the
+    /// launch has either opened its terminal, registered the completion
+    /// monitor, and scheduled any exited-pid cancellation, or failed —
+    /// the state a fixed "let it settle" sleep used to approximate.
+    @MainActor
+    private func finishPendingLaunches(_ state: AppState) async {
+        for task in Array(state.pendingScriptLaunchTasks.values) {
+            await task.value
+        }
+    }
+
+    /// Polls `condition` until it holds or `timeout` elapses; the caller
+    /// asserts the condition afterwards. The default deadline must stay
+    /// below the 5 s the never-completing waiters in this suite sleep:
+    /// otherwise a monitor that finished on its own (instead of being
+    /// cancelled after the production 2 s exited-terminal grace) could
+    /// satisfy a "monitor count reached 0" wait.
+    @MainActor
+    private func waitUntil(
+        timeout: Duration = .seconds(4),
+        _ condition: () -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     private func runZsh(_ command: String) throws -> Process {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -368,7 +396,7 @@ struct RunScriptLaunchTests {
 
         state.runOrFocusScript(runScript, in: worktree)
         state.runOrFocusScript(runScript, in: worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(state)
 
         #expect(openCount == 1)
         let scriptTabs = state.tabs.tabs(forWorktree: worktree.id).filter { tab in
@@ -449,7 +477,7 @@ struct RunScriptLaunchTests {
         fixture.state.harness.notifications.notificationAdder = { notifications.append($0) }
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         let failures = fixture.state.runScriptFailures(in: fixture.worktree.id)
@@ -470,7 +498,7 @@ struct RunScriptLaunchTests {
         defer { try? FileManager.default.removeItem(at: fixture.worktree.path) }
         fixture.state.harness.notifications.notificationAdder = { _ in }
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         let failure = try #require(fixture.state.runScriptFailures(in: fixture.worktree.id).first)
@@ -504,7 +532,7 @@ struct RunScriptLaunchTests {
         fixture.state.harness.notifications.notificationAdder = { notifications.append($0) }
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).isEmpty)
@@ -524,7 +552,7 @@ struct RunScriptLaunchTests {
         })
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         fixture.state.closeAllTabs(worktreeId: fixture.worktree.id)
@@ -534,15 +562,19 @@ struct RunScriptLaunchTests {
 
     @MainActor
     @Test func closeAllTabsAllowsCompletedRunMonitorToReportFailure() async throws {
+        // The run completes only after the close below, standing in for a
+        // monitor that is still in flight when its terminal goes away.
+        let gate = CompletionGate()
         let fixture = try makeAppStateFixture(waiter: { _ in
-            try await Task.sleep(for: .milliseconds(200))
+            await gate.wait()
             return RunScriptCompletion(exitCode: 42, transcript: Data("bad\n".utf8), truncated: false)
         })
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
 
         fixture.state.closeAllTabs(worktreeId: fixture.worktree.id)
+        await gate.open()
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).count == 1)
@@ -561,7 +593,7 @@ struct RunScriptLaunchTests {
         )
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
 
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).isEmpty)
@@ -575,10 +607,10 @@ struct RunScriptLaunchTests {
         })
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
 
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
-        try await Task.sleep(for: .milliseconds(2_200))
+        try await waitUntil { fixture.state.runScriptCompletionTaskCountForTesting == 0 }
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
     }
 
@@ -590,13 +622,13 @@ struct RunScriptLaunchTests {
         })
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
         let tab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).first)
 
         fixture.state.closeTab(worktreeId: fixture.worktree.id, tabId: tab.id)
 
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
-        try await Task.sleep(for: .milliseconds(2_200))
+        try await waitUntil { fixture.state.runScriptCompletionTaskCountForTesting == 0 }
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
     }
 
@@ -608,7 +640,7 @@ struct RunScriptLaunchTests {
         })
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
         let tab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).first)
         guard case .terminal(let terminal) = tab else {
             Issue.record("Expected terminal tab")
@@ -627,7 +659,7 @@ struct RunScriptLaunchTests {
         fixture.state.closeFocusedPane(worktreeId: fixture.worktree.id)
 
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
-        try await Task.sleep(for: .milliseconds(2_200))
+        try await waitUntil { fixture.state.runScriptCompletionTaskCountForTesting == 0 }
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
     }
 
@@ -672,16 +704,20 @@ struct RunScriptLaunchTests {
 
     @MainActor
     @Test func closingCompletedKeepOpenRunScriptTerminalPreservesFailure() async throws {
+        // The run completes only after the close below, standing in for a
+        // monitor that is still in flight when its terminal goes away.
+        let gate = CompletionGate()
         let fixture = try makeAppStateFixture(waiter: { _ in
-            try await Task.sleep(for: .milliseconds(200))
+            await gate.wait()
             return RunScriptCompletion(exitCode: 42, transcript: Data("bad\n".utf8), truncated: false)
         })
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
         let tab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).first)
 
         fixture.state.closeTab(worktreeId: fixture.worktree.id, tabId: tab.id)
+        await gate.open()
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).count == 1)
@@ -699,7 +735,7 @@ struct RunScriptLaunchTests {
         fixture.state.harness.notifications.notificationAdder = { notifications.append($0) }
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
         let tab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).first)
         guard case .terminal(let terminal) = tab else {
             Issue.record("Expected terminal tab")
@@ -744,7 +780,7 @@ struct RunScriptLaunchTests {
 
         state.cancelRunScriptCompletionTasks(sessionID: "session", after: .milliseconds(30))
 
-        try await Task.sleep(for: .milliseconds(100))
+        try await waitUntil { state.runScriptCompletionTaskCountForTesting == 0 }
         #expect(state.runScriptCompletionTaskCountForTesting == 0)
     }
 
@@ -794,7 +830,7 @@ struct RunScriptLaunchTests {
         )
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
         try await Task.sleep(for: .milliseconds(2_200))
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
@@ -809,7 +845,7 @@ struct RunScriptLaunchTests {
         })
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
         let runTab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).first)
         let otherTab = fixture.state.tabs.appendTerminal(
             worktreeId: fixture.worktree.id,
@@ -821,7 +857,7 @@ struct RunScriptLaunchTests {
 
         #expect(!fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).contains(where: { $0.id == runTab.id }))
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
-        try await Task.sleep(for: .milliseconds(2_200))
+        try await waitUntil { fixture.state.runScriptCompletionTaskCountForTesting == 0 }
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
     }
 
@@ -835,7 +871,7 @@ struct RunScriptLaunchTests {
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         #expect(waitCount.value == 1)
@@ -853,7 +889,7 @@ struct RunScriptLaunchTests {
         )
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        await finishPendingLaunches(fixture.state)
 
         #expect(includeUserStartupScript == true)
     }
@@ -931,6 +967,23 @@ struct RunScriptLaunchTests {
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
         return (state, runScript, worktree)
+    }
+}
+
+/// Holds a completion waiter until the test opens it.
+private actor CompletionGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        for waiter in waiters { waiter.resume() }
+        waiters = []
     }
 }
 

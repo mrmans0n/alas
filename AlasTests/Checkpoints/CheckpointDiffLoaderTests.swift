@@ -4,7 +4,7 @@ import Testing
 
 struct CheckpointDiffLoaderTests {
     @Test func textDiffUsesCheckpointBeforeCurrentAfterWithoutMutation() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("checkpoint text\n", to: "file.txt")
         let service = WorktreeCheckpointService(store: .init(root: repo.root.appendingPathComponent(".git/checkpoints")))
@@ -27,7 +27,7 @@ struct CheckpointDiffLoaderTests {
     }
 
     @Test func binarySizesAndMissingBlobAreExplicit() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let saved = Data([0, 255, 1])
         try repo.write(saved, to: "file.dat")
@@ -50,7 +50,7 @@ struct CheckpointDiffLoaderTests {
     }
 
     @Test func emptyFileAdditionAndDeletionRemainVisible() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let service = WorktreeCheckpointService(store: .init(root: repo.root.appendingPathComponent(".git/checkpoints")))
         let additionBaseline = try await service.createManual(target: repo.target, label: "Before empty add")
@@ -74,7 +74,7 @@ struct CheckpointDiffLoaderTests {
     }
 
     @Test func absentOnBothSidesDoesNotReportEmptyFileChange() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let pathState = CheckpointPathState(
             relativePath: "deleted.txt",
@@ -110,7 +110,7 @@ struct CheckpointDiffLoaderTests {
     }
 
     @Test func currentOnlyDiffSnapshotsOnlyRequestedPath() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("baseline\n", to: "unrelated.txt")
         try await repo.commitAll("baseline")
@@ -135,7 +135,7 @@ struct CheckpointDiffLoaderTests {
     }
 
     @Test func modeOnlyDiffRemainsVisible() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("same\n", to: "script.sh")
         let fileURL = repo.root.appendingPathComponent("script.sh")
@@ -154,7 +154,7 @@ struct CheckpointDiffLoaderTests {
     }
 
     @Test func fileKindOnlyDiffRemainsVisible() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("target", to: "linkish")
         try repo.write("target\n", to: "target")
@@ -176,7 +176,7 @@ struct CheckpointDiffLoaderTests {
     }
 
     @Test func imageNamedSymlinkUsesTextDiffInsteadOfImageDecode() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.symlink("assets/old.png", at: "logo.png")
         let service = WorktreeCheckpointService(store: .init(root: repo.root.appendingPathComponent(".git/checkpoints")))
@@ -198,7 +198,7 @@ struct CheckpointDiffLoaderTests {
     }
 
     @Test func oversizedCurrentSideReturnsSizePreviewWithoutReadingFile() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let bytes = Data("small\n".utf8)
         let blob = CheckpointBlobReference.make(for: bytes)
@@ -244,7 +244,7 @@ struct CheckpointDiffLoaderTests {
     }
 
     @Test func currentDirectoryAtCheckpointFilePathIsTreatedAsAbsentLeaf() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("saved\n", to: "config")
         let service = WorktreeCheckpointService(store: .init(root: repo.root.appendingPathComponent(".git/checkpoints")))
@@ -263,7 +263,7 @@ struct CheckpointDiffLoaderTests {
     }
 
     @Test func oversizedEqualCurrentFileDoesNotReportChangedBinaryPreview() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let bytes = Data(repeating: 42, count: 10 * 1024 * 1024 + 1)
         let blob = CheckpointBlobReference.make(for: bytes)
@@ -305,7 +305,7 @@ struct CheckpointDiffLoaderTests {
     }
 
     @Test func oversizedEqualCurrentFilePreservesModeOnlySummary() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let bytes = Data(repeating: 42, count: 10 * 1024 * 1024 + 1)
         let blob = CheckpointBlobReference.make(for: bytes)
@@ -359,7 +359,7 @@ struct CheckpointDiffLoaderTests {
     }
 
     @Test @MainActor func imagesKeepBothSidesAndFrameCounts() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let first = try png(width: 2)
         let second = try png(width: 3)

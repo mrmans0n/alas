@@ -54,11 +54,63 @@ struct MergeConflictTabModelTests {
         _ = try await Process.git(["commit", "-q", "-am", "main"], cwd: repo)
     }
 
+    /// PRE-text + conflict + POST-text: base, feature, and main share a
+    /// header and footer line and each edit only the middle line.
+    fileprivate static func makeContextConflictBranches(_ repo: URL) async throws {
+        try writeFile(repo, "a.txt", "header line\nbase mid\nfooter line\n")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
+        try writeFile(repo, "a.txt", "header line\nfeature mid\nfooter line\n")
+        _ = try await Process.git(["commit", "-q", "-am", "feature"], cwd: repo)
+        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
+        try writeFile(repo, "a.txt", "header line\nmain mid\nfooter line\n")
+        _ = try await Process.git(["commit", "-q", "-am", "main"], cwd: repo)
+    }
+
+    fileprivate enum ConflictFixture {
+        case singleConflict
+        case twoConflicts
+        case contextConflict
+    }
+
+    /// One real repo per fixture shape, built once (real `git init`,
+    /// commits, and a conflicting `git merge feature`) and left mid-merge.
+    /// The suite is `.serialized` and main-actor isolated, so this cache
+    /// is only touched from one test at a time.
+    private static var conflictTemplates: [ConflictFixture: URL] = [:]
+
+    /// A fresh, private copy of the mid-merge template for `fixture`.
+    /// Copying the directory (worktree + `.git`, including `MERGE_HEAD`
+    /// and the index's conflict stages) yields the same repository state
+    /// the per-test init/commit/merge sequence produced, without
+    /// re-running a dozen git processes per test. Each test owns and
+    /// deletes its copy, so mutations (staging, `merge --abort`) never
+    /// leak across tests.
+    fileprivate static func conflictedRepo(_ fixture: ConflictFixture) async throws -> URL {
+        let template: URL
+        if let cached = conflictTemplates[fixture] {
+            template = cached
+        } else {
+            let repo = try await makeRepo()
+            switch fixture {
+            case .singleConflict: try await makeConflictingBranches(repo)
+            case .twoConflicts: try await makeTwoConflictBranches(repo)
+            case .contextConflict: try await makeContextConflictBranches(repo)
+            }
+            _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
+            conflictTemplates[fixture] = repo
+            template = repo
+        }
+        let copy = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-mctm-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: template, to: copy)
+        return copy
+    }
+
     @Test func loadPopulatesSidesAndRegions() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
 
         let model = MergeConflictTabModel(
             worktreePath: repo,
@@ -94,10 +146,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func acceptLocalReplacesMarkerBlockWithLocalContent() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
 
         let model = MergeConflictTabModel(
             worktreePath: repo,
@@ -114,10 +164,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func acceptRemoteReplacesMarkerBlockWithRemoteContent() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
 
         let model = MergeConflictTabModel(
             worktreePath: repo,
@@ -132,10 +180,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func acceptBothPreservesBothSides() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
 
         let model = MergeConflictTabModel(
             worktreePath: repo,
@@ -230,10 +276,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func markFileResolvedStagesViaGitService() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
 
         let model = MergeConflictTabModel(
             worktreePath: repo,
@@ -294,10 +338,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func loadSnapshotsInitialConflictCount() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
 
         let model = MergeConflictTabModel(
             worktreePath: repo,
@@ -403,10 +445,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func loadClearsAnyPendingAgentProposal() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
 
         let model = MergeConflictTabModel(
             worktreePath: repo,
@@ -429,10 +469,8 @@ struct MergeConflictTabModelTests {
         // Both successful and failed loads must bump the generation — stale
         // async guards (binary cache, requestAgentResolveFile) rely on it
         // changing even when a reload fails.
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
 
         let model = MergeConflictTabModel(
             worktreePath: repo,
@@ -469,10 +507,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func acceptLocalForBlockTargetsThatBlockNotCurrentIndex() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.twoConflicts)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeTwoConflictBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
         let model = MergeConflictTabModel(
             worktreePath: repo,
             relativePath: "a.txt",
@@ -492,10 +528,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func wordDiffModeDefaultsToCharacters() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
         let model = MergeConflictTabModel(
             worktreePath: repo,
             relativePath: "a.txt",
@@ -506,10 +540,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func wordDiffModeIsMutableAndDoesNotResetOnReload() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
         let model = MergeConflictTabModel(
             worktreePath: repo,
             relativePath: "a.txt",
@@ -522,10 +554,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func flatTextForWritingSerializesRegionsWithoutMarkers() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
         let model = MergeConflictTabModel(
             worktreePath: repo,
             relativePath: "a.txt",
@@ -541,10 +571,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func resetToInitialStackRestoresBothHunks() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
         let model = MergeConflictTabModel(
             worktreePath: repo,
             relativePath: "a.txt",
@@ -569,10 +597,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func acceptForBlockShiftsLaterCursorDownByOne() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.twoConflicts)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeTwoConflictBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
         let model = MergeConflictTabModel(
             worktreePath: repo,
             relativePath: "a.txt",
@@ -592,10 +618,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func setRowContentEditsTextRegion() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
         let model = MergeConflictTabModel(
             worktreePath: repo,
             relativePath: "a.txt",
@@ -614,10 +638,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func setRowContentEditsLocalHunkAndPreservesRemote() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
         let model = MergeConflictTabModel(
             worktreePath: repo,
             relativePath: "a.txt",
@@ -635,10 +657,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func setRowContentPreservesMarkerStructureForFutureAccepts() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
         let model = MergeConflictTabModel(
             worktreePath: repo,
             relativePath: "a.txt",
@@ -661,10 +681,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func applyEditedFullTextHandlesDeletion() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
         let model = MergeConflictTabModel(
             worktreePath: repo,
             relativePath: "a.txt",
@@ -683,10 +701,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func applyEditedFullTextAbsorbsInsertedLinesIntoLocalHunk() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
         let model = MergeConflictTabModel(
             worktreePath: repo,
             relativePath: "a.txt",
@@ -726,10 +742,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func applyEditedFullTextAppendsTrailingLinesAtEndOfFile() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
         let model = MergeConflictTabModel(
             worktreePath: repo,
             relativePath: "a.txt",
@@ -745,10 +759,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func acceptAfterEditedHunkUsesUpdatedLineRanges() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
         let model = MergeConflictTabModel(
             worktreePath: repo,
             relativePath: "a.txt",
@@ -791,20 +803,10 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func applyEditedFullTextKeepsInsertedContextLineOutOfConflictHunk() async throws {
-        let repo = try await Self.makeRepo()
+        // Fixture with PRE-text + conflict + POST-text, so there is a
+        // text region BEFORE the conflict.
+        let repo = try await Self.conflictedRepo(.contextConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        // Build a fixture with PRE-text + conflict + POST-text.
-        // We need a file that produces a text region BEFORE the conflict.
-        try Self.writeFile(repo, "a.txt", "header line\nbase mid\nfooter line\n")
-        _ = try await Process.git(["add", "a.txt"], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
-        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
-        try Self.writeFile(repo, "a.txt", "header line\nfeature mid\nfooter line\n")
-        _ = try await Process.git(["commit", "-q", "-am", "feature"], cwd: repo)
-        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
-        try Self.writeFile(repo, "a.txt", "header line\nmain mid\nfooter line\n")
-        _ = try await Process.git(["commit", "-q", "-am", "main"], cwd: repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
 
         let model = MergeConflictTabModel(
             worktreePath: repo,
@@ -833,18 +835,8 @@ struct MergeConflictTabModelTests {
         // and the following plain-text region used to leave the trailing
         // .text region rebuilt with a phantom "\n", so the saved merge
         // result diverged from the user's typed buffer.
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.contextConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try Self.writeFile(repo, "a.txt", "header line\nbase mid\nfooter line\n")
-        _ = try await Process.git(["add", "a.txt"], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
-        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
-        try Self.writeFile(repo, "a.txt", "header line\nfeature mid\nfooter line\n")
-        _ = try await Process.git(["commit", "-q", "-am", "feature"], cwd: repo)
-        _ = try await Process.git(["checkout", "-q", "main"], cwd: repo)
-        try Self.writeFile(repo, "a.txt", "header line\nmain mid\nfooter line\n")
-        _ = try await Process.git(["commit", "-q", "-am", "main"], cwd: repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
 
         let model = MergeConflictTabModel(
             worktreePath: repo,
@@ -862,10 +854,8 @@ struct MergeConflictTabModelTests {
     }
 
     @Test func applyEditedFullTextRoutesRemoteSideEditToRemote() async throws {
-        let repo = try await Self.makeRepo()
+        let repo = try await Self.conflictedRepo(.singleConflict)
         defer { try? FileManager.default.removeItem(at: repo) }
-        try await Self.makeConflictingBranches(repo)
-        _ = try await Process.git(["merge", "feature", "--no-edit"], cwd: repo)
         let model = MergeConflictTabModel(
             worktreePath: repo,
             relativePath: "a.txt",

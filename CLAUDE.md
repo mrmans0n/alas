@@ -48,9 +48,12 @@ Coverage is not a goal. Fewer, sharper tests beat many shallow ones.
 - Never synchronize with a fixed `Task.sleep`. Await the event, inject a
   clock, or poll a condition with a deadline. Reuse an existing polling or
   fixture helper instead of writing another private copy.
-- Prefer in-memory fakes over real git repos, processes, sockets, or windows.
-  Reserve real subprocesses and AppKit windows for a small number of
-  integration tests that genuinely need them.
+- Git stays real. Tests that touch git are integration tests; do not fake or
+  mock git. Keep them cheap instead: build only the repository the assertions
+  need, reuse a template repository copied per test rather than re-running
+  `git init` and commits, and skip git calls the assertions don't read.
+- For other processes, sockets, and AppKit windows, prefer in-memory fakes and
+  reserve the real thing for the few tests that genuinely need it.
 - Do not add `.serialized`, `@MainActor`, or a `subprocess` entry in
   `scripts/ci-swift-test-policy.tsv` by default. Add them only with a stated
   reason: shared global state you cannot remove, main-thread-only API, or a

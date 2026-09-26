@@ -4,7 +4,7 @@ import Testing
 
 struct CheckpointRestoreIntegrationTests {
     @Test func capturePreservesIndexBytesWhenOnlyFileMetadataChanged() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let root = URL(fileURLWithPath: "/private/tmp/checkpoint-stat-store-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -20,7 +20,7 @@ struct CheckpointRestoreIntegrationTests {
 
     @Test(arguments: [false, true])
     func restoreCreatesAndRemovesUntrackedSymlinks(savedLink: Bool) async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let root = URL(fileURLWithPath: "/private/tmp/checkpoint-link-store-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -39,7 +39,7 @@ struct CheckpointRestoreIntegrationTests {
     }
 
     @Test func restoreReplacesTrackedFileToDirectoryTransition() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let root = URL(fileURLWithPath: "/private/tmp/checkpoint-file-dir-store-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -59,7 +59,7 @@ struct CheckpointRestoreIntegrationTests {
     }
 
     @Test func restoreAllowsUserFileSharingRestorePrefix() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let root = URL(fileURLWithPath: "/private/tmp/checkpoint-restore-prefix-store-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -78,7 +78,7 @@ struct CheckpointRestoreIntegrationTests {
     }
 
     @Test func restoreReplacesTrackedFileWithSavedDirectoryTransition() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let root = URL(fileURLWithPath: "/private/tmp/checkpoint-dir-file-store-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -101,7 +101,7 @@ struct CheckpointRestoreIntegrationTests {
     }
 
     @Test func restoreOrdersStructuralParentsBeforeUnrelatedDeeperPaths() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let root = URL(fileURLWithPath: "/private/tmp/checkpoint-restore-order-store-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -131,18 +131,18 @@ struct CheckpointRestoreIntegrationTests {
     }
 
     @Test func fullRestorePreservesEverySavedLayerAndPublishesRecovery() async throws {
-        let fixture = try await CheckpointRestoreFixture.make()
+        let fixture = try await CheckpointRestoreFixture.makeFromTemplate()
         defer { fixture.remove() }
-        let saved = try await fixture.snapshot()
+        let saved = try await fixture.pathSnapshot()
         let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
         try await fixture.later()
-        let before = try await fixture.snapshot()
+        let before = try await fixture.pathSnapshot()
         let preview = try await fixture.preview(checkpoint.id)
 
         let result = try await fixture.service.restore(target: fixture.repo.target, preview: preview,
                                                        selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
 
-        let after = try await fixture.snapshot()
+        let after = try await fixture.pathSnapshot()
         #expect(after.paths == saved.paths)
         #expect(after.headOID == before.headOID)
         #expect(try await fixture.repo.index("selected.bin") == Data([0, 255, 1]))
@@ -159,13 +159,13 @@ struct CheckpointRestoreIntegrationTests {
     }
 
     @Test func selectiveRestorePreservesUnselectedIndexAndDiskBytes() async throws {
-        let fixture = try await CheckpointRestoreFixture.make()
+        let fixture = try await CheckpointRestoreFixture.makeFromTemplate()
         defer { fixture.remove() }
         let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
         try await fixture.later()
         let preview = try await fixture.preview(checkpoint.id)
         let selected = Set(preview.groups.filter { $0.primaryPath == "selected.bin" }.map(\.id))
-        let before = try await fixture.snapshot()
+        let before = try await fixture.pathSnapshot()
         let indexOID = try await fixture.repo.git(["rev-parse", ":keep.swift"])
         let diskHash = CheckpointBlobReference.make(for: try fixture.repo.disk("keep.swift"))
 
@@ -175,11 +175,51 @@ struct CheckpointRestoreIntegrationTests {
         #expect(result.restoredPaths == ["selected.bin"])
         #expect(try await fixture.repo.git(["rev-parse", ":keep.swift"]) == indexOID)
         #expect(CheckpointBlobReference.make(for: try fixture.repo.disk("keep.swift")) == diskHash)
-        let after = try await fixture.snapshot()
+        let after = try await fixture.pathSnapshot()
         for (path, state) in before.paths where path != "selected.bin" { #expect(after.paths[path] == state) }
         #expect(after.headOID == before.headOID)
         #expect(try await fixture.repo.index("selected.bin") == Data([0, 255, 1]))
         #expect(try fixture.repo.disk("selected.bin") == Data([0, 254, 2]))
+    }
+}
+
+/// A per-process copy source for `CheckpointTestRepository.makeFromTemplate()`.
+/// It holds exactly what `CheckpointTestRepository.make()` builds (same `git init`,
+/// same config, same empty seed commit) but never gets a lineage marker, so each
+/// copy mints its own lineage. The seed commit tracks no files, so the index has
+/// no stat entries that could go stale when the directory is copied.
+private enum CheckpointRepositoryTemplate {
+    static let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-template-\(UUID().uuidString)")
+    static let ready = Task<URL, any Error> {
+        try FileManager.default.createDirectory(at: CheckpointRepositoryTemplate.root, withIntermediateDirectories: true)
+        for args in [["init", "-b", "main"], ["config", "user.name", "Checkpoint Tests"],
+                     ["config", "user.email", "checkpoints@example.test"], ["config", "commit.gpgsign", "false"],
+                     ["config", "core.hooksPath", "/dev/null"], ["config", "core.filemode", "true"],
+                     ["commit", "--allow-empty", "-m", "seed"]] {
+            let result = try await Process.git(args, cwd: CheckpointRepositoryTemplate.root)
+            guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        }
+        atexit { try? FileManager.default.removeItem(at: CheckpointRepositoryTemplate.root) }
+        return CheckpointRepositoryTemplate.root
+    }
+}
+
+extension CheckpointTestRepository {
+    /// Equivalent to `make()` — a real repository with the same config and seed
+    /// commit, and a fresh lineage — but copied from a template instead of
+    /// spawning seven `git` processes per test.
+    static func makeFromTemplate() async throws -> Self {
+        let template = try await CheckpointRepositoryTemplate.ready.value
+        let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-test-\(UUID().uuidString)")
+        do {
+            try FileManager.default.copyItem(at: template, to: root)
+            let lineage = try #require(WorktreeService.localLineageID(forWorktreeAt: root))
+            return Self(root: root, target: .init(worktreeID: UUID().uuidString, projectID: "test", path: root,
+                                                 lineageID: lineage, branch: "main", repositoryName: "test", workspaceName: nil))
+        } catch {
+            try? FileManager.default.removeItem(at: root)
+            throw error
+        }
     }
 }
 
@@ -192,7 +232,15 @@ struct CheckpointRestoreFixture: Sendable {
     static let paths: Set<String> = ["selected.bin", "keep.swift", "deleted", "added", "old", "new", "run.sh", "link", "untracked", "later-only"]
 
     static func make(faultInjector: CheckpointRestoreFaultInjector = .none) async throws -> Self {
-        let repo = try await CheckpointTestRepository.make()
+        try await populate(CheckpointTestRepository.make(), faultInjector: faultInjector)
+    }
+
+    /// Same fixture as `make()`, built on a template-copied repository.
+    static func makeFromTemplate(faultInjector: CheckpointRestoreFaultInjector = .none) async throws -> Self {
+        try await populate(CheckpointTestRepository.makeFromTemplate(), faultInjector: faultInjector)
+    }
+
+    private static func populate(_ repo: CheckpointTestRepository, faultInjector: CheckpointRestoreFaultInjector) async throws -> Self {
         let root = URL(fileURLWithPath: "/private/tmp/checkpoint-apply-store-\(UUID().uuidString)")
         let store = WorktreeCheckpointStore(root: root)
         let service = WorktreeCheckpointService(store: store, restoreFaultInjector: faultInjector)
@@ -230,6 +278,14 @@ struct CheckpointRestoreFixture: Sendable {
 
     func snapshot() async throws -> WorktreeStateSnapshot {
         try await WorktreeStateSnapshotter.live.snapshot(target: repo.target, includingPaths: Self.paths)
+    }
+
+    /// The same path states, HEAD, and index checksum as `snapshot()`, without
+    /// retaining payload bytes: blobs are hashed via one streamed `cat-file` per
+    /// entry instead of `cat-file -s` plus `cat-file blob`. Assertions only read
+    /// `paths` and `headOID`, whose values do not depend on retention.
+    func pathSnapshot() async throws -> WorktreeStateSnapshot {
+        try await WorktreeStateSnapshotter.live.snapshot(target: repo.target, includingPaths: Self.paths, retainingPayloads: false)
     }
 
     func preview(_ id: CheckpointID) async throws -> CheckpointRestorePreview {

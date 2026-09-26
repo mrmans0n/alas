@@ -48,7 +48,7 @@ struct CheckpointCoordinationTests {
     }
 
     @Test func appStateCountsWriterLeasesUsingDurableLineageWhenCachedWorktreeLineageIsMissing() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let lineageID = repo.target.lineageID
         let leases = CheckpointWriterLeaseStore()
@@ -141,7 +141,7 @@ struct CheckpointCoordinationTests {
     }
 
     @Test func appStateDiscoversCheckpointRecoveryBeforeBlockingKnownWorktreeWrites() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let state = AppState()
         let project = try await state.projectsManager.addProject(path: repo.root, displayName: "test", color: "#000000")
@@ -154,7 +154,7 @@ struct CheckpointCoordinationTests {
     }
 
     @Test func appStateBlocksACPAdmissionDuringCheckpointRecoveryLease() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let state = AppState()
         let project = try await state.projectsManager.addProject(path: repo.root, displayName: "test", color: "#000000")

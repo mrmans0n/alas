@@ -11,7 +11,7 @@ struct CheckpointRestorePreparationTests {
         try await fixture.makeLaterState()
         let preview = try await fixture.service.restorePreview(target: fixture.target, id: checkpoint.id, coordination: .clear)
         let preRestore = try await fixture.snapshot()
-        let before = try await fixture.state()
+        let before = try await fixture.state(preRestore)
 
         let preparation = try await fixture.service.prepareRestore(target: fixture.target, preview: preview,
                                                                     selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
@@ -44,7 +44,7 @@ struct CheckpointRestorePreparationTests {
     }
 
     @Test func storageFailureLeavesNoRestoreStagingDirectory() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let root = URL(fileURLWithPath: "/private/tmp/checkpoint-restore-limited-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -117,7 +117,7 @@ struct CheckpointRestorePreparationTests {
     }
 
     @Test func recoveryFinishesEarlyAdmissionJournalWithoutStaging() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let root = URL(fileURLWithPath: "/private/tmp/checkpoint-restore-admission-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -157,42 +157,46 @@ private struct RestorePreparationFixture: Sendable {
     var target: CheckpointWorktreeTarget { repo.target }
 
     static func make() async throws -> Self {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         let root = URL(fileURLWithPath: "/private/tmp/checkpoint-restore-store-\(UUID().uuidString)")
         let store = WorktreeCheckpointStore(root: root)
         let service = WorktreeCheckpointService(store: store)
         try repo.write("delete baseline\n", to: "delete.txt")
         try repo.write("#!/bin/sh\necho baseline\n", to: "run.sh")
-        try await repo.stage("run.sh")
-        try await repo.git(["update-index", "--chmod=+x", "run.sh"])
+        // core.filemode is true, so `commitAll`'s `add -A` records the on-disk
+        // executable bit as 100755 without a separate `update-index --chmod`.
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: repo.root.appendingPathComponent("run.sh").path)
         try repo.symlink("baseline-target", at: "link")
         try await repo.commitAll("baseline")
-        try await repo.git(["rm", "delete.txt"])
+        try FileManager.default.removeItem(at: repo.root.appendingPathComponent("delete.txt"))
         try repo.write("#!/bin/sh\necho saved\n", to: "run.sh")
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: repo.root.appendingPathComponent("run.sh").path)
-        try await repo.stage("run.sh")
         try FileManager.default.removeItem(at: repo.root.appendingPathComponent("link"))
         try repo.symlink("saved-target", at: "link")
-        try await repo.stage("link")
+        // One `add -A` stages the deletion, the new script, and the new link
+        // target: the same index `git rm` plus two `git add`s produced.
+        try await repo.git(["add", "-A", "--", "delete.txt", "run.sh", "link"])
         return .init(repo: repo, storeRoot: root, store: store, service: service)
     }
 
     func makeLaterState() async throws {
         try await repo.git(["restore", "--source=HEAD", "--staged", "--worktree", "delete.txt", "run.sh", "link"])
         try repo.write("later delete\n", to: "delete.txt")
-        try await repo.stage("delete.txt")
         try repo.write("#!/bin/sh\necho later\n", to: "run.sh")
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: repo.root.appendingPathComponent("run.sh").path)
-        try await repo.stage("run.sh")
         try FileManager.default.removeItem(at: repo.root.appendingPathComponent("link"))
         try repo.symlink("later-target", at: "link")
-        try await repo.stage("link")
+        try await repo.git(["add", "--", "delete.txt", "run.sh", "link"])
         try repo.write("later untracked\n", to: "untracked.txt")
     }
 
     func state() async throws -> (String, Data, String, [String: Data]) {
-        let snapshot = try await snapshot()
+        try await state(snapshot())
+    }
+
+    /// `state()` built from a snapshot the caller already took at this instant,
+    /// so a test that also needs the snapshot does not take a second one.
+    func state(_ snapshot: WorktreeStateSnapshot) async throws -> (String, Data, String, [String: Data]) {
         let excludedPrefix = Array("? .alas-checkpoint-restore-".utf8)
         let records = try await repo.status().split(separator: 0).map(Array.init)
         let userStatus = Data(records.filter { !$0.starts(with: excludedPrefix) }.flatMap { $0 + [0] })
@@ -205,7 +209,8 @@ private struct RestorePreparationFixture: Sendable {
     }
 
     func snapshot() async throws -> WorktreeStateSnapshot {
-        try await WorktreeStateSnapshotter.live.snapshot(target: target, includingPaths: ["delete.txt", "run.sh", "link", "untracked.txt"])
+        try await WorktreeStateSnapshotter.live.snapshot(target: target, includingPaths: ["delete.txt", "run.sh", "link", "untracked.txt"],
+                                                      retainingPayloads: false)
     }
 
     private func leaf(_ path: String) throws -> Data {
