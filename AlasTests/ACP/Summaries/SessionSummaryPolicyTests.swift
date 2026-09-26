@@ -122,6 +122,7 @@ import Testing
         "Run rm -rf \"/\"",
         "Run rm -rf '/'",
         "Run rm -rf -- /",
+        "Run rm --recursive --force /",
         "Run rm -rf -- \"/\"",
         "Run rm -rf -- '/'",
         "Format the production disk",
