@@ -20,7 +20,29 @@ ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / ".build/xcode/results"
 
 
-def make_plan(document, policy, batch_count):
+def suite_of(test):
+    """The selector a test is grouped and scheduled under: its suite, or itself for a free function."""
+    return test.rsplit("/", 1)[0] if test.count("/") > 1 else test
+
+
+def balanced_chunks(selectors, batch_count, suite_seconds):
+    """Fill batches longest-first so each gets a similar share of measured test time.
+
+    Unknown suites weigh the median of the known ones, so a new suite adds an
+    estimate instead of shifting every other suite into a different batch.
+    """
+    known = [seconds for seconds in suite_seconds.values() if seconds > 0]
+    default = statistics.median(known) if known else 1.0
+    chunks = [[] for _ in range(batch_count)]
+    loads = [0.0] * batch_count
+    for selector in sorted(selectors, key=lambda selector: (-suite_seconds.get(selector, default), selector)):
+        index = min(range(batch_count), key=lambda candidate: (loads[candidate], candidate))
+        chunks[index].append(selector)
+        loads[index] += suite_seconds.get(selector, default)
+    return [sorted(chunk) for chunk in chunks]
+
+
+def make_plan(document, policy, batch_count, suite_seconds=None):
     if batch_count < 1 or document.get("errors") != [] or not document.get("values"):
         raise ValueError(f"Invalid or failed Xcode enumeration: {document.get('errors')}")
     tests, disabled = [], set()
@@ -70,8 +92,12 @@ def make_plan(document, policy, batch_count):
                 selector = test.rsplit("/", 1)[0] if test.count("/") > 1 else test
                 groups.setdefault(selector, []).append(test)
         selectors = sorted(groups)
-        chunks = ([selectors[i:i + 3] for i in range(0, len(selectors), 3)]
-                  if lane == "subprocess" else [selectors[i::batch_count] for i in range(batch_count)])
+        if lane == "subprocess":
+            chunks = [selectors[i:i + 3] for i in range(0, len(selectors), 3)]
+        elif suite_seconds:
+            chunks = balanced_chunks(selectors, batch_count, suite_seconds)
+        else:
+            chunks = [selectors[i::batch_count] for i in range(batch_count)]
         if lane == "subprocess":
             bounded_chunks = []
             for chunk in chunks:
@@ -127,6 +153,7 @@ def make_plan(document, policy, batch_count):
 
 def account(expected, document):
     observed = {}
+    suite_seconds = {}
 
     def visit(node, target=None):
         if node.get("nodeType") == "Unit test bundle":
@@ -138,6 +165,8 @@ def account(expected, document):
             if identifier in observed:
                 raise ValueError(f"Duplicate result test: {identifier}")
             observed[identifier] = node.get("result")
+            suite = suite_of(identifier)
+            suite_seconds[suite] = suite_seconds.get(suite, 0.0) + float(node.get("durationInSeconds") or 0.0)
         for child in node.get("children", []):
             visit(child, target)
 
@@ -150,7 +179,8 @@ def account(expected, document):
     executed = sum(outcome in ("Passed", "Failed", "Expected Failure") for outcome in observed.values())
     return {"ok": not (missing or unexpected or failed or skipped), "missing": missing,
             "unexpected": unexpected, "failed": failed, "skipped": skipped,
-            "executed": executed, "outcomes": observed}
+            "executed": executed, "outcomes": observed,
+            "suite_seconds": {suite: round(seconds, 3) for suite, seconds in sorted(suite_seconds.items())}}
 
 
 def suite_key(selectors):
@@ -158,8 +188,13 @@ def suite_key(selectors):
                          for selector in selectors}))
 
 
-def assign_shards(plan, timings):
-    """Balance ordinary and isolated invocations across two test runners."""
+def assign_shards(plan, timings, suite_seconds=None, invocation_overhead=0.0):
+    """Balance ordinary and isolated invocations across two test runners.
+
+    Invocations without an exact or suite-group timing are estimated from
+    measured per-suite seconds plus the typical per-invocation launch overhead
+    when those are available, and from apportioned invocation time otherwise.
+    """
     weights = {}
     groups, suites = {}, {}
     for entry in timings:
@@ -176,7 +211,10 @@ def assign_shards(plan, timings):
             suites.setdefault(suite, []).append(seconds / len(group))
     suite_weights = {suite: statistics.median(values) for suite, values in suites.items()}
     unknown = statistics.median(suite_weights.values()) if suite_weights else 10.0
-    sources = dict.fromkeys(("exact", "suite-group", "estimated"), 0)
+    measured = [seconds for seconds in (suite_seconds or {}).values() if seconds > 0]
+    measured_default = statistics.median(measured) if measured else None
+    sources = dict.fromkeys(("exact", "suite-group", "suites", "estimated") if suite_seconds
+                            else ("exact", "suite-group", "estimated"), 0)
     pending = []
     for batch in plan["batches"]:
         batch["shards"] = [0] * len(batch["invocations"])
@@ -187,6 +225,9 @@ def assign_shards(plan, timings):
                 seconds, source = weights[tuple(selectors)], "exact"
             elif group in groups:
                 seconds, source = statistics.median(groups[group]), "suite-group"
+            elif measured_default is not None:
+                seconds = sum(suite_seconds.get(suite, measured_default) for suite in group) + invocation_overhead
+                source = "suites"
             else:
                 seconds = sum(suite_weights.get(suite, unknown) for suite in group)
                 source = "estimated"
@@ -319,6 +360,7 @@ def run_shard(plan, directory, shard):
 def summarize(plan, directory):
     rows, missing, observed = [], [], set()
     timings, shard_seconds = [], [0.0, 0.0, 0.0]
+    suites, overheads, complete_suites = {}, [], True
     timing_path = directory / "timings.json"
     timing_path.unlink(missing_ok=True)
     reports = {}
@@ -351,6 +393,13 @@ def summarize(plan, directory):
                 shard = batch.get("shards", [0] * len(batch["invocations"]))[number - 1]
                 shard_seconds[shard] += duration
                 timings.append({"selectors": batch["invocations"][number - 1], "seconds": duration})
+                measured_suites = report.get("suite_seconds")
+                if isinstance(measured_suites, dict):
+                    for suite, seconds in measured_suites.items():
+                        suites[suite] = suites.get(suite, 0.0) + seconds
+                    overheads.append(max(duration - sum(measured_suites.values()), 0.0))
+                else:
+                    complete_suites = False
             rows.append(f"| {name} | {report.get('executed', 0)} | {report.get('skipped', 0)} | "
                         f"{report.get('duration_seconds', 'incomplete')} | {report['ok']} |")
     scheduled = set(plan["tests"]) - set(plan["excluded"])
@@ -375,7 +424,11 @@ def summarize(plan, directory):
                   f"{os.environ['GITHUB_RUN_ID']}/attempts/{os.environ['GITHUB_RUN_ATTEMPT']}"
                   if all(os.environ.get(key) for key in ("GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"))
                   else f"plan:{plan['id']}")
-        write_json(timing_path, {"source": source, "invocations": timings})
+        exported = {"source": source, "invocations": timings}
+        if complete_suites and suites:
+            exported["suites"] = {suite: round(seconds, 3) for suite, seconds in sorted(suites.items())}
+            exported["invocation_overhead_seconds"] = round(statistics.median(overheads), 2)
+        write_json(timing_path, exported)
     (directory / "summary.md").write_text(summary)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
@@ -412,8 +465,10 @@ def main():
         source = args.enumeration or discover(args.directory)
         with args.policy.open() as policy:
             rows = [row for row in csv.reader(policy, delimiter="\t") if row and not row[0].startswith("#")]
-        plan = make_plan(json.loads(source.read_text()), rows, args.batch_count)
-        assign_shards(plan, json.loads(args.timings.read_text())["invocations"])
+        timings = json.loads(args.timings.read_text())
+        suite_seconds = timings.get("suites")
+        plan = make_plan(json.loads(source.read_text()), rows, args.batch_count, suite_seconds)
+        assign_shards(plan, timings["invocations"], suite_seconds, timings.get("invocation_overhead_seconds", 0.0))
         write_json(plan_path, plan)
         print(f"Discovered {len(plan['tests'])} tests; excluded {len(plan['excluded'])}; "
               f"scheduled {len(plan['tests']) - len(plan['excluded'])}")
