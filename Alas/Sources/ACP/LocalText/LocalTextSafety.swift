@@ -53,7 +53,7 @@ enum LocalTextSafety {
         }
         return !isQuoted
             || near.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || matches(near, #"(?i)\b(?:run|execute)\s*$"#)
+            || matches(near, #"(?i)\b(?:(?:run|execute)(?:\s+the\s+command)?|proceed\s+by\s+running)\s*$"#)
     }
 
     private static func matches(_ text: String, _ pattern: String) -> Bool {
