@@ -51,33 +51,56 @@ struct ACPUpstreamReferenceComposerTests {
         ACPInputField.Coordinator.extract(textView.attributedString()).0
     }
 
-    @Test("typing a reference does not touch undo history, and it is still text right after typing")
-    func typedReferenceStaysTextAndPreservesUndo() async {
+    @Test("typing whitespace after a reference turns it into a chip in the same edit")
+    func typedReferenceChips() async {
         let store = await UpstreamReferenceFixtures.store()
         let (textView, coordinator, window) = makeTextView(store: store)
         defer { withExtendedLifetime((coordinator, window)) {} }
 
         type("see #12 ", into: textView)
 
-        // A hand-typed reference is not chipped at the whitespace keystroke
-        // (unlike the leading command pill): chipping many references per
-        // message through `replaceClearingUndo` would wipe undo history on
-        // every one of them. Plain typing keeps its own undo record.
-        #expect(chipSpellings(textView).isEmpty)
+        #expect(chipSpellings(textView) == ["#12"])
         #expect(wireText(textView) == "see #12 ")
-        #expect(textView.undoManager?.canUndo == true)
-
-        // Don't pin the exact coalescing granularity (AppKit groups typed
-        // characters into undo steps on its own schedule) — just confirm a
-        // real undo happens and a redo becomes available, proving the
-        // history is intact rather than wiped by `replaceClearingUndo`.
-        let lengthBeforeUndo = (textView.string as NSString).length
-        textView.undoManager?.undo()
-        #expect((textView.string as NSString).length < lengthBeforeUndo)
-        #expect(textView.undoManager?.canRedo == true)
+        #expect(textView.selectedRange() == NSRange(location: textView.attributedString().length, length: 0))
+        #expect(store.entry(for: CodeHostReference(sigil: .hash, number: 12)) != .idle)
     }
 
-    @Test("a typed reference becomes a chip by send time")
+    @Test("undo after a typed chip restores the typed text and can be redone without crashing")
+    func undoThroughTypedChips() async {
+        let store = await UpstreamReferenceFixtures.store()
+        let (textView, coordinator, window) = makeTextView(store: store)
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let undoManager = textView.undoManager
+
+        type("fix #12 and #13 now", into: textView)
+        #expect(chipSpellings(textView) == ["#12", "#13"])
+        #expect(undoManager?.canUndo == true)
+
+        // The chip edit is an ordinary undoable step: undoing brings the
+        // plain `#13` back, and repeatedly walking the whole history in
+        // both directions must never leave a chip or a stale range behind.
+        // (This used to throw `NSRangeException` out of `NSTextStorage`
+        // when the chip edit bypassed NSTextView's own undo bookkeeping.)
+        undoManager?.undo()
+        #expect(chipSpellings(textView).count < 2)
+        #expect(!textView.string.contains("\u{FFFC}\u{FFFC}"))
+        while undoManager?.canUndo == true { undoManager?.undo() }
+        #expect(textView.string.isEmpty)
+        while undoManager?.canRedo == true { undoManager?.redo() }
+        #expect(wireText(textView) == "fix #12 and #13 now")
+        #expect(chipSpellings(textView) == ["#12", "#13"])
+        while undoManager?.canUndo == true { undoManager?.undo() }
+        #expect(textView.string.isEmpty)
+
+        // Editing after an undo is still a normal, undoable typing session.
+        type("see #14 ", into: textView)
+        #expect(chipSpellings(textView) == ["#14"])
+        undoManager?.undo()
+        #expect(chipSpellings(textView).isEmpty)
+        #expect(textView.string.hasPrefix("see #14") || textView.string.isEmpty)
+    }
+
+    @Test("a reference still being typed at send time becomes a chip before the message leaves")
     func typedReferenceChipsBeforeSend() async {
         let store = await UpstreamReferenceFixtures.store()
         // Reject the submit so `submit(_:)` does not clear the visible
@@ -86,29 +109,25 @@ struct ACPUpstreamReferenceComposerTests {
         // editable draft in place" in `Coordinator.submit`'s own doc comment.
         let (textView, coordinator, window) = makeTextView(store: store, onSubmit: { _, _, _, _, _ in false })
         defer { withExtendedLifetime((coordinator, window)) {} }
-        type("see #12 ", into: textView)
+        // No trailing whitespace, so no keystroke ever completed the token.
+        type("see #12", into: textView)
         #expect(chipSpellings(textView).isEmpty)
 
         coordinator.submit(textView)
 
         #expect(chipSpellings(textView) == ["#12"])
-        #expect(store.entry(for: CodeHostReference(sigil: .hash, number: 12)) != .idle)
     }
 
-    @Test("punctuation typed before a reference is unaffected; it is still text after typing")
-    func punctuationAroundReferenceStaysText() async {
+    @Test("punctuation typed before the space is kept, and auto-paired parens are not doubled")
+    func punctuationCarriedOver() async {
         let store = await UpstreamReferenceFixtures.store()
-        let (textView, coordinator, window) = makeTextView(store: store, onSubmit: { _, _, _, _, _ in false })
+        let (textView, coordinator, window) = makeTextView(store: store)
         defer { withExtendedLifetime((coordinator, window)) {} }
 
         type("(#12). ", into: textView)
 
-        #expect(chipSpellings(textView).isEmpty)
-        #expect(wireText(textView) == "(#12). ")
-
-        coordinator.submit(textView)
-
         #expect(chipSpellings(textView) == ["#12"])
+        #expect(wireText(textView) == "(#12). ")
     }
 
     @Test("no store, or a token in an open code span, stays plain text")
@@ -161,10 +180,6 @@ struct ACPUpstreamReferenceComposerTests {
         let (textView, coordinator, window) = makeTextView(store: store)
         defer { withExtendedLifetime((coordinator, window)) {} }
         type("fix #12 now", into: textView)
-        // Typing alone no longer chips (see `typedReferenceStaysTextAndPreservesUndo`);
-        // chip explicitly here so the round trip has an actual chip to
-        // preserve, same as it would carry one by send time or on restore.
-        textView.chipUpstreamReferencesIfNeeded()
         #expect(chipSpellings(textView) == ["#12"])
         let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
         defer { board.releaseGlobally() }
@@ -179,12 +194,15 @@ struct ACPUpstreamReferenceComposerTests {
         #expect(wireText(textView) == "fix #12 now")
     }
 
-    @Test("attaching a store chips existing text once its remote resolves")
+    @Test("attaching a store chips existing text once its remote resolves, keeping undo intact")
     func attachChipsAfterResolution() async throws {
         let store = await UpstreamReferenceFixtures.store()
         let (textView, coordinator, window) = makeTextView(store: nil)
         defer { withExtendedLifetime((coordinator, window)) {} }
-        textView.string = "see #12 "
+        // Typed, not assigned, so the text carries its own undo record for
+        // the late chip edit to coexist with.
+        type("see #12 ", into: textView)
+        #expect(chipSpellings(textView).isEmpty)
 
         coordinator.attachUpstreamReferences(store)
 
@@ -193,6 +211,10 @@ struct ACPUpstreamReferenceComposerTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(chipSpellings(textView) == ["#12"])
+        #expect(textView.undoManager?.canUndo == true)
+        textView.undoManager?.undo()
+        #expect(chipSpellings(textView).isEmpty)
+        #expect("see #12 ".hasPrefix(textView.string))
     }
 
     @Test("restoring a draft ending in a reference leaves it as text, not a chip cut off mid-digit")
@@ -206,9 +228,12 @@ struct ACPUpstreamReferenceComposerTests {
         #expect(chipSpellings(textView).isEmpty)
         #expect(textView.string == "see #12")
 
+        // The user finishes the number; the whitespace then chips the full
+        // `#123`, not a premature `#12`.
         textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
         type("3 ", into: textView)
-        #expect(textView.string == "see #123 ")
+        #expect(chipSpellings(textView) == ["#123"])
+        #expect(wireText(textView) == "see #123 ")
     }
 
     @Test("restoring a draft chips every completed reference except one ending at the text's end")

@@ -2228,9 +2228,8 @@ struct ACPComposerDraftBridgeTests {
         )
         textView.allowsUndo = true
         // A real insertText call (not `.string =`) leaves its own undo
-        // record behind, matching production: the pill-forming edit
-        // deliberately clears the undo stack rather than risk corrupting
-        // that record — see `replaceClearingUndo`.
+        // record behind, matching production: the pill-forming edit must
+        // coexist with that record — see `replaceUndoably`.
         textView.insertText("/$brainstorming:ideas", replacementRange: textView.selectedRange())
         textView.insertText(" ", replacementRange: textView.selectedRange())
 
@@ -2238,7 +2237,18 @@ struct ACPComposerDraftBridgeTests {
         #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/$brainstorming:ideas")
         #expect(ACPInputField.Coordinator.extract(storage).0 == "/$brainstorming:ideas ")
         #expect(textView.selectedRange() == NSRange(location: storage.length, length: 0))
-        #expect(textView.undoManager?.canUndo == false)
+
+        // ⌘Z types the pill back out. Don't pin how many steps AppKit
+        // coalesced the typing into — only that the first undo removes the
+        // chip without crashing and the history replays cleanly.
+        #expect(textView.undoManager?.canUndo == true)
+        textView.undoManager?.undo()
+        #expect(textView.attributedString().length == 0
+            || textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) == nil)
+        #expect("/$brainstorming:ideas ".hasPrefix(textView.string))
+        while textView.undoManager?.canRedo == true { textView.undoManager?.redo() }
+        #expect(textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/$brainstorming:ideas")
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/$brainstorming:ideas ")
     }
 
     @Test("late-arriving suggestions pill a hand-typed command without corrupting undo")
@@ -2254,8 +2264,8 @@ struct ACPComposerDraftBridgeTests {
         textView.insertText("/init ", replacementRange: textView.selectedRange())
         #expect(textView.string == "/init ")
         #expect(textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) == nil)
-        // The typing above left its own undo record. Confirm it exists
-        // before the pill-forming edit clears it below.
+        // The typing above left its own undo record, which the pill-forming
+        // edit below shrinks the range of.
         #expect(textView.undoManager?.canUndo == true)
 
         coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
@@ -2265,16 +2275,21 @@ struct ACPComposerDraftBridgeTests {
         #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
         #expect(ACPInputField.Coordinator.extract(storage).0 == "/init ")
 
-        // The prior typing's undo record targeted the pre-chip character
-        // range, which this edit just shrank — replaying it (via undo)
-        // reproducibly crashed `NSTextStorage` regardless of mechanism
-        // (see `replaceClearingUndo`'s doc comment), so it's cleared
-        // instead of preserved.
-        #expect(textView.undoManager?.canUndo == false)
+        // Replaying the prior typing's record after a direct storage
+        // mutation used to throw `NSRangeException` out of `NSTextStorage`;
+        // going through NSTextView's own insertText keeps it consistent.
+        #expect(textView.undoManager?.canUndo == true)
+        textView.undoManager?.undo()
+        #expect(textView.attributedString().length == 0
+            || textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) == nil)
+        while textView.undoManager?.canUndo == true { textView.undoManager?.undo() }
+        #expect(textView.string.isEmpty)
+        while textView.undoManager?.canRedo == true { textView.undoManager?.redo() }
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/init ")
     }
 
-    @Test("accepting a leading command from the picker clears stale undo history")
-    func pickerAcceptClearsStaleUndoHistory() throws {
+    @Test("accepting a leading command from the picker keeps undo history intact")
+    func pickerAcceptKeepsUndoHistory() throws {
         let (textView, coordinator, window) = makeGhostHintTextView()
         _ = window
         textView.allowsUndo = true
@@ -2293,10 +2308,16 @@ struct ACPComposerDraftBridgeTests {
         #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/read-jira-ticket")
         #expect(ACPInputField.Coordinator.extract(storage).0 == "/read-jira-ticket ")
         #expect(!textView.isSlashPanelOpen)
-        // Same reasoning as `replaceClearingUndo`: the picked token can be
-        // longer than its one-glyph chip, so the prior typing's undo
-        // record no longer matches — clear it instead of risking a crash.
-        #expect(textView.undoManager?.canUndo == false)
+        // The picked token is longer than the typed prefix it replaced and
+        // shrinks to a one-glyph chip; undo still walks back to the typed
+        // text and redo rebuilds the pill.
+        #expect(textView.undoManager?.canUndo == true)
+        textView.undoManager?.undo()
+        #expect(textView.attributedString().length == 0
+            || textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) == nil)
+        #expect("/read-j".hasPrefix(textView.string))
+        while textView.undoManager?.canRedo == true { textView.undoManager?.redo() }
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/read-jira-ticket ")
     }
 
     @Test("late chipification preserves the caret's position past the command")
