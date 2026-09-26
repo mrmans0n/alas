@@ -360,6 +360,15 @@ struct AppStateRunScheduleTests {
             runRecords: runRecords,
             tabs: [unrelatedTab]
         )?.sessionID == nil)
+        // A closed tab must not be mistaken for a terminal that cleanup can
+        // terminate through its tab; the caller must use the closed-session
+        // verification path instead.
+        #expect(AppState.scheduledScriptTerminalForCleanup(
+            report: report,
+            worktree: fixture.worktree,
+            runRecords: runRecords,
+            tabs: []
+        ) == nil)
     }
 
     @Test func appStateReconcilesReportsLoadedFromDisk() async throws {
@@ -597,6 +606,81 @@ struct AppStateRunScheduleTests {
         })
     }
 
+    @Test func reportCompletionRetryKeepsItsOwnerUntilPersistenceRecovers() async throws {
+        struct FinalizationFailure: Error {}
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let expected = ScheduledAgentReport(
+            id: "retry-report",
+            occurrenceID: "retry-occurrence",
+            scheduleID: "retry-schedule",
+            scheduleName: "Nightly",
+            projectID: fixture.project.id,
+            projectName: fixture.project.name,
+            branch: fixture.worktree.branch,
+            baseCommit: "base",
+            worktreeID: fixture.worktree.id,
+            sessionID: "session",
+            agentID: "agent",
+            request: "Run the task.",
+            startedAt: Date(),
+            finishedAt: Date(),
+            taskState: .succeeded,
+            completion: ScheduledAgentCompletion(
+                outcome: .succeeded,
+                summary: "Complete.",
+                checks: [],
+                links: []
+            ),
+            cleanupRequested: true,
+            cleanupState: .pending
+        )
+        let registration = ScheduledAgentRunRegistration(
+            reportID: expected.id,
+            occurrenceID: expected.occurrenceID,
+            scheduleID: expected.scheduleID,
+            projectID: fixture.project.id,
+            worktreeID: fixture.worktree.id,
+            worktreeLineageID: fixture.worktree.lineageID,
+            sessionID: "session",
+            promptID: UUID()
+        )
+        fixture.state.activeScheduledAgentRunsBySession["session"] = registration
+        var allowPersistence = false
+        var attempts = 0
+        var returned = false
+        let retryTask = Task {
+            defer {
+                if fixture.state.activeScheduledAgentRunsBySession["session"] === registration {
+                    registration.invalidate()
+                    fixture.state.activeScheduledAgentRunsBySession["session"] = nil
+                }
+            }
+            let report = await AppState.finishRecordedScheduledReportWithRetry(
+                retryDelay: { _ in .milliseconds(1) }
+            ) {
+                attempts += 1
+                guard allowPersistence else { throw FinalizationFailure() }
+                return expected
+            }
+            returned = true
+            return report
+        }
+
+        let deadline = Date().addingTimeInterval(5)
+        while attempts < 8 && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(attempts >= 8)
+        #expect(!returned)
+        #expect(fixture.state.activeScheduledAgentRunsBySession["session"] === registration)
+        allowPersistence = true
+
+        let finalized = await retryTask.value
+        #expect(finalized.id == expected.id)
+        #expect(returned)
+        #expect(fixture.state.activeScheduledAgentRunsBySession["session"] == nil)
+    }
     /// A schedule's history links runs in worktrees whose Run tab may never
     /// have been opened — a worktree the schedule created itself, most
     /// obviously. After a relaunch nothing has loaded their report ids, so the

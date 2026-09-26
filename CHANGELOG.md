@@ -10,7 +10,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Submit a required federated elicitation array with an empty selection: "required" now means the property must be present, and only a declared `minItems` constrains the item count.
 - Report a failed submit to the composer and to remote clients when the writer lease is lost mid-send, and close a remote ACP session whose creation completed after its chat was disposed.
-- After transient report-finalization retries succeed, continue scheduled cleanup and completion notifications; avoid redundant zmx kills after the scheduled script is already terminated; verify cleanup reachability against branches advertised by `origin` (#1465).
+- After transient report-finalization retries succeed, continue scheduled cleanup and completion notifications; skip duplicate zmx kills after verified scheduled-script termination and let quit-time drains return when kill subprocesses finish, without waiting on MainActor bookkeeping; verify cleanup reachability against branches advertised by `origin` (#1465).
+- Serialize terminal and ACP writer admission with cleanup staging; retain worktrees with ignored data, unpublished submodule state, or unverified terminal kills; preserve report-history pagination boundaries and refreshes.
 
 ## [0.19.9] - 2026-09-25
 

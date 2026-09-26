@@ -17,6 +17,37 @@ struct CheckpointWriterLeaseStoreTests {
         #expect(store.activeLeaseCount(lineageID: lineageID, excludingInstanceID: "other-instance") == 1)
     }
 
+    @Test func admissionPersistsLeaseUnderHeldDeletionLock() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lineageID = UUID().uuidString.lowercased()
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { .some([]) })
+        let deletionLease = try #require(store.holdDeletionLock(
+            lineageIDs: [lineageID],
+            instanceID: "cleanup",
+            sessionID: "worktree"
+        ))
+
+        #expect(!store.acquire(
+            lineageIDs: [lineageID],
+            sessionID: "writer",
+            instanceID: "writer-instance",
+            zmxSessionName: nil,
+            remoteHost: nil
+        ))
+        #expect(store.activeLeaseCount(lineageID: lineageID, excludingInstanceID: "cleanup") == 0)
+
+        #expect(store.acquire(
+            lineageIDs: [lineageID],
+            sessionID: "writer",
+            instanceID: "writer-instance",
+            zmxSessionName: nil,
+            remoteHost: nil,
+            holding: deletionLease
+        ))
+        #expect(store.activeLeaseCount(lineageID: lineageID, excludingInstanceID: "cleanup") == 1)
+    }
+
     @Test func liveReusedPidDoesNotKeepStaleLeaseActive() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -111,7 +142,9 @@ struct CheckpointWriterLeaseStoreTests {
             lineageID: lineageID,
             excludingInstanceID: "current-instance"
         ) == 1)
-        #expect(try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).count == 1)
+        let entries = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        #expect(entries.filter { $0.pathExtension == "json" }.count == 1)
+        #expect(entries.contains { $0.lastPathComponent == "deletion.lock" })
     }
 
     @Test func checkedLeaseCountTreatsMissingLineageDirectoryAsEmpty() throws {

@@ -892,6 +892,7 @@ struct WorktreeService {
             try WorktreeService.renameAtomically(from: $0, to: $1)
         }
     ) async throws -> WorktreeRemovalOutcome {
+        defer { withExtendedLifetime(deletionLease) {} }
         func requireExpectedLineage(at path: URL) throws {
             guard let expectedWorktreeLineageID else { return }
             guard !path.isRemoteAlasPath,
@@ -1188,7 +1189,7 @@ struct WorktreeService {
             // audit — local-only submodule state is expected and deletable —
             // so the post-stage audit is likewise gated on the lease check
             // that only scheduled cleanup supplies.
-            if let beforeRemoval {
+            if beforeRemoval != nil {
                 do {
                     // The pre-rename ignored-content audit ran against the
                     // live path; an external process can create an ignored
@@ -1208,10 +1209,16 @@ struct WorktreeService {
                         worktreePath: ticket.stagedPath,
                         worktreeGitDirectory: expectedRegistration.gitDirectory
                     )
-                    guard try await Self.stagedSubmoduleHistoryIsSafe(
-                        stored,
-                        worktreeGitDirectory: expectedRegistration.gitDirectory
-                    ) else {
+                    let active = try await stagedActiveSubmoduleGitDirectories(
+                        worktreePath: ticket.stagedPath,
+                        gitDirectory: expectedRegistration.gitDirectory
+                    )
+                    guard Set(stored) == active,
+                          try await Self.stagedSubmoduleHistoryIsSafe(
+                              stored,
+                              worktreeGitDirectory: expectedRegistration.gitDirectory
+                          )
+                    else {
                         try failAfterRollingBack(
                             "A submodule of this worktree holds unpublished Git state that cleanup would destroy."
                         )
@@ -1488,8 +1495,8 @@ struct WorktreeService {
             cwd: worktreePath
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
-        // Trim, not raw emptiness: a trailing newline always terminates the
-        // listing, and an all-space pathname must still count as content.
+        // Check raw output: a pathname consisting only of whitespace still
+        // makes the ignored-content listing nonempty.
         if !result.stdout.isEmpty {
             return true
         }
@@ -1577,33 +1584,60 @@ struct WorktreeService {
         guard moduleDirectories.stored.allSatisfy({ moduleDirectories.active.contains($0) }) else {
             return false
         }
-
         let submoduleRemoteRefs = try await Process.git(
             [
                 "submodule", "foreach", "--quiet", "--recursive",
                 """
                 set -e
-                refs=$(git for-each-ref --contains=HEAD --format='%(refname)' refs/remotes/)
-                test -n "$refs"
-                local_only=$(git rev-list --max-count=1 --all --reflog --not --remotes 2>/dev/null)
+                advertised_refs=$(git -c protocol.file.allow=always ls-remote origin)
+                test -n "$advertised_refs"
+                advertised_oids=$(printf '%s\\n' "$advertised_refs" | awk '{ print $1 }')
+                head=$(git rev-parse HEAD)
+                head_is_advertised_reachable=0
+                while read -r remote_oid remote_ref; do
+                    test -n "$remote_oid" || continue
+                    if git merge-base --is-ancestor "$head" "$remote_oid"; then
+                        head_is_advertised_reachable=1
+                        break
+                    fi
+                done <<REFS_EOF
+                $advertised_refs
+                REFS_EOF
+                test "$head_is_advertised_reachable" -eq 1
+                # Any local tracking ref can mask objects from the
+                # reachability check; map its branch name back to origin's
+                # advertised ref (including the remote default HEAD).
+                tracking_failed=0
+                while IFS=' ' read -r ref_oid ref_name; do
+                    case "$ref_name" in
+                        refs/remotes/*)
+                            tracking_path=${ref_name#refs/remotes/}
+                            tracking_branch=${tracking_path#*/}
+                            if test "$tracking_branch" = "HEAD"; then
+                                remote_name=HEAD
+                            else
+                                remote_name=refs/heads/$tracking_branch
+                            fi
+                            remote_oid=$(printf '%s\\n' "$advertised_refs" | awk -v ref="$remote_name" '$2 == ref { print $1; exit }')
+                            test "$remote_oid" = "$ref_oid" || tracking_failed=1
+                            ;;
+                    esac
+                done <<TRACKING_EOF
+                $(git for-each-ref --format='%(objectname) %(refname)' refs/remotes/)
+                TRACKING_EOF
+                test "$tracking_failed" -eq 0
+                local_only=$(git rev-list --max-count=1 --all --reflog --not $advertised_oids 2>/dev/null)
                 test -z "$local_only"
-                # Every local ref *name* (branches, tags, and any custom
-                # namespace like refs/notes or refs/archive) must exist on a
-                # remote under the same namespace AND point at the same
-                # object. The commits behind them are already covered by the
-                # rev-list/fsck checks above, but the ref *names* themselves
-                # are destroyed with the worktree-specific repository, so a
-                # same-short-name remote ref in another namespace — or one
-                # pointing at a different object — does not preserve the
-                # association. The protocol override keeps file:// remotes
-                # (local test fixtures) working; network remotes ignore it.
+                # Every local ref name outside remote-tracking caches must
+                # exist on origin in the same namespace at the same object.
                 names_failed=0
                 while IFS=' ' read -r ref_oid ref_name; do
                     test -n "$ref_name" || continue
-                    remote_oid=$(git -c protocol.file.allow=always ls-remote origin "$ref_name" | awk '$2 == ref { print $1; exit }' ref="$ref_name")
+                    case "$ref_name" in refs/remotes/*) continue ;; esac
+                    remote_oid=$(printf '%s\\n' "$advertised_refs" | awk -v ref="$ref_name" '$2 == ref { print $1; exit }')
                     test "$remote_oid" = "$ref_oid" || names_failed=1
                 done <<REFS_EOF
-                $(git for-each-ref --format='%(objectname) %(refname)' | awk '$2 !~ /^refs\\/remotes\\// { print }')
+                $(git for-each-ref --format='%(objectname) %(refname)' | awk 'index($2, "refs/remotes/") != 1 { print }')
                 REFS_EOF
                 test "$names_failed" -eq 0
                 unreachable=$(git fsck --no-reflogs --unreachable --no-progress 2>/dev/null)
@@ -1635,6 +1669,41 @@ struct WorktreeService {
         return try submoduleGitDirectories(in: modulesDirectory)
     }
 
+    /// Resolves initialized submodule repositories from the staged checkout.
+    /// A stored gitdir with no corresponding `.git` entry was deinitialized
+    /// before the rename and must not be silently discarded.
+    private func stagedActiveSubmoduleGitDirectories(
+        worktreePath: URL,
+        gitDirectory: URL
+    ) async throws -> Set<String> {
+        let submodulePaths = try await submodulePathsFromGitmodules(
+            worktreePath,
+            usesRemoteHostRegistry: false
+        )
+        var active = Set<String>()
+        for relativePath in submodulePaths {
+            let submodulePath = worktreePath.appendingPathComponent(relativePath)
+            guard FileManager.default.fileExists(atPath: submodulePath.appendingPathComponent(".git").path) else {
+                continue
+            }
+            guard let submoduleGitDirectory = Self.submoduleGitDirectory(
+                for: submodulePath,
+                relativePath: relativePath,
+                parentGitDirectory: gitDirectory
+            ) else {
+                throw WorktreeError.gitFailed("Could not verify a staged submodule repository.")
+            }
+            active.insert(Self.resolvedFileSystemPath(submoduleGitDirectory))
+            active.formUnion(
+                try await stagedActiveSubmoduleGitDirectories(
+                    worktreePath: submodulePath,
+                    gitDirectory: submoduleGitDirectory
+                )
+            )
+        }
+        return active
+    }
+
     /// Post-rename counterpart of `scheduledCleanupHistoryIsSafe`'s submodule
     /// audit. Runs the reachability checks directly against each staged
     /// submodule Git directory (their relative `gitdir:` pointers are
@@ -1656,24 +1725,34 @@ struct WorktreeService {
             let head = headResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !head.isEmpty else { return false }
 
-            let auditResult = try await Process.git(
-                gitArguments
-                    + [
-                        "for-each-ref", "--contains=\(head)", "--format=%(refname)", "refs/remotes/",
-                    ],
+            let advertisedRefs = try await Process.git(
+                ["-c", "protocol.file.allow=always"] + gitArguments + ["ls-remote", "origin"],
                 cwd: worktreeGitDirectory
             )
-            guard auditResult.exitCode == 0,
-                  !auditResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else { return false }
-
-            let localOnly = try await Process.git(
-                gitArguments + ["rev-list", "--max-count=1", "--all", "--reflog", "--not", "--remotes"],
-                cwd: worktreeGitDirectory
+            guard advertisedRefs.exitCode == 0 else { return false }
+            let advertised = advertisedRefs.stdout.split(whereSeparator: \.isNewline).compactMap {
+                line -> (oid: String, name: String)? in
+                let fields = line.split(whereSeparator: \.isWhitespace)
+                guard fields.count == 2 else { return nil }
+                return (String(fields[0]), String(fields[1]))
+            }
+            guard !advertised.isEmpty else { return false }
+            let advertisedByName = Dictionary(
+                advertised.map { ($0.name, $0.oid) },
+                uniquingKeysWith: { first, _ in first }
             )
-            guard localOnly.exitCode == 0,
-                  localOnly.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else { return false }
+            var headIsAdvertisedReachable = false
+            for remoteRef in advertised {
+                let ancestry = try await Process.git(
+                    gitArguments + ["merge-base", "--is-ancestor", head, remoteRef.oid],
+                    cwd: worktreeGitDirectory
+                )
+                if ancestry.exitCode == 0 {
+                    headIsAdvertisedReachable = true
+                    break
+                }
+            }
+            guard headIsAdvertisedReachable else { return false }
 
             let namesResult = try await Process.git(
                 gitArguments + ["for-each-ref", "--format=%(objectname) %(refname)"],
@@ -1686,34 +1765,28 @@ struct WorktreeService {
                 guard parts.count == 2 else { return false }
                 let oid = String(parts[0])
                 let fullName = String(parts[1])
-                // Remote-tracking refs are the anchor the reachability checks
-                // rely on; every other local namespace (branches, tags,
-                // notes, custom archives) must survive on a remote.
-                guard !fullName.hasPrefix("refs/remotes/") else { continue }
-                // The ref *name* is destroyed with the repository, so each
-                // one has to exist on the remote under the same namespace
-                // AND point at the same object — a same-short-name remote
-                // ref in another namespace, or one pointing at a different
-                // object, does not preserve the association. The protocol
-                // override keeps file:// remotes (local test fixtures)
-                // working; network remotes ignore it.
-                let published = try await Process.git(
-                    ["-c", "protocol.file.allow=always"]
-                        + gitArguments
-                        + ["ls-remote", "origin", fullName],
-                    cwd: worktreeGitDirectory
-                )
-                guard published.exitCode == 0 else { return false }
-                let remoteOID = published.stdout
-                    .split(whereSeparator: \.isNewline)
-                    .compactMap { line -> String? in
-                        let columns = line.trimmingCharacters(in: .whitespaces)
-                            .split(maxSplits: 1, omittingEmptySubsequences: true) { $0 == "\t" || $0 == " " }
-                        return columns.count == 2 && columns[1] == fullName ? String(columns[0]) : nil
-                    }
-                    .first
-                guard remoteOID == oid else { return false }
+                if fullName.hasPrefix("refs/remotes/") {
+                    let trackingPath = fullName.dropFirst("refs/remotes/".count)
+                    let trackingBranch = trackingPath.split(separator: "/", maxSplits: 1).dropFirst().first
+                    let advertisedName = trackingBranch == "HEAD"
+                        ? "HEAD"
+                        : "refs/heads/" + (trackingBranch.map { String($0) } ?? "")
+                    guard advertisedByName[advertisedName] == oid else { return false }
+                } else {
+                    // Local branches, tags and custom refs are state too:
+                    // their exact names and objects must still be advertised.
+                    guard advertisedByName[fullName] == oid else { return false }
+                }
             }
+
+            let localOnly = try await Process.git(
+                gitArguments + ["rev-list", "--max-count=1", "--all", "--reflog", "--not"]
+                    + advertised.map { $0.oid },
+                cwd: worktreeGitDirectory
+            )
+            guard localOnly.exitCode == 0,
+                  localOnly.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return false }
 
             let unreachable = try await Process.git(
                 gitArguments + ["fsck", "--no-reflogs", "--unreachable", "--no-progress"],

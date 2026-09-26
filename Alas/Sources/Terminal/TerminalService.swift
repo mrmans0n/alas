@@ -169,6 +169,19 @@ final class TerminalService {
         }
     }
 
+    private func dispatchTrackedKill(
+        _ body: @escaping @Sendable () async -> Bool,
+        completion: @escaping @MainActor @Sendable (Bool) -> Void
+    ) {
+        let task = Task.detached(operation: body)
+        let trackedTask = Task.detached { _ = await task.value }
+        pendingKillTasks.insert(trackedTask)
+        Task { @MainActor [weak self] in
+            completion(await task.value)
+            self?.pendingKillTasks.remove(trackedTask)
+        }
+    }
+
     /// Build the global config file for this app + theme combination, then
     /// (re)create the AlasGhostty.App if the config has changed materially.
     /// Call this on launch and whenever theme/terminal settings change.
@@ -535,6 +548,16 @@ final class TerminalService {
         return Set(pendingKillSessionIDs(restrictToWorktree: worktreeID))
     }
 
+    func waitForTerminalKillOutcome(sessionID: String) async -> Bool? {
+        while let outcome = pendingKillOutcomes[sessionID] {
+            if let succeeded = outcome.succeeded { return succeeded }
+            await Task.detached {
+                try? await Task.sleep(for: .milliseconds(50))
+            }.value
+        }
+        return nil
+    }
+
     func closeSession(
         id: String,
         worktreeId explicitWorktreeId: String? = nil,
@@ -556,48 +579,70 @@ final class TerminalService {
         if alreadyTerminated {
             killDispatched = false
         } else if let host = existing?.remoteHost, let existingName = existing?.zmxSessionName {
-            killDispatched = true
             pendingKillOutcomes[id] = .init(startedAt: Date(), succeeded: nil, worktreeID: killWorktreeID)
-            dispatchTrackedKill {
-                await Self.killRemoteSession(host: host, name: existingName)
-                await MainActor.run { [weak self] in
-                    self?.pendingKillOutcomes[id]?.succeeded = true
+            killDispatched = true
+            dispatchTrackedKill({
+                do {
+                    try await Self.terminateRemoteSessionAndVerify(host: host, name: existingName, timeout: 10)
+                    return true
+                } catch {
+                    return false
                 }
-            }
+            }, completion: { [weak self] succeeded in
+                self?.pendingKillOutcomes[id]?.succeeded = succeeded
+            })
         } else if let existingName = existing?.zmxSessionName {
             killDispatched = true
             pendingKillOutcomes[id] = .init(startedAt: Date(), succeeded: nil, worktreeID: killWorktreeID)
             let client = zmxClient
-            dispatchTrackedKill {
-                let killed = client.killSessionResult(name: existingName)
-                await MainActor.run { [weak self] in
-                    self?.pendingKillOutcomes[id]?.succeeded = killed
+            dispatchTrackedKill({
+                do {
+                    try await Self.terminateLocalSessionAndVerify(
+                        name: existingName,
+                        client: client,
+                        timeout: 10
+                    )
+                    return true
+                } catch {
+                    return false
                 }
-            }
+            }, completion: { [weak self] succeeded in
+                self?.pendingKillOutcomes[id]?.succeeded = succeeded
+            })
         } else if let worktreeId = explicitWorktreeId ?? existing?.worktreeId {
             killDispatched = true
             pendingKillOutcomes[id] = .init(startedAt: Date(), succeeded: nil, worktreeID: killWorktreeID)
             let client = zmxClient
             let remoteHost = Self.remoteHostForCleanup(worktreeId: worktreeId, projectPath: projectPath)
-            dispatchTrackedKill {
+            dispatchTrackedKill({
                 let sessionNames = Self.sessionNamesForCleanup(
                     worktreeId: worktreeId,
                     projectPath: projectPath,
                     leafId: id,
                     zmxClient: client
                 )
-                var allKilled = true
+                // This session has no recorded zmx name, so enumerating other
+                // zmx sessions cannot prove that its Ghostty process exited.
+                var allKilled = false
                 for sessionName in sessionNames {
                     if let remoteHost {
-                        await Self.killRemoteSession(host: remoteHost, name: sessionName)
+                        do {
+                            try await Self.terminateRemoteSessionAndVerify(
+                                host: remoteHost,
+                                name: sessionName,
+                                timeout: 10
+                            )
+                        } catch {
+                            allKilled = false
+                        }
                     } else {
                         allKilled = client.killSessionResult(name: sessionName) && allKilled
                     }
                 }
-                await MainActor.run { [weak self] in
-                    self?.pendingKillOutcomes[id]?.succeeded = allKilled
-                }
-            }
+                return allKilled
+            }, completion: { [weak self] succeeded in
+                self?.pendingKillOutcomes[id]?.succeeded = succeeded
+            })
         } else {
             killDispatched = false
         }
@@ -747,15 +792,20 @@ final class TerminalService {
                 try client.listSessionInfosThrowing().map(\.name)
             }.value
         )
+        var killedLocalNames: Set<String> = []
         for name in localNames where localExistingNames.contains(name) {
             let killed = await Task.detached { client.killSessionResult(name: name) }.value
             guard killed else { throw SessionTerminationError.failed(name) }
+            killedLocalNames.insert(name)
         }
+        try await Self.waitForLocalSessionsToDisappear(
+            killedLocalNames,
+            client: client,
+            timeout: timeout
+        )
         for (host, names) in remoteNamesByHost {
-            let existingNames = try await Self.remoteSessionNames(host: host, timeout: timeout)
             for name in names {
-                guard existingNames.contains(name) else { continue }
-                try await Self.killRemoteSessionChecked(host: host, name: name, timeout: timeout)
+                try await Self.terminateRemoteSessionAndVerify(host: host, name: name, timeout: timeout)
             }
         }
     }
@@ -917,6 +967,60 @@ final class TerminalService {
         )
         guard result.exitCode == 0 else { throw SessionTerminationError.failed(host) }
         return Set(ZmxClient.parseSessionInfos(result.stdout).map(\.name))
+    }
+
+    nonisolated private static func terminateLocalSessionAndVerify(
+        name: String,
+        client: ZmxClient,
+        timeout: TimeInterval
+    ) async throws {
+        let existingNames = Set(
+            try await Task.detached {
+                try client.listSessionInfosThrowing().map(\.name)
+            }.value
+        )
+        guard existingNames.contains(name) else { return }
+        let killed = await Task.detached { client.killSessionResult(name: name) }.value
+        guard killed else { throw SessionTerminationError.failed(name) }
+        try await waitForLocalSessionsToDisappear([name], client: client, timeout: timeout)
+    }
+
+    nonisolated private static func waitForLocalSessionsToDisappear(
+        _ names: Set<String>,
+        client: ZmxClient,
+        timeout: TimeInterval
+    ) async throws {
+        guard !names.isEmpty else { return }
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            let currentNames = Set(
+                try await Task.detached {
+                    try client.listSessionInfosThrowing().map(\.name)
+                }.value
+            )
+            guard !names.isDisjoint(with: currentNames) else { return }
+            guard Date() < deadline else {
+                throw SessionTerminationError.failed(names.first ?? "unknown")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    nonisolated static func terminateRemoteSessionAndVerify(
+        host: String,
+        name: String,
+        timeout: TimeInterval
+    ) async throws {
+        let existingNames = try await remoteSessionNames(host: host, timeout: timeout)
+        guard existingNames.contains(name) else { return }
+        try await killRemoteSessionChecked(host: host, name: name, timeout: timeout)
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            let remainingNames = try await remoteSessionNames(host: host, timeout: timeout)
+            guard remainingNames.contains(name) else { return }
+            guard Date() < deadline else { throw SessionTerminationError.failed(name) }
+            try await Task.sleep(for: .milliseconds(100))
+        }
     }
 
     nonisolated static func remoteHostForCleanup(worktreeId: String, projectPath: String?) -> String? {

@@ -288,6 +288,93 @@ struct ScheduledAgentReportStoreTests {
         #expect(refreshed.reports.map(\.id) == ["report-0", "report-1", "report-2", "report-3"])
         #expect(refreshed.pageOffset == 4)
     }
+    @Test func emptyReportPageRefreshUsesProbeForHasMore() {
+        let onlyReport = report(id: "only", startedAt: epoch)
+        let oneReport = ScheduledAgentReportPageRefresh.loadedWindowRefresh(
+            firstPage: [onlyReport],
+            from: [],
+            pageSize: 2,
+            prefix: [onlyReport],
+            requestedLimit: 1
+        )
+        #expect(oneReport.reports.map(\.id) == ["only"])
+        #expect(oneReport.pageOffset == 1)
+        #expect(!oneReport.hasMore)
+
+        let secondReport = report(id: "second", startedAt: epoch.addingTimeInterval(-1))
+        let exactPage = ScheduledAgentReportPageRefresh.loadedWindowRefresh(
+            firstPage: [onlyReport, secondReport],
+            from: [],
+            pageSize: 2,
+            prefix: [onlyReport],
+            requestedLimit: 1
+        )
+        #expect(exactPage.reports.map(\.id) == ["only", "second"])
+        #expect(exactPage.pageOffset == 2)
+        #expect(!exactPage.hasMore)
+
+        let thirdReport = report(id: "third", startedAt: epoch.addingTimeInterval(-2))
+        let pageWithProbe = ScheduledAgentReportPageRefresh.loadedWindowRefresh(
+            firstPage: [onlyReport, secondReport, thirdReport],
+            from: [],
+            pageSize: 2,
+            prefix: [onlyReport],
+            requestedLimit: 1
+        )
+        #expect(pageWithProbe.reports.map(\.id) == ["only", "second"])
+        #expect(pageWithProbe.pageOffset == 2)
+        #expect(pageWithProbe.hasMore)
+
+        let stillEmpty = ScheduledAgentReportPageRefresh.loadedWindowRefresh(
+            firstPage: [],
+            from: [],
+            pageSize: 2,
+            prefix: [],
+            requestedLimit: 1
+        )
+        #expect(stillEmpty.reports.isEmpty)
+        #expect(stillEmpty.pageOffset == 0)
+        #expect(!stillEmpty.hasMore)
+        let remainingReport = report(id: "remaining", startedAt: epoch)
+        let exhaustedAfterDeletion = ScheduledAgentReportPageRefresh.loadedWindowRefresh(
+            firstPage: [remainingReport],
+            from: [onlyReport, secondReport],
+            pageSize: 2,
+            prefix: [remainingReport],
+            requestedLimit: 3
+        )
+        #expect(exhaustedAfterDeletion.reports.map(\.id) == ["remaining"])
+        #expect(exhaustedAfterDeletion.pageOffset == 1)
+        #expect(!exhaustedAfterDeletion.hasMore)
+    }
+
+    @Test func reportPageRefreshAppliesUpdatedPayloadsAcrossLoadedPages() {
+        let first = report(id: "first", startedAt: epoch)
+        let oldPending = report(id: "second", startedAt: epoch.addingTimeInterval(-1))
+        var refreshedFirst = first
+        refreshedFirst.taskState = .succeeded
+        refreshedFirst.finishedAt = epoch.addingTimeInterval(10)
+        var refreshedSecond = oldPending
+        refreshedSecond.taskState = .succeeded
+        refreshedSecond.finishedAt = epoch.addingTimeInterval(11)
+        let probe = report(id: "probe", startedAt: epoch.addingTimeInterval(-2))
+
+        let refreshed = ScheduledAgentReportPageRefresh.loadedWindowRefresh(
+            firstPage: [refreshedFirst],
+            from: [first, oldPending],
+            pageSize: 2,
+            prefix: [refreshedFirst, refreshedSecond, probe],
+            requestedLimit: 3
+        )
+
+        #expect(refreshed.reports.map(\.id) == ["first", "second"])
+        #expect(refreshed.reports[0].taskState == .succeeded)
+        #expect(refreshed.reports[1].taskState == .succeeded)
+        #expect(refreshed.reports[1].finishedAt == refreshedSecond.finishedAt)
+        #expect(refreshed.pageOffset == 2)
+        #expect(refreshed.hasMore)
+    }
+
     @Test func acceptedCompletionStaysRunningUntilThePromptSettlesAndRejectsDuplicates() async throws {
         let path = temporaryPath()
         defer { try? FileManager.default.removeItem(atPath: path) }

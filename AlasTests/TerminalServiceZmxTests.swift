@@ -61,6 +61,58 @@ private final class SlowListRunner: @unchecked Sendable {
         return calls.map(\.args)
     }
 }
+private final class DisappearingSessionRunner: @unchecked Sendable {
+    private let lock = NSLock()
+    private let sessionName: String
+    private let killStarted: DispatchSemaphore?
+    private let unblockKill: DispatchSemaphore?
+    private var sessionIsPresent = true
+    private var calls: [RecordingRunner.Call] = []
+
+    init(
+        sessionName: String,
+        killStarted: DispatchSemaphore? = nil,
+        unblockKill: DispatchSemaphore? = nil
+    ) {
+        self.sessionName = sessionName
+        self.killStarted = killStarted
+        self.unblockKill = unblockKill
+    }
+
+    func runner() -> SubprocessRunner {
+        SubprocessRunner { executable, args, _, _ in
+            self.lock.lock()
+            self.calls.append(.init(executable: executable, args: args))
+            if args == ["ls"] {
+                let isPresent = self.sessionIsPresent
+                self.lock.unlock()
+                let stdout = isPresent
+                    ? "name=\(self.sessionName)\tpid=1\tclients=0\tcreated=1\tstart_dir=/tmp/wt\tcmd=/bin/zsh -l\n"
+                    : ""
+                return .init(exitCode: 0, stdout: stdout, stderr: "")
+            }
+            guard args == ["kill", self.sessionName] else {
+                self.lock.unlock()
+                return .init(exitCode: 1, stdout: "", stderr: "unexpected command")
+            }
+            self.lock.unlock()
+            self.killStarted?.signal()
+            if let unblockKill = self.unblockKill {
+                _ = unblockKill.wait(timeout: .now() + 5.0)
+            }
+            self.lock.lock()
+            self.sessionIsPresent = false
+            self.lock.unlock()
+            return .init(exitCode: 0, stdout: "", stderr: "")
+        }
+    }
+
+    var callArgs: [[String]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls.map(\.args)
+    }
+}
 
 private func makeZmxEnv(available: Bool = true) -> ZmxEnv {
     ZmxEnv(
@@ -129,9 +181,10 @@ struct TerminalServiceZmxTests {
     // MARK: closeSession — zmx kill
 
     @Test func closeSessionInvokesZmxKillWithDerivedName() async {
-        let recorder = RecordingRunner()
+        let sessionName = ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-xyz")
+        let runner = DisappearingSessionRunner(sessionName: sessionName)
         let svc = TerminalService(
-            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: runner.runner())
         )
 
         let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
@@ -142,17 +195,17 @@ struct TerminalServiceZmxTests {
             surface: surface,
             executable: "/bin/zsh",
             args: [],
-            zmxSessionName: ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-xyz")
+            zmxSessionName: sessionName
         )
         svc.registry.register(session)
 
         svc.closeSession(id: "leaf-xyz", worktreeId: "wt-1")
-        await waitForCalls(recorder, count: 1) { $0.calls.count }
+        await waitForCalls(runner, count: 3) { $0.callArgs.count }
 
-        #expect(recorder.calls.count == 1)
-        #expect(recorder.calls[0].args == [
-            "kill",
-            ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-xyz"),
+        #expect(runner.callArgs == [
+            ["ls"],
+            ["kill", sessionName],
+            ["ls"],
         ])
     }
 
@@ -726,19 +779,14 @@ struct TerminalServiceZmxTests {
     func waitForPendingKillsBlocksUntilDispatchedKillCompletes() {
         let started = DispatchSemaphore(value: 0)
         let unblock = DispatchSemaphore(value: 0)
-        let recorder = RecordingRunner()
-        // Replace runner so the kill subprocess parks until we let it
-        // through, simulating a slow daemon round-trip. The drain MUST
-        // observe completion before returning, otherwise a Cmd-Q would
-        // again abandon the in-flight task.
-        let stallRunner = SubprocessRunner { exe, args, _, _ in
-            recorder.calls.append(.init(executable: exe, args: args))
-            started.signal()
-            _ = unblock.wait(timeout: .now() + 5.0)
-            return .init(exitCode: 0, stdout: "", stderr: "")
-        }
+        let sessionName = ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-drain")
+        let runner = DisappearingSessionRunner(
+            sessionName: sessionName,
+            killStarted: started,
+            unblockKill: unblock
+        )
         let svc = TerminalService(
-            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: stallRunner)
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: runner.runner())
         )
 
         let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
@@ -749,20 +797,13 @@ struct TerminalServiceZmxTests {
             surface: surface,
             executable: "/bin/zsh",
             args: [],
-            zmxSessionName: ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-drain")
+            zmxSessionName: sessionName
         )
         svc.registry.register(session)
         svc.closeSession(id: "leaf-drain", worktreeId: "wt-1")
-        // The detached task should have entered the runner by now.
         _ = blockingWait(started, timeout: .now() + 2.0)
 
-        // Drain runs on a background awaiter so the @MainActor task that
-        // removes the completed task from the tracking set can schedule
-        // even though the test thread is calling waitForPendingKills.
         Thread.detachNewThread {
-            // Let the subprocess return shortly after the drain begins,
-            // proving the wait actually observed the task's completion
-            // (rather than just timing out).
             Thread.sleep(forTimeInterval: 0.1)
             unblock.signal()
         }
@@ -771,7 +812,11 @@ struct TerminalServiceZmxTests {
         let elapsed = Date().timeIntervalSince(start)
 
         #expect(elapsed < 1.5, "drain should return when the kill completes, not at timeout")
-        #expect(recorder.calls.map(\.args) == [["kill", "alas-\(ZmxSessionName.hash16("wt-1"))-\(ZmxSessionName.hash16("leaf-drain"))"]])
+        #expect(runner.callArgs == [
+            ["ls"],
+            ["kill", sessionName],
+            ["ls"],
+        ])
     }
 
     @Test
@@ -790,13 +835,17 @@ struct TerminalServiceZmxTests {
     func drainPendingKillsReturnsAtTimeoutWhileKillIsStillBlocked() async {
         let started = DispatchSemaphore(value: 0)
         let unblock = DispatchSemaphore(value: 0)
-        let stallRunner = SubprocessRunner { _, _, _, _ in
-            started.signal()
-            _ = unblock.wait(timeout: .now() + 5.0)
-            return .init(exitCode: 0, stdout: "", stderr: "")
-        }
+        let sessionName = ZmxSessionName.derive(
+            worktreeId: "wt-1",
+            leafId: "leaf-drain-timeout"
+        )
+        let runner = DisappearingSessionRunner(
+            sessionName: sessionName,
+            killStarted: started,
+            unblockKill: unblock
+        )
         let svc = TerminalService(
-            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: stallRunner)
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: runner.runner())
         )
 
         let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
@@ -807,7 +856,7 @@ struct TerminalServiceZmxTests {
             surface: surface,
             executable: "/bin/zsh",
             args: [],
-            zmxSessionName: ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-drain-timeout")
+            zmxSessionName: sessionName
         ))
         svc.closeSession(id: "leaf-drain-timeout", worktreeId: "wt-1")
         _ = blockingWait(started, timeout: .now() + 2.0)
@@ -819,6 +868,84 @@ struct TerminalServiceZmxTests {
         svc.waitForPendingKills(timeout: 2.0)
 
         #expect(elapsed < 0.5, "drain should return at its timeout even when a kill task stays blocked")
+        #expect(runner.callArgs == [
+            ["ls"],
+            ["kill", sessionName],
+            ["ls"],
+        ])
+    }
+
+    @Test func failedClosedTerminalKillBlocksOnlyItsWorktreeAfterAgeWindow() async {
+        let recorder = RecordingRunner()
+        let sessionID = "failed-closed-leaf"
+        let sessionName = ZmxSessionName.derive(
+            worktreeId: "worktree-with-failed-kill",
+            leafId: sessionID
+        )
+        recorder.resultsByFirstArg["ls"] = .init(
+            exitCode: 0,
+            stdout: "name=\(sessionName)\n",
+            stderr: ""
+        )
+        recorder.resultsByFirstArg["kill"] = .init(exitCode: 1, stdout: "", stderr: "kill failed")
+        let service = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        )
+        service.registry.register(TerminalSession(
+            id: sessionID,
+            worktreeId: "worktree-with-failed-kill",
+            projectId: "project",
+            surface: AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO()),
+            executable: "/bin/zsh",
+            args: [],
+            zmxSessionName: sessionName
+        ))
+        service.closeSession(id: sessionID, worktreeId: "worktree-with-failed-kill")
+
+        await waitForCalls(recorder, count: 2) { $0.calls.count }
+        let agedPastWindow = Date().addingTimeInterval(30)
+        let blocked = await service.awaitAndVerifyRecentTerminalKills(
+            within: 15,
+            timeout: 0.1,
+            restrictToWorktree: "worktree-with-failed-kill",
+            now: agedPastWindow
+        )
+
+        #expect(blocked == Set([sessionID]))
+        #expect(await service.awaitAndVerifyRecentTerminalKills(
+            within: 15,
+            timeout: 0.1,
+            restrictToWorktree: "unrelated-worktree",
+            now: agedPastWindow
+        ).isEmpty)
+    }
+
+    @Test func unidentifiedTerminalKillDoesNotProveGhosttyExited() async {
+        let recorder = RecordingRunner()
+        let service = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        )
+        let sessionID = "unidentified-leaf"
+        service.registry.register(TerminalSession(
+            id: sessionID,
+            worktreeId: "worktree-with-unidentified-session",
+            projectId: "project",
+            surface: AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO()),
+            executable: "/bin/zsh",
+            args: [],
+            zmxSessionName: nil
+        ))
+
+        service.closeSession(id: sessionID, worktreeId: "worktree-with-unidentified-session")
+        await waitForCalls(recorder, count: 1) { $0.calls.count }
+        let blocked = await service.awaitAndVerifyRecentTerminalKills(
+            within: 15,
+            timeout: 0.1,
+            restrictToWorktree: "worktree-with-unidentified-session",
+            now: Date().addingTimeInterval(30)
+        )
+
+        #expect(blocked == Set([sessionID]))
     }
 
     // MARK: resolveLaunchPlan — keepSessionsAlive gating

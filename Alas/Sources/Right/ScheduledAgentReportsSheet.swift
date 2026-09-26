@@ -24,14 +24,16 @@ struct ScheduledAgentReportPageRefresh {
         let windowCount = requestedLimit - 1
         let window = prefix.prefix(windowCount)
         // Nothing was loaded yet (first read failed or the project had no
-        // reports): seed the list from the refreshed read instead of
-        // discarding it, otherwise a report that appeared would never be
-        // shown and the list would stay empty. The seed row is data, not a
-        // probe: it says nothing about rows beyond it.
+        // reports): seed the list from the refreshed first page instead of
+        // discarding it, otherwise reports that appeared would never be
+        // shown and the empty state would persist. The first-page rows are
+        // data, not probes; its page-size boundary determines `hasMore`.
         if windowCount == 0 {
-            return replacingLoadedPrefix(
-                Array(prefix.prefix(1)),
-                requestedLimit: prefix.count + 1
+            let seededPage = Array(firstPage.prefix(pageSize))
+            return Self(
+                reports: seededPage,
+                pageOffset: seededPage.count,
+                hasMore: firstPage.count > pageSize
             )
         }
         let prefixMatches = window.map(\.id) == reports.map(\.id)
@@ -49,17 +51,10 @@ struct ScheduledAgentReportPageRefresh {
                 hasMore: prefix.count == requestedLimit
             )
         }
-        return replacingLoadedPrefix(Array(window), requestedLimit: windowCount)
-    }
-
-    static func replacingLoadedPrefix(
-        _ reports: [ScheduledAgentReport],
-        requestedLimit: Int
-    ) -> Self {
-        Self(
-            reports: reports,
-            pageOffset: reports.count,
-            hasMore: reports.count == requestedLimit
+        return Self(
+            reports: Array(window),
+            pageOffset: window.count,
+            hasMore: prefix.count == requestedLimit
         )
     }
 }
@@ -549,11 +544,15 @@ struct ScheduledAgentReportsSheet: View {
             }
         }
         do {
-            let firstPage = try await state.scheduledAgentReportPage(projectID: projectID, offset: 0, limit: pageSize)
+            let firstPage = try await state.scheduledAgentReportPage(
+                projectID: projectID,
+                offset: 0,
+                limit: pageSize + 1
+            )
             guard !Task.isCancelled else { return }
-            reports = firstPage
-            pageOffset = firstPage.count
-            hasMore = firstPage.count == pageSize
+            reports = Array(firstPage.prefix(pageSize))
+            pageOffset = reports.count
+            hasMore = firstPage.count > pageSize
         } catch {
             guard !Task.isCancelled else { return }
             pageError = error.localizedDescription
@@ -569,13 +568,14 @@ struct ScheduledAgentReportsSheet: View {
             let page = try await state.scheduledAgentReportPage(
                 projectID: projectID,
                 offset: pageOffset,
-                limit: pageSize
+                limit: pageSize + 1
             )
             guard !Task.isCancelled else { return }
+            let loadedPage = page.prefix(pageSize)
             let seen = Set(reports.map(\.id))
-            reports.append(contentsOf: page.filter { !seen.contains($0.id) })
-            pageOffset += page.count
-            hasMore = page.count == pageSize
+            reports.append(contentsOf: loadedPage.filter { !seen.contains($0.id) })
+            pageOffset += loadedPage.count
+            hasMore = page.count > pageSize
         } catch {
             guard !Task.isCancelled else { return }
             pageError = error.localizedDescription
@@ -588,7 +588,7 @@ struct ScheduledAgentReportsSheet: View {
             let firstPage = try await state.scheduledAgentReportPage(
                 projectID: projectID,
                 offset: 0,
-                limit: pageSize
+                limit: pageSize + 1
             )
             guard !Task.isCancelled, selectedReportID == nil else { return }
 

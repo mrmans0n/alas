@@ -39,18 +39,16 @@ struct CheckpointWriterLeaseStore: Sendable {
         instanceID: String,
         zmxSessionName: String?,
         remoteHost: String?,
-        pid: Int64 = Int64(ProcessInfo.processInfo.processIdentifier)
+        pid: Int64 = Int64(ProcessInfo.processInfo.processIdentifier),
+        holding deletionLease: CheckpointDeletionLease? = nil
     ) -> Bool {
         guard !lineageIDs.isEmpty else { return true }
         let validIDs = lineageIDs.filter(validLineageID)
         guard !validIDs.isEmpty else { return true }
-        // Scheduled cleanup holds the per-lineage deletion lock across its
-        // final lease checks and the staging rename. The lock is held from
-        // the admission probe through the lease write so a cleanup racing
-        // after the probe cannot rename the worktree while a lease-less
-        // writer is launching; without it cleanup would observe zero
-        // writers and destroy the checkout underneath the new session.
-        let admissionLease = holdDeletionLock(
+        // Admission is serialized through the lease write. Launchers may
+        // acquire the deletion lock before spawning the process and pass the
+        // held claim here, closing the launch/register race as well.
+        let admissionLease = deletionLease ?? holdDeletionLock(
             lineageIDs: validIDs,
             instanceID: instanceID,
             sessionID: sessionID

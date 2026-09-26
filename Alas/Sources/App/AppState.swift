@@ -2766,11 +2766,18 @@ final class AppState {
                 .appendingPathComponent(WorkspaceCheckoutManifest.fileName).path,
             startupScript: authoritative.configurationSnapshot?.shared.sessionOpenScript ?? ""
         )
-        let session = try terminal.openCheckoutSession(
-            context: context,
-            cfg: config.terminal,
-            theme: themeStore.current
-        )
+        let sessionID = UUID().uuidString
+        let session = try withCheckpointTerminalAdmission(for: authoritative, sessionID: sessionID) {
+            try terminal.openCheckoutSession(
+                context: context,
+                cfg: config.terminal,
+                theme: themeStore.current,
+                leafId: sessionID
+            )
+        }
+        if let result = terminalLeaseAcquisitionResults.removeValue(forKey: session.id), !result {
+            throw TerminalLaunchError.worktreeOperationInProgress
+        }
         harness.detector.register(sessionId: session.id) { [weak session] in
             session?.surface.foregroundPid
         }
@@ -2825,11 +2832,18 @@ final class AppState {
                 workspaceCheckoutAgentStartupCommand(for: agent, project: project, checkout: authoritative),
             ].filter { !$0.isEmpty }.joined(separator: "\n")
         )
-        let session = try terminal.openCheckoutSession(
-            context: context,
-            cfg: config.terminal,
-            theme: themeStore.current
-        )
+        let sessionID = UUID().uuidString
+        let session = try withCheckpointTerminalAdmission(for: authoritative, sessionID: sessionID) {
+            try terminal.openCheckoutSession(
+                context: context,
+                cfg: config.terminal,
+                theme: themeStore.current,
+                leafId: sessionID
+            )
+        }
+        if let result = terminalLeaseAcquisitionResults.removeValue(forKey: session.id), !result {
+            throw TerminalLaunchError.worktreeOperationInProgress
+        }
         harness.detector.register(sessionId: session.id) { [weak session] in
             session?.surface.foregroundPid
         }
@@ -2865,15 +2879,20 @@ final class AppState {
         let cwd = restoredCwd ?? URL(fileURLWithPath: context.rootPath)
         do {
             let leafID = UUID().uuidString
-            let newSession = try terminal.openCheckoutSession(
-                context: context,
-                cfg: config.terminal,
-                theme: themeStore.current,
-                forcedCwd: cwd,
-                forcedCwdLocation: context.executionLocation,
-                remoteCwdAlreadyValidated: restoredCwd != nil,
-                leafId: leafID
-            )
+            let newSession = try withCheckpointTerminalAdmission(for: authoritative, sessionID: leafID) {
+                try terminal.openCheckoutSession(
+                    context: context,
+                    cfg: config.terminal,
+                    theme: themeStore.current,
+                    forcedCwd: cwd,
+                    forcedCwdLocation: context.executionLocation,
+                    remoteCwdAlreadyValidated: restoredCwd != nil,
+                    leafId: leafID
+                )
+            }
+            if let result = terminalLeaseAcquisitionResults.removeValue(forKey: newSession.id), !result {
+                throw TerminalLaunchError.worktreeOperationInProgress
+            }
             harness.detector.register(sessionId: newSession.id) { [weak newSession] in newSession?.surface.foregroundPid }
             _ = tabs.splitFocusedLeaf(
                 owner: owner,
@@ -3060,18 +3079,23 @@ final class AppState {
               case .terminal(let state) = tab
         else { return nil }
         for leaf in state.root.leaves() where terminal.registry.session(for: leaf.id) == nil {
-            let session = try terminal.openCheckoutSession(
-                context: context,
-                cfg: config.terminal,
-                theme: themeStore.current,
-                forcedCwd: TerminalService.checkoutRestorationCwd(
-                    savedPath: leaf.lastCwd,
+            let session = try withCheckpointTerminalAdmission(for: checkout, sessionID: leaf.id) {
+                try terminal.openCheckoutSession(
                     context: context,
-                    savedLocation: leaf.lastCwdLocation
-                ),
-                forcedCwdLocation: leaf.lastCwdLocation,
-                leafId: leaf.id
-            )
+                    cfg: config.terminal,
+                    theme: themeStore.current,
+                    forcedCwd: TerminalService.checkoutRestorationCwd(
+                        savedPath: leaf.lastCwd,
+                        context: context,
+                        savedLocation: leaf.lastCwdLocation
+                    ),
+                    forcedCwdLocation: leaf.lastCwdLocation,
+                    leafId: leaf.id
+                )
+            }
+            if let result = terminalLeaseAcquisitionResults.removeValue(forKey: session.id), !result {
+                throw TerminalLaunchError.worktreeOperationInProgress
+            }
             harness.detector.register(sessionId: session.id) { [weak session] in session?.surface.foregroundPid }
         }
         return tabs.tabs(for: owner).first(where: { $0.id == tabID })
@@ -7062,15 +7086,17 @@ final class AppState {
             )
         } else {
             let leafID = UUID().uuidString
-            let session = try terminal.openSession(
-                worktree: worktree,
-                project: project,
-                cfg: config.terminal,
-                theme: themeStore.current,
-                forcedCwd: forcedCwd,
-                repoStartupScript: repoStartupScript,
-                leafId: leafID
-            )
+            let session = try withCheckpointTerminalAdmission(for: worktree, sessionID: leafID) {
+                try terminal.openSession(
+                    worktree: worktree,
+                    project: project,
+                    cfg: config.terminal,
+                    theme: themeStore.current,
+                    forcedCwd: forcedCwd,
+                    repoStartupScript: repoStartupScript,
+                    leafId: leafID
+                )
+            }
             // `onSessionRegistered` already ran and recorded its outcome;
             // a refused lease means the session was closed and must fail
             // this launch rather than installing a dead replacement pane.
@@ -7140,23 +7166,23 @@ final class AppState {
                 environmentRemovals
             )
         } else {
-            let session = try terminal.openSession(
-                worktree: worktree, project: project,
-                cfg: terminalConfig, theme: themeStore.current,
-                startupScriptSuffix: startupScriptSuffix,
-                repoStartupScript: repoStartupScript,
-                includeUserStartupScript: includeUserStartupScript,
-                environmentOverrides: environmentOverrides,
-                environmentRemovals: environmentRemovals,
-                leafId: leafId
-            )
-            // The lease is acquired inside `onSessionRegistered`, which has
-            // already run and recorded its outcome. A scheduled cleanup that
-            // grabbed the deletion lock between the pre-launch probe and
-            // registration (or a failed lease write) must fail this launch,
-            // not leave the caller appending a tab around a session cleanup
-            // is about to destroy. A missing entry means no lease attempt
-            // happened (no lineage), which is fine.
+            let session = try withCheckpointTerminalAdmission(for: worktree, sessionID: leafId) {
+                try terminal.openSession(
+                    worktree: worktree, project: project,
+                    cfg: terminalConfig, theme: themeStore.current,
+                    startupScriptSuffix: startupScriptSuffix,
+                    repoStartupScript: repoStartupScript,
+                    includeUserStartupScript: includeUserStartupScript,
+                    environmentOverrides: environmentOverrides,
+                    environmentRemovals: environmentRemovals,
+                    leafId: leafId
+                )
+            }
+            // The deletion lock was acquired before the process launch and
+            // stays held through `onSessionRegistered`'s lease write. A
+            // refusal means persistence failed, so never append a tab around
+            // a session cleanup could otherwise remove the worktree beneath.
+            // A missing result means no lineage lease was applicable.
             if let result = terminalLeaseAcquisitionResults.removeValue(forKey: session.id), !result {
                 throw TerminalLaunchError.worktreeOperationInProgress
             }
@@ -7346,13 +7372,15 @@ final class AppState {
             // Generated here so the registry key matches the leaf ID stored
             // in the split tree.
             let newLeafId = UUID().uuidString
-            let session = try terminal.openSession(
-                worktree: worktree, project: project,
-                cfg: config.terminal, theme: themeStore.current,
-                forcedCwd: cwd,
-                repoStartupScript: repoStartupScript,
-                leafId: newLeafId
-            )
+            let session = try withCheckpointTerminalAdmission(for: worktree, sessionID: newLeafId) {
+                try terminal.openSession(
+                    worktree: worktree, project: project,
+                    cfg: config.terminal, theme: themeStore.current,
+                    forcedCwd: cwd,
+                    repoStartupScript: repoStartupScript,
+                    leafId: newLeafId
+                )
+            }
             // `onSessionRegistered` already ran; a refused lease means the
             // session was closed and the split must not install a dead pane.
             if let result = terminalLeaseAcquisitionResults.removeValue(forKey: session.id), !result {
@@ -7894,15 +7922,20 @@ final class AppState {
                 context: context,
                 savedLocation: leaf.lastCwdLocation
             )
-            let session = try terminal.openCheckoutSession(
-                context: context,
-                cfg: config.terminal,
-                theme: themeStore.current,
-                forcedCwd: forcedCwd,
-                forcedCwdLocation: leaf.lastCwdLocation,
-                remoteCwdAlreadyValidated: forcedCwd != nil,
-                leafId: leaf.id
-            )
+            let session = try withCheckpointTerminalAdmission(for: checkout, sessionID: leaf.id) {
+                try terminal.openCheckoutSession(
+                    context: context,
+                    cfg: config.terminal,
+                    theme: themeStore.current,
+                    forcedCwd: forcedCwd,
+                    forcedCwdLocation: leaf.lastCwdLocation,
+                    remoteCwdAlreadyValidated: forcedCwd != nil,
+                    leafId: leaf.id
+                )
+            }
+            if let result = terminalLeaseAcquisitionResults.removeValue(forKey: session.id), !result {
+                throw TerminalLaunchError.worktreeOperationInProgress
+            }
             harness.detector.register(sessionId: session.id) { [weak session] in
                 session?.surface.foregroundPid
             }
@@ -8003,15 +8036,17 @@ final class AppState {
                     _ = tabs.clearRunScriptMarker(worktreeId: worktreeId, tabId: tabId)
                 }
             }
-            let session = try terminal.openSession(
-                worktree: worktree, project: project,
-                cfg: config.terminal, theme: themeStore.current,
-                forcedCwd: forcedCwd,
-                repoStartupScript: repoStartupScript,
-                leafId: leaf.id,
-                allowLegacyAttach: allowLegacyAttach,
-                preResolvedZmxSessionName: preResolvedZmxSessionName
-            )
+            let session = try withCheckpointTerminalAdmission(for: worktree, sessionID: leaf.id) {
+                try terminal.openSession(
+                    worktree: worktree, project: project,
+                    cfg: config.terminal, theme: themeStore.current,
+                    forcedCwd: forcedCwd,
+                    repoStartupScript: repoStartupScript,
+                    leafId: leaf.id,
+                    allowLegacyAttach: allowLegacyAttach,
+                    preResolvedZmxSessionName: preResolvedZmxSessionName
+                )
+            }
             // `onSessionRegistered` already ran; a refused lease means the
             // session was closed and must not be registered as restored.
             if let result = terminalLeaseAcquisitionResults.removeValue(forKey: session.id), !result {
@@ -11244,7 +11279,7 @@ final class AppState {
                 // gap where a fresh writer attaches to a worktree that is
                 // about to be renamed underneath it.
                 let deletionLease: CheckpointDeletionLease?
-                if let scheduledCleanupLeaseCheck,
+                if scheduledCleanupLeaseCheck != nil,
                    let lineageID = authorizedWorktreeLineageID {
                     deletionLease = checkpointWriterLeases.holdDeletionLock(
                         lineageIDs: [lineageID],
@@ -11735,6 +11770,14 @@ final class AppState {
     @ObservationIgnored
     private var terminalLeaseAcquisitionResults: [String: Bool] = [:]
 
+    /// Admission claims held from immediately before terminal process launch
+    /// through the synchronous registration callback that persists its lease.
+    @ObservationIgnored
+    private var terminalAdmissionReservations: [String: CheckpointDeletionLease] = [:]
+
+    @ObservationIgnored
+    private var terminalAdmissionLineageIDs: [String: Set<String>] = [:]
+
     @ObservationIgnored
     private let acpOrchestrationPersistence = ACPOrchestrationPersistence()
 
@@ -11860,26 +11903,82 @@ final class AppState {
         }
     }
 
+    private func withCheckpointTerminalAdmission<T>(
+        for worktree: Worktree,
+        sessionID: String,
+        operation: () throws -> T
+    ) throws -> T {
+        let lineageIDs = worktree.lineageID.map { Set([$0]) } ?? []
+        return try withCheckpointTerminalAdmission(
+            lineageIDs: lineageIDs,
+            sessionID: sessionID,
+            operation: operation
+        )
+    }
+
+    private func withCheckpointTerminalAdmission<T>(
+        for checkout: WorkspaceCheckout,
+        sessionID: String,
+        operation: () throws -> T
+    ) throws -> T {
+        return try withCheckpointTerminalAdmission(
+            lineageIDs: checkpointTerminalLeaseLineageIDs(for: checkout),
+            sessionID: sessionID,
+            operation: operation
+        )
+    }
+
+    private func withCheckpointTerminalAdmission<T>(
+        lineageIDs: Set<String>,
+        sessionID: String,
+        operation: () throws -> T
+    ) throws -> T {
+        guard !lineageIDs.isEmpty else { return try operation() }
+        guard let reservation = checkpointWriterLeases.holdDeletionLock(
+            lineageIDs: lineageIDs,
+            instanceID: instanceId,
+            sessionID: sessionID
+        ) else {
+            throw TerminalLaunchError.worktreeOperationInProgress
+        }
+        terminalAdmissionReservations[sessionID] = reservation
+        terminalAdmissionLineageIDs[sessionID] = lineageIDs
+        defer {
+            if terminalLeaseAcquisitionResults[sessionID] == false {
+                releaseTerminalAdmissionAfterVerifiedKill(sessionID: sessionID)
+            } else {
+                terminalAdmissionReservations.removeValue(forKey: sessionID)
+                terminalAdmissionLineageIDs.removeValue(forKey: sessionID)
+            }
+        }
+        return try operation()
+    }
+
+    private func releaseTerminalAdmissionAfterVerifiedKill(sessionID: String) {
+        guard terminalAdmissionReservations[sessionID] != nil else { return }
+        Task { @MainActor [weak self] in
+            guard let self,
+                  await terminal.waitForTerminalKillOutcome(sessionID: sessionID) == true
+            else { return }
+            terminalAdmissionReservations.removeValue(forKey: sessionID)
+            terminalAdmissionLineageIDs.removeValue(forKey: sessionID)
+        }
+    }
+
     private func acquireCheckpointTerminalLease(for session: TerminalSession) {
-        let lineageIDs = checkpointTerminalLeaseLineageIDs(for: session)
+        let lineageIDs = terminalAdmissionLineageIDs[session.id]
+            ?? checkpointTerminalLeaseLineageIDs(for: session)
         let acquired = checkpointWriterLeases.acquire(
             lineageIDs: lineageIDs,
             sessionID: session.id,
             instanceID: instanceId,
             zmxSessionName: session.zmxSessionName,
-            remoteHost: session.remoteHost
+            remoteHost: session.remoteHost,
+            holding: terminalAdmissionReservations[session.id]
         )
         terminalLeaseAcquisitionResults[session.id] = acquired
         guard acquired else {
-            // A scheduled cleanup holds the deletion lock: the shell was
-            // admitted before the lock was taken, so the lease probe passed
-            // but the write was refused. The session must not survive —
-            // it has no lease and its worktree is about to be renamed away.
-            // Terminate and block on the tracked kill (semaphore-backed, so
-            // it is safe from this synchronous MainActor context) so cleanup
-            // cannot race a still-alive shell.
             closeTerminalSession(id: session.id, worktreeId: session.worktreeId, projectPath: nil)
-            terminal.waitForPendingKills(timeout: 5)
             return
         }
     }
@@ -11896,6 +11995,12 @@ final class AppState {
                 checkpointMemberWorktree(for: member)?.lineageID
             })
         }
+    }
+
+    private func checkpointTerminalLeaseLineageIDs(for checkout: WorkspaceCheckout) -> Set<String> {
+        Set(checkout.members.compactMap { member in
+            checkpointMemberWorktree(for: member)?.lineageID
+        })
     }
 
     private func checkpointACPLeaseCount(

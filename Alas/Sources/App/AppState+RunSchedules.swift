@@ -789,6 +789,30 @@ extension AppState {
             return message
         }
     }
+
+    /// The caller's defer unregisters the active run, so never return while
+    /// its durable report still says `running`. Retry even after cancellation:
+    /// dropping the only live owner would leave the report stuck until restart.
+    static func finishRecordedScheduledReportWithRetry(
+        retryDelay: (Int) -> Duration = { .seconds(1 << min($0 - 1, 3)) },
+        finalize: () async throws -> ScheduledAgentReport
+    ) async -> ScheduledAgentReport {
+        var failedAttempts = 0
+        while true {
+            if failedAttempts > 0 {
+                let delay = retryDelay(failedAttempts)
+                await Task.detached {
+                    try? await Task.sleep(for: delay)
+                }.value
+            }
+            do {
+                return try await finalize()
+            } catch {
+                failedAttempts += 1
+            }
+        }
+    }
+
     private func runScheduleOutcomeDescription(_ outcome: RunScheduleOutcome) -> String {
         switch outcome {
         case .succeeded:
@@ -1536,40 +1560,11 @@ extension AppState {
                 )
                 return .launchFailed(outcomeReason)
             }
-            var completedReport: ScheduledAgentReport?
-            var lastError: Error?
-            do {
-                completedReport = try await store.finishRecordedCompletion(
+            let report = await Self.finishRecordedScheduledReportWithRetry {
+                try await store.finishRecordedCompletion(
                     reportID: reportID,
                     authenticatedSessionID: prepared.sessionID
                 )
-            } catch {
-                lastError = error
-                for attempt in 0..<5 {
-                    if attempt > 0 {
-                        try? await Task.sleep(for: .seconds(1 << min(attempt - 1, 3)))
-                    }
-                    do {
-                        completedReport = try await store.finishRecordedCompletion(
-                            reportID: reportID,
-                            authenticatedSessionID: prepared.sessionID
-                        )
-                        break
-                    } catch {
-                        lastError = error
-                    }
-                }
-            }
-            guard let report = completedReport else {
-                let reason = "Could not finalize the scheduled-agent report; the report was not committed and the worktree was retained."
-                reportScheduleFailure(
-                    schedule,
-                    reason: "\(reason) \(lastError.map { "Last error: \($0)." } ?? "") Report: \(reportID).",
-                    project: project,
-                    worktree: worktree,
-                    reportID: reportID
-                )
-                return .launchFailed(reason)
             }
             guard report.taskState == .succeeded else {
                 let reason = "The ACP agent reported \(completion.outcome.rawValue); the worktree was retained."
