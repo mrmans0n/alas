@@ -49,10 +49,13 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             memoizeInlineMarkdown: memoizesInlineMarkdown
         )
         let chipping = context.environment.acpUpstreamReferenceChipping
-        if let chipping {
-            ACPUpstreamReferenceChip.chipifyRendered(rendered, chipping: chipping)
-        }
-        (textView as? ACPMarkdownInlineNSTextView)?.upstreamReferences = chipping?.store
+        // Only subscribe the paragraph to store revisions, and only install
+        // its hover tracking area, when it actually holds a chip: most
+        // paragraphs in a long transcript have no reference in them at
+        // all, and without this guard every one of them still repaints and
+        // tracks the mouse on every store revision bump.
+        let chippedCount = chipping.map { ACPUpstreamReferenceChip.chipifyRendered(rendered, chipping: $0) } ?? 0
+        (textView as? ACPMarkdownInlineNSTextView)?.upstreamReferences = chippedCount > 0 ? chipping?.store : nil
         textView.textStorage?.setAttributedString(rendered)
         // The rendered text changed, so any memoized width→height
         // measurements are stale; drop them before SwiftUI re-queries

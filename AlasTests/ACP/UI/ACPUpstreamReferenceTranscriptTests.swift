@@ -45,6 +45,30 @@ struct ACPUpstreamReferenceTranscriptTests {
         #expect(board.string(forType: .string) == "see #12 please")
     }
 
+    @Test("a paragraph without references never subscribes to store revisions")
+    func plainParagraphSkipsStoreSubscription() async {
+        let store = await UpstreamReferenceFixtures.store()
+        let chipping = ACPUpstreamReferenceChipping(store: store, host: .github)
+
+        // Mirrors exactly what `ACPMarkdownInlineTextView.updateNSView` does:
+        // gate the `upstreamReferences` assignment on `chipifyRendered`'s
+        // own replacement count, so a paragraph with nothing to chip never
+        // installs a hover tracking area or a revision subscription.
+        let plainText = rendered("nothing to see here")
+        let plainCount = ACPUpstreamReferenceChip.chipifyRendered(plainText, chipping: chipping)
+        let plainView = ACPMarkdownInlineNSTextView(frame: .zero)
+        plainView.upstreamReferences = plainCount > 0 ? chipping.store : nil
+        #expect(plainCount == 0)
+        #expect(plainView.upstreamReferences == nil)
+
+        let referencedText = rendered("see #12")
+        let referencedCount = ACPUpstreamReferenceChip.chipifyRendered(referencedText, chipping: chipping)
+        let referencedView = ACPMarkdownInlineNSTextView(frame: .zero)
+        referencedView.upstreamReferences = referencedCount > 0 ? chipping.store : nil
+        #expect(referencedCount == 1)
+        #expect(referencedView.upstreamReferences === store)
+    }
+
     @Test("a paragraph with a chip measures wider than its text alone")
     func measuresChipWidth() async {
         let store = await UpstreamReferenceFixtures.store()
