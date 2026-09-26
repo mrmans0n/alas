@@ -211,6 +211,11 @@ private struct ACPSessionView: View {
                     agentLookup: { state.agent(id: $0) },
                     state: state,
                     worktree: worktree,
+                    sessionSummaryCoordinator: state.sessionSummaryCoordinator,
+                    sessionSummariesRequested: sessionSummariesRequested,
+                    sessionSummariesRuntimeEnabled: state.sessionSummariesRuntimeEnabled,
+                    localTextSupported: state.localTextSupported,
+                    localTextModelState: state.localTextModelState,
                     owner: owner,
                     onOpenPreview: onOpenPreview
                 )
@@ -242,12 +247,45 @@ private struct ACPSessionView: View {
                 composerReady: composerCanAcceptInput
             )
         }
+        .onAppear {
+            applySessionSummaryBinding(
+                ACPSessionSummaryBindingPolicy.action(from: nil, to: sessionSummaryBindingInput)
+            )
+        }
+        .onChange(of: sessionSummaryBindingInput) { previous, current in
+            applySessionSummaryBinding(
+                ACPSessionSummaryBindingPolicy.action(from: previous, to: current)
+            )
+        }
         .task(id: sessionId) {
             await hydrateAndAttach()
             onStartupRecoveryReady()
         }
         .onExitCommand {
             handleEscape()
+        }
+    }
+
+    private var sessionSummariesRequested: Bool {
+        state.config.sessionSummariesEnabled && !state.sessionSummaryDisableSavePending
+    }
+
+    private var sessionSummaryBindingInput: ACPSessionSummaryBindingPolicy.Input {
+        .init(
+            requested: sessionSummariesRequested,
+            supported: state.localTextSupported,
+            incarnation: session.incarnation
+        )
+    }
+
+    private func applySessionSummaryBinding(_ action: ACPSessionSummaryBindingPolicy.Action) {
+        switch action {
+        case .none:
+            break
+        case .bind:
+            state.sessionSummaryCoordinator.bind(to: session)
+        case .teardown:
+            state.sessionSummaryCoordinator.teardown()
         }
     }
 

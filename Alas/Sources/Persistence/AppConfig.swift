@@ -45,6 +45,7 @@ struct AppConfig: Codable, Equatable {
     /// off until the feature has completed its preview acceptance matrix.
     var workspacesEnabled: Bool = false
     var nextPromptSuggestionsEnabled: Bool = false
+    var sessionSummariesEnabled: Bool = false
     /// Preview gate for the Needs Attention inbox and project affordances.
     /// Events continue collecting while its presentation is disabled.
     var needsAttentionEnabled: Bool = false
@@ -583,6 +584,7 @@ struct AppConfig: Codable, Equatable {
         files: Files(showIgnored: true, bookmarksPaneHeight: nil),
         workspacesEnabled: false,
         nextPromptSuggestionsEnabled: false,
+        sessionSummariesEnabled: false,
         needsAttentionEnabled: false,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
@@ -677,6 +679,7 @@ extension AppConfig {
              remote,
              workspacesEnabled,
              nextPromptSuggestionsEnabled,
+             sessionSummariesEnabled,
              needsAttentionEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
@@ -921,6 +924,7 @@ extension AppConfig {
         // must continue to load with the feature disabled.
         workspacesEnabled = (try? c.decode(Bool.self, forKey: .workspacesEnabled)) ?? false
         nextPromptSuggestionsEnabled = (try? c.decode(Bool.self, forKey: .nextPromptSuggestionsEnabled)) ?? false
+        sessionSummariesEnabled = (try? c.decode(Bool.self, forKey: .sessionSummariesEnabled)) ?? false
         // Needs Attention remains opt-in while its entry points are in preview.
         needsAttentionEnabled = (try? c.decode(Bool.self, forKey: .needsAttentionEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
