@@ -111,7 +111,6 @@ AlasTests/ReviewLoopStateTests	subprocess	Conservative subprocess isolation base
 AlasTests/ReviewSessionLoaderTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/RevisionSnapshotCacheTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/RightPaneCheckpointStateTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
-AlasTests/RightPaneGGRefreshSchedulingTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/RightPaneGGStackErrorPresentationTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/RightPaneGGStackTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
 AlasTests/RightPaneOptimisticStageTests	subprocess	Conservative subprocess isolation baseline; at most three suites per invocation.	#23
