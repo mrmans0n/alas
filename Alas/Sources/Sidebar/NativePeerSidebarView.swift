@@ -496,8 +496,10 @@ private struct NativePeerWorktreeRow: View {
                 .fixedSize()
                 // Same aggregate surface `HarnessSessionOverflowBadge` uses
                 // locally, so a hidden session needing attention still shows
-                // through the collapsed chip.
-                .modifier(HarnessSessionBadgeChrome(
+                // through the collapsed chip. Unlike the local, active-only
+                // harness collection, a peer's hidden sessions can all be
+                // idle history, which draws no chrome at all.
+                .modifier(OptionalBadgeChrome(
                     surface: Self.overflowSurface(for: hidden),
                     isSelected: hidden.contains { $0.id == selectedSessionId }
                 ))
@@ -513,14 +515,18 @@ private struct NativePeerWorktreeRow: View {
 
     /// The overflow chip's aggregate surface: mixed when the hidden sessions
     /// span both running and waiting, otherwise whichever of the two they
-    /// share — mirrors `HarnessSessionBadgeSurface.init(sessions:)`.
-    private static func overflowSurface(for sessions: [RemoteSessionSummary]) -> HarnessSessionBadgeSurface {
+    /// share. Nil — no chrome at all — when every hidden session is idle:
+    /// unlike the active-only local harness collection
+    /// `HarnessSessionBadgeSurface.init(sessions:)` mirrors, a peer's hidden
+    /// sessions can be idle history with nothing pending.
+    private static func overflowSurface(for sessions: [RemoteSessionSummary]) -> HarnessSessionBadgeSurface? {
         let hasRunning = sessions.contains { $0.status == "streaming" }
         let hasWaiting = sessions.contains { NativePeerWorktreeGroup.waitingStatuses.contains($0.status) }
         switch (hasRunning, hasWaiting) {
         case (true, true): return .mixed
         case (true, false): return .running
-        case (false, true), (false, false): return .awaiting
+        case (false, true): return .awaiting
+        case (false, false): return nil
         }
     }
 
