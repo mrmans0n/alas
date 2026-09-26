@@ -16,9 +16,7 @@ struct AdvancedPane: View {
                     .padding(.bottom, 12)
 
                 SettingsGroup(title: "Experimental") {
-                    #if DEBUG
                     NextPromptSuggestionsSettings(state: state)
-                    #endif
                     SettingsRow(
                         name: "Workspaces preview",
                         desc: "Enables persistent multi-repository Workspaces for preview testing."
