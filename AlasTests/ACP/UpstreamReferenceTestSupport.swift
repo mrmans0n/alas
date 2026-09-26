@@ -14,6 +14,11 @@ struct StubReferenceProvider: CodeHostProvider {
     var available = true
     var authenticated = true
     let calls = ReferenceCallCounter()
+    /// Counts calls to `isAvailable`/`isAuthenticated` separately, so a
+    /// test can assert the CLI/auth probe ran once and was shared across
+    /// several concurrently failing lookups, not re-run per failure.
+    let availabilityCalls = ReferenceCallCounter()
+    let authenticationCalls = ReferenceCallCounter()
     var respond: @Sendable (CodeHostReference) async throws -> CodeHostReferenceSummary = { reference in
         UpstreamReferenceFixtures.summary(.reviewRequest, reference.number)
     }
@@ -31,8 +36,15 @@ struct StubReferenceProvider: CodeHostProvider {
         return try await respond(reference)
     }
 
-    func isAvailable(cwd: URL) async -> Bool { available }
-    func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { authenticated }
+    func isAvailable(cwd: URL) async -> Bool {
+        await availabilityCalls.increment()
+        return available
+    }
+
+    func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool {
+        await authenticationCalls.increment()
+        return authenticated
+    }
     func currentReviewRequest(
         remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, cwd: URL
     ) async throws -> ReviewRequest? { nil }

@@ -27,6 +27,25 @@ final class ACPUpstreamReferenceStore: ObservableObject {
         case failed(CodeHostReferenceFailure)
     }
 
+    /// One shared classification of the CLI's availability/auth state,
+    /// cached for `staleAfter` so N concurrently failing lookups run the
+    /// `isAvailable`/`isAuthenticated` probe at most once between them,
+    /// and a cached `cliMissing`/`unauthenticated` verdict skips the
+    /// `gh`/`glab` process entirely on the next lookup.
+    private enum CLIProbeVerdict: Equatable {
+        case ok
+        case cliMissing(executable: String)
+        case unauthenticated(executable: String, host: String)
+
+        var failure: CodeHostReferenceFailure? {
+            switch self {
+            case .ok: nil
+            case .cliMissing(let executable): .cliMissing(executable: executable)
+            case .unauthenticated(let executable, let host): .unauthenticated(executable: executable, host: host)
+            }
+        }
+    }
+
     @MainActor
     final class Registry {
         private var stores: [String: ACPUpstreamReferenceStore] = [:]
@@ -57,6 +76,8 @@ final class ACPUpstreamReferenceStore: ObservableObject {
     private var remoteTask: Task<Void, Never>?
     private var activeLoadCount = 0
     private var loadSlotWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cliProbe: (verdict: CLIProbeVerdict, at: Date)?
+    private var cliProbeTask: Task<CLIProbeVerdict, Never>?
 
     init(worktreeRoot: URL, environment: Environment = .live) {
         self.worktreeRoot = worktreeRoot
@@ -137,17 +158,33 @@ final class ACPUpstreamReferenceStore: ObservableObject {
         loads[reference] = Task { [weak self] in
             await self?.acquireLoadSlot()
             guard let self else { return }
+            // A cached, still-fresh cliMissing/unauthenticated verdict
+            // means this lookup can never succeed right now — skip the
+            // `gh`/`glab` process entirely instead of relaunching it only
+            // to hit the same failure.
+            if let precomputed = self.cachedCLIFailure() {
+                self.releaseLoadSlot()
+                self.loads[reference] = nil
+                guard self.remote == remote else { return }
+                self.set(reference, .failed(precomputed))
+                return
+            }
             let outcome: Entry
             do {
                 outcome = .loaded(try await provider.referenceSummary(remote: remote, reference: reference, cwd: root))
             } catch {
-                outcome = .failed(await Self.failure(for: error, provider: provider, remote: remote, cwd: root))
+                outcome = .failed(await self.classifyFailure(error, provider: provider, remote: remote, cwd: root))
             }
             self.releaseLoadSlot()
             self.loads[reference] = nil
             guard self.remote == remote else { return }
             self.set(reference, outcome)
         }
+    }
+
+    private func cachedCLIFailure() -> CodeHostReferenceFailure? {
+        guard let cliProbe, environment.now().timeIntervalSince(cliProbe.at) < Self.staleAfter else { return nil }
+        return cliProbe.verdict.failure
     }
 
     /// Blocks until fewer than `maxConcurrentLoads` lookups are in flight.
@@ -186,8 +223,14 @@ final class ACPUpstreamReferenceStore: ObservableObject {
         revision &+= 1
     }
 
-    private nonisolated static func failure(
-        for error: Error,
+    /// Classifies one lookup's failure. An error the provider already
+    /// labeled `cliMissing`/`unauthenticated` is trusted directly (and
+    /// cached). Anything else asks `cliProbeVerdict`, which runs the actual
+    /// `isAvailable`/`isAuthenticated` probe at most once per `staleAfter`
+    /// and shares one in-flight probe across every call racing to classify
+    /// a failure at the same time.
+    private func classifyFailure(
+        _ error: Error,
         provider: any CodeHostProvider,
         remote: CodeHostRemote,
         cwd: URL
@@ -198,15 +241,56 @@ final class ACPUpstreamReferenceStore: ObservableObject {
         }
         if let error = error as? CodeHostProviderError {
             switch error {
-            case .cliMissing: return .cliMissing(executable: executable)
-            case .unauthenticated(let host): return .unauthenticated(executable: executable, host: host)
+            case .cliMissing:
+                cacheCLIProbe(.cliMissing(executable: executable))
+                return .cliMissing(executable: executable)
+            case .unauthenticated(let host):
+                cacheCLIProbe(.unauthenticated(executable: executable, host: host))
+                return .unauthenticated(executable: executable, host: host)
             default: break
             }
         }
-        if !(await provider.isAvailable(cwd: cwd)) { return .cliMissing(executable: executable) }
-        if !(await provider.isAuthenticated(remote: remote, cwd: cwd)) {
-            return .unauthenticated(executable: executable, host: remote.host)
+        switch await cliProbeVerdict(provider: provider, remote: remote, cwd: cwd) {
+        case .cliMissing(let executable): return .cliMissing(executable: executable)
+        case .unauthenticated(let executable, let host): return .unauthenticated(executable: executable, host: host)
+        case .ok: return .other(error.localizedDescription)
         }
-        return .other(error.localizedDescription)
+    }
+
+    /// Runs `isAvailable`/`isAuthenticated` at most once per `staleAfter`
+    /// window. A fresh cached verdict returns immediately; an in-flight
+    /// probe is awaited rather than duplicated, so several references
+    /// failing at once (e.g. the CLI just became unauthenticated) share
+    /// one pair of probe calls instead of one pair each.
+    private func cliProbeVerdict(
+        provider: any CodeHostProvider,
+        remote: CodeHostRemote,
+        cwd: URL
+    ) async -> CLIProbeVerdict {
+        if let cliProbe, environment.now().timeIntervalSince(cliProbe.at) < Self.staleAfter {
+            return cliProbe.verdict
+        }
+        if let cliProbeTask {
+            return await cliProbeTask.value
+        }
+        let executable = remote.kind.cliExecutable
+        let task = Task<CLIProbeVerdict, Never> {
+            if !(await provider.isAvailable(cwd: cwd)) {
+                return .cliMissing(executable: executable)
+            }
+            if !(await provider.isAuthenticated(remote: remote, cwd: cwd)) {
+                return .unauthenticated(executable: executable, host: remote.host)
+            }
+            return .ok
+        }
+        cliProbeTask = task
+        let verdict = await task.value
+        cacheCLIProbe(verdict)
+        cliProbeTask = nil
+        return verdict
+    }
+
+    private func cacheCLIProbe(_ verdict: CLIProbeVerdict) {
+        cliProbe = (verdict, environment.now())
     }
 }

@@ -186,6 +186,25 @@ struct ACPUpstreamReferenceStoreTests {
         c.ensureLoaded(ref)
         await c.waitForPendingLoads()
         #expect(c.entry(for: ref) == .failed(.unauthenticated(executable: "gh", host: "github.com")))
+
+        // The CLI/auth probe is cached, so three different references
+        // failing in turn share one `isAvailable` probe rather than
+        // re-running it per failure.
+        var repeatedlyMissing = StubReferenceProvider()
+        repeatedlyMissing.available = false
+        repeatedlyMissing.respond = { _ in throw CodeHostProviderError.commandFailed(command: "gh api issue", stderr: "") }
+        let d = await UpstreamReferenceFixtures.store(provider: repeatedlyMissing)
+        for number in [21, 22, 23] {
+            d.ensureLoaded(CodeHostReference(sigil: .hash, number: number))
+            await d.waitForPendingLoads()
+        }
+        #expect(d.entry(for: CodeHostReference(sigil: .hash, number: 21)) == .failed(.cliMissing(executable: "gh")))
+        #expect(d.entry(for: CodeHostReference(sigil: .hash, number: 22)) == .failed(.cliMissing(executable: "gh")))
+        #expect(d.entry(for: CodeHostReference(sigil: .hash, number: 23)) == .failed(.cliMissing(executable: "gh")))
+        #expect(await repeatedlyMissing.availabilityCalls.count == 1)
+        // The second and third references never even reach the CLI: the
+        // cached verdict short-circuits before `referenceSummary` runs.
+        #expect(await repeatedlyMissing.calls.count == 1)
     }
 
     @Test("GitLab chips know their kind from the sigil before any lookup")
