@@ -116,6 +116,33 @@ final class ACPOrchestrationStore {
         """, bindings: [phase.rawValue, failureMessage, updatedAt, childSessionId])
     }
 
+    /// Atomically transitions a delegation to `.failed`, returning `true`
+    /// only for the caller that actually made the transition. Two Alas
+    /// instances reconciling the same stuck delegation both call this; the
+    /// conditional `WHERE phase != 'failed'` plus `BEGIN IMMEDIATE` (same
+    /// idiom as `claimMessage` above) ensures exactly one of them sees
+    /// `changed == 1` and is responsible for waking the parent — a plain
+    /// read-then-write has a window where both read the pre-transition
+    /// phase before either writes.
+    func claimFailedPhase(childSessionId: String, failureMessage: String, updatedAt: Int64) throws -> Bool {
+        try db.exec("BEGIN IMMEDIATE")
+        do {
+            let changed = try db.execChanges("""
+            UPDATE delegations
+            SET phase = ?, failure_message = ?, updated_at = ?
+            WHERE child_session_id = ? AND phase != ?
+            """, bindings: [
+                ACPDelegationPhase.failed.rawValue, failureMessage, updatedAt,
+                childSessionId, ACPDelegationPhase.failed.rawValue,
+            ])
+            try db.exec("COMMIT")
+            return changed == 1
+        } catch {
+            try? db.exec("ROLLBACK")
+            throw error
+        }
+    }
+
     func clearPendingInitialPrompt(childSessionId: String, updatedAt: Int64) throws {
         try db.exec("""
         UPDATE delegations

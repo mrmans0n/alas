@@ -59,6 +59,14 @@ actor ACPOrchestrationPersistence {
         )
     }
 
+    func claimFailedPhase(childSessionId: String, failureMessage: String, updatedAt: Int64) throws -> Bool {
+        try openedStore().claimFailedPhase(
+            childSessionId: childSessionId,
+            failureMessage: failureMessage,
+            updatedAt: updatedAt
+        )
+    }
+
     func updateChildWorktree(
         childSessionId: String,
         worktreeId: String,
