@@ -202,10 +202,14 @@ final class AppState {
     let localTextSupported: Bool
     var localTextModelState: LocalTextModelState = .notInstalled
     var nextPromptInferenceState: NextPromptInferenceState = .ready
-    var nextPromptRuntimeEnabled = false
+    var nextPromptRuntimeEnabled = false {
+        didSet { cancelIssueWorktreeNameSuggestionIfUnavailable(wasEnabled: oldValue) }
+    }
     var nextPromptDisableSavePending = false
     var nextPromptSettingsError: String?
-    var sessionSummariesRuntimeEnabled = false
+    var sessionSummariesRuntimeEnabled = false {
+        didSet { cancelIssueWorktreeNameSuggestionIfUnavailable(wasEnabled: oldValue) }
+    }
     var sessionSummaryDisableSavePending = false
     var sessionSummarySettingsError: String?
     var localTextRemovalFailure: LocalTextModelFailure?
@@ -1594,6 +1598,32 @@ final class AppState {
             },
             providers: .live()
         ))
+    }
+
+    /// Worktree name suggestions ride on a local-text capability the user has
+    /// already consented to. Without one, or while the model is not verified
+    /// ready, the suggester never touches the engine or the model assets.
+    var issueWorktreeNameSuggestionsAvailable: Bool {
+        localTextSupported
+            && !nextPromptShuttingDown
+            && !localTextRemovalInProgress
+            && localTextModelState == .ready
+            && (nextPromptRuntimeEnabled || sessionSummariesRuntimeEnabled)
+    }
+
+    /// Worktree names borrow consent from the other local-text capabilities,
+    /// so turning the last one off must also stop an in-flight name request.
+    /// The suggester rechecks availability too; this frees the engine early.
+    private func cancelIssueWorktreeNameSuggestionIfUnavailable(wasEnabled: Bool) {
+        guard wasEnabled, !nextPromptRuntimeEnabled, !sessionSummariesRuntimeEnabled else { return }
+        let engine = localTextInference
+        Task { await engine.cancel(caller: .worktreeName) }
+    }
+
+    func makeIssueWorktreeNameSuggester() -> IssueWorktreeNameSuggester {
+        IssueWorktreeNameSuggester(engine: localTextInference) { [weak self] in
+            self?.issueWorktreeNameSuggestionsAvailable ?? false
+        }
     }
 
     /// All worktree IDs currently known to the projects manager (including

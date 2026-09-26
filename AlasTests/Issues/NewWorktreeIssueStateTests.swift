@@ -62,6 +62,79 @@ struct NewWorktreeIssueStateTests {
         #expect(state.remove() == nil)
     }
 
+    @Test(arguments: [
+        // (createsGGStack, expected branch, expected stack name)
+        (false, "42-offline-conflicts", ""),
+        (true, "", "42-offline-conflicts"),
+    ])
+    func nameSuggestionReplacesOnlyTheTitleOfTheUntouchedSeed(
+        createsGGStack: Bool, expectedBranch: String, expectedStack: String
+    ) throws {
+        var state = NewWorktreeIssueState()
+        _ = state.attach(Self.draft(branchSeed: "42-fix-sync"), currentLaunch: Self.terminalLaunch)
+        let started = state.beginNameSuggestion()
+        let request = try #require(started)
+
+        let names = state.completeNameSuggestion(
+            request.id,
+            semanticName: "offline-conflicts",
+            branch: createsGGStack ? "" : "42-fix-sync",
+            stackName: createsGGStack ? "42-fix-sync" : ""
+        )
+
+        #expect(names?.branch == expectedBranch)
+        #expect(names?.stackName == expectedStack)
+    }
+
+    @Test(arguments: [false, true])
+    func nameSuggestionKeepsANameTheUserEditedEvenAfterRestoringTheSeed(createsGGStack: Bool) throws {
+        var state = NewWorktreeIssueState()
+        _ = state.attach(Self.draft(branchSeed: "42-fix-sync"), currentLaunch: Self.terminalLaunch)
+        let started = state.beginNameSuggestion()
+        let request = try #require(started)
+
+        // The user types, then undoes back to the exact seed.
+        state.recordUserNameEdit()
+        let names = state.completeNameSuggestion(
+            request.id,
+            semanticName: "offline-conflicts",
+            branch: createsGGStack ? "" : "42-fix-sync",
+            stackName: createsGGStack ? "42-fix-sync" : ""
+        )
+
+        #expect(names == nil)
+    }
+
+    @Test func missingSemanticNameKeepsTheSeed() throws {
+        var state = NewWorktreeIssueState()
+        _ = state.attach(Self.draft(branchSeed: "42-fix-sync"), currentLaunch: Self.terminalLaunch)
+        let started = state.beginNameSuggestion()
+        let request = try #require(started)
+
+        #expect(state.completeNameSuggestion(
+            request.id, semanticName: nil, branch: "42-fix-sync", stackName: ""
+        ) == nil)
+    }
+
+    @Test func laterAttachOrRemovalMakesAPendingNameSuggestionStale() throws {
+        var state = NewWorktreeIssueState()
+        _ = state.attach(Self.draft(branchSeed: "42-fix-sync"), currentLaunch: Self.terminalLaunch)
+        let firstRequest = state.beginNameSuggestion()
+        let first = try #require(firstRequest)
+
+        _ = state.attach(Self.draft(branchSeed: "42-fix-sync"), currentLaunch: Self.terminalLaunch)
+        #expect(state.completeNameSuggestion(
+            first.id, semanticName: "offline-conflicts", branch: "42-fix-sync", stackName: ""
+        ) == nil)
+
+        let secondRequest = state.beginNameSuggestion()
+        let second = try #require(secondRequest)
+        _ = state.remove()
+        #expect(state.completeNameSuggestion(
+            second.id, semanticName: "offline-conflicts", branch: "42-fix-sync", stackName: ""
+        ) == nil)
+    }
+
     private static let terminalLaunch = NewWorktreeLaunchPreference(
         openAfterCreate: true,
         launchMode: .terminal,

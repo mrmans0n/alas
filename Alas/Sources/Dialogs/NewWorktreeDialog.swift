@@ -42,6 +42,7 @@ struct NewWorktreeDialog: View {
     @State private var issueState = NewWorktreeIssueState()
     @State private var issueSheetPresentation: AttachIssuePresentation?
     @State private var issueDrivenProjectChangeID: String?
+    @State private var nameSuggestionTask: Task<Void, Never>?
 
     @Environment(\.theme) var theme
 
@@ -180,6 +181,7 @@ struct NewWorktreeDialog: View {
             applyLaunchDefaults(for: projectId)
             loadBranchesForSelectedProject()
         }
+        .onDisappear { cancelNameSuggestion() }
         .onChange(of: projectId) { _, newProjectId in
             let shouldApplyLaunchDefaults = Self.appliesLaunchDefaultsAfterProjectChange(
                 projectID: newProjectId,
@@ -248,8 +250,10 @@ struct NewWorktreeDialog: View {
             get: { activeName },
             set: { newValue in
                 if createsGGStack {
+                    if newValue != stackName { issueState.recordUserNameEdit() }
                     stackName = newValue
                 } else {
+                    if newValue != branch { issueState.recordUserNameEdit() }
                     branch = newValue
                 }
             }
@@ -479,6 +483,7 @@ struct NewWorktreeDialog: View {
 
     private func attachIssue(_ draft: AttachedIssueDraft) {
         let shouldApplyParentFields = Self.appliesParentFieldsAfterIssueAttach(existingDraft: issueState.draft)
+        cancelNameSuggestion()
         let effects = issueState.attach(draft, currentLaunch: currentLaunchPreference)
         guard shouldApplyParentFields else {
             issueSheetPresentation = nil
@@ -505,6 +510,7 @@ struct NewWorktreeDialog: View {
         )
         branch = names.branch
         stackName = names.stackName
+        startNameSuggestion()
         if effects.shouldSelectChat, acpSegmentEnabled {
             openAfterCreate = true
             launchMode = .acp
@@ -518,7 +524,34 @@ struct NewWorktreeDialog: View {
         createErrorMessage = nil
     }
 
+    /// The deterministic seed is already in the field; this only upgrades its
+    /// title component if the local model answers before the user edits it.
+    private func startNameSuggestion() {
+        guard state.issueWorktreeNameSuggestionsAvailable,
+              let request = issueState.beginNameSuggestion() else { return }
+        let suggester = state.makeIssueWorktreeNameSuggester()
+        nameSuggestionTask = Task { @MainActor in
+            let semanticName = await suggester.suggestName(for: request.source)
+            guard !Task.isCancelled else { return }
+            nameSuggestionTask = nil
+            guard let names = issueState.completeNameSuggestion(
+                request.id,
+                semanticName: semanticName,
+                branch: branch,
+                stackName: stackName
+            ) else { return }
+            branch = names.branch
+            stackName = names.stackName
+        }
+    }
+
+    private func cancelNameSuggestion() {
+        nameSuggestionTask?.cancel()
+        nameSuggestionTask = nil
+    }
+
     private func removeIssue() {
+        cancelNameSuggestion()
         if let preference = issueState.remove() {
             openAfterCreate = preference.openAfterCreate
             launchMode = preference.launchMode
@@ -540,6 +573,7 @@ struct NewWorktreeDialog: View {
 
     private func create() {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return }
+        cancelNameSuggestion()
         let dest = URL(fileURLWithPath: renderedPath)
         let issueDraft = issueState.draft
         guard launchMode != .acp || !openAfterCreate || launchAgentId != "none" else {

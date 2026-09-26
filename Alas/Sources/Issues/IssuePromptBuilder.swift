@@ -5,10 +5,14 @@ enum IssueBranchName {
     /// Dialogs compose the prefix themselves (the same way gg composes
     /// `<username>/`), so a seeded name never carries the prefix twice.
     static func make(displayReference: String?, title: String) -> String {
-        let referenceComponent = displayReference.map(slug).flatMap { $0.isEmpty ? nil : $0 }
         let titleComponent = slug(title)
-        let components = [referenceComponent, titleComponent].compactMap { $0 }
+        let components = [referenceComponent(displayReference), titleComponent].compactMap { $0 }
         return components.joined(separator: "-")
+    }
+
+    /// The slugged ticket reference that leads every issue branch name.
+    static func referenceComponent(_ displayReference: String?) -> String? {
+        displayReference.map(slug).flatMap { $0.isEmpty ? nil : $0 }
     }
 
     private static func slug(_ value: String) -> String {
