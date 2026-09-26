@@ -208,26 +208,19 @@ struct NextPromptInferenceTests {
     }
 
     @Test func delayedCancellationCallbackCannotOverwriteTerminalState() async throws {
-        let fixture = try LeaseFixture()
-        let entered = Gate(), finish = Gate()
+        let engine = CancellationResistantNextPromptEngine()
         let callback = Mutex<(@Sendable () async -> Void)?>(nil)
         let inference = NextPromptInference(
-            acquireLease: { try fixture.acquire() },
-            load: { _ in
-                return { _ in
-                    await entered.open()
-                    await finish.wait()
-                    return #"{"suggestion":"Late candidate."}"#
-                }
-            },
+            engine: engine,
+            verifyAvailability: {},
             scheduleCancellation: { action in callback.withLock { $0 = action } }
         )
         let task = Task { try await inference.generate(request) }
-        await entered.wait()
+        await engine.waitUntilEvaluationStarts()
 
         task.cancel()
         try await eventually { callback.withLock { $0 != nil } }
-        await finish.open()
+        await engine.finishEvaluation()
         #expect(try await task.value == nil)
         #expect(await inference.state == .ready)
 
@@ -237,7 +230,6 @@ struct NextPromptInferenceTests {
         }
         await delayed?()
         #expect(await inference.state == .ready)
-        #expect(fixture.canLockExclusively())
     }
 
     @Test func rejectedReplacementCancelsBlockedRequestAndSuppressesItsResult() async throws {
@@ -472,4 +464,21 @@ private final class ContainerLifetime: Sendable {
     let onRelease: @Sendable () -> Void
     init(_ onRelease: @escaping @Sendable () -> Void) { self.onRelease = onRelease }
     deinit { onRelease() }
+}
+
+private final class CancellationResistantNextPromptEngine: LocalTextGenerating {
+    private let entered = Gate()
+    private let finish = Gate()
+
+    func generate(_ request: LocalTextGenerationRequest, caller: LocalTextCaller,
+                  priority: LocalTextJobPriority) async throws -> LocalTextGenerationResult {
+        await entered.open()
+        await finish.wait()
+        return .init(text: #"{"suggestion":"Late candidate."}"#, selectedCandidateIndex: 0)
+    }
+
+    func cancel(caller: LocalTextCaller) async {}
+    func cancelAndUnload() async {}
+    func waitUntilEvaluationStarts() async { await entered.wait() }
+    func finishEvaluation() async { await finish.open() }
 }

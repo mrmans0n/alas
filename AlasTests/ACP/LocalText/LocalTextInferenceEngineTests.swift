@@ -102,8 +102,8 @@ struct LocalTextInferenceEngineTests {
         let engine = LocalTextInferenceEngine(
             acquireLease: { try fixture.acquire() },
             load: { _ in
-                { candidates, _, _ in
-                    .init(text: candidates[0][0].content, selectedCandidateIndex: 0)
+                { request in
+                    .init(text: request.messageCandidates[0][0].content, selectedCandidateIndex: 0)
                 }
             },
             tokenCount: { Int($0[0].content)! },
@@ -189,7 +189,7 @@ private final class LocalTextEngineProbe: Sendable {
         LocalTextInferenceEngine(
             acquireLease: { try self.fixture.acquire() },
             load: { _ in
-                { _, _, _ in
+                { _ in
                     let index = self.state.withLock { state in
                         let index = state.starts
                         state.starts += 1

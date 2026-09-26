@@ -64,15 +64,7 @@ actor NextPromptInference: NextPromptRuntime {
             acquireLease: acquireLease,
             load: { directory in
                 let evaluation = try await load(directory)
-                return { candidates, inputTokenLimit, parameters in
-                    let request = LocalTextGenerationRequest(
-                        messageCandidates: candidates,
-                        inputTokenLimit: inputTokenLimit,
-                        maxTokens: parameters.maxTokens ?? 0,
-                        temperature: parameters.temperature,
-                        prefillStepSize: parameters.prefillStepSize,
-                        timeout: .seconds(15)
-                    )
+                return { request in
                     return .init(text: try await evaluation(request) ?? "", selectedCandidateIndex: 0)
                 }
             },
@@ -142,8 +134,9 @@ actor NextPromptInference: NextPromptRuntime {
                 scheduleCancellation { await self.beginUnloading(id) }
             }
             deadlineTask.cancel()
-            guard finishRequest(id) else { return nil }
+            guard generation == id, activeRequestID == id else { return nil }
             try Task.checkCancellation()
+            activeRequestID = nil
             failures = 0
             publish(.ready)
             guard let candidate = NextPromptPolicy.parse(Data(result.text.utf8)),

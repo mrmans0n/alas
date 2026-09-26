@@ -9,7 +9,11 @@ import MLXLMCommon
 import Tokenizers
 
 actor LocalTextInferenceEngine: LocalTextGenerating {
-    typealias Evaluation = @Sendable (
+    typealias InjectedEvaluation = @Sendable (
+        LocalTextGenerationRequest
+    ) async throws -> LocalTextGenerationResult
+
+    private typealias Evaluation = @Sendable (
         [[LocalTextMessage]], Int, GenerateParameters
     ) async throws -> LocalTextGenerationResult
 
@@ -57,13 +61,23 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
     }
 
     init(acquireLease: @escaping @Sendable () async throws -> LocalTextModelLease,
-         load: @escaping @Sendable (URL) async throws -> Evaluation,
+         load: @escaping @Sendable (URL) async throws -> InjectedEvaluation,
          tokenCount: @escaping @Sendable ([LocalTextMessage]) async throws -> Int = { _ in 0 },
          supported: @escaping @Sendable () -> Bool = { true },
          clock: Clock = Clock(), observeMemoryPressure: Bool = true) {
         self.acquireLease = acquireLease
         self.load = { directory in
-            .init(tokenCount: tokenCount, evaluate: try await load(directory))
+            let injected = try await load(directory)
+            return .init(tokenCount: tokenCount) { candidates, inputTokenLimit, parameters in
+                try await injected(.init(
+                    messageCandidates: candidates,
+                    inputTokenLimit: inputTokenLimit,
+                    maxTokens: parameters.maxTokens ?? 0,
+                    temperature: parameters.temperature,
+                    prefillStepSize: parameters.prefillStepSize,
+                    timeout: .seconds(15)
+                ))
+            }
         }
         self.supported = supported
         self.clock = clock
