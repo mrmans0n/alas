@@ -995,14 +995,23 @@ struct ACPComposerDraftBridgeTests {
 
     @Test("copy then paste into an empty composer restores the command pill and mention chip")
     func copyPasteRoundTripRestoresChips() {
+        // A private pasteboard, not `.general`: `.general` is a process-wide
+        // singleton other test suites in this same run also read and write,
+        // and an intervening write from one of them between this test's
+        // copy and paste steps would corrupt what gets pasted back. Going
+        // through `writeSelection`/`readSelection` directly exercises the
+        // exact same code `copy(_:)`/`paste(_:)` call, just against a board
+        // only this test touches.
         let (textView, coordinator, window) = makeChipTextView()
         defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
         textView.selectAll(nil)
-        textView.copy(nil)
-        #expect(NSPasteboard.general.string(forType: .string) == "/review @File.swift tail")
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+        #expect(board.string(forType: .string) == "/review @File.swift tail")
 
         textView.string = ""
-        textView.paste(nil)
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
 
         #expect(chipKinds(in: textView) == ["command", "mention"])
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == Self.chipDraft)
@@ -1014,12 +1023,19 @@ struct ACPComposerDraftBridgeTests {
     func pastedCommandMidMessageStaysText() {
         let (textView, coordinator, window) = makeChipTextView()
         defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
         textView.selectAll(nil)
-        textView.copy(nil)
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
 
-        textView.string = "hi "
+        // `textView.string = "hi "` would inherit the attributes of the text
+        // it replaces — here, position 0's command chip — via
+        // NSMutableAttributedString's plain-String replace, corrupting "hi "
+        // with a phantom `.commandChipName`. Replacing the whole attributed
+        // string instead gives it no attributes at all.
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "hi "))
         textView.setSelectedRange(NSRange(location: 3, length: 0))
-        textView.paste(nil)
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
 
         #expect(chipKinds(in: textView) == ["mention"])
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == ACPComposerDraft(segments: [
@@ -1033,13 +1049,18 @@ struct ACPComposerDraftBridgeTests {
     func lonePillPastedBeforeWhitespaceRepills() {
         let (textView, coordinator, window) = makeChipTextView()
         defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
         textView.setSelectedRange(NSRange(location: 0, length: 1))
-        textView.copy(nil)
-        #expect(NSPasteboard.general.string(forType: .string) == "/review")
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+        #expect(board.string(forType: .string) == "/review")
 
-        textView.string = " the parser"
+        // See the note in `pastedCommandMidMessageStaysText`: replace the
+        // whole attributed string, not just `.string`, so the new text
+        // doesn't inherit the command chip's attributes it's overwriting.
+        textView.textStorage?.setAttributedString(NSAttributedString(string: " the parser"))
         textView.setSelectedRange(NSRange(location: 0, length: 0))
-        textView.paste(nil)
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
 
         #expect(chipKinds(in: textView) == ["command"])
         #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/review the parser")
@@ -1049,13 +1070,18 @@ struct ACPComposerDraftBridgeTests {
     func chipPasteUndoRedo() {
         let (textView, coordinator, window) = makeChipTextView()
         defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
         textView.selectAll(nil)
-        textView.copy(nil)
-        textView.string = "keep"
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+        // See the note in `pastedCommandMidMessageStaysText`: replace the
+        // whole attributed string, not just `.string`, so the new text
+        // doesn't inherit the just-copied chip's attributes it's overwriting.
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "keep"))
         textView.setSelectedRange(NSRange(location: 4, length: 0))
         textView.undoManager?.removeAllActions()
 
-        textView.paste(nil)
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
         #expect(chipKinds(in: textView) == ["mention"])
 
         textView.undoManager?.undo()
