@@ -230,6 +230,27 @@ struct ACPUserInputFormStateTests {
         ])
     }
 
+    @Test("enumerated strings still honor pattern and length constraints")
+    func enumeratedStringsHonorConstraints() throws {
+        let request = try formRequest(#"""
+        {
+          "requestId":1,"mode":"form","message":"Deploy",
+          "requestedSchema":{"properties":{
+            "target":{"type":"string","enum":["dev","prod"],"pattern":"^prod$"}
+          },"required":["target"]}
+        }
+        """#)
+        let state = ACPUserInputFormState(request: request)
+        let target = try #require(request.fields.first)
+
+        state.toggle("dev", for: target)
+        #expect(state.validationError(for: target) != nil)
+        #expect(state.submittedContent() == nil)
+
+        state.toggle("prod", for: target)
+        #expect(state.submittedContent() == ["target": .string("prod")])
+    }
+
     @Test("plan approval checklist lists top-level todos and every phase")
     func planApprovalChecklistIncludesPhases() {
         let plan = ACPCursorCreatePlanParams(
