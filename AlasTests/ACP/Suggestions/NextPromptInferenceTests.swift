@@ -151,6 +151,21 @@ struct NextPromptInferenceTests {
         await inference.cancelAndUnload()
     }
 
+    @Test func longSessionsUseBoundedFallbackCandidates() async throws {
+        let engine = CountingNextPromptEngine()
+        let inference = NextPromptInference(engine: engine, verifyAvailability: {})
+        let longRequest = NextPromptRequest(
+            id: .init(sessionID: "test", incarnation: UUID(), promptID: 1, transcriptRevision: 1,
+                      draftRevision: 0, composerEpoch: 0, settingsGeneration: 0, modelGeneration: 0),
+            turns: (0..<256).map { .init(user: "Question \($0)", assistant: "Answer \($0)") }
+        )
+
+        #expect(try await inference.generate(longRequest) == "Show an example.")
+        let candidateCount = await engine.candidateCount
+        #expect(candidateCount > 1 && candidateCount <= 10)
+        await inference.cancelAndUnload()
+    }
+
     @Test func resourceFailuresSuppressAttemptsUntilRetry() async throws {
         let fixture = try LeaseFixture()
         let attempts = Mutex(0)
@@ -464,6 +479,19 @@ private final class ContainerLifetime: Sendable {
     let onRelease: @Sendable () -> Void
     init(_ onRelease: @escaping @Sendable () -> Void) { self.onRelease = onRelease }
     deinit { onRelease() }
+}
+
+private actor CountingNextPromptEngine: LocalTextGenerating {
+    private(set) var candidateCount = 0
+
+    func generate(_ request: LocalTextGenerationRequest, caller: LocalTextCaller,
+                  priority: LocalTextJobPriority) async throws -> LocalTextGenerationResult {
+        candidateCount = request.messageCandidates.count
+        return .init(text: #"{"suggestion":"Show an example."}"#, selectedCandidateIndex: 0)
+    }
+
+    func cancel(caller: LocalTextCaller) async {}
+    func cancelAndUnload() async {}
 }
 
 private final class CancellationResistantNextPromptEngine: LocalTextGenerating {
