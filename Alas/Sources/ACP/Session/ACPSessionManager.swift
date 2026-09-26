@@ -144,6 +144,7 @@ final class ACPSessionManager: ObservableObject {
     private let onQueueChanged: ((ACPSession.ID, Bool) -> Void)?
     private let onSuccessfulTurn: @MainActor (NextPromptCompletedTurn) -> Void
     private let onTurnCompleted: ((ACPTurnCompletion) -> Void)?
+    private let onChildBlocked: ((ACPChildBlocker) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
@@ -224,6 +225,24 @@ final class ACPSessionManager: ObservableObject {
 
     /// Live session object if cached (does not trigger hydration).
     func liveSession(for id: ACPSession.ID) -> ACPSession? { sessions[id] }
+
+    /// Every request this session is currently blocked on, by stable key.
+    ///
+    /// Assembled here rather than read off the transcript because
+    /// `transcript.pendingPermission` is published with a hardcoded
+    /// `.number(0)` id — it proves a permission is pending but not which one.
+    /// The runner's policy holds the real id.
+    func blockedRequestKeys(for sessionId: ACPSession.ID) -> Set<String> {
+        guard let session = sessions[sessionId] else { return [] }
+        var keys = Set(session.transcript.pendingUserInputs.map { ACPChildBlocker.requestKey($0.id) })
+        if let plan = session.transcript.pendingPlan {
+            keys.insert(ACPChildBlocker.requestKey(plan.id))
+        }
+        if let permissionKey = runners[sessionId]?.blockedPermissionRequestKey {
+            keys.insert(permissionKey)
+        }
+        return keys
+    }
 
     func retainedCleanupHasActivePromptWork(for id: ACPSession.ID) -> Bool {
         runners[id]?.hasRetainedCleanupPromptWork == true
@@ -1371,6 +1390,7 @@ final class ACPSessionManager: ObservableObject {
          onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
          onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
          onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
+         onChildBlocked: ((ACPChildBlocker) -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          delegatedMessageNotifier: ACPChangeNotifier? = nil,
@@ -1414,6 +1434,7 @@ final class ACPSessionManager: ObservableObject {
         self.onQueueChanged = onQueueChanged
         self.onSuccessfulTurn = onSuccessfulTurn
         self.onTurnCompleted = onTurnCompleted
+        self.onChildBlocked = onChildBlocked
         self.onCheckpointCapture = onCheckpointCapture
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
@@ -5010,12 +5031,28 @@ extension ACPSessionManager {
             client: connection.client,
             onInputAwaiting: { [weak self] session, request in
                 self?.onInputAwaiting?(session, request)
+                let trimmedTitle = request.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let trimmedMessage = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
+                let summary = !trimmedTitle.isEmpty ? trimmedTitle : (!trimmedMessage.isEmpty ? trimmedMessage : "a question")
+                self?.onChildBlocked?(ACPChildBlocker(
+                    sessionId: session.id,
+                    requestKey: ACPChildBlocker.requestKey(request.id),
+                    kind: .question,
+                    summary: summary
+                ))
             },
             onInputResolved: { [weak self] in
                 self?.runners[sessionId]?.flushQueueIfIdle()
             },
             onPlanAwaiting: { [weak self] session, request in
                 self?.onPlanAwaiting?(session, request)
+                let trimmedName = request.params.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                self?.onChildBlocked?(ACPChildBlocker(
+                    sessionId: session.id,
+                    requestKey: ACPChildBlocker.requestKey(request.id),
+                    kind: .plan,
+                    summary: !trimmedName.isEmpty ? trimmedName : "a plan"
+                ))
             },
             onPlanRejected: { [weak self, weak session] reason in
                 guard let self, let session else { return }
@@ -5394,6 +5431,12 @@ extension ACPSessionManager {
                                                     self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
                                               else { return }
                                               self.onTurnCompleted?(completion)
+                                          },
+                                          onPermissionBlocked: { [weak self] blocker in
+                                              guard let self,
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                              else { return }
+                                              self.onChildBlocked?(blocker)
                                           },
                                           onQueuedPromptDispatchRegistration: { [weak self] itemId in
                                               guard let self,
