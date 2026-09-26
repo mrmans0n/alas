@@ -1235,6 +1235,33 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.string == "keep me")
     }
 
+    @Test("pasting a draft with a missing image plus its trailing separator space leaves a nonempty selection untouched")
+    func pastedDraftWithMissingImageAndSeparatorDoesNotLeaveOrphanSpace() throws {
+        // `insertImage` always appends a trailing space after the chip, so a
+        // draft copied from a real image chip commonly looks like this: the
+        // image segment plus a lone separator space. If the image is
+        // dropped (missing file), the space alone must not survive as a
+        // 1-character "paste" that still overwrites the selection.
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "keep me"))
+        textView.setSelectedRange(NSRange(location: 0, length: 4))
+
+        let missingURI = "file:///tmp/alas-deleted-\(UUID().uuidString).png"
+        let draft = ACPComposerDraft(segments: [.image(uri: missingURI, mimeType: "image/png"), .text(" ")])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(textView.string == "keep me")
+    }
+
     @Test("pasting over a selection that itself holds an image chip does not double-count it against the cap")
     func pastedDraftExcludesReplacedImagesFromBudget() async throws {
         let (textView, coordinator, window) = makeSlashTextView()

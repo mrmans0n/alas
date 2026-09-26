@@ -2222,12 +2222,16 @@ final class ACPNSTextView: PairedDelimiterTextView {
         )
         // `draft` was structurally non-empty (it has an `.image` segment),
         // but `attributedString(from:)` silently drops an `.image` whose
-        // staged file no longer exists on disk. If that was every segment,
-        // the realized fragment is empty even though `draft.isEmpty` said
-        // otherwise — inserting it would delete a nonempty selection and
-        // paste nothing in its place. Treat this the same as the all-images-
-        // capped case: handled, nothing to insert.
-        guard fragment.length > 0 else { return true }
+        // staged file no longer exists on disk — and a copied image chip
+        // commonly has a trailing separator space next to it (`insertImage`
+        // always appends one), which survives as ordinary text even when
+        // the image itself is dropped. Either way, once every chip is gone,
+        // what's left is whitespace with nothing (a U+FFFC character isn't
+        // whitespace, so a surviving chip always fails this check): inserting
+        // it would delete a nonempty selection and leave an orphan space
+        // behind instead of the paste the user expected. Treat this the same
+        // as the all-images-capped case: handled, nothing to insert.
+        guard !fragment.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
         if replacementRange.location == 0, let coordinator {
             let tail = NSMaxRange(replacementRange)
             let combined = NSMutableAttributedString(attributedString: fragment)
