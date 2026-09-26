@@ -132,10 +132,15 @@ final class ACPFileMentionHoverController {
         target = next
         let work = DispatchWorkItem { [weak self, weak textView] in
             guard let self, let textView, self.target == next,
-                  let anchor = textView.imageChipAnchorRect(for: range),
-                  let url = URL(string: next.uri), url.isFileURL else { return }
+                  let anchor = textView.imageChipAnchorRect(for: range) else { return }
+            let url = URL(string: next.uri)
+            let isFile = url?.isFileURL == true
             let hosting = NSHostingController(
-                rootView: ACPFileMentionHoverCard(name: attachment.displayName, path: url.path)
+                rootView: ACPFileMentionHoverCard(
+                    name: attachment.displayName,
+                    location: isFile ? (url?.path ?? next.uri) : next.uri,
+                    isFile: isFile
+                )
             )
             hosting.sizingOptions = [.preferredContentSize]
             let popover = NSPopover()
@@ -160,14 +165,15 @@ final class ACPFileMentionHoverController {
 
 private struct ACPFileMentionHoverCard: View {
     let name: String
-    let path: String
+    let location: String
+    let isFile: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(name, systemImage: "doc.text")
+            Label(name, systemImage: isFile ? "doc.text" : "link")
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
-            Text(path)
+            Text(location)
                 .font(.system(size: 11.5, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .lineLimit(4)
