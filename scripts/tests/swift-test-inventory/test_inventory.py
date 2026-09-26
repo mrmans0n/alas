@@ -161,6 +161,80 @@ class InventoryTests(unittest.TestCase):
             timings = json.loads((directory / "timings.json").read_text())
             self.assertEqual(timings["invocations"], [{"selectors": ["AlasTests/A"], "seconds": 80}])
 
+    def test_results_record_measured_seconds_per_suite(self):
+        document = {"testNodes": [{"nodeType": "Unit test bundle", "name": "AlasTests", "children": [
+            {"nodeType": "Test Case", "nodeIdentifier": "A/a()", "result": "Passed", "durationInSeconds": 1.25},
+            {"nodeType": "Test Case", "nodeIdentifier": "A/b()", "result": "Passed", "durationInSeconds": 0.75},
+            {"nodeType": "Test Case", "nodeIdentifier": "free()", "result": "Passed", "durationInSeconds": 0.5}]}]}
+        report = self.module.account(["AlasTests/A/a()", "AlasTests/A/b()", "AlasTests/free()"], document)
+        self.assertEqual(report["suite_seconds"], {"AlasTests/A": 2.0, "AlasTests/free()": 0.5})
+
+    def test_measured_suites_fill_ordinary_batches_longest_first(self):
+        weights = {"AlasTests/Big": 60, "AlasTests/Mid": 30, "AlasTests/Small1": 20,
+                   "AlasTests/Small2": 10, "AlasTests/Tiny": 5}
+        ids = [f"{suite}/test()" for suite in weights] + ["AlasTests/New/test()"]
+        plan = self.module.make_plan(enumeration(*ids), [], 2, weights)
+        ordinary = [batch for batch in plan["batches"] if batch["lane"] == "ordinary"]
+        loads = [sum(weights.get(selector, 20) for selector in batch["invocations"][0]) for batch in ordinary]
+        # Unknown "New" weighs the median (20). Longest first into the lighter
+        # batch: 60+10+5 against 30+20+20.
+        self.assertEqual(sorted(loads), [70, 75])
+        self.assertIn("AlasTests/Big", ordinary[0]["invocations"][0])
+        scheduled = [test for batch in plan["batches"] for test in batch["tests"]]
+        self.assertCountEqual(scheduled, plan["tests"])
+
+    def test_suite_seconds_estimate_invocations_without_exact_timings(self):
+        plan = self.module.make_plan(enumeration("AlasTests/A/a()", "AlasTests/B/b()", "AlasTests/C/c()"), [], 2,
+                                     {"AlasTests/A": 40, "AlasTests/B": 30})
+        self.module.assign_shards(plan, [], {"AlasTests/A": 40, "AlasTests/B": 30}, 10)
+        # A alone: 40 + 10 overhead; B plus unknown C (median 35): 65 + 10.
+        self.assertEqual(sorted(plan["shard_seconds"]), [50, 75])
+        self.assertEqual(plan["timing_sources"]["suites"], 2)
+
+    def test_split_suite_invocations_share_the_suite_time(self):
+        ids = [f"AlasTests/Slow/t{i}()" for i in range(9)]
+        plan = self.module.make_plan(enumeration(*ids), [
+            ("AlasTests/Slow", "slow-subprocess", "slow", "#23")], 1)
+        self.module.assign_shards(plan, [], {"AlasTests/Slow": 90}, 0)
+        estimates = sorted(seconds for batch in plan["batches"] for seconds in batch["estimated_seconds"])
+        # Four-method chunks of a nine-test, 90 s suite: 10 s per test, not 90 s each.
+        self.assertEqual(estimates, [10, 40, 40])
+        self.assertEqual(sum(plan["shard_seconds"]), 90)
+
+    def test_audit_exports_suite_seconds_and_launch_overhead(self):
+        plan = self.module.make_plan(enumeration("AlasTests/A/a()", "AlasTests/B/b()"), [], 2)
+        self.module.assign_shards(plan, [])
+        reports = [("ordinary-1-1", "AlasTests/A/a()", 30, {"AlasTests/A": 24.0}),
+                   ("ordinary-2-1", "AlasTests/B/b()", 20, {"AlasTests/B": 12.0})]
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            for name, test, duration, suites in reports:
+                batch = next(batch for batch in plan["batches"] if test in batch["tests"])
+                report = self.module.account([test], results((test.removeprefix("AlasTests/"), "Passed")))
+                report.update(plan_id=plan["id"], selectors=batch["invocations"][0], duration_seconds=duration,
+                              suite_seconds=suites)
+                self.module.write_json(directory / f"{batch['id']}-1.report.json", report)
+            with patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
+                self.assertTrue(self.module.summarize(plan, directory))
+            timings = json.loads((directory / "timings.json").read_text())
+            self.assertEqual(timings["suites"], {"AlasTests/A": 24.0, "AlasTests/B": 12.0})
+            # Overheads are 6 and 8 seconds.
+            self.assertEqual(timings["invocation_overhead_seconds"], 7.0)
+
+    def test_audit_omits_suite_seconds_when_a_report_lacks_them(self):
+        plan = self.module.make_plan(enumeration("AlasTests/A/a()"), [], 1)
+        self.module.assign_shards(plan, [])
+        report = self.module.account(["AlasTests/A/a()"], results(("A/a()", "Passed")))
+        report.pop("suite_seconds")
+        report.update(plan_id=plan["id"], selectors=["AlasTests/A"], duration_seconds=12)
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            self.module.write_json(directory / "ordinary-1-1.report.json", report)
+            with patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
+                self.assertTrue(self.module.summarize(plan, directory))
+            timings = json.loads((directory / "timings.json").read_text())
+            self.assertNotIn("suites", timings)
+
     def test_portable_xctestrun_does_not_resolve_or_build_project(self):
         with patch.dict("os.environ", {"SWIFT_TEST_XCTESTRUN": "/tmp/products/Alas.xctestrun"}):
             args = self.module.xcode_arguments()
