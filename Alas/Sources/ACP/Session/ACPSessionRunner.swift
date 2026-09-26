@@ -126,6 +126,11 @@ final class ACPSessionRunner {
     private let onTurnCompleted: ((ACPTurnCompletion) -> Void)?
     private var activePromptStartedAt: Int64?
     private var activePromptDelegatedSource: ACPDelegatedPromptSource?
+    /// Transcript message count when this turn's prompt was recorded. Bounds
+    /// `emitTurnCompleted`'s search for the turn's own last agent message, so
+    /// a turn whose output hasn't drained yet reports no text rather than the
+    /// previous turn's.
+    private var activePromptTranscriptFloor: Int?
     private let onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)?
     private let onSessionTitleUpdated: ((String) -> Void)?
     private let localTitlesEnabled: @MainActor () -> Bool
@@ -176,6 +181,12 @@ final class ACPSessionRunner {
     private var latestPromptTask: Task<Void, Never>?
     private var appliedUpdateCount = 0
     private var persistedMessageCount: Int
+    /// Row ids whose individual write outcome a caller is awaiting, and the
+    /// ones among them a confirmed write actually stored. Both are populated
+    /// only while an `appendAndPersistSystemNoticeAwaitingResult` call is in
+    /// flight, so the fire-and-forget persistence path pays nothing.
+    private var awaitedNoticeRowIDs: Set<String> = []
+    private var writtenAwaitedNoticeRowIDs: Set<String> = []
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
     /// Outcome of the most recently COMPLETED write queued via
@@ -1645,6 +1656,7 @@ final class ACPSessionRunner {
             activePromptID = nil
             activePromptStartedAt = nil
             activePromptDelegatedSource = nil
+            activePromptTranscriptFloor = nil
         }
     }
 
@@ -1653,25 +1665,27 @@ final class ACPSessionRunner {
     /// superseded prompt never reports.
     private func emitTurnCompleted(_ result: ACPTurnCompletion.Result) {
         guard let startedAt = activePromptStartedAt else { return }
-        // NOTE: this reads the transcript as it stands right now, which can
-        // be ahead of what has actually drained from the incoming-update
-        // coalescing buffer (a final `agentMessageChunk` may still be
-        // pending), so `lastAgentText` can occasionally be stale or missing
-        // for a turn that did produce output. A synchronous
-        // `flushPendingIncomingUpdates()` call here was tried and reverted:
-        // by the time this runs, `activePromptID` has already been cleared,
-        // and forcing the flush at that point deadlocked
-        // `userCancelDoesNotCancelQueuedSuccessorStartedByPendingBoundaryFlush`
-        // (a pre-existing test) — applying a buffered update against a
-        // cleared `activePromptID` interacts badly with the queued-successor
-        // dispatch this same completion is in the middle of. The correct
-        // fix mirrors `NextPromptCompletedTurn`'s pattern: defer building
-        // the completion until `applyPendingCompletedOutputBoundaryIfReady`
-        // confirms the transcript is caught up, rather than reading it
-        // eagerly here. Left as a follow-up; this is a display-only
-        // imprecision (the transcript and the actual delivered result are
-        // still correct), not a wake/notice misclassification.
-        let lastAgentText: String? = session.transcript.messages.reversed().lazy
+        // Only consider agent messages this turn actually produced: scanning
+        // the whole transcript would quote an EARLIER turn's text whenever
+        // this turn's final `agentMessageChunk` is still sitting in the
+        // incoming-update coalescing buffer, which is strictly worse than
+        // saying nothing (the wake copy has a no-text path for exactly this).
+        // `activePromptTranscriptFloor` is the message count captured when
+        // this turn's prompt was recorded, so anything at or after it belongs
+        // to this turn.
+        //
+        // This deliberately does NOT wait for the buffer to drain, so a turn
+        // whose tail chunk lands late still reports no text rather than
+        // partial text. Draining here was tried and reverted: by this point
+        // `activePromptID` is already cleared, and forcing the flush collides
+        // with the queued-successor dispatch this same completion is in the
+        // middle of, deadlocking
+        // `userCancelDoesNotCancelQueuedSuccessorStartedByPendingBoundaryFlush`.
+        // Guaranteeing the final text needs the completion deferred into
+        // `applyPendingCompletedOutputBoundaryIfReady`, the way
+        // `NextPromptCompletedTurn` is — tracked as follow-up.
+        let floor = min(activePromptTranscriptFloor ?? 0, session.transcript.messages.count)
+        let lastAgentText: String? = session.transcript.messages[floor...].reversed().lazy
             .compactMap { message -> String? in
                 guard case .agent(_, _, let text) = message else { return nil }
                 let tail = ACPDelegatedOutcomeText.tail(text.value, limit: ACPTurnCompletion.lastAgentTextLimit)
@@ -1687,6 +1701,7 @@ final class ACPSessionRunner {
         )
         activePromptStartedAt = nil
         activePromptDelegatedSource = nil
+        activePromptTranscriptFloor = nil
         onTurnCompleted?(completion)
     }
 
@@ -3019,6 +3034,9 @@ extension ACPSessionRunner {
                 }
                 self.activePromptStartedAt = Int64(Date().timeIntervalSince1970 * 1000)
                 self.activePromptDelegatedSource = delegatedSource
+                // Captured before the user prompt is recorded below, so the
+                // floor points at this turn's own first transcript entry.
+                self.activePromptTranscriptFloor = self.session.transcript.messages.count
                 // Re-allow streaming boundary crossings now that we are inside
                 // the Task and have confirmed this prompt is still active. The
                 // RPC is sent below, so any agent chunk that follows is genuine
@@ -3513,6 +3531,43 @@ extension ACPSessionRunner {
         persistFromIndex(before)
     }
 
+    /// Append a system notice and report whether it actually reached the
+    /// store, unlike the fire-and-forget `appendAndPersistSystemNotice`.
+    /// A caller that holds the only other durable copy — the delegated
+    /// message inbox — needs the real answer, because it deletes that copy
+    /// on success and would otherwise lose the notice entirely when the
+    /// write is rejected by the lease fence or fails in SQLite.
+    ///
+    /// Deliberately goes through the same fire-and-forget path rather than
+    /// writing directly, so the notice keeps its place in the serialized
+    /// persistence queue, and reads the outcome from a recorded row id
+    /// rather than awaiting a completion: `enqueuePersistence` skips its
+    /// completion when the task is cancelled, so a continuation waiting on
+    /// it could hang forever.
+    ///
+    /// The answer has to name THIS row. `persistedMessageCount` is a global
+    /// high-water mark that any later index can advance — a queued agent
+    /// update committing while this flush awaits, or the streaming path,
+    /// which raises it optimistically at enqueue time — so it reports
+    /// success for a notice whose own write was rejected by the fence or
+    /// failed in SQLite, and the caller then deletes the inbox row that was
+    /// the notice's only other copy. `writtenAwaitedNoticeRowIDs` is
+    /// populated solely by `commitPersistedMessageRows`, which runs only on
+    /// a confirmed write of these exact rows, so an unwritten notice always
+    /// reports `false` and is retried from the inbox.
+    func appendAndPersistSystemNoticeAwaitingResult(_ text: String) async -> Bool {
+        guard holdsLeaseForWrite() else { return false }
+        let rowID = messageRowID(session.transcript.messages.count)
+        awaitedNoticeRowIDs.insert(rowID)
+        defer {
+            awaitedNoticeRowIDs.remove(rowID)
+            writtenAwaitedNoticeRowIDs.remove(rowID)
+        }
+        appendAndPersistSystemNotice(text)
+        await flushPersistence()
+        return writtenAwaitedNoticeRowIDs.contains(rowID)
+    }
+
     /// Append a file-edit card to the session AND persist it.
     func appendAndPersistFileEdit(_ edit: ACPMessage.FileEdit) {
         let before = session.transcript.messages.count
@@ -3615,7 +3670,7 @@ extension ACPSessionRunner {
               let fence = leaseFenceProvider()
         else { return }
         capturingPersistedBaseIndices.insert(index)
-        let id = "msg-\(sessionId)-\(index)"
+        let id = messageRowID(index)
         enqueuePersistence({ persistence in
             try await persistence.loadMessagePayload(id: id, fence: fence)
         }, completion: { [weak self] payload in
@@ -3757,7 +3812,7 @@ extension ACPSessionRunner {
         let snapshots = pendingStreamingPersistSnapshots
         for i in snapshots.keys.sorted() {
             guard let snapshot = snapshots[i] else { continue }
-            let id = "msg-\(sessionId)-\(i)"
+            let id = messageRowID(i)
             // Both writes below are best-effort salvage attempts that can
             // legitimately lose the race — a CAS whose base payload no
             // longer matches, or an insert onto a row the new owner already
@@ -3833,7 +3888,7 @@ extension ACPSessionRunner {
             guard i >= 0, i < messages.count else { continue }
             let m = messageForPersistence(messages[i])
             guard let payload = try? ACPMessageCodec.encode(m) else { continue }
-            let id = "msg-\(sessionId)-\(i)"
+            let id = messageRowID(i)
             rows.append(ACPStoredMessage(
                 id: id,
                 sessionId: sessionId,
@@ -3898,11 +3953,22 @@ extension ACPSessionRunner {
             ?? Date().timeIntervalSince1970)
     }
 
+    /// The store's row id for the message at `index`. Single source of truth:
+    /// `awaitedNoticeRowIDs` matches on this, so a divergence between how a
+    /// row is written and how its write is confirmed would silently report
+    /// every awaited notice as unwritten.
+    private func messageRowID(_ index: Int) -> String {
+        "msg-\(sessionId)-\(index)"
+    }
+
     private func commitPersistedMessageRows(_ rows: [ACPStoredMessage]) {
         for row in rows {
             let index = Int(row.seq)
             persistedMessageCount = max(persistedMessageCount, index + 1)
             lastPersistedPayloads[index] = row.payload
+            if awaitedNoticeRowIDs.contains(row.id) {
+                writtenAwaitedNoticeRowIDs.insert(row.id)
+            }
         }
         trimLastPersistedPayloads()
         onPersist?()
@@ -3946,7 +4012,7 @@ extension ACPSessionRunner {
         for i in lowerBound..<messages.count {
             let m = messages[i]
             guard let payload = try? ACPMessageCodec.encode(m) else { continue }
-            let id = "msg-\(sessionId)-\(i)"
+            let id = messageRowID(i)
             rows.append(ACPStoredMessage(
                 id: id,
                 sessionId: sessionId,

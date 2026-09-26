@@ -6921,18 +6921,18 @@ extension ACPSessionManager {
         guard sessions[sessionId] != nil else { return false }
         await awaitBackfill(id: sessionId)
         guard let runner = runners[sessionId], isWriter(for: sessionId) else { return false }
-        runner.appendAndPersistSystemNotice(text)
-        // Wait for the write to actually be attempted before telling the
-        // caller it's safe to delete the durable inbox row — otherwise a
-        // lease change or process exit while the persistence write is still
-        // queued can lose the notice entirely (queued-but-never-run), while
-        // the caller has already removed its only other record of it.
-        // `flushPersistence()` drains the queue; it does not distinguish a
-        // successful write from one that failed and was swallowed by the
-        // queue's own `try?` — narrowing that gap needs source-level dedupe
-        // (see PR discussion), out of scope here.
-        await runner.flushPersistence()
-        return true
+        // Report whether the notice actually reached the store, not merely
+        // that the write was attempted: the caller deletes the durable inbox
+        // row on `true`, so a fence-rejected or failed write must come back
+        // `false` and leave that row in place for the next delivery.
+        //
+        // On `false` the in-memory transcript keeps the appended notice even
+        // though nothing persisted, so a retry inside the same session can
+        // briefly show the line twice. It self-heals on reload — the failed
+        // write means only the retried copy is in the store. Suppressing
+        // even that needs `.systemNotice` to carry a delegated source to
+        // dedupe against, which is tracked separately.
+        return await runner.appendAndPersistSystemNoticeAwaitingResult(text)
     }
 
     @discardableResult

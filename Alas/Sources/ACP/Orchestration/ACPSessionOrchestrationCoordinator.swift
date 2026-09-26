@@ -426,23 +426,36 @@ final class ACPSessionOrchestrationCoordinator {
         // sees `true` and is responsible for the outcome. A separate read
         // before the write would leave a window where both readers see the
         // pre-transition phase before either writes.
-        let wonTransition = (try? await environment.persistence.claimFailedPhase(
-            childSessionId: childSessionId,
-            failureMessage: message,
-            updatedAt: environment.now()
-        )) ?? false
-        environment.notifyChanged()
-        guard wonTransition,
-              let record = try? await environment.persistence.delegation(childSessionId: childSessionId)
+        //
+        // The outcome is built here, before the claim, because its text needs
+        // the delegation record — but it is WRITTEN inside the claim's own
+        // transaction, so the phase change and the parent's notification
+        // commit together. Splitting them left a crash window that stranded
+        // the child permanently: phase `.failed`, no outcome, and every later
+        // call correctly losing the claim.
+        guard let record = try? await environment.persistence.delegation(childSessionId: childSessionId)
         else { return }
-        await enqueueOutcome(.init(
+        let outcome = ACPDelegatedMessage(
             id: "outcome-\(childSessionId)-failed",
             sourceSessionId: childSessionId,
             targetSessionId: record.parentSessionId,
             prompt: ACPDelegatedOutcomeText.failure(outcomeContext(for: record), message: message),
             createdAt: environment.now(),
             kind: .prompt
-        ), child: record)
+        )
+        let wonTransition = (try? await environment.persistence.claimFailedPhase(
+            childSessionId: childSessionId,
+            failureMessage: message,
+            updatedAt: environment.now(),
+            outcome: outcome
+        )) ?? false
+        environment.notifyChanged()
+        guard wonTransition else { return }
+        await deliverPendingMessages(
+            to: outcome.targetSessionId,
+            callerParent: record,
+            targetParent: nil
+        )
     }
 
     private func outcomeContext(for record: ACPDelegationRecord) -> ACPDelegatedOutcomeText.Context {
