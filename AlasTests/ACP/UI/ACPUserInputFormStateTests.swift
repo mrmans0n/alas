@@ -203,26 +203,31 @@ struct ACPUserInputFormStateTests {
         #expect(ACPUserInputPrompt.shouldShowMessage(for: request))
     }
 
-    @Test("required array without minItems submits an empty selection")
+    @Test("required arrays without minItems submit an empty selection, even with no options to pick")
     func requiredArrayWithoutMinItemsSubmitsEmptySelection() throws {
         let request = try formRequest(#"""
         {
           "requestId":1,"mode":"form","message":"Pick",
           "requestedSchema":{"properties":{
             "scopes":{"type":"array","items":{"type":"string","enum":["read","write"]}},
+            "tags":{"type":"array"},
             "targets":{"type":"array","minItems":1,"items":{"type":"string","enum":["mac"]}}
-          },"required":["scopes","targets"]}
+          },"required":["scopes","tags","targets"]}
         }
         """#)
         let state = ACPUserInputFormState(request: request)
         let scopes = try #require(request.fields.first { $0.key == "scopes" })
+        let tags = try #require(request.fields.first { $0.key == "tags" })
         let targets = try #require(request.fields.first { $0.key == "targets" })
 
         #expect(state.validationError(for: scopes) == nil)
+        #expect(state.validationError(for: tags) == nil)
         #expect(state.validationError(for: targets) != nil)
 
         state.toggle("mac", for: targets)
-        #expect(state.submittedContent() == ["scopes": .strings([]), "targets": .strings(["mac"])])
+        #expect(state.submittedContent() == [
+            "scopes": .strings([]), "tags": .strings([]), "targets": .strings(["mac"]),
+        ])
     }
 
     @Test("plan approval checklist lists top-level todos and every phase")

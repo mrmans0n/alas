@@ -111,21 +111,29 @@ struct NativePeerTranscriptTests {
         #expect(beforeRequest != transcript)
     }
 
-    @Test func sequentialRequestsReusingAWireIdGetDistinctGenerations() {
+    @Test func requestGenerationAdvancesForNewRequestsButNotIdenticalReplays() {
         var transcript = NativePeerTranscript(sessionId: "B:s")
-        let question = RemoteQuestionPayload(requestId: 1, title: nil, questions: [
-            .init(id: "q", prompt: "Which?", options: [.init(id: "a", label: "A")], allowMultiple: false),
-        ])
+        func question(_ prompt: String) -> RemoteQuestionPayload {
+            .init(requestId: 1, title: nil, questions: [
+                .init(id: "q", prompt: prompt, options: [.init(id: "a", label: "A")], allowMultiple: false),
+            ])
+        }
 
-        transcript.apply(.questionRequest(sessionId: "B:s", payload: question))
+        transcript.apply(.questionRequest(sessionId: "B:s", payload: question("Which?")))
         let first = transcript.requestGeneration
-        transcript.apply(.questionResolved(sessionId: "B:s", requestId: 1))
-        transcript.apply(.questionRequest(sessionId: "B:s", payload: question))
-        let second = transcript.requestGeneration
-        transcript.apply(.questionRequest(sessionId: "B:s", payload: question))
-        let third = transcript.requestGeneration
+        // A resubscribe replays the still-pending request verbatim; the
+        // prompt must keep whatever the user has already selected.
+        transcript.apply(.questionRequest(sessionId: "B:s", payload: question("Which?")))
+        #expect(transcript.requestGeneration == first)
 
-        #expect(first != second)
-        #expect(second != third)
+        // Same wire id, different question: a new request.
+        transcript.apply(.questionRequest(sessionId: "B:s", payload: question("Which one?")))
+        let second = transcript.requestGeneration
+        #expect(second != first)
+
+        // Same wire id and content again, but after the previous one resolved.
+        transcript.apply(.questionResolved(sessionId: "B:s", requestId: 1))
+        transcript.apply(.questionRequest(sessionId: "B:s", payload: question("Which one?")))
+        #expect(transcript.requestGeneration != second)
     }
 }
