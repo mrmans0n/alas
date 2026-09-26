@@ -8,6 +8,7 @@ enum ACPDelegatedOutcomeText {
         let childSessionId: String
         let agentId: String
         let worktreeName: String?
+        var blockerSummary: String? = nil
     }
 
     static func unreported(_ context: Context, lastAgentText: String?) -> String {
@@ -24,6 +25,31 @@ enum ACPDelegatedOutcomeText {
 
     static func failure(_ context: Context, message: String) -> String {
         "[alas system] Delegated session \(label(context)) failed: \(message)."
+    }
+
+    /// Copy for a child blocked on a human decision. The strict boundary is
+    /// in the words on purpose: a parent genuinely cannot answer a permission,
+    /// question, or plan prompt — `flushQueueIfIdle` will not even dispatch a
+    /// queued message while the child is blocked — so the text must not imply
+    /// it can.
+    static func blocker(
+        _ context: Context,
+        kindLabel: String,
+        waitedSeconds: Int,
+        escalated: Bool
+    ) -> String {
+        guard escalated else {
+            return "Delegated session \(label(context)) is waiting for a human decision "
+                + "(\(kindLabel)): \(context.blockerSummary ?? kindLabel)."
+        }
+        return [
+            "[alas system] Delegated session \(label(context)) has been waiting \(waitedSeconds)s "
+                + "for a human decision (\(kindLabel)): \(context.blockerSummary ?? kindLabel).",
+            "You cannot approve this for the user — a permission, question, or plan prompt is "
+                + "answered only in that session.",
+            "Use notify to tell the user, session_send to give the child guidance it will act on "
+                + "once unblocked, or continue with other work.",
+        ].joined(separator: "\n")
     }
 
     static func notice(_ context: Context) -> String {

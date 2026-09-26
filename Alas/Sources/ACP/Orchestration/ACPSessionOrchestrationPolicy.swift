@@ -41,6 +41,12 @@ enum ACPChildOutcomeDisposition: Equatable, Sendable {
     case notice
 }
 
+/// Whether a blocked child still warrants waking its parent.
+enum ACPBlockerEscalation: Equatable, Sendable {
+    case wake
+    case stillHandled
+}
+
 enum ACPSessionOrchestrationPolicy {
     enum Error: Swift.Error, Equatable {
         case delegatedSessionCannotCreateChild
@@ -152,6 +158,17 @@ enum ACPSessionOrchestrationPolicy {
             }
             return .wake
         }
+    }
+
+    /// Escalate only while the child is still blocked on the SAME request.
+    /// Matching the specific key matters: a child that cleared one prompt and
+    /// hit another is blocked, but not on the thing the parent was told about,
+    /// and a second block raises its own notice and escalation.
+    static func escalation(
+        blocker: ACPChildBlocker,
+        liveBlockedRequestKeys: Set<String>
+    ) -> ACPBlockerEscalation {
+        liveBlockedRequestKeys.contains(blocker.requestKey) ? .wake : .stillHandled
     }
 
     static func publicState(

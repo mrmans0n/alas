@@ -42,4 +42,26 @@ struct ACPDelegatedOutcomeTextTests {
         #expect(ACPDelegatedOutcomeText.tail("short", limit: 5) == "short")
         #expect(ACPDelegatedOutcomeText.tail("  padded \n", limit: 50) == "padded")
     }
+
+    @Test("escalated blocker copy states the parent cannot approve")
+    func escalatedBlockerCopy() {
+        let text = ACPDelegatedOutcomeText.blocker(
+            context, kindLabel: "permission", waitedSeconds: 30, escalated: true
+        )
+        #expect(text.hasPrefix("[alas system] Delegated session child-1 (codex, worktree feature-x)"))
+        #expect(text.contains("30s"))
+        #expect(text.contains("cannot approve"))
+        #expect(text.contains("notify"))
+        #expect(text.contains("session_send"))
+    }
+
+    @Test("non-escalated blocker copy is a plain notice")
+    func nonEscalatedBlockerCopy() {
+        let text = ACPDelegatedOutcomeText.blocker(
+            context, kindLabel: "question", waitedSeconds: 0, escalated: false
+        )
+        #expect(!text.hasPrefix("[alas system]"))
+        #expect(text.contains("waiting for a human decision"))
+        #expect(!text.lowercased().contains("acknowledge"))
+    }
 }
