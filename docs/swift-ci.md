@@ -30,9 +30,12 @@ New tests default to ordinary execution without editing that file or the workflo
 The policy records selectors, execution requirements, reasons, and tracking issues.
 Ghostty runtime smoke, real Bonjour discovery, SSH integration, live LSP
 verification, and Gemini E2E remain explicit opt-ins outside PR CI.
-The three historically disabled subprocess suites retain #23 as their follow-up.
-The subprocess list preserves the conservative isolation baseline gathered during
-#1277; it does not assert every listed suite individually reproduced a hang.
+The subprocess lane is reserved for suites with CI evidence that they fail or
+hang inside an ordinary batch; each entry cites that evidence. The conservative
+baseline of 155 suites carried over from #1277 was removed in September 2026:
+those suites had never individually reproduced a hang, and the lane spent more
+time launching test hosts than running tests. See
+`docs/testing/test-cost-baseline-2026-09.md`.
 
 The build runner publishes compiled products and the test plan, then finishes.
 Two dependent test runners balance all eight ordinary batches and the subprocess
