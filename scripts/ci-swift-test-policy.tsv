@@ -10,9 +10,9 @@ AlasTests/ACPGeminiE2ETests	quarantine	Requires a locally installed and authenti
 AlasTests/LiveLanguageServerVerificationTests	quarantine	Opt-in evidence collector requiring a locally installed language server; see docs/plans/2026-09-13-code-editor-lsp-verification.md.	#1270
 AlasTests/RemoteDiscoveryIntegrationTests	quarantine	Requires real multicast DNS; hosted macOS runners did not discover their local advertisement in runs 35711949987 and 35733349340. Run explicitly on a Bonjour-capable host.	#1270
 AlasTests/SSHIntegrationTests	quarantine	Requires a key-authenticated SSH localhost fixture; run explicitly with ALAS_SSH_INTEGRATION=1.	#1270
-AlasTests/GitServiceTests	quarantine	macos-26 subprocess/git hang quarantine; reassess under #23.	#23
-AlasTests/WorktreeServiceTests	quarantine	macos-26 subprocess/git hang quarantine; reassess under #23.	#23
-AlasTests/ProjectsManagerTests	quarantine	macos-26 subprocess/git hang quarantine; reassess under #23.	#23
+AlasTests/GitServiceTests	subprocess	Reinstated from the macos-26 git hang quarantine after Process+Git gained bounded pipe reads and process-kill escalation; isolated until CI shows it is stable in an ordinary batch.	#23
+AlasTests/WorktreeServiceTests	subprocess	Reinstated from the macos-26 git hang quarantine after Process+Git gained bounded pipe reads and process-kill escalation; isolated until CI shows it is stable in an ordinary batch.	#23
+AlasTests/ProjectsManagerTests	subprocess	Reinstated from the macos-26 git hang quarantine after Process+Git gained bounded pipe reads and process-kill escalation; isolated until CI shows it is stable in an ordinary batch.	#23
 AlasTests/AgentHookSocketServerTests/aliasEnvelope_dispatchesMappedEvent()	quarantine	Socket acknowledgement assertions still fail in full CI. Evidence: subprocess-4-1 in run 35322676722.	#1297
 AlasTests/AgentHookSocketServerTests/malformedJSON_returnsError()	quarantine	Socket acknowledgement assertions still fail in full CI. Evidence: subprocess-4-1 in run 35322676722.	#1297
 AlasTests/AgentHookSocketServerTests/unknownEvent_acksOkButDoesNotDispatch()	quarantine	Socket acknowledgement assertions still fail in full CI. Evidence: subprocess-4-1 in run 35322676722.	#1297
