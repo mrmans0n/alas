@@ -263,6 +263,22 @@ struct AppStateRunRecordTests {
         }
     }
 
+    /// Waits until a launch has moved past its synchronous "claim the slot"
+    /// step. Unlike `waitUntilRunning`, this tolerates a waiter with no
+    /// artificial delay: `.running` can be so short-lived that a 10ms poll
+    /// never observes it before the run has already settled to `.finished`.
+    private func waitUntilNotStarting(_ fixture: Fixture, worktree: Worktree? = nil) async throws {
+        var budget = 100
+        while runRecord(fixture, worktree: worktree)?.status == .starting {
+            budget -= 1
+            guard budget > 0 else {
+                Issue.record("run never left .starting; last status \(String(describing: runRecord(fixture, worktree: worktree)?.status))")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     /// A restart replaces the run record with a new id; waits for that
     /// replacement to actually land instead of guessing a duration.
     private func waitUntilRunningWithNewID(_ fixture: Fixture, previousID: String) async throws -> String {
@@ -482,14 +498,21 @@ struct AppStateRunRecordTests {
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        // A fixed sleep here races markRunning the same way #1475/#1502/#1514
+        // already found elsewhere in this file: under loaded CI, the launch
+        // hadn't even cleared its pendingScriptLaunches slot yet, so the
+        // second runOrFocusScript below landed as "already starting" (a
+        // no-op) instead of a genuine relaunch attempt. This waiter has no
+        // artificial delay, so `.running` itself can be too short-lived for
+        // waitUntilRunning's poll to ever observe — wait for the launch to
+        // leave `.starting` instead of guessing a duration.
+        try await waitUntilNotStarting(fixture)
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
         #expect(runRecord(fixture)?.status == .finished(.failed(exitCode: 7)))
 
         // Delete the script out from under the next launch.
         try FileManager.default.removeItem(at: fixture.script.fileURL)
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
 
         #expect(runRecord(fixture)?.status == .finished(.failed(exitCode: 7)))
         #expect(fixture.errors().contains { $0.title == "Run Script Failed" })
