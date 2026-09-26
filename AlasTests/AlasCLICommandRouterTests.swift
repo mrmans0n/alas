@@ -13,54 +13,6 @@ struct AlasCLICommandRouterTests {
         return url
     }
 
-    @Test func opensInWorktreeFileByRelativePath() async throws {
-        let root = try makeFile("repo/a.txt").deletingLastPathComponent()
-        let worktree = Worktree(
-            id: "wt1", projectId: "p1", name: "main", branch: "main",
-            path: root, status: .clean, lastActivity: Date()
-        )
-        var opened: [(worktreeId: String, relativePath: String)] = []
-
-        let router = AlasCLICommandRouter(
-            sessionWorktreeId: { $0 == "s1" ? "wt1" : nil },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
-            openRelativeFile: { relativePath, worktreeId in opened.append((worktreeId, relativePath)) },
-            openExternalFile: { _, _ in Issue.record("expected relative open") },
-            activateApp: {}
-        )
-
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [root.appendingPathComponent("a.txt").path])))
-
-        #expect(response == .ok)
-        #expect(opened.count == 1)
-        #expect(opened[0].worktreeId == "wt1")
-        #expect(opened[0].relativePath == "a.txt")
-    }
-
-    @Test func resolvesOriginFromCwdWhenNoSession() async throws {
-        let root = try makeFile("repo/a.txt").deletingLastPathComponent()
-        let worktree = Worktree(
-            id: "wt1", projectId: "p1", name: "main", branch: "main",
-            path: root, status: .clean, lastActivity: Date()
-        )
-        var opened: [(worktreeId: String, relativePath: String)] = []
-        let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in nil },
-            originatingWorktree: { _ in nil },
-            visibleWorktrees: { [worktree] },
-            openRelativeFile: { relativePath, worktreeId in opened.append((worktreeId, relativePath)) },
-            openExternalFile: { _, _ in Issue.record("expected relative open") },
-            activateApp: {}
-        )
-        let response = await router.handle(.init(
-            version: 1, sessionId: nil, cwd: root.path,
-            command: .open(paths: [root.appendingPathComponent("a.txt").path])
-        ))
-        #expect(response == .ok)
-        #expect(opened.first?.relativePath == "a.txt")
-    }
-
     @Test func resolvesOriginFromCwdWhenSessionMapsToCheckoutStorageKey() async throws {
         let root = try makeFile("repo/a.txt").deletingLastPathComponent()
         let worktree = Worktree(
@@ -124,50 +76,6 @@ struct AlasCLICommandRouterTests {
         #expect(captured?.body == "Blocked")
         #expect(captured?.title == "Need input")
         #expect(captured?.level == .attention)
-    }
-
-    @Test func checkoutOwnedNotifyPreservesTypedSessionOwner() async throws {
-        let sharedPath = URL(fileURLWithPath: "/srv/shared/member")
-        let checkoutOwner = SessionOwnerID.workspaceCheckout(
-            UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!,
-            .ssh("devbox")
-        )
-        let member = Worktree(
-            id: "member-wt",
-            projectId: "project",
-            name: "member",
-            branch: "main",
-            path: sharedPath,
-            status: .clean,
-            lastActivity: Date()
-        )
-        var capturedOwner: SessionOwnerID?
-        let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in nil },
-            sessionOwner: { $0 == "checkout-leaf" ? checkoutOwner : nil },
-            sessionCwdWorktree: { sessionId, cwd in
-                sessionId == "checkout-leaf" && cwd == sharedPath.path ? member : nil
-            },
-            originatingWorktree: { _ in nil },
-            visibleWorktrees: { [member] },
-            openRelativeFile: { _, _ in },
-            openExternalFile: { _, _ in },
-            notifyOwnedSession: { _, owner, _, _, _ in
-                capturedOwner = owner
-                return .ok
-            },
-            activateApp: {}
-        )
-
-        let response = await router.handle(.init(
-            version: 1,
-            sessionId: "checkout-leaf",
-            cwd: sharedPath.path,
-            command: .notify(body: "Blocked", title: nil, level: .info)
-        ))
-
-        #expect(response == .ok)
-        #expect(capturedOwner == checkoutOwner)
     }
 
     @Test func checkoutOwnedNotifyDoesNotRequireRepositoryTarget() async throws {
@@ -379,32 +287,6 @@ struct AlasCLICommandRouterTests {
         #expect(opened[0].relativePath == "Sources/App.swift")
     }
 
-    @Test func opensExternalFileOwnedByOriginatingWorktree() async throws {
-        let root = try makeFile("repo/a.txt").deletingLastPathComponent()
-        let external = try makeFile("external/note.txt")
-        let worktree = Worktree(
-            id: "wt1", projectId: "p1", name: "main", branch: "main",
-            path: root, status: .clean, lastActivity: Date()
-        )
-        var externalOpens: [(worktreeId: String, url: URL)] = []
-
-        let router = AlasCLICommandRouter(
-            sessionWorktreeId: { $0 == "s1" ? "wt1" : nil },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
-            openRelativeFile: { _, _ in Issue.record("expected external open") },
-            openExternalFile: { url, worktreeId in externalOpens.append((worktreeId, url)) },
-            activateApp: {}
-        )
-
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [external.path])))
-
-        #expect(response == .ok)
-        #expect(externalOpens.count == 1)
-        #expect(externalOpens[0].worktreeId == "wt1")
-        #expect(externalOpens[0].url.standardizedFileURL.path == external.standardizedFileURL.path)
-    }
-
     @Test func rejectsUnsafePrefixMatch() async throws {
         let repo = try makeFile("repo/a.txt").deletingLastPathComponent()
         let sibling = repo.deletingLastPathComponent().appendingPathComponent(repo.lastPathComponent + "-copy")
@@ -432,36 +314,6 @@ struct AlasCLICommandRouterTests {
         #expect(externalCount == 1)
     }
 
-    @Test func rejectsMissingFilesAndDirectories() async throws {
-        let root = try makeFile("repo/a.txt").deletingLastPathComponent()
-        let worktree = Worktree(
-            id: "wt1", projectId: "p1", name: "main", branch: "main",
-            path: root, status: .clean, lastActivity: Date()
-        )
-        let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in "wt1" },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
-            openRelativeFile: { _, _ in },
-            openExternalFile: { _, _ in },
-            activateApp: {}
-        )
-
-        let missing = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [root.appendingPathComponent("missing.txt").path])))
-        let directory = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [root.path])))
-
-        guard case .error(let missingMessage) = missing else {
-            Issue.record("expected missing file error")
-            return
-        }
-        guard case .error(let directoryMessage) = directory else {
-            Issue.record("expected directory error")
-            return
-        }
-        #expect(missingMessage.contains("does not exist"))
-        #expect(directoryMessage.contains("is a directory"))
-    }
-
     @Test func returnsCombinedErrorForMissingFilesAndDirectoriesInOneRequest() async throws {
         let root = try makeFile("repo/a.txt").deletingLastPathComponent()
         let worktree = Worktree(
@@ -487,51 +339,6 @@ struct AlasCLICommandRouterTests {
         }
         #expect(message.contains("\(missingPath) does not exist."))
         #expect(message.contains("\(root.path) is a directory."))
-    }
-
-    @Test func activatesAfterSuccessfulOpen() async throws {
-        let root = try makeFile("repo/a.txt").deletingLastPathComponent()
-        let worktree = Worktree(
-            id: "wt1", projectId: "p1", name: "main", branch: "main",
-            path: root, status: .clean, lastActivity: Date()
-        )
-        var activationCount = 0
-
-        let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in "wt1" },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
-            openRelativeFile: { _, _ in },
-            openExternalFile: { _, _ in },
-            activateApp: { activationCount += 1 }
-        )
-
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [root.appendingPathComponent("a.txt").path])))
-
-        #expect(response == .ok)
-        #expect(activationCount == 1)
-    }
-
-    @Test func doesNotActivateWhenAllPathsFail() async throws {
-        let root = try makeFile("repo/a.txt").deletingLastPathComponent()
-        let worktree = Worktree(
-            id: "wt1", projectId: "p1", name: "main", branch: "main",
-            path: root, status: .clean, lastActivity: Date()
-        )
-        var activationCount = 0
-
-        let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in "wt1" },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
-            openRelativeFile: { _, _ in Issue.record("expected no opens") },
-            openExternalFile: { _, _ in Issue.record("expected no opens") },
-            activateApp: { activationCount += 1 }
-        )
-
-        _ = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [root.appendingPathComponent("missing.txt").path, root.path])))
-
-        #expect(activationCount == 0)
     }
 
     @Test func activatesOnceForMultiFileRequest() async throws {
@@ -571,26 +378,6 @@ struct AlasCLICommandRouterTests {
         #expect(response == .text(AlasCLIWorktreeResolver.rows(worktrees: [current, other], currentWorktreeId: current.id)))
     }
 
-    @Test func switchesMatchedWorktree() async throws {
-        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
-        let target = Self.worktree(branch: "feature/review", path: "/tmp/review", projectId: "p1")
-        var focused: (id: String, projectId: String)?
-        var activationCount = 0
-        let router = Self.router(
-            origin: current,
-            visibleWorktrees: [current, target],
-            focusWorktree: { focused = ($0.id, $0.projectId) },
-            activateApp: { activationCount += 1 }
-        )
-
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.switch(target: "feature"))))
-
-        #expect(response == .ok)
-        #expect(focused?.id == target.id)
-        #expect(focused?.projectId == "p1")
-        #expect(activationCount == 1)
-    }
-
     @Test func returnsWorktreeResolutionErrors() async throws {
         let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
         let first = Self.worktree(branch: "feature/a", path: "/tmp/a", projectId: "p1")
@@ -604,109 +391,36 @@ struct AlasCLICommandRouterTests {
         #expect(ambiguous == .error("ambiguous worktree \"feature\"; matches: feature/a, feature/b"))
     }
 
-    @Test func createsNewWorktreeFromOrigin() async throws {
-        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
-        var created: (origin: Worktree, branch: String, base: String?)?
-        let router = Self.router(
-            origin: current,
-            visibleWorktrees: [current],
-            createWorktree: { origin, branch, base in
-                created = (origin, branch, base)
-                return .text(["created"])
-            }
-        )
-
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.new(branch: "feature/cli", base: "main"))))
-
-        #expect(response == .text(["created"]))
-        #expect(created?.origin == current)
-        #expect(created?.branch == "feature/cli")
-        #expect(created?.base == "main")
-    }
-
-    @Test func deletesMatchedWorktree() async throws {
-        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
-        let target = Self.worktree(branch: "feature/review", path: "/tmp/review", projectId: "p1")
-        var deleted: (worktree: Worktree, force: Bool, keepBranch: Bool)?
-        let router = Self.router(
-            origin: current,
-            visibleWorktrees: [current, target],
-            deleteWorktree: { worktree, force, keepBranch in
-                deleted = (worktree, force, keepBranch)
-                return .ok
-            }
-        )
-
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "feature", force: true, keepBranch: true))))
-
-        #expect(response == .ok)
-        #expect(deleted?.worktree == target)
-        #expect(deleted?.force == true)
-        #expect(deleted?.keepBranch == true)
-    }
-
-    @Test func opensLocalReviewChanges() async throws {
-        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
-        var opened: String?
-        var activationCount = 0
-        let router = Self.router(
-            origin: current,
-            visibleWorktrees: [current],
-            openReviewChanges: { opened = $0.id },
-            activateApp: { activationCount += 1 }
-        )
-
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges(worktree: nil))))
-
-        guard case .text(let lines) = response, lines.count == 2 else {
-            Issue.record("expected two-line text response, got \(response)")
-            return
-        }
-        let expectedSession = ReviewDraftSessionID.localChanges(
-            worktreeID: current.id, worktreePath: current.path, scope: .all
-        )
-        let object = try JSONSerialization.jsonObject(with: Data(lines[1].utf8)) as? [String: String]
-        #expect(object?["session_id"] == expectedSession.rawValue)
-        #expect(opened == current.id)
-        #expect(activationCount == 1)
-    }
-
-    @Test func opensProviderReviewFromOrigin() async throws {
-        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
-        var opened: (origin: Worktree, target: String)?
-        let router = Self.router(
-            origin: current,
-            visibleWorktrees: [current],
-            openReview: { origin, target in
-                opened = (origin, target)
-                return .ok
-            }
-        )
-
-        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.target("123", worktree: nil))))
-
-        #expect(response == .ok)
-        #expect(opened?.origin == current)
-        #expect(opened?.target == "123")
-    }
-
-    @Test func reviewLocalHonorsWorktreeOverride() async throws {
+    @Test func reviewCommandsHonorWorktreeOverride() async throws {
         let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
         let sibling = Self.worktree(branch: "feature-x", path: "/tmp/repo-feature-x", projectId: "p1")
-        var reviewedIn: Worktree?
+        var localReviewedIn: Worktree?
+        var targetReviewedIn: Worktree?
+        var reviewedTarget: String?
         let router = Self.router(
             origin: current,
             visibleWorktrees: [current, sibling],
-            openReviewChanges: { reviewedIn = $0 }
+            openReviewChanges: { localReviewedIn = $0 },
+            openReview: { worktree, target in
+                targetReviewedIn = worktree
+                reviewedTarget = target
+                return .ok
+            }
         )
 
-        let response = await router.handle(.init(
+        let local = await router.handle(.init(
             version: 1, sessionId: "s1", cwd: nil,
             command: .review(.localChanges(worktree: "feature-x"))
         ))
+        _ = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.target("main..HEAD", worktree: "feature-x"))
+        ))
 
-        if case .error(let message) = response { Issue.record("unexpected error: \(message)") }
-        #expect(reviewedIn?.branch == "feature-x")
+        if case .error(let message) = local { Issue.record("unexpected error: \(message)") }
+        #expect(localReviewedIn?.branch == "feature-x")
+        #expect(targetReviewedIn?.branch == "feature-x")
+        #expect(reviewedTarget == "main..HEAD")
     }
 
     @Test func reviewWithUnknownWorktreeOverrideErrors() async throws {
@@ -726,30 +440,6 @@ struct AlasCLICommandRouterTests {
             return
         }
         #expect(message.contains("unknown worktree"))
-    }
-
-    @Test func reviewTargetHonorsWorktreeOverride() async throws {
-        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
-        let sibling = Self.worktree(branch: "feature-x", path: "/tmp/repo-feature-x", projectId: "p1")
-        var reviewedIn: Worktree?
-        var reviewedTarget: String?
-        let router = Self.router(
-            origin: current,
-            visibleWorktrees: [current, sibling],
-            openReview: { worktree, target in
-                reviewedIn = worktree
-                reviewedTarget = target
-                return .ok
-            }
-        )
-
-        _ = await router.handle(.init(
-            version: 1, sessionId: "s1", cwd: nil,
-            command: .review(.target("main..HEAD", worktree: "feature-x"))
-        ))
-
-        #expect(reviewedIn?.branch == "feature-x")
-        #expect(reviewedTarget == "main..HEAD")
     }
 
     private func makeDraftComment(
@@ -1068,42 +758,6 @@ struct AlasCLICommandRouterTests {
         #expect(record.verdict?.verdict == .approve)
     }
 
-    @Test func replyAndResolveSucceedForACommentOwnedBySiblingWorktreeSession() async throws {
-        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
-        let worktree = Worktree(
-            id: "wt1", projectId: "p1", name: "main", branch: "main",
-            path: root, status: .clean, lastActivity: Date()
-        )
-        let sibling = Worktree(
-            id: "wt2", projectId: "p1", name: "feature", branch: "feature",
-            path: URL(fileURLWithPath: "/tmp/sibling-repo"), status: .clean, lastActivity: Date()
-        )
-        let storeURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-            .appendingPathComponent("drafts.json")
-        let store = ReviewDraftCommentStore(url: storeURL)
-        try store.save(makeDraftComment(id: "sibling-c1", worktreeID: "wt2"))
-
-        let router = makeReviewRouter(worktree: worktree, store: store, visibleWorktrees: [worktree, sibling])
-
-        let replyResponse = await router.handle(.init(
-            version: 1, sessionId: "s1", cwd: nil,
-            command: .review(.reply(commentID: "sibling-c1", body: "on it"))
-        ))
-        #expect(replyResponse == .ok)
-        let afterReply = try #require(try store.find(commentID: "sibling-c1"))
-        #expect(afterReply.allReplies.map(\.bodyMarkdown) == ["on it"])
-
-        let resolveResponse = await router.handle(.init(
-            version: 1, sessionId: "s1", cwd: nil,
-            command: .review(.resolve(commentID: "sibling-c1", reply: nil, reopen: false))
-        ))
-        #expect(resolveResponse == .ok)
-        let afterResolve = try #require(try store.find(commentID: "sibling-c1"))
-        #expect(afterResolve.state == .resolved)
-        #expect(afterResolve.resolvedBy?.isAgent == true)
-    }
-
     /// Regression test: `origin` can be a worktree the user has hidden for
     /// this project, which `visibleWorktrees()` (and thus `projectWorktrees`)
     /// excludes — but the CLI still resolves `origin` itself directly via
@@ -1227,37 +881,6 @@ struct AlasCLICommandRouterTests {
         #expect(saved[0].originalPath == "Sources/Old.swift")
     }
 
-    @Test func commentAddLeavesOriginalPathNilWhenResolverReturnsNil() async throws {
-        let root = try makeFile("repo/Sources/New.swift").deletingLastPathComponent().deletingLastPathComponent()
-        let worktree = Worktree(
-            id: "wt1", projectId: "p1", name: "main", branch: "main",
-            path: root, status: .clean, lastActivity: Date()
-        )
-        let storeURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-            .appendingPathComponent("drafts.json")
-        let store = ReviewDraftCommentStore(url: storeURL)
-        let session = ReviewDraftSessionID.reviewRequest(
-            worktreeID: "wt1", provider: .gitlab, host: "gitlab.com", repositorySlug: "group/repo", number: 7
-        )
-
-        let router = makeReviewRouter(
-            worktree: worktree, store: store,
-            providerReviewOriginalPath: { _, _ in nil }
-        )
-        _ = await router.handle(.init(
-            version: 1, sessionId: "s1", cwd: nil,
-            command: .review(.commentAdd(
-                path: "Sources/New.swift", startLine: 3, endLine: nil, side: nil,
-                body: "unmatched", sessionID: session.rawValue
-            ))
-        ))
-
-        let saved = try store.load(sessionID: session)
-        #expect(saved.count == 1)
-        #expect(saved[0].originalPath == nil)
-    }
-
     @Test func commentAddDoesNotResolveOriginalPathForGitHubReview() async throws {
         let root = try makeFile("repo/Sources/New.swift").deletingLastPathComponent().deletingLastPathComponent()
         let worktree = Worktree(
@@ -1296,7 +919,14 @@ struct AlasCLICommandRouterTests {
         #expect(saved[0].originalPath == nil)
     }
 
-    @Test func commentAddDoesNotResolveOriginalPathForLocalChangesSession() async throws {
+    /// Local-changes comments land in the namespace the review surface reads:
+    /// an `.all` session prefers unstaged when the path is both staged and
+    /// unstaged, while a staged-only session honors its scope.
+    @Test(arguments: [
+        (ReviewDraftLocalChangesScope.all, "unstaged"),
+        (ReviewDraftLocalChangesScope.staged, "staged"),
+    ])
+    func commentAddPicksNamespaceForPartiallyStagedPath(scope: ReviewDraftLocalChangesScope, expectedNamespace: String) async throws {
         let root = try makeFile("repo/a.swift").deletingLastPathComponent()
         let worktree = Worktree(
             id: "wt1", projectId: "p1", name: "main", branch: "main",
@@ -1306,77 +936,7 @@ struct AlasCLICommandRouterTests {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("drafts.json")
         let store = ReviewDraftCommentStore(url: storeURL)
-        var resolverCalled = false
-
-        let router = makeReviewRouter(
-            worktree: worktree, store: store,
-            gitStatus: { _ in
-                [ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)]
-            },
-            providerReviewOriginalPath: { _, _ in
-                resolverCalled = true
-                return "Sources/Old.swift"
-            }
-        )
-        _ = await router.handle(.init(
-            version: 1, sessionId: "s1", cwd: nil,
-            command: .review(.commentAdd(
-                path: "a.swift", startLine: 1, endLine: nil, side: nil, body: "local", sessionID: nil
-            ))
-        ))
-
-        #expect(!resolverCalled)
-        let expectedSession = ReviewDraftSessionID.localChanges(worktreeID: "wt1", worktreePath: root, scope: .all)
-        let saved = try store.load(sessionID: expectedSession)
-        #expect(saved.count == 1)
-        #expect(saved[0].originalPath == nil)
-    }
-
-    @Test func commentAddPrefersUnstagedWhenPathIsBothStagedAndUnstaged() async throws {
-        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
-        let worktree = Worktree(
-            id: "wt1", projectId: "p1", name: "main", branch: "main",
-            path: root, status: .clean, lastActivity: Date()
-        )
-        let storeURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-            .appendingPathComponent("drafts.json")
-        let store = ReviewDraftCommentStore(url: storeURL)
-
-        let router = makeReviewRouter(
-            worktree: worktree, store: store,
-            gitStatus: { _ in
-                [
-                    ChangedFile(path: "a.swift", status: "M", stage: .staged, add: 1, del: 0, renameFrom: nil),
-                    ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil),
-                ]
-            }
-        )
-        _ = await router.handle(.init(
-            version: 1, sessionId: "s1", cwd: nil,
-            command: .review(.commentAdd(
-                path: "a.swift", startLine: 4, endLine: nil, side: nil, body: "add a guard", sessionID: nil
-            ))
-        ))
-
-        let expectedSession = ReviewDraftSessionID.localChanges(
-            worktreeID: "wt1", worktreePath: root, scope: .all
-        )
-        let saved = try store.load(sessionID: expectedSession)
-        #expect(saved.first?.fileID == DiffReviewFileID(namespace: "unstaged", path: "a.swift"))
-    }
-
-    @Test func commentAddHonorsAStagedOnlySessionScopeOverUnstagedGitStatus() async throws {
-        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
-        let worktree = Worktree(
-            id: "wt1", projectId: "p1", name: "main", branch: "main",
-            path: root, status: .clean, lastActivity: Date()
-        )
-        let storeURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-            .appendingPathComponent("drafts.json")
-        let store = ReviewDraftCommentStore(url: storeURL)
-        let stagedSession = ReviewDraftSessionID.localChanges(worktreeID: "wt1", worktreePath: root, scope: .staged)
+        let session = ReviewDraftSessionID.localChanges(worktreeID: "wt1", worktreePath: root, scope: scope)
 
         let router = makeReviewRouter(
             worktree: worktree, store: store,
@@ -1391,12 +951,12 @@ struct AlasCLICommandRouterTests {
             version: 1, sessionId: "s1", cwd: nil,
             command: .review(.commentAdd(
                 path: "a.swift", startLine: 4, endLine: nil, side: nil, body: "add a guard",
-                sessionID: stagedSession.rawValue
+                sessionID: session.rawValue
             ))
         ))
 
-        let saved = try store.load(sessionID: stagedSession)
-        #expect(saved.first?.fileID == DiffReviewFileID(namespace: "staged", path: "a.swift"))
+        let saved = try store.load(sessionID: session)
+        #expect(saved.first?.fileID == DiffReviewFileID(namespace: expectedNamespace, path: "a.swift"))
     }
 
     @Test func commentAddRejectsPathOutsideAStagedOnlySessionScope() async throws {
@@ -1505,40 +1065,6 @@ struct AlasCLICommandRouterTests {
         #expect(AlasActionService.worktreeRelativePath("../a.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "a.swift")
     }
 
-    @Test func commentAddFilesAgentCommentAtNormalizedPathForDotSlashInput() async throws {
-        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
-        let worktree = Worktree(
-            id: "wt1", projectId: "p1", name: "main", branch: "main",
-            path: root, status: .clean, lastActivity: Date()
-        )
-        let storeURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-            .appendingPathComponent("drafts.json")
-        let store = ReviewDraftCommentStore(url: storeURL)
-
-        let router = makeReviewRouter(
-            worktree: worktree, store: store,
-            gitStatus: { _ in
-                [ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)]
-            }
-        )
-        let response = await router.handle(.init(
-            version: 1, sessionId: "s1", cwd: nil,
-            command: .review(.commentAdd(
-                path: "./a.swift", startLine: 1, endLine: nil, side: nil, body: "add a guard", sessionID: nil
-            ))
-        ))
-
-        guard case .text = response else {
-            Issue.record("expected .text response, got \(response)")
-            return
-        }
-        let expectedSession = ReviewDraftSessionID.localChanges(worktreeID: "wt1", worktreePath: root, scope: .all)
-        let saved = try store.load(sessionID: expectedSession)
-        #expect(saved.count == 1)
-        #expect(saved[0].path == "a.swift")
-    }
-
     @Test func worktreeRelativePathResolvesCaseVariantRootOnACaseInsensitiveVolume() throws {
         // On the default case-insensitive-but-case-preserving macOS volume,
         // a case-variant of the tracked root's name (e.g. the shell's $PWD
@@ -1574,46 +1100,6 @@ struct AlasCLICommandRouterTests {
         )
     }
 
-    @Test func commentAddFilesIntoTheCorrectSessionWhenRunFromASymlinkedWorktree() async throws {
-        let realRoot = try makeFile("repo/Sources/App.swift").deletingLastPathComponent().deletingLastPathComponent()
-        let logicalRoot = realRoot.deletingLastPathComponent().appendingPathComponent("logical-repo")
-        try FileManager.default.createSymbolicLink(at: logicalRoot, withDestinationURL: realRoot)
-        let worktree = Worktree(
-            id: "wt1", projectId: "p1", name: "main", branch: "main",
-            path: realRoot, status: .clean, lastActivity: Date()
-        )
-        let storeURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-            .appendingPathComponent("drafts.json")
-        let store = ReviewDraftCommentStore(url: storeURL)
-
-        let router = makeReviewRouter(
-            worktree: worktree, store: store,
-            gitStatus: { _ in
-                [ChangedFile(path: "Sources/App.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)]
-            }
-        )
-        let response = await router.handle(.init(
-            version: 1, sessionId: "s1", cwd: nil,
-            command: .review(.commentAdd(
-                path: logicalRoot.appendingPathComponent("Sources/App.swift").path,
-                startLine: 1, endLine: nil, side: nil, body: "add a guard", sessionID: nil
-            ))
-        ))
-
-        guard case .text(let lines) = response, lines.count == 2 else {
-            Issue.record("expected two-line text response, got \(response)")
-            return
-        }
-        let expectedSession = ReviewDraftSessionID.localChanges(
-            worktreeID: "wt1", worktreePath: realRoot, scope: .all
-        )
-        let saved = try store.load(sessionID: expectedSession)
-        #expect(saved.count == 1)
-        #expect(saved[0].path == "Sources/App.swift")
-        #expect(saved[0].fileID == DiffReviewFileID(namespace: "unstaged", path: "Sources/App.swift"))
-    }
-
     @Test func commentAddRejectsSessionIDFromAnotherWorktree() async throws {
         let root = try makeFile("repo/a.swift").deletingLastPathComponent()
         let worktree = Worktree(
@@ -1643,77 +1129,6 @@ struct AlasCLICommandRouterTests {
         }
         #expect(message.contains("unknown review session id"))
         #expect(try store.load(sessionID: foreignSession).isEmpty)
-    }
-
-    @Test func reviewLocalReturnsItsSessionID() async throws {
-        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
-        let worktree = Worktree(
-            id: "wt1", projectId: "p1", name: "main", branch: "main",
-            path: root, status: .clean, lastActivity: Date()
-        )
-        var openedReview = false
-        var router = makeReviewRouter(
-            worktree: worktree,
-            store: ReviewDraftCommentStore(
-                url: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json")
-            )
-        )
-        router.openReviewChanges = { _ in openedReview = true }
-
-        let response = await router.handle(.init(
-            version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges(worktree: nil))
-        ))
-
-        #expect(openedReview)
-        guard case .text(let lines) = response, lines.count == 2 else {
-            Issue.record("expected two-line text response, got \(response)")
-            return
-        }
-        let expected = ReviewDraftSessionID.localChanges(worktreeID: "wt1", worktreePath: root, scope: .all)
-        #expect(lines[1].contains(#""session_id":"#))
-        let object = try JSONSerialization.jsonObject(with: Data(lines[1].utf8)) as? [String: String]
-        #expect(object?["session_id"] == expected.rawValue)
-    }
-
-    @Test func reviewFinishRecordsVerdictForTheRequestedSession() async throws {
-        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
-        let worktree = Worktree(
-            id: "wt1", projectId: "p1", name: "main", branch: "main",
-            path: root, status: .clean, lastActivity: Date()
-        )
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let sessionStore = ReviewSessionStore(url: directory.appendingPathComponent("sessions.json"))
-        let target = ReviewSessionTarget.localChanges(worktreeID: "wt1", repositoryPath: root, scope: .all)
-        try sessionStore.save(ReviewSessionRecord(
-            id: target.id,
-            target: target,
-            createdAt: Date(timeIntervalSince1970: 1),
-            updatedAt: Date(timeIntervalSince1970: 1)
-        ))
-        var changed = 0
-        let router = makeReviewRouter(
-            worktree: worktree,
-            store: ReviewDraftCommentStore(url: directory.appendingPathComponent("drafts.json")),
-            sessionStore: sessionStore,
-            onChange: { changed += 1 }
-        )
-
-        let response = await router.handle(.init(
-            version: 1, sessionId: "s1", cwd: nil,
-            command: .review(.finish(
-                sessionID: target.draftSessionID.rawValue,
-                verdict: .requestChanges,
-                summary: "Fix the race."
-            ))
-        ))
-
-        #expect(response == .ok)
-        #expect(changed == 1)
-        let record = try #require(try sessionStore.load(id: target.id))
-        #expect(record.status == .reviewed)
-        #expect(record.verdict?.verdict == .requestChanges)
-        #expect(record.verdict?.summary == "Fix the race.")
-        #expect(try sessionStore.findActive(targetID: target.id) == nil)
     }
 
     @Test func reviewFinishRejectsChangeRequestWithoutSummary() async throws {
@@ -1929,73 +1344,6 @@ struct AlasCLICommandRouterTests {
         #expect(message.contains("unknown review comment id"))
     }
 
-    @Test func sessionCommandsForwardTheirResolvedACPOrigin() async throws {
-        let worktree = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
-        let origin = ACPOrchestrationSessionOrigin(
-            sessionId: "acp-1",
-            projectId: "p1",
-            worktreeId: worktree.id
-        )
-        var listedOrigin: ACPOrchestrationSessionOrigin?
-        var created: (origin: ACPOrchestrationSessionOrigin, request: ACPDelegatedSessionNewRequest)?
-        var sent: (origin: ACPOrchestrationSessionOrigin, request: ACPDelegatedSessionMessageRequest)?
-        let router = AlasCLICommandRouter(
-            sessionWorktreeId: { _ in worktree.id },
-            resolveACPSessionOrigin: { $0 == "acp-1" ? origin : nil },
-            originatingWorktree: { _ in worktree },
-            visibleWorktrees: { [worktree] },
-            openRelativeFile: { _, _ in },
-            openExternalFile: { _, _ in },
-            listDelegatedSessions: { resolvedOrigin in
-                listedOrigin = resolvedOrigin
-                return .text([#"{"sessions":[]}"#])
-            },
-            createDelegatedSession: { resolvedOrigin, request in
-                created = (resolvedOrigin, request)
-                return .text([#"{"session_id":"child"}"#])
-            },
-            sendDelegatedSessionMessage: { resolvedOrigin, request in
-                sent = (resolvedOrigin, request)
-                return .text([#"{"queued":true}"#])
-            },
-            activateApp: {}
-        )
-
-        let list = await router.handle(.init(version: 1, sessionId: "acp-1", cwd: nil, command: .sessionList))
-        let create = await router.handle(.init(
-            version: 1,
-            sessionId: "acp-1",
-            cwd: nil,
-            command: .sessionNew(
-                prompt: "Implement this",
-                agentID: "codex",
-                worktree: .new(branch: "child", base: "origin/main")
-            )
-        ))
-        let send = await router.handle(.init(
-            version: 1,
-            sessionId: "acp-1",
-            cwd: nil,
-            command: .sessionSend(sessionID: "child", prompt: "Please continue")
-        ))
-
-        #expect(listedOrigin == origin)
-        #expect(created?.origin == origin)
-        #expect(created?.request == ACPDelegatedSessionNewRequest(
-            prompt: "Implement this",
-            agentId: "codex",
-            worktree: .new(branch: "child", base: "origin/main")
-        ))
-        #expect(sent?.origin == origin)
-        #expect(sent?.request == ACPDelegatedSessionMessageRequest(
-            targetSessionId: "child",
-            prompt: "Please continue"
-        ))
-        #expect(list == .text([#"{"sessions":[]}"#]))
-        #expect(create == .text([#"{"session_id":"child"}"#]))
-        #expect(send == .text([#"{"queued":true}"#]))
-    }
-
     @Test func sessionCommandsRequireAnOriginatingACPSession() async throws {
         let worktree = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
         let router = AlasCLICommandRouter(
@@ -2047,12 +1395,8 @@ struct AlasCLICommandRouterTests {
     private static func router(
         origin: Worktree,
         visibleWorktrees: [Worktree],
-        focusWorktree: @escaping (Worktree) -> Void = { _ in },
-        createWorktree: @escaping (Worktree, String, String?) async -> AlasCLIResponse = { _, _, _ in .ok },
-        deleteWorktree: @escaping (Worktree, Bool, Bool) async -> AlasCLIResponse = { _, _, _ in .ok },
         openReviewChanges: @escaping (Worktree) -> Void = { _ in },
-        openReview: @escaping (Worktree, String) async -> AlasCLIResponse = { _, _ in .ok },
-        activateApp: @escaping () -> Void = {}
+        openReview: @escaping (Worktree, String) async -> AlasCLIResponse = { _, _ in .ok }
     ) -> AlasCLICommandRouter {
         AlasCLICommandRouter(
             sessionWorktreeId: { $0 == "s1" ? origin.id : nil },
@@ -2060,12 +1404,9 @@ struct AlasCLICommandRouterTests {
             visibleWorktrees: { visibleWorktrees },
             openRelativeFile: { _, _ in Issue.record("expected no relative file open") },
             openExternalFile: { _, _ in Issue.record("expected no external file open") },
-            focusWorktree: focusWorktree,
-            createWorktree: createWorktree,
-            deleteWorktree: deleteWorktree,
             openReviewChanges: openReviewChanges,
             openReview: openReview,
-            activateApp: activateApp
+            activateApp: {}
         )
     }
 

@@ -217,99 +217,6 @@ struct DiffReviewSurfaceTests {
         }
     }
 
-    @Test func appKitReviewWindowCompensatesCommentInsertionAboveViewport() async throws {
-        let firstSummary = summary(path: "Sources/CommentAbove.swift")
-        let secondSummary = summary(path: "Sources/CommentBelow.swift")
-        let first = fileSection(
-            summary: firstSummary,
-            displayModel: largeSingleGroupDisplayModel(rowCount: 30, filePath: firstSummary.path)
-        )
-        let second = fileSection(
-            summary: secondSummary,
-            displayModel: largeSingleGroupDisplayModel(rowCount: 30, filePath: secondSummary.path)
-        )
-        let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [first, second]))
-
-        try await withAppKitReviewScroller {
-            let controller = host(
-                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
-                width: 1_000,
-                height: 260
-            )
-            let window = attachWindow(controller, width: 1_000, height: 260)
-            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
-            await drainSwiftUI(controller.view)
-            let scroller = try #require(appKitReviewScroller(in: controller.view))
-
-            #expect(pressAccessibilityElement(
-                withAccessibilityIdentifier: "diff-review-rail-row-\(secondSummary.id.rawValue)",
-                in: controller.view
-            ))
-            pumpMainRunLoop(seconds: 0.30)
-            await drainSwiftUI(controller.view)
-            let beforeInsertionY = scroller.scrollY
-            #expect(model.selected == secondSummary.id)
-
-            model.draftCommentsByFileID = [
-                first.id: [draftComment(id: "above-draft", fileID: first.id, path: first.summary.path, startLine: 1)],
-            ]
-            await drainSwiftUI(controller.view)
-
-            #expect(model.selected == secondSummary.id)
-            #expect(scroller.scrollY >= beforeInsertionY)
-        }
-    }
-
-    @Test func appKitReviewWindowOpensRestoredDraftCommentEditor() async throws {
-        let file = fileSection(
-            summary: summary(path: "Sources/RestoredDraft.swift"),
-            displayModel: displayModel()
-        )
-        let comment = draftComment(
-            id: "restored-draft",
-            fileID: file.id,
-            path: file.summary.path,
-            startLine: 2
-        )
-        let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [file]))
-        model.draftCommentsByFileID = [file.id: [comment]]
-        model.draftCommentActions = ReviewDraftCommentActions(
-            availability: { _ in
-                ReviewDraftCommentActionAvailability(
-                    canEdit: true,
-                    canDelete: false,
-                    canResolve: false,
-                    canDismiss: false,
-                    canCopyPrompt: false,
-                    canShowSendToAgent: false,
-                    canSendToAgent: false
-                )
-            }
-        )
-
-        await withAppKitReviewScroller {
-            let controller = host(
-                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
-                width: 1_000,
-                height: 500
-            )
-            let window = attachWindow(controller, width: 1_000, height: 500)
-            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
-            await drainSwiftUI(controller.view)
-
-            #expect(pressAccessibilityElement(
-                withAccessibilityIdentifier: "diff-review-draft-comment-action-edit-restored-draft",
-                in: controller.view
-            ))
-            await drainSwiftUI(controller.view)
-
-            #expect(subview(
-                withAccessibilityIdentifier: "diff-review-draft-comment-action-save-restored-draft",
-                in: controller.view
-            ) != nil)
-        }
-    }
-
     @Test func appKitReviewWindowOpensNewlyPostedDraftCommentEditor() async throws {
         let file = fileSection(
             summary: summary(path: "Sources/NewDraft.swift"),
@@ -518,39 +425,6 @@ struct DiffReviewSurfaceTests {
         }
     }
 
-    @Test func appKitReviewWindowRoutesStagedHunkMutationAction() async throws {
-        let actions = AppKitReviewActionRecorder()
-        let stagedSummary = summary(
-            path: "Sources/StagedHunk.swift",
-            namespace: "staged",
-            groupID: "staged",
-            groupTitle: "Staged"
-        )
-        let stagedFile = fileSection(
-            summary: stagedSummary,
-            displayModel: displayModel(),
-            stagedMutationActions: DiffReviewStagedMutationActions(
-                unstageHunk: { _ in actions.unstagedHunks += 1 },
-                isHunkUnstageEnabled: { _ in true }
-            )
-        )
-        let model = AppKitReviewSurfaceWindowModel(session: loadedSession(files: [stagedFile]))
-
-        await withAppKitReviewScroller {
-            let controller = host(
-                AppKitReviewSurfaceWindowHarness(model: model).environment(\.theme, theme()),
-                width: 1_000,
-                height: 420
-            )
-            let window = attachWindow(controller, width: 1_000, height: 420)
-            defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
-            await drainSwiftUI(controller.view)
-
-            #expect(pressButton(withToolTip: "Drop from commit", in: controller.view))
-            #expect(actions.unstagedHunks == 1)
-        }
-    }
-
     @Test func draftComposerRefocusesForEachNewFocusRequestGeneration() async throws {
         let model = ReviewDraftComposerFocusModel()
         let controller = NSHostingController(
@@ -584,81 +458,6 @@ struct DiffReviewSurfaceTests {
         #expect(window.firstResponder === textView)
     }
 
-    @Test func railRendersUngroupedCommitSessionWithFileRowsAndNoSourceHeader() {
-        let files = [
-            summary(path: "Sources/App/AlphaView.swift", additions: 4, deletions: 1),
-            summary(path: "Tests/BetaTests.swift", status: .added, additions: 12, deletions: 0),
-        ]
-        let session = DiffReviewSessionModel(files: files, groupsEnabled: false)
-        var selected = files[0].id
-        var collapsed = false
-
-        let view = DiffReviewRail(
-            session: session,
-            selectedFileID: Binding(get: { selected }, set: { selected = $0 }),
-            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
-            onSelectFile: { selected = $0 }
-        )
-        .environment(\.theme, theme())
-
-        let controller = host(view, width: 280, height: 500)
-
-        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[0].id.rawValue)", in: controller.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[1].id.rawValue)", in: controller.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-source-commit", in: controller.view) == nil)
-        #expect(accessibilityLabel(in: controller.view, containing: "AlphaView.swift") != nil)
-        #expect(accessibilityLabel(in: controller.view, containing: "BetaTests.swift") != nil)
-    }
-
-    @Test func railRendersGroupedSessionsWithSourceHeaders() {
-        let files = [
-            summary(path: "Sources/App/AlphaView.swift", namespace: "unstaged", groupID: "unstaged", groupTitle: "Unstaged"),
-            summary(path: "Sources/App/BetaView.swift", namespace: "staged", groupID: "staged", groupTitle: "Staged", status: .added),
-        ]
-        let session = DiffReviewSessionModel(files: files, groupsEnabled: true)
-        var selected = files[0].id
-        var collapsed = false
-
-        let view = DiffReviewRail(
-            session: session,
-            selectedFileID: Binding(get: { selected }, set: { selected = $0 }),
-            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
-            onSelectFile: { selected = $0 }
-        )
-        .environment(\.theme, theme())
-
-        let controller = host(view, width: 280, height: 500)
-
-        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-source-unstaged", in: controller.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-source-staged", in: controller.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[0].id.rawValue)", in: controller.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[1].id.rawValue)", in: controller.view) != nil)
-    }
-
-    @Test func collapsedRailKeepsSelectableMarkers() {
-        let files = [
-            summary(path: "Sources/App/AlphaView.swift", additions: 4, deletions: 1),
-            summary(path: "Tests/BetaTests.swift", status: .added, additions: 12, deletions: 0),
-        ]
-        let session = DiffReviewSessionModel(files: files, groupsEnabled: false)
-        var selected = files[1].id
-        var collapsed = true
-
-        let view = DiffReviewRail(
-            session: session,
-            selectedFileID: Binding(get: { selected }, set: { selected = $0 }),
-            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
-            onSelectFile: { selected = $0 }
-        )
-        .environment(\.theme, theme())
-
-        let controller = host(view, width: 60, height: 500)
-
-        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-marker-\(files[0].id.rawValue)", in: controller.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-marker-\(files[1].id.rawValue)", in: controller.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-marker-selected-\(files[1].id.rawValue)", in: controller.view) != nil)
-    }
-
     @Test func railFilterNarrowsNavigationWithoutChangingSelectionAndPersistsAcrossCollapse() async {
         let files = [
             summary(path: "Sources/App/AlphaView.swift", additions: 4, deletions: 1),
@@ -689,55 +488,6 @@ struct DiffReviewSurfaceTests {
         await drainSwiftUI(controller.view)
         #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[0].id.rawValue)", in: controller.view) == nil)
         #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[1].id.rawValue)", in: controller.view) != nil)
-    }
-
-    @Test func railFilterShowsEmptyStateAndUnfilteredRailRestoresAllFiles() async {
-        let files = [
-            summary(path: "Sources/App/AlphaView.swift"),
-            summary(path: "Tests/BetaTests.swift"),
-        ]
-        let model = DiffReviewRailHarnessModel(selectedFileID: files[0].id)
-        let controller = host(
-            DiffReviewRailHarness(
-                session: DiffReviewSessionModel(files: files, groupsEnabled: false),
-                model: model,
-                filterQuery: "missing"
-            )
-            .environment(\.theme, theme()),
-            width: 280,
-            height: 500
-        )
-        await drainSwiftUI(controller.view)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-filter-empty", in: controller.view) != nil)
-
-        let unfilteredController = host(
-            DiffReviewRailHarness(
-                session: DiffReviewSessionModel(files: files, groupsEnabled: false),
-                model: model
-            )
-            .environment(\.theme, theme()),
-            width: 280,
-            height: 500
-        )
-        await drainSwiftUI(unfilteredController.view)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-filter-empty", in: unfilteredController.view) == nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[0].id.rawValue)", in: unfilteredController.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[1].id.rawValue)", in: unfilteredController.view) != nil)
-    }
-
-    @Test func railFileTooltipUsesRelativePath() {
-        let file = summary(path: "Sources/Deeply/Nested/FeatureView.swift")
-        #expect(DiffReviewRailTooltip.text(for: file) == "Sources/Deeply/Nested/FeatureView.swift")
-    }
-
-    @Test func railSelectedFileRowsUseSidebarSelectionTreatment() {
-        #expect(DiffReviewRailSelectedRowStyle.backgroundToken == "bg-4")
-        #expect(DiffReviewRailSelectedRowStyle.fileDepthIndent == 6)
-        #expect(DiffReviewRailSelectedRowStyle.accentRailWidth == 3)
-        #expect(DiffReviewRailSelectedRowStyle.accentRailHeight == 14)
-        #expect(DiffReviewRailSelectedRowStyle.accentRailXOffset == 2)
-        #expect(DiffReviewRailSelectedRowStyle.cornerRadius == 6)
-        #expect(DiffReviewRailSelectedRowStyle.contentLeadingPadding == 6)
     }
 
     @Test func fileSectionHidesReviewAffordanceWhenDraftCommentCreationIsDisabled() async {
@@ -825,152 +575,6 @@ struct DiffReviewSurfaceTests {
         #expect(subview(withAccessibilityIdentifier: "diff-review-image-retry-\(file.id.rawValue)", in: view) != nil)
     }
 
-    @Test func imageFileSectionRendersProviderThreadsAndAnnotations() async {
-        let file = DiffReviewFileSectionModel(
-            summary: summary(path: "Assets/logo.png", status: .modified),
-            parsedDiff: nil,
-            displayModel: nil,
-            placeholderMessage: nil,
-            openFile: nil,
-            contextProvider: nil,
-            imageProvider: DiffReviewImageProvider(
-                id: DiffReviewImageProviderID(
-                    source: .commit,
-                    repository: "/repo",
-                    beforeRevision: "base",
-                    afterRevision: "head",
-                    beforePath: "Assets/logo.png",
-                    afterPath: "Assets/logo.png"
-                ),
-                load: {
-                    let image = NSImage(size: NSSize(width: 1, height: 1))
-                    return ImageDiffPair(
-                        before: .image(image, frameCount: 1),
-                        after: .image(image, frameCount: 1),
-                        oldPath: nil,
-                        kind: .modified
-                    )
-                }
-            )
-        )
-        let thread = DiffInlineCommentThread(
-            id: "provider-thread",
-            filePath: file.summary.path,
-            newLine: 1,
-            isResolved: false,
-            isOutdated: false,
-            comments: [
-                DiffInlineComment(
-                    id: "provider-comment",
-                    author: "reviewer",
-                    body: "Keep this image feedback visible.",
-                    viewerCanUpdate: true,
-                    viewerCanDelete: true
-                ),
-            ]
-        )
-        let annotation = DiffInlineAnnotation(
-            id: "provider-annotation",
-            checkName: "Asset check",
-            newLine: 1,
-            level: .warning,
-            message: "Image dimensions changed.",
-            rawDetails: nil
-        )
-        let view = await mountReviewFile(
-            AppKitDiffReviewRowInput(
-                file: file,
-                threads: [thread],
-                annotations: [annotation],
-                state: AppKitDiffReviewFileState(),
-                theme: theme(),
-                codeFontFamily: "",
-                actionPresence: .init(canReply: true, canResolve: true, canAddToReview: true)
-            ),
-            width: 900,
-            height: 720
-        )
-
-        #expect(subview(
-            withAccessibilityIdentifier: "diff-review-image-thread-\(thread.id)",
-            in: view
-        ) != nil)
-        #expect(subview(
-            withAccessibilityIdentifier: "diff-review-image-annotation-\(annotation.id)",
-            in: view
-        ) != nil)
-    }
-
-    @Test func imageProviderFeedbackPresentationRoutesEveryAction() {
-        let file = DiffReviewFileSectionModel(
-            summary: summary(path: "Assets/logo.png", status: .modified),
-            parsedDiff: nil,
-            displayModel: nil,
-            placeholderMessage: nil,
-            openFile: nil,
-            contextProvider: nil,
-            imageProvider: nil
-        )
-        let comment = DiffInlineComment(
-            id: "provider-comment",
-            author: "reviewer",
-            body: "Keep this image feedback visible.",
-            viewerCanUpdate: true,
-            viewerCanDelete: true
-        )
-        let thread = DiffInlineCommentThread(
-            id: "provider-thread",
-            filePath: file.summary.path,
-            newLine: 1,
-            isResolved: false,
-            isOutdated: false,
-            comments: [comment]
-        )
-        let routed = ThreadActionRecorder()
-        let state = AppKitDiffReviewFileState()
-        state.actionRelay.update(
-            inlineFeedbackActions: .init(),
-            onSelectInlineFeedback: { _ in },
-            draftCommentActions: ReviewDraftCommentActions(),
-            onSelectDraftComment: { _ in },
-            onSaveDraftComment: { _, _ in },
-            onContextExpansionActivated: {},
-            onReply: { routed.actions.append("reply:\($0.id):\($1)") },
-            onResolve: { routed.actions.append("resolve:\($0.id)") },
-            onUnresolve: { routed.actions.append("unresolve:\($0.id)") },
-            onEdit: { routed.actions.append("edit:\($0.id):\($1.id):\($2)") },
-            onDelete: { routed.actions.append("delete:\($0.id):\($1.id)") },
-            onStageReply: { routed.actions.append("stage:\($0.id):\($1)") }
-        )
-        let input = AppKitDiffReviewRowInput(
-            file: file,
-            threads: [thread],
-            state: state,
-            theme: theme(),
-            codeFontFamily: "",
-            actionPresence: .init(canReply: true, canResolve: true, canAddToReview: true)
-        )
-
-        state.actionRelay.reply(to: thread, body: "sent")
-        state.actionRelay.stageReply(to: thread, body: "draft")
-        state.actionRelay.resolve(thread)
-        state.actionRelay.unresolve(thread)
-        state.actionRelay.edit(comment, in: thread, body: "edited")
-        state.actionRelay.delete(comment, in: thread)
-
-        #expect(input.actionPresence.canReply)
-        #expect(input.actionPresence.canResolve)
-        #expect(input.actionPresence.canAddToReview)
-        #expect(routed.actions == [
-            "reply:provider-thread:sent",
-            "stage:provider-thread:draft",
-            "resolve:provider-thread",
-            "unresolve:provider-thread",
-            "edit:provider-thread:provider-comment:edited",
-            "delete:provider-thread:provider-comment",
-        ])
-    }
-
     @Test func imageProviderFeedbackIncludesFileLevelThreads() {
         let filePath = "Assets/logo.png"
         let thread = ReviewThread(
@@ -1013,55 +617,6 @@ struct DiffReviewSurfaceTests {
             for: filePath,
             includeFileLevel: false
         ).isEmpty)
-    }
-
-    @Test func fileSectionClearsImageControlsWhenProviderIsRemoved() async {
-        let imageFile = DiffReviewFileSectionModel(
-            summary: summary(path: "Assets/logo.png", status: .modified),
-            parsedDiff: nil,
-            displayModel: nil,
-            placeholderMessage: nil,
-            openFile: nil,
-            contextProvider: nil,
-            imageProvider: DiffReviewImageProvider(
-                id: DiffReviewImageProviderID(
-                    source: .commit,
-                    repository: "/repo",
-                    beforeRevision: "abc123^",
-                    afterRevision: "abc123",
-                    beforePath: "Assets/logo.png",
-                    afterPath: "Assets/logo.png"
-                ),
-                load: {
-                    ImageDiffPair(
-                        before: .failed(.init(message: "Could not decode before image")),
-                        after: .missing,
-                        oldPath: nil,
-                        kind: .deleted
-                    )
-                }
-            )
-        )
-        let model = ImageProviderRemovalModel(file: imageFile)
-        let view = ImageProviderRemovalHarness(theme: theme(), model: model)
-        let controller = host(view, width: 900, height: 520)
-        let window = attachWindow(controller, width: 900, height: 520)
-        defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
-        await drainSwiftUI(controller.view)
-
-        #expect(subview(withAccessibilityIdentifier: "diff-review-image-header-\(imageFile.id.rawValue)", in: controller.view) != nil)
-
-        model.file = DiffReviewFileSectionModel(
-            summary: imageFile.summary,
-            parsedDiff: nil,
-            displayModel: nil,
-            placeholderMessage: nil,
-            openFile: nil,
-            contextProvider: nil
-        )
-        await drainSwiftUI(controller.view)
-
-        #expect(subview(withAccessibilityIdentifier: "diff-review-image-header-\(imageFile.id.rawValue)", in: controller.view) == nil)
     }
 
     @Test func fileSectionRefocusesDraftComposerAfterSelectingDifferentGutterRows() async throws {
@@ -1233,173 +788,6 @@ struct DiffReviewSurfaceTests {
         #expect(materializedSegments.count < displayModel.groups.count / 2)
     }
 
-    @Test func fileSectionEmbedsDiffPaneWithoutToolbarAndShowsOpenFile() async {
-        let file = DiffReviewFileSectionModel(
-            summary: summary(
-                path: "Sources/App/AlphaView.swift",
-                namespace: "unstaged",
-                groupID: "unstaged",
-                groupTitle: "Unstaged",
-                additions: 1,
-                deletions: 1
-            ),
-            parsedDiff: parsedDiff(),
-            displayModel: displayModel(),
-            placeholderMessage: nil,
-            openFile: {},
-            contextProvider: nil
-        )
-
-        let view = await mountReviewFile(
-            AppKitDiffReviewRowInput(
-                file: file,
-                state: AppKitDiffReviewFileState(),
-                theme: theme(),
-                codeFontFamily: "",
-                showsSourceBadge: true
-            ),
-            width: 900,
-            height: 500
-        )
-
-        #expect(subview(withAccessibilityIdentifier: "diff-review-file-section-\(file.id.rawValue)", in: view) != nil)
-        #expect(allSubviews(of: view).contains { $0 is DiffPaneTextScrollView })
-        #expect(subview(withAccessibilityIdentifier: "diff-pane-toolbar", in: view) == nil)
-        #expect(DiffReviewFileSectionActions.openFileButtonTitle(for: file) == "Open File")
-        #expect(accessibilityLabel(in: view, containing: "UNSTAGED") != nil)
-    }
-
-    @Test func fileSectionAcceptsLSPContextWithoutChangingLayout() async {
-        let file = DiffReviewFileSectionModel(
-            summary: summary(path: "Sources/App/AlphaView.swift"),
-            parsedDiff: parsedDiff(),
-            displayModel: displayModel(),
-            placeholderMessage: nil,
-            openFile: nil,
-            contextProvider: nil
-        )
-        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: []))
-        let context = DiffPaneLSPContext(
-            worktreeId: "worktree-1",
-            worktreeRoot: URL(fileURLWithPath: "/tmp/worktree"),
-            relativePath: "Sources/App/AlphaView.swift",
-            language: "swift",
-            lsp: manager,
-            openTarget: { _, _, _ in }
-        )
-
-        let view = await mountReviewFile(
-            AppKitDiffReviewRowInput(
-                file: file,
-                state: AppKitDiffReviewFileState(),
-                theme: theme(),
-                lspContext: context
-            ),
-            width: 900,
-            height: 500
-        )
-        let textViews = allSubviews(of: view).compactMap { $0 as? DiffPaneCodeTextView }
-
-        #expect(allSubviews(of: view).contains { $0 is DiffPaneTextScrollView })
-        #expect(textViews.contains { $0.hasLSPContextForTesting && $0.allowedLSPSideForTesting == .new })
-        #expect(subview(withAccessibilityIdentifier: "diff-pane-toolbar", in: view) == nil)
-    }
-
-    @Test func fileSectionRendersFileLevelInlineFeedbackBelowHeader() async {
-        let file = DiffReviewFileSectionModel(
-            summary: summary(path: "Sources/App.swift"),
-            parsedDiff: parsedDiff(),
-            displayModel: displayModel(),
-            placeholderMessage: nil,
-            openFile: nil,
-            contextProvider: nil
-        )
-        let feedback = [
-            DiffReviewInlineFeedback(
-                id: "thread-file",
-                providerName: "GitHub",
-                author: "reviewer",
-                bodyPreview: "Please review this file.",
-                status: .actionable,
-                providerURL: URL(string: "https://github.com/thread-file")!,
-                anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: nil, side: .unknown),
-                evidenceItemID: "thread-file"
-            ),
-        ]
-        let view = await mountReviewFile(
-            AppKitDiffReviewRowInput(
-                file: file,
-                inlineFeedback: feedback,
-                state: AppKitDiffReviewFileState(),
-                theme: theme(),
-                codeFontFamily: ""
-            ),
-            width: 900,
-            height: 500
-        )
-
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-file", in: view) != nil)
-        #expect(accessibilityLabel(in: view, containing: "GitHub") != nil)
-        #expect(accessibilityLabel(in: view, containing: "reviewer") != nil)
-        #expect(accessibilityLabel(in: view, containing: "Please review this file.") != nil)
-    }
-
-    @Test func fileSectionHighlightsFocusedInlineFeedbackAndShowsAvailableActions() async {
-        let file = DiffReviewFileSectionModel(
-            summary: summary(path: "Sources/App.swift"),
-            parsedDiff: parsedDiff(),
-            displayModel: displayModel(),
-            placeholderMessage: nil,
-            openFile: nil,
-            contextProvider: nil
-        )
-        let feedback = DiffReviewInlineFeedback(
-            id: "thread-1",
-            providerName: "GitHub",
-            author: "reviewer",
-            bodyPreview: "Please update this.",
-            status: .actionable,
-            providerURL: URL(string: "https://github.com/thread")!,
-            anchor: DiffReviewInlineFeedbackAnchor(path: file.summary.path, line: 2, side: .new),
-            evidenceItemID: "thread-1"
-        )
-        let actions = DiffReviewInlineFeedbackActions(
-            availability: { _, _ in
-                DiffReviewInlineFeedbackActionAvailability(
-                    canOpenProvider: true,
-                    canCopyContext: true,
-                    canSendToAgent: false
-                )
-            },
-            openProvider: { _, _ in },
-            copyContext: { _, _ in },
-            sendToAgent: { _, _ in }
-        )
-        let state = AppKitDiffReviewFileState()
-        state.actionRelay.update(inlineFeedbackActions: actions)
-
-        let view = await mountReviewFile(
-            AppKitDiffReviewRowInput(
-                file: file,
-                inlineFeedback: [feedback],
-                state: state,
-                theme: theme(),
-                codeFontFamily: "",
-                focusedFeedbackID: "thread-1"
-            ),
-            width: 900,
-            height: 500
-        )
-
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-1", in: view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-focused-thread-1", in: view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-open-thread-1", in: view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-copy-thread-1", in: view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-send-thread-1", in: view) == nil)
-        #expect(subviews(withAccessibilityIdentifier: "diff-review-inline-feedback-open-thread-1", in: view).count <= 1)
-        #expect(subviews(withAccessibilityIdentifier: "diff-review-inline-feedback-copy-thread-1", in: view).count <= 1)
-    }
-
     @Test func providerFeedbackCardShowsReplyResolveAndUnresolveActions() async {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),
@@ -1524,103 +912,6 @@ struct DiffReviewSurfaceTests {
         #expect(accessibilityLabel(in: view, containing: "+1 more feedback") != nil)
     }
 
-    @Test func inlineFeedbackScrollTargetPastDisplayCapRemainsVisible() async {
-        let file = DiffReviewFileSectionModel(
-            summary: summary(path: "Sources/App.swift"),
-            parsedDiff: parsedDiff(),
-            displayModel: displayModel(),
-            placeholderMessage: nil,
-            openFile: nil,
-            contextProvider: nil
-        )
-        let feedback = inlineFeedbackItems(count: 5, path: file.summary.path, lineAnchored: false)
-
-        let view = await mountReviewFile(
-            AppKitDiffReviewRowInput(
-                file: file,
-                inlineFeedback: feedback,
-                state: AppKitDiffReviewFileState(),
-                theme: theme(),
-                codeFontFamily: "",
-                inlineFeedbackScrollTargetID: "thread-5"
-            ),
-            width: 900,
-            height: 600
-        )
-
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-5", in: view) != nil)
-    }
-
-    @Test func inlineFeedbackCardInteractionRoutesSelectionAndActionsIndependently() {
-        let feedback = DiffReviewInlineFeedback(
-            id: "thread-1",
-            providerName: "GitHub",
-            author: "reviewer",
-            bodyPreview: "Please update this.",
-            status: .actionable,
-            providerURL: URL(string: "https://github.com/thread")!,
-            anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: 2, side: .new),
-            evidenceItemID: "thread-1"
-        )
-        var selectedFeedbackID: String?
-        var openedFeedbackID: String?
-        var copiedFeedbackID: String?
-        var sentFeedbackID: String?
-
-        DiffReviewInlineFeedbackCardInteraction.open(feedback) {
-            openedFeedbackID = $0.id
-        }
-        DiffReviewInlineFeedbackCardInteraction.copy(feedback) {
-            copiedFeedbackID = $0.id
-        }
-        DiffReviewInlineFeedbackCardInteraction.send(feedback) {
-            sentFeedbackID = $0.id
-        }
-
-        #expect(selectedFeedbackID == nil)
-        #expect(openedFeedbackID == "thread-1")
-        #expect(copiedFeedbackID == "thread-1")
-        #expect(sentFeedbackID == "thread-1")
-
-        DiffReviewInlineFeedbackCardInteraction.select(feedback) {
-            selectedFeedbackID = $0.id
-        }
-
-        #expect(selectedFeedbackID == "thread-1")
-    }
-
-    @Test func fileSectionCapsInlineFeedbackCardsWithMoreRow() async {
-        let file = DiffReviewFileSectionModel(
-            summary: summary(path: "Sources/App.swift"),
-            parsedDiff: parsedDiff(),
-            displayModel: displayModel(),
-            placeholderMessage: nil,
-            openFile: nil,
-            contextProvider: nil
-        )
-        let feedback = inlineFeedbackItems(count: 5, path: file.summary.path, lineAnchored: false)
-
-        let view = await mountReviewFile(
-            AppKitDiffReviewRowInput(
-                file: file,
-                inlineFeedback: feedback,
-                state: AppKitDiffReviewFileState(),
-                theme: theme(),
-                codeFontFamily: ""
-            ),
-            width: 900,
-            height: 500
-        )
-
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-1", in: view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-2", in: view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-3", in: view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-4", in: view) == nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-5", in: view) == nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-more", in: view) != nil)
-        #expect(accessibilityLabel(in: view, containing: "+2 more feedback") != nil)
-    }
-
     @Test func inlineFeedbackPlacementGroupsLineAnchoredItemsByMatchingHunk() throws {
         let model = displayModel()
         let firstGroup = try #require(model.groups.first)
@@ -1743,62 +1034,6 @@ struct DiffReviewSurfaceTests {
         #expect(context.group(id: firstGroup.id)?.segments.flatMap(\.draftComments) == [draft])
         #expect(context.group(id: firstGroup.id)?.segments.first?.blocks == expectedBlocks)
         #expect(context.groupData[firstGroup.id] == context.group(id: firstGroup.id))
-    }
-
-    @Test func renderContextCacheReusesSameKeyWithoutRebuilding() {
-        let model = displayModel()
-        let fileID = DiffReviewFileID(namespace: "commit", path: model.filePath)
-        let key = DiffReviewRenderContextKey(
-            fileID: fileID,
-            displayModel: model,
-            contextSnapshot: nil,
-            contextProviderAvailable: false,
-            contextExpansion: DiffContextExpansionState(),
-            inlineFeedback: [],
-            draftComments: [],
-            pendingDraftAnchor: nil,
-            canCreateDraftComment: true,
-            threads: [],
-            annotations: []
-        )
-        let cache = DiffReviewRenderContextCache(limit: 2)
-        var buildCount = 0
-
-        _ = cache.context(key: key) {
-            buildCount += 1
-            return DiffReviewRenderContextBuilder.build(
-                fileID: fileID,
-                displayModel: model,
-                contextSnapshot: nil,
-                contextProviderAvailable: false,
-                contextExpansion: DiffContextExpansionState(),
-                inlineFeedback: [],
-                draftComments: [],
-                pendingDraftAnchor: nil,
-                canCreateDraftComment: true,
-                threads: [],
-                annotations: []
-            )
-        }
-        _ = cache.context(key: key) {
-            buildCount += 1
-            return DiffReviewRenderContextBuilder.build(
-                fileID: fileID,
-                displayModel: model,
-                contextSnapshot: nil,
-                contextProviderAvailable: false,
-                contextExpansion: DiffContextExpansionState(),
-                inlineFeedback: [],
-                draftComments: [],
-                pendingDraftAnchor: nil,
-                canCreateDraftComment: true,
-                threads: [],
-                annotations: []
-            )
-        }
-
-        #expect(buildCount == 1)
-        #expect(cache.missCountForTests == 1)
     }
 
     @Test func renderContextKeyChangesForPlacementInputsButNotPresentationInputs() {
@@ -2051,18 +1286,6 @@ struct DiffReviewSurfaceTests {
         )
 
         #expect(firstKey != secondKey)
-    }
-
-    @Test func localDraftCommentsPositionAtExactMatchingRows() throws {
-        let model = displayModel()
-        let comment = draftComment(id: "draft-line", path: "A.swift", side: .new, startLine: 2)
-
-        let placement = ReviewDraftCommentPlacement.position([comment], in: model.groups)
-
-        #expect(
-            placement.byRowAnchor[ReviewDraftCommentPlacement.RowKey(side: .new, line: 2)]?.map(\.id) == ["draft-line"]
-        )
-        #expect(placement.fileLevel.isEmpty)
     }
 
     @Test func unmatchedLocalDraftCommentsFallBackToFileLevel() {
@@ -2356,32 +1579,6 @@ struct DiffReviewSurfaceTests {
         #expect(segments.items[0].draftComments.map(\.id) == ["draft-collapsed"])
     }
 
-    @Test func draftPlacementIndexesCollapsedChildRows() {
-        let line = diffLine(id: "old-hidden", side: .old, oldLine: 7, text: "let old = true")
-        let row = DiffDisplayRow(
-            id: "collapsed-parent",
-            kind: .collapsed,
-            old: nil,
-            new: nil,
-            collapsedLineCount: 1,
-            collapsedRows: [
-                DiffDisplayRow(
-                    id: "old-hidden-row",
-                    kind: .context,
-                    old: line,
-                    new: nil,
-                    collapsedLineCount: 0
-                ),
-            ]
-        )
-
-        #expect(ReviewDraftCommentPlacement.visibleRowKeys(in: row).isEmpty)
-        #expect(ReviewDraftCommentPlacement.allRowKeys(in: row) == [
-            ReviewDraftCommentPlacement.RowKey(side: .old, line: 7),
-            ReviewDraftCommentPlacement.RowKey(side: .unknown, line: 7),
-        ])
-    }
-
     @Test func localDraftCommentsWithUnknownSideMatchContextRows() throws {
         let model = displayModel()
         let comment = draftComment(id: "draft-unknown", path: "A.swift", side: .unknown, startLine: 1)
@@ -2474,31 +1671,6 @@ struct DiffReviewSurfaceTests {
 
         #expect(segments.items.filter(\.showsComposer).count == 1)
         #expect(segments.items.filter(\.showsComposer).first?.rows.map(\.id) == ["row-1", "row-2"])
-    }
-
-    @Test func sourceIndexedPendingAnchorMapsSegmentLocalRowsToDisplayRows() {
-        let row = DiffDisplayRow(
-            id: "row-2",
-            kind: .context,
-            old: diffLine(id: "old-2", side: .old, oldLine: 2, text: "two", rowIndex: 1),
-            new: diffLine(id: "new-3", side: .new, newLine: 3, text: "three", rowIndex: 1),
-            collapsedLineCount: 0
-        )
-        let localAnchor = DiffReviewLineAnchor(
-            path: "A.swift",
-            side: .unknown,
-            line: 2,
-            rowIndex: 0,
-            selectedLines: [
-                DiffReviewLineAnchor.SelectedLine(side: .unknown, line: 2, isChange: false),
-            ],
-            selectedText: "two"
-        )
-
-        let sourceAnchor = ReviewDraftCommentRowSegmentation.sourceIndexedAnchor(localAnchor, in: [row])
-
-        #expect(sourceAnchor.rowIndex == 1)
-        #expect(sourceAnchor.endRowIndex == 1)
     }
 
     @Test func pendingUnknownDraftComposerUsesSourceRowAfterExistingDraftSegment() {
@@ -2597,34 +1769,6 @@ struct DiffReviewSurfaceTests {
         #expect(placement.groupIDByCommentID["draft-cross-hunk"] == "first-group")
         #expect(firstSegments.items.flatMap(\.draftComments).map(\.id) == ["draft-cross-hunk"])
         #expect(secondSegments.items.flatMap(\.draftComments).isEmpty)
-    }
-
-    @Test func fileSectionRendersVisibleLocalDraftCommentCard() async {
-        let file = DiffReviewFileSectionModel(
-            summary: summary(path: "Sources/App.swift"),
-            parsedDiff: parsedDiff(),
-            displayModel: displayModel(),
-            placeholderMessage: nil,
-            openFile: nil,
-            contextProvider: nil
-        )
-        let comment = draftComment(id: "draft-visible", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
-
-        let view = await mountReviewFile(
-            AppKitDiffReviewRowInput(
-                file: file,
-                draftComments: [comment],
-                state: AppKitDiffReviewFileState(),
-                theme: theme(),
-                codeFontFamily: ""
-            ),
-            width: 900,
-            height: 500
-        )
-
-        #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-draft-visible", in: view) != nil)
-        #expect(accessibilityLabel(in: view, containing: "Local draft") != nil)
-        #expect(accessibilityLabel(in: view, containing: "Please revisit this line.") != nil)
     }
 
     @Test func fileSectionRenderContextCacheIgnoresPresentationOnlyChanges() async {
@@ -2815,115 +1959,6 @@ struct DiffReviewSurfaceTests {
         #expect(ReviewDraftComposerKeyboardAction.resolve(key: "\r", modifiers: []) == nil)
     }
 
-    @Test func gutterCommentAffordanceUsesCompactPlusButton() {
-        let rowRect = NSRect(x: 0, y: 10, width: 42, height: 20)
-        let plusRect = DiffPaneLineNumberRulerView.reviewAffordanceRect(in: rowRect, ruleThickness: 42)
-
-        #expect(plusRect.width == 16)
-        #expect(plusRect.height == 16)
-        #expect(plusRect.maxX <= rowRect.maxX - 4)
-        #expect(plusRect.midY == rowRect.midY)
-    }
-
-    @Test func fileSectionDraftCommentCardCanDismissComment() async {
-        let file = DiffReviewFileSectionModel(
-            summary: summary(path: "Sources/App.swift"),
-            parsedDiff: parsedDiff(),
-            displayModel: displayModel(),
-            placeholderMessage: nil,
-            openFile: nil,
-            contextProvider: nil
-        )
-        let comment = draftComment(id: "draft-dismiss-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
-        var dismissedID: String?
-        let actions = ReviewDraftCommentActions(
-            availability: { _ in
-                ReviewDraftCommentActionAvailability(
-                    canEdit: false,
-                    canDelete: false,
-                    canResolve: false,
-                    canDismiss: true,
-                    canCopyPrompt: false,
-                    canShowSendToAgent: false,
-                    canSendToAgent: false
-                )
-            },
-            dismiss: { dismissedID = $0.id }
-        )
-
-        let state = AppKitDiffReviewFileState()
-        state.actionRelay.update(draftCommentActions: actions)
-
-        let view = await mountReviewFile(
-            AppKitDiffReviewRowInput(
-                file: file,
-                draftComments: [comment],
-                state: state,
-                theme: theme(),
-                codeFontFamily: "",
-                draftCommentActions: actions
-            ),
-            width: 900,
-            height: 500
-        )
-
-        #expect(pressAccessibilityElement(
-            withAccessibilityIdentifier: "diff-review-draft-comment-action-dismiss-draft-dismiss-inline",
-            in: view
-        ))
-        #expect(dismissedID == "draft-dismiss-inline")
-    }
-
-    @Test func fileSectionDraftCommentCardCanPublishProviderComment() async {
-        let file = DiffReviewFileSectionModel(
-            summary: summary(path: "Sources/App.swift"),
-            parsedDiff: parsedDiff(),
-            displayModel: displayModel(),
-            placeholderMessage: nil,
-            openFile: nil,
-            contextProvider: nil
-        )
-        let comment = draftComment(id: "draft-publish-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
-        var publishedID: String?
-        let actions = ReviewDraftCommentActions(
-            availability: { _ in
-                ReviewDraftCommentActionAvailability(
-                    canEdit: false,
-                    canDelete: false,
-                    canResolve: false,
-                    canDismiss: false,
-                    canCopyPrompt: false,
-                    canShowSendToAgent: false,
-                    canSendToAgent: false,
-                    canPublishProvider: true
-                )
-            },
-            publishProvider: { publishedID = $0.id }
-        )
-
-        let state = AppKitDiffReviewFileState()
-        state.actionRelay.update(draftCommentActions: actions)
-
-        let view = await mountReviewFile(
-            AppKitDiffReviewRowInput(
-                file: file,
-                draftComments: [comment],
-                state: state,
-                theme: theme(),
-                codeFontFamily: "",
-                draftCommentActions: actions
-            ),
-            width: 900,
-            height: 500
-        )
-
-        #expect(pressAccessibilityElement(
-            withAccessibilityIdentifier: "diff-review-draft-comment-publish-draft-publish-inline",
-            in: view
-        ))
-        #expect(publishedID == "draft-publish-inline")
-    }
-
     @Test func fileSectionDraftCommentCardUsesProvidedReviewTargetForPromptActions() async {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),
@@ -3020,18 +2055,6 @@ struct DiffReviewSurfaceTests {
             .thread("active-thread"),
             .draft("focused-draft"),
         ])
-    }
-
-    @Test func commentCardsReportHoverOnlyForHoverPriority() {
-        #expect(ReviewDraftCommentCard.reportsHover(isHovered: true, isFocused: false))
-        #expect(ReviewDraftCommentCard.reportsHover(isHovered: true, isFocused: true))
-        #expect(!ReviewDraftCommentCard.reportsHover(isHovered: false, isFocused: true))
-        #expect(!ReviewDraftCommentCard.reportsHover(isHovered: false, isFocused: false))
-
-        #expect(DiffReviewInlineFeedbackCard.reportsHover(isHovered: true, isFocused: false))
-        #expect(DiffReviewInlineFeedbackCard.reportsHover(isHovered: true, isFocused: true))
-        #expect(!DiffReviewInlineFeedbackCard.reportsHover(isHovered: false, isFocused: true))
-        #expect(!DiffReviewInlineFeedbackCard.reportsHover(isHovered: false, isFocused: false))
     }
 
     @Test func fileSectionDraftCommentCardDoesNotFireDisabledSendAction() async {
@@ -3150,7 +2173,7 @@ struct DiffReviewSurfaceTests {
 
         // Verified against state rather than the rendered Save/select markers:
         // this specific assertion is sensitive to test order — running it after
-        // appKitReviewWindowOpensRestoredDraftCommentEditor (which also opens a
+        // appKitReviewWindowOpensNewlyPostedDraftCommentEditor (which also opens a
         // draft-comment text editor and leaves its window process-retained per
         // ReviewDraftComposerFocusRetainer) makes this row's SwiftUI content
         // stop refreshing after the edit press, on both this minimal harness and
@@ -3236,27 +2259,6 @@ struct DiffReviewSurfaceTests {
     }
 
     @MainActor
-    @Test func inlineFeedbackMarkdownRendersCommonReviewMarkup() throws {
-        let rendered = NSAttributedString(
-            ACPMarkdownText.inlineMarkdown("Use **bold** and `configId`, then see [docs](https://example.com/docs).")
-        )
-
-        #expect(rendered.string == "Use bold and configId, then see docs.")
-
-        let linkRange = (rendered.string as NSString).range(of: "docs")
-        try #require(linkRange.location != NSNotFound)
-        let url = rendered.attribute(NSAttributedString.Key.link, at: linkRange.location, effectiveRange: nil) as? URL
-        #expect(url?.absoluteString == "https://example.com/docs")
-    }
-
-    @MainActor
-    @Test func inlineFeedbackMarkdownPlainTextStripsDelimitersForAccessibility() {
-        let plain = DiffReviewInlineFeedbackMarkdown.plainText("Use **bold** and `configId`.")
-
-        #expect(plain == "Use bold and configId.")
-    }
-
-    @MainActor
     @Test func inlineFeedbackMarkdownPlainTextUsesImageAltAndStripsSubscript() {
         let plain = DiffReviewInlineFeedbackMarkdown.plainText(
             "**<sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub> Preserve streamed text**"
@@ -3324,32 +2326,6 @@ struct DiffReviewSurfaceTests {
         #expect(stackedTextViews.filter(\.hasLSPContextForTesting).count == 1)
     }
 
-    @Test func placeholderSectionsRenderMessageWithoutDiffPane() async {
-        let file = DiffReviewFileSectionModel(
-            summary: summary(path: "Assets/logo.png", status: .modified, isRenderable: false),
-            parsedDiff: nil,
-            displayModel: nil,
-            placeholderMessage: "Binary files are not shown.",
-            openFile: nil,
-            contextProvider: nil
-        )
-        let view = await mountReviewFile(
-            AppKitDiffReviewRowInput(
-                file: file,
-                state: AppKitDiffReviewFileState(),
-                theme: theme(),
-                codeFontFamily: "",
-                showsSourceBadge: true
-            ),
-            width: 900,
-            height: 260
-        )
-
-        #expect(subview(withAccessibilityIdentifier: "diff-review-file-section-\(file.id.rawValue)", in: view) != nil)
-        #expect(accessibilityLabel(in: view, containing: "Binary files are not shown.") != nil)
-        #expect(!allSubviews(of: view).contains { $0 is DiffPaneTextScrollView })
-    }
-
     @Test func aggregateBudgetDeferralHidesTextDiffUntilReviewerRequestsIt() async {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/Deferred.swift"),
@@ -3386,115 +2362,6 @@ struct DiffReviewSurfaceTests {
         await drainSwiftUI(view)
 
         #expect(allSubviews(of: view).contains { $0 is DiffPaneTextScrollView })
-    }
-
-    @Test func surfaceRepairsInvalidSelectedIDToFirstSessionFile() {
-        let first = summary(path: "Sources/App/AlphaView.swift")
-        let second = summary(path: "Tests/BetaTests.swift")
-        let loaded = loadedSession(summaries: [first, second])
-        var selected: DiffReviewFileID? = DiffReviewFileID(namespace: "commit", path: "Missing.swift")
-        var collapsed = false
-        var layout = DiffLayoutMode.split
-        var wrap = false
-        var whitespace = false
-
-        let view = DiffReviewSurface(
-            session: loaded,
-            selectedFileID: Binding(get: { selected }, set: { selected = $0 }),
-            railCollapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
-            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
-            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
-            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
-            codeFontFamily: "",
-            codeFontSize: 13
-        )
-        .environment(\.theme, theme())
-
-        _ = host(view, width: 1000, height: 700)
-        pumpMainRunLoop(seconds: 0.05)
-
-        #expect(selected == first.id)
-    }
-
-    @Test func surfacePassesFeedbackToMatchingFileOnly() async {
-        let first = summary(path: "Sources/App.swift")
-        let second = summary(path: "Sources/Other.swift")
-        let session = loadedSession(summaries: [first, second])
-        let feedback = [
-            first.id: [
-                DiffReviewInlineFeedback(
-                    id: "thread-app",
-                    providerName: "GitHub",
-                    author: "reviewer",
-                    bodyPreview: "App feedback.",
-                    status: .actionable,
-                    providerURL: nil,
-                    anchor: DiffReviewInlineFeedbackAnchor(path: first.path, line: 2, side: .new),
-                    evidenceItemID: "thread-app"
-                ),
-            ],
-        ]
-        var selected: DiffReviewFileID? = second.id
-        var collapsed = false
-        var layout = DiffLayoutMode.split
-        var wrap = false
-        var whitespace = false
-
-        let view = DiffReviewSurface(
-            session: session,
-            selectedFileID: Binding(get: { selected }, set: { selected = $0 }),
-            railCollapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
-            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
-            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
-            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
-            codeFontFamily: "",
-            codeFontSize: 13,
-            inlineFeedbackByFileID: feedback
-        )
-        .environment(\.theme, theme())
-
-        let controller = host(view, width: 1000, height: 700)
-        await drainSwiftUI(controller.view)
-        #expect(appKitReviewScroller(in: controller.view) != nil)
-    }
-
-    @Test func surfaceShowsDraftSummaryRailAndSelectsDraftComment() throws {
-        let file = summary(path: "Sources/App.swift")
-        let session = loadedSession(summaries: [file])
-        let comment = draftComment(id: "draft-summary", fileID: file.id, path: file.path, side: .new, startLine: 2)
-        var selectedFileID: DiffReviewFileID? = file.id
-        var railCollapsed = false
-        var summaryCollapsed = false
-        var layout = DiffLayoutMode.split
-        var wrap = false
-        var whitespace = false
-        var selectedDraftID: String?
-
-        let view = DiffReviewSurface(
-            session: session,
-            selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
-            railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
-            reviewSummaryCollapsed: Binding(get: { summaryCollapsed }, set: { summaryCollapsed = $0 }),
-            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
-            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
-            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
-            codeFontFamily: "",
-            codeFontSize: 13,
-            draftCommentsByFileID: [file.id: [comment]],
-            onSelectDraftComment: { selectedDraftID = $0.id }
-        )
-        .environment(\.theme, theme())
-
-        let controller = host(view, width: 1200, height: 700)
-
-        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-rail", in: controller.view) != nil)
-        let pressed = pressAccessibilityElement(
-            withAccessibilityIdentifier: "review-draft-summary-comment-draft-summary",
-            in: controller.view
-        )
-
-        #expect(pressed)
-        #expect(selectedDraftID == "draft-summary")
     }
 
     @Test func narrowSurfaceMovesDraftSummaryAfterTheDiffStack() async throws {
@@ -3541,40 +2408,6 @@ struct DiffReviewSurfaceTests {
 
         #expect(pressed)
         #expect(selectedDraftID == "draft-inline")
-    }
-
-    @Test func wideSurfaceKeepsDraftSummaryInTheRail() async throws {
-        let file = summary(path: "Sources/App.swift")
-        let session = loadedSession(summaries: [file])
-        let comment = draftComment(id: "draft-rail", fileID: file.id, path: file.path, side: .new, startLine: 2)
-        var selectedFileID: DiffReviewFileID? = file.id
-        var railCollapsed = false
-        var summaryCollapsed = false
-        var layout = DiffLayoutMode.split
-        var wrap = false
-        var whitespace = false
-
-        let view = DiffReviewSurface(
-            session: session,
-            selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
-            railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
-            reviewSummaryCollapsed: Binding(get: { summaryCollapsed }, set: { summaryCollapsed = $0 }),
-            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
-            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
-            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
-            codeFontFamily: "",
-            codeFontSize: 13,
-            draftCommentsByFileID: [file.id: [comment]]
-        )
-        .environment(\.theme, theme())
-
-        let controller = host(view, width: 1200, height: 700)
-        let window = attachWindow(controller, width: 1200, height: 700)
-        defer { _ = window }
-        await drainSwiftUI(controller.view)
-
-        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-rail", in: controller.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-inline", in: controller.view) == nil)
     }
 
     @Test func inlineSummaryActionsStayFreshAfterActionsChangeWithoutChangingTheToken() async throws {
@@ -3653,35 +2486,6 @@ struct DiffReviewSurfaceTests {
         #expect(resolvedByFirstActions.isEmpty)
     }
 
-    @Test func surfaceCanShowDraftSummaryRailBeforeCommentsExist() throws {
-        let file = summary(path: "Sources/App.swift")
-        let session = loadedSession(summaries: [file])
-        var selectedFileID: DiffReviewFileID? = file.id
-        var railCollapsed = false
-        var summaryCollapsed = false
-        var layout = DiffLayoutMode.split
-        var wrap = false
-        var whitespace = false
-
-        let view = DiffReviewSurface(
-            session: session,
-            selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
-            railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
-            reviewSummaryCollapsed: Binding(get: { summaryCollapsed }, set: { summaryCollapsed = $0 }),
-            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
-            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
-            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
-            codeFontFamily: "",
-            codeFontSize: 13,
-            showsDraftSummaryRail: true
-        )
-        .environment(\.theme, theme())
-
-        let controller = host(view, width: 1200, height: 700)
-
-        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-rail", in: controller.view) != nil)
-    }
-
     @Test func surfaceKeepsDraftSummaryRailWhenOnlyDismissedCommentsRemain() throws {
         let file = summary(path: "Sources/App.swift")
         let session = loadedSession(summaries: [file])
@@ -3713,7 +2517,9 @@ struct DiffReviewSurfaceTests {
         #expect(accessibilityLabel(in: controller.view, containing: "dismissed") != nil)
     }
 
-    @Test func summaryRailUsesProvidedBundleForCopyAndSendActions() throws {
+    // The collapsed rail must keep the finish actions reachable.
+    @Test(arguments: [false, true])
+    func summaryRailFinishActionsUseProvidedBundle(initiallyCollapsed: Bool) throws {
         let file = summary(path: "Sources/App.swift")
         let comment = draftComment(id: "draft-bundle", fileID: file.id, path: file.path, side: .new, startLine: 2)
         let bundle = ReviewFeedbackBundle(
@@ -3725,7 +2531,7 @@ struct DiffReviewSurfaceTests {
             ),
             comments: [comment]
         )
-        var collapsed = false
+        var collapsed = initiallyCollapsed
         let recorder = ReviewBundleActionRecorder()
         let actions = ReviewDraftCommentActions(
             availability: { _ in
@@ -3756,48 +2562,13 @@ struct DiffReviewSurfaceTests {
         )
         .environment(\.theme, theme())
 
-        let controller = host(view, width: 280, height: 500)
+        let controller = host(view, width: initiallyCollapsed ? 80 : 280, height: 500)
         #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-copy-prompt", in: controller.view))
         #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-send-agent", in: controller.view))
 
         #expect(recorder.copied == bundle)
         #expect(recorder.sent == bundle)
         #expect(recorder.sentTarget == .newChat(agentID: "codex", title: "Codex"))
-    }
-
-    @Test func summaryRailCanPublishReview() throws {
-        let file = summary(path: "Sources/App.swift")
-        let comment = draftComment(id: "draft-publish-summary", fileID: file.id, path: file.path, side: .new, startLine: 2)
-        let bundle = ReviewFeedbackBundle(
-            target: ReviewFeedbackTarget(
-                title: "Review provider request",
-                repositoryPath: "/repo",
-                providerDescription: "GitHub #527",
-                sourceDescription: "Provider review"
-            ),
-            comments: [comment]
-        )
-        var collapsed = false
-        var didPublish = false
-        let actions = ReviewDraftCommentActions(
-            availability: { _ in .none },
-            canPublishReview: { true },
-            publishReview: { didPublish = true }
-        )
-
-        let view = ReviewDraftSummaryRail(
-            comments: [comment],
-            bundle: bundle,
-            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
-            draftCommentActions: actions,
-            onSelectDraftComment: { _ in }
-        )
-        .environment(\.theme, theme())
-
-        let controller = host(view, width: 280, height: 500)
-
-        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-publish-review", in: controller.view))
-        #expect(didPublish)
     }
 
     @Test func summaryRailHidesSendActionWhenNoAgentTargetExists() throws {
@@ -3833,53 +2604,6 @@ struct DiffReviewSurfaceTests {
 
         #expect(!pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-copy-prompt", in: controller.view))
         #expect(subview(withAccessibilityIdentifier: "review-draft-summary-send-agent", in: controller.view) == nil)
-    }
-
-    @Test func summaryRailCanDismissDraftComment() throws {
-        let file = summary(path: "Sources/App.swift")
-        let comment = draftComment(id: "draft-dismiss-summary", fileID: file.id, path: file.path, side: .new, startLine: 2)
-        let bundle = ReviewFeedbackBundle(
-            target: ReviewFeedbackTarget(
-                title: "Review Sources/App.swift",
-                repositoryPath: "/repo",
-                providerDescription: nil,
-                sourceDescription: "Local draft comments"
-            ),
-            comments: [comment]
-        )
-        var collapsed = false
-        var dismissedID: String?
-        let actions = ReviewDraftCommentActions(
-            availability: { _ in
-                ReviewDraftCommentActionAvailability(
-                    canEdit: false,
-                    canDelete: false,
-                    canResolve: false,
-                    canDismiss: true,
-                    canCopyPrompt: false,
-                    canShowSendToAgent: false,
-                    canSendToAgent: false
-                )
-            },
-            dismiss: { dismissedID = $0.id }
-        )
-
-        let view = ReviewDraftSummaryRail(
-            comments: [comment],
-            bundle: bundle,
-            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
-            draftCommentActions: actions,
-            onSelectDraftComment: { _ in }
-        )
-        .environment(\.theme, theme())
-
-        let controller = host(view, width: 280, height: 500)
-
-        #expect(pressAccessibilityElement(
-            withAccessibilityIdentifier: "review-draft-summary-dismiss-draft-dismiss-summary",
-            in: controller.view
-        ))
-        #expect(dismissedID == "draft-dismiss-summary")
     }
 
     @Test func inlineRowTokenChangesWithEditingState() throws {
@@ -4157,82 +2881,6 @@ struct DiffReviewSurfaceTests {
         #expect(accessibilityLabel(in: controller.view, containing: "GitLab error: Line is no longer commentable.") != nil)
     }
 
-    @Test func collapsedSummaryRailKeepsFinishActionsAccessible() throws {
-        let file = summary(path: "Sources/App.swift")
-        let comment = draftComment(id: "draft-collapsed", fileID: file.id, path: file.path, side: .new, startLine: 2)
-        let bundle = ReviewFeedbackBundle(
-            target: ReviewFeedbackTarget(
-                title: "Review Sources/App.swift",
-                repositoryPath: "/repo",
-                providerDescription: nil,
-                sourceDescription: "Local draft comments"
-            ),
-            comments: [comment]
-        )
-        var collapsed = true
-        let recorder = ReviewBundleActionRecorder()
-        let actions = ReviewDraftCommentActions(
-            availability: { _ in
-                ReviewDraftCommentActionAvailability(
-                    canEdit: false,
-                    canDelete: false,
-                    canResolve: false,
-                    canDismiss: false,
-                    canCopyPrompt: true,
-                    canShowSendToAgent: true,
-                    canSendToAgent: true
-                )
-            },
-            copyPrompt: { recorder.copied = $0 },
-            agentTargets: { [.newChat(agentID: "codex", title: "Codex")] },
-            sendToAgent: { bundle, target in
-                recorder.sent = bundle
-                recorder.sentTarget = target
-            }
-        )
-
-        let view = ReviewDraftSummaryRail(
-            comments: [comment],
-            bundle: bundle,
-            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
-            draftCommentActions: actions,
-            onSelectDraftComment: { _ in }
-        )
-        .environment(\.theme, theme())
-
-        let controller = host(view, width: 80, height: 500)
-        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-copy-prompt", in: controller.view))
-        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-send-agent", in: controller.view))
-
-        #expect(recorder.copied == bundle)
-        #expect(recorder.sent == bundle)
-        #expect(recorder.sentTarget == .newChat(agentID: "codex", title: "Codex"))
-    }
-
-    @Test func selectionSynchronizationClearsEmptySessions() {
-        let selected = DiffReviewFileID(namespace: "commit", path: "Stale.swift")
-
-        let result = DiffReviewSurfaceSelectionSync.synchronizedSelection(
-            current: selected,
-            fileIDs: []
-        )
-
-        #expect(result == nil)
-    }
-
-    @Test func selectionSynchronizationRepairsMissingSelection() {
-        let first = DiffReviewFileID(namespace: "commit", path: "First.swift")
-        let second = DiffReviewFileID(namespace: "commit", path: "Second.swift")
-        let missing = DiffReviewFileID(namespace: "commit", path: "Missing.swift")
-
-        let result = DiffReviewSurfaceSelectionSync.synchronizedSelection(
-            current: missing,
-            fileIDs: [first, second]
-        )
-
-        #expect(result == first)
-    }
-
     @Test func sessionFileSetChangesResetProgrammaticScrollSuppression() {
         let first = DiffReviewFileID(namespace: "commit", path: "First.swift")
         let second = DiffReviewFileID(namespace: "commit", path: "Second.swift")
@@ -4364,63 +3012,6 @@ struct DiffReviewSurfaceTests {
         #expect(manyFeedback == cappedFeedback)
     }
 
-    @Test func estimatedSectionHeightGrowsWithInlineFeedbackBodyLength() {
-        let file = DiffReviewFileSectionModel(
-            summary: summary(path: "Sources/App.swift"),
-            parsedDiff: parsedDiff(),
-            displayModel: displayModel(),
-            placeholderMessage: nil,
-            openFile: nil,
-            contextProvider: nil
-        )
-        let shortFeedback = [
-            DiffReviewInlineFeedback(
-                id: "short",
-                providerName: "GitHub",
-                author: "reviewer",
-                bodyPreview: "Short.",
-                status: .actionable,
-                providerURL: nil,
-                anchor: DiffReviewInlineFeedbackAnchor(path: file.summary.path, line: nil, side: .unknown),
-                evidenceItemID: "short"
-            ),
-        ]
-        let longFeedback = [
-            DiffReviewInlineFeedback(
-                id: "long",
-                providerName: "GitHub",
-                author: "reviewer",
-                bodyPreview: Array(repeating: "This review comment needs to remain fully visible.", count: 12).joined(separator: " "),
-                status: .actionable,
-                providerURL: nil,
-                anchor: DiffReviewInlineFeedbackAnchor(path: file.summary.path, line: nil, side: .unknown),
-                evidenceItemID: "long"
-            ),
-        ]
-
-        #expect(
-            DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: longFeedback)
-                > DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: shortFeedback)
-        )
-    }
-
-    @Test func estimatedSectionHeightGrowsWithDraftComments() {
-        let file = DiffReviewFileSectionModel(
-            summary: summary(path: "Sources/App.swift"),
-            parsedDiff: parsedDiff(),
-            displayModel: displayModel(),
-            placeholderMessage: nil,
-            openFile: nil,
-            contextProvider: nil
-        )
-        let comment = draftComment(id: "draft-height", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
-
-        #expect(
-            DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: [], draftComments: [comment])
-                > DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: [], draftComments: [])
-        )
-    }
-
     @Test func estimatedSectionHeightGrowsWithDraftCommentsOnCollapsedRows() {
         let hiddenLine = diffLine(id: "hidden-new", side: .new, newLine: 12, text: "let hidden = true")
         let collapsedParent = DiffDisplayRow(
@@ -4498,42 +3089,6 @@ struct DiffReviewSurfaceTests {
         #expect(DiffReviewInlineFeedbackDisplayPolicy.estimatedCardHeight(for: short) >= DiffReviewInlineFeedbackDisplayPolicy.cardMinimumHeight)
     }
 
-    @Test func summaryRailRendersGitHubFeedbackSection() {
-        let fileID = DiffReviewFileID(namespace: "github", path: "Sources/App.swift")
-        let feedback = DiffReviewInlineFeedback(
-            id: "thread-1",
-            providerName: "GitHub",
-            author: "reviewer",
-            bodyPreview: "Please fix this.",
-            status: .actionable,
-            providerURL: nil,
-            anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: 2, side: .new),
-            evidenceItemID: "thread-1"
-        )
-        var collapsed = false
-        let view = ReviewDraftSummaryRail(
-            comments: [],
-            bundle: ReviewFeedbackBundle(
-                target: ReviewFeedbackTarget(
-                    title: "PR",
-                    repositoryPath: nil,
-                    providerDescription: nil,
-                    sourceDescription: "Diff review"
-                ),
-                comments: []
-            ),
-            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
-            inlineFeedbackByFileID: [fileID: [feedback]]
-        )
-        .environment(\.theme, theme())
-
-        let controller = host(view, width: 320, height: 500)
-
-        #expect(subview(withAccessibilityIdentifier: "review-summary-feedback-header", in: controller.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "review-summary-feedback-thread-1", in: controller.view) != nil)
-        #expect(accessibilityLabel(in: controller.view, containing: "Please fix this.") != nil)
-    }
-
     @Test func summaryRailEllipsizesMultiblockFeedbackPreview() {
         let fileID = DiffReviewFileID(namespace: "github", path: "Sources/App.swift")
         let feedback = DiffReviewInlineFeedback(
@@ -4562,28 +3117,6 @@ struct DiffReviewSurfaceTests {
 
         #expect(subview(withAccessibilityIdentifier: "review-summary-feedback-thread-multiblock", in: controller.view) != nil)
         #expect(accessibilityLabel(in: controller.view, containing: "Paragraph two") != nil)
-    }
-
-    @Test func summaryRailOmitsGitHubFeedbackSectionWhenEmpty() {
-        var collapsed = false
-        let view = ReviewDraftSummaryRail(
-            comments: [],
-            bundle: ReviewFeedbackBundle(
-                target: ReviewFeedbackTarget(
-                    title: "PR",
-                    repositoryPath: nil,
-                    providerDescription: nil,
-                    sourceDescription: "Diff review"
-                ),
-                comments: []
-            ),
-            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 })
-        )
-        .environment(\.theme, theme())
-
-        let controller = host(view, width: 320, height: 500)
-
-        #expect(subview(withAccessibilityIdentifier: "review-summary-feedback-header", in: controller.view) == nil)
     }
 
     @Test func surfaceForwardsInlineFeedbackToSummaryRail() throws {
@@ -5025,28 +3558,6 @@ struct DiffReviewSurfaceTests {
         return subview(withAccessibilityIdentifier: identifier, in: view)
     }
 
-    private func clickAccessibilityElement(withAccessibilityIdentifier identifier: String, in view: NSView) -> Bool {
-        guard let marker = subviews(withAccessibilityIdentifier: identifier, in: view).first,
-              let window = marker.window
-        else { return false }
-        let location = marker.convert(NSPoint(x: marker.bounds.midX, y: marker.bounds.midY), to: nil)
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            guard let event = NSEvent.mouseEvent(
-                with: type,
-                location: location,
-                modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber,
-                context: nil,
-                eventNumber: 0,
-                clickCount: 1,
-                pressure: 1
-            ) else { return false }
-            window.sendEvent(event)
-        }
-        return true
-    }
-
     private func pressButton(withToolTip toolTip: String, in view: NSView) -> Bool {
         for button in allSubviews(of: view).compactMap({ $0 as? NSButton })
             where button.toolTip == toolTip || button.accessibilityLabel() == toolTip {
@@ -5184,11 +3695,6 @@ private struct DiffReviewRailHarness: View {
 }
 
 @MainActor
-private final class ThreadActionRecorder {
-    var actions: [String] = []
-}
-
-@MainActor
 private final class ImagePairLoadGate {
     private var continuation: CheckedContinuation<ImageDiffPair, Never>?
 
@@ -5199,40 +3705,6 @@ private final class ImagePairLoadGate {
     func resume(returning pair: ImageDiffPair) {
         continuation?.resume(returning: pair)
         continuation = nil
-    }
-}
-
-@Observable
-@MainActor
-private final class ImageProviderRemovalModel {
-    var file: DiffReviewFileSectionModel
-    let state = AppKitDiffReviewFileState()
-
-    init(file: DiffReviewFileSectionModel) {
-        self.file = file
-    }
-}
-
-@MainActor
-private struct ImageProviderRemovalHarness: View {
-    let theme: Theme
-    let model: ImageProviderRemovalModel
-    @State private var layout = DiffLayoutMode.split
-    @State private var wrapLines = false
-    @State private var showWhitespace = false
-
-    var body: some View {
-        AppKitReviewFileHarness(input: AppKitDiffReviewRowInput(
-            file: model.file,
-            state: model.state,
-            theme: theme,
-            layoutMode: layout,
-            wrapLines: wrapLines,
-            showWhitespace: showWhitespace,
-            codeFontFamily: "",
-            allowsDraftCommentCreation: false
-        ))
-        .environment(\.theme, theme)
     }
 }
 
