@@ -216,4 +216,32 @@ struct ACPSessionOrchestrationPolicyTests {
             archived: true
         ) == .closed)
     }
+
+    @Test("completed turn that reported to the parent only notices")
+    func completedReportedNotices() {
+        #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: .completed, lastParentReportAt: 120, turnStartedAt: 100) == .notice)
+    }
+
+    @Test("completed turn without a report wakes the parent")
+    func completedUnreportedWakes() {
+        #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: .completed, lastParentReportAt: nil, turnStartedAt: 100) == .wake)
+        #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: .completed, lastParentReportAt: 99, turnStartedAt: 100) == .wake)
+    }
+
+    @Test("a report at the exact turn start counts as reported")
+    func reportAtTurnStartCounts() {
+        #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: .completed, lastParentReportAt: 100, turnStartedAt: 100) == .notice)
+    }
+
+    @Test("failed turn always wakes, cancelled turn only notices")
+    func failedWakesCancelledNotices() {
+        #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: .failed("boom"), lastParentReportAt: 500, turnStartedAt: 100) == .wake)
+        #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: .cancelled, lastParentReportAt: nil, turnStartedAt: 100) == .notice)
+    }
 }

@@ -120,6 +120,12 @@ final class ACPSessionRunner {
     private let onMessageActivity: (() -> Void)?
     private let onPromptWorkChanged: (() -> Void)?
     private let onSuccessfulTurn: @MainActor (NextPromptCompletedTurn) -> Void
+    /// Fires on the main actor once per `sendNow` prompt whose RPC settled
+    /// while it was still the active prompt. Recovery-context prompts and
+    /// superseded prompts do not fire.
+    private let onTurnCompleted: ((ACPTurnCompletion) -> Void)?
+    private var activePromptStartedAt: Int64?
+    private var activePromptDelegatedSource: ACPDelegatedPromptSource?
     private let onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)?
     private let onSessionTitleUpdated: ((String) -> Void)?
     private let localTitlesEnabled: @MainActor () -> Bool
@@ -284,6 +290,7 @@ final class ACPSessionRunner {
          onMessageActivity: (() -> Void)? = nil,
          onPromptWorkChanged: (() -> Void)? = nil,
          onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
+         onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
          onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
@@ -318,6 +325,7 @@ final class ACPSessionRunner {
         self.onPersist = onPersist
         self.onMessageActivity = onMessageActivity
         self.onPromptWorkChanged = onPromptWorkChanged
+        self.onTurnCompleted = onTurnCompleted
         self.onQueuedPromptDispatchRegistration = onQueuedPromptDispatchRegistration
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.localTitlesEnabled = localTitlesEnabled
@@ -1635,7 +1643,51 @@ final class ACPSessionRunner {
         if let promptID = activePromptID {
             cancelledPromptIDs.insert(promptID)
             activePromptID = nil
+            activePromptStartedAt = nil
+            activePromptDelegatedSource = nil
         }
+    }
+
+    /// Snapshot the finished turn and hand it to `onTurnCompleted`. Must be
+    /// called on the main actor inside the `isActivePrompt` branch so a
+    /// superseded prompt never reports.
+    private func emitTurnCompleted(_ result: ACPTurnCompletion.Result) {
+        guard let startedAt = activePromptStartedAt else { return }
+        // NOTE: this reads the transcript as it stands right now, which can
+        // be ahead of what has actually drained from the incoming-update
+        // coalescing buffer (a final `agentMessageChunk` may still be
+        // pending), so `lastAgentText` can occasionally be stale or missing
+        // for a turn that did produce output. A synchronous
+        // `flushPendingIncomingUpdates()` call here was tried and reverted:
+        // by the time this runs, `activePromptID` has already been cleared,
+        // and forcing the flush at that point deadlocked
+        // `userCancelDoesNotCancelQueuedSuccessorStartedByPendingBoundaryFlush`
+        // (a pre-existing test) — applying a buffered update against a
+        // cleared `activePromptID` interacts badly with the queued-successor
+        // dispatch this same completion is in the middle of. The correct
+        // fix mirrors `NextPromptCompletedTurn`'s pattern: defer building
+        // the completion until `applyPendingCompletedOutputBoundaryIfReady`
+        // confirms the transcript is caught up, rather than reading it
+        // eagerly here. Left as a follow-up; this is a display-only
+        // imprecision (the transcript and the actual delivered result are
+        // still correct), not a wake/notice misclassification.
+        let lastAgentText: String? = session.transcript.messages.reversed().lazy
+            .compactMap { message -> String? in
+                guard case .agent(_, _, let text) = message else { return nil }
+                let tail = ACPDelegatedOutcomeText.tail(text.value, limit: ACPTurnCompletion.lastAgentTextLimit)
+                return tail.isEmpty ? nil : tail
+            }
+            .first
+        let completion = ACPTurnCompletion(
+            sessionId: sessionId,
+            startedAt: startedAt,
+            result: result,
+            delegatedSource: activePromptDelegatedSource,
+            lastAgentText: lastAgentText
+        )
+        activePromptStartedAt = nil
+        activePromptDelegatedSource = nil
+        onTurnCompleted?(completion)
     }
 
     /// Re-upsert the session's persistence row to capture changes to
@@ -2002,6 +2054,19 @@ final class ACPSessionRunner {
                 // cancel await would have moved it on.
                 if activePromptID == promptID {
                     activePromptID = nil
+                    // `sendNow`'s own success/catch handlers only emit
+                    // inside their `isActivePrompt` guard, which this branch
+                    // has just made false for them — so if the RPC settles
+                    // after this point, neither of their emit calls fires.
+                    // This is the mutually-exclusive counterpart: whichever
+                    // of {this block, sendNow's handler} observes
+                    // `activePromptID == promptID` first performs the
+                    // clear-and-emit; the other sees it already cleared and
+                    // no-ops. `activePromptStartedAt` still belongs to this
+                    // promptID by the same invariant `sendNow` relies on
+                    // (nothing overwrites it without first changing
+                    // `activePromptID` away from `promptID`).
+                    emitTurnCompleted(.cancelled)
                 }
             }
             policy.userCancelled()
@@ -2952,6 +3017,8 @@ extension ACPSessionRunner {
                     }
                     return (false, nil)
                 }
+                self.activePromptStartedAt = Int64(Date().timeIntervalSince1970 * 1000)
+                self.activePromptDelegatedSource = delegatedSource
                 // Re-allow streaming boundary crossings now that we are inside
                 // the Task and have confirmed this prompt is still active. The
                 // RPC is sent below, so any agent chunk that follows is genuine
@@ -3078,6 +3145,11 @@ extension ACPSessionRunner {
                     guard self.isConnectionCurrent() else { return }
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
+                    // Read-only here (not `.remove`): `deferCompletedOutputBoundaryUntilUpdatesDrain`'s
+                    // `successfulTurn` closure below also checks `cancelledPromptIDs.contains(promptID)`
+                    // and needs the id still present when it runs. The actual removal happens once,
+                    // after the `isActivePrompt` block, mirroring the pre-existing cleanup point.
+                    let wasCancelled = self.cancelledPromptIDs.contains(promptID)
                     // A cancelled/superseded prompt's response can still
                     // arrive after a successor has started or finished.
                     // Its tokens are real spend, so always fold them into
@@ -3128,6 +3200,7 @@ extension ACPSessionRunner {
                             }
                         }
                         self.activePromptID = nil
+                        self.emitTurnCompleted(wasCancelled ? .cancelled : .completed)
                         self.deferCompletedOutputBoundaryUntilUpdatesDrain(
                             successfulTurn: completionUserMessageID.flatMap { userMessageID in
                                 guard normalUserTurn,
@@ -3199,6 +3272,7 @@ extension ACPSessionRunner {
                             }
                         }
                         self.activePromptID = nil
+                        self.emitTurnCompleted(wasCancelled ? .cancelled : .failed(errorMessage))
                         self.deferCompletedOutputBoundaryUntilUpdatesDrain()
                         self.onPromptWorkChanged?()
                     }

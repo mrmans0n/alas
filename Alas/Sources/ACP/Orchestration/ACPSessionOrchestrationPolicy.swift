@@ -33,6 +33,14 @@ struct ACPOrchestrationAgent: Equatable, Sendable {
     let isACPCapable: Bool
 }
 
+/// What the parent receives when a delegated child's turn ends.
+enum ACPChildOutcomeDisposition: Equatable, Sendable {
+    /// Queue a prompt so the parent runs a turn.
+    case wake
+    /// Append a passive system notice only.
+    case notice
+}
+
 enum ACPSessionOrchestrationPolicy {
     enum Error: Swift.Error, Equatable {
         case delegatedSessionCannotCreateChild
@@ -122,6 +130,28 @@ enum ACPSessionOrchestrationPolicy {
         }
 
         return prompt
+    }
+
+    /// Hybrid rule: a child that already messaged its parent during the turn
+    /// costs the parent nothing more than a notice; a child that ended
+    /// silently, or failed, wakes the parent. A cancelled turn means the human
+    /// intervened, so it never wakes.
+    static func outcomeDisposition(
+        result: ACPTurnCompletion.Result,
+        lastParentReportAt: Int64?,
+        turnStartedAt: Int64
+    ) -> ACPChildOutcomeDisposition {
+        switch result {
+        case .failed:
+            return .wake
+        case .cancelled:
+            return .notice
+        case .completed:
+            if let lastParentReportAt, lastParentReportAt >= turnStartedAt {
+                return .notice
+            }
+            return .wake
+        }
     }
 
     static func publicState(

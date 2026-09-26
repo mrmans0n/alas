@@ -1573,11 +1573,9 @@ final class AppState {
             guard let worktree,
                   let manager = acpManager(for: worktree)
             else {
-                try? await acpOrchestrationPersistence.updatePhase(
+                await acpOrchestration.markChildFailed(
                     childSessionId: record.childSessionId,
-                    phase: .failed,
-                    failureMessage: "Alas stopped before delegated session setup completed.",
-                    updatedAt: Int64(Date().timeIntervalSince1970)
+                    message: "Alas stopped before delegated session setup completed."
                 )
                 continue
             }
@@ -1612,20 +1610,16 @@ final class AppState {
                     into: record.childSessionId
                 )
                 guard accepted else {
-                    try? await acpOrchestrationPersistence.updatePhase(
+                    await acpOrchestration.markChildFailed(
                         childSessionId: record.childSessionId,
-                        phase: .failed,
-                        failureMessage: "Could not restore delegated session prompt.",
-                        updatedAt: Int64(Date().timeIntervalSince1970)
+                        message: "Could not restore delegated session prompt."
                     )
                     continue
                 }
             } else if !sessionAlreadyPersisted {
-                try? await acpOrchestrationPersistence.updatePhase(
+                await acpOrchestration.markChildFailed(
                     childSessionId: record.childSessionId,
-                    phase: .failed,
-                    failureMessage: "Could not restore delegated session prompt.",
-                    updatedAt: Int64(Date().timeIntervalSince1970)
+                    message: "Could not restore delegated session prompt."
                 )
                 continue
             }
@@ -1633,11 +1627,9 @@ final class AppState {
             guard let session = manager.liveSession(for: record.childSessionId),
                   session.agentState == .ready
             else {
-                try? await acpOrchestrationPersistence.updatePhase(
+                await acpOrchestration.markChildFailed(
                     childSessionId: record.childSessionId,
-                    phase: .failed,
-                    failureMessage: recoveredDelegatedSessionFailureMessage(manager.liveSession(for: record.childSessionId)),
-                    updatedAt: Int64(Date().timeIntervalSince1970)
+                    message: recoveredDelegatedSessionFailureMessage(manager.liveSession(for: record.childSessionId))
                 )
                 continue
             }
@@ -6512,15 +6504,19 @@ final class AppState {
     /// simply falls back to nil (today's behavior).
     private var providerReviewFileSummaryCache: [ReviewDraftSessionID: [DiffReviewFileSummary]] = [:]
 
-    func makeCLICommandRouter(
-        sessionWorktreeLookup: @escaping (String) -> String?,
-        sessionOwnerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil }
-    ) -> AlasCLICommandRouter {
-        let orchestration = ACPSessionOrchestrationCoordinator(
+    /// Shared orchestration coordinator: the CLI/MCP router, the manager
+    /// turn-completion hooks, and startup reconciliation all talk to one
+    /// instance so outcome delivery has a single producer per instance.
+    @ObservationIgnored
+    private(set) lazy var acpOrchestration: ACPSessionOrchestrationCoordinator = makeOrchestrationCoordinator()
+
+    private func makeOrchestrationCoordinator() -> ACPSessionOrchestrationCoordinator {
+        ACPSessionOrchestrationCoordinator(
             environment: .init(
                 persistence: acpOrchestrationPersistence,
                 instanceId: instanceId,
                 now: { Int64(Date().timeIntervalSince1970) },
+                nowMillis: { Int64(Date().timeIntervalSince1970 * 1000) },
                 makeID: { UUID().uuidString },
                 worktree: { [weak self] id in self?.worktree(withId: id) },
                 existingWorktree: { [weak self] projectId, worktreeId in
@@ -6604,6 +6600,13 @@ final class AppState {
                 notifyChanged: { }
             )
         )
+    }
+
+    func makeCLICommandRouter(
+        sessionWorktreeLookup: @escaping (String) -> String?,
+        sessionOwnerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil }
+    ) -> AlasCLICommandRouter {
+        let orchestration = acpOrchestration
         return AlasCLICommandRouter(
             sessionWorktreeId: sessionWorktreeLookup,
             sessionOwner: sessionOwnerLookup,
@@ -11975,6 +11978,11 @@ final class AppState {
                     retainActivePrompt: retainActivePrompt
                 )
             },
+            onTurnCompleted: { [weak self] completion in
+                Task { @MainActor [weak self] in
+                    await self?.acpOrchestration.childTurnCompleted(completion)
+                }
+            },
             onCheckpointCapture: { [weak self] prompt, hasAttachments in
                 guard let self, let target = self.checkpointTarget(for: worktree) else { return nil }
                 do {
@@ -12400,6 +12408,11 @@ final class AppState {
                     sessionId: sessionId,
                     retainActivePrompt: retainActivePrompt
                 )
+            },
+            onTurnCompleted: { [weak self] completion in
+                Task { @MainActor [weak self] in
+                    await self?.acpOrchestration.childTurnCompleted(completion)
+                }
             },
             launchSpecTransformer: { [weak self] spec in
                 guard let self else { return spec }
@@ -13235,14 +13248,23 @@ final class AppState {
                 now: Int64(Date().timeIntervalSince1970),
                 staleAfter: 60
             ) else { continue }
-            let accepted = await manager.enqueueDelegatedPrompt(
-                text: claimed.message.prompt,
-                source: ACPDelegatedPromptSource(
-                    sessionId: claimed.message.sourceSessionId,
-                    messageId: claimed.message.id
-                ),
-                into: sessionId
-            )
+            let accepted: Bool
+            switch claimed.message.kind {
+            case .prompt:
+                accepted = await manager.enqueueDelegatedPrompt(
+                    text: claimed.message.prompt,
+                    source: ACPDelegatedPromptSource(
+                        sessionId: claimed.message.sourceSessionId,
+                        messageId: claimed.message.id
+                    ),
+                    into: sessionId
+                )
+            case .notice:
+                accepted = await manager.appendDelegatedNotice(
+                    text: claimed.message.prompt,
+                    into: sessionId
+                )
+            }
             if accepted {
                 try? await acpOrchestrationPersistence.removeDeliveredMessage(
                     id: claimed.message.id,
