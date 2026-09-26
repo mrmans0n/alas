@@ -297,7 +297,12 @@ struct NextPromptSettingsTests {
         let persistence = SettingsStore()
         let state = makeState(fixture, persistence)
         let enable = Task { await state.enableNextPromptSuggestions() }
-        try await waitUntil { fixture.transport.started.withLock { $0 } }
+        // This is the only wait in the test (no risk of stacking against the
+        // harness's 60s execution allowance), and has been observed missing
+        // the shared 20s default on CI twice — once while nothing else was
+        // running slowly, implying the spawned enable task's own first
+        // scheduling turn (not this loop) ate the budget. Give it real room.
+        try await waitUntil(timeout: .seconds(45)) { fixture.transport.started.withLock { $0 } }
         #expect(persistence.config.nextPromptSuggestionsEnabled)
         await state.cancelNextPromptDownload()
         await enable.value
@@ -453,13 +458,18 @@ struct NextPromptSettingsTests {
         }
     }
 
-    private func waitUntil(_ condition: () async -> Bool) async throws {
+    private func waitUntil(timeout: Duration = .seconds(20), _ condition: () async -> Bool) async throws {
         // 5s was too tight on loaded CI runners: the tasks under test are real actor
-        // hops competing with ~1300 other tests' work on the same cooperative pool,
-        // and have been observed missing that deadline by microseconds. 20s stays
-        // safely under the harness's per-test 60s execution allowance, including the
-        // one test above that calls this twice.
-        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+        // hops (and, for callers awaiting a freshly-spawned Task's first
+        // scheduling turn, `Task.detached` work) competing with ~1300 other
+        // tests' work on the same cooperative pool. 20s wasn't always enough
+        // either — seen missing that deadline twice, once by microseconds
+        // and once after a lane that ran at normal speed, implying the
+        // spawned task's own first turn was the slow part, not this loop.
+        // The default stays well under the harness's 60s per-test execution
+        // allowance even for the one test that calls this twice; callers
+        // waiting on nothing else can ask for more headroom.
+        let deadline = ContinuousClock.now.advanced(by: timeout)
         while !(await condition()) {
             try #require(ContinuousClock.now < deadline)
             await Task.yield()
