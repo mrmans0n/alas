@@ -425,6 +425,7 @@ struct ACPComposer: View {
             }
             .padding(.horizontal, 2)
         }
+        .padding(.horizontal, 12).padding(.vertical, 10)
         .acpComposerPill(focused: inputFocused)
     }
 

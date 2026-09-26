@@ -19,6 +19,10 @@ struct NativePeerTranscript: Equatable {
     private(set) var pendingQuestion: RemoteQuestionPayload?
     private(set) var pendingPlan: RemotePlanPayload?
     private(set) var pendingElicitation: RemoteElicitationPayload?
+    /// Bumped on every request frame. Wire request ids can repeat back to
+    /// back (string JSON-RPC ids all forward as the same int), so views key
+    /// their per-request state on this instead of the id alone.
+    private(set) var requestGeneration = 0
 
     init(sessionId: String) { self.sessionId = sessionId }
 
@@ -80,16 +84,24 @@ struct NativePeerTranscript: Equatable {
             firstIndex = first
             return false
 
-        case .permissionRequest(_, let payload): pendingPermission = payload
+        case .permissionRequest(_, let payload):
+            pendingPermission = payload
+            requestGeneration += 1
         case .permissionResolved(_, let requestId):
             if pendingPermission?.requestId == requestId { pendingPermission = nil }
-        case .questionRequest(_, let payload): pendingQuestion = payload
+        case .questionRequest(_, let payload):
+            pendingQuestion = payload
+            requestGeneration += 1
         case .questionResolved(_, let requestId):
             if pendingQuestion?.requestId == requestId { pendingQuestion = nil }
-        case .planRequest(_, let payload): pendingPlan = payload
+        case .planRequest(_, let payload):
+            pendingPlan = payload
+            requestGeneration += 1
         case .planResolved(_, let requestId):
             if pendingPlan?.requestId == requestId { pendingPlan = nil }
-        case .elicitationRequest(_, let payload): pendingElicitation = payload
+        case .elicitationRequest(_, let payload):
+            pendingElicitation = payload
+            requestGeneration += 1
         case .elicitationResolved(_, let requestId):
             if pendingElicitation?.requestId == requestId { pendingElicitation = nil }
         case .sessionClosed:

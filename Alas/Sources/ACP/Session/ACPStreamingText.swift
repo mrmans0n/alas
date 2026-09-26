@@ -61,6 +61,20 @@ final class StreamingText: ObservableObject {
         scheduleThrottledPublish()
     }
 
+    /// Swaps the whole text while keeping this object's identity, so views
+    /// already observing it see the new value. Publishes immediately rather
+    /// than through the streaming throttle: a replacement is a structural
+    /// change (a resubscribe or a corrected row), not a chunk in a burst.
+    func replace(with text: String) {
+        value = text
+        utf8Length = text.utf8.count
+        revision &+= 1
+        lastAppendedSuffix = nil
+        drainTask?.cancel()
+        drainTask = nil
+        publish(at: ProcessInfo.processInfo.systemUptime)
+    }
+
     func adopt(phase: ACPMessagePhase?, metadata: AnyCodable?) {
         if self.phase == nil { self.phase = phase }
         self.metadata = AnyCodable.mergingMetadata(self.metadata, metadata)

@@ -78,8 +78,10 @@ final class NativePeerRowCache {
     }
 
     /// Grows a thought buffer in place while the forwarded text only gains a
-    /// suffix (the streaming case) and swaps in a fresh buffer when it
-    /// diverges, e.g. after a resubscribe replaced the row wholesale.
+    /// suffix (the streaming case) and replaces its contents when it
+    /// diverges, e.g. after a resubscribe rewrote the row. The buffer object
+    /// never changes, so a mounted `ACPThoughtView` observing it is notified
+    /// either way.
     func sync(_ messages: [RemoteWireMessage]) {
         for message in messages where message.kind == "thought" {
             let text = message.text ?? ""
@@ -88,7 +90,7 @@ final class NativePeerRowCache {
             if text.hasPrefix(buffer.value) {
                 buffer.append(String(text.dropFirst(buffer.value.count)))
             } else {
-                thoughtBuffers[message.stableId] = StreamingText(text)
+                buffer.replace(with: text)
             }
         }
     }

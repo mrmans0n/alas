@@ -110,4 +110,22 @@ struct NativePeerTranscriptTests {
 
         #expect(beforeRequest != transcript)
     }
+
+    @Test func sequentialRequestsReusingAWireIdGetDistinctGenerations() {
+        var transcript = NativePeerTranscript(sessionId: "B:s")
+        let question = RemoteQuestionPayload(requestId: 1, title: nil, questions: [
+            .init(id: "q", prompt: "Which?", options: [.init(id: "a", label: "A")], allowMultiple: false),
+        ])
+
+        transcript.apply(.questionRequest(sessionId: "B:s", payload: question))
+        let first = transcript.requestGeneration
+        transcript.apply(.questionResolved(sessionId: "B:s", requestId: 1))
+        transcript.apply(.questionRequest(sessionId: "B:s", payload: question))
+        let second = transcript.requestGeneration
+        transcript.apply(.questionRequest(sessionId: "B:s", payload: question))
+        let third = transcript.requestGeneration
+
+        #expect(first != second)
+        #expect(second != third)
+    }
 }

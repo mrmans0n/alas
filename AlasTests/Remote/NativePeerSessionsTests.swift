@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 @testable import Alas
@@ -112,7 +113,7 @@ struct NativePeerSessionsTests {
         #expect(unknown == .systemNotice("Body"))
     }
 
-    @Test func thoughtBufferGrowsInPlaceAndResetsWhenTextDiverges() {
+    @Test func thoughtBufferKeepsItsIdentityAndPublishesWhenTextDiverges() {
         let cache = NativePeerRowCache()
         func thought(_ text: String) -> RemoteWireMessage {
             .init(stableId: "t", kind: "thought", text: text, json: nil, index: 0)
@@ -124,9 +125,15 @@ struct NativePeerSessionsTests {
         #expect(cache.thoughtBuffer(for: "t") === buffer)
         #expect(buffer.value == "Hello")
 
+        // A mounted `ACPThoughtView` observes `buffer`; a divergent replace
+        // must reach it through that same object, synchronously.
+        var publishes = 0
+        let subscription = buffer.objectWillChange.sink { _ in publishes += 1 }
+        defer { subscription.cancel() }
         cache.sync([thought("Bye")])
-        #expect(cache.thoughtBuffer(for: "t") !== buffer)
-        #expect(cache.thoughtBuffer(for: "t").value == "Bye")
+        #expect(cache.thoughtBuffer(for: "t") === buffer)
+        #expect(buffer.value == "Bye")
+        #expect(publishes == 1)
     }
 
     @Test func peerQuestionRoundTripsThroughTheNativeInputForm() {
