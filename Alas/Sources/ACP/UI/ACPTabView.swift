@@ -660,7 +660,8 @@ private struct ACPSessionView: View {
                 state.agent(id: agentID)?.displayName ?? agentID
             },
             showMinimap: showMinimap,
-            collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls
+            collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls,
+            upstreamReferences: manager.upstreamReferences.store(for: worktree.path)
         )
     }
 

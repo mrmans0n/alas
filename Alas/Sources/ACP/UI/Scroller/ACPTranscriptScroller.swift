@@ -47,6 +47,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     /// Settings → Chat → "Collapse finished tool calls". See
     /// `ACPToolCallGrouping`.
     var collapsesFinishedToolCalls: Bool = false
+    var upstreamReferences: ACPUpstreamReferenceStore? = nil
 
     /// Ambient theme at the point this representable sits in the SwiftUI
     /// tree. Individual rows are hosted in their own, otherwise-disconnected
@@ -403,6 +404,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .environment(\.theme, host.theme)
                     .environment(\.openURL, host.openTranscriptURLAction)
+                    .environment(\.acpUpstreamReferenceStore, host.upstreamReferences)
             )
         }
 

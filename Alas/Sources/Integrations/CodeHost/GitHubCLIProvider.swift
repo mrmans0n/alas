@@ -2638,3 +2638,93 @@ private extension URL {
         (scheme == "http" || scheme == "https") && !(host ?? "").isEmpty
     }
 }
+
+// MARK: - Reference chip lookup
+
+extension GitHubCLIProvider {
+    /// The issues endpoint answers for both issues and pull requests. A PR
+    /// carries a `pull_request` object with `merged_at` and a top-level
+    /// `draft` flag, so one call is enough.
+    func referenceSummary(
+        remote: CodeHostRemote,
+        reference: CodeHostReference,
+        cwd: URL
+    ) async throws -> CodeHostReferenceSummary {
+        let result = try await runner.run(
+            executable,
+            args: ["api", "--hostname", remote.host, "repos/\(remote.repositorySlug)/issues/\(reference.number)"],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            if let error = CodeHostIssueProviderError.classification(
+                provider: kind, remote: remote, number: reference.number, result: result
+            ) {
+                throw error
+            }
+            throw CodeHostProviderError.commandFailed(command: "gh api issue", stderr: result.stderr)
+        }
+        return try Self.parseReferenceSummary(result.stdout, requestedNumber: reference.number)
+    }
+
+    static func parseReferenceSummary(_ json: String, requestedNumber: Int) throws -> CodeHostReferenceSummary {
+        struct Response: Decodable {
+            struct User: Decodable { let login: String? }
+            struct PullRequest: Decodable {
+                let mergedAt: String?
+                enum CodingKeys: String, CodingKey { case mergedAt = "merged_at" }
+            }
+            let number: Int
+            let title: String
+            let state: String
+            let draft: Bool?
+            let user: User?
+            let createdAt: String?
+            let updatedAt: String?
+            let closedAt: String?
+            let htmlURL: String?
+            let pullRequest: PullRequest?
+            enum CodingKeys: String, CodingKey {
+                case number, title, state, draft, user
+                case createdAt = "created_at"
+                case updatedAt = "updated_at"
+                case closedAt = "closed_at"
+                case htmlURL = "html_url"
+                case pullRequest = "pull_request"
+            }
+        }
+        let response: Response
+        do {
+            response = try JSONDecoder().decode(Response.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse GitHub reference output.")
+        }
+        guard response.number == requestedNumber,
+              let url = try parseOptionalHTTPURL(response.htmlURL, context: "GitHub reference output is missing a valid URL.")
+        else {
+            throw CodeHostProviderError.malformedOutput("GitHub reference output is missing required fields.")
+        }
+        let mergedAt = try parseOptionalDate(response.pullRequest?.mergedAt)
+        let state: CodeHostReferenceSummary.State
+        if mergedAt != nil {
+            state = .merged
+        } else if response.state.lowercased() == "closed" {
+            state = .closed
+        } else if response.draft == true {
+            state = .draft
+        } else {
+            state = .open
+        }
+        return CodeHostReferenceSummary(
+            kind: response.pullRequest == nil ? .issue : .reviewRequest,
+            number: response.number,
+            title: response.title,
+            state: state,
+            author: response.user?.login,
+            createdAt: try parseOptionalDate(response.createdAt),
+            updatedAt: try parseOptionalDate(response.updatedAt),
+            closedAt: try parseOptionalDate(response.closedAt),
+            mergedAt: mergedAt,
+            url: url
+        )
+    }
+}

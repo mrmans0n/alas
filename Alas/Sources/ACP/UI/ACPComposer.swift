@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import CryptoKit
 import UniformTypeIdentifiers
 
@@ -50,6 +51,8 @@ struct ACPInputField: NSViewRepresentable {
     var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
     var nextPromptInputBlocked: () -> Bool = { false }
     var nextPromptIsDictating: () -> Bool = { false }
+    /// Reference-chip cache for this worktree. `nil` disables reference chips.
+    var upstreamReferences: ACPUpstreamReferenceStore? = nil
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = ACPNSTextView()
@@ -69,6 +72,7 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.onImageError = onImageError
         textView.registerForDraggedTypes([.fileURL, .png, .tiff])
         context.coordinator.restoreInitialDraft(into: textView)
+        context.coordinator.attachUpstreamReferences(upstreamReferences)
         configureNextPrompt(textView)
         textView.invalidateNextPromptSuggestion()
         // Publish the submit closure so the SwiftUI send button can fire
@@ -126,6 +130,9 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.theme = context.environment.theme
         context.coordinator.sendOnEnter = sendOnEnter
         context.coordinator.typography = typography
+        if context.coordinator.upstreamReferences !== upstreamReferences {
+            context.coordinator.attachUpstreamReferences(upstreamReferences)
+        }
         if context.coordinator.focusRequest != focusRequest {
             context.coordinator.focusRequest = focusRequest
             if let tv = nsView.documentView as? ACPNSTextView,
@@ -242,7 +249,8 @@ struct ACPInputField: NSViewRepresentable {
             onStopDictation: onStopDictation,
             onSubmit: onSubmit,
             filesProvider: filesProvider,
-            dropRouter: dropRouter
+            dropRouter: dropRouter,
+            upstreamReferences: upstreamReferences
         )
     }
 
@@ -269,6 +277,8 @@ struct ACPInputField: NSViewRepresentable {
         let filesProvider: (@Sendable () async -> [URL])?
         let dropRouter: ACPComposerDropRouter
         var promptSuggestions: [ACPPromptSuggestion] = []
+        private(set) var upstreamReferences: ACPUpstreamReferenceStore?
+        private var upstreamObservations: Set<AnyCancellable> = []
         /// Snapshotted at makeNSView time so the AppKit-only slash panel
         /// can render its SwiftUI content with our theme tokens.
         var theme: Theme?
@@ -319,7 +329,8 @@ struct ACPInputField: NSViewRepresentable {
             onStopDictation: @escaping () -> Void = {},
             onSubmit: @escaping ACPComposerSubmitHandler,
             filesProvider: (@Sendable () async -> [URL])? = nil,
-            dropRouter: ACPComposerDropRouter = ACPComposerDropRouter()
+            dropRouter: ACPComposerDropRouter = ACPComposerDropRouter(),
+            upstreamReferences: ACPUpstreamReferenceStore? = nil
         ) {
             self.worktreeRoot = worktreeRoot
             self.initialDraft = initialDraft
@@ -334,6 +345,7 @@ struct ACPInputField: NSViewRepresentable {
             self.onSubmit = onSubmit
             self.filesProvider = filesProvider
             self.dropRouter = dropRouter
+            self.upstreamReferences = upstreamReferences
         }
 
         func textDidBeginEditing(_ notification: Notification) {
@@ -473,6 +485,12 @@ struct ACPInputField: NSViewRepresentable {
             flushPendingRestyleNow()
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
+                // Hand-typed references were left as plain text (see
+                // `ACPNSTextView.insertText`'s doc comment) to avoid
+                // wiping undo history on every `#N `; chip them now, in an
+                // edit whose undo-clearing no longer matters because the
+                // visible draft is about to be cleared regardless.
+                tv.chipUpstreamReferencesIfNeeded()
             }
             let attributed = textView.attributedString()
             let (text, attachments) = Self.extract(attributed)
@@ -582,6 +600,29 @@ struct ACPInputField: NSViewRepresentable {
             restoringDraft = true
             storage.setAttributedString(Self.attributedString(from: draft, typography: typography))
             ACPLeadingCommand.chipify(storage, suggestions: promptSuggestions, font: typography.appKitFont())
+            if let store = upstreamReferences, let host = store.hostKind {
+                // A restored draft has no real selection yet, so the "still
+                // being typed" caret-skip guard uses the end of the
+                // restored text instead — the last reference in a draft
+                // that was persisted mid-keystroke (e.g. "#12" of an
+                // intended "#123") stays plain text rather than chipping
+                // into something the user didn't finish typing. Shares the
+                // exact same match-finding as `chipUpstreamReferencesIfNeeded()`.
+                let end = (storage.string as NSString).length
+                let matches = ACPUpstreamReferenceDetector.chippableMatches(
+                    in: storage.string, host: host, caret: NSRange(location: end, length: 0)
+                )
+                for match in matches.reversed() {
+                    let attributes = storage.attributes(at: match.range.location, effectiveRange: nil)
+                    storage.replaceCharacters(
+                        in: match.range,
+                        with: ACPUpstreamReferenceChip.chip(
+                            for: match.reference, host: host, store: store, attributes: attributes
+                        )
+                    )
+                    store.ensureLoaded(match.reference)
+                }
+            }
             // `restoringDraft` short-circuits `textDidChange`, where the fence
             // cache is normally refreshed, so refresh it here or it keeps
             // describing the document this one replaced.
@@ -596,6 +637,36 @@ struct ACPInputField: NSViewRepresentable {
             textView.needsDisplay = true
             restoringDraft = false
             lastSyncedDraft = draft
+        }
+
+        /// Swaps the reference-chip store. Chips existing text once the
+        /// remote resolves. `$remote` replays its current value, so an
+        /// already-resolved store chips right away. Repaints chips whenever
+        /// a lookup lands. Both hops go through the main queue so they never
+        /// run nested inside another edit. Combine sink closures are
+        /// nonisolated, so each hops back with `MainActor.assumeIsolated`,
+        /// which holds because delivery is on `DispatchQueue.main`.
+        func attachUpstreamReferences(_ store: ACPUpstreamReferenceStore?) {
+            upstreamReferences = store
+            upstreamObservations.removeAll()
+            guard let store else { return }
+            store.resolveRemote()
+            store.$remote
+                .compactMap { $0 }
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        (self?.textView as? ACPNSTextView)?.chipUpstreamReferencesIfNeeded()
+                    }
+                }
+                .store(in: &upstreamObservations)
+            store.$revision
+                .dropFirst()
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated { self?.textView?.needsDisplay = true }
+                }
+                .store(in: &upstreamObservations)
         }
 
         #if DEBUG
@@ -687,6 +758,8 @@ struct ACPInputField: NSViewRepresentable {
             attributed.enumerateAttributes(in: full) { keys, range, _ in
                 if let command = keys[.commandChipName] as? String {
                     appendText(command)
+                } else if let spelling = keys[.upstreamReference] as? String {
+                    appendText(spelling)
                 } else if let uri = keys[.imageAttachmentURI] as? String {
                     let mime = (keys[.imageAttachmentMime] as? String) ?? "image/png"
                     segments.append(.image(uri: uri, mimeType: mime))
@@ -759,6 +832,8 @@ struct ACPInputField: NSViewRepresentable {
             attributed.enumerateAttributes(in: full) { keys, range, _ in
                 if let command = keys[.commandChipName] as? String {
                     text += command
+                } else if let spelling = keys[.upstreamReference] as? String {
+                    text += spelling
                 } else if let uri = keys[.imageAttachmentURI] as? String {
                     let mime = (keys[.imageAttachmentMime] as? String) ?? "image/png"
                     let name = URL(string: uri)?.lastPathComponent
@@ -784,10 +859,12 @@ struct ACPInputField: NSViewRepresentable {
 }
 
 extension Dictionary where Key == NSAttributedString.Key, Value == Any {
-    /// A composer chip run (mention, image, or command) that restyling must
-    /// leave alone: resetting its attributes strips the attachment cell.
+    /// A composer chip run (mention, image, command, or upstream reference)
+    /// that restyling must leave alone: resetting its attributes strips the
+    /// attachment.
     var isComposerChip: Bool {
-        self[.attachmentURI] != nil || self[.imageAttachmentURI] != nil || self[.commandChipName] != nil
+        self[.attachmentURI] != nil || self[.imageAttachmentURI] != nil
+            || self[.commandChipName] != nil || self[.upstreamReference] != nil
     }
 }
 
@@ -1183,6 +1260,17 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// why a follow-up edit is unsafe here. Everything else (fenced-block
     /// pairing, IME composition, plain typing) still goes through
     /// `PairedDelimiterTextView`'s own `insertText`.
+    ///
+    /// A hand-typed upstream reference (`#12`, etc.) is deliberately NOT
+    /// completed here the way the command pill is: a message references at
+    /// most one leading command, but can carry many `#N`/`!N` tokens, and
+    /// `replaceClearingUndo`'s undo-wipe — an accepted, one-time cost for
+    /// the command pill — would otherwise fire on every single reference
+    /// typed, leaving undo effectively disabled for anyone who writes about
+    /// PRs. Typed references instead stay plain text until
+    /// `chipUpstreamReferencesIfNeeded()` sweeps them in an undo-safe
+    /// moment: when the remote resolves, when a draft restores, and right
+    /// before the message is sent (`Coordinator.submit`).
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
         invalidateNextPromptSuggestion()
         let range = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
@@ -1238,7 +1326,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// identical plain text for drafts, queued prompts, and the outgoing
     /// message — only interactive undo of this specific transformation is
     /// given up.
-    private func replaceClearingUndo(range: NSRange, with replacement: NSAttributedString) {
+    func replaceClearingUndo(range: NSRange, with replacement: NSAttributedString) {
         guard let textStorage else { return }
         let selectionBefore = selectedRange()
         undoManager?.removeAllActions()
@@ -1389,6 +1477,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if openUpstreamReference(at: convert(event.locationInWindow, from: nil), event: event) { return }
         invalidateNextPromptSuggestion()
         super.mouseDown(with: event)
         reconcileSlashPanel()
@@ -1508,6 +1597,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     private var imageChipHover: ACPImageChipHoverController?
     private let commandChipHover = ACPCommandChipHoverController()
+    private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
 
     /// Character range + file URL when `point` sits on an image chip
     /// (a character tagged with `.imageAttachmentURI`), nil otherwise.
@@ -1619,12 +1709,14 @@ final class ACPNSTextView: PairedDelimiterTextView {
         } else {
             commandChipHover.hide()
         }
+        upstreamReferenceHover.update(at: point, in: self, store: coordinator?.upstreamReferences)
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         imageChipHoverController().hide()
         commandChipHover.hide()
+        upstreamReferenceHover.hide()
     }
 
     /// Observes the enclosing scroll view's clip view while the composer is
@@ -1648,6 +1740,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         ) { [weak self] in
             guard let self, self.window != nil else { return }
             self.commandChipHover.hide()
+            self.upstreamReferenceHover.hide()
             // The pointer's current position decides the post-scroll state:
             // still over a chip re-schedules (no-op while it stays there);
             // anywhere else hides. `window.mouseLocationOutsideOfEventStream`
@@ -1694,6 +1787,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     func dismissImageChipHover() {
         imageChipHover?.hide()
         commandChipHover.hide()
+        upstreamReferenceHover.hide()
     }
 
     #if DEBUG
@@ -2255,6 +2349,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
                 )
             }
         }
+        chipUpstreamReferences(in: fragment, replacing: replacementRange)
         let attrs = baseTypingAttributes
         typingAttributes = attrs
         performNativeTextInsertion {
@@ -2276,8 +2371,16 @@ final class ACPNSTextView: PairedDelimiterTextView {
         let boundedRange = boundedSelectedRange(in: textStorage)
         let attrs = baseTypingAttributes
         typingAttributes = attrs
+        let fragment = NSMutableAttributedString(string: text, attributes: attrs)
+        let chipped = chipUpstreamReferences(in: fragment, replacing: boundedRange)
         performNativeTextInsertion {
-            insertText(text, replacementRange: boundedRange)
+            // Plain strings keep going through the String path so paired
+            // delimiter handling is unchanged when nothing was chipped.
+            if chipped {
+                insertText(fragment, replacementRange: boundedRange)
+            } else {
+                insertText(text, replacementRange: boundedRange)
+            }
         }
         typingAttributes = attrs
         return true

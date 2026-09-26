@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import AppKit
 
@@ -35,7 +36,8 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             typography: typography,
             role: role,
             theme: theme,
-            memoizesInlineMarkdown: memoizesInlineMarkdown
+            memoizesInlineMarkdown: memoizesInlineMarkdown,
+            chipping: context.environment.acpUpstreamReferenceChipping
         )
         guard context.coordinator.shouldRender(renderState) else { return }
 
@@ -46,6 +48,14 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             role: role,
             memoizeInlineMarkdown: memoizesInlineMarkdown
         )
+        let chipping = context.environment.acpUpstreamReferenceChipping
+        // Only subscribe the paragraph to store revisions, and only install
+        // its hover tracking area, when it actually holds a chip: most
+        // paragraphs in a long transcript have no reference in them at
+        // all, and without this guard every one of them still repaints and
+        // tracks the mouse on every store revision bump.
+        let chippedCount = chipping.map { ACPUpstreamReferenceChip.chipifyRendered(rendered, chipping: $0) } ?? 0
+        (textView as? ACPMarkdownInlineNSTextView)?.upstreamReferences = chippedCount > 0 ? chipping?.store : nil
         textView.textStorage?.setAttributedString(rendered)
         // The rendered text changed, so any memoized width→height
         // measurements are stale; drop them before SwiftUI re-queries
@@ -212,6 +222,7 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
         let role: ACPMarkdownInlineRole
         let theme: Theme
         let memoizesInlineMarkdown: Bool
+        let chipping: ACPUpstreamReferenceChipping?
     }
 }
 
@@ -288,6 +299,100 @@ struct ACPMarkdownScrollRoutingState {
 final class ACPMarkdownInlineNSTextView: NSTextView {
     private var scrollRoutingState = ACPMarkdownScrollRoutingState()
 
+    private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
+    private var upstreamRevisionObservation: AnyCancellable?
+    private static let upstreamHoverTrackingKind = "alas.acp.upstreamReferenceHover"
+
+    /// Set on user-message paragraphs that render reference chips. A lookup
+    /// landing repaints the chips, and hover tracking is installed only here.
+    var upstreamReferences: ACPUpstreamReferenceStore? {
+        didSet {
+            guard upstreamReferences !== oldValue else { return }
+            upstreamRevisionObservation = upstreamReferences?.$revision
+                .dropFirst()
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated { self?.invalidateUpstreamReferenceChips() }
+                }
+            if upstreamReferences == nil { upstreamReferenceHover.hide() }
+            updateTrackingAreas()
+        }
+    }
+
+    /// Marks every reference-chip attachment range as attribute-edited.
+    /// Under TextKit 2 (used for transcript paragraphs), `needsDisplay =
+    /// true` alone does not cause an `NSTextAttachment`'s lazy drawing
+    /// handler to re-run once a lookup lands; only re-marking the storage
+    /// does. The composer uses TextKit 1, where `needsDisplay` is enough,
+    /// so it does not need this.
+    private func invalidateUpstreamReferenceChips() {
+        guard let textStorage, textStorage.length > 0 else { return }
+        let full = NSRange(location: 0, length: textStorage.length)
+        textStorage.beginEditing()
+        textStorage.enumerateAttribute(.upstreamReference, in: full) { value, range, _ in
+            guard value != nil else { return }
+            textStorage.edited(.editedAttributes, range: range, changeInLength: 0)
+        }
+        textStorage.endEditing()
+        needsDisplay = true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas
+        where area.owner === self && area.userInfo?[Self.upstreamHoverTrackingKind] != nil {
+            removeTrackingArea(area)
+        }
+        guard upstreamReferences != nil else { return }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: [Self.upstreamHoverTrackingKind: true]
+        ))
+    }
+
+    /// Transcript rows are pooled and re-hosted for different messages as
+    /// the user scrolls, so a paragraph can lose its window (and be
+    /// recycled onto different content) while its hover card is still
+    /// open. Close it before that happens rather than leaving it
+    /// orphaned over whatever now occupies this row.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { upstreamReferenceHover.hide() }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        upstreamReferenceHover.update(
+            at: convert(event.locationInWindow, from: nil), in: self, store: upstreamReferences
+        )
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        upstreamReferenceHover.hide()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if openUpstreamReference(at: convert(event.locationInWindow, from: nil), event: event) { return }
+        super.mouseDown(with: event)
+    }
+
+    /// Selections containing reference chips copy their spelling instead
+    /// of the U+FFFC attachment placeholder.
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard let textStorage, selectedRanges.count == 1 else {
+            return super.writeSelection(to: pboard, types: types)
+        }
+        let range = selectedRange()
+        guard range.length > 0, NSMaxRange(range) <= textStorage.length,
+              let text = ACPUpstreamReferenceChip.plainText(of: textStorage.attributedSubstring(from: range))
+        else { return super.writeSelection(to: pboard, types: types) }
+        pboard.declareTypes([.string], owner: nil)
+        return pboard.setString(text, forType: .string)
+    }
+
     private let minimumFittingWidth: CGFloat = 80
     private let maximumNaturalFittingWidth: CGFloat = 10_000
 
@@ -357,7 +462,12 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     /// Forward vertical scrolling to the transcript's AppKit scroller.
     /// Markdown cells are NSTextViews, so without this override they consume
     /// wheel events even though they cannot scroll vertically themselves.
+    /// Also hides a hover card left open at its old screen position: the
+    /// card only updates on `mouseMoved`/`mouseExited`, so scrolling with
+    /// the trackpad while the pointer stays still would otherwise leave it
+    /// floating over content it's no longer anchored to.
     override func scrollWheel(with event: NSEvent) {
+        if upstreamReferences != nil { upstreamReferenceHover.hide() }
         if let transcriptScroller {
             var routingState = transcriptScroller.markdownScrollRoutingState
             routeScrollWheel(
