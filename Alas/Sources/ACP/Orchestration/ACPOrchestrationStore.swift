@@ -116,15 +116,24 @@ final class ACPOrchestrationStore {
         """, bindings: [phase.rawValue, failureMessage, updatedAt, childSessionId])
     }
 
-    /// Atomically transitions a delegation to `.failed`, returning `true`
-    /// only for the caller that actually made the transition. Two Alas
-    /// instances reconciling the same stuck delegation both call this; the
-    /// conditional `WHERE phase != 'failed'` plus `BEGIN IMMEDIATE` (same
-    /// idiom as `claimMessage` above) ensures exactly one of them sees
-    /// `changed == 1` and is responsible for waking the parent — a plain
-    /// read-then-write has a window where both read the pre-transition
-    /// phase before either writes.
-    func claimFailedPhase(childSessionId: String, failureMessage: String, updatedAt: Int64) throws -> Bool {
+    /// Atomically transitions a delegation to `.failed` AND enqueues the
+    /// outcome that tells its parent, returning `true` only for the caller
+    /// that made the transition.
+    ///
+    /// Both writes share one transaction on purpose. The conditional
+    /// `WHERE phase != 'failed'` (same idiom as `claimMessage` above) means
+    /// exactly one of two instances reconciling the same stuck delegation
+    /// owns the notification, and committing the outcome row with it closes
+    /// the window where a crash between the two leaves the child
+    /// permanently `.failed` with no parent notification and no recovery —
+    /// a later call would correctly lose the claim, and startup
+    /// reconciliation only reloads creating/starting records.
+    func claimFailedPhase(
+        childSessionId: String,
+        failureMessage: String,
+        updatedAt: Int64,
+        outcome: ACPDelegatedMessage
+    ) throws -> Bool {
         try db.exec("BEGIN IMMEDIATE")
         do {
             let changed = try db.execChanges("""
@@ -135,8 +144,24 @@ final class ACPOrchestrationStore {
                 ACPDelegationPhase.failed.rawValue, failureMessage, updatedAt,
                 childSessionId, ACPDelegationPhase.failed.rawValue,
             ])
+            guard changed == 1 else {
+                try db.exec("COMMIT")
+                return false
+            }
+            try db.exec("""
+            INSERT OR IGNORE INTO delegated_messages (
+                id, source_session_id, target_session_id, prompt, created_at, kind
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """, bindings: [
+                outcome.id,
+                outcome.sourceSessionId,
+                outcome.targetSessionId,
+                outcome.prompt,
+                outcome.createdAt,
+                outcome.kind.rawValue,
+            ])
             try db.exec("COMMIT")
-            return changed == 1
+            return true
         } catch {
             try? db.exec("ROLLBACK")
             throw error

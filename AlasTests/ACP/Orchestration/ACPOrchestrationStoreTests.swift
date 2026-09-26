@@ -394,4 +394,56 @@ struct ACPOrchestrationStoreTests {
         try store.markParentReport(childSessionId: "child", at: 640)
         #expect(try store.delegation(childSessionId: "child")?.lastParentReportAt == 640)
     }
+
+    private func failureOutcome() -> ACPDelegatedMessage {
+        .init(
+            id: "outcome-child-failed",
+            sourceSessionId: "child",
+            targetSessionId: "parent",
+            prompt: "[alas system] Delegated session child (codex) failed: boom.",
+            createdAt: 700,
+            kind: .prompt
+        )
+    }
+
+    @Test("claiming the failed phase commits the parent's outcome with it")
+    func claimFailedPhaseCommitsOutcomeTogether() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        try store.insert(newRecord())
+
+        #expect(try store.claimFailedPhase(
+            childSessionId: "child", failureMessage: "boom", updatedAt: 700, outcome: failureOutcome()
+        ))
+
+        let record = try #require(try store.delegation(childSessionId: "child"))
+        #expect(record.phase == .failed)
+        #expect(record.failureMessage == "boom")
+        let pending = try store.pendingMessages(targetSessionId: "parent")
+        #expect(pending.map(\.id) == ["outcome-child-failed"])
+        #expect(pending.first?.kind == .prompt)
+    }
+
+    @Test("a losing failed-phase claim writes no second outcome")
+    func claimFailedPhaseLoserEnqueuesNothing() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        try store.insert(newRecord())
+        #expect(try store.claimFailedPhase(
+            childSessionId: "child", failureMessage: "boom", updatedAt: 700, outcome: failureOutcome()
+        ))
+        // Simulate the first outcome having been delivered and removed, which
+        // is what previously let a fixed id be re-inserted and wake twice.
+        let claim = try #require(try store.claimMessage(
+            id: "outcome-child-failed", instanceId: "i", token: "t", now: 700, staleAfter: 60
+        ))
+        try store.removeDeliveredMessage(id: "outcome-child-failed", claim: claim.claim)
+        #expect(try store.pendingMessages(targetSessionId: "parent").isEmpty)
+
+        #expect(try store.claimFailedPhase(
+            childSessionId: "child", failureMessage: "boom again", updatedAt: 800, outcome: failureOutcome()
+        ) == false)
+
+        #expect(try store.pendingMessages(targetSessionId: "parent").isEmpty)
+        // The losing caller must not overwrite the recorded reason either.
+        #expect(try store.delegation(childSessionId: "child")?.failureMessage == "boom")
+    }
 }

@@ -126,6 +126,11 @@ final class ACPSessionRunner {
     private let onTurnCompleted: ((ACPTurnCompletion) -> Void)?
     private var activePromptStartedAt: Int64?
     private var activePromptDelegatedSource: ACPDelegatedPromptSource?
+    /// Transcript message count when this turn's prompt was recorded. Bounds
+    /// `emitTurnCompleted`'s search for the turn's own last agent message, so
+    /// a turn whose output hasn't drained yet reports no text rather than the
+    /// previous turn's.
+    private var activePromptTranscriptFloor: Int?
     private let onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)?
     private let onSessionTitleUpdated: ((String) -> Void)?
     private let localTitlesEnabled: @MainActor () -> Bool
@@ -1645,6 +1650,7 @@ final class ACPSessionRunner {
             activePromptID = nil
             activePromptStartedAt = nil
             activePromptDelegatedSource = nil
+            activePromptTranscriptFloor = nil
         }
     }
 
@@ -1653,25 +1659,27 @@ final class ACPSessionRunner {
     /// superseded prompt never reports.
     private func emitTurnCompleted(_ result: ACPTurnCompletion.Result) {
         guard let startedAt = activePromptStartedAt else { return }
-        // NOTE: this reads the transcript as it stands right now, which can
-        // be ahead of what has actually drained from the incoming-update
-        // coalescing buffer (a final `agentMessageChunk` may still be
-        // pending), so `lastAgentText` can occasionally be stale or missing
-        // for a turn that did produce output. A synchronous
-        // `flushPendingIncomingUpdates()` call here was tried and reverted:
-        // by the time this runs, `activePromptID` has already been cleared,
-        // and forcing the flush at that point deadlocked
-        // `userCancelDoesNotCancelQueuedSuccessorStartedByPendingBoundaryFlush`
-        // (a pre-existing test) — applying a buffered update against a
-        // cleared `activePromptID` interacts badly with the queued-successor
-        // dispatch this same completion is in the middle of. The correct
-        // fix mirrors `NextPromptCompletedTurn`'s pattern: defer building
-        // the completion until `applyPendingCompletedOutputBoundaryIfReady`
-        // confirms the transcript is caught up, rather than reading it
-        // eagerly here. Left as a follow-up; this is a display-only
-        // imprecision (the transcript and the actual delivered result are
-        // still correct), not a wake/notice misclassification.
-        let lastAgentText: String? = session.transcript.messages.reversed().lazy
+        // Only consider agent messages this turn actually produced: scanning
+        // the whole transcript would quote an EARLIER turn's text whenever
+        // this turn's final `agentMessageChunk` is still sitting in the
+        // incoming-update coalescing buffer, which is strictly worse than
+        // saying nothing (the wake copy has a no-text path for exactly this).
+        // `activePromptTranscriptFloor` is the message count captured when
+        // this turn's prompt was recorded, so anything at or after it belongs
+        // to this turn.
+        //
+        // This deliberately does NOT wait for the buffer to drain, so a turn
+        // whose tail chunk lands late still reports no text rather than
+        // partial text. Draining here was tried and reverted: by this point
+        // `activePromptID` is already cleared, and forcing the flush collides
+        // with the queued-successor dispatch this same completion is in the
+        // middle of, deadlocking
+        // `userCancelDoesNotCancelQueuedSuccessorStartedByPendingBoundaryFlush`.
+        // Guaranteeing the final text needs the completion deferred into
+        // `applyPendingCompletedOutputBoundaryIfReady`, the way
+        // `NextPromptCompletedTurn` is — tracked as follow-up.
+        let floor = min(activePromptTranscriptFloor ?? 0, session.transcript.messages.count)
+        let lastAgentText: String? = session.transcript.messages[floor...].reversed().lazy
             .compactMap { message -> String? in
                 guard case .agent(_, _, let text) = message else { return nil }
                 let tail = ACPDelegatedOutcomeText.tail(text.value, limit: ACPTurnCompletion.lastAgentTextLimit)
@@ -1687,6 +1695,7 @@ final class ACPSessionRunner {
         )
         activePromptStartedAt = nil
         activePromptDelegatedSource = nil
+        activePromptTranscriptFloor = nil
         onTurnCompleted?(completion)
     }
 
@@ -3019,6 +3028,9 @@ extension ACPSessionRunner {
                 }
                 self.activePromptStartedAt = Int64(Date().timeIntervalSince1970 * 1000)
                 self.activePromptDelegatedSource = delegatedSource
+                // Captured before the user prompt is recorded below, so the
+                // floor points at this turn's own first transcript entry.
+                self.activePromptTranscriptFloor = self.session.transcript.messages.count
                 // Re-allow streaming boundary crossings now that we are inside
                 // the Task and have confirmed this prompt is still active. The
                 // RPC is sent below, so any agent chunk that follows is genuine
@@ -3511,6 +3523,29 @@ extension ACPSessionRunner {
         let before = session.transcript.messages.count
         session.appendSystemNotice(text)
         persistFromIndex(before)
+    }
+
+    /// Append a system notice and report whether it actually reached the
+    /// store, unlike the fire-and-forget `appendAndPersistSystemNotice`.
+    /// A caller that holds the only other durable copy — the delegated
+    /// message inbox — needs the real answer, because it deletes that copy
+    /// on success and would otherwise lose the notice entirely when the
+    /// write is rejected by the lease fence or fails in SQLite.
+    ///
+    /// Deliberately goes through the same fire-and-forget path rather than
+    /// writing directly, so the notice keeps its place in the serialized
+    /// persistence queue, and reads the result from `persistedMessageCount`
+    /// rather than awaiting a completion: `enqueuePersistence` skips its
+    /// completion when the task is cancelled, so a continuation waiting on
+    /// it could hang forever. `persistedMessageCount` only advances through
+    /// `commitPersistedMessageRows`, which runs solely on a successful
+    /// write.
+    func appendAndPersistSystemNoticeAwaitingResult(_ text: String) async -> Bool {
+        guard holdsLeaseForWrite() else { return false }
+        let index = session.transcript.messages.count
+        appendAndPersistSystemNotice(text)
+        await flushPersistence()
+        return persistedMessageCount > index
     }
 
     /// Append a file-edit card to the session AND persist it.

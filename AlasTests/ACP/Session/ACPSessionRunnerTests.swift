@@ -4252,12 +4252,16 @@ struct ACPSessionRunnerTests {
 
     @Test("delegated prompt completion carries its source and the trimmed last agent text")
     func delegatedPromptCompletionCarriesSource() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         var completions: [ACPTurnCompletion] = []
-        let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
+        let (runner, mock) = try makeRunner(session: session, onTurnCompleted: { completions.append($0) })
         let source = ACPDelegatedPromptSource(sessionId: "parent", messageId: "m1")
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
-        // Seed an agent message before the turn so the completion has a tail to pick up.
-        runner.session.apply(.agentMessageChunk(.text("  Parser fixed. \n")))
+        // Produce the agent text DURING the turn, which is the only text the
+        // completion may quote.
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await MainActor.run { session.apply(.agentMessageChunk(.text("  Parser fixed. \n"))) }
+            return Data("{}".utf8)
+        }
 
         _ = await withCheckedContinuation { continuation in
             runner.sendNow(
@@ -4271,6 +4275,51 @@ struct ACPSessionRunnerTests {
         #expect(completions.count == 1)
         #expect(completions.first?.delegatedSource == source)
         #expect(completions.first?.lastAgentText == "Parser fixed.")
+    }
+
+    @Test("completion never quotes an agent message from an earlier turn")
+    func completionDoesNotQuotePriorTurnText() async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        // Text from a PREVIOUS turn, already in the transcript. A turn whose
+        // own output hasn't drained yet must report no text rather than
+        // attributing this to itself.
+        runner.session.apply(.agentMessageChunk(.text("answer from the previous turn")))
+
+        _ = await withCheckedContinuation { continuation in
+            runner.send(text: "next", attachments: []) { _ in continuation.resume(returning: ()) }
+        }
+
+        #expect(completions.count == 1)
+        #expect(completions.first?.lastAgentText == nil)
+    }
+
+    @Test("awaited delegated notice reports success once the row is written")
+    func awaitedDelegatedNoticeReportsSuccess() async throws {
+        let (runner, _) = try makeRunner()
+        let before = runner.session.transcript.messages.count
+
+        let persisted = await runner.appendAndPersistSystemNoticeAwaitingResult(
+            "Delegated session child (codex) finished its turn."
+        )
+
+        #expect(persisted)
+        #expect(runner.session.transcript.messages.count == before + 1)
+    }
+
+    @Test("awaited delegated notice reports failure when the runner cannot write")
+    func awaitedDelegatedNoticeReportsFailureWithoutLease() async throws {
+        // Without the write lease nothing can be persisted, so the caller —
+        // which deletes its durable inbox row on `true` — must be told `false`
+        // and keep that row for a later retry.
+        let (runner, _) = try makeRunner(canWrite: { false })
+
+        let persisted = await runner.appendAndPersistSystemNoticeAwaitingResult(
+            "Delegated session child (codex) finished its turn."
+        )
+
+        #expect(persisted == false)
     }
 
     @Test("system notice appended while streaming still lands and persists")
