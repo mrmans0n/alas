@@ -532,6 +532,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             persistence: persistence,
             instanceId: "instance",
             now: { 900 },
+            nowMillis: { 900 },
             makeID: { UUID().uuidString },
             worktree: { parentReachable && $0 == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },

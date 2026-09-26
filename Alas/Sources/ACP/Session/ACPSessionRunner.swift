@@ -1653,6 +1653,24 @@ final class ACPSessionRunner {
     /// superseded prompt never reports.
     private func emitTurnCompleted(_ result: ACPTurnCompletion.Result) {
         guard let startedAt = activePromptStartedAt else { return }
+        // NOTE: this reads the transcript as it stands right now, which can
+        // be ahead of what has actually drained from the incoming-update
+        // coalescing buffer (a final `agentMessageChunk` may still be
+        // pending), so `lastAgentText` can occasionally be stale or missing
+        // for a turn that did produce output. A synchronous
+        // `flushPendingIncomingUpdates()` call here was tried and reverted:
+        // by the time this runs, `activePromptID` has already been cleared,
+        // and forcing the flush at that point deadlocked
+        // `userCancelDoesNotCancelQueuedSuccessorStartedByPendingBoundaryFlush`
+        // (a pre-existing test) — applying a buffered update against a
+        // cleared `activePromptID` interacts badly with the queued-successor
+        // dispatch this same completion is in the middle of. The correct
+        // fix mirrors `NextPromptCompletedTurn`'s pattern: defer building
+        // the completion until `applyPendingCompletedOutputBoundaryIfReady`
+        // confirms the transcript is caught up, rather than reading it
+        // eagerly here. Left as a follow-up; this is a display-only
+        // imprecision (the transcript and the actual delivered result are
+        // still correct), not a wake/notice misclassification.
         let lastAgentText: String? = session.transcript.messages.reversed().lazy
             .compactMap { message -> String? in
                 guard case .agent(_, _, let text) = message else { return nil }
@@ -2036,6 +2054,19 @@ final class ACPSessionRunner {
                 // cancel await would have moved it on.
                 if activePromptID == promptID {
                     activePromptID = nil
+                    // `sendNow`'s own success/catch handlers only emit
+                    // inside their `isActivePrompt` guard, which this branch
+                    // has just made false for them — so if the RPC settles
+                    // after this point, neither of their emit calls fires.
+                    // This is the mutually-exclusive counterpart: whichever
+                    // of {this block, sendNow's handler} observes
+                    // `activePromptID == promptID` first performs the
+                    // clear-and-emit; the other sees it already cleared and
+                    // no-ops. `activePromptStartedAt` still belongs to this
+                    // promptID by the same invariant `sendNow` relies on
+                    // (nothing overwrites it without first changing
+                    // `activePromptID` away from `promptID`).
+                    emitTurnCompleted(.cancelled)
                 }
             }
             policy.userCancelled()
@@ -2986,7 +3017,7 @@ extension ACPSessionRunner {
                     }
                     return (false, nil)
                 }
-                self.activePromptStartedAt = Int64(Date().timeIntervalSince1970)
+                self.activePromptStartedAt = Int64(Date().timeIntervalSince1970 * 1000)
                 self.activePromptDelegatedSource = delegatedSource
                 // Re-allow streaming boundary crossings now that we are inside
                 // the Task and have confirmed this prompt is still active. The

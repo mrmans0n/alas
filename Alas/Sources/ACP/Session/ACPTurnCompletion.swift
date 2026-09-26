@@ -14,7 +14,12 @@ struct ACPTurnCompletion: Equatable, Sendable {
     static let lastAgentTextLimit = 1_200
 
     let sessionId: String
-    /// Epoch seconds captured when the user prompt was recorded.
+    /// Epoch milliseconds captured when the user prompt was recorded. Millisecond
+    /// (not second) precision is required: `ACPSessionOrchestrationPolicy
+    /// .outcomeDisposition` compares this against `ACPDelegationRecord
+    /// .lastParentReportAt`, and the coordinator derives the outcome message's
+    /// id from it — whole-second precision let two distinct turns starting in
+    /// the same second collide on both the comparison and the id.
     let startedAt: Int64
     let result: Result
     /// The delegated prompt that started this turn, if any.

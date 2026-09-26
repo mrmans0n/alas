@@ -6516,6 +6516,7 @@ final class AppState {
                 persistence: acpOrchestrationPersistence,
                 instanceId: instanceId,
                 now: { Int64(Date().timeIntervalSince1970) },
+                nowMillis: { Int64(Date().timeIntervalSince1970 * 1000) },
                 makeID: { UUID().uuidString },
                 worktree: { [weak self] id in self?.worktree(withId: id) },
                 existingWorktree: { [weak self] projectId, worktreeId in

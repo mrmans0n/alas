@@ -15,6 +15,13 @@ final class ACPSessionOrchestrationCoordinator {
         let persistence: ACPOrchestrationPersistence
         let instanceId: String
         let now: () -> Int64
+        /// Epoch **milliseconds**, unlike `now` (seconds). Used only where
+        /// millisecond precision matters: recording when a delegated child
+        /// reported to its parent, compared against `ACPTurnCompletion
+        /// .startedAt` (also milliseconds) in `outcomeDisposition`. Defaults
+        /// to a real millisecond clock so existing call sites that don't
+        /// care about this comparison don't need to supply one.
+        let nowMillis: () -> Int64
         let makeID: () -> String
         let worktree: (String) -> Worktree?
         let existingWorktree: (String, String) -> Worktree?
@@ -27,6 +34,42 @@ final class ACPSessionOrchestrationCoordinator {
         let rememberParent: (String, String) -> Void
         let autoRunDefault: () -> Bool
         let notifyChanged: () -> Void
+
+        init(
+            persistence: ACPOrchestrationPersistence,
+            instanceId: String,
+            now: @escaping () -> Int64,
+            nowMillis: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
+            makeID: @escaping () -> String,
+            worktree: @escaping (String) -> Worktree?,
+            existingWorktree: @escaping (String, String) -> Worktree?,
+            configuredAgents: @escaping () -> [ACPOrchestrationAgent],
+            availableAgents: @escaping (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPOrchestrationAgent],
+            sessionLocation: @escaping (String) -> SessionLocation?,
+            manager: @escaping (Worktree) -> ACPSessionManager?,
+            newWorktreeDestination: @escaping (String, String) -> URL?,
+            createWorktree: @escaping (String, String, String?) async -> Result<Worktree, WorktreeCreationError>,
+            rememberParent: @escaping (String, String) -> Void,
+            autoRunDefault: @escaping () -> Bool,
+            notifyChanged: @escaping () -> Void
+        ) {
+            self.persistence = persistence
+            self.instanceId = instanceId
+            self.now = now
+            self.nowMillis = nowMillis
+            self.makeID = makeID
+            self.worktree = worktree
+            self.existingWorktree = existingWorktree
+            self.configuredAgents = configuredAgents
+            self.availableAgents = availableAgents
+            self.sessionLocation = sessionLocation
+            self.manager = manager
+            self.newWorktreeDestination = newWorktreeDestination
+            self.createWorktree = createWorktree
+            self.rememberParent = rememberParent
+            self.autoRunDefault = autoRunDefault
+            self.notifyChanged = notifyChanged
+        }
     }
 
     private let environment: Environment
@@ -313,9 +356,13 @@ final class ACPSessionOrchestrationCoordinator {
         }
         targetSession?.hasPendingDelegatedMessages = true
         if callerParent?.parentSessionId == request.targetSessionId {
+            // `nowMillis`, not `message.createdAt` (seconds): this is compared
+            // against `ACPTurnCompletion.startedAt`, also milliseconds, in
+            // `outcomeDisposition` — whole-second precision let a report near
+            // the end of one turn be mistaken for covering the next.
             try? await environment.persistence.markParentReport(
                 childSessionId: origin.sessionId,
-                at: message.createdAt
+                at: environment.nowMillis()
             )
         }
         environment.notifyChanged()
