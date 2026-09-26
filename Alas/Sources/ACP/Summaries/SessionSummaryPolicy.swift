@@ -86,7 +86,18 @@ enum SessionSummaryPolicy {
         ) && !LocalTextSafety.containsActiveAction(
             nextAction,
             pattern: #"(?i)\b(?:git\s+)?(?:reset\s+--hard|push\b[^;\n]{0,80}\s+--force(?:-with-lease)?|clean\b(?=[^;\n]{0,40}(?:-[A-Za-z]*f[A-Za-z]*|--force)\b))"#
-        )
+        ) && !containsQuotedDestructiveCommand(nextAction)
+    }
+
+    private static func containsQuotedDestructiveCommand(_ text: String) -> Bool {
+        let command = #"(?:rm\b\s+(?:-[A-Za-z]+\s+)*(?:/|~/?)|git\s+clean\b(?=[^"']{0,40}(?:-[A-Za-z]*f[A-Za-z]*|--force)\b)[^"']*)"#
+        return LocalTextSafety.containsActiveAction(
+            text,
+            pattern: #"(?i)\b(?:run|execute)\s+["']\#(command)\s*["']"#
+        ) || text.range(
+            of: #"(?i)^\s*["']\#(command)\s*["']\s*[.!]?\s*$"#,
+            options: .regularExpression
+        ) != nil
     }
 
     private static func validText(_ text: String) -> Bool {
