@@ -12,7 +12,7 @@ enum NextPromptPolicy {
     Return exactly {"suggestion": null} or {"suggestion": "one concise user message"}. Use the user's language. The message must be a single line of at most 160 characters. Do not explain your decision.
     """
 
-    static func messages(for turns: [NextPromptTurn]) -> [NextPromptChatMessage] {
+    static func messages(for turns: [NextPromptTurn]) -> [LocalTextMessage] {
         struct Entry: Encodable {
             let role: String
             let content: String

@@ -67,6 +67,7 @@ targets:
       path: Alas/Resources/Info.plist
       properties:
         AlasBuildDate: ""
+        AlasBuildConfiguration: "$(CONFIGURATION)"
         AlasGitSHA: ""
         AlasReleaseTrack: stable
         CFBundleDevelopmentRegion: en
