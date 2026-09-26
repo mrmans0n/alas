@@ -98,8 +98,11 @@ import Testing
         #"Run "rm -rf /""#,
         #"Run "git clean -fdx""#,
         #"Execute "git clean -fdx""#,
+        #"Run "git reset --hard""#,
+        #"Execute "format the production disk""#,
         #""rm -rf /""#,
-        #""git clean -fdx""#
+        #""git clean -fdx""#,
+        #""git push origin main --force""#
     ])
     func rejectsCommonDestructiveActions(_ nextAction: String) {
         let json = "{\"goal\":null,\"completed\":[],\"blockers\":[],\"next_action\":\(jsonString(nextAction))}"
@@ -110,6 +113,7 @@ import Testing
         "Do not run rm -rf /",
         #"Do not run "rm -rf /""#,
         "Never format the production disk",
+        #"Never execute "format the production disk""#,
         #"Explain why "git clean -fdx" is destructive"#
     ])
     func allowsNegatedOrDescriptiveDestructiveActions(_ nextAction: String) {

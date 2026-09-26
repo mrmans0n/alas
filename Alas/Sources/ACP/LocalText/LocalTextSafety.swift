@@ -23,21 +23,37 @@ enum LocalTextSafety {
         return false
     }
 
-    static func containsActiveAction(_ text: String, pattern: String) -> Bool {
+    static func containsActiveAction(
+        _ text: String,
+        pattern: String,
+        includingQuotedCommands: Bool = false
+    ) -> Bool {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
         let ns = text as NSString
         for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
-            if activeActionPrefix(ns.substring(to: match.range.location)) { return true }
+            if activeActionPrefix(
+                ns.substring(to: match.range.location),
+                includingQuotedCommands: includingQuotedCommands
+            ) { return true }
         }
         return false
     }
 
-    private static func activeActionPrefix(_ prefix: String) -> Bool {
-        let near = String(prefix.suffix(35))
+    private static func activeActionPrefix(
+        _ prefix: String,
+        includingQuotedCommands: Bool
+    ) -> Bool {
+        let isQuoted = prefix.last == "'" || prefix.last == "\""
+        if isQuoted && !includingQuotedCommands { return false }
+
+        let actionablePrefix = isQuoted ? String(prefix.dropLast()) : prefix
+        let near = String(actionablePrefix.suffix(35))
         if matches(near, #"(?i)\b(?:never|not|don.t|do\s+not|must\s+not|avoid)\s+(?:\w+\s+){0,2}$"#) {
             return false
         }
-        return near.last != "'" && near.last != "\""
+        return !isQuoted
+            || near.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || matches(near, #"(?i)\b(?:run|execute)\s*$"#)
     }
 
     private static func matches(_ text: String, _ pattern: String) -> Bool {

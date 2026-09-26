@@ -79,25 +79,17 @@ enum SessionSummaryPolicy {
         guard let nextAction = summary.nextAction else { return true }
         return !LocalTextSafety.containsActiveAction(
             nextAction,
-            pattern: #"(?i)\b(?:delete|remove|wipe|erase|destroy|drop|format)\b\s+(?:(?:the|a|my|our|all|entire|whole|old|local|protected|production)\s+){0,3}(?:projects?|repositories|repos?|backups?|databases?|data|disks?|volumes?)\b"#
+            pattern: #"(?i)\b(?:delete|remove|wipe|erase|destroy|drop|format)\b\s+(?:(?:the|a|my|our|all|entire|whole|old|local|protected|production)\s+){0,3}(?:projects?|repositories|repos?|backups?|databases?|data|disks?|volumes?)\b"#,
+            includingQuotedCommands: true
         ) && !LocalTextSafety.containsActiveAction(
             nextAction,
-            pattern: #"(?i)\brm\b\s+(?:-[A-Za-z]+\s+)*(?:/(?:\s|$)|~(?:/|\s|$))"#
+            pattern: #"(?i)\brm\b\s+(?:-[A-Za-z]+\s+)*(?:/(?:["']|\s|$)|~(?:/|["']|\s|$))"#,
+            includingQuotedCommands: true
         ) && !LocalTextSafety.containsActiveAction(
             nextAction,
-            pattern: #"(?i)\b(?:git\s+)?(?:reset\s+--hard|push\b[^;\n]{0,80}\s+--force(?:-with-lease)?|clean\b(?=[^;\n]{0,40}(?:-[A-Za-z]*f[A-Za-z]*|--force)\b))"#
-        ) && !containsQuotedDestructiveCommand(nextAction)
-    }
-
-    private static func containsQuotedDestructiveCommand(_ text: String) -> Bool {
-        let command = #"(?:rm\b\s+(?:-[A-Za-z]+\s+)*(?:/|~/?)|git\s+clean\b(?=[^"']{0,40}(?:-[A-Za-z]*f[A-Za-z]*|--force)\b)[^"']*)"#
-        return LocalTextSafety.containsActiveAction(
-            text,
-            pattern: #"(?i)\b(?:run|execute)\s+["']\#(command)\s*["']"#
-        ) || text.range(
-            of: #"(?i)^\s*["']\#(command)\s*["']\s*[.!]?\s*$"#,
-            options: .regularExpression
-        ) != nil
+            pattern: #"(?i)\b(?:git\s+)?(?:reset\s+--hard|push\b[^;\n]{0,80}\s+--force(?:-with-lease)?|clean\b(?=[^;\n]{0,40}(?:-[A-Za-z]*f[A-Za-z]*|--force)\b))"#,
+            includingQuotedCommands: true
+        )
     }
 
     private static func validText(_ text: String) -> Bool {
