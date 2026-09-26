@@ -44,4 +44,34 @@ struct ACPUpstreamReferenceChipTests {
     func plainTextNilWithoutChips() {
         #expect(ACPUpstreamReferenceChip.plainText(of: NSAttributedString(string: "#12")) == nil)
     }
+
+    @Test("the card shows state, title, author, and a relative age")
+    func cardModelLoaded() {
+        let ref = CodeHostReference(sigil: .hash, number: 1497)
+        let merged = CodeHostReferenceSummary(
+            kind: .reviewRequest, number: 1497, title: "fix(acp): preserve chips", state: .merged,
+            author: "mrmans0n", createdAt: nil, updatedAt: nil, closedAt: nil,
+            mergedAt: Date(timeIntervalSince1970: 1_000_000),
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/1497")!
+        )
+        let model = ACPUpstreamReferenceCardModel.make(
+            reference: ref, entry: .loaded(merged), now: Date(timeIntervalSince1970: 1_000_000 + 2 * 86_400)
+        )
+        #expect(model.badge == .merged)
+        #expect(model.badge?.label == "Merged")
+        #expect(model.title == "fix(acp): preserve chips")
+        #expect(model.detail == "mrmans0n · merged 2 days ago")
+    }
+
+    @Test("loading and failures replace the body with one status line")
+    func cardModelStatus() {
+        let ref = CodeHostReference(sigil: .hash, number: 12)
+        func detail(_ entry: ACPUpstreamReferenceStore.Entry) -> String {
+            ACPUpstreamReferenceCardModel.make(reference: ref, entry: entry, now: Date()).detail
+        }
+        #expect(detail(.loading) == "Loading…")
+        #expect(detail(.failed(.notFound(repository: "github.com/mrmans0n/alas"))) == "Not found on github.com/mrmans0n/alas")
+        #expect(detail(.failed(.unauthenticated(executable: "gh", host: "github.com"))) == "gh isn't authenticated for github.com")
+        #expect(detail(.failed(.cliMissing(executable: "glab"))) == "glab is not installed")
+    }
 }

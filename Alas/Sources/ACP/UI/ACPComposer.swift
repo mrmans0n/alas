@@ -1448,6 +1448,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if openUpstreamReference(at: convert(event.locationInWindow, from: nil), event: event) { return }
         invalidateNextPromptSuggestion()
         super.mouseDown(with: event)
         reconcileSlashPanel()
@@ -1567,6 +1568,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     private var imageChipHover: ACPImageChipHoverController?
     private let commandChipHover = ACPCommandChipHoverController()
+    private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
 
     /// Character range + file URL when `point` sits on an image chip
     /// (a character tagged with `.imageAttachmentURI`), nil otherwise.
@@ -1678,12 +1680,14 @@ final class ACPNSTextView: PairedDelimiterTextView {
         } else {
             commandChipHover.hide()
         }
+        upstreamReferenceHover.update(at: point, in: self, store: coordinator?.upstreamReferences)
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         imageChipHoverController().hide()
         commandChipHover.hide()
+        upstreamReferenceHover.hide()
     }
 
     /// Observes the enclosing scroll view's clip view while the composer is
@@ -1707,6 +1711,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         ) { [weak self] in
             guard let self, self.window != nil else { return }
             self.commandChipHover.hide()
+            self.upstreamReferenceHover.hide()
             // The pointer's current position decides the post-scroll state:
             // still over a chip re-schedules (no-op while it stays there);
             // anywhere else hides. `window.mouseLocationOutsideOfEventStream`
@@ -1753,6 +1758,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     func dismissImageChipHover() {
         imageChipHover?.hide()
         commandChipHover.hide()
+        upstreamReferenceHover.hide()
     }
 
     #if DEBUG
