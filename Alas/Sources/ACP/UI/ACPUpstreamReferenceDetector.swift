@@ -110,47 +110,6 @@ enum ACPUpstreamReferenceDetector {
         return CodeHostReference(spelling: "\(parsed.sigil.rawValue)\(parsed.digits)")
     }
 
-    /// The token a single typed whitespace character completes. Chips form
-    /// on whitespace only: intercepting punctuation would bypass the text
-    /// view's delimiter pairing (a typed `)` skipping over an auto-inserted
-    /// one). Punctuation typed between the digits and the caret is instead
-    /// carried inside `replaceRange`, so the caller re-inserts it after the
-    /// chip.
-    static func chipTarget(
-        completingWith insertedText: String,
-        at range: NSRange,
-        in text: String,
-        host: CodeHostKind
-    ) -> (match: Match, replaceRange: NSRange)? {
-        guard range.length == 0,
-              insertedText.utf16.count == 1,
-              let typed = insertedText.utf16.first,
-              isWhitespace(typed)
-        else { return nil }
-        let string = text as NSString
-        guard range.location <= string.length else { return nil }
-        var tokenEnd = range.location
-        while tokenEnd > 0, trailingPunctuation.contains(string.character(at: tokenEnd - 1)) { tokenEnd -= 1 }
-        var digitsStart = tokenEnd
-        while digitsStart > 0, isASCIIDigit(string.character(at: digitsStart - 1)) { digitsStart -= 1 }
-        guard digitsStart > 0, digitsStart < tokenEnd else { return nil }
-        let sigilIndex = digitsStart - 1
-        let token = string.substring(with: NSRange(location: sigilIndex, length: tokenEnd - sigilIndex))
-        let before: unichar? = sigilIndex > 0 ? string.character(at: sigilIndex - 1) : nil
-        let after: unichar = tokenEnd < range.location ? string.character(at: tokenEnd) : typed
-        guard let local = references(in: token, host: host, precededBy: before, followedBy: after).first,
-              local.range == NSRange(location: 0, length: (token as NSString).length)
-        else { return nil }
-        let prefix = string.substring(to: range.location) as NSString
-        guard !codeRanges(in: prefix, unclosedRunsExtendToEnd: true)
-            .contains(where: { NSLocationInRange(sigilIndex, $0) })
-        else { return nil }
-        return (
-            Match(range: NSRange(location: sigilIndex, length: local.range.length), reference: local.reference),
-            NSRange(location: sigilIndex, length: range.location - sigilIndex)
-        )
-    }
-
     /// Ranges enclosed by matching backtick runs. This covers inline code
     /// and fenced blocks alike, since a fence is a run of three closed by
     /// another run of three. An unclosed run is literal text in CommonMark,

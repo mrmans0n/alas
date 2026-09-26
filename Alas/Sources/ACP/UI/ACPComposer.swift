@@ -485,6 +485,12 @@ struct ACPInputField: NSViewRepresentable {
             flushPendingRestyleNow()
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
+                // Hand-typed references were left as plain text (see
+                // `ACPNSTextView.insertText`'s doc comment) to avoid
+                // wiping undo history on every `#N `; chip them now, in an
+                // edit whose undo-clearing no longer matters because the
+                // visible draft is about to be cleared regardless.
+                tv.chipUpstreamReferencesIfNeeded()
             }
             let attributed = textView.attributedString()
             let (text, attachments) = Self.extract(attributed)
@@ -1231,10 +1237,20 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// hand-typed leading command, turning it into a pill in the SAME edit
     /// as the keystroke instead of a follow-up one — see
     /// `ACPLeadingCommand.chipTarget(completingWith:at:in:suggestions:)` for
-    /// why a follow-up edit is unsafe here. Also completes a hand-typed
-    /// upstream reference (`#12`, etc.) the same way. Everything else
-    /// (fenced-block pairing, IME composition, plain typing) still goes
-    /// through `PairedDelimiterTextView`'s own `insertText`.
+    /// why a follow-up edit is unsafe here. Everything else (fenced-block
+    /// pairing, IME composition, plain typing) still goes through
+    /// `PairedDelimiterTextView`'s own `insertText`.
+    ///
+    /// A hand-typed upstream reference (`#12`, etc.) is deliberately NOT
+    /// completed here the way the command pill is: a message references at
+    /// most one leading command, but can carry many `#N`/`!N` tokens, and
+    /// `replaceClearingUndo`'s undo-wipe — an accepted, one-time cost for
+    /// the command pill — would otherwise fire on every single reference
+    /// typed, leaving undo effectively disabled for anyone who writes about
+    /// PRs. Typed references instead stay plain text until
+    /// `chipUpstreamReferencesIfNeeded()` sweeps them in an undo-safe
+    /// moment: when the remote resolves, when a draft restores, and right
+    /// before the message is sent (`Coordinator.submit`).
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
         invalidateNextPromptSuggestion()
         let range = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
@@ -1249,13 +1265,6 @@ final class ACPNSTextView: PairedDelimiterTextView {
             )
             chip.append(NSAttributedString(string: text, attributes: baseTypingAttributes))
             replaceClearingUndo(range: target.range, with: chip)
-            return
-        }
-        if let text = insertString as? String,
-           let target = upstreamReferenceChipTarget(completing: text, at: range) {
-            // Same single-edit, undo-clearing path as the command pill; see
-            // `replaceClearingUndo` for why a follow-up edit is unsafe.
-            replaceClearingUndo(range: target.range, with: target.replacement)
             return
         }
         super.insertText(insertString, replacementRange: replacementRange)

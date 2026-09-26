@@ -6,33 +6,6 @@ extension ACPNSTextView {
         return (store, host)
     }
 
-    /// When the typed whitespace completes a reference, returns the edit
-    /// (range from the sigil to the caret, and the chip plus carried-over
-    /// punctuation plus the typed whitespace) for `insertText` to apply in
-    /// one step.
-    func upstreamReferenceChipTarget(
-        completing text: String,
-        at range: NSRange
-    ) -> (range: NSRange, replacement: NSAttributedString)? {
-        guard let textStorage, let context = upstreamReferenceContext,
-              let target = ACPUpstreamReferenceDetector.chipTarget(
-                  completingWith: text, at: range, in: textStorage.string, host: context.host
-              )
-        else { return nil }
-        let attributes = textStorage.attributes(at: target.match.range.location, effectiveRange: nil)
-        let replacement = NSMutableAttributedString(attributedString: ACPUpstreamReferenceChip.chip(
-            for: target.match.reference, host: context.host, store: context.store, attributes: attributes
-        ))
-        let tailStart = NSMaxRange(target.match.range)
-        let tail = NSRange(location: tailStart, length: NSMaxRange(target.replaceRange) - tailStart)
-        if tail.length > 0 {
-            replacement.append(textStorage.attributedSubstring(from: tail))
-        }
-        replacement.append(NSAttributedString(string: text, attributes: typingAttributes))
-        context.store.ensureLoaded(target.match.reference)
-        return (target.replaceRange, replacement)
-    }
-
     /// Chips references in a fragment about to replace `range`. The
     /// characters on either side of `range` decide whether the fragment's
     /// edges are boundaries, so `#12` pasted right after `abc` stays text.
