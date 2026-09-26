@@ -101,6 +101,10 @@ final class ACPTranscriptScrollerReconciler {
     /// let the outer pass's stale `band`/`keep` release views the inner
     /// pass just mounted.
     private var isLayingOutRows = false
+    /// A height update can synchronously report its compensating scroll.
+    /// Let the caller's trailing layout pass handle the new mount band instead
+    /// of mounting rows inside that scroll callback while geometry is changing.
+    private var isUpdatingRowHeight = false
     private var pendingRelayout = false
     private var lastLaidOutBand: Range<Int>?
 
@@ -854,7 +858,10 @@ final class ACPTranscriptScrollerReconciler {
     /// recursing, so this never interleaves with an in-progress pass.
     private func applyMeasuredHeight(id: String, view: ACPTranscriptRowHostingView) {
         let height = view.measuredHeight(forWidth: contentWidth)
-        if applyHeightToTiling(id: id, height: height) {
+        isUpdatingRowHeight = true
+        let heightChanged = applyHeightToTiling(id: id, height: height)
+        isUpdatingRowHeight = false
+        if heightChanged {
             layoutMountedRows()
         }
     }
@@ -886,6 +893,7 @@ final class ACPTranscriptScrollerReconciler {
     /// Scrolling only changes which rows need hosting views. Between band
     /// crossings, their content and document-relative frames stay unchanged.
     func layoutMountedRowsForScroll() {
+        guard !isUpdatingRowHeight else { return }
         guard currentMountBand != lastLaidOutBand else { return }
         layoutMountedRows()
     }
