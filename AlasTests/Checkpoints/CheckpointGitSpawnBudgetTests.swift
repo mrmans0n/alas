@@ -6,7 +6,7 @@ import Testing
 /// real; the runner only counts. Lower a budget when a change removes spawns,
 /// and justify any increase.
 struct CheckpointGitSpawnBudgetTests {
-    @Test(arguments: [(true, 24), (false, 18)])
+    @Test(arguments: [(true, 14), (false, 13)])
     func snapshotSpawnBudget(retainingPayloads: Bool, budget: Int) async throws {
         let fixture = try await Fixture.make()
         defer { fixture.remove() }
@@ -21,17 +21,17 @@ struct CheckpointGitSpawnBudgetTests {
         defer { fixture.remove() }
 
         let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
-        #expect(fixture.git.drain().count == 42)
+        #expect(fixture.git.drain().count == 27)
 
         for path in Fixture.paths { try fixture.repo.write("later \(path)\n", to: path) }
         let preview = try await fixture.service.restorePreview(target: fixture.repo.target, id: checkpoint.id, coordination: .clear)
         #expect(preview.blocker == nil)
-        #expect(fixture.git.drain().count == 20)
+        #expect(fixture.git.drain().count == 15)
 
         let result = try await fixture.service.restore(target: fixture.repo.target, preview: preview,
                                                        selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
         #expect(result.restoredPaths == Fixture.paths)
-        #expect(fixture.git.drain().count == 99)
+        #expect(fixture.git.drain().count == 64)
     }
 
     /// Three committed files, each modified only in the worktree, so every
@@ -94,8 +94,18 @@ final class CountingCheckpointGitRunner: CheckpointGitRunning, @unchecked Sendab
         return try await live.runData(args, cwd: cwd, environment: environment)
     }
 
-    func blobReference(oid: String, cwd: URL, environment: [String: String]) async throws -> CheckpointBlobReference {
-        record(["cat-file", "blob", oid])
-        return try await live.blobReference(oid: oid, cwd: cwd, environment: environment)
+    func blobSizes(oids: [String], cwd: URL) async throws -> [String: Int64] {
+        if !oids.isEmpty { record(["cat-file", "--batch-check"]) }
+        return try await live.blobSizes(oids: oids, cwd: cwd)
+    }
+
+    func blobContents(oids: [String], cwd: URL) async throws -> [String: Data] {
+        if !oids.isEmpty { record(["cat-file", "--batch"]) }
+        return try await live.blobContents(oids: oids, cwd: cwd)
+    }
+
+    func blobReferences(oids: [String], cwd: URL) async throws -> [String: CheckpointBlobReference] {
+        if !oids.isEmpty { record(["cat-file", "--batch"]) }
+        return try await live.blobReferences(oids: oids, cwd: cwd)
     }
 }
