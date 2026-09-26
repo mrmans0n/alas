@@ -91,10 +91,12 @@ enum SessionSummaryPolicy {
             includingQuotedCommands: true
         ) && !LocalTextSafety.containsActiveAction(
             nextAction,
-            pattern: #"(?i)\b(?:approve|authorize|confirm|accept|allow|grant|consent\s+to)\b\s+(?:(?:the|a|this|that)\s+)?(?:production\s+(?:deployment|release|access)|(?:deployment|release)\s+to\s+production|payments?|purchases?|transactions?|account\s+(?:deletion|closure)|data\s+deletion|(?:admin|root|privileged)\s+access|permission\s+request)\b"#
+            pattern: #"(?i)\b(?:(?:approve|authorize|confirm|accept|allow|grant|consent\s+to)\b\s+(?:(?:the|a|this|that)\s+)?(?:production\s+(?:deployment|release|access)|(?:deployment|release)\s+to\s+production|payments?|purchases?|transactions?|account\s+(?:deletion|closure)|data\s+deletion|(?:admin|root|privileged)\s+access|permission\s+request)\b|(?:answer|respond|reply|say)\b\s+(?:with\s+)?(?:yes|no|affirmatively|negatively)\s+to\s+(?:(?:the|a|this|that)\s+)?(?:permission|authorization|consent|approval)\s+(?:request|prompt|question)\b)"#,
+            includingQuotedCommands: true
         ) && !LocalTextSafety.containsActiveAction(
             nextAction,
-            pattern: #"(?i)\b(?:send|share|post|upload|paste|publish|disclose|reveal|provide|give)\b[^.;\n]{0,80}\b(?:\.env|credentials?|secrets?|api[_ -]?keys?|access[_ -]?keys?|passwords?|tokens?|private\s+keys?)\b"#
+            pattern: #"(?i)\b(?:send|share|post|upload|paste|publish|disclose|reveal|provide|give|email|forward|mail|message|text|transmit)\b[^.;\n]{0,80}\b(?:\.env|credentials?|secrets?|api[_ -]?keys?|access[_ -]?keys?|passwords?|tokens?|private\s+keys?)\b"#,
+            includingQuotedCommands: true
         )
     }
 
@@ -106,7 +108,7 @@ enum SessionSummaryPolicy {
                     || $0.value == 0x2028 || $0.value == 0x2029
             })
             && text.range(
-                of: #"(?i)\b(?:[a-z][a-z0-9+.-]*://|mailto:)"#,
+                of: #"\b[A-Za-z][A-Za-z0-9+.-]*:[^\s]"#,
                 options: .regularExpression
             ) == nil
             && text.range(of: #"</?[A-Za-z][^>]*>"#, options: .regularExpression) == nil
