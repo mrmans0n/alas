@@ -11,6 +11,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - After transient report-finalization retries succeed, continue scheduled cleanup and completion notifications; skip duplicate zmx kills after verified scheduled-script termination and let quit-time drains return when kill subprocesses finish, without waiting on MainActor bookkeeping; verify cleanup reachability against branches advertised by `origin` (#1465).
 - Serialize terminal and ACP writer admission with cleanup staging; retain worktrees with ignored data, unpublished submodule state, or unverified terminal kills; preserve report-history pagination boundaries and refreshes.
 
+## [0.19.13] - 2026-09-26
+
+### ✨ Features
+
+- Suggest concise worktree names from attached tickets with the on-device local text model, while preserving deterministic fallbacks and user edits (#1531).
+
+### 🏗️ Internal
+
+- Stabilize four settings and run-record tests that failed under CI scheduling contention (#1532).
+
 ## [0.19.12] - 2026-09-26
 
 ### ✨ Features
