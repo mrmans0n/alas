@@ -54,47 +54,184 @@ struct NativePeerSessionsTests {
               isSecret: isSecret, options: options, defaultValue: defaultValue)
     }
 
-    @Test func permissionPresentationKeepsToolNameAlongsideTitle() {
-        let request = RemotePermissionPayload(
-            requestId: 1, toolName: "bash", options: [], title: "Run command?",
-            mcpServerName: "build-tools", commandSummary: "swift build"
-        )
-
-        let presentation = NativePeerPermissionPresentation(request: request)
-
-        #expect(presentation.title == "Run command?")
-        #expect(presentation.toolName == "bash")
-        #expect(presentation.commandSummary == "swift build")
-        #expect(presentation.mcpServerName == "build-tools")
-    }
-
-    @Test func permissionDefaultToNoEmphasizesOneTimeRejection() {
-        let presentation = NativePeerPermissionPresentation(request: RemotePermissionPayload(
-            requestId: 1,
-            toolName: "bash",
-            options: [],
-            defaultToNo: true
-        ))
-        let rejectOnce = RemotePermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")
-        let allowOnce = RemotePermissionOption(optionId: "allow", name: "Allow", kind: "allow_once")
-
-        #expect(presentation.isDefaultStyled(rejectOnce))
-        #expect(presentation.isDefaultAction(rejectOnce))
-        #expect(!presentation.isDefaultStyled(allowOnce))
-        #expect(!presentation.isDefaultAction(allowOnce))
-    }
-
-    @Test func permissionPresentationIncludesOptionDescriptions() {
+    @Test func remotePermissionMapsOntoTheNativeCard() {
         let described = RemotePermissionOption(
             optionId: "allow-once", name: "Allow", kind: "allow_once", description: "For this request only."
         )
         let empty = RemotePermissionOption(optionId: "reject", name: "Reject", kind: "reject_once", description: "")
-        let presentation = NativePeerPermissionPresentation(request: RemotePermissionPayload(
-            requestId: 1, toolName: "bash", options: [described, empty]
+        let content = ACPPermissionCardContent(payload: RemotePermissionPayload(
+            requestId: 1, toolName: "bash", options: [described, empty], title: "Run command?",
+            reason: "Builds the project.", defaultToNo: true,
+            mcpServerName: "build-tools", commandSummary: "swift build"
         ))
 
-        #expect(presentation.description(for: described) == "For this request only.")
-        #expect(presentation.description(for: empty) == nil)
+        #expect(content.heading == "Run command?")
+        #expect(content.title == "bash")
+        #expect(content.summary == "swift build")
+        #expect(content.reason == "Builds the project.")
+        #expect(content.mcpServerName == "build-tools")
+        #expect(content.defaultToNo)
+        #expect(content.options.map(\.description) == ["For this request only.", nil])
+
+        let bare = ACPPermissionCardContent(payload: RemotePermissionPayload(
+            requestId: 2, toolName: "bash", options: [], title: "", commandSummary: "bash"
+        ))
+        #expect(bare.heading == nil)
+        #expect(bare.summary == nil)
+    }
+
+    @Test func structuredPeerRowsDecodeIntoNativeCards() throws {
+        func json<T: Encodable>(_ value: T) throws -> String {
+            String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+        }
+        let tool = ACPMessage.ToolCall(toolCallId: "tool-1", title: "Run checks",
+                                       status: "completed", content: "All checks passed")
+        let edit = ACPMessage.FileEdit(path: "Sources/App.swift", added: 2, removed: 1,
+                                       newText: "let ready = true")
+        let items = [ACPMessage.PlanItem(content: "Update the sidebar", status: "pending")]
+
+        #expect(NativePeerRow(message: .init(
+            stableId: "1", kind: "toolCall", text: nil, json: try json(tool), index: 1
+        )) == .toolCall(tool))
+        #expect(NativePeerRow(message: .init(
+            stableId: "2", kind: "fileEdit", text: nil, json: try json(edit), index: 2
+        )) == .fileEdit(edit))
+        #expect(NativePeerRow(message: .init(
+            stableId: "3", kind: "plan", text: nil, json: try json(items), index: 3
+        )) == .plan(items))
+        #expect(NativePeerRow(message: .init(
+            stableId: "4", kind: "thought", text: "Hmm", json: nil, index: 4
+        )) == .thought("Hmm"))
+    }
+
+    @Test func malformedOrUnknownPeerRowsFallBackToANotice() {
+        let broken = NativePeerRow(message: .init(stableId: "1", kind: "toolCall", text: nil, json: "{", index: 1))
+        #expect(broken == .systemNotice("Tool call details are unavailable."))
+
+        let unknown = NativePeerRow(message: .init(stableId: "2", kind: "mystery", text: "Body", json: nil, index: 2))
+        #expect(unknown == .systemNotice("Body"))
+    }
+
+    @Test func thoughtBufferGrowsInPlaceAndResetsWhenTextDiverges() {
+        let cache = NativePeerRowCache()
+        func thought(_ text: String) -> RemoteWireMessage {
+            .init(stableId: "t", kind: "thought", text: text, json: nil, index: 0)
+        }
+
+        cache.sync([thought("Hel")])
+        let buffer = cache.thoughtBuffer(for: "t")
+        cache.sync([thought("Hello")])
+        #expect(cache.thoughtBuffer(for: "t") === buffer)
+        #expect(buffer.value == "Hello")
+
+        cache.sync([thought("Bye")])
+        #expect(cache.thoughtBuffer(for: "t") !== buffer)
+        #expect(cache.thoughtBuffer(for: "t").value == "Bye")
+    }
+
+    @Test func peerQuestionRoundTripsThroughTheNativeInputForm() {
+        let payload = RemoteQuestionPayload(requestId: 7, title: "Pick", questions: [
+            .init(id: "branch", prompt: "Which branch?",
+                  options: [.init(id: "main", label: "main"), .init(id: "dev", label: "dev")],
+                  allowMultiple: false),
+            .init(id: "targets", prompt: "Targets?",
+                  options: [.init(id: "mac", label: "Mac")], allowMultiple: true),
+        ])
+
+        let request = NativePeerRequestBridge.userInputRequest(question: payload)
+        #expect(request.title == "Pick")
+        #expect(request.fields.map(\.key) == ["branch", "targets"])
+        #expect(request.fields.map(\.schema.type) == ["string", "array"])
+        #expect(request.fields[0].schema.options.map(\.const) == ["main", "dev"])
+        guard case .cursor = request.source else {
+            Issue.record("Expected a cursor question source")
+            return
+        }
+
+        let answers = NativePeerRequestBridge.questionAnswers(
+            for: .submit(["branch": .string("dev"), "targets": .strings(["mac"])]), question: payload
+        )
+        #expect(answers == [
+            .init(questionId: "branch", selectedOptionIds: ["dev"]),
+            .init(questionId: "targets", selectedOptionIds: ["mac"]),
+        ])
+        #expect(NativePeerRequestBridge.questionAnswers(for: .decline, question: payload) == nil)
+        #expect(NativePeerRequestBridge.questionAnswers(for: .cancel, question: payload) == nil)
+    }
+
+    @Test func peerElicitationRoundTripsThroughTheNativeInputForm() throws {
+        let payload = RemoteElicitationPayload(
+            requestId: "form-request", title: "Choose", message: "Pick a value", mode: "form",
+            fields: [
+                elicitationField("token", type: "string", isSecret: true),
+                elicitationField("scopes", type: "array", required: false, minItems: 1,
+                                 options: [.init(value: "read", title: "Read", description: "Read only")],
+                                 defaultValue: .strings(["read"])),
+            ],
+            elicitationId: nil, url: nil
+        )
+
+        let request = try #require(NativePeerRequestBridge.userInputRequest(elicitation: payload))
+        #expect(request.mode == .form)
+        #expect(request.title == "Choose")
+        #expect(request.fields.map(\.key) == ["token", "scopes"])
+        #expect(request.fields[0].schema.isSecret)
+        #expect(!request.fields[1].required)
+        #expect(request.fields[1].schema.minItems == 1)
+        #expect(request.fields[1].schema.options.first?.description == "Read only")
+        #expect(request.fields[1].schema.defaultValue?.value as? [String] == ["read"])
+
+        let submit = NativePeerRequestBridge.elicitationReply(for: .submit(["token": .string("abc")]))
+        #expect(submit.action == "accept")
+        #expect(submit.content == ["token": .string("abc")])
+        #expect(NativePeerRequestBridge.elicitationReply(for: .decline).action == "decline")
+        #expect(NativePeerRequestBridge.elicitationReply(for: .cancel).content == nil)
+    }
+
+    @Test func peerURLElicitationRequiresAnHTTPHost() throws {
+        func payload(_ url: String?) -> RemoteElicitationPayload {
+            .init(requestId: "url-request", title: nil, message: "Sign in", mode: "url",
+                  fields: [], elicitationId: "e1", url: url)
+        }
+
+        let valid = try #require(NativePeerRequestBridge.userInputRequest(
+            elicitation: payload("https://example.com/auth")
+        ))
+        guard case .url(let request) = valid.mode else {
+            Issue.record("Expected a URL elicitation")
+            return
+        }
+        #expect(request.url.host == "example.com")
+        #expect(request.elicitationId == "e1")
+        #expect(NativePeerRequestBridge.userInputRequest(elicitation: payload("file:///etc/passwd")) == nil)
+        #expect(NativePeerRequestBridge.userInputRequest(elicitation: payload(nil)) == nil)
+    }
+
+    @Test func peerPlanRoundTripsThroughTheNativeApprovalPrompt() {
+        let payload = RemotePlanPayload(
+            requestId: .string("plan-1"), toolCallId: "tool-1", name: "Implement feature",
+            overview: "Add peer visibility.", plan: "Render peers.",
+            todos: [.init(id: "todo-1", content: "Update the sidebar", status: "pending")],
+            isProject: true,
+            phases: [.init(name: "Verification", todos: [
+                .init(id: "todo-2", content: "Run native tests", status: "pending"),
+            ])]
+        )
+
+        let params = NativePeerRequestBridge.planParams(payload)
+        #expect(params.toolCallId == "tool-1")
+        #expect(params.name == "Implement feature")
+        #expect(params.todos.map(\.content) == ["Update the sidebar"])
+        #expect(params.phases.first?.todos.map(\.id) == ["todo-2"])
+        #expect(params.isProject)
+
+        let accepted = NativePeerRequestBridge.planReply(.init(outcome: .accepted(planUri: "alas://plans/tool-1")))
+        #expect(accepted.action == "accept")
+        #expect(accepted.reason == nil)
+        let rejected = NativePeerRequestBridge.planReply(.init(outcome: .rejected(reason: " Needs tests ")))
+        #expect(rejected.action == "reject")
+        #expect(rejected.reason == "Needs tests")
+        #expect(NativePeerRequestBridge.planReply(.init(outcome: .cancelled)).action == "cancel")
     }
 
     @Test func startSelectionAndStopOwnOneDownstream() {
@@ -337,67 +474,6 @@ struct NativePeerSessionsTests {
         ))
     }
 
-    @Test func secretStringElicitationFieldsUseMaskedInput() {
-        let secret = elicitationField("token", type: "string", isSecret: true)
-        let regular = elicitationField("name", type: "string")
-        let nonString = elicitationField("count", type: "integer", isSecret: true)
-
-        #expect(NativePeerElicitationFieldPresentation.usesSecureInput(for: secret))
-        #expect(!NativePeerElicitationFieldPresentation.usesSecureInput(for: regular))
-        #expect(!NativePeerElicitationFieldPresentation.usesSecureInput(for: nonString))
-    }
-
-    @Test func arrayElicitationSubmitsSelectedOptionsAsStringArray() {
-        let field = RemoteElicitationField(
-            key: "scopes", type: "array", title: "Scopes", description: nil, required: true,
-            minLength: nil, maxLength: nil, minimum: nil, maximum: nil, minItems: 1, maxItems: nil,
-            format: nil, pattern: nil,
-            options: [
-                .init(value: "read", title: "Read", description: nil),
-                .init(value: "write", title: "Write", description: nil),
-                .init(value: "admin", title: "Admin", description: nil),
-            ],
-            defaultValue: nil
-        )
-
-        let content = NativePeerElicitationForm.submittedContent(
-            fields: [field], values: [:], selectedOptions: ["scopes": ["write", "read"]]
-        )
-
-        #expect(content == ["scopes": .strings(["read", "write"])])
-    }
-
-    @Test func elicitationOptionPresentationIncludesDescriptions() {
-        let described = NativePeerElicitationOptionPresentation(option: .init(
-            value: "write", title: "Write access", description: "Allows changes to files."
-        ))
-        let untitled = NativePeerElicitationOptionPresentation(option: .init(
-            value: "read", title: nil, description: ""
-        ))
-
-        #expect(described.title == "Write access")
-        #expect(described.description == "Allows changes to files.")
-        #expect(untitled.title == "read")
-        #expect(untitled.description == nil)
-    }
-
-    @Test func planPreviewIncludesPlanTodosAndPhases() {
-        let request = RemotePlanPayload(
-            requestId: .string("plan-1"), toolCallId: "tool-1", name: "Implement feature",
-            overview: "Add peer visibility.", plan: "Render peer sessions grouped by owner.",
-            todos: [.init(id: "todo-1", content: "Update the sidebar", status: "pending")],
-            isProject: false,
-            phases: [.init(name: "Verification", todos: [
-                .init(id: "todo-2", content: "Run native tests", status: "pending"),
-            ])]
-        )
-
-        let details = NativePeerPlanPresentation.details(for: request)
-        #expect(details.contains("Render peer sessions grouped by owner."))
-        #expect(details.contains("Todos:\n- [pending] Update the sidebar"))
-        #expect(details.contains("Phase: Verification\n- [pending] Run native tests"))
-    }
-
     @Test func stopControlIsShownForEveryActivePeerState() {
         #expect(NativePeerSessionControls.showsStop(for: "streaming"))
         #expect(NativePeerSessionControls.showsStop(for: "awaitingPermission"))
@@ -461,190 +537,6 @@ struct NativePeerSessionsTests {
                                        upserts: [deliveredPrompt], epoch: 1, revision: 1), from: "B")
         #expect(!client.isPromptPending)
         #expect(client.draft.isEmpty)
-    }
-
-    @Test func scalarElicitationRejectsValuesOutsideTheForwardedSchema() {
-        let environment = elicitationField("environment", type: "string", options: [
-            .init(value: "staging", title: "Staging", description: nil),
-            .init(value: "production", title: "Production", description: nil),
-        ])
-        let port = elicitationField("port", type: "integer", minimum: 1024, maximum: 65535)
-        let email = elicitationField("email", type: "string", format: "email")
-        let name = elicitationField("name", type: "string", minLength: 3, maxLength: 16, pattern: "^[A-Z].*")
-        let fields = [environment, port, email, name]
-        let values = ["environment": "production", "port": "3000", "email": "ops@example.com", "name": "Alas"]
-
-        #expect(NativePeerElicitationForm.canSubmit(
-            fields: fields, values: values, selectedOptions: ["environment": ["production"]]
-        ))
-
-        #expect(!NativePeerElicitationForm.canSubmit(
-            fields: fields, values: values, selectedOptions: ["environment": ["unknown"]]
-        ))
-        #expect(!NativePeerElicitationForm.canSubmit(
-            fields: fields,
-            values: ["environment": "production", "port": "80", "email": "ops@example.com", "name": "Alas"],
-            selectedOptions: ["environment": ["production"]]
-        ))
-        #expect(!NativePeerElicitationForm.canSubmit(
-            fields: fields,
-            values: ["environment": "production", "port": "3000", "email": "not-an-email", "name": "Alas"],
-            selectedOptions: ["environment": ["production"]]
-        ))
-        #expect(!NativePeerElicitationForm.canSubmit(
-            fields: fields,
-            values: ["environment": "production", "port": "3000", "email": "ops@example.com", "name": "ab"],
-            selectedOptions: ["environment": ["production"]]
-        ))
-        #expect(!NativePeerElicitationForm.canSubmit(
-            fields: fields,
-            values: ["environment": "production", "port": "3000", "email": "ops@example.com", "name": "lowercase"],
-            selectedOptions: ["environment": ["production"]]
-        ))
-    }
-
-    @Test func dateElicitationRejectsImpossibleCalendarDate() {
-        let date = elicitationField("date", type: "string", format: "date")
-
-        #expect(!NativePeerElicitationForm.canSubmit(
-            fields: [date], values: ["date": "2026-02-31"], selectedOptions: [:]
-        ))
-        #expect(!NativePeerElicitationForm.canSubmit(
-            fields: [date], values: ["date": "2026-2-8"], selectedOptions: [:]
-        ))
-        #expect(NativePeerElicitationForm.canSubmit(
-            fields: [date], values: ["date": "2026-02-28"], selectedOptions: [:]
-        ))
-    }
-
-    @Test func scalarElicitationSubmitsSelectedOptionsAndTypedValues() {
-        let environment = elicitationField("environment", type: "string", options: [
-            .init(value: "staging", title: "Staging", description: nil),
-            .init(value: "production", title: "Production", description: nil),
-        ])
-        let port = elicitationField("port", type: "integer", minimum: 1024, maximum: 65535)
-        let enabled = elicitationField("enabled", type: "boolean")
-
-        let content = NativePeerElicitationForm.submittedContent(
-            fields: [environment, port, enabled],
-            values: ["port": "3000"],
-            selectedOptions: ["environment": ["production"]],
-            booleanValues: ["enabled": true]
-        )
-
-        #expect(content == [
-            "environment": .string("production"),
-            "port": .integer(3000),
-            "enabled": .boolean(true),
-        ])
-    }
-
-    @Test func requiredStringCanSubmitAnEmptyValueWhenTheSchemaAllowsIt() {
-        let message = elicitationField("message", type: "string")
-
-        #expect(!NativePeerElicitationForm.canSubmit(
-            fields: [message], values: [:], selectedOptions: [:]
-        ))
-        #expect(NativePeerElicitationForm.canSubmit(
-            fields: [message], values: ["message": ""], selectedOptions: [:]
-        ))
-        #expect(NativePeerElicitationForm.submittedContent(
-            fields: [message], values: ["message": ""], selectedOptions: [:]
-        ) == ["message": .string("")])
-    }
-
-    @Test func requiredArrayCanSubmitAnEmptySelectionWhenTheSchemaHasNoMinItems() {
-        let scopes = elicitationField("scopes", type: "array", options: [
-            .init(value: "read", title: "Read", description: nil),
-            .init(value: "write", title: "Write", description: nil),
-        ])
-
-        #expect(NativePeerElicitationForm.canSubmit(
-            fields: [scopes], values: [:], selectedOptions: [:]
-        ))
-        #expect(NativePeerElicitationForm.submittedContent(
-            fields: [scopes], values: [:], selectedOptions: [:]
-        ) == ["scopes": .strings([])])
-
-        let minOne = elicitationField("scopes", type: "array", minItems: 1, options: [
-            .init(value: "read", title: "Read", description: nil),
-            .init(value: "write", title: "Write", description: nil),
-        ])
-        #expect(!NativePeerElicitationForm.canSubmit(
-            fields: [minOne], values: [:], selectedOptions: [:]
-        ))
-    }
-
-    @Test func booleanElicitationAcceptsEitherExplicitChoice() {
-        let enabled = elicitationField("enabled", type: "boolean")
-
-        #expect(!NativePeerElicitationForm.canSubmit(
-            fields: [enabled], values: [:], selectedOptions: [:]
-        ))
-        #expect(NativePeerElicitationForm.canSubmit(
-            fields: [enabled], values: [:], selectedOptions: [:], booleanValues: ["enabled": false]
-        ))
-        #expect(NativePeerElicitationForm.canSubmit(
-            fields: [enabled], values: [:], selectedOptions: [:], booleanValues: ["enabled": true]
-        ))
-    }
-
-    @Test func untouchedOptionalBooleanIsOmittedFromElicitationResponse() {
-        let optional = elicitationField("enabled", type: "boolean", required: false)
-        let state = NativePeerElicitationForm.State(requestId: "request", fields: [optional])
-
-        let untouched = NativePeerElicitationForm.submittedContent(
-            fields: [optional], values: state.values, selectedOptions: state.selectedOptions,
-            booleanValues: state.booleanValues
-        )
-        let explicitlyFalse = NativePeerElicitationForm.submittedContent(
-            fields: [optional], values: state.values, selectedOptions: state.selectedOptions,
-            booleanValues: ["enabled": false]
-        )
-
-        #expect(untouched.isEmpty)
-        #expect(explicitlyFalse == ["enabled": .boolean(false)])
-    }
-
-    @Test func elicitationFormResetClearsValuesWhenRequestChanges() {
-        let originalFields = [
-            elicitationField("name", type: "string", defaultValue: .string("old default")),
-            elicitationField("scopes", type: "array", required: false),
-            elicitationField("enabled", type: "boolean", defaultValue: .boolean(false)),
-        ]
-        var state = NativePeerElicitationForm.State(requestId: "first", fields: originalFields)
-        state.values["name"] = "typed value"
-        state.selectedOptions["scopes"] = ["read"]
-        state.booleanValues["enabled"] = true
-
-        let nextFields = [
-            elicitationField("name", type: "string", defaultValue: .string("new default")),
-            elicitationField("scopes", type: "array", required: false),
-            elicitationField("enabled", type: "boolean", defaultValue: .boolean(false)),
-        ]
-        state.reset(requestId: "second", fields: nextFields)
-
-        #expect(state.values["name"] == "new default")
-        #expect(state.selectedOptions["scopes"] == nil)
-        #expect(state.booleanValues["enabled"] == false)
-    }
-
-    @Test func planRejectionReasonResetsWhenARequestReusesItsWireID() {
-        var state = NativePeerPlanRejectionState(requestId: .string("plan-1"))
-        state.reason = "Old feedback"
-
-        state.reset(requestId: .string("plan-1"))
-
-        #expect(state.reason.isEmpty)
-    }
-
-    @Test func questionSelectionsResetWhenARequestReusesItsWireID() {
-        var state = NativePeerQuestionSelectionState(requestId: 1)
-        state.selectedOptions["branch"] = ["main"]
-
-        state.reset(requestId: 1)
-
-        #expect(state.selectedOptions.isEmpty)
     }
 
     @Test func peerTranscriptTailFollowPausesWhenScrolledAway() {

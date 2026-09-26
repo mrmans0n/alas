@@ -45,6 +45,24 @@ struct ACPPermissionFSTests {
         #expect(p.toolCall.mcpServerName == "github")
     }
 
+    @Test("permission card content folds _meta and the command block into rendered fields")
+    func cardContentFromParams() throws {
+        let data = try fixture("permission-request-meta")
+        let env = try JSONDecoder().decode(JSONRPCEnvelope<ACPPermissionRequestParams>.self, from: data)
+        let p = try #require(env.params)
+
+        let content = ACPPermissionCardContent(params: p)
+        #expect(content.heading == "Run command?")
+        #expect(content.kind == "execute")
+        #expect(content.title == "bash")
+        #expect(content.summary == "swift build")
+        #expect(content.reason == "Reason: needs shell access to build the project")
+        #expect(content.defaultToNo)
+        #expect(content.mcpServerName == "github")
+        #expect(content.options.map(\.optionId) == ["allow-once", "allow-with-updates", "reject"])
+        #expect(content.options.map(\.description) == ["Run this command one time", nil, "Don't run this command"])
+    }
+
     @Test("unversioned/future _meta.permission is ignored, not surfaced")
     func ignoresUnversionedOrFutureMeta() throws {
         let futureVersion = AnyCodable([

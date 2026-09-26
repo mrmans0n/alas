@@ -425,32 +425,7 @@ struct ACPComposer: View {
             }
             .padding(.horizontal, 2)
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .background {
-            // Two layered BACKGROUNDS — both sit behind the content. The
-            // previous version put the dark gradient as `.overlay`,
-            // which painted it OVER the chips and text and washed them
-            // out (this is the bug the user kept seeing). Material goes
-            // closest to the content; the tint sits behind it.
-            ZStack {
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(
-                        LinearGradient(
-                            colors: [theme.color("bg-2").opacity(0.55),
-                                     theme.color("bg-1").opacity(0.65)],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                    )
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(.ultraThinMaterial)
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(borderColor, lineWidth: 0.75)
-        )
-        .shadow(color: .black.opacity(0.45), radius: 18, y: 10)
+        .acpComposerPill(focused: inputFocused)
     }
 
     private var contextUsageButton: some View {
@@ -795,10 +770,6 @@ struct ACPComposer: View {
             parts.append(detail)
         }
         return parts.isEmpty ? "Auth status reported by the adapter" : parts.joined(separator: " · ")
-    }
-
-    private var borderColor: Color {
-        inputFocused ? theme.color("add").opacity(0.7) : theme.color("line")
     }
 
     // MARK: - Auto-run pill (was in the toolbar)
@@ -1240,5 +1211,51 @@ struct ACPComposer: View {
         case .stop:
             stopTapped()
         }
+    }
+}
+
+/// The floating pill that frames the composer: tinted gradient under a
+/// material, hairline border that warms when focused, and a soft drop
+/// shadow. Shared with the mirrored peer composer.
+struct ACPComposerPillChrome: ViewModifier {
+    let focused: Bool
+    @Environment(\.theme) private var theme
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                // Two layered BACKGROUNDS — both sit behind the content. An
+                // earlier version put the dark gradient as `.overlay`, which
+                // painted it OVER the chips and text and washed them out.
+                // Material goes closest to the content; the tint sits
+                // behind it.
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(
+                            LinearGradient(
+                                colors: [theme.color("bg-2").opacity(0.55),
+                                         theme.color("bg-1").opacity(0.65)],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        )
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(.ultraThinMaterial)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(
+                        focused ? theme.color("add").opacity(0.7) : theme.color("line"),
+                        lineWidth: 0.75
+                    )
+            )
+            .shadow(color: .black.opacity(0.45), radius: 18, y: 10)
+    }
+}
+
+extension View {
+    func acpComposerPill(focused: Bool) -> some View {
+        modifier(ACPComposerPillChrome(focused: focused))
     }
 }

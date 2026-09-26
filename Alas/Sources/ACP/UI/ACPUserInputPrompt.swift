@@ -4,6 +4,10 @@ struct ACPUserInputPrompt: View {
     let request: ACPUserInputRequest
     let onRespond: (UUID, ACPUserInputAction) -> Void
     let onOpenURL: (UUID) async -> Bool
+    /// Whether the Skip/Decline and Cancel buttons are offered. A mirrored
+    /// peer question has no wire form for either, so it hides them rather
+    /// than show buttons that cannot act.
+    let showsDismissActions: Bool
     @Environment(\.theme) private var theme
     @State private var formState: ACPUserInputFormState
     @State private var urlOpenError = false
@@ -12,11 +16,13 @@ struct ACPUserInputPrompt: View {
     init(
         request: ACPUserInputRequest,
         onRespond: @escaping (UUID, ACPUserInputAction) -> Void,
-        onOpenURL: @escaping (UUID) async -> Bool
+        onOpenURL: @escaping (UUID) async -> Bool,
+        showsDismissActions: Bool = true
     ) {
         self.request = request
         self.onRespond = onRespond
         self.onOpenURL = onOpenURL
+        self.showsDismissActions = showsDismissActions
         _formState = State(initialValue: ACPUserInputFormState(request: request))
     }
 
@@ -292,8 +298,10 @@ struct ACPUserInputPrompt: View {
 
     private var actionRow: some View {
         HStack(spacing: 8) {
-            Button(secondaryActionTitle) { onRespond(request.id, .decline) }
-            Button("Cancel", role: .cancel) { onRespond(request.id, .cancel) }
+            if showsDismissActions {
+                Button(secondaryActionTitle) { onRespond(request.id, .decline) }
+                Button("Cancel", role: .cancel) { onRespond(request.id, .cancel) }
+            }
             Spacer()
             Button(primaryActionTitle) {
                 if let content = formState.submittedContent() {
