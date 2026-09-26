@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import Alas
 
+// @MainActor: drives ACPNSTextView/NSWindow, AppKit main-thread-only APIs.
 @MainActor
 @Suite("ACP composer upstream reference chips")
 struct ACPUpstreamReferenceComposerTests {

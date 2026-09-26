@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import Alas
 
+// @MainActor: drives ACPMarkdownInlineNSTextView, AppKit main-thread-only APIs.
 @MainActor
 @Suite("ACP transcript upstream reference chips")
 struct ACPUpstreamReferenceTranscriptTests {

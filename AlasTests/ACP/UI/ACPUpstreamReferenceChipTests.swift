@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import Alas
 
+// @MainActor: builds NSAttributedString chip attachments and reads NSFont/NSColor, AppKit main-thread-only APIs.
 @MainActor
 @Suite("ACP upstream reference chip")
 struct ACPUpstreamReferenceChipTests {

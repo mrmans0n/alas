@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import Alas
 
+// @MainActor: ACPUpstreamReferenceStore is a @MainActor class.
 @MainActor
 @Suite("ACP upstream reference store")
 struct ACPUpstreamReferenceStoreTests {
