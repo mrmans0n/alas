@@ -458,17 +458,18 @@ struct NextPromptSettingsTests {
         }
     }
 
-    private func waitUntil(timeout: Duration = .seconds(20), _ condition: () async -> Bool) async throws {
+    private func waitUntil(timeout: Duration = .seconds(28), _ condition: () async -> Bool) async throws {
         // 5s was too tight on loaded CI runners: the tasks under test are real actor
         // hops (and, for callers awaiting a freshly-spawned Task's first
         // scheduling turn, `Task.detached` work) competing with ~1300 other
         // tests' work on the same cooperative pool. 20s wasn't always enough
-        // either — seen missing that deadline twice, once by microseconds
-        // and once after a lane that ran at normal speed, implying the
-        // spawned task's own first turn was the slow part, not this loop.
-        // The default stays well under the harness's 60s per-test execution
-        // allowance even for the one test that calls this twice; callers
-        // waiting on nothing else can ask for more headroom.
+        // either — three different tests in this file have now each missed
+        // it at least once, always by a small margin, implying the spawned
+        // task's own first scheduling turn (not this loop) is what's slow.
+        // 28s keeps the one test that calls this twice at 56s total, still
+        // under the harness's 60s per-test execution allowance; callers
+        // waiting on nothing else (see cancelledInstallRemainsEnabledUntilExplicitRetry)
+        // can ask for more headroom still.
         let deadline = ContinuousClock.now.advanced(by: timeout)
         while !(await condition()) {
             try #require(ContinuousClock.now < deadline)
