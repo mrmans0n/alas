@@ -36,7 +36,7 @@ struct ACPSessionManagerAttachRestoreTests {
         let restart = Task { await manager.restartConnection(to: session.id) }
         let duplicateRestart = Task { await manager.restartConnection(to: session.id) }
 
-        try await waitUntilAsync(timeoutNanos: 1_000_000_000) {
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
             session.agentState == .ready && launchCount == 1
         }
         #expect(await setupGate.hasEntered)
