@@ -766,9 +766,12 @@ struct ACPSessionManagerAttachRestoreTests {
         }
         #expect(await sharedService.detached.count == 1)
 
-        // Give the stalled detach's bounded wait time to time out so the
-        // pending requirement is recorded before the retry attach starts.
-        try await Task.sleep(for: .milliseconds(150))
+        // Let the stalled detach's bounded wait time out so the pending
+        // requirement is recorded before the retry attach starts. Await the
+        // recorded requirement itself instead of sleeping past the timeout.
+        try await waitUntil(timeoutNanos: 2_000_000_000) {
+            manager.pendingFreshBrokerNamespacesForTesting.contains(session.id)
+        }
 
         // The restart flow's release evicted the failed session; recreate it
         // from the store like a reopening tab would.

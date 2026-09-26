@@ -4,7 +4,7 @@ import Testing
 
 struct WorktreeStateSnapshotterTests {
     @Test func snapshotKeepsHeadIndexAndDiskVersionsDistinct() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("original\n", to: "file.swift")
         try await repo.commitAll("file")
@@ -24,7 +24,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func trackedDeletionIsAbsentOnDisk() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("original", to: "deleted")
         try await repo.commitAll("file")
@@ -35,7 +35,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func stagedRenameGroupsBothPaths() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("original", to: "old name")
         try await repo.commitAll("file")
@@ -48,7 +48,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func executableModesSurvive() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("script", to: "run")
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: repo.root.appendingPathComponent("run").path)
@@ -61,7 +61,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func symlinkCapturesTargetBytes() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.symlink("nonexistent-target", at: "link")
         try await repo.stage("link")
@@ -73,7 +73,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func binaryDataSurvives() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write(Data([0, 255, 254, 128]), to: "binary")
         try await repo.stage("binary")
@@ -84,7 +84,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func untrackedSourceIncludedAndIgnoredContentAbsent() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("ignored/\n", to: ".gitignore")
         try await repo.commitAll("ignore")
@@ -95,7 +95,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func gitlinkFailsCapture() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let oid = String(decoding: try await repo.git(["rev-parse", "HEAD"]), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         try await repo.git(["update-index", "--add", "--cacheinfo", "160000,\(oid),module"])
@@ -103,7 +103,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func intentToAddEntryFailsCaptureWithoutChangingIndexIntent() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("not staged", to: "planned.swift")
         try await repo.git(["add", "-N", "planned.swift"])
@@ -120,9 +120,8 @@ struct WorktreeStateSnapshotterTests {
         let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-unborn-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        for args in [["init", "-b", "main"], ["config", "user.name", "Checkpoint Tests"],
-                     ["config", "user.email", "checkpoints@example.test"], ["config", "commit.gpgsign", "false"],
-                     ["config", "core.hooksPath", "/dev/null"], ["config", "core.filemode", "true"]] {
+        // Nothing here commits, so identity, signing, and hook config are never read.
+        for args in [["init", "-b", "main"], ["config", "core.filemode", "true"]] {
             let result = try await Process.git(args, cwd: root)
             guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
         }
@@ -146,9 +145,8 @@ struct WorktreeStateSnapshotterTests {
         let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-unborn-sha256-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        for args in [["init", "--object-format=sha256", "-b", "main"], ["config", "user.name", "Checkpoint Tests"],
-                     ["config", "user.email", "checkpoints@example.test"], ["config", "commit.gpgsign", "false"],
-                     ["config", "core.hooksPath", "/dev/null"], ["config", "core.filemode", "true"]] {
+        // Nothing here commits, so identity, signing, and hook config are never read.
+        for args in [["init", "--object-format=sha256", "-b", "main"], ["config", "core.filemode", "true"]] {
             let result = try await Process.git(args, cwd: root)
             guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
         }
@@ -169,7 +167,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func unmergedEntryFailsCapture() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("base", to: "file")
         try await repo.commitAll("base")
@@ -184,7 +182,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func sparseStateFailsCapture() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("base", to: "file")
         try await repo.commitAll("base")
@@ -193,7 +191,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func assumeUnchangedDiskEditFailsCapture() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("original", to: "hidden.swift")
         try await repo.commitAll("file")
@@ -209,7 +207,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func untrackedPolicyUsesExactNamesAndCaseInsensitiveExtensions() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let ignored = [".build/a", "build/a", "DerivedData/a", "node_modules/a", ".swiftpm/a", ".gradle/a", "Pods/a", "Carthage/a"]
         let secrets = [".env", ".env.local", ".netrc", "credentials", "credentials.json", "cert.KEY", "cert.pem", "cert.p12",
@@ -229,7 +227,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func trackedSecretNamesRemainIncluded() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("tracked", to: ".env")
         try await repo.stage(".env")
@@ -239,7 +237,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func trackedPayloadAboveRetainedLimitFailsBeforeCapture() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write(Data(repeating: 7, count: 33), to: "large.bin")
         try await repo.stage("large.bin")
@@ -251,7 +249,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func fingerprintIsStableAndChangesWithDiskBytes() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("one", to: "file")
         let first = try await WorktreeStateSnapshotter.live.snapshot(target: repo.target)
@@ -263,7 +261,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func fingerprintOnlySnapshotDoesNotRetainPayloadBytes() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("one", to: "file")
 
@@ -276,7 +274,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func caseOnlyRenameCapturesSourceAndDestinationAsDirtyRename() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("old", to: "foo")
         try await repo.commitAll("lowercase")
@@ -296,7 +294,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func trackedFileReplacedByDirectoryIsCapturedAsAbsentLeaf() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("tracked", to: "config")
         try await repo.commitAll("tracked file")
@@ -312,7 +310,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     @Test func lineageReplacementFailsCapture() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("\(UUID().uuidString.lowercased())\n", to: ".git/alas-worktree-lineage")
         await #expect(throws: CheckpointSnapshotError.lineageChanged) {

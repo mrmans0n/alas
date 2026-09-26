@@ -190,7 +190,9 @@ struct ACPTranscriptScrollerLiveScrollTests {
         let (host, scroller, coordinator) = tailFollowingHost()
         liveScroll(scroller, to: scroller.scrollY - 400)
         #expect(!host.session.followsTranscriptTail)
-        try await Task.sleep(for: .milliseconds(700))
+        // Wait for the gesture to be fully over: the grace period has lapsed
+        // and the settle timer has compacted the grow-only window.
+        try await waitForSettledHistoryWindow(host: host, scroller: scroller)
         // An idle layout correction reaching the bottom is not a user gesture.
         scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: scroller.contentHeight - scroller.viewportHeight))
         scroller.reflectScrolledClipView(scroller.contentView)
@@ -224,7 +226,7 @@ struct ACPTranscriptScrollerLiveScrollTests {
 
         liveScroll(scroller, to: target)
         let distanceFromBottom = scroller.distanceFromBottom
-        try await Task.sleep(for: .milliseconds(700))
+        try await waitForSettledHistoryWindow(host: host, scroller: scroller)
 
         #expect(!host.session.followsTranscriptTail)
         #expect(
@@ -276,7 +278,9 @@ struct ACPTranscriptScrollerLiveScrollTests {
         let (host, scroller, coordinator) = tailFollowingHost()
         liveScroll(scroller, to: max(0, scroller.contentHeight - scroller.viewportHeight - 470))
 
-        try await Task.sleep(for: .milliseconds(600))
+        try await waitUntil {
+            host.transcript.visibleTailBound - host.transcript.visibleHead <= ACPTranscript.maxVisibleRows
+        }
 
         #expect(
             host.transcript.visibleTailBound - host.transcript.visibleHead
@@ -311,7 +315,7 @@ struct ACPTranscriptScrollerLiveScrollTests {
         NotificationCenter.default.post(
             name: NSScrollView.didEndLiveScrollNotification, object: scroller
         )
-        try await Task.sleep(for: .milliseconds(700))
+        try await waitUntil { host.transcript.visibleHead == 120 - ACPTranscript.tailWindow }
         #expect(host.transcript.visibleHead == 120 - ACPTranscript.tailWindow)
         #expect(host.transcript.visibleTail == nil)
         #expect(scroller.distanceFromBottom < 1)
@@ -382,6 +386,36 @@ struct ACPTranscriptScrollerLiveScrollTests {
             ) == false,
             "well after the gesture, the scroller is idle again"
         )
+    }
+
+    /// Polls `condition` every 10 ms until it holds or `timeout` elapses. The
+    /// caller re-asserts the condition, so a timeout still fails the test; the
+    /// generous ceiling only bounds that failure case.
+    private func waitUntil(timeout: Duration = .seconds(5), _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    /// Waits until a history gesture has fully settled: the post-gesture grace
+    /// period has lapsed and the debounced settle pass has compacted the
+    /// temporary grow-only window back to `maxVisibleRows`. This is the state
+    /// the fixed sleeps used to wait for, observed directly.
+    private func waitForSettledHistoryWindow(
+        host: ACPTranscriptScroller,
+        scroller: ACPTranscriptScrollerView
+    ) async throws {
+        #expect(
+            host.transcript.visibleTailBound - host.transcript.visibleHead > ACPTranscript.maxVisibleRows,
+            "the gesture should leave the grow-only window uncompacted until it settles"
+        )
+        try await waitUntil {
+            !scroller.isUserScrollActive
+                && host.transcript.visibleTailBound - host.transcript.visibleHead <= ACPTranscript.maxVisibleRows
+        }
+        #expect(!scroller.isUserScrollActive)
+        #expect(host.transcript.visibleTailBound - host.transcript.visibleHead <= ACPTranscript.maxVisibleRows)
     }
 }
 

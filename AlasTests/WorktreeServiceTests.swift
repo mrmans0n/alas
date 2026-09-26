@@ -10,13 +10,55 @@ import Foundation
 // contention). Force-serialize so each git invocation runs cleanly.
 @Suite(.serialized)
 struct WorktreeServiceTests {
-    private func makeRepo() async throws -> URL {
+    /// Real git repositories built once per test process and copied into a
+    /// unique directory per test, so each test starts from the same state as
+    /// the old per-test `init` + `commit` (+ fixture) sequence without
+    /// re-spawning those git processes every time. Templates only ever hold
+    /// state from *before* any `git worktree add`: linked worktrees record
+    /// absolute paths, so every test still creates its own worktrees against
+    /// its own copy.
+    private static let emptyRepoTemplate = Task { try await makeEmptyRepoTemplate() }
+
+    private static func makeTemplateDirectory(_ label: String) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-wt-template-\(label)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// `git init` + an empty `init` commit, the base state of every fixture.
+    private static func initRepo(at dir: URL) async throws {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try await checkedGit(["init", "-q", "-b", "main"], cwd: dir)
+        try await checkedGit(["commit", "-q", "--allow-empty", "-m", "init"], cwd: dir)
+    }
+
+    private static func makeEmptyRepoTemplate() async throws -> URL {
+        let repo = try makeTemplateDirectory("empty").appendingPathComponent("repo")
+        try await initRepo(at: repo)
+        return repo
+    }
+
+    @discardableResult
+    private static func checkedGit(_ args: [String], cwd: URL) async throws -> String {
+        let result = try await Process.git(args, cwd: cwd)
+        guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Copies a template repository to a fresh `alas-wt-<uuid>` directory.
+    /// Callers whose template has tracked files refresh the copy's index
+    /// afterwards: copied files get new inodes and ctimes, which would
+    /// otherwise make them look stat-dirty against the copied index.
+    private static func copyRepo(_ template: URL) throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-wt-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: dir)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: dir)
+        try FileManager.default.copyItem(at: template, to: dir)
         return dir
+    }
+
+    private func makeRepo() async throws -> URL {
+        try Self.copyRepo(try await Self.emptyRepoTemplate.value)
     }
 
     @Test func listFindsMain() async throws {
@@ -1414,14 +1456,34 @@ extension WorktreeServiceTests {
         }
     }
 
-    private func makeMissingLFSFixture(suffix: String) async throws -> MissingLFSFixture {
-        let repo = try await makeRepo()
-        let lfsOverride = [
-            "-c", "filter.lfs.process=",
-            "-c", "filter.lfs.smudge=",
-            "-c", "filter.lfs.clean=",
-            "-c", "filter.lfs.required=false"
-        ]
+    /// Disables any LFS filter (including a globally installed git-lfs) for
+    /// one git invocation.
+    private static let lfsOverride = [
+        "-c", "filter.lfs.process=",
+        "-c", "filter.lfs.smudge=",
+        "-c", "filter.lfs.clean=",
+        "-c", "filter.lfs.required=false"
+    ]
+
+    /// Points the repository's LFS filters at a binary that does not exist,
+    /// the failure shape of a missing git-lfs install.
+    private static func configureMissingLFSFilters(in repo: URL) async throws {
+        try await checkedGit(["config", "filter.lfs.process", "missing-git-lfs filter-process"], cwd: repo)
+        try await checkedGit(["config", "filter.lfs.clean", "missing-git-lfs clean -- %f"], cwd: repo)
+        try await checkedGit(["config", "filter.lfs.smudge", "missing-git-lfs smudge -- %f"], cwd: repo)
+        try await checkedGit(["config", "filter.lfs.required", "true"], cwd: repo)
+    }
+
+    /// A repository with a committed LFS pointer and the missing-git-lfs
+    /// filter config already applied. Setting that config before the
+    /// per-test `worktree add` is equivalent to setting it after: every git
+    /// call that must not hit the broken filter passes `lfsOverride`, whose
+    /// `-c` values take precedence over repository config.
+    private static let missingLFSTemplate = Task { try await makeMissingLFSTemplate() }
+
+    private static func makeMissingLFSTemplate() async throws -> URL {
+        let repo = try makeTemplateDirectory("missing-lfs").appendingPathComponent("repo")
+        try await initRepo(at: repo)
         try "*.bin filter=lfs diff=lfs merge=lfs -text\n".write(
             to: repo.appendingPathComponent(".gitattributes"),
             atomically: true,
@@ -1438,20 +1500,23 @@ extension WorktreeServiceTests {
             atomically: true,
             encoding: .utf8
         )
-        _ = try await Process.git(lfsOverride + ["add", ".gitattributes", "data.bin"], cwd: repo)
-        _ = try await Process.git(lfsOverride + ["commit", "-q", "-m", "add lfs pointer"], cwd: repo)
+        try await checkedGit(lfsOverride + ["add", ".gitattributes", "data.bin"], cwd: repo)
+        try await checkedGit(lfsOverride + ["commit", "-q", "-m", "add lfs pointer"], cwd: repo)
+        try await configureMissingLFSFilters(in: repo)
+        return repo
+    }
+
+    private func makeMissingLFSFixture(suffix: String) async throws -> MissingLFSFixture {
+        let repo = try Self.copyRepo(try await Self.missingLFSTemplate.value)
+        try await Self.checkedGit(Self.lfsOverride + ["update-index", "-q", "--refresh"], cwd: repo)
 
         let dest = repo.deletingLastPathComponent()
             .appendingPathComponent("\(repo.lastPathComponent)-\(suffix)")
         let branch = "feat/\(suffix)"
         _ = try await Process.git(
-            lfsOverride + ["worktree", "add", "-q", dest.path, "-b", branch],
+            Self.lfsOverride + ["worktree", "add", "-q", dest.path, "-b", branch],
             cwd: repo
         )
-        _ = try await Process.git(["config", "filter.lfs.process", "missing-git-lfs filter-process"], cwd: repo)
-        _ = try await Process.git(["config", "filter.lfs.clean", "missing-git-lfs clean -- %f"], cwd: repo)
-        _ = try await Process.git(["config", "filter.lfs.smudge", "missing-git-lfs smudge -- %f"], cwd: repo)
-        _ = try await Process.git(["config", "filter.lfs.required", "true"], cwd: repo)
 
         let wt = Worktree(
             id: Worktree.makeId(path: dest),
@@ -1504,24 +1569,30 @@ extension WorktreeServiceTests {
         ))
     }
 
-    @Test func removePreservesSmudgedLFSCleanSemanticsWhenGitLFSIsMissing() async throws {
-        let repo = try await makeRepo()
-        defer { try? FileManager.default.removeItem(at: repo) }
+    private struct SmudgedLFSTemplate: Sendable {
+        let repo: URL
+        /// The committed pointer's oid: the SHA-256 of `smudgedContent`.
+        let sha: String
+    }
 
-        let lfsOverride = [
-            "-c", "filter.lfs.process=",
-            "-c", "filter.lfs.smudge=",
-            "-c", "filter.lfs.clean=",
-            "-c", "filter.lfs.required=false"
-        ]
+    private static let smudgedLFSContent = "real lfs content"
+
+    /// A repository whose committed `data.bin` is a real LFS pointer to
+    /// `smudgedLFSContent`. The missing-git-lfs filter config is applied per
+    /// test, after the test's own `git add` of the smudged file, exactly as
+    /// before the fixture was templated.
+    private static let smudgedLFSTemplate = Task { try await makeSmudgedLFSTemplate() }
+
+    private static func makeSmudgedLFSTemplate() async throws -> SmudgedLFSTemplate {
+        let repo = try makeTemplateDirectory("smudged-lfs").appendingPathComponent("repo")
+        try await initRepo(at: repo)
         try "*.bin filter=lfs diff=lfs merge=lfs -text\n".write(
             to: repo.appendingPathComponent(".gitattributes"),
             atomically: true,
             encoding: .utf8
         )
-        let smudgedContent = "real lfs content"
         let dataPath = repo.appendingPathComponent("data.bin")
-        try smudgedContent.write(to: dataPath, atomically: true, encoding: .utf8)
+        try smudgedLFSContent.write(to: dataPath, atomically: true, encoding: .utf8)
         let sha = try await Process.run("/usr/bin/shasum", args: ["-a", "256", dataPath.path])
             .stdout
             .split(separator: " ")
@@ -1530,12 +1601,27 @@ extension WorktreeServiceTests {
         let pointer = """
         version https://git-lfs.github.com/spec/v1
         oid sha256:\(sha)
-        size \(Data(smudgedContent.utf8).count)
+        size \(Data(smudgedLFSContent.utf8).count)
 
         """
         try pointer.write(to: dataPath, atomically: true, encoding: .utf8)
-        _ = try await Process.git(lfsOverride + ["add", ".gitattributes", "data.bin"], cwd: repo)
-        _ = try await Process.git(lfsOverride + ["commit", "-q", "-m", "add lfs pointer"], cwd: repo)
+        try await checkedGit(lfsOverride + ["add", ".gitattributes", "data.bin"], cwd: repo)
+        try await checkedGit(lfsOverride + ["commit", "-q", "-m", "add lfs pointer"], cwd: repo)
+        return SmudgedLFSTemplate(repo: repo, sha: sha)
+    }
+
+    private func copySmudgedLFSTemplate() async throws -> (repo: URL, sha: String) {
+        let template = try await Self.smudgedLFSTemplate.value
+        let repo = try Self.copyRepo(template.repo)
+        try await Self.checkedGit(Self.lfsOverride + ["update-index", "-q", "--refresh"], cwd: repo)
+        return (repo, template.sha)
+    }
+
+    @Test func removePreservesSmudgedLFSCleanSemanticsWhenGitLFSIsMissing() async throws {
+        let (repo, sha) = try await copySmudgedLFSTemplate()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let lfsOverride = Self.lfsOverride
+        let smudgedContent = Self.smudgedLFSContent
 
         let dest = repo.deletingLastPathComponent()
             .appendingPathComponent("\(repo.lastPathComponent)-smudged-lfs-remove")
@@ -1553,10 +1639,7 @@ extension WorktreeServiceTests {
         /bin/sh -c '/bin/cat >/dev/null; /usr/bin/printf "version https://git-lfs.github.com/spec/v1\\noid sha256:\(sha)\\nsize \(Data(smudgedContent.utf8).count)\\n"'
         """
         _ = try await Process.git(["-c", "filter.lfs.clean=\(fakeClean)", "add", "data.bin"], cwd: dest)
-        _ = try await Process.git(["config", "filter.lfs.process", "missing-git-lfs filter-process"], cwd: repo)
-        _ = try await Process.git(["config", "filter.lfs.clean", "missing-git-lfs clean -- %f"], cwd: repo)
-        _ = try await Process.git(["config", "filter.lfs.smudge", "missing-git-lfs smudge -- %f"], cwd: repo)
-        _ = try await Process.git(["config", "filter.lfs.required", "true"], cwd: repo)
+        try await Self.configureMissingLFSFilters(in: repo)
 
         let wt = Worktree(
             id: Worktree.makeId(path: dest),
@@ -1573,37 +1656,10 @@ extension WorktreeServiceTests {
     }
 
     @Test func removeDoesNotForceDeleteSmudgedLFSFileWithModeChangeWhenGitLFSIsMissing() async throws {
-        let repo = try await makeRepo()
+        let (repo, sha) = try await copySmudgedLFSTemplate()
         defer { try? FileManager.default.removeItem(at: repo) }
-
-        let lfsOverride = [
-            "-c", "filter.lfs.process=",
-            "-c", "filter.lfs.smudge=",
-            "-c", "filter.lfs.clean=",
-            "-c", "filter.lfs.required=false"
-        ]
-        try "*.bin filter=lfs diff=lfs merge=lfs -text\n".write(
-            to: repo.appendingPathComponent(".gitattributes"),
-            atomically: true,
-            encoding: .utf8
-        )
-        let smudgedContent = "real lfs content"
-        let dataPath = repo.appendingPathComponent("data.bin")
-        try smudgedContent.write(to: dataPath, atomically: true, encoding: .utf8)
-        let sha = try await Process.run("/usr/bin/shasum", args: ["-a", "256", dataPath.path])
-            .stdout
-            .split(separator: " ")
-            .first
-            .map(String.init) ?? ""
-        let pointer = """
-        version https://git-lfs.github.com/spec/v1
-        oid sha256:\(sha)
-        size \(Data(smudgedContent.utf8).count)
-
-        """
-        try pointer.write(to: dataPath, atomically: true, encoding: .utf8)
-        _ = try await Process.git(lfsOverride + ["add", ".gitattributes", "data.bin"], cwd: repo)
-        _ = try await Process.git(lfsOverride + ["commit", "-q", "-m", "add lfs pointer"], cwd: repo)
+        let lfsOverride = Self.lfsOverride
+        let smudgedContent = Self.smudgedLFSContent
 
         let dest = repo.deletingLastPathComponent()
             .appendingPathComponent("\(repo.lastPathComponent)-smudged-lfs-mode-change")
@@ -1619,10 +1675,7 @@ extension WorktreeServiceTests {
         """
         _ = try await Process.git(["-c", "filter.lfs.clean=\(fakeClean)", "add", "data.bin"], cwd: dest)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destData.path)
-        _ = try await Process.git(["config", "filter.lfs.process", "missing-git-lfs filter-process"], cwd: repo)
-        _ = try await Process.git(["config", "filter.lfs.clean", "missing-git-lfs clean -- %f"], cwd: repo)
-        _ = try await Process.git(["config", "filter.lfs.smudge", "missing-git-lfs smudge -- %f"], cwd: repo)
-        _ = try await Process.git(["config", "filter.lfs.required", "true"], cwd: repo)
+        try await Self.configureMissingLFSFilters(in: repo)
 
         let wt = Worktree(
             id: Worktree.makeId(path: dest),
@@ -1642,39 +1695,105 @@ extension WorktreeServiceTests {
 }
 
 extension WorktreeServiceTests {
+    private enum SubmoduleTemplateShape {
+        /// `Deps/Submodule` holds one commit tracking `tracked.txt`.
+        case trackedFile
+        /// `Deps/Submodule` holds a single empty commit.
+        case emptyCommit
+        /// `Deps/Submodule` itself holds a `Nested` submodule whose gitlink
+        /// is pinned to the first of the nested repository's two commits.
+        case nested
+    }
+
+    private struct SubmoduleRepoTemplate: Sendable {
+        let repo: URL
+        /// The nested repository's second commit, which the pinned gitlink
+        /// does not point at (`.nested` only).
+        let unpinnedNestedCommit: String?
+    }
+
+    /// A superproject with `Deps/Submodule` added and committed, built once
+    /// per shape. The submodule source repositories live beside the template
+    /// and are never modified by a test (every test clones them through its
+    /// own worktree's `submodule update`), so all copies share them via the
+    /// absolute URL recorded in `.gitmodules`.
+    private static let trackedFileSubmoduleTemplate = Task { try await makeSubmoduleTemplate(.trackedFile) }
+    private static let emptyCommitSubmoduleTemplate = Task { try await makeSubmoduleTemplate(.emptyCommit) }
+    private static let nestedSubmoduleTemplate = Task { try await makeSubmoduleTemplate(.nested) }
+
+    private static func makeSubmoduleTemplate(_ shape: SubmoduleTemplateShape) async throws -> SubmoduleRepoTemplate {
+        let root = try makeTemplateDirectory("submodule")
+        let repo = root.appendingPathComponent("repo")
+        try await initRepo(at: repo)
+
+        let submoduleRepo = root.appendingPathComponent("submodule")
+        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
+        try await checkedGit(["init", "-q", "-b", "main"], cwd: submoduleRepo)
+        var unpinnedNestedCommit: String?
+        switch shape {
+        case .trackedFile:
+            try "initial".write(
+                to: submoduleRepo.appendingPathComponent("tracked.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+            try await checkedGit(["add", "tracked.txt"], cwd: submoduleRepo)
+            try await checkedGit(["commit", "-q", "-m", "submodule init"], cwd: submoduleRepo)
+        case .emptyCommit:
+            try await checkedGit(["commit", "-q", "--allow-empty", "-m", "submodule init"], cwd: submoduleRepo)
+        case .nested:
+            let nestedRepo = root.appendingPathComponent("nested")
+            try FileManager.default.createDirectory(at: nestedRepo, withIntermediateDirectories: true)
+            try await checkedGit(["init", "-q", "-b", "main"], cwd: nestedRepo)
+            try "one".write(to: nestedRepo.appendingPathComponent("nested.txt"), atomically: true, encoding: .utf8)
+            try await checkedGit(["add", "nested.txt"], cwd: nestedRepo)
+            try await checkedGit(["commit", "-q", "-m", "nested one"], cwd: nestedRepo)
+            let firstNestedSha = try await checkedGit(["rev-parse", "HEAD"], cwd: nestedRepo)
+            try "two".write(to: nestedRepo.appendingPathComponent("nested.txt"), atomically: true, encoding: .utf8)
+            try await checkedGit(["commit", "-q", "-am", "nested two"], cwd: nestedRepo)
+            unpinnedNestedCommit = try await checkedGit(["rev-parse", "HEAD"], cwd: nestedRepo)
+
+            try await checkedGit(
+                ["-c", "protocol.file.allow=always", "submodule", "add", "-q", nestedRepo.path, "Nested"],
+                cwd: submoduleRepo
+            )
+            try await checkedGit(["checkout", "-q", firstNestedSha], cwd: submoduleRepo.appendingPathComponent("Nested"))
+            try await checkedGit(["add", "."], cwd: submoduleRepo)
+            try await checkedGit(["commit", "-q", "-m", "add nested submodule"], cwd: submoduleRepo)
+        }
+
+        try await checkedGit(
+            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
+            cwd: repo
+        )
+        try await checkedGit(["commit", "-q", "-am", "add submodule"], cwd: repo)
+        return SubmoduleRepoTemplate(repo: repo, unpinnedNestedCommit: unpinnedNestedCommit)
+    }
+
+    /// A fresh copy of a submodule template, with its index refreshed so the
+    /// copied `.gitmodules` and gitlink match a freshly committed repo.
+    private func copySubmoduleTemplate(
+        _ template: Task<SubmoduleRepoTemplate, any Error>
+    ) async throws -> (repo: URL, template: SubmoduleRepoTemplate) {
+        let resolved = try await template.value
+        let repo = try Self.copyRepo(resolved.repo)
+        try await Self.checkedGit(["update-index", "-q", "--refresh"], cwd: repo)
+        return (repo, resolved)
+    }
+
     private struct InitializedSubmoduleFixture {
         let repo: URL
-        let submoduleRepo: URL
         let service: WorktreeService
         let worktree: Worktree
 
         func removeFiles() {
             try? FileManager.default.removeItem(at: worktree.path)
             try? FileManager.default.removeItem(at: repo)
-            try? FileManager.default.removeItem(at: submoduleRepo)
         }
     }
 
     private func makeRepoWithInitializedSubmodule(suffix: String) async throws -> InitializedSubmoduleFixture {
-        let repo = try await makeRepo()
-
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        try "initial".write(
-            to: submoduleRepo.appendingPathComponent("tracked.txt"),
-            atomically: true,
-            encoding: .utf8
-        )
-        _ = try await Process.git(["add", "tracked.txt"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "-m", "submodule init"], cwd: submoduleRepo)
-
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
+        let repo = try await copySubmoduleTemplate(Self.trackedFileSubmoduleTemplate).repo
 
         let dest = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-\(suffix)")
         let svc = WorktreeService()
@@ -1687,7 +1806,7 @@ extension WorktreeServiceTests {
             cwd: dest
         )
 
-        return InitializedSubmoduleFixture(repo: repo, submoduleRepo: submoduleRepo, service: svc, worktree: wt)
+        return InitializedSubmoduleFixture(repo: repo, service: svc, worktree: wt)
     }
 
     /// Git refuses any worktree holding an initialized submodule without
@@ -1824,11 +1943,7 @@ extension WorktreeServiceTests {
 
     @Test func removeWithForceDeletesCleanInitializedSubmodule() async throws {
         let fixture = try await makeRepoWithInitializedSubmodule(suffix: "submodule-force")
-        defer {
-            try? FileManager.default.removeItem(at: fixture.repo)
-            try? FileManager.default.removeItem(at: fixture.submoduleRepo)
-            try? FileManager.default.removeItem(at: fixture.worktree.path)
-        }
+        defer { fixture.removeFiles() }
 
         try await fixture.service.remove(
             repoPath: fixture.repo,
@@ -1924,21 +2039,8 @@ extension WorktreeServiceTests {
     }
 
     @Test func removeDoesNotForceDeleteIgnoredDirtySubmodule() async throws {
-        let repo = try await makeRepo()
+        let repo = try await copySubmoduleTemplate(Self.emptyCommitSubmoduleTemplate).repo
         defer { try? FileManager.default.removeItem(at: repo) }
-
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "submodule init"], cwd: submoduleRepo)
-
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
 
         let dest = repo.deletingLastPathComponent()
             .appendingPathComponent("\(repo.lastPathComponent)-ignored-dirty-submodule")
@@ -1966,21 +2068,8 @@ extension WorktreeServiceTests {
     }
 
     @Test func removeDoesNotForceDeleteHiddenUntrackedFile() async throws {
-        let repo = try await makeRepo()
+        let repo = try await copySubmoduleTemplate(Self.emptyCommitSubmoduleTemplate).repo
         defer { try? FileManager.default.removeItem(at: repo) }
-
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "submodule init"], cwd: submoduleRepo)
-
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
 
         let dest = repo.deletingLastPathComponent()
             .appendingPathComponent("\(repo.lastPathComponent)-hidden-untracked")
@@ -2008,21 +2097,8 @@ extension WorktreeServiceTests {
     }
 
     @Test func removeDoesNotForceDeleteSubmoduleHiddenUntrackedFile() async throws {
-        let repo = try await makeRepo()
+        let repo = try await copySubmoduleTemplate(Self.emptyCommitSubmoduleTemplate).repo
         defer { try? FileManager.default.removeItem(at: repo) }
-
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "submodule init"], cwd: submoduleRepo)
-
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
 
         let dest = repo.deletingLastPathComponent()
             .appendingPathComponent("\(repo.lastPathComponent)-submodule-hidden-untracked")
@@ -2051,40 +2127,9 @@ extension WorktreeServiceTests {
     }
 
     @Test func removeDoesNotForceDeleteNestedSubmoduleGitlinkChangeHiddenByIgnoreConfig() async throws {
-        let repo = try await makeRepo()
+        let (repo, template) = try await copySubmoduleTemplate(Self.nestedSubmoduleTemplate)
         defer { try? FileManager.default.removeItem(at: repo) }
-
-        let nestedRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-nested-submodule-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: nestedRepo) }
-        try FileManager.default.createDirectory(at: nestedRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: nestedRepo)
-        try "one".write(to: nestedRepo.appendingPathComponent("nested.txt"), atomically: true, encoding: .utf8)
-        _ = try await Process.git(["add", "nested.txt"], cwd: nestedRepo)
-        _ = try await Process.git(["commit", "-q", "-m", "nested one"], cwd: nestedRepo)
-        let firstNestedSha = try await Process.git(["rev-parse", "HEAD"], cwd: nestedRepo)
-        try "two".write(to: nestedRepo.appendingPathComponent("nested.txt"), atomically: true, encoding: .utf8)
-        _ = try await Process.git(["commit", "-q", "-am", "nested two"], cwd: nestedRepo)
-        let secondNestedSha = try await Process.git(["rev-parse", "HEAD"], cwd: nestedRepo)
-
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", nestedRepo.path, "Nested"],
-            cwd: submoduleRepo
-        )
-        _ = try await Process.git(["checkout", "-q", firstNestedSha.stdout.trimmingCharacters(in: .whitespacesAndNewlines)], cwd: submoduleRepo.appendingPathComponent("Nested"))
-        _ = try await Process.git(["add", "."], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "-m", "add nested submodule"], cwd: submoduleRepo)
-
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
+        let secondNestedSha = try #require(template.unpinnedNestedCommit)
 
         let dest = repo.deletingLastPathComponent()
             .appendingPathComponent("\(repo.lastPathComponent)-nested-submodule-change")
@@ -2103,7 +2148,7 @@ extension WorktreeServiceTests {
         let nestedPath = submodulePath.appendingPathComponent("Nested")
         _ = try await Process.git(["config", "submodule.Nested.ignore", "all"], cwd: submodulePath)
         _ = try await Process.git(
-            ["checkout", "-q", secondNestedSha.stdout.trimmingCharacters(in: .whitespacesAndNewlines)],
+            ["checkout", "-q", secondNestedSha],
             cwd: nestedPath
         )
 
@@ -2121,34 +2166,8 @@ extension WorktreeServiceTests {
     /// submodule's gitdir properly, rolling back every unforced deletion of
     /// a worktree with recursively initialized submodules.
     @Test func fastLocalRemoveSupportsCleanRecursivelyInitializedSubmodulesWithoutForce() async throws {
-        let repo = try await makeRepo()
+        let repo = try await copySubmoduleTemplate(Self.nestedSubmoduleTemplate).repo
         defer { try? FileManager.default.removeItem(at: repo) }
-
-        let nestedRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-nested-submodule-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: nestedRepo) }
-        try FileManager.default.createDirectory(at: nestedRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: nestedRepo)
-        try "one".write(to: nestedRepo.appendingPathComponent("nested.txt"), atomically: true, encoding: .utf8)
-        _ = try await Process.git(["add", "nested.txt"], cwd: nestedRepo)
-        _ = try await Process.git(["commit", "-q", "-m", "nested init"], cwd: nestedRepo)
-
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", nestedRepo.path, "Nested"],
-            cwd: submoduleRepo
-        )
-        _ = try await Process.git(["commit", "-q", "-m", "add nested submodule"], cwd: submoduleRepo)
-
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
 
         let dest = repo.deletingLastPathComponent()
             .appendingPathComponent("\(repo.lastPathComponent)-nested-submodule-clean")
@@ -2183,21 +2202,8 @@ extension WorktreeServiceTests {
         // only supplies that force after proving the tree is clean. When the
         // submodule's gitdir is corrupt the proof is impossible, so the
         // removal must stop rather than force blindly.
-        let repo = try await makeRepo()
+        let repo = try await copySubmoduleTemplate(Self.emptyCommitSubmoduleTemplate).repo
         defer { try? FileManager.default.removeItem(at: repo) }
-
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-submodule-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: submoduleRepo) }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "submodule init"], cwd: submoduleRepo)
-
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
 
         let dest = repo.deletingLastPathComponent()
             .appendingPathComponent("\(repo.lastPathComponent)-submodule-broken")
