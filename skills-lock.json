@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "swift-testing-expert": {
+      "source": "avdlee/swift-testing-agent-skill",
+      "sourceType": "github",
+      "skillPath": "swift-testing-expert/SKILL.md",
+      "computedHash": "ee2a73c7148264cb7e0a0819d3063225541e57162353d97707d9fab830d27ba6"
+    }
+  }
+}
