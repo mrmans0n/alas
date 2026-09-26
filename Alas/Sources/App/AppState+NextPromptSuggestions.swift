@@ -201,6 +201,13 @@ extension AppState {
         updateLocalTextModelState(await localTextReadModelState())
     }
 
+    func cancelLocalTextDownloadIfUnused() async {
+        guard !config.nextPromptSuggestionsEnabled,
+              !config.sessionSummariesEnabled,
+              localTextInstallation != nil else { return }
+        await cancelLocalTextDownload()
+    }
+
     func retryLocalTextModel() async {
         guard !localTextRemovalInProgress else { return }
         if config.nextPromptSuggestionsEnabled { await retryNextPromptSuggestions() }
@@ -215,6 +222,7 @@ extension AppState {
             ? "Could not save disabling. Retry before quitting or suggestions may turn on again after relaunch."
             : nil
         await drainNextPromptWork()
+        await cancelLocalTextDownloadIfUnused()
         updateLocalTextModelState(await localTextReadModelState())
     }
 

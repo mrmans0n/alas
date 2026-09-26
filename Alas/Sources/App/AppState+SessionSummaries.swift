@@ -41,6 +41,7 @@ extension AppState {
             sessionSummarySettingsError =
                 "Could not save disabling. Retry before quitting or summaries may turn on again after relaunch."
         }
+        await cancelLocalTextDownloadIfUnused()
     }
 
     private func prepareSessionSummaries(generation: UInt64) async {

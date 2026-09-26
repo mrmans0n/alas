@@ -112,6 +112,29 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
+    @Test func disablingLastCapabilityCancelsSummaryInstallation() async throws {
+        let fixture = try LocalTextModelFixture()
+        defer { fixture.removeTemporaryRoot() }
+        fixture.transport.mode.withLock { $0 = .waitForCancellation }
+        let state = makeState(fixture, SummarySettingsStore())
+        let enable = Task { await state.enableSessionSummaries() }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+        while !fixture.transport.started.withLock({ $0 }), ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        try #require(fixture.transport.started.withLock { $0 })
+
+        await state.disableSessionSummaries()
+
+        #expect(fixture.transport.drained.withLock { $0 })
+        if !fixture.transport.drained.withLock({ $0 }) { await state.cancelLocalTextDownload() }
+        await enable.value
+        #expect(state.localTextInstallation == nil)
+        #expect(!state.config.sessionSummariesEnabled)
+        #expect(state.localTextModelState == .notInstalled)
+        await state.shutdownLocalTextFeatures()
+    }
+
     @Test func disablingSummaryCancelsOnlySummaryWork() async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }

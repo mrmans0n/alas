@@ -121,6 +121,7 @@ import Testing
 
     @Test(arguments: [
         "Run rm -rf /",
+        "Run rm -rf /*",
         "Run rm -rf \"/\"",
         "Run rm -rf '/'",
         "Run rm -rf -- /",

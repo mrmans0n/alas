@@ -83,7 +83,7 @@ enum SessionSummaryPolicy {
             includingQuotedCommands: true
         ) && !LocalTextSafety.containsActiveAction(
             nextAction,
-            pattern: #"(?i)\brm\b\s+(?:--?[A-Za-z]+(?:=[^\s]+)?\s+)*(?:--\s+)?(?:(?:"/"|'/'|/)(?=["']?(?:\s|$))|~(?:/|["']|\s|$))"#,
+            pattern: #"(?i)\brm\b\s+(?:--?[A-Za-z]+(?:=[^\s]+)?\s+)*(?:--\s+)?(?:(?:"/"|'/'|/)(?=["']?(?:\*|\s|$))|~(?:/|["']|\s|$))"#,
             includingQuotedCommands: true
         ) && !LocalTextSafety.containsActiveAction(
             nextAction,
