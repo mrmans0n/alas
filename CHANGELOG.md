@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.13] - 2026-09-26
+
+### ✨ Features
+
+- Suggest concise worktree names from attached tickets with the on-device local text model, while preserving deterministic fallbacks and user edits (#1531).
+
+### 🏗️ Internal
+
+- Stabilize four settings and run-record tests that failed under CI scheduling contention (#1532).
+
 ## [0.19.12] - 2026-09-26
 
 ### ✨ Features
