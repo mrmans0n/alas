@@ -510,7 +510,12 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
     /// A parent session that exists but cannot attach (missing agent), so
     /// delivery leaves rows pending and unclaimed for inspection.
-    private func makeOutcomeFixture(parentReachable: Bool = true) throws -> OutcomeFixture {
+    private func makeOutcomeFixture(
+        parentReachable: Bool = true,
+        blockedKeys: Set<String> = [],
+        escalationSeconds: Int = 30,
+        scheduleEscalationCheck: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in }
+    ) throws -> OutcomeFixture {
         let orchestrationPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-orchestration-outcome-\(UUID().uuidString).sqlite").path
         let sessionPath = FileManager.default.temporaryDirectory
@@ -533,6 +538,9 @@ struct ACPSessionOrchestrationCoordinatorTests {
             instanceId: "instance",
             now: { 900 },
             nowMillis: { 900 },
+            blockedRequestKeys: { _ in blockedKeys },
+            escalationDelaySeconds: { escalationSeconds },
+            scheduleEscalationCheck: scheduleEscalationCheck,
             makeID: { UUID().uuidString },
             worktree: { parentReachable && $0 == worktree.id ? worktree : nil },
             existingWorktree: { _, _ in nil },
@@ -720,5 +728,130 @@ struct ACPSessionOrchestrationCoordinatorTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         return try #require(try await persistence.delegation(childSessionId: childSessionId))
+    }
+
+    private func testBlocker(_ key: String = "n42") -> ACPChildBlocker {
+        .init(sessionId: "child", requestKey: key, kind: .permission, summary: "Write file")
+    }
+
+    @Test("a blocked child notices its parent immediately")
+    func blockedChildNoticesParent() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childBlocked(testBlocker())
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.count == 1)
+        #expect(pending.first?.kind == .notice)
+        #expect(pending.first?.id == "blocker-child-n42-notice")
+        #expect(pending.first?.prompt.contains("waiting for a human decision") == true)
+    }
+
+    @Test("a still-blocked child escalates to a wake")
+    func stillBlockedChildEscalates() async throws {
+        let fixture = try makeOutcomeFixture(blockedKeys: ["n42"])
+        try await insertReadyChild(fixture.persistence)
+        await fixture.coordinator.childBlocked(testBlocker())
+
+        await fixture.coordinator.escalateBlockerIfStillBlocked(testBlocker())
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.map(\.kind) == [.notice, .prompt])
+        #expect(pending.last?.id == "blocker-child-n42")
+        #expect(pending.last?.prompt.contains("cannot approve") == true)
+    }
+
+    @Test("a resolved block never escalates")
+    func resolvedBlockDoesNotEscalate() async throws {
+        let fixture = try makeOutcomeFixture(blockedKeys: [])
+        try await insertReadyChild(fixture.persistence)
+        await fixture.coordinator.childBlocked(testBlocker())
+
+        await fixture.coordinator.escalateBlockerIfStillBlocked(testBlocker())
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.map(\.kind) == [.notice])
+    }
+
+    @Test("being blocked on a different request does not escalate the first")
+    func differentBlockDoesNotEscalate() async throws {
+        let fixture = try makeOutcomeFixture(blockedKeys: ["n99"])
+        try await insertReadyChild(fixture.persistence)
+        await fixture.coordinator.childBlocked(testBlocker())
+
+        await fixture.coordinator.escalateBlockerIfStillBlocked(testBlocker())
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.kind) == [.notice])
+    }
+
+    @Test("repeated detection of the same block adds nothing")
+    func repeatedBlockIsIdempotent() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childBlocked(testBlocker())
+        await fixture.coordinator.childBlocked(testBlocker())
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").count == 1)
+    }
+
+    @Test("a session with no delegation record produces no blocker outcome")
+    func nonDelegatedBlockIsIgnored() async throws {
+        let fixture = try makeOutcomeFixture()
+
+        await fixture.coordinator.childBlocked(testBlocker())
+
+        #expect(try await fixture.persistence.pendingMessageTargetSessionIds().isEmpty)
+    }
+
+    @Test("a terminal child produces no blocker outcome")
+    func terminalChildBlockIsIgnored() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+        try await fixture.persistence.updatePhase(
+            childSessionId: "child", phase: .closed, failureMessage: nil, updatedAt: 200
+        )
+
+        await fixture.coordinator.childBlocked(testBlocker())
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+    }
+
+    @Test("escalation disabled by config notices but never wakes")
+    func escalationDisabledNoticesOnly() async throws {
+        let fixture = try makeOutcomeFixture(blockedKeys: ["n42"], escalationSeconds: 0)
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childBlocked(testBlocker())
+        await fixture.coordinator.escalateBlockerIfStillBlocked(testBlocker())
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.kind) == [.notice])
+    }
+
+    @Test("a positive delay schedules exactly one re-check; a zero delay schedules none")
+    func schedulesTheReCheckOnlyWhenEnabled() async throws {
+        // Proves the scheduling wiring directly, rather than only inferring it
+        // from every other test's fixture leaving the default no-op scheduler
+        // in place and simply not hanging.
+        final class ScheduleRecorder: @unchecked Sendable {
+            var calls: [Int] = []
+        }
+        let recorder = ScheduleRecorder()
+        let fixture = try makeOutcomeFixture(
+            escalationSeconds: 30,
+            scheduleEscalationCheck: { delay, _ in recorder.calls.append(delay) }
+        )
+        try await insertReadyChild(fixture.persistence)
+        await fixture.coordinator.childBlocked(testBlocker())
+        #expect(recorder.calls == [30])
+
+        let disabledFixture = try makeOutcomeFixture(
+            escalationSeconds: 0,
+            scheduleEscalationCheck: { delay, _ in recorder.calls.append(delay) }
+        )
+        try await insertReadyChild(disabledFixture.persistence)
+        await disabledFixture.coordinator.childBlocked(testBlocker())
+        #expect(recorder.calls == [30])
     }
 }
