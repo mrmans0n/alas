@@ -9,6 +9,16 @@ struct RunScriptLaunchTests {
         completion: "/tmp/alas-runs/run-1.done"
     )
 
+    /// Stands in for the production 2 s local run-monitor grace in tests that
+    /// exercise it, so they don't wait it out.
+    private static let localMonitorGrace: Duration = .milliseconds(200)
+
+    /// How long a "nothing happens within the local grace" test watches
+    /// before asserting. Comfortably past `localMonitorGrace` so an expired
+    /// grace has had its chance to fire, and far below the 30 s all-monitor
+    /// grace so that one never does.
+    private static let pastLocalMonitorGrace: Duration = .milliseconds(300)
+
     private func script(
         executable: Bool,
         onExit: RunScriptOnExit = .keep,
@@ -294,8 +304,8 @@ struct RunScriptLaunchTests {
     /// asserts the condition afterwards. The default deadline must stay
     /// below the 5 s the never-completing waiters in this suite sleep:
     /// otherwise a monitor that finished on its own (instead of being
-    /// cancelled after the production 2 s exited-terminal grace) could
-    /// satisfy a "monitor count reached 0" wait.
+    /// cancelled after the exited-terminal grace) could satisfy a "monitor
+    /// count reached 0" wait.
     @MainActor
     private func waitUntil(
         timeout: Duration = .seconds(4),
@@ -601,10 +611,13 @@ struct RunScriptLaunchTests {
 
     @MainActor
     @Test func alreadyExitedRunScriptTerminalCancelsRunMonitor() async throws {
-        let fixture = try makeAppStateFixture(waiter: { _ in
-            try await Task.sleep(for: .seconds(5))
-            return RunScriptCompletion(exitCode: 1, transcript: nil, truncated: false)
-        })
+        let fixture = try makeAppStateFixture(
+            waiter: { _ in
+                try await Task.sleep(for: .seconds(5))
+                return RunScriptCompletion(exitCode: 1, transcript: nil, truncated: false)
+            },
+            localMonitorGrace: Self.localMonitorGrace
+        )
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
@@ -616,10 +629,13 @@ struct RunScriptLaunchTests {
 
     @MainActor
     @Test func closingRunScriptTerminalCancelsRunMonitor() async throws {
-        let fixture = try makeAppStateFixture(waiter: { _ in
-            try await Task.sleep(for: .seconds(5))
-            return RunScriptCompletion(exitCode: 1, transcript: nil, truncated: false)
-        })
+        let fixture = try makeAppStateFixture(
+            waiter: { _ in
+                try await Task.sleep(for: .seconds(5))
+                return RunScriptCompletion(exitCode: 1, transcript: nil, truncated: false)
+            },
+            localMonitorGrace: Self.localMonitorGrace
+        )
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
@@ -634,10 +650,13 @@ struct RunScriptLaunchTests {
 
     @MainActor
     @Test func closingSplitRunScriptPaneCancelsRunMonitor() async throws {
-        let fixture = try makeAppStateFixture(waiter: { _ in
-            try await Task.sleep(for: .seconds(5))
-            return RunScriptCompletion(exitCode: 1, transcript: nil, truncated: false)
-        })
+        let fixture = try makeAppStateFixture(
+            waiter: { _ in
+                try await Task.sleep(for: .seconds(5))
+                return RunScriptCompletion(exitCode: 1, transcript: nil, truncated: false)
+            },
+            localMonitorGrace: Self.localMonitorGrace
+        )
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
@@ -665,7 +684,7 @@ struct RunScriptLaunchTests {
 
     @MainActor
     @Test func closingSplitRunScriptPanePreservesRemoteMonitorAfterLocalGrace() async throws {
-        let state = AppState(store: MemoryStore())
+        let state = AppState(store: MemoryStore(), runScriptLocalMonitorGrace: Self.localMonitorGrace)
         let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: Date())
         let worktree = Worktree(
             id: "wt",
@@ -697,7 +716,7 @@ struct RunScriptLaunchTests {
 
         state.closeFocusedPane(worktreeId: worktree.id)
 
-        try await Task.sleep(for: .milliseconds(2_200))
+        try await Task.sleep(for: Self.pastLocalMonitorGrace)
         #expect(state.runScriptCompletionTaskCountForTesting == 1)
         state.cancelAllRunScriptCompletionTasks()
     }
@@ -725,12 +744,14 @@ struct RunScriptLaunchTests {
 
     @MainActor
     @Test func processExitAllowsCompletedMonitorToReportFailure() async throws {
+        // Completes only after the local grace has expired: a process exit
+        // must not apply that grace to a monitor that is about to report.
         let fixture = try makeAppStateFixture(waiter: { _ in
-            try await Task.sleep(for: .milliseconds(2_200))
+            try await Task.sleep(for: Self.pastLocalMonitorGrace)
             return RunScriptCompletion(exitCode: 42, transcript: Data("bad\n".utf8), truncated: false)
         }, terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
             .init(id: "session", foregroundPid: { 1 })
-        })
+        }, localMonitorGrace: Self.localMonitorGrace)
         var notifications: [UNNotificationRequest] = []
         fixture.state.harness.notifications.notificationAdder = { notifications.append($0) }
 
@@ -826,23 +847,27 @@ struct RunScriptLaunchTests {
                     pidChecks += 1
                     return pidChecks == 1 ? nil : 123
                 })
-            }
+            },
+            localMonitorGrace: Self.localMonitorGrace
         )
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
-        try await Task.sleep(for: .milliseconds(2_200))
+        try await Task.sleep(for: Self.pastLocalMonitorGrace)
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
         fixture.state.cancelAllRunScriptCompletionTasks()
     }
 
     @MainActor
     @Test func bulkClosingRunScriptTerminalCancelsRunMonitor() async throws {
-        let fixture = try makeAppStateFixture(waiter: { _ in
-            try await Task.sleep(for: .seconds(5))
-            return RunScriptCompletion(exitCode: 1, transcript: nil, truncated: false)
-        })
+        let fixture = try makeAppStateFixture(
+            waiter: { _ in
+                try await Task.sleep(for: .seconds(5))
+                return RunScriptCompletion(exitCode: 1, transcript: nil, truncated: false)
+            },
+            localMonitorGrace: Self.localMonitorGrace
+        )
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         await finishPendingLaunches(fixture.state)
@@ -928,7 +953,8 @@ struct RunScriptLaunchTests {
     @MainActor
     private func makeAppStateFixture(
         waiter: @escaping AppState.RunScriptCompletionWaiter,
-        terminalSessionOpener: AppState.TerminalSessionOpener? = nil
+        terminalSessionOpener: AppState.TerminalSessionOpener? = nil,
+        localMonitorGrace: Duration = .seconds(2)
     ) throws -> (state: AppState, script: RunScript, worktree: Worktree) {
         let dir = try makeTemporaryDirectory()
         let scriptURL = dir.appendingPathComponent("dev.sh")
@@ -962,6 +988,7 @@ struct RunScriptLaunchTests {
             fileActionErrorHandler: { _, _ in },
             terminalSessionOpener: opener,
             runScriptCompletionWaiter: waiter,
+            runScriptLocalMonitorGrace: localMonitorGrace,
             attentionStore: AttentionStore(url: dir.appendingPathComponent("attention-events.json"))
         )
         state.projectsManager = ProjectsManager(persistedProjects: [project])

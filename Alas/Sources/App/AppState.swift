@@ -277,6 +277,13 @@ final class AppState {
     @ObservationIgnored var attentionAliasRetryNotBefore: Date?
     @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
     @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
+    /// How long a local run-script completion monitor outlives its exited or
+    /// closed terminal before it is cancelled. Injectable so tests don't wait
+    /// out the production grace.
+    @ObservationIgnored let runScriptLocalMonitorGrace: Duration
+    /// The same grace for every monitor, remote ones included; remote
+    /// captures can land well after the terminal is gone.
+    @ObservationIgnored let runScriptMonitorGrace: Duration
     /// Told exactly once when a run settles, keyed by run ID. Only the
     /// scheduler registers here; manual runs are observed through `runRecords`.
     /// The worktree is carried so a worktree teardown can settle every run it
@@ -1366,6 +1373,8 @@ final class AppState {
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         ggStackCache: GGStackCache = .shared,
         runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
+        runScriptLocalMonitorGrace: Duration = .seconds(2),
+        runScriptMonitorGrace: Duration = .seconds(30),
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
         runScheduler: RunScheduler? = nil,
         acpModelCatalog: ACPAgentModelCatalog? = nil,
@@ -1422,6 +1431,8 @@ final class AppState {
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.ggStackCache = ggStackCache
         self.runScriptCompletionWaiter = runScriptCompletionWaiter
+        self.runScriptLocalMonitorGrace = runScriptLocalMonitorGrace
+        self.runScriptMonitorGrace = runScriptMonitorGrace
         self.runHistoryStore = runHistoryStore
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
@@ -7387,7 +7398,7 @@ final class AppState {
             return state.root.find(leafId: leafId) != nil
         }?.id
         guard let tabId = owningTabId else { return }
-        cancelRunScriptCompletionTasks(sessionID: leafId, after: .seconds(30))
+        cancelRunScriptCompletionTasks(sessionID: leafId, after: runScriptMonitorGrace)
         guard let outcome = tabs.removeLeaf(
             worktreeId: worktreeId, tabId: tabId, leafId: leafId
         ) else { return }

@@ -540,8 +540,8 @@ extension AppState {
                     )
                     runRecords.markRunning(runID: runID, sessionID: sessionID)
                     if runScriptSessionForegroundPidIsMissing(sessionID: sessionID) {
-                        cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: .seconds(2), includeRemote: false)
-                        cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: .seconds(30))
+                        cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: runScriptLocalMonitorGrace, includeRemote: false)
+                        cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: runScriptMonitorGrace)
                     }
                 } catch {
                     releaseRunHistoryCaptureInBackground(.location(captureLocation))
@@ -1019,8 +1019,8 @@ extension AppState {
     }
 
     func scheduleRunScriptCompletionCancellation(sessionID: String) {
-        cancelRunScriptCompletionTasks(sessionID: sessionID, after: .seconds(2), includeRemote: false)
-        cancelRunScriptCompletionTasks(sessionID: sessionID, after: .seconds(30))
+        cancelRunScriptCompletionTasks(sessionID: sessionID, after: runScriptLocalMonitorGrace, includeRemote: false)
+        cancelRunScriptCompletionTasks(sessionID: sessionID, after: runScriptMonitorGrace)
     }
 
     private func cancelRunScriptCompletionTasksIfSessionStillExited(

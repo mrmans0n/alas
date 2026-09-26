@@ -105,6 +105,9 @@ private final class SummaryThenHangingGGRunner: GGCommandRunning, @unchecked Sen
 }
 
 private struct SummaryThenDelayedFailureGGRunner: GGCommandRunning {
+    /// How long after the summary the process reports its nonzero exit.
+    let exitDelayNanoseconds: UInt64
+
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected buffered run")
     }
@@ -113,7 +116,7 @@ private struct SummaryThenDelayedFailureGGRunner: GGCommandRunning {
         AsyncThrowingStream { continuation in
             continuation.yield(#"{"event":"summary"}"#)
             Task {
-                try? await Task.sleep(nanoseconds: 5_200_000_000)
+                try? await Task.sleep(nanoseconds: exitDelayNanoseconds)
                 continuation.finish(throwing: GGServiceError.commandFailed(stderr: "sync failed"))
             }
         }
@@ -291,7 +294,10 @@ struct GGServiceActionsTests {
     }
 
     @Test func syncFailsWhenProcessDoesNotExitAfterTerminalSummary() async {
-        let service = GGService(runner: SummaryThenHangingGGRunner())
+        let service = GGService(
+            runner: SummaryThenHangingGGRunner(),
+            syncPostSummaryDeadlineNanoseconds: 200_000_000
+        )
 
         await #expect(throws: GGServiceError.commandFailed(
             stderr: "gg sync did not exit after summary."
@@ -437,11 +443,30 @@ struct GGServiceActionsTests {
     }
 
     @Test func syncJSONLPreservesDelayedNonzeroExitAfterSummary() async {
-        let service = GGService(runner: SummaryThenDelayedFailureGGRunner())
-
+        // A nonzero exit that arrives after the summary but inside the
+        // post-summary deadline is the command's real outcome, not a hang.
+        let withinDeadline = GGService(
+            runner: SummaryThenDelayedFailureGGRunner(exitDelayNanoseconds: 300_000_000),
+            syncPostSummaryDeadlineNanoseconds: 1_000_000_000
+        )
         await #expect(throws: GGServiceError.commandFailed(stderr: "sync failed")) {
-            for try await _ in service.sync(worktreePath: "/tmp/wt", supportsJSONL: true) {}
+            for try await _ in withinDeadline.sync(worktreePath: "/tmp/wt", supportsJSONL: true) {}
         }
+
+        // The same late exit past the deadline is reported as a hang, so the
+        // pass above is down to the deadline covering the delay.
+        let pastDeadline = GGService(
+            runner: SummaryThenDelayedFailureGGRunner(exitDelayNanoseconds: 1_000_000_000),
+            syncPostSummaryDeadlineNanoseconds: 200_000_000
+        )
+        await #expect(throws: GGServiceError.commandFailed(stderr: "gg sync did not exit after summary.")) {
+            for try await _ in pastDeadline.sync(worktreePath: "/tmp/wt", supportsJSONL: true) {}
+        }
+
+        // The production deadline must cover the streaming runner's
+        // documented cleanup window: 2 s SIGTERM grace + 1 s SIGKILL sweep,
+        // then up to 2 s draining pipes.
+        #expect(GGService().syncPostSummaryDeadlineNanoseconds > 5_000_000_000)
     }
 
     @Test func cleanContinueAbortCheckoutSendExpectedArgs() async throws {
