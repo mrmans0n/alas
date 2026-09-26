@@ -181,6 +181,9 @@ struct GitServiceUpstreamTests {
             try? FileManager.default.removeItem(at: remote)
         }
         let checkpoint = try await checkedGit(["rev-parse", "HEAD"], cwd: repo)
+        // Git prepends its own exec-path to PATH for the upload-pack command,
+        // so `git-upload-pack` resolves to the running git's helper rather than
+        // the `/usr/bin` xcrun shim, whose cold lookup can take seconds on CI.
         let script = repo.appendingPathComponent("upload-pack")
         let marker = repo.appendingPathComponent("advertised")
         try """
@@ -190,7 +193,7 @@ struct GitServiceUpstreamTests {
             exit 42
         fi
         touch '\(marker.path)'
-        exec /usr/bin/git-upload-pack "$@"
+        exec git-upload-pack "$@"
         """.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         _ = try await checkedGit(["config", "remote.origin.uploadpack", script.path], cwd: repo)
@@ -207,19 +210,47 @@ struct GitServiceUpstreamTests {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// A real repo + bare remote pair (one empty `init` commit pushed with
+    /// `-u`), built once per test process. Each test copies both into unique
+    /// directories and repoints `origin` at its own remote copy, instead of
+    /// re-running the seven-command init/commit/push sequence.
+    private static let repoWithRemoteTemplate = Task { try await makeRepoWithRemoteTemplate() }
+
+    private struct RepoWithRemote: Sendable {
+        let repo: URL
+        let remote: URL
+    }
+
+    private static func makeRepoWithRemoteTemplate() async throws -> RepoWithRemote {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-up-template-\(UUID().uuidString)")
+        let repo = root.appendingPathComponent("repo")
+        let remote = root.appendingPathComponent("remote.git")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        for args in [
+            ["init", "-q", "-b", "main"],
+            ["config", "user.email", "t@e"],
+            ["config", "user.name", "t"],
+            ["commit", "-q", "--allow-empty", "-m", "init"],
+            ["init", "--bare", "-q", remote.path],
+            ["remote", "add", "origin", remote.path],
+            ["push", "-q", "-u", "origin", "main"],
+        ] {
+            let result = try await Process.git(args, cwd: repo)
+            guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        }
+        return RepoWithRemote(repo: repo, remote: remote)
+    }
+
     private func makeRepoWithRemote() async throws -> (URL, URL) {
+        let template = try await Self.repoWithRemoteTemplate.value
         let repo = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-up-\(UUID().uuidString)")
         let remote = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-rmt-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
-        _ = try await Process.git(["config", "user.email", "t@e"], cwd: repo)
-        _ = try await Process.git(["config", "user.name", "t"], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
-        _ = try await Process.git(["init", "--bare", "-q", remote.path], cwd: nil)
-        _ = try await Process.git(["remote", "add", "origin", remote.path], cwd: repo)
-        _ = try await Process.git(["push", "-q", "-u", "origin", "main"], cwd: repo)
+        try FileManager.default.copyItem(at: template.repo, to: repo)
+        try FileManager.default.copyItem(at: template.remote, to: remote)
+        _ = try await checkedGit(["remote", "set-url", "origin", remote.path], cwd: repo)
         return (repo, remote)
     }
 

@@ -4,7 +4,7 @@ import Testing
 
 struct CheckpointRestorePreviewTests {
     @Test func previewUnionsPathsAndPreservesDeselectionWithRestoreEffects() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         for path in ["a.swift", "b.swift", "old.swift", "clean-at-capture.swift", "unselected.swift"] {
             try repo.write("original\n", to: path)
@@ -18,9 +18,8 @@ struct CheckpointRestorePreviewTests {
         let service = WorktreeCheckpointService(store: .init(root: storeRoot))
         let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
         try repo.write("later\n", to: "clean-at-capture.swift")
-        try await repo.stage("clean-at-capture.swift")
         try repo.write("keep\n", to: "unselected.swift")
-        try await repo.stage("unselected.swift")
+        try await repo.git(["add", "--", "clean-at-capture.swift", "unselected.swift"])
         try repo.write("keep disk\n", to: "unselected.swift")
         try repo.write("new\n", to: "later.txt")
         let before = try await repo.status()
@@ -47,7 +46,7 @@ struct CheckpointRestorePreviewTests {
     }
 
     @Test func previewShowsStructuralDependenciesForFileDirectoryRestore() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let root = URL(fileURLWithPath: "/private/tmp/checkpoint-structural-preview-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -76,7 +75,7 @@ struct CheckpointRestorePreviewTests {
     }
 
     @Test func previewTreatsCurrentDirectoryAsAbsentForSavedUntrackedLeaf() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let root = URL(fileURLWithPath: "/private/tmp/checkpoint-untracked-directory-preview-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -120,7 +119,7 @@ struct CheckpointRestorePreviewTests {
     }
 
     @Test func dirtyBufferOnlyBlocksSelectedGroupAndSessionBlocksAll() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("saved", to: "file.txt")
         let service = WorktreeCheckpointService(store: .init(root: repo.root.appendingPathComponent(".git/checkpoints")))
@@ -135,7 +134,7 @@ struct CheckpointRestorePreviewTests {
     }
 
     @Test func cleanCurrentPathRestoresSavedDeletionAndCleanCheckpointRemovesLaterChanges() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("original", to: "file.txt")
         try await repo.commitAll("baseline")
@@ -156,7 +155,7 @@ struct CheckpointRestorePreviewTests {
     }
 
     @Test func realGitMarkersLocksAndInterruptedJournalBlockBeforeMutation() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         let store = WorktreeCheckpointStore(root: repo.root.appendingPathComponent(".git/checkpoints"))
         let service = WorktreeCheckpointService(store: store)
@@ -172,7 +171,7 @@ struct CheckpointRestorePreviewTests {
     }
 
     @Test func missingPayloadKeepsHigherPriorityBlockersAndDeselection() async throws {
-        let repo = try await CheckpointTestRepository.make()
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
         try repo.write("saved", to: "file.txt")
         let root = repo.root.appendingPathComponent(".git/checkpoints")

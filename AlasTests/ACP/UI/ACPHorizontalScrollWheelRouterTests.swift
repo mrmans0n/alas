@@ -81,7 +81,12 @@ struct ACPHorizontalScrollWheelRouterTests {
         let pool = ACPTranscriptRowHostingPool()
         let reconciler: ACPTranscriptScrollerReconciler
 
-        init(markdown: String, rowCount: Int = 40, window: NSWindow) throws {
+        /// Every inserted row is built and measured eagerly, so the row count
+        /// dominates setup cost. The assertions only need a document tall
+        /// enough to park at 200pt and scroll up to ~240pt further without
+        /// clamping (>= ~850pt); 12 rows of >= ~90pt each plus spacing clear
+        /// that with margin, and `parkAndSettle` asserts the park held.
+        init(markdown: String, rowCount: Int = 12, window: NSWindow) throws {
             self.window = window
             scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
             reconciler = ACPTranscriptScrollerReconciler(tiling: tiling, pool: pool, scroller: scroller)
@@ -296,7 +301,6 @@ struct ACPHorizontalScrollWheelRouterTests {
             | --- | --- | --- | --- | --- | --- | --- | --- |
             | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
             """,
-            rowCount: 40,
             window: window
         )
         defer { fixture.close() }
@@ -341,7 +345,6 @@ struct ACPHorizontalScrollWheelRouterTests {
             | --- | --- | --- |
             | Alpha | Ready | A deterministic table cell with enough text to wrap. |
             """,
-            rowCount: 40,
             window: window
         )
         defer { fixture.close() }
@@ -367,7 +370,6 @@ struct ACPHorizontalScrollWheelRouterTests {
             | --- | --- | --- | --- | --- | --- | --- | --- |
             | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
             """,
-            rowCount: 40,
             window: window
         )
         defer { fixture.close() }

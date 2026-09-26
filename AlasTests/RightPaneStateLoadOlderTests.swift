@@ -62,44 +62,86 @@ struct RightPaneStateLoadOlderTests {
         )
     }
 
-    private func makeRepoOnMain(commits n: Int) async throws -> URL {
+    private struct FixtureCommit {
+        let branch: String
+        let message: String
+        let path: String
+        let contents: String
+    }
+
+    /// Builds the whole commit graph in ONE real `git fast-import` run
+    /// instead of an add + commit process pair per commit (the paging
+    /// fixtures need 20+ commits, which dominated these tests' runtime).
+    /// The resulting history is the same shape the per-commit loop made:
+    /// linear `main`, optional branch forked from main's tip, each commit
+    /// rewriting one file, subjects as given. Commit timestamps increase
+    /// one second per commit so `git log` ordering never depends on
+    /// same-second ties. Finishes with a forced checkout of `checkout`, so
+    /// HEAD, index, and working tree match a normal clean checkout.
+    private func makeRepo(_ commits: [FixtureCommit], checkout: String) async throws -> URL {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-loadolder-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         _ = try await Process.git(["init", "-q", "-b", "main"], cwd: tmp)
-        _ = try await Process.git(["config", "user.email", "t@e.com"], cwd: tmp)
-        _ = try await Process.git(["config", "user.name", "t"], cwd: tmp)
-        for i in 1...n {
-            try "\(i)\n".write(to: tmp.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
-            _ = try await Process.git(["add", "."], cwd: tmp)
-            _ = try await Process.git(["commit", "-q", "-m", "feat: c\(i)"], cwd: tmp)
+        func data(_ text: String) -> String { "data \(text.utf8.count)\n\(text)" }
+        let firstTimestamp = Int(Date().timeIntervalSince1970) - commits.count
+        var stream = ""
+        var tips: [String: Int] = [:]
+        var lastMark: Int?
+        for (index, commit) in commits.enumerated() {
+            let mark = index + 1
+            let timestamp = firstTimestamp + index
+            stream += "commit refs/heads/\(commit.branch)\nmark :\(mark)\n"
+            stream += "author t <t@e.com> \(timestamp) +0000\n"
+            stream += "committer t <t@e.com> \(timestamp) +0000\n"
+            stream += data("\(commit.message)\n") + "\n"
+            // A branch's first commit forks from the previous commit (main's
+            // tip), exactly like `git checkout -b` followed by a commit.
+            if tips[commit.branch] == nil, let lastMark {
+                stream += "from :\(lastMark)\n"
+            }
+            stream += "M 100644 inline \(commit.path)\n" + data(commit.contents) + "\n"
+            tips[commit.branch] = mark
+            lastMark = mark
         }
+        stream += "done\n"
+        let imported = try await Process.git(["fast-import", "--quiet", "--done"], cwd: tmp, stdin: stream)
+        try #require(imported.exitCode == 0, "git fast-import failed: \(imported.stderr)")
+        let checkedOut = try await Process.git(["checkout", "-q", "-f", checkout], cwd: tmp)
+        try #require(checkedOut.exitCode == 0, "git checkout failed: \(checkedOut.stderr)")
         return tmp
     }
 
+    private func mainCommits(_ n: Int) -> [FixtureCommit] {
+        (1...n).map { FixtureCommit(branch: "main", message: "feat: c\($0)", path: "a.txt", contents: "\($0)\n") }
+    }
+
+    private func makeRepoOnMain(commits n: Int) async throws -> URL {
+        try await makeRepo(mainCommits(n), checkout: "main")
+    }
+
     private func makeBranchAhead(base: Int, ahead: Int) async throws -> URL {
-        let repo = try await makeRepoOnMain(commits: base)
-        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: repo)
-        for i in 1...ahead {
-            try "f\(i)\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
-            _ = try await Process.git(["add", "."], cwd: repo)
-            _ = try await Process.git(["commit", "-q", "-m", "feat: ahead\(i)"], cwd: repo)
+        let feature = (1...ahead).map {
+            FixtureCommit(branch: "feature", message: "feat: ahead\($0)", path: "a.txt", contents: "f\($0)\n")
         }
-        return repo
+        return try await makeRepo(mainCommits(base) + feature, checkout: "feature")
     }
 
     private func makeRepoWithRemoteBranches() async throws -> (repo: URL, remote: URL) {
-        let repo = try await makeRepoOnMain(commits: 1)
+        let repo = try await makeRepo(
+            mainCommits(1) + [
+                FixtureCommit(branch: "worktree/task-branch", message: "feat: task", path: "task.txt", contents: "task\n"),
+            ],
+            checkout: "worktree/task-branch"
+        )
         let remote = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-remote-\(UUID().uuidString).git")
         _ = try await Process.git(["init", "-q", "--bare", remote.path], cwd: repo)
         _ = try await Process.git(["remote", "add", "origin", remote.path], cwd: repo)
-        _ = try await Process.git(["checkout", "-q", "-b", "worktree/task-branch"], cwd: repo)
-        try "task\n".write(to: repo.appendingPathComponent("task.txt"), atomically: true, encoding: .utf8)
-        _ = try await Process.git(["add", "."], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "-m", "feat: task"], cwd: repo)
+        // A push to a remote with the default fetch refspec also updates
+        // refs/remotes/origin/*, so no separate fetch is needed for the
+        // origin/... branches the test asserts on.
         _ = try await Process.git(["push", "-q", "origin", "main", "worktree/task-branch"], cwd: repo)
-        _ = try await Process.git(["fetch", "-q", "origin"], cwd: repo)
         return (repo, remote)
     }
 

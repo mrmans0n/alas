@@ -95,8 +95,18 @@ struct ACPTranscriptScrollerConvergenceTests {
         let fixture = try ConvergenceScrollerFixture()
         defer { fixture.close() }
         let tracked = ConvergenceWeakViews()
+        // The reconciler has no row clamp of its own; the window size only has
+        // to make the backfilled document (windowRows + backfillRows rows, each
+        // at least ~145pt including row spacing) much taller than one mount band
+        // (viewport 400 + 2 * overscan 1200 = 2800pt). At 60 rows the 0.15, 0.8
+        // and 0.3 scroll fractions below are >= ~3900pt apart, so each jump
+        // retires the whole previous band; the disjointness guard asserts it.
+        // Every inserted row is built and measured eagerly, so this size
+        // dominates the test's cost.
+        let windowRows = 45
+        let backfillRows = windowRows / 3
         var head = 0
-        var specs = fixture.specs(head..<(head + 90))
+        var specs = fixture.specs(head..<(head + windowRows))
         fixture.apply(specs)
         fixture.window.orderFront(nil)
         try await settle(fixture.window)
@@ -104,7 +114,7 @@ struct ACPTranscriptScrollerConvergenceTests {
         #expect(tracked.liveHostCount > 0)
         #expect(tracked.liveTextViewCount > 0)
 
-        // Three backfills replace the entire original 90-row window.
+        // Three backfills replace the entire original window.
         // Use an external test timeout: synchronous AppKit layout cannot be
         // interrupted by an in-process timer.
         for _ in 0..<3 {
@@ -112,8 +122,8 @@ struct ACPTranscriptScrollerConvergenceTests {
             fixture.reconciler.layoutMountedRowsForScroll()
             let anchorID = "row\(head)"
             let anchorBefore = try #require(fixture.tiling.row(withId: anchorID)).minY - fixture.scroller.scrollY
-            head -= 30
-            specs.insert(contentsOf: fixture.specs(head..<(head + 30)), at: 0)
+            head -= backfillRows
+            specs.insert(contentsOf: fixture.specs(head..<(head + backfillRows)), at: 0)
             fixture.apply(specs)
             try await settle(fixture.window)
             let anchorAfter = try #require(fixture.tiling.row(withId: anchorID)).minY - fixture.scroller.scrollY
@@ -123,9 +133,14 @@ struct ACPTranscriptScrollerConvergenceTests {
             // Cross mount-band boundaries, then deliver real wheel events to
             // table cells inside their native horizontal scroll views.
             for fraction in [0.15, 0.8, 0.3] {
+                let mountedBeforeJump = fixture.pool.mountedIds
                 fixture.scroller.setScrollY((fixture.scroller.contentHeight - fixture.scroller.viewportHeight) * fraction)
                 fixture.reconciler.layoutMountedRowsForScroll()
                 try await settle(fixture.window)
+                if fraction != 0.15 {
+                    #expect(fixture.pool.mountedIds.isDisjoint(with: mountedBeforeJump),
+                            "the document must be tall enough for each jump to retire the whole previous mount band")
+                }
                 tracked.observe(fixture.scroller.flippedDocumentView)
                 let beforeWheel = fixture.scroller.scrollY
                 try await sendTableGesture(in: fixture, deltaY: fraction == 0.8 ? 60 : -60)
@@ -136,7 +151,7 @@ struct ACPTranscriptScrollerConvergenceTests {
             }
 
             // Match the bounded transcript window after its temporary backfill.
-            specs = Array(specs.prefix(90))
+            specs = Array(specs.prefix(windowRows))
             fixture.apply(specs)
             try await settle(fixture.window)
             tracked.observe(fixture.scroller.flippedDocumentView)
@@ -177,7 +192,10 @@ struct ACPTranscriptScrollerConvergenceTests {
     func retiredHostCannotRemountRow() async throws {
         let fixture = try ConvergenceScrollerFixture()
         defer { fixture.close() }
-        fixture.apply(fixture.specs(0..<90))
+        // Enough rows (each >= ~145pt with spacing) that row0 falls outside the
+        // bottom mount band (viewport 400 + overscan 1200 above it); the
+        // `row0 == nil` expectation below fails if the fixture is too short.
+        fixture.apply(fixture.specs(0..<30))
         fixture.window.orderFront(nil)
         try await settle(fixture.window)
         let retired = try #require(fixture.pool.mountedView(id: "row0"))
@@ -224,9 +242,9 @@ struct ACPTranscriptScrollerConvergenceTests {
 
     private func waitForRetiredViews(_ tracked: ConvergenceWeakViews, fixture: ConvergenceScrollerFixture) async throws {
         for _ in 0..<40 {
+            if tracked.detachedLiveCount(in: fixture.scroller.flippedDocumentView) == 0 { return }
             try await Task.sleep(for: .milliseconds(25))
             autoreleasepool { fixture.window.layoutIfNeeded() }
-            if tracked.detachedLiveCount(in: fixture.scroller.flippedDocumentView) == 0 { return }
         }
     }
 

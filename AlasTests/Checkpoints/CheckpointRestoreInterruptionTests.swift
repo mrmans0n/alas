@@ -42,16 +42,12 @@ struct CheckpointRestoreInterruptionTests {
 
     @Test(arguments: [false, true])
     func selectiveRecoveryPreservesUnrelatedEditsMadeAfterInterruption(replacedByDirectory: Bool) async throws {
-        let fixture = try await CheckpointRestoreFixture.make(faultInjector: .init {
+        let (fixture, preview, before) = try await Self.laterStateFixture(faultInjector: .init {
             if $0 == .beforeIndexInstall { throw CheckpointRestoreFixture.Fault.injected }
             if case .duringRollback = $0 { throw CheckpointRestoreFixture.Fault.injected }
         })
         defer { fixture.remove() }
-        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
-        try await fixture.later()
-        let preview = try await fixture.preview(checkpoint.id)
         let selected = Set(preview.groups.filter { $0.primaryPath == "selected.bin" }.map(\.id))
-        let before = try await fixture.snapshot()
         await #expect(throws: (any Error).self) {
             try await fixture.service.restore(target: fixture.repo.target, preview: preview,
                                                selectedGroupIDs: selected, coordination: .clear)
@@ -72,7 +68,8 @@ struct CheckpointRestoreInterruptionTests {
         let journal = try #require(journals.first)
         let result = try await service.recoverInterruptedRestore(target: fixture.repo.target, operationID: journal.id, coordination: .clear)
         #expect(result.restoredPaths == ["selected.bin"])
-        let after = try await WorktreeStateSnapshotter.live.snapshot(target: fixture.repo.target, includingPaths: ["selected.bin"], onlyIncludedPaths: true)
+        let after = try await WorktreeStateSnapshotter.live.snapshot(target: fixture.repo.target, includingPaths: ["selected.bin"],
+                                                                       onlyIncludedPaths: true, retainingPayloads: false)
         #expect(after.paths["selected.bin"] == before.paths["selected.bin"])
         #expect(after.indexChecksum == before.indexChecksum)
         #expect(try fixture.repo.disk(unrelatedPath) == Data("unrelated edit after interruption".utf8))
@@ -84,15 +81,11 @@ struct CheckpointRestoreInterruptionTests {
     @Test(arguments: [CheckpointRestoreFaultPoint.afterPartialIndexWrite, .beforeIndexCandidateSync,
                       .afterIndexCandidatePublication, .afterIndexLockHandoff], [false, true])
     func indexInstallationInterruptionCanRecoverWithoutTrustingForeignLockBytes(point: CheckpointRestoreFaultPoint, tamper: Bool) async throws {
-        let fixture = try await CheckpointRestoreFixture.make(faultInjector: .init {
+        let (fixture, preview, before) = try await Self.laterStateFixture(faultInjector: .init {
             if $0 == point { throw CheckpointRestoreFixture.Fault.injected }
             if case .duringRollback = $0 { throw CheckpointRestoreFixture.Fault.injected }
         })
         defer { fixture.remove() }
-        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
-        try await fixture.later()
-        let preview = try await fixture.preview(checkpoint.id)
-        let before = try await fixture.snapshot()
         await #expect(throws: (any Error).self) {
             try await fixture.service.restore(target: fixture.repo.target, preview: preview,
                                                selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
@@ -110,7 +103,7 @@ struct CheckpointRestoreInterruptionTests {
             #expect(try await store.recoverableJournals(lineageID: fixture.repo.target.lineageID).count == 1)
         } else {
             _ = try await service.recoverInterruptedRestore(target: fixture.repo.target, operationID: journal.id, coordination: .clear)
-            let after = try await fixture.snapshot()
+            let after = try await Self.pathSnapshot(fixture)
             #expect(after.paths == before.paths)
             #expect(after.indexChecksum == before.indexChecksum)
             #expect(try await store.recoverableJournals(lineageID: fixture.repo.target.lineageID).isEmpty)
@@ -120,13 +113,10 @@ struct CheckpointRestoreInterruptionTests {
     }
 
     @Test func failureAfterIndexLockIntentDoesNotLeaveALock() async throws {
-        let fixture = try await CheckpointRestoreFixture.make(faultInjector: .init {
+        let (fixture, preview, _) = try await Self.laterStateFixture(faultInjector: .init {
             if $0 == .afterIndexLockIntentJournaled { throw CheckpointRestoreFixture.Fault.injected }
         })
         defer { fixture.remove() }
-        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
-        try await fixture.later()
-        let preview = try await fixture.preview(checkpoint.id)
 
         await #expect(throws: (any Error).self) {
             try await fixture.service.restore(target: fixture.repo.target, preview: preview,
@@ -138,11 +128,8 @@ struct CheckpointRestoreInterruptionTests {
     }
 
     @Test func competingEmptyIndexLockIsNotRemoved() async throws {
-        let fixture = try await CheckpointRestoreFixture.make()
+        let (fixture, preview, _) = try await Self.laterStateFixture()
         defer { fixture.remove() }
-        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
-        try await fixture.later()
-        let preview = try await fixture.preview(checkpoint.id)
         let service = WorktreeCheckpointService(store: fixture.store, restoreFaultInjector: .init {
             if $0 == .afterIndexLockIntentJournaled {
                 try Data().write(to: fixture.repo.root.appendingPathComponent(".git/index.lock"))
@@ -159,15 +146,11 @@ struct CheckpointRestoreInterruptionTests {
     }
 
     @Test func recoveryAcceptsPendingEmptyIndexLockCandidateName() async throws {
-        let fixture = try await CheckpointRestoreFixture.make(faultInjector: .init {
+        let (fixture, preview, before) = try await Self.laterStateFixture(faultInjector: .init {
             if $0 == .beforeIndexInstall { throw CheckpointRestoreFixture.Fault.injected }
             if case .duringRollback = $0 { throw CheckpointRestoreFixture.Fault.injected }
         })
         defer { fixture.remove() }
-        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
-        try await fixture.later()
-        let preview = try await fixture.preview(checkpoint.id)
-        let before = try await fixture.snapshot()
 
         await #expect(throws: (any Error).self) {
             try await fixture.service.restore(target: fixture.repo.target, preview: preview,
@@ -183,7 +166,7 @@ struct CheckpointRestoreInterruptionTests {
         let result = try await service.recoverInterruptedRestore(target: fixture.repo.target, operationID: journal.id, coordination: .clear)
 
         #expect(result.recoveryCheckpointID == journal.recoveryCheckpointID)
-        let after = try await fixture.snapshot()
+        let after = try await Self.pathSnapshot(fixture)
         #expect(after.paths == before.paths)
         #expect(after.indexChecksum == before.indexChecksum)
         #expect(try await fixture.store.recoverableJournals(lineageID: fixture.repo.target.lineageID).isEmpty)
@@ -192,17 +175,13 @@ struct CheckpointRestoreInterruptionTests {
     @Test(arguments: [CheckpointRestoreFaultPoint.afterFileMove(path: "added"), .afterFileMove(path: "selected.bin"),
                       .beforeIndexInstall, .afterIndexInstall, .beforeVerification])
     func failuresRollBackBothLayers(point: CheckpointRestoreFaultPoint) async throws {
-        let fixture = try await CheckpointRestoreFixture.make(faultInjector: .init { if $0 == point { throw CheckpointRestoreFixture.Fault.injected } })
+        let (fixture, preview, before) = try await Self.laterStateFixture(faultInjector: .init { if $0 == point { throw CheckpointRestoreFixture.Fault.injected } })
         defer { fixture.remove() }
-        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
-        try await fixture.later()
-        let preview = try await fixture.preview(checkpoint.id)
-        let before = try await fixture.snapshot()
         await #expect(throws: CheckpointRestoreError.restoreFailedButRecovered) {
             try await fixture.service.restore(target: fixture.repo.target, preview: preview,
                                                selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
         }
-        let after = try await fixture.snapshot()
+        let after = try await Self.pathSnapshot(fixture)
         #expect(after.paths == before.paths)
         #expect(after.indexChecksum == before.indexChecksum)
         #expect(after.headOID == before.headOID)
@@ -244,15 +223,11 @@ struct CheckpointRestoreInterruptionTests {
 
     @Test(arguments: [false, true], [CheckpointRestoreFaultPoint.beforeIndexInstall, .afterIndexInstall])
     func relaunchRecoversUnlessOwnedLockChanged(tamper: Bool, point: CheckpointRestoreFaultPoint) async throws {
-        let fixture = try await CheckpointRestoreFixture.make(faultInjector: .init {
+        let (fixture, preview, before) = try await Self.laterStateFixture(faultInjector: .init {
             if $0 == point { throw CheckpointRestoreFixture.Fault.injected }
             if case .duringRollback = $0 { throw CheckpointRestoreFixture.Fault.injected }
         })
         defer { fixture.remove() }
-        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
-        try await fixture.later()
-        let preview = try await fixture.preview(checkpoint.id)
-        let before = try await fixture.snapshot()
         await #expect(throws: (any Error).self) {
             try await fixture.service.restore(target: fixture.repo.target, preview: preview,
                                                selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
@@ -273,7 +248,7 @@ struct CheckpointRestoreInterruptionTests {
         } else {
             let result = try await service.recoverInterruptedRestore(target: fixture.repo.target, operationID: journal.id, coordination: .clear)
             #expect(result.recoveryCheckpointID == journal.recoveryCheckpointID)
-            let after = try await fixture.snapshot()
+            let after = try await Self.pathSnapshot(fixture)
             #expect(after.paths == before.paths)
             #expect(after.indexChecksum == before.indexChecksum)
             #expect(try await store.recoverableJournals(lineageID: fixture.repo.target.lineageID).isEmpty)
@@ -282,11 +257,8 @@ struct CheckpointRestoreInterruptionTests {
 
     @Test(arguments: ["disk", "index", "head", "lock", "lineage"])
     func staleStateNeverWritesSelectedFiles(change: String) async throws {
-        let fixture = try await CheckpointRestoreFixture.make()
+        let (fixture, preview, _) = try await Self.laterStateFixture()
         defer { fixture.remove() }
-        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
-        try await fixture.later()
-        let preview = try await fixture.preview(checkpoint.id)
         switch change {
         case "disk": try fixture.repo.write("concurrent", to: "selected.bin")
         case "index": try await fixture.repo.stage("selected.bin")
@@ -310,11 +282,8 @@ struct CheckpointRestoreInterruptionTests {
     }
 
     @Test func lockedRevalidationRejectsChangesAfterPreparation() async throws {
-        let fixture = try await CheckpointRestoreFixture.make()
+        let (fixture, preview, _) = try await Self.laterStateFixture()
         defer { fixture.remove() }
-        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
-        try await fixture.later()
-        let preview = try await fixture.preview(checkpoint.id)
         let index = try fixture.repo.disk(".git/index")
         let service = WorktreeCheckpointService(store: fixture.store, restoreFaultInjector: .init {
             if $0 == .afterJournalPrepared { try fixture.repo.write("concurrent after preparation", to: "selected.bin") }
@@ -329,14 +298,11 @@ struct CheckpointRestoreInterruptionTests {
     }
 
     @Test func recoveryRefusesSessionsDirtyBuffersAndReplacedLockInode() async throws {
-        let fixture = try await CheckpointRestoreFixture.make(faultInjector: .init {
+        let (fixture, preview, _) = try await Self.laterStateFixture(faultInjector: .init {
             if $0 == .beforeIndexInstall { throw CheckpointRestoreFixture.Fault.injected }
             if case .duringRollback = $0 { throw CheckpointRestoreFixture.Fault.injected }
         })
         defer { fixture.remove() }
-        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
-        try await fixture.later()
-        let preview = try await fixture.preview(checkpoint.id)
         await #expect(throws: (any Error).self) {
             try await fixture.service.restore(target: fixture.repo.target, preview: preview,
                                                selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
@@ -366,11 +332,8 @@ struct CheckpointRestoreInterruptionTests {
     }
 
     @Test func rollbackPreservesConcurrentSelectedEditAndBackups() async throws {
-        let fixture = try await CheckpointRestoreFixture.make()
+        let (fixture, preview, _) = try await Self.laterStateFixture()
         defer { fixture.remove() }
-        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
-        try await fixture.later()
-        let preview = try await fixture.preview(checkpoint.id)
         let service = WorktreeCheckpointService(store: fixture.store, restoreFaultInjector: .init {
             if $0 == .beforeVerification {
                 try fixture.repo.write("concurrent selected edit", to: "selected.bin")
@@ -401,4 +364,78 @@ struct CheckpointRestoreInterruptionTests {
         #expect(FileManager.default.fileExists(atPath: orphan.path))
         #expect(try Data(contentsOf: orphan.appendingPathComponent("payload")) == Data("orphan".utf8))
     }
+}
+
+extension CheckpointRestoreInterruptionTests {
+    /// A real repository and checkpoint store copied from the per-process
+    /// template: `CheckpointRestoreFixture.make()`, a manual "Saved" checkpoint,
+    /// then `later()`. Also returns the restore preview and the pre-restore
+    /// snapshot, both computed once on the template. Neither depends on the
+    /// worktree path: the fingerprint and path states hash lineage, HEAD, index
+    /// bytes, and file contents/modes, all of which the copy preserves (the
+    /// store is keyed by lineage, and the lineage marker is copied with `.git`).
+    /// A copy that diverged would fail `restore`'s own fingerprint check with
+    /// `stalePreview` before touching anything.
+    ///
+    /// The copy deliberately skips `git update-index --refresh`: that would
+    /// rewrite the index bytes the preview fingerprint and `before.indexChecksum`
+    /// were computed from. Every tracked path is already a snapshot candidate,
+    /// so stale stat entries do not change which paths are captured.
+    fileprivate static func laterStateFixture(faultInjector: CheckpointRestoreFaultInjector = .none) async throws
+        -> (fixture: CheckpointRestoreFixture, preview: CheckpointRestorePreview, before: WorktreeStateSnapshot) {
+        let template = try await LaterStateTemplate.ready.value
+        let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-test-\(UUID().uuidString)")
+        let storeRoot = URL(fileURLWithPath: "/private/tmp/checkpoint-apply-store-\(UUID().uuidString)")
+        do {
+            try FileManager.default.copyItem(at: LaterStateTemplate.repo, to: root)
+            try FileManager.default.copyItem(at: LaterStateTemplate.store, to: storeRoot)
+            let lineage = try #require(WorktreeService.existingLocalLineageID(forWorktreeAt: root))
+            try #require(lineage == template.lineageID)
+            let repo = CheckpointTestRepository(root: root, target: .init(
+                worktreeID: UUID().uuidString, projectID: "test", path: root, lineageID: lineage,
+                branch: "main", repositoryName: "test", workspaceName: nil
+            ))
+            let store = WorktreeCheckpointStore(root: storeRoot)
+            let service = WorktreeCheckpointService(store: store, restoreFaultInjector: faultInjector)
+            let fixture = CheckpointRestoreFixture(repo: repo, storeRoot: storeRoot, store: store, service: service)
+            return (fixture, template.preview, template.before)
+        } catch {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: storeRoot)
+            throw error
+        }
+    }
+
+    /// `CheckpointRestoreFixture.snapshot()` without retaining payload bytes:
+    /// one streamed `cat-file` per blob instead of `cat-file -s` plus
+    /// `cat-file blob`. Path states, HEAD, and index checksum are identical
+    /// either way — `createManual` relies on that when it compares a retaining
+    /// capture against a non-retaining verification fingerprint.
+    fileprivate static func pathSnapshot(_ fixture: CheckpointRestoreFixture) async throws -> WorktreeStateSnapshot {
+        try await WorktreeStateSnapshotter.live.snapshot(target: fixture.repo.target, includingPaths: CheckpointRestoreFixture.paths,
+                                                         retainingPayloads: false)
+    }
+}
+
+private struct LaterStateTemplate: Sendable {
+    static let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-interruption-template-\(UUID().uuidString)")
+    static let repo = LaterStateTemplate.root.appendingPathComponent("repo", isDirectory: true)
+    static let store = LaterStateTemplate.root.appendingPathComponent("store", isDirectory: true)
+    static let ready = Task<LaterStateTemplate, any Error> {
+        let fixture = try await CheckpointRestoreFixture.make()
+        defer { fixture.remove() }
+        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
+        try await fixture.later()
+        let preview = try await fixture.preview(checkpoint.id)
+        let before = try await CheckpointRestoreInterruptionTests.pathSnapshot(fixture)
+        try FileManager.default.createDirectory(at: LaterStateTemplate.root, withIntermediateDirectories: true)
+        atexit { try? FileManager.default.removeItem(at: LaterStateTemplate.root) }
+        try FileManager.default.moveItem(at: fixture.repo.root, to: LaterStateTemplate.repo)
+        try FileManager.default.moveItem(at: fixture.storeRoot, to: LaterStateTemplate.store)
+        return LaterStateTemplate(lineageID: fixture.repo.target.lineageID, preview: preview, before: before)
+    }
+
+    let lineageID: String
+    let preview: CheckpointRestorePreview
+    let before: WorktreeStateSnapshot
 }
