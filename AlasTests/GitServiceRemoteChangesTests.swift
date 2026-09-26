@@ -69,14 +69,60 @@ struct GitServiceRemoteChangesTests {
         #expect(try await git.worktreeDiffStats(worktreePath: repo) == WorktreeDiffStats(added: 0, deleted: 0))
     }
 
+    /// Real repositories built once per test process and copied into a
+    /// unique directory per test, so each test starts from the same state the
+    /// old per-test init/config(/commit) sequence produced without
+    /// re-spawning those git processes every time. Neither template tracks
+    /// files, so a copy needs no index refresh. The suite is `.serialized`
+    /// and main-actor isolated, so these caches are only touched from one
+    /// test at a time.
+    private static var unbornRepoTemplate: URL?
+    private static var initCommitRepoTemplate: URL?
+
+    @discardableResult
+    private static func checkedGit(_ args: [String], cwd: URL) async throws -> String {
+        let result = try await Process.git(args, cwd: cwd)
+        guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func copy(_ template: URL, prefix: String) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: template, to: dir)
+        return dir
+    }
+
+    /// `main` with a configured identity and no commits.
+    private static func unbornTemplate() async throws -> URL {
+        if let unbornRepoTemplate { return unbornRepoTemplate }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-changes-template-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try await checkedGit(["init", "-q", "-b", "main"], cwd: dir)
+        try await checkedGit(["config", "user.email", "test@example.com"], cwd: dir)
+        try await checkedGit(["config", "user.name", "test user"], cwd: dir)
+        unbornRepoTemplate = dir
+        return dir
+    }
+
+    /// The unborn template plus one empty `init` commit.
+    private static func initCommitTemplate() async throws -> URL {
+        if let initCommitRepoTemplate { return initCommitRepoTemplate }
+        let dir = try copy(try await unbornTemplate(), prefix: "alas-remote-changes-template")
+        try await checkedGit(["commit", "--allow-empty", "-m", "init"], cwd: dir)
+        initCommitRepoTemplate = dir
+        return dir
+    }
+
+    /// A configured repo on an unborn `main`.
     private func makeRepo() async throws -> URL {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-remote-changes-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: tmp)
-        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: tmp)
-        _ = try await Process.git(["config", "user.name", "test user"], cwd: tmp)
-        return tmp
+        try Self.copy(try await Self.unbornTemplate(), prefix: "alas-remote-changes")
+    }
+
+    /// A configured repo on `main` whose only commit is an empty `init`.
+    private func makeRepoWithInitCommit() async throws -> URL {
+        try Self.copy(try await Self.initCommitTemplate(), prefix: "alas-remote-changes")
     }
 
     @Test func changedFilesAgainstRef_includesCommittedAndUncommittedAndUntracked() async throws {
@@ -109,9 +155,8 @@ struct GitServiceRemoteChangesTests {
     }
 
     @Test func changedFilesAgainstRef_fallsBackToStatusWhenRefIsNil() async throws {
-        let repo = try await makeRepo()
+        let repo = try await makeRepoWithInitCommit()
         defer { try? FileManager.default.removeItem(at: repo) }
-        _ = try await Process.git(["commit", "--allow-empty", "-m", "init"], cwd: repo)
         try "hello\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
 
         let files = try await GitService().changedFilesAgainstRef(worktreePath: repo, ref: nil)
@@ -182,9 +227,8 @@ struct GitServiceRemoteChangesTests {
     }
 
     @Test func changedFileBadges_fallsBackToStatusWhenRefIsNil() async throws {
-        let repo = try await makeRepo()
+        let repo = try await makeRepoWithInitCommit()
         defer { try? FileManager.default.removeItem(at: repo) }
-        _ = try await Process.git(["commit", "--allow-empty", "-m", "init"], cwd: repo)
         try "hello\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
 
         let files = try await GitService().changedFileBadges(worktreePath: repo, ref: nil)
@@ -240,9 +284,8 @@ struct GitServiceRemoteChangesTests {
     }
 
     @Test func diffAgainstRef_showsUntrackedFileAsAllAdd() async throws {
-        let repo = try await makeRepo()
+        let repo = try await makeRepoWithInitCommit()
         defer { try? FileManager.default.removeItem(at: repo) }
-        _ = try await Process.git(["commit", "--allow-empty", "-m", "init"], cwd: repo)
         _ = try await Process.git(["branch", "start"], cwd: repo)
         try "fresh\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
 
@@ -432,28 +475,23 @@ struct GitServiceRemoteChangesTests {
     /// section ever appears, and `sliceDiffForFile` finds nothing to return
     /// for it — indistinguishable from a genuinely empty diff unless this is
     /// treated as a failure instead.
+    ///
+    /// The cap is soft: `gitCapped` stops git only after a whole pipe read
+    /// arrives. aaa.txt's section must therefore be larger than one read
+    /// (64 KB on macOS), or the entire diff, zzz.txt's section included, is
+    /// captured in one read and correctly returned. See
+    /// `copySourceFixture` for the sizes.
     @Test func diffAgainstRef_throwsWhenACopySourceSectionAloneExceedsTheOutputCap() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let original = (1 ... 100).map { "line\($0)\n" }.joined()
-        try original.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
+        let fixture = Self.copySourceFixture()
+        try fixture.original.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "aaa.txt"], cwd: repo)
         _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
         _ = try await Process.git(["branch", "start"], cwd: repo)
 
-        // Append enough new content to aaa.txt that its OWN diff section
-        // (measured at ~611 bytes for this exact fixture) exceeds the
-        // test's small cap below, while staying similar enough to its prior
-        // version for git's default (no --find-copies-harder) copy
-        // detection to still recognize zzz.txt as a copy of it — appending
-        // materially more than 10 lines here drops the similarity score
-        // below git's 50% threshold and the fixture stops producing a copy
-        // at all, defeating the point of the test.
-        let appended = original + (1 ... 10).map { "appended-line-\($0)-with-enough-padding-to-add-up\n" }.joined()
-        try appended.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
-        // zzz.txt: a copy of the now-appended aaa.txt, sorting AFTER it, with
-        // one more line so it's a distinct file highly similar to its source.
-        try (appended + "zzz-marker\n").write(to: repo.appendingPathComponent("zzz.txt"), atomically: true, encoding: .utf8)
+        try fixture.modified.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
+        try fixture.copy.write(to: repo.appendingPathComponent("zzz.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "-A"], cwd: repo)
         _ = try await Process.git(["commit", "-m", "copy with modification"], cwd: repo)
 
@@ -466,7 +504,7 @@ struct GitServiceRemoteChangesTests {
 
         await #expect(throws: (any Error).self) {
             _ = try await GitService().diff(
-                worktreePath: repo, againstRef: "start", file: "zzz.txt", maxOutputBytes: 300)
+                worktreePath: repo, againstRef: "start", file: "zzz.txt", maxOutputBytes: 1000)
         }
     }
 
@@ -577,9 +615,8 @@ struct GitServiceRemoteChangesTests {
     }
 
     @Test func looksBinaryAtRef_returnsNilWhenTheFileDoesNotExistAtTheRef() async throws {
-        let repo = try await makeRepo()
+        let repo = try await makeRepoWithInitCommit()
         defer { try? FileManager.default.removeItem(at: repo) }
-        _ = try await Process.git(["commit", "--allow-empty", "-m", "init"], cwd: repo)
         _ = try await Process.git(["branch", "start"], cwd: repo)
 
         let result = try await GitService().looksBinaryAtRef(worktreePath: repo, ref: "start", file: "missing.bin")
@@ -701,9 +738,8 @@ struct GitServiceRemoteChangesTests {
     /// ref, path absent at that ref" shape explicitly to guard the
     /// cat-file-exit-code fix above from over-rejecting the legitimate case.
     @Test func diffAgainstRef_stillShowsANewFileAsAllAddWhenItGenuinelyDidNotExistAtAValidRef() async throws {
-        let repo = try await makeRepo()
+        let repo = try await makeRepoWithInitCommit()
         defer { try? FileManager.default.removeItem(at: repo) }
-        _ = try await Process.git(["commit", "--allow-empty", "-m", "init"], cwd: repo)
         _ = try await Process.git(["branch", "start"], cwd: repo)
         try "fresh\n".write(to: repo.appendingPathComponent("brand-new.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "brand-new.txt"], cwd: repo)
@@ -759,14 +795,13 @@ struct GitServiceRemoteChangesTests {
     @Test func remoteDiff_throwsWhenAStagedCopySourceSectionAloneExceedsTheOutputCap() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let original = (1 ... 100).map { "line\($0)\n" }.joined()
-        try original.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
+        let fixture = Self.copySourceFixture()
+        try fixture.original.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "aaa.txt"], cwd: repo)
         _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
 
-        let appended = original + (1 ... 10).map { "appended-line-\($0)-with-enough-padding-to-add-up\n" }.joined()
-        try appended.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
-        try (appended + "zzz-marker\n").write(to: repo.appendingPathComponent("zzz.txt"), atomically: true, encoding: .utf8)
+        try fixture.modified.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
+        try fixture.copy.write(to: repo.appendingPathComponent("zzz.txt"), atomically: true, encoding: .utf8)
         _ = try await Process.git(["add", "-A"], cwd: repo)
 
         await #expect(throws: (any Error).self) {
@@ -775,9 +810,24 @@ struct GitServiceRemoteChangesTests {
                 file: "zzz.txt",
                 staged: true,
                 originalPath: "aaa.txt",
-                maxOutputBytes: 300
+                maxOutputBytes: 1000
             )
         }
+    }
+
+    /// aaa.txt has 20,000 lines, and the modified version rewrites the first
+    /// 4,000. That keeps zzz.txt (the modified text plus one line) about 73%
+    /// similar to aaa.txt, above git's 50% copy threshold, while aaa.txt's
+    /// own diff section is about 158 KB. That is more than twice the 64 KB
+    /// pipe read, so a 1,000-byte cap always stops git before zzz.txt's
+    /// section is captured.
+    private static func copySourceFixture() -> (original: String, modified: String, copy: String) {
+        let lines = (1 ... 20000).map { "base-line-\($0)" }
+        let original = lines.map { $0 + "\n" }.joined()
+        let modified = lines.enumerated().map { index, line in
+            (index < 4000 ? "changed-" + line : line) + "\n"
+        }.joined()
+        return (original, modified, modified + "zzz-marker\n")
     }
 
     /// A file declared binary purely via `.gitattributes` (content that
@@ -808,9 +858,8 @@ struct GitServiceRemoteChangesTests {
     /// disagree with `addedLineCount`'s (used by the ref-resolved path) by
     /// exactly one for this shape.
     @Test func changedFilesAgainstRef_reportsTheSameAddCountForAnUntrackedFileRegardlessOfRefResolution() async throws {
-        let repo = try await makeRepo()
+        let repo = try await makeRepoWithInitCommit()
         defer { try? FileManager.default.removeItem(at: repo) }
-        _ = try await Process.git(["commit", "--allow-empty", "-m", "init"], cwd: repo)
         try "one\n".write(to: repo.appendingPathComponent("untracked.txt"), atomically: true, encoding: .utf8)
 
         let withNilRef = try await GitService().changedFilesAgainstRef(worktreePath: repo, ref: nil)
@@ -896,13 +945,7 @@ struct GitServiceRemoteChangesTests {
     // MARK: - diffAgainstHEAD on an unborn branch
 
     private func makeUnbornRepo() async throws -> URL {
-        let repo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-unborn-diff-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
-        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: repo)
-        _ = try await Process.git(["config", "user.name", "Test User"], cwd: repo)
-        return repo
+        try Self.copy(try await Self.unbornTemplate(), prefix: "alas-unborn-diff")
     }
 
     /// Baseline/regression coverage for the LOCAL branch of `diffAgainstHEAD`'s

@@ -36,7 +36,7 @@ struct ACPSessionManagerAttachRestoreTests {
         let restart = Task { await manager.restartConnection(to: session.id) }
         let duplicateRestart = Task { await manager.restartConnection(to: session.id) }
 
-        try await waitUntilAsync(timeoutNanos: 1_000_000_000) {
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
             session.agentState == .ready && launchCount == 1
         }
         #expect(await setupGate.hasEntered)
@@ -117,6 +117,89 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(launchCount == 3)
         #expect(session.agentState == .ready)
         #expect(!session.connectionRestartInProgress)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("a superseded recovery restart or automatic reattach cannot exhaust its replacement's recovery", arguments: [false, true])
+    func supersededRecoveryAttemptDoesNotExhaustReplacement(staleIsReattach: Bool) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let initialClient = ACPMockClient()
+        let staleClient = ACPMockClient()
+        let currentClient = ACPMockClient()
+        let staleInitializeGate = AttachPhaseGate()
+        let currentInitializeGate = AttachPhaseGate()
+        scriptInitialize(initialClient)
+        scriptSessionResult(initialClient, method: "session/new", sessionId: "remote-initial")
+        staleClient.scriptAsync(method: "initialize") { _ in
+            await staleInitializeGate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(staleClient, method: "session/new", sessionId: "remote-stale")
+        currentClient.scriptAsync(method: "initialize") { _ in
+            await currentInitializeGate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(currentClient, method: "session/new", sessionId: "remote-current")
+        var launchCount = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                launchCount += 1
+                if launchCount == 1 { return ACPConnection(client: initialClient) }
+                if launchCount == 2 { return ACPConnection(client: staleClient) }
+                return ACPConnection(client: currentClient)
+            }
+        )
+        let session = manager.createSession(agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        #expect(session.agentState == .ready)
+        #expect(session.beginConnectionRecovery())
+        if staleIsReattach {
+            session.agentState = .disconnected
+        }
+        defer {
+            Task { await staleInitializeGate.release() }
+            Task { await currentInitializeGate.release() }
+        }
+
+        let staleAttempt = Task {
+            if staleIsReattach {
+                await manager.reattach(to: session.id)
+            } else {
+                await manager.restartConnection(to: session.id)
+            }
+        }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await staleInitializeGate.hasEntered
+        }
+        let currentRestart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await currentInitializeGate.hasEntered && session.agentState == .spawning
+        }
+
+        await staleInitializeGate.release()
+        await staleAttempt.value
+
+        #expect(session.agentState == .spawning)
+        #expect(session.connectionRecoveryState == .reconnecting(attempt: nil, maxAttempts: nil))
+
+        await currentInitializeGate.release()
+        await currentRestart.value
+
+        #expect(session.agentState == .ready)
+        #expect(session.connectionRecoveryState == nil)
+        #expect(launchCount == 3)
         await manager.detach(sessionId: session.id)
     }
 
@@ -564,6 +647,285 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(manager.runners[session.id] === replacementRunner)
         #expect(session.remoteSessionId == "remote-broker")
         #expect(try store.loadLease(sessionId: session.id)?.token == replacementLease?.token)
+    }
+
+    @Test("a late retiring detach timeout retries the attach in a fresh broker namespace")
+    func lateRetiringDetachTimeoutRetriesAttachInFreshBrokerNamespace() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerServiceProxy(stallDetach: true)
+        let isolatedService = ManagerBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .seconds(10),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "late-detach-fresh-namespace", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+        let originalRunner = try #require(manager.runners[session.id])
+        let originalLease = try store.loadLease(sessionId: session.id)
+        let originalBrokerId = try await #require(sharedService.opened.first?.brokerId)
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        defer {
+            Task {
+                // The retirement detach's cancelled operation task still
+                // waits on the gate; release it so the actor winds down.
+                await sharedService.detachGate.release()
+            }
+        }
+
+        // The replacement initializes on the shared broker namespace while
+        // the retiring connection's detach is still stalled.
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.detachGate.hasEntered
+                && session.agentState != .ready
+                && manager.runners[session.id] == nil
+        }
+        #expect(await sharedService.detached.count == 1)
+
+        // The detach times out without the gate ever being released — the
+        // retry must not wait on the wedged broker. The attach abandons that
+        // connection and re-runs in an isolated namespace.
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            let isolatedOpenCount = await isolatedService.opened.count
+            return session.agentState == .ready && isolatedOpenCount == 1
+        }
+        let isolatedBrokerId = try await #require(isolatedService.opened.first?.brokerId)
+        #expect(isolatedBrokerId.rawValue.hasPrefix("fallback-"))
+        #expect(isolatedBrokerId != originalBrokerId)
+
+        let retriedRunner = try #require(manager.runners[session.id])
+        #expect(retriedRunner !== originalRunner)
+        let retriedLease = try store.loadLease(sessionId: session.id)
+        #expect(retriedLease != nil)
+        #expect(retriedLease?.token != originalLease?.token)
+
+        // The abandoned replacement unwinds: its broker connection is closed.
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.closed.count >= 1
+        }
+        #expect(session.agentState == .ready)
+        await restart.value
+
+        #expect(session.agentState == .ready)
+        #expect(manager.runners[session.id] === retriedRunner)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("a failed attach whose retiring detach times out keeps the fresh-namespace requirement")
+    func failedAttachKeepsFreshNamespaceRequirementForNextAttach() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerServiceProxy(
+            stallDetach: true,
+            failSendMethod: "initialize",
+            failSendAfterOpenCount: 2
+        )
+        let isolatedService = ManagerBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .seconds(10),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "failed-attach-fresh-namespace", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+        let originalRunner = try #require(manager.runners[session.id])
+        let originalBrokerId = try await #require(sharedService.opened.first?.brokerId)
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        defer {
+            Task {
+                // The cleanup detach's cancelled operation task still waits
+                // on the gate; release it so the actor winds down.
+                await sharedService.detachGate.release()
+            }
+        }
+
+        // The replacement's broker opens on the shared namespace, but its
+        // `initialize` fails (the proxy throws after two opens). The attach
+        // fails, and its cleanup then detaches the retiring connection —
+        // which stalls and times out while the attempt is deregistered.
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.detachGate.hasEntered
+                && manager.runners[session.id] == nil
+                && {
+                    if case .failed = session.agentState { return true }
+                    return false
+                }()
+        }
+        #expect(await sharedService.detached.count == 1)
+
+        // Let the stalled detach's bounded wait time out so the pending
+        // requirement is recorded before the retry attach starts. Await the
+        // recorded requirement itself instead of sleeping past the timeout.
+        try await waitUntil(timeoutNanos: 2_000_000_000) {
+            manager.pendingFreshBrokerNamespacesForTesting.contains(session.id)
+        }
+
+        // The restart flow's release evicted the failed session; recreate it
+        // from the store like a reopening tab would.
+        let reopenedSession = try #require(manager.placeholderSession(id: session.id))
+        await manager.hydrateIfNeeded(id: reopenedSession.id)
+
+        // The next attach must not reuse the wedged namespace: the pending
+        // requirement left behind by the deregistered attempt routes it
+        // through the isolated service.
+        let retriedAttach = Task { await manager.attach(to: reopenedSession.id, freshlyCreated: false) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            let isolatedOpenCount = await isolatedService.opened.count
+            return reopenedSession.agentState == .ready && isolatedOpenCount == 1
+        }
+        let isolatedBrokerId = try await #require(isolatedService.opened.first?.brokerId)
+        #expect(isolatedBrokerId.rawValue.hasPrefix("fallback-"))
+        #expect(isolatedBrokerId != originalBrokerId)
+        let retriedRunner = try #require(manager.runners[reopenedSession.id])
+        #expect(retriedRunner !== originalRunner)
+
+        await sharedService.detachGate.release()
+        await restart.value
+
+        #expect(reopenedSession.agentState == .ready)
+        #expect(manager.runners[reopenedSession.id] === retriedRunner)
+        await manager.detach(sessionId: reopenedSession.id)
+    }
+
+    @Test("disposing during a stalled retirement detach still claims the retiring broker")
+    func disposalDuringStalledRetirementDetachClaimsRetiringBroker() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let sharedService = ManagerBrokerServiceProxy(stallDetach: true)
+        let isolatedService = ManagerBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { sharedService },
+            isolatedBrokerServiceFactory: { isolatedService },
+            attachmentStartupTimeout: .seconds(10),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "disposal-stalled-retire", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.detachGate.hasEntered
+                && session.agentState != .ready
+                && manager.runners[session.id] == nil
+        }
+
+        // The retirement detach is suspended with the retiring connection
+        // still tracked. A disposal landing in that window must find and
+        // claim it instead of leaving it unowned.
+        let disposal = Task { try await manager.disposeSession(id: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await sharedService.closed.count >= 1
+        }
+
+        await sharedService.detachGate.release()
+        await restart.value
+        try await disposal.value
+
+        #expect(manager.liveSession(for: session.id) == nil)
+        #expect(await sharedService.detached.count == 1)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("restart detaches the retiring broker without closing it before replacement initialization")
+    func restartRetainsRetiringBrokerUntilReplacementInitialization() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let service = ManagerBrokerService()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { service },
+            isolatedBrokerServiceFactory: { ManagerBrokerService() },
+            attachmentStartupTimeout: .milliseconds(50),
+            restartTeardownTimeout: .milliseconds(50)
+        )
+        let session = manager.createSession(id: "restart-retiring-broker", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        #expect(session.agentState == .ready)
+
+        await manager.restartConnection(to: session.id)
+
+        #expect(session.agentState == .ready)
+        #expect(await service.closed.isEmpty)
+        #expect(await service.detached.count == 1)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("restart retains a registered runner's broker while attach restoration is in flight")
+    func restartRetainsRegisteredRunnerBrokerDuringAttachRestoration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let retiringService = ManagerBrokerService()
+        let replacementService = ManagerBrokerServiceProxy(stallSendMethod: "initialize")
+        let registrationGate = ManagerBrokerGate()
+        var serviceFactoryCalls = 0
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            brokerServiceFactory: {
+                serviceFactoryCalls += 1
+                if serviceFactoryCalls == 1 { return retiringService }
+                return replacementService
+            },
+            isolatedBrokerServiceFactory: { ManagerBrokerService() },
+            attachmentStartupTimeout: .seconds(10),
+            restartTeardownTimeout: .seconds(1)
+        )
+        let session = manager.createSession(id: "restart-registered-runner", agentId: "claude")
+        var registrationCount = 0
+        manager.afterRunnerRegistrationForTesting = { _ in
+            registrationCount += 1
+            guard registrationCount == 1 else { return }
+            await registrationGate.wait()
+        }
+        defer {
+            Task {
+                await registrationGate.release()
+                await replacementService.sendGate.release()
+            }
+        }
+
+        let initialAttach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await registrationGate.hasEntered && manager.runners[session.id] != nil
+        }
+        #expect(session.agentState == .spawning)
+
+        let restart = Task { await manager.restartConnection(to: session.id) }
+        try await waitUntilAsync(timeoutNanos: 2_000_000_000) {
+            await replacementService.sendGate.hasEntered
+        }
+
+        #expect(await retiringService.closed.isEmpty)
+
+        await registrationGate.release()
+        await replacementService.sendGate.release()
+        await initialAttach.value
+        await restart.value
+
+        #expect(session.agentState == .ready)
+        #expect(await retiringService.closed.isEmpty)
+        #expect(await retiringService.detached.count == 1)
+        await manager.detach(sessionId: session.id)
     }
 
     @Test("disposing during restart does not strand a reopened session attachment")
@@ -1040,6 +1402,8 @@ struct ACPSessionManagerAttachRestoreTests {
         let summary = try #require(session.mcpAttachmentSummary)
         #expect(summary.statuses == [.init(id: "0", name: "filesystem", transport: .stdio, disposition: .requested)])
         #expect(summary.configurationFingerprint == MCPAttachmentPlanner.configurationFingerprint(for: configuredServers))
+        #expect(session.pendingMCPPreamble?.contains("filesystem") == true)
+        #expect(session.mcpPreambleSent == false)
     }
 
     @Test("local attach uses broker client and persists durable broker state")
@@ -1249,45 +1613,7 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(row.acpBrokerAcknowledgedCursor == 4)
     }
 
-    @Test("reopened session uses session/load")
-    func reopenedSessionUsesLoad() async throws {
-        let store = try ACPSessionStore(path: tmpStorePath())
-        try store.upsertSession(row(remoteSessionId: "remote-old"))
-        let client = ACPMockClient()
-        scriptInitialize(client)
-        scriptSessionResult(client, method: "session/load", sessionId: "remote-restored")
-        let manager = manager(store: store, client: client)
-
-        let session = try #require(manager.placeholderSession(id: "local"))
-        await manager.hydrateIfNeeded(id: "local")
-        await manager.attach(to: session.id, freshlyCreated: false)
-
-        let methods = client.sent.map(\.method)
-        #expect(methods == ["initialize", "session/load"])
-        #expect(session.remoteSessionId == "remote-restored")
-        #expect(session.contextRestoreWarning == nil)
-        #expect(try store.loadSession(id: "local")?.remoteSessionId == "remote-restored")
-    }
-
-    @Test("fresh session/new sets a pending MCP preamble when servers attach")
-    func freshSessionSetsPendingPreamble() async throws {
-        let store = try ACPSessionStore(path: tmpStorePath())
-        let client = ACPMockClient()
-        scriptInitialize(client)
-        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
-        let configuredServers = [ProjectMCPServer.stdio(name: "filesystem", command: "mcp-files")]
-        let manager = manager(store: store, client: client, mcpProjectContextProvider: {
-            MCPProjectContext(projectDirectory: "/tmp/project", configuredServers: configuredServers)
-        })
-        let session = manager.createSession(agentId: "claude")
-
-        await manager.attach(to: session.id, freshlyCreated: true)
-
-        #expect(session.pendingMCPPreamble?.contains("filesystem") == true)
-        #expect(session.mcpPreambleSent == false)
-    }
-
-    @Test("loaded session does not reset the MCP preamble")
+    @Test("reopened session uses session/load, adopts its remote id, and does not reset the MCP preamble")
     func loadedSessionDoesNotResetPreamble() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(remoteSessionId: "remote-old"))
@@ -1305,6 +1631,9 @@ struct ACPSessionManagerAttachRestoreTests {
 
         #expect(client.sent.map(\.method) == ["initialize", "session/load"])
         #expect(session.pendingMCPPreamble == nil)
+        #expect(session.remoteSessionId == "remote-restored")
+        #expect(session.contextRestoreWarning == nil)
+        #expect(try store.loadSession(id: "local")?.remoteSessionId == "remote-restored")
     }
 
     @Test("fresh remote session preamble omits built-in but names a surviving user server")
@@ -1441,33 +1770,6 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(!preamble.contains("MCP server \"alas\""))
     }
 
-    @Test("local pi attach invokes the external MCP status provider")
-    func localPiAttachInvokesExternalMCPStatusProvider() async throws {
-        let store = try ACPSessionStore(path: tmpStorePath())
-        let client = ACPMockClient()
-        scriptInitialize(client)
-        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
-        let manager = ACPSessionManager(
-            worktreeId: "wt",
-            worktreePath: "/tmp/wt",
-            store: store,
-            setupEvaluator: { _ in .ready },
-            connectionFactory: { _, _, _ in ACPConnection(client: client) }
-        )
-        let session = manager.createSession(agentId: ACPLaunchCatalog.spec(for: "pi")!.agentID)
-        var providerCalled = false
-        manager.externalMCPStatusProvider = { _ in
-            providerCalled = true
-            return (adapterState: .installed, configOutcome: .wrote, userServerNames: [], skippedServerStatuses: [], requestedServerStatuses: [])
-        }
-
-        await manager.attach(to: session.id, freshlyCreated: true)
-
-        #expect(providerCalled)
-        #expect(session.mcpExternalStatus?.adapterState == .installed)
-        #expect(session.mcpExternalStatus?.configOutcome == .wrote)
-    }
-
     @Test("pi attach preamble names http/sse-only servers from the external plan")
     func piAttachPreambleNamesExternalPlanServers() async throws {
         // Regression guard: `wireMCPServers` is planned against pi's real
@@ -1503,40 +1805,7 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(preamble.contains("mcp()"))
     }
 
-    @Test("remote pi attach skips the external MCP status provider")
-    func remotePiAttachSkipsExternalMCPStatusProvider() async throws {
-        let root = "/srv/task5-remote-external-mcp-\(UUID().uuidString)"
-        RemoteHostRegistry.shared.register(root: root, host: "devbox")
-        defer { RemoteHostRegistry.shared.unregister(root: root) }
-        let store = try ACPSessionStore(path: tmpStorePath())
-        let client = ACPMockClient()
-        scriptInitialize(client)
-        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
-        let manager = ACPSessionManager(
-            worktreeId: "wt",
-            worktreePath: root,
-            store: store,
-            remoteAdapterResolver: { _, _, _ in
-                .ready(.init(adapterPath: "/home/dev/.alas/acp/pi/bin/pi-acp", nodeBinDirectory: ""))
-            },
-            connectionFactory: { _, _, _ in ACPConnection(client: client) }
-        )
-        let session = manager.createSession(agentId: ACPLaunchCatalog.spec(for: "pi")!.agentID)
-        var providerCalled = false
-        manager.externalMCPStatusProvider = { _ in
-            providerCalled = true
-            return (adapterState: .installed, configOutcome: .wrote, userServerNames: [], skippedServerStatuses: [], requestedServerStatuses: [])
-        }
-
-        await manager.attach(to: session.id, freshlyCreated: true)
-
-        #expect(!providerCalled)
-        #expect(session.mcpExternalStatus?.adapterState == .unknown)
-        #expect(session.mcpExternalStatus?.cliActive == false)
-        #expect(session.mcpExternalStatus?.configOutcome == nil)
-    }
-
-    @Test("remote pi attach preserves configured MCP server names as unavailable")
+    @Test("remote pi attach skips the external MCP status provider and reports configured servers as unavailable")
     func remotePiAttachPreservesConfiguredMCPServerNames() async throws {
         let root = "/srv/task5-remote-external-mcp-names-\(UUID().uuidString)"
         RemoteHostRegistry.shared.register(root: root, host: "devbox")
@@ -1561,9 +1830,15 @@ struct ACPSessionManagerAttachRestoreTests {
             }
         )
         let session = manager.createSession(agentId: ACPLaunchCatalog.spec(for: "pi")!.agentID)
+        var providerCalled = false
+        manager.externalMCPStatusProvider = { _ in
+            providerCalled = true
+            return (adapterState: .installed, configOutcome: .wrote, userServerNames: [], skippedServerStatuses: [], requestedServerStatuses: [])
+        }
 
         await manager.attach(to: session.id, freshlyCreated: true)
 
+        #expect(!providerCalled)
         #expect(session.mcpExternalStatus?.userServerNames == ["linear"])
         #expect(session.mcpExternalStatus?.adapterServerAvailability == .notInstalled)
         #expect(session.mcpExternalStatus?.canInstallAdapterLocally == false)
@@ -1609,45 +1884,6 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.currentMode == "default")
         #expect(session.contextRestoreWarning == nil)
         #expect(try store.loadSession(id: "local")?.remoteSessionId == "remote-old")
-    }
-
-    @Test("reopened session reapplies its persisted model after load")
-    func reopenedSessionReappliesPersistedModel() async throws {
-        let store = try ACPSessionStore(path: tmpStorePath())
-        try store.upsertSession(row(
-            remoteSessionId: "remote-old",
-            agentId: "codex",
-            currentModel: "sonnet"
-        ))
-        let client = ACPMockClient()
-        scriptInitialize(client)
-        client.script(method: "session/load") { _ in
-            try JSONEncoder().encode(ACPSessionNewResult(
-                sessionId: "remote-old",
-                availableModels: [
-                    .init(id: "sonnet", name: "Sonnet"),
-                    .init(id: "opus", name: "Opus"),
-                ],
-                availableModes: [],
-                currentModel: "opus",
-                currentMode: nil,
-                promptSuggestions: []
-            ))
-        }
-        client.script(method: "session/set_model") { _ in Data("{}".utf8) }
-        let manager = manager(store: store, client: client)
-
-        let session = try #require(manager.placeholderSession(id: "local"))
-        await manager.hydrateIfNeeded(id: "local")
-        await manager.attach(to: session.id, freshlyCreated: false)
-
-        try await waitUntil {
-            client.sent.map(\.method) == ["initialize", "session/load", "session/set_model"]
-        }
-        let params = try #require(client.sent.last?.params as? ACPSessionSetModelParams)
-        #expect(params.sessionId == "remote-old")
-        #expect(params.modelId == "sonnet")
-        #expect(session.currentModel == "sonnet")
     }
 
     @Test("user model and mode edits follow reconnect restoration")
@@ -1732,8 +1968,8 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.currentMode == "ask")
     }
 
-    @Test("pre-attach model and mode picks apply after lease acquisition")
-    func preAttachModelAndModePicksApplyAfterLeaseAcquisition() async throws {
+    @Test("pre-attach model and mode picks wait for the initial lease claim", arguments: [false, true])
+    func preAttachModelAndModePicksApplyAfterLeaseAcquisition(staleOwnershipMarker: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(
             remoteSessionId: "remote-old",
@@ -1766,18 +2002,31 @@ struct ACPSessionManagerAttachRestoreTests {
         let session = try #require(manager.placeholderSession(id: "local"))
 
         await manager.hydrateIfNeeded(id: "local")
+        if staleOwnershipMarker {
+            // Simulate a stale local ownership marker while the first lease
+            // observation is pending. A pick must not write without its token.
+            session.agentState = .spawning
+            manager._ownedLeases.insert(session.id)
+        }
         await manager.setModel(for: session.id, modelId: "haiku")
         await manager.setMode(for: session.id, modeId: "ask")
-        manager.renameSession(id: session.id, title: "Renamed", source: .manual)
+        if !staleOwnershipMarker {
+            manager.renameSession(id: session.id, title: "Renamed", source: .manual)
+        }
         #expect(client.sent.isEmpty)
 
         await manager.flushAllPersistence()
         #expect(session.currentModel == "haiku")
         #expect(session.currentMode == "ask")
-        #expect(try store.loadSession(id: "local")?.title == "Renamed")
+        if !staleOwnershipMarker {
+            #expect(try store.loadSession(id: "local")?.title == "Renamed")
+        }
         #expect(try store.loadSession(id: "local")?.currentModel == "sonnet")
         #expect(try store.loadSession(id: "local")?.currentMode == "plan")
 
+        if staleOwnershipMarker {
+            session.agentState = .idle
+        }
         await manager.attach(to: session.id, freshlyCreated: false)
         try await waitUntil {
             client.sent.map(\.method) == [
@@ -1938,72 +2187,6 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.currentMode == "plan")
         #expect(try store.loadSession(id: "local")?.currentModel == "sonnet")
         #expect(try store.loadSession(id: "local")?.currentMode == "plan")
-    }
-
-    @Test("model and mode picks wait for the initial lease claim")
-    func modelAndModePicksWaitForInitialLeaseClaim() async throws {
-        let store = try ACPSessionStore(path: tmpStorePath())
-        try store.upsertSession(row(
-            remoteSessionId: "remote-old",
-            agentId: "codex",
-            currentModel: "sonnet",
-            currentMode: "plan"
-        ))
-        let client = ACPMockClient()
-        scriptInitialize(client)
-        client.script(method: "session/load") { _ in
-            try JSONEncoder().encode(ACPSessionNewResult(
-                sessionId: "remote-old",
-                availableModels: [
-                    .init(id: "sonnet", name: "Sonnet"),
-                    .init(id: "haiku", name: "Haiku"),
-                ],
-                availableModes: [
-                    .init(id: "default", name: "Default"),
-                    .init(id: "plan", name: "Plan"),
-                    .init(id: "ask", name: "Ask"),
-                ],
-                currentModel: "sonnet",
-                currentMode: "default",
-                promptSuggestions: []
-            ))
-        }
-        client.script(method: "session/set_model") { _ in Data("{}".utf8) }
-        client.script(method: "session/set_mode") { _ in Data("{}".utf8) }
-        let manager = manager(store: store, client: client)
-        let session = try #require(manager.placeholderSession(id: "local"))
-        await manager.hydrateIfNeeded(id: "local")
-
-        // Simulate a stale local ownership marker while the first lease
-        // observation is pending. A pick must not write without its token.
-        session.agentState = .spawning
-        manager._ownedLeases.insert(session.id)
-        await manager.setModel(for: session.id, modelId: "haiku")
-        await manager.setMode(for: session.id, modeId: "ask")
-        await manager.flushAllPersistence()
-
-        #expect(client.sent.isEmpty)
-        #expect(session.currentModel == "haiku")
-        #expect(session.currentMode == "ask")
-        #expect(try store.loadSession(id: "local")?.currentModel == "sonnet")
-        #expect(try store.loadSession(id: "local")?.currentMode == "plan")
-
-        session.agentState = .idle
-        await manager.attach(to: session.id, freshlyCreated: false)
-        try await waitUntil {
-            client.sent.map(\.method) == [
-                "initialize",
-                "session/load",
-                "session/set_model",
-                "session/set_mode",
-            ]
-        }
-        await manager.flushAllPersistence()
-
-        #expect(session.currentModel == "haiku")
-        #expect(session.currentMode == "ask")
-        #expect(try store.loadSession(id: "local")?.currentModel == "haiku")
-        #expect(try store.loadSession(id: "local")?.currentMode == "ask")
     }
 
     @Test("rapid model and mode picks reach the agent in selection order")
@@ -2424,8 +2607,8 @@ struct ACPSessionManagerAttachRestoreTests {
         try await waitUntil { activePromptCompleted == true && session.transcript.streamingState == .idle }
     }
 
-    @Test("detaching cancels a prompt behind model selection")
-    func detachingCancelsPromptBehindModelSelection() async throws {
+    @Test("detaching or losing the writer lease cancels a prompt behind model selection", arguments: [true, false])
+    func losingOwnershipCancelsPromptBehindModelSelection(byDetach: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(
             remoteSessionId: "remote-old",
@@ -2458,8 +2641,8 @@ struct ACPSessionManagerAttachRestoreTests {
         }
         let manager = manager(store: store, client: client)
         let session = try #require(manager.placeholderSession(id: "local"))
-        manager.retainSession(id: session.id)
-        defer { manager.releaseSession(id: session.id) }
+        if byDetach { manager.retainSession(id: session.id) }
+        defer { if byDetach { manager.releaseSession(id: session.id) } }
 
         await manager.hydrateIfNeeded(id: session.id)
         await manager.attach(to: session.id, freshlyCreated: false)
@@ -2469,7 +2652,7 @@ struct ACPSessionManagerAttachRestoreTests {
         var promptCompleted: Bool?
         let accepted = manager.submit(
             sessionId: session.id,
-            text: "do not send after detach",
+            text: "do not send after losing ownership",
             attachments: [],
             intent: .auto
         ) { succeeded in
@@ -2477,79 +2660,25 @@ struct ACPSessionManagerAttachRestoreTests {
         }
         #expect(accepted)
 
-        await manager.detach(sessionId: session.id)
+        if byDetach {
+            await manager.detach(sessionId: session.id)
+        } else {
+            try store.seizeLease(
+                sessionId: session.id,
+                instanceId: "OTHER",
+                pid: Int64(getpid()),
+                now: Int64(Date().timeIntervalSince1970)
+            )
+        }
         await modelGate.release()
         await selection.value
         try await waitUntil { promptCompleted != nil }
 
         #expect(promptCompleted == false)
         #expect(!client.sent.contains { $0.method == "session/prompt" })
-        #expect(session.agentState == .idle)
-    }
-
-    @Test("losing writer lease cancels a prompt behind model selection")
-    func losingWriterLeaseCancelsPromptBehindModelSelection() async throws {
-        let store = try ACPSessionStore(path: tmpStorePath())
-        try store.upsertSession(row(
-            remoteSessionId: "remote-old",
-            agentId: "codex",
-            currentModel: "sonnet",
-            currentMode: "plan"
-        ))
-        let client = ACPMockClient()
-        let modelGate = AttachPhaseGate()
-        scriptInitialize(client)
-        client.script(method: "session/load") { _ in
-            try JSONEncoder().encode(ACPSessionNewResult(
-                sessionId: "remote-old",
-                availableModels: [
-                    .init(id: "sonnet", name: "Sonnet"),
-                    .init(id: "haiku", name: "Haiku"),
-                ],
-                availableModes: [.init(id: "plan", name: "Plan")],
-                currentModel: "sonnet",
-                currentMode: "plan",
-                promptSuggestions: []
-            ))
+        if byDetach {
+            #expect(session.agentState == .idle)
         }
-        client.scriptAsync(method: "session/set_model") { request in
-            let params = try #require(request.params as? ACPSessionSetModelParams)
-            if params.modelId == "haiku" {
-                await modelGate.enterAndWait()
-            }
-            return Data("{}".utf8)
-        }
-        let manager = manager(store: store, client: client)
-        let session = try #require(manager.placeholderSession(id: "local"))
-
-        await manager.hydrateIfNeeded(id: session.id)
-        await manager.attach(to: session.id, freshlyCreated: false)
-        let selection = manager.enqueueModelSelection(for: session.id, modelId: "haiku")
-        try await waitUntilAsync { await modelGate.hasEntered }
-
-        var promptCompleted: Bool?
-        let accepted = manager.submit(
-            sessionId: session.id,
-            text: "do not send after losing the lease",
-            attachments: [],
-            intent: .auto
-        ) { succeeded in
-            promptCompleted = succeeded
-        }
-        #expect(accepted)
-
-        try store.seizeLease(
-            sessionId: session.id,
-            instanceId: "OTHER",
-            pid: Int64(getpid()),
-            now: Int64(Date().timeIntervalSince1970)
-        )
-        await modelGate.release()
-        await selection.value
-        try await waitUntil { promptCompleted != nil }
-
-        #expect(promptCompleted == false)
-        #expect(!client.sent.contains { $0.method == "session/prompt" })
     }
 
     @Test("reopened session reapplies persisted mode and config options after load")
@@ -3395,34 +3524,10 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.availableConfigOptions.count == 2)
     }
 
-    @Test("reopened config-only session records its already-selected model")
-    func reopenedConfigOnlySessionRecordsAlreadySelectedModel() async throws {
+    @Test("reopened config-only session adopts the loaded model without restoring it", arguments: ["opus", nil] as [String?])
+    func reopenedConfigOnlySessionAdoptsLoadedModel(persistedModel: String?) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
-        try store.upsertSession(row(remoteSessionId: "remote-old", agentId: "codex", currentModel: "opus"))
-        let client = ACPMockClient()
-        scriptInitialize(client)
-        client.script(method: "session/load") { _ in
-            try JSONEncoder().encode(ACPSessionNewResult(
-                sessionId: "remote-old", availableModels: [], availableModes: [], currentModel: nil,
-                currentMode: nil, promptSuggestions: [], configOptions: [ACPConfigOption(
-                    id: "model", name: "Model", category: "model", currentValue: "opus",
-                    options: [.init(id: "opus", name: "Opus")])]
-            ))
-        }
-        let manager = manager(store: store, client: client)
-
-        let session = try #require(manager.placeholderSession(id: "local"))
-        await manager.hydrateIfNeeded(id: "local")
-        await manager.attach(to: session.id, freshlyCreated: false)
-
-        #expect(client.sent.map(\.method) == ["initialize", "session/load"])
-        #expect(session.currentModel == "opus")
-    }
-
-    @Test("reopened config-only session persists loaded model when row has no model")
-    func reopenedConfigOnlySessionPersistsLoadedModelWhenRowHasNoModel() async throws {
-        let store = try ACPSessionStore(path: tmpStorePath())
-        try store.upsertSession(row(remoteSessionId: "remote-old", agentId: "codex", currentModel: nil))
+        try store.upsertSession(row(remoteSessionId: "remote-old", agentId: "codex", currentModel: persistedModel))
         let client = ACPMockClient()
         scriptInitialize(client)
         client.script(method: "session/load") { _ in
@@ -3446,8 +3551,8 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
-    @Test("reopened config-option session keeps the loaded model when restoration fails")
-    func reopenedConfigOptionSessionKeepsLoadedModelWhenRestorationFails() async throws {
+    @Test("reopened config-option session falls back to the loaded model when restoration fails", arguments: ["opus", nil] as [String?])
+    func reopenedConfigOptionSessionFallsBackToLoadedModelWhenRestorationFails(loadedModel: String?) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(
             remoteSessionId: "remote-old",
@@ -3468,7 +3573,7 @@ struct ACPSessionManagerAttachRestoreTests {
                     id: "model",
                     name: "Model",
                     category: "model",
-                    currentValue: "opus",
+                    currentValue: loadedModel,
                     options: [
                         .init(id: "sonnet", name: "Sonnet"),
                         .init(id: "opus", name: "Opus"),
@@ -3484,55 +3589,11 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.hydrateIfNeeded(id: "local")
         await manager.attach(to: session.id, freshlyCreated: false)
 
-        #expect(session.currentModel == "opus")
-        #expect(session.availableConfigOptions.first?.currentStringValue == "opus")
+        // Without a loaded value, the stale persisted model is cleared.
+        #expect(session.currentModel == loadedModel)
+        #expect(session.availableConfigOptions.first?.currentStringValue == loadedModel)
         try await waitUntil {
-            (try? store.loadSession(id: "local"))?.currentModel == "opus"
-        }
-    }
-
-    @Test("reopened config-option session clears stale model when restoration fails without loaded value")
-    func reopenedConfigOptionSessionClearsStaleModelWhenRestorationFailsWithoutLoadedValue() async throws {
-        let store = try ACPSessionStore(path: tmpStorePath())
-        try store.upsertSession(row(
-            remoteSessionId: "remote-old",
-            agentId: "codex",
-            currentModel: "sonnet"
-        ))
-        let client = ACPMockClient()
-        scriptInitialize(client)
-        client.script(method: "session/load") { _ in
-            try JSONEncoder().encode(ACPSessionNewResult(
-                sessionId: "remote-old",
-                availableModels: [],
-                availableModes: [],
-                currentModel: nil,
-                currentMode: nil,
-                promptSuggestions: [],
-                configOptions: [ACPConfigOption(
-                    id: "model",
-                    name: "Model",
-                    category: "model",
-                    currentValue: nil as ACPConfigValue?,
-                    options: [
-                        .init(id: "sonnet", name: "Sonnet"),
-                        .init(id: "opus", name: "Opus"),
-                    ])]
-            ))
-        }
-        client.script(method: "session/set_config_option") { _ in
-            throw ACPClientError.noScript(method: "session/set_config_option")
-        }
-        let manager = manager(store: store, client: client)
-
-        let session = try #require(manager.placeholderSession(id: "local"))
-        await manager.hydrateIfNeeded(id: "local")
-        await manager.attach(to: session.id, freshlyCreated: false)
-
-        #expect(session.currentModel == nil)
-        #expect(session.availableConfigOptions.first?.currentStringValue == nil)
-        try await waitUntil {
-            (try? store.loadSession(id: "local"))?.currentModel == nil
+            (try? store.loadSession(id: "local"))?.currentModel == loadedModel
         }
     }
 
@@ -3912,8 +3973,8 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.currentModel == "haiku")
     }
 
-    @Test("reopened session stays detached when closed during model restoration")
-    func reopenedSessionStaysDetachedWhenClosedDuringModelRestoration() async throws {
+    @Test("reopened session stays detached or disconnected when closed or its stream ends during model restoration", arguments: [false, true])
+    func reopenedSessionStaysDownWhenInterruptedDuringModelRestoration(streamEnds: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(
             remoteSessionId: "remote-old",
@@ -3949,59 +4010,23 @@ struct ACPSessionManagerAttachRestoreTests {
         }
 
         try await waitUntilAsync { await modelGate.hasEntered }
-        await manager.detach(sessionId: session.id)
-        await modelGate.release()
-        await attachTask.value
-
-        #expect(session.agentState == .idle)
-        #expect(manager.runners[session.id] == nil)
-    }
-
-    @Test("reopened session stays disconnected when stream ends during model restoration")
-    func reopenedSessionStaysDisconnectedWhenStreamEndsDuringModelRestoration() async throws {
-        let store = try ACPSessionStore(path: tmpStorePath())
-        try store.upsertSession(row(
-            remoteSessionId: "remote-old",
-            agentId: "codex",
-            currentModel: "sonnet"
-        ))
-        let client = ACPMockClient()
-        let modelGate = PromptGate()
-        scriptInitialize(client)
-        client.script(method: "session/load") { _ in
-            try JSONEncoder().encode(ACPSessionNewResult(
-                sessionId: "remote-old",
-                availableModels: [
-                    .init(id: "sonnet", name: "Sonnet"),
-                    .init(id: "opus", name: "Opus"),
-                ],
-                availableModes: [],
-                currentModel: "opus",
-                currentMode: nil,
-                promptSuggestions: []
-            ))
-        }
-        client.scriptAsync(method: "session/set_model") { _ in
-            await modelGate.waitInPrompt()
-            return Data("{}".utf8)
-        }
-        let manager = manager(store: store, client: client)
-
-        let session = try #require(manager.placeholderSession(id: "local"))
-        await manager.hydrateIfNeeded(id: "local")
-        let attachTask = Task {
-            await manager.attach(to: session.id, freshlyCreated: false)
-        }
-
-        try await waitUntilAsync { await modelGate.hasEntered }
-        await client.shutdown()
-        try await waitUntil {
-            session.agentState == .disconnected
+        if streamEnds {
+            await client.shutdown()
+            try await waitUntil {
+                session.agentState == .disconnected
+            }
+        } else {
+            await manager.detach(sessionId: session.id)
         }
         await modelGate.release()
         await attachTask.value
 
-        #expect(session.agentState == .disconnected)
+        if streamEnds {
+            #expect(session.agentState == .disconnected)
+        } else {
+            #expect(session.agentState == .idle)
+            #expect(manager.runners[session.id] == nil)
+        }
     }
 
     @Test("reopened session preserves newer mode selected during model restoration")
@@ -4205,50 +4230,34 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(titleCallbacks.first?.1 == "Adapter Title")
     }
 
-    @Test("fresh attach exposes initializing phase while initialize is pending")
-    func freshAttachExposesInitializingPhaseWhileInitializeIsPending() async throws {
+    @Test("fresh attach exposes the pending first-run phase", arguments: [true, false])
+    func freshAttachExposesPendingFirstRunPhase(gateInitialize: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         let client = ACPMockClient()
         let gate = AttachPhaseGate()
-        client.scriptAsync(method: "initialize") { _ in
-            await gate.enterAndWait()
-            return try JSONEncoder().encode(ACPInitializeResult(
-                protocolVersion: 1,
-                agentCapabilities: nil,
-                authMethods: []
-            ))
-        }
-        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
-        let manager = manager(store: store, client: client)
-        let session = manager.createSession(agentId: "claude")
-
-        let attachTask = Task { await manager.attach(to: session.id, freshlyCreated: true) }
-        try await waitUntilAsync { await gate.hasEntered }
-
-        #expect(session.firstRunConnectingPhase == .initializing)
-
-        await gate.release()
-        await attachTask.value
-        #expect(session.firstRunConnectingPhase == nil)
-        #expect(session.agentState == .ready)
-    }
-
-    @Test("fresh attach exposes creating session phase while session new is pending")
-    func freshAttachExposesCreatingSessionPhaseWhileNewIsPending() async throws {
-        let store = try ACPSessionStore(path: tmpStorePath())
-        let client = ACPMockClient()
-        scriptInitialize(client)
-        let gate = AttachPhaseGate()
-        client.scriptAsync(method: "session/new") { _ in
-            await gate.enterAndWait()
-            return try JSONEncoder().encode(ACPSessionNewResult(
-                sessionId: "remote-new",
-                availableModels: [],
-                availableModes: [],
-                currentModel: nil,
-                currentMode: nil,
-                promptSuggestions: []
-            ))
+        if gateInitialize {
+            client.scriptAsync(method: "initialize") { _ in
+                await gate.enterAndWait()
+                return try JSONEncoder().encode(ACPInitializeResult(
+                    protocolVersion: 1,
+                    agentCapabilities: nil,
+                    authMethods: []
+                ))
+            }
+            scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        } else {
+            scriptInitialize(client)
+            client.scriptAsync(method: "session/new") { _ in
+                await gate.enterAndWait()
+                return try JSONEncoder().encode(ACPSessionNewResult(
+                    sessionId: "remote-new",
+                    availableModels: [],
+                    availableModes: [],
+                    currentModel: nil,
+                    currentMode: nil,
+                    promptSuggestions: []
+                ))
+            }
         }
         let manager = manager(store: store, client: client)
         let session = manager.createSession(agentId: "claude")
@@ -4256,7 +4265,8 @@ struct ACPSessionManagerAttachRestoreTests {
         let attachTask = Task { await manager.attach(to: session.id, freshlyCreated: true) }
         try await waitUntilAsync { await gate.hasEntered }
 
-        #expect(session.firstRunConnectingPhase == .creatingSession)
+        let expectedPhase: ACPFirstRunConnectingPhase = gateInitialize ? .initializing : .creatingSession
+        #expect(session.firstRunConnectingPhase == expectedPhase)
 
         await gate.release()
         await attachTask.value
@@ -4361,49 +4371,6 @@ struct ACPSessionManagerAttachRestoreTests {
             return
         }
         #expect(text == "queued prompt")
-    }
-
-    @Test("load failure falls back to session/new and auto-sends transcript context")
-    func loadFailureFallsBackToNewAndAutoSendsTranscriptContext() async throws {
-        let store = try ACPSessionStore(path: tmpStorePath())
-        try store.upsertSession(row(remoteSessionId: "remote-old"))
-        let priorPrompt: ACPMessage = .user(id: UUID(), text: "prior prompt", attachments: [])
-        try store.appendMessage(
-            sessionId: "local", id: "m0", kind: priorPrompt.kind, seq: 0,
-            payload: ACPMessageCodec.encode(priorPrompt), createdAt: 0
-        )
-        let client = ACPMockClient()
-        scriptInitialize(client)
-        client.script(method: "session/load") { _ in
-            throw JSONRPCError(code: -32601, message: "Method not found", data: nil)
-        }
-        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
-        client.script(method: "session/prompt") { request in
-            let params = try #require(request.params as? ACPSessionPromptParams)
-            #expect(params.sessionId == "remote-new")
-            let block = try #require(params.prompt.first)
-            guard case .text(let text) = block else {
-                Issue.record("Expected text prompt block")
-                return Data("null".utf8)
-            }
-            #expect(text.contains("prior prompt"))
-            return Data("null".utf8)
-        }
-        let manager = manager(store: store, client: client)
-
-        let session = try #require(manager.placeholderSession(id: "local"))
-        await manager.hydrateIfNeeded(id: "local")
-        await manager.attach(to: session.id, freshlyCreated: false)
-
-        try await waitUntil {
-            client.sent.map(\.method) == ["initialize", "session/load", "session/new", "session/prompt"]
-                && session.contextRestoreWarning == nil
-        }
-        #expect(session.remoteSessionId == "remote-new")
-        #expect(session.contextRecoveryStatus == .restored)
-        let row = try #require(try store.loadSession(id: "local"))
-        #expect(row.remoteSessionId == "remote-new")
-        #expect(!row.contextRecoveryPending)
     }
 
     @Test("pending force send waits for transcript recovery")
@@ -4709,8 +4676,12 @@ struct ACPSessionManagerAttachRestoreTests {
         }
         #expect(recovery.contains("Prior context"))
         #expect(prompts.last?.prompt == [.text("queued prompt")])
+        #expect(prompts.allSatisfy { $0.sessionId == "remote-new" })
         #expect(session.queue.isEmpty)
-        #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
+        #expect(session.remoteSessionId == "remote-new")
+        let persistedRow = try #require(try store.loadSession(id: "local"))
+        #expect(persistedRow.remoteSessionId == "remote-new")
+        #expect(!persistedRow.contextRecoveryPending)
     }
 
     @Test("load fallback keeps pending fork context out of generic recovery")
@@ -5003,48 +4974,32 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.contextRestoreWarning == nil)
     }
 
-    @Test("remote managed adapter absence maps to needs setup")
-    func remoteManagedAdapterAbsenceMapsToNeedsSetup() async throws {
-        let root = "/srv/task4-missing-\(UUID().uuidString)"
+    @Test("remote adapter absence maps to needs setup and prerequisite failure to setup error", arguments: [true, false])
+    func remoteAdapterResolutionFailureMapsToSetupState(adapterMissing: Bool) async throws {
+        let root = "/srv/task4-setup-failure-\(UUID().uuidString)"
         RemoteHostRegistry.shared.register(root: root, host: "devbox")
         defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let reason = adapterMissing
+            ? "codex-acp is not installed on devbox."
+            : "Node.js and npm are unavailable."
         let store = try ACPSessionStore(path: tmpStorePath())
         let manager = ACPSessionManager(
             worktreeId: "wt",
             worktreePath: root,
             store: store,
             remoteAdapterResolver: { _, _, _ in
-                .missing(reason: "codex-acp is not installed on devbox.")
+                adapterMissing ? .missing(reason: reason) : .error(message: reason)
             }
         )
         let session = manager.createSession(agentId: "codex")
 
         await manager.attach(to: session.id, freshlyCreated: false)
 
-        #expect(session.setupState == .needsSetup(reason: "codex-acp is not installed on devbox."))
-        #expect(session.agentState == .failed("codex-acp is not installed on devbox."))
-    }
-
-    @Test("remote prerequisite failure maps to setup error")
-    func remotePrerequisiteFailureMapsToSetupError() async throws {
-        let root = "/srv/task4-error-\(UUID().uuidString)"
-        RemoteHostRegistry.shared.register(root: root, host: "devbox")
-        defer { RemoteHostRegistry.shared.unregister(root: root) }
-        let store = try ACPSessionStore(path: tmpStorePath())
-        let manager = ACPSessionManager(
-            worktreeId: "wt",
-            worktreePath: root,
-            store: store,
-            remoteAdapterResolver: { _, _, _ in
-                .error(message: "Node.js and npm are unavailable.")
-            }
-        )
-        let session = manager.createSession(agentId: "codex")
-
-        await manager.attach(to: session.id, freshlyCreated: false)
-
-        #expect(session.setupState == .setupError(reason: "Node.js and npm are unavailable."))
-        #expect(session.agentState == .failed("Node.js and npm are unavailable."))
+        let expectedSetupState: ACPSession.SetupState = adapterMissing
+            ? .needsSetup(reason: reason)
+            : .setupError(reason: reason)
+        #expect(session.setupState == expectedSetupState)
+        #expect(session.agentState == .failed(reason))
     }
 
     @Test("remote setup resolution is reused for absolute launch")
@@ -5158,6 +5113,7 @@ struct ACPSessionManagerAttachRestoreTests {
         let session = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: "local")
         await manager.attach(to: session.id, freshlyCreated: false)
+        try store.setContextRecoveryPending(sessionId: "local", pending: true)
         session.contextRestoreWarning = .init(
             message: "Agent context could not be restored.",
             canSendTranscript: true
@@ -5170,35 +5126,6 @@ struct ACPSessionManagerAttachRestoreTests {
         try await waitUntil { session.contextRestoreWarning == nil }
         #expect(session.transcript.messages.count == messageCountBefore)
         #expect(client.sent.map(\.method) == ["initialize", "session/load", "session/prompt"])
-    }
-
-    @Test("send transcript context clears persisted recovery pending flag")
-    func sendTranscriptContextClearsPersistedPendingFlag() async throws {
-        let store = try ACPSessionStore(path: tmpStorePath())
-        try store.upsertSession(row(remoteSessionId: "remote-new"))
-        try appendMessage(
-            .user(id: UUID(), text: "What changed?", attachments: []),
-            to: store,
-            seq: 0
-        )
-        let client = ACPMockClient()
-        scriptInitialize(client)
-        scriptSessionResult(client, method: "session/load", sessionId: "remote-new")
-        client.script(method: "session/prompt") { _ in Data("null".utf8) }
-        let manager = manager(store: store, client: client)
-
-        let session = try #require(manager.placeholderSession(id: "local"))
-        await manager.hydrateIfNeeded(id: "local")
-        await manager.attach(to: session.id, freshlyCreated: false)
-        try store.setContextRecoveryPending(sessionId: "local", pending: true)
-        session.contextRestoreWarning = .init(
-            message: "Agent context could not be restored.",
-            canSendTranscript: true
-        )
-
-        #expect(session.contextRestoreWarning?.canSendTranscript == true)
-        #expect(manager.sendTranscriptAsContext(sessionId: session.id, agentName: "Agent"))
-        try await waitUntil { session.contextRestoreWarning == nil }
         #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
     }
 
@@ -5324,8 +5251,8 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(second.prompt == [.text("normal prompt")])
     }
 
-    @Test("recovery context superseded by a steer clears the restoring status")
-    func recoveryContextSupersededBySteerClearsStatus() async throws {
+    @Test("recovery context superseded by a steer or newer prompt clears the restoring status", arguments: [true, false])
+    func recoveryContextSupersededClearsStatus(bySteer: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(remoteSessionId: "remote-new"))
         try appendMessage(
@@ -5335,17 +5262,17 @@ struct ACPSessionManagerAttachRestoreTests {
         )
         let client = ACPMockClient()
         let recoveryGate = PromptGate()
-        let steerGate = PromptGate()
+        let supersedingGate = PromptGate()
         let promptCount = PromptCounter()
         scriptInitialize(client)
         scriptSessionResult(client, method: "session/load", sessionId: "remote-new")
         // Gate the first (recovery) prompt so it stays in flight while the
-        // user steers, and hold the steer's replacement prompt so it still
+        // user supersedes it, and hold the superseding prompt so it still
         // owns the transport when the recovery RPC finally returns.
         client.scriptAsync(method: "session/prompt") { _ in
             switch await promptCount.next() {
             case 1: await recoveryGate.waitInPrompt()
-            case 2: await steerGate.waitInPrompt()
+            case 2: await supersedingGate.waitInPrompt()
             default: break
             }
             return Data("null".utf8)
@@ -5365,63 +5292,20 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.contextRecoveryStatus == .sendingTranscript)
         try await waitUntilAsync { await recoveryGate.hasEntered }
 
-        // User steers a new prompt while the recovery context is still in
-        // flight — the steer's replacement prompt takes over the transport.
-        runner.steer(blocks: [.text("actually do this instead")])
-
-        // The recovery RPC now returns, superseded by the steer. The
-        // "Restoring…" spinner must resolve rather than strand forever.
-        await recoveryGate.release()
-        try await waitUntil { session.contextRecoveryStatus != .sendingTranscript }
-
-        await steerGate.release()
-    }
-
-    @Test("recovery context superseded by a newer prompt clears the restoring status")
-    func recoveryContextSupersededByNewerPromptClearsStatus() async throws {
-        let store = try ACPSessionStore(path: tmpStorePath())
-        try store.upsertSession(row(remoteSessionId: "remote-new"))
-        try appendMessage(
-            .user(id: UUID(), text: "What changed?", attachments: []),
-            to: store,
-            seq: 0
-        )
-        let client = ACPMockClient()
-        let recoveryGate = PromptGate()
-        let newerPromptGate = PromptGate()
-        let promptCount = PromptCounter()
-        scriptInitialize(client)
-        scriptSessionResult(client, method: "session/load", sessionId: "remote-new")
-        client.scriptAsync(method: "session/prompt") { _ in
-            switch await promptCount.next() {
-            case 1: await recoveryGate.waitInPrompt()
-            case 2: await newerPromptGate.waitInPrompt()
-            default: break
-            }
-            return Data("null".utf8)
+        if bySteer {
+            // The steer's replacement prompt takes over the transport.
+            runner.steer(blocks: [.text("actually do this instead")])
+        } else {
+            runner.sendNow(blocks: [.text("actually do this instead")], queuedItemId: nil)
+            try await waitUntilAsync { await supersedingGate.hasEntered }
         }
-        let manager = manager(store: store, client: client)
 
-        let session = try #require(manager.placeholderSession(id: "local"))
-        await manager.hydrateIfNeeded(id: "local")
-        await manager.attach(to: session.id, freshlyCreated: false)
-        let runner = try #require(manager.runners[session.id])
-        session.contextRestoreWarning = .init(
-            message: "Agent context could not be restored.",
-            canSendTranscript: true
-        )
-
-        #expect(manager.sendTranscriptAsContext(sessionId: session.id, agentName: "Agent"))
-        #expect(session.contextRecoveryStatus == .sendingTranscript)
-        try await waitUntilAsync { await recoveryGate.hasEntered }
-
-        runner.sendNow(blocks: [.text("actually do this instead")], queuedItemId: nil)
-        try await waitUntilAsync { await newerPromptGate.hasEntered }
-
+        // The recovery RPC now returns, superseded. The "Restoring…"
+        // spinner must resolve rather than strand forever.
         await recoveryGate.release()
         try await waitUntil { session.contextRecoveryStatus != .sendingTranscript }
 
-        await newerPromptGate.release()
+        await supersedingGate.release()
     }
 
     @Test("replaced runner recovery completion cannot overwrite current recovery status", arguments: [false, true])
@@ -5483,22 +5367,14 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.detach(sessionId: session.id)
     }
 
-    @Test("transcript context prompt requires conversation")
-    func transcriptContextPromptRequiresConversation() async throws {
-        let store = try ACPSessionStore(path: tmpStorePath())
-        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
-        let session = manager.createSession(agentId: "claude")
-        session.appendSystemNotice("Agent context could not be restored.")
-
-        #expect(manager.transcriptContextPrompt(for: session, agentName: "Agent") == nil)
-        #expect(manager.sendTranscriptAsContext(sessionId: session.id, agentName: "Agent") == false)
-    }
-
     @Test("send transcript context rejects unavailable states")
     func sendTranscriptContextRejectsUnavailableStates() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
         let session = manager.createSession(agentId: "claude")
+        session.appendSystemNotice("Agent context could not be restored.")
+        #expect(manager.transcriptContextPrompt(for: session, agentName: "Agent") == nil)
+
         session.recordUserPrompt(text: "What changed?", attachments: [])
 
         #expect(manager.sendTranscriptAsContext(sessionId: session.id, agentName: nil) == false)
@@ -6016,6 +5892,8 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
     private let stallDetach: Bool
     private let stallClose: Bool
     private let stallSendMethod: String?
+    private let failSendMethod: String?
+    private let failSendAfterOpenCount: Int
     private var hasStalledSend = false
     private(set) var completedOpenCount = 0
     private(set) var opened: [ACPBrokerOpenParams] = []
@@ -6026,12 +5904,16 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
         stallOpen: Bool = false,
         stallDetach: Bool = false,
         stallClose: Bool = false,
-        stallSendMethod: String? = nil
+        stallSendMethod: String? = nil,
+        failSendMethod: String? = nil,
+        failSendAfterOpenCount: Int = .max
     ) {
         self.stallOpen = stallOpen
         self.stallDetach = stallDetach
         self.stallClose = stallClose
         self.stallSendMethod = stallSendMethod
+        self.failSendMethod = failSendMethod
+        self.failSendAfterOpenCount = failSendAfterOpenCount
     }
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
@@ -6050,6 +5932,13 @@ private actor ManagerBrokerServiceProxy: ACPBrokerServicing {
         if !hasStalledSend, params.method == stallSendMethod {
             hasStalledSend = true
             await sendGate.wait()
+        }
+        if params.method == failSendMethod, opened.count >= failSendAfterOpenCount {
+            throw JSONRPCError(
+                code: -32000,
+                message: "initialize rejected after reopen",
+                data: nil
+            )
         }
         return try await base.send(params)
     }

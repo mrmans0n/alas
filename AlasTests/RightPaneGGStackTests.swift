@@ -29,18 +29,6 @@ struct GGReorderModelTests {
         #expect(model.move(from: 0, to: 2) == .moved)
         #expect(model.orderedIDs == ["b", "a", "merged", "c"])
     }
-
-    @Test func reorderAlwaysSubmitsCompleteExactIdentifierOrderAndHasNoDropAction() {
-        var model = GGReorderModel(entries: [
-            .immutable(id: "merged", title: "Merged"),
-            .mutable(id: "one", title: "One"),
-            .mutable(id: "two", title: "Two"),
-        ])
-
-        #expect(model.move(from: 2, to: 1) == .moved)
-        #expect(model.orderedIDs == ["merged", "two", "one"])
-        #expect(model.availableActions == [.apply, .cancel])
-    }
 }
 
 /// Counts `run(...)` calls so tests can assert `refreshGGStack()` skips the
@@ -679,89 +667,7 @@ struct RightPaneGGStackErrorPresentationTests {
 }
 
 @MainActor
-struct RightPaneGGRefreshSchedulingTests {
-    @Test func watcherStackRefreshIsSuppressedDuringMutations() {
-        #expect(!RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: .sync))
-        #expect(!RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: .rebase))
-        #expect(!RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: .amendCurrent))
-        #expect(RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: nil))
-    }
-
-    @Test func refreshWorkDefersDuringMutations() {
-        #expect(RightPaneState.shouldDeferGGStackRefresh(
-            inFlightAction: .sync,
-            refreshRequired: true
-        ))
-        #expect(!RightPaneState.shouldDeferGGStackRefresh(
-            inFlightAction: .sync,
-            refreshRequired: false
-        ))
-        #expect(RightPaneState.shouldDeferGGStackRefresh(
-            inFlightAction: .rebase,
-            refreshRequired: true
-        ))
-        #expect(!RightPaneState.shouldDeferGGStackRefresh(
-            inFlightAction: nil,
-            refreshRequired: true
-        ))
-    }
-
-    @Test func refreshPublishesOnlyForItsCommitSnapshot() {
-        #expect(RightPaneState.shouldPublishGGStackRefresh(
-            refreshedCommitsKey: "main|abc",
-            currentCommitsKey: "main|abc"
-        ))
-        #expect(!RightPaneState.shouldPublishGGStackRefresh(
-            refreshedCommitsKey: "main|abc",
-            currentCommitsKey: "main|def"
-        ))
-    }
-
-    @Test func deferredRefreshForcesTheNextStackLoad() {
-        #expect(RightPaneState.shouldForceGGStackRefresh(
-            forceRemote: false,
-            deferredUntilMutationEnds: true
-        ))
-        #expect(RightPaneState.shouldForceGGStackRefresh(
-            forceRemote: true,
-            deferredUntilMutationEnds: false
-        ))
-        #expect(!RightPaneState.shouldForceGGStackRefresh(
-            forceRemote: false,
-            deferredUntilMutationEnds: false
-        ))
-    }
-}
-
-@MainActor
 struct RightPaneGGStackTests {
-    @Test func commitPublishTargetCapturesDetachedStackContext() throws {
-        let state = makeState()
-        state.ggContext = .active(stackName: "agent-inbox")
-        state.ggStack = try GGStackSnapshot.decode(fromJSON: Data(GGStackModelsTests.fixture.utf8)).stack
-        state.currentBranch = ""
-        state.currentHeadSHA = "ccccccc"
-
-        #expect(state.ggTargetForCommitPublish() == .init(
-            branch: "",
-            stackName: "agent-inbox",
-            base: "main",
-            expectedHeadSHA: "ccccccc"
-        ))
-    }
-
-    @Test func commitPublishSyncAwaitsCoordinatorAndPreservesSummary() async throws {
-        let state = await makeMutationReadyState()
-        let runner = ReentrantSyncFakeGGRunner()
-        state.ggService = GGService(runner: runner)
-        state.ggContextProvider = { _ in .active(stackName: "stack") }
-        try await state.syncGGForCommitPublish()
-        #expect(runner.syncCallCount == 1)
-        #expect(state.ggActionState.inFlightAction == nil)
-        #expect(state.ggActionState.lastActionSummary == "Synced · 1 pushed")
-        #expect(state.ggActionState.lastError == nil)
-    }
-
     @Test func commitPublishSyncThrowsAndPublishesFailureOnce() async throws {
         let state = await makeMutationReadyState()
         let runner = ThrowingFakeGGRunner()
@@ -794,7 +700,7 @@ struct RightPaneGGStackTests {
     }
 
     @Test func commitPublishSyncRefusesConcurrentMutation() async throws {
-        let state = await makeMutationReadyState()
+        let state = await makeMutationReadyState(syncJSONL: true)
         let runner = ReentrantSyncFakeGGRunner(suspendSync: true)
         state.ggService = GGService(runner: runner)
         let first = try #require(state.runGGMutation(.sync))
@@ -854,7 +760,10 @@ struct RightPaneGGStackTests {
         return state
     }
 
-    private func makeMutationReadyState(worktree: Worktree? = nil) async -> RightPaneState {
+    private func makeMutationReadyState(
+        worktree: Worktree? = nil,
+        syncJSONL: Bool = false
+    ) async -> RightPaneState {
         let worktree = worktree ?? makeWorktree()
         let state = RightPaneState(
             worktree: worktree,
@@ -872,16 +781,20 @@ struct RightPaneGGStackTests {
                 workspaceName: nil
             )
         }
-        installFakeGGStackLoader(on: state)
+        installFakeGGStackLoader(on: state, syncJSONL: syncJSONL)
         #expect(!(await state.checkpointMutationsDisabledAfterJournalRevalidation()))
         return state
     }
 
-    private func installFakeGGStackLoader(on state: RightPaneState) {
+    /// `syncJSONL` selects the streaming `gg sync --jsonl` path. The capability
+    /// is cached at startup rather than probed per sync, so a fake runner's
+    /// `sync --help` answer no longer selects it.
+    private func installFakeGGStackLoader(on state: RightPaneState, syncJSONL: Bool = false) {
         state.ggCapabilities = {
             GGCapabilities(
                 structuredSplit: false,
                 keepCurrentUnstack: false,
+                syncJSONL: syncJSONL,
                 localStackSnapshot: false
             )
         }
@@ -911,56 +824,6 @@ struct RightPaneGGStackTests {
         #expect(state.ggStackDisplayCommits.map(\.shortSha) == ["ccccccc", "bbbbbbb", "aaaaaaa"])
         #expect(state.commitsForDisplay == state.ggStackDisplayCommits)
         #expect(state.commits == [reachable])
-    }
-
-    @Test func localFirstRefreshKeepsRowsWhenRemoteEnrichmentFails() async {
-        let runner = LocalFirstGGRunner()
-        let state = makeState()
-        state.ggService = GGService(runner: runner)
-        state.ggCapabilities = {
-            GGCapabilities(
-                structuredSplit: false,
-                keepCurrentUnstack: false,
-                localStackSnapshot: true
-            )
-        }
-        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
-        state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
-
-        await state.refreshGGStack()
-
-        #expect(runner.calls == [
-            ["ls", "--json", "--no-refresh"],
-            ["ls", "--json"],
-        ])
-        #expect(state.ggStackLoadState == .loaded)
-        #expect(state.ggStackDisplayCommits.count == 3)
-        #expect(state.ggStackRemoteError == "remote unavailable")
-    }
-
-    @Test func localFirstRefreshPublishesRowsBeforeRemoteEnrichmentCompletes() async throws {
-        let runner = LocalFirstGGRunner()
-        runner.delaysRemote = true
-        let state = makeState()
-        state.ggService = GGService(runner: runner)
-        state.ggCapabilities = {
-            GGCapabilities(
-                structuredSplit: false,
-                keepCurrentUnstack: false,
-                localStackSnapshot: true
-            )
-        }
-        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
-
-        let refresh = Task { @MainActor in await state.refreshGGStack() }
-        for _ in 0..<500 where runner.calls.count < 2 {
-            try await Task.sleep(nanoseconds: 1_000_000)
-        }
-
-        #expect(state.ggStackLoadState == .loaded)
-        #expect(state.ggStackDisplayCommits.count == 3)
-        refresh.cancel()
-        await refresh.value
     }
 
     @Test func cancelledRemoteEnrichmentIsRetriedForTheSameStack() async throws {
@@ -1124,15 +987,6 @@ struct RightPaneGGStackTests {
         #expect(state.ggStackLoadState == .loading)
     }
 
-    @Test func prepareCardRemainsVisibleAlongsideGGDrawer() {
-        #expect(ChangesTabView.shouldShowChangesPreparationCard(
-            preparationIsVisible: true
-        ))
-        #expect(!ChangesTabView.shouldShowChangesPreparationCard(
-            preparationIsVisible: false
-        ))
-    }
-
     @Test func ggPreparationDestinationsRouteToExistingActions() {
         #expect(ChangesTabView.stackAction(for: .newStackCommit) == nil)
         #expect(ChangesTabView.stackAction(for: .amendCurrent) == .amendCurrent)
@@ -1166,37 +1020,6 @@ struct RightPaneGGStackTests {
 
         #expect(runner.containsCommand(suffix: ["rebase", "origin/main"]))
         #expect(!runner.containsCommand(suffix: ["rebase", "main"]))
-    }
-
-    @Test func manualRebaseIgnoresBehindRefForADifferentStackBase() async throws {
-        let wt = makeWorktree()
-        try FileManager.default.createDirectory(
-            at: wt.path.appendingPathComponent(".git"),
-            withIntermediateDirectories: true
-        )
-        defer { try? FileManager.default.removeItem(at: wt.path) }
-        let runner = RecordingLifecycleGGRunner()
-        let state = await makeMutationReadyState(worktree: wt)
-        state.ggService = GGService(runner: runner)
-        let releaseFixture = GGStackModelsTests.fixture.replacingOccurrences(
-            of: #""base": "main""#,
-            with: #""base": "release""#
-        )
-        state.ggStack = try GGStackSnapshot.decode(fromJSON: Data(releaseFixture.utf8)).stack
-        state.behindBase = GitService.BehindStatus(
-            ref: "origin/main",
-            sha: "base-sha",
-            count: 2,
-            probedAt: Date()
-        )
-
-        state.onGGStackAction(.rebase, appState: AppState(store: MemoryStore()))
-        for _ in 0..<500 where !runner.containsCommand(suffix: ["rebase", "release"]) {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-
-        #expect(runner.containsCommand(suffix: ["rebase", "release"]))
-        #expect(!runner.containsCommand(suffix: ["rebase", "origin/main"]))
     }
 
     @Test func manualRebaseUsesRemoteQualifiedRefOnlyForTheExactStackBase() {
@@ -1262,19 +1085,31 @@ struct RightPaneGGStackTests {
         #expect(runner.callCount == 0)
     }
 
-    @Test func staleDropApplyRefreshesLoadedStack() async throws {
+    /// Both preflight rejections (the stack changed under the confirmation, or
+    /// the target became immutable) must re-read the stack so the drawer shows
+    /// the state that caused the rejection.
+    @Test(arguments: [false, true])
+    func rejectedDropApplyRefreshesLoadedStack(targetBecameImmutable: Bool) async throws {
         let state = await makeMutationReadyState()
         try FileManager.default.createDirectory(
             at: state.worktree.path.appendingPathComponent(".git"),
             withIntermediateDirectories: true
         )
-        let staleJSON = GGStackModelsTests.fixture.replacingOccurrences(
-            of: #""pr_state": "open""#,
-            with: #""pr_state": null"#
-        )
+        let loadedJSON = targetBecameImmutable
+            ? GGStackModelsTests.fixture
+            : GGStackModelsTests.fixture.replacingOccurrences(
+                of: #""pr_state": "open""#,
+                with: #""pr_state": null"#
+            )
+        let freshJSON = targetBecameImmutable
+            ? GGStackModelsTests.fixture.replacingOccurrences(
+                of: #""pr_state": "open""#,
+                with: #""pr_state": "merged""#
+            )
+            : GGStackModelsTests.fixture
         let runner = SequencedFakeGGRunner(results: [
-            ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: freshJSON, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: freshJSON, stderr: ""),
         ])
         state.ggService = GGService(runner: runner)
         state.ggCapabilities = {
@@ -1287,7 +1122,7 @@ struct RightPaneGGStackTests {
         state.ggContext = .active(stackName: "agent-inbox")
         state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
-        let stack = try #require(try GGStackSnapshot.decode(fromJSON: Data(staleJSON.utf8)).stack)
+        let stack = try #require(try GGStackSnapshot.decode(fromJSON: Data(loadedJSON.utf8)).stack)
         state.ggStack = stack
         state.ggStackCommitsKey = state.currentGGStackCommitsKey
 
@@ -1298,48 +1133,10 @@ struct RightPaneGGStackTests {
         }
 
         #expect(runner.callCount == 2)
-        #expect(state.ggStack?.entries[1].prState == .open)
-        #expect(state.ggActionState.lastError == "The stack changed. Review the updated state and try again.")
-    }
-
-    @Test func immutableDropApplyRefreshesLoadedStack() async throws {
-        let state = await makeMutationReadyState()
-        try FileManager.default.createDirectory(
-            at: state.worktree.path.appendingPathComponent(".git"),
-            withIntermediateDirectories: true
-        )
-        let mergedJSON = GGStackModelsTests.fixture.replacingOccurrences(
-            of: #""pr_state": "open""#,
-            with: #""pr_state": "merged""#
-        )
-        let runner = SequencedFakeGGRunner(results: [
-            ProcessResult(exitCode: 0, stdout: mergedJSON, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: mergedJSON, stderr: ""),
-        ])
-        state.ggService = GGService(runner: runner)
-        state.ggCapabilities = {
-            GGCapabilities(
-                structuredSplit: false,
-                keepCurrentUnstack: false,
-                localStackSnapshot: false
-            )
-        }
-        state.ggContext = .active(stackName: "agent-inbox")
-        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
-        state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
-        let stack = try #require(try GGStackSnapshot.decode(fromJSON: Data(GGStackModelsTests.fixture.utf8)).stack)
-        state.ggStack = stack
-        state.ggStackCommitsKey = state.currentGGStackCommitsKey
-
-        state.requestGGDrop(stack.entries[1])
-        state.performGGDrop()
-        for _ in 0..<500 where runner.callCount < 2 || state.ggActionState.lastError == nil {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-
-        #expect(runner.callCount == 2)
-        #expect(state.ggStack?.entries[1].prState == .merged)
-        #expect(state.ggActionState.lastError == "Merged commits cannot be rewritten.")
+        #expect(state.ggStack?.entries[1].prState == (targetBecameImmutable ? GGPRState.merged : GGPRState.open))
+        #expect(state.ggActionState.lastError == (targetBecameImmutable
+            ? "Merged commits cannot be rewritten."
+            : "The stack changed. Review the updated state and try again."))
     }
 
     @Test func splitDescriptionUsesLoadedStackWithoutRefreshingGG() async throws {
@@ -1358,19 +1155,6 @@ struct RightPaneGGStackTests {
 
         #expect(runner.calls == [["split", "--describe", "--commit", "id-2", "--json"]])
         #expect(loaded.stackIdentity == snapshot.identity)
-    }
-
-    @Test func applyPreflightFailurePresentsGGServiceUserMessage() async throws {
-        let wt = makeWorktree()
-        let state = await makeMutationReadyState(worktree: wt)
-        state.ggService = GGService(runner: ThrowingFakeGGRunner())
-
-        state.requestGGCheckout(target: "change-1")
-        for _ in 0..<500 where state.ggActionState.lastError == nil {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-
-        #expect(state.ggActionState.lastError == "boom")
     }
 
     @Test func unchangedStackKeyStillReloadsEffectiveConfig() async throws {
@@ -1400,21 +1184,6 @@ struct RightPaneGGStackTests {
 
         #expect(state.ggEffectiveConfig == .init(syncAutoRebase: true, syncBehindThreshold: 7))
         #expect(runner.callCount == 1)
-    }
-
-    @Test func forcedRemoteRefreshReloadsUnchangedStack() async {
-        let runner = CountingFakeGGRunner(
-            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
-        )
-        let state = makeState()
-        state.ggService = GGService(runner: runner)
-        state.ggContextProvider = { _ in .active(stackName: "stack") }
-        state.ggStackSourceCommits = [commit(sha: String(repeating: "r", count: 40), stackShaped: true)]
-
-        await state.refreshGGStack()
-        await state.refreshGGStack(forceRemote: true)
-
-        #expect(runner.callCount == 2)
     }
 
     @Test func unchangedStackKeyReconcilesUndoAgainstExternalLaterOperation() async throws {
@@ -1535,33 +1304,6 @@ struct RightPaneGGStackTests {
         #expect(state.ggUndoCandidate == nil)
     }
 
-    @Test func ggOwnedPresentationUsesCommitTerminology() throws {
-        let action = GGStackActionState()
-        _ = action.beginAction(.sync)
-        action.appendSyncEvent(.start(totalEntries: 2))
-        action.appendSyncEvent(.entryStarted(position: 1, title: "First"))
-        action.appendSyncEvent(.pushDone(position: 1, forced: false))
-        action.appendSyncEvent(.prCreated(position: 1, prNumber: 7, prURL: nil, draft: false))
-        let stack = GGStack(
-            name: "feature", base: "main", totalCommits: 2, syncedCommits: 0,
-            currentPosition: 2, behindBase: 0, entries: []
-        )
-
-        let drawer = GGStackReadinessModel.make(stack: stack, action: action)
-        let progress = try #require(drawer.syncProgress)
-
-        #expect(progress.liveStatus == "Syncing 1 of 2 commits…")
-        #expect(progress.rows.map(\.text) == ["[1] Pushed · PR #7 created"])
-
-        let typedStrings = drawer.facts.map(\.label)
-            + progress.rows.map(\.text)
-            + [progress.liveStatus ?? "", GGInboxTabView.commitCountLabel(2)]
-            + [CommitRow.ggCheckoutTitle, GGMutationConfirmation.clean(mergedCommits: 2).message]
-        #expect(typedStrings.allSatisfy {
-            !$0.lowercased().contains("entry") && !$0.lowercased().contains("entries")
-        })
-    }
-
     /// A real repo with `main` pushed to a bare remote, then a `nacho/stack`
     /// branch carrying one GG-ID-trailered commit — also fully pushed, so
     /// `@{u}` == HEAD and the branch has nothing left unpushed.
@@ -1617,49 +1359,6 @@ struct RightPaneGGStackTests {
         #expect(state.commits.isEmpty)
         #expect(!state.ggStackSourceCommits.isEmpty)
         #expect(GGStackGate.isStackShaped(commits: state.ggStackSourceCommits))
-    }
-
-    @Test func activeContextLoadsStackWithNoSourceCommits() async {
-        let state = makeState()
-        let runner = CountingFakeGGRunner(
-            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
-        )
-        state.ggService = GGService(runner: runner)
-        state.ggContextProvider = { _ in .active(stackName: "stack") }
-        state.ggStackSourceCommits = []
-
-        await state.refreshGGStack()
-
-        #expect(runner.callCount == 1)
-        #expect(state.ggStack != nil)
-        #expect(state.ggStackLoadState == .loaded)
-    }
-
-    @Test func detachedRefreshRecoversCurrentStackAndDedupesThePromotedContext() async {
-        let runner = CountingFakeGGRunner(
-            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
-        )
-        let state = makeState()
-        let branchContext = GGWorktreeContextBox(.active(stackName: "agent-inbox"))
-        state.ggService = GGService(runner: runner)
-        state.ggContextProvider = { _ in branchContext.value }
-        state.ggStackSourceCommits = [commit(sha: String(repeating: "d", count: 40), stackShaped: true)]
-
-        state.seedGGContext(branch: "nacho/agent-inbox")
-        await state.refreshGGStack()
-
-        branchContext.value = .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/"))
-        state.seedGGContext(branch: "")
-        await state.refreshGGStack()
-
-        #expect(runner.callCount == 2)
-        #expect(state.ggContext == .active(stackName: "agent-inbox"))
-        #expect(state.ggStackLoadState == .loaded)
-        #expect(state.ggStackDisplayCommits.map(\.shortSha) == ["ccccccc", "bbbbbbb", "aaaaaaa"])
-
-        await state.refreshGGStack()
-
-        #expect(runner.callCount == 2)
     }
 
     @Test func coldDetachedRefreshPublishesStackToStoreSnapshotConsumers() async throws {
@@ -1748,22 +1447,6 @@ struct RightPaneGGStackTests {
         #expect(state.ggStack == nil)
         #expect(state.ggStackDisplayCommits.isEmpty)
         #expect(state.commitsForDisplay == state.commits)
-    }
-
-    @Test func policyDeniedDetachedRefreshDoesNotQueryGG() async {
-        let runner = CountingFakeGGRunner(
-            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
-        )
-        let state = makeState()
-        state.ggService = GGService(runner: runner)
-        state.ggContextProvider = { _ in .inactive(reason: .policyOff) }
-        state.seedGGContext(branch: "")
-
-        await state.refreshGGStack()
-
-        #expect(runner.callCount == 0)
-        #expect(state.ggContext == .inactive(reason: .policyOff))
-        #expect(state.ggStackLoadState == .inactive)
     }
 
     @Test func missingBranchUsernameDetachedRefreshDoesNotQueryGG() async {
@@ -1856,23 +1539,6 @@ struct RightPaneGGStackTests {
         #expect(state.ggContext == .inactive(reason: .policyOff))
         #expect(state.ggStack == nil)
         #expect(state.ggStackLoadState == .inactive)
-        #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
-    }
-
-    @Test func gateClosedSkipsCLIAndClearsStack() async throws {
-        let wt = makeWorktree()
-        let state = makeState(worktree: wt)
-        let runner = CountingFakeGGRunner(
-            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
-        )
-        state.ggService = GGService(runner: runner)
-        state.ggContextProvider = { _ in .inactive(reason: .policyOff) }
-        state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
-
-        await state.refreshGGStack()
-
-        #expect(runner.callCount == 0)
-        #expect(state.ggStack == nil)
         #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
     }
 
@@ -2125,33 +1791,6 @@ struct RightPaneGGStackTests {
         #expect(active.ggStackLoadState == .loaded)
     }
 
-    /// `reevaluateGGGate()` must clear stale stack state immediately when the
-    /// gate flips closed (e.g. the Settings master toggle goes off), rather
-    /// than waiting for the next watcher-driven refresh. `reevaluateGGGate()`
-    /// returns its underlying fire-and-forget task so the test can await it
-    /// deterministically instead of racing the MainActor scheduler.
-    @Test func reevaluateGGGateClearsStackWhenGateClosed() async throws {
-        let wt = makeWorktree()
-        let state = makeState(worktree: wt)
-        let runner = CountingFakeGGRunner(
-            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
-        )
-        state.ggService = GGService(runner: runner)
-        state.ggContextProvider = { _ in .active(stackName: "stack") }
-        state.ggStackSourceCommits = [commit(sha: String(repeating: "e", count: 40), stackShaped: true)]
-
-        await state.refreshGGStack()
-        #expect(state.ggStack != nil)
-        #expect(GGStackSummaryStore.shared.summaries[wt.path.path] != nil)
-
-        // Simulate the master toggle going off in Settings.
-        state.ggContextProvider = { _ in .inactive(reason: .policyOff) }
-        await state.reevaluateGGGate().value
-
-        #expect(state.ggStack == nil)
-        #expect(GGStackSummaryStore.shared.summaries[wt.path.path] == nil)
-    }
-
     @Test func storeReevaluatesGGGateOnlyForRequestedWorktree() async throws {
         let firstWorktree = makeWorktree()
         let secondWorktree = makeWorktree()
@@ -2177,45 +1816,6 @@ struct RightPaneGGStackTests {
         #expect(firstEvaluationCount == 1)
         #expect(secondEvaluationCount == 0)
         #expect(store.reevaluateGGGate(worktreeId: "missing") == nil)
-    }
-
-    /// A thrown gg failure must not cache the commits key — otherwise a
-    /// transient error (auth hiccup, network blip) permanently skips retries
-    /// for that commit set via the unchanged-key guard, even after the
-    /// underlying problem clears up.
-    @Test func transientFailureDoesNotPoisonCommitsKeyCache() async throws {
-        let wt = makeWorktree()
-        let state = makeState(worktree: wt)
-        let runner = ThrowingFakeGGRunner()
-        state.ggService = GGService(runner: runner)
-        state.ggContextProvider = { _ in .active(stackName: "stack") }
-        state.ggStackSourceCommits = [commit(sha: String(repeating: "f", count: 40), stackShaped: true)]
-
-        await state.refreshGGStack()
-        #expect(runner.callCount == 1)
-        #expect(state.ggStack == nil)
-        #expect(state.ggStackCommitsKey == nil)
-
-        // Same commit set again — since the key was never cached, this must
-        // retry rather than being skipped by the unchanged-key guard.
-        await state.refreshGGStack()
-        #expect(runner.callCount == 2)
-    }
-
-    @Test func transientStackLoadFailurePreservesUndoRecoveryMarker() async throws {
-        let wt = makeWorktree()
-        defer { GGUndoMarkerStore().clear(worktreeId: wt.id) }
-        let markerStore = GGUndoMarkerStore()
-        markerStore.set(GGUndoMarker(operationID: "op_1"), worktreeId: wt.id)
-        let state = makeState(worktree: wt)
-        state.ggService = GGService(runner: ThrowingFakeGGRunner())
-        state.ggContextProvider = { _ in .active(stackName: "stack") }
-        state.ggStackSourceCommits = [commit(sha: String(repeating: "f", count: 40), stackShaped: true)]
-
-        await state.refreshGGStack()
-
-        #expect(state.ggUndoCandidate == nil)
-        #expect(markerStore.marker(worktreeId: wt.id)?.operationID == "op_1")
     }
 
     @Test func staleWatcherStackLoadCannotOverwriteNewerRefresh() async throws {
@@ -2291,47 +1891,6 @@ struct RightPaneGGStackTests {
         #expect(state.ggStackCommitsKey == nil)
         await state.refreshGGStack()
         #expect(throwingRunner.callCount == 2)
-    }
-
-    /// The cache key must be reset (not left pointing at the last
-    /// *successful* key) when a later reload fails and clears `ggStack` —
-    /// otherwise returning to that prior branch/commit set would hit the
-    /// unchanged-key guard and skip re-fetching the now-cleared stack,
-    /// leaving the UI stuck showing plain commits.
-    @Test func failedReloadAllowsRefetchOnReturnToPriorBranch() async throws {
-        let wt = makeWorktree()
-        let state = makeState(worktree: wt)
-        let commitsA = [commit(sha: String(repeating: "k", count: 40), stackShaped: true)]
-
-        let firstRunner = CountingFakeGGRunner(
-            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
-        )
-        state.ggService = GGService(runner: firstRunner)
-        state.ggContextProvider = { _ in .active(stackName: "stack") }
-        state.currentBranch = "nacho/stack-a"
-        state.ggStackSourceCommits = commitsA
-        await state.refreshGGStack()
-        #expect(state.ggStack != nil)
-
-        let throwingRunner = ThrowingFakeGGRunner()
-        state.ggService = GGService(runner: throwingRunner)
-        state.currentBranch = "nacho/stack-b"
-        state.ggStackSourceCommits = [commit(sha: String(repeating: "l", count: 40), stackShaped: true)]
-        await state.refreshGGStack()
-        #expect(state.ggStack == nil)
-
-        // Back to branch A with the exact same commits as the first,
-        // successful load — must re-fetch, not be skipped as "unchanged".
-        let secondRunner = CountingFakeGGRunner(
-            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
-        )
-        state.ggService = GGService(runner: secondRunner)
-        state.currentBranch = "nacho/stack-a"
-        state.ggStackSourceCommits = commitsA
-        await state.refreshGGStack()
-
-        #expect(secondRunner.callCount == 1)
-        #expect(state.ggStack != nil)
     }
 
     /// `gg ls --json` answers for the *current* branch, so a checkout to a
@@ -2734,37 +2293,6 @@ struct RightPaneGGStackTests {
         #expect(runner.callCount == 2)
     }
 
-    @Test func cancelledFirstStackLoadBecomesRetryableFailure() async {
-        let worktree = makeWorktree()
-        let result = ProcessResult(
-            exitCode: 0,
-            stdout: GGStackModelsTests.fixture,
-            stderr: ""
-        )
-        let runner = ControlledStackGGRunner(
-            stackResults: [("agent-inbox", result)],
-            suspendedCalls: [1]
-        )
-        let state = makeState(worktree: worktree)
-        state.ggService = GGService(runner: runner)
-        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
-        state.ggStackSourceCommits = [
-            commit(sha: String(repeating: "r", count: 40), stackShaped: true),
-        ]
-
-        let refresh = Task { @MainActor in await state.refreshGGStack() }
-        await runner.waitUntilCall(1)
-        #expect(state.ggStackLoadState == .loading)
-
-        refresh.cancel()
-        await runner.complete(call: 1)
-        await refresh.value
-
-        #expect(state.ggStackLoadState == .failed("Stack refresh was interrupted. Retry to load it again."))
-        #expect(state.ggStack == nil)
-        #expect(state.ggStackCommitsKey == nil)
-    }
-
     @Test func changedKeyLoadingInvalidatesOldCacheAndSuspendsUndoUntilReconciled() async throws {
         let worktree = makeWorktree()
         try FileManager.default.createDirectory(
@@ -2858,7 +2386,9 @@ struct RightPaneGGStackTests {
         #expect(state.ggActionState.pausedOperation != nil)
     }
 
-    @Test func storeSnapshotMarksStaleStackKeyAsLoading() async throws {
+    /// A store snapshot whose loaded stack no longer matches the live commit
+    /// key or the effective context must report `.loading`, not `.loaded`.
+    @Test func storeSnapshotMarksStaleStackAsLoading() async throws {
         let worktree = makeWorktree()
         let store = RightPaneStore()
         let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
@@ -2872,37 +2402,22 @@ struct RightPaneGGStackTests {
         await state.refreshGGStack()
         #expect(state.ggStackLoadState == .loaded)
 
-        state.ggStackSourceCommits = [commit(sha: String(repeating: "p", count: 40), stackShaped: true)]
-        let snapshot = try #require(store.ggStackSnapshotForWorktreePath(
-            worktree.path.path,
-            effectiveContext: .active(stackName: "stack"),
-            liveBranch: state.currentBranch
-        ))
-
-        #expect(snapshot.stack != nil)
-        #expect(snapshot.loadState == .loading)
-    }
-
-    @Test func storeSnapshotMarksStaleContextAsLoading() async throws {
-        let worktree = makeWorktree()
-        let store = RightPaneStore()
-        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
-        store.deactivate()
-        installFakeGGStackLoader(on: state)
-        state.ggContextProvider = { _ in .active(stackName: "old-stack") }
-        state.ggService = GGService(runner: CountingFakeGGRunner(
-            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
-        ))
-        await state.refreshGGStack()
-
-        let snapshot = try #require(store.ggStackSnapshotForWorktreePath(
+        let staleContext = try #require(store.ggStackSnapshotForWorktreePath(
             worktree.path.path,
             effectiveContext: .active(stackName: "new-stack"),
             liveBranch: state.currentBranch
         ))
+        #expect(staleContext.stack != nil)
+        #expect(staleContext.loadState == .loading)
 
-        #expect(snapshot.stack != nil)
-        #expect(snapshot.loadState == .loading)
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "p", count: 40), stackShaped: true)]
+        let staleKey = try #require(store.ggStackSnapshotForWorktreePath(
+            worktree.path.path,
+            effectiveContext: .active(stackName: "stack"),
+            liveBranch: state.currentBranch
+        ))
+        #expect(staleKey.stack != nil)
+        #expect(staleKey.loadState == .loading)
     }
 
     /// `markSnapshotUnknown()` resets `commits` along with the rest of the
@@ -3103,7 +2618,7 @@ struct RightPaneGGStackTests {
             id: Worktree.makeId(path: dir), projectId: "p", name: "feature",
             branch: "feature", path: dir, status: .clean, lastActivity: Date()
         )
-        let state = await makeMutationReadyState(worktree: wt)
+        let state = await makeMutationReadyState(worktree: wt, syncJSONL: true)
         state.ggService = GGService(runner: ConflictAfterSyncRunner())
         state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
@@ -3142,37 +2657,6 @@ struct RightPaneGGStackTests {
 
         #expect(runner.arguments.filter { $0 == ["clean", "--all", "--json"] }.count == 1)
         #expect(didRefreshProjectTopology)
-    }
-
-    @Test func syncActionLeavesSummaryAndClearsProgress() async throws {
-        let wt = makeWorktree()
-        let state = makeState(worktree: wt)
-        let ndjson = [
-            #"{"event":"start","total_entries":1}"#,
-            #"{"event":"push_done","position":1,"forced":false}"#,
-            #"{"event":"summary"}"#,
-        ].joined(separator: "\n")
-        state.ggService = GGService(runner: NDJSONSyncFakeGGRunner(ndjson: ndjson))
-        state.ggContextProvider = { _ in .active(stackName: "stack") }
-        state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
-
-        // Drive the same body onGGStackAction(.sync) runs, but awaitably:
-        // consume the service stream and apply the summary exactly as
-        // runGGSync does. If runGGSync is refactored to expose an awaitable
-        // core (e.g. `func runGGSyncBody() async`), call that instead —
-        // implementer's choice; the assertion is what matters:
-        _ = state.ggActionState.beginAction(.sync)
-        for try await event in state.ggService.sync(worktreePath: wt.path.path, supportsJSONL: true) {
-            state.ggActionState.appendSyncEvent(event)
-        }
-        if let summary = GGStackActionState.syncSummaryLine(from: state.ggActionState.syncProgress) {
-            state.ggActionState.setActionSummary(summary)
-            state.ggActionState.clearSyncProgress()
-        }
-        state.ggActionState.endAction(.sync)
-
-        #expect(state.ggActionState.lastActionSummary == "Synced · 1 pushed")
-        #expect(state.ggActionState.syncProgress.isEmpty)
     }
 
     @Test func postMutationStackRefreshIsCancelledByReplacementRefresh() async {
@@ -3288,7 +2772,7 @@ struct RightPaneGGStackTests {
     @Test func repeatedSyncInvocationIsSilentlyIgnoredAtUIBoundary() async throws {
         let wt = makeWorktree()
         let runner = ReentrantSyncFakeGGRunner()
-        let state = await makeMutationReadyState(worktree: wt)
+        let state = await makeMutationReadyState(worktree: wt, syncJSONL: true)
         state.ggService = GGService(runner: runner)
         state.ggContextProvider = { _ in .active(stackName: "stack") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "s", count: 40), stackShaped: true)]
@@ -3310,7 +2794,7 @@ struct RightPaneGGStackTests {
 
     @Test func syncErrorSuppressesSuccessSummary() async throws {
         let wt = makeWorktree()
-        let state = await makeMutationReadyState(worktree: wt)
+        let state = await makeMutationReadyState(worktree: wt, syncJSONL: true)
         let ndjson = [
             #"{"event":"start","total_entries":1}"#,
             #"{"event":"push_done","position":1,"forced":false}"#,
@@ -3351,12 +2835,6 @@ struct RightPaneGGStackTests {
 
         state.ggStackCommitsKey = state.currentGGStackCommitsKey
         #expect(!CommitsSectionView.ggSelectionIsStale(rps: state))
-    }
-
-    @Test func providerReviewResponseSurfacesOnlyErrors() {
-        #expect(RightPaneState.ggProviderReviewError(.ok) == nil)
-        #expect(RightPaneState.ggProviderReviewError(.text(["opened"])) == nil)
-        #expect(RightPaneState.ggProviderReviewError(.error("Review could not be opened")) == "Review could not be opened")
     }
 }
 

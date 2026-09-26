@@ -189,6 +189,12 @@ struct ACPComposer: View {
     let onSubmit: ACPComposerSubmitHandler
     let filesProvider: (@Sendable () async -> [URL])?
 
+    let nextPromptOffer: String?
+    let takeNextPromptOffer: () -> String?
+    let dismissNextPromptOffer: () -> Void
+    let onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void
+    let nextPromptInputBlocked: () -> Bool
+
     @Environment(\.theme) private var theme
     @State private var inputFocused = false
     @State private var hasText: Bool = false
@@ -213,6 +219,11 @@ struct ACPComposer: View {
         typography: ACPChatTypography = .default,
         actions: ACPComposerActions,
         filesProvider: (@Sendable () async -> [URL])? = nil,
+        nextPromptOffer: String? = nil,
+        takeNextPromptOffer: @escaping () -> String? = { nil },
+        dismissNextPromptOffer: @escaping () -> Void = {},
+        onNextPromptStateChange: @escaping (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in },
+        nextPromptInputBlocked: @escaping () -> Bool = { false },
         onSubmit: @escaping ACPComposerSubmitHandler
     ) {
         self._session = ObservedObject(wrappedValue: session)
@@ -230,6 +241,11 @@ struct ACPComposer: View {
         self.actions = actions
         self.filesProvider = filesProvider
         self.onSubmit = onSubmit
+        self.nextPromptOffer = nextPromptOffer
+        self.takeNextPromptOffer = takeNextPromptOffer
+        self.dismissNextPromptOffer = dismissNextPromptOffer
+        self.onNextPromptStateChange = onNextPromptStateChange
+        self.nextPromptInputBlocked = nextPromptInputBlocked
     }
 
     var body: some View {
@@ -353,7 +369,14 @@ struct ACPComposer: View {
                         if composerNotice == error.userMessage { composerNotice = nil }
                     }
                 },
-                filesProvider: filesProvider
+                filesProvider: filesProvider,
+                nextPromptOffer: nextPromptOffer,
+                takeNextPromptOffer: takeNextPromptOffer,
+                dismissNextPromptOffer: dismissNextPromptOffer,
+                onNextPromptStateChange: onNextPromptStateChange,
+                nextPromptInputBlocked: nextPromptInputBlocked,
+                nextPromptIsDictating: { dictation.state == .preparing || dictation.state == .listening },
+                upstreamReferences: manager.upstreamReferences.store(for: worktreeRoot)
             )
             .frame(minHeight: 44, maxHeight: 140)
             .onAppear {
@@ -521,6 +544,7 @@ struct ACPComposer: View {
 
     private var compactOptionsButton: some View {
         Button {
+            dismissNextPromptOffer()
             showingCompactOptions.toggle()
         } label: {
             HStack(spacing: 6) {
@@ -848,6 +872,7 @@ struct ACPComposer: View {
 
     private var micButton: some View {
         Button {
+            dismissNextPromptOffer()
             dictation.toggle()
         } label: {
             Image(systemName: ACPComposerControlPresentation.micIconName(for: dictation.state))

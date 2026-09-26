@@ -62,42 +62,42 @@ struct ACPTerminalTests {
     func releaseReachesOrphans() async throws {
         // Backgrounded sleep inherits the pipe write end, so the root
         // can exit but the EOF on our read end never fires. The parent
-        // stays alive for ~3 s after the fork so the periodic
-        // descendant tracker can capture the BG sleep before exit; once
-        // the root exits, kill() relies on that captured set to reach
-        // the orphan and let EOF finally arrive.
+        // stays alive for ~8 s after the fork so the periodic descendant
+        // tracker — a `.utility`-priority background task polling roughly
+        // once a second — gets several chances to capture the BG sleep
+        // before exit even under CI-loaded scheduling delays (a 3s window
+        // left only 2-3 attempts and has been observed missing all of
+        // them); once the root exits, kill() relies on that captured set
+        // to reach the orphan and let EOF finally arrive.
         let t = try ACPTerminal(
             id: "torphan",
             command: "/bin/sh",
-            args: ["-c", "sleep 60 & echo $!; sleep 3"],
+            args: ["-c", "sleep 60 & echo $!; sleep 8"],
             env: [:],
             cwd: "/tmp",
             outputByteLimit: 1024
         )
-        var sleepPid: pid_t = 0
-        for _ in 0..<50 {
-            try await Task.sleep(nanoseconds: 40_000_000)
-            let snap = t.snapshot(byteLimit: 1024).text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let pid = pid_t(snap) {
-                sleepPid = pid
-                break
-            }
-        }
+        let sleepPid = try await printedPid(of: t)
         #expect(sleepPid != 0)
-        // Wait long enough for sh to finish its `sleep 3` and exit, so
-        // we're genuinely in the orphaned-pipe state when release runs.
-        try await Task.sleep(nanoseconds: 3_500_000_000)
+        // The backgrounded sleep's parent is the root shell while it runs.
+        let rootPid = parentPid(of: sleepPid)
+        #expect(rootPid != nil)
+        // Wait for sh to finish its `sleep 8` and be reaped, so we're
+        // genuinely in the orphaned-pipe state when release runs. Polling the
+        // root's disappearance (rather than sleeping a fixed 8.5 s) releases
+        // as soon as that state exists, and never too early under load.
+        let rootReaped = try await pollUntil(timeout: 20) {
+            rootPid.map { !processExists($0) } ?? false
+        }
+        #expect(rootReaped)
+        // Foundation's `terminationHandler` (which marks the root exited, so
+        // `kill()` takes the cached-descendant path instead of a process-group
+        // signal that would also reach the orphan) runs just after the reap.
+        try await Task.sleep(for: .milliseconds(300))
         #expect(t.exitStatus == nil)
         t.release()
         _ = await t.waitForExit()
-        var reaped = false
-        for _ in 0..<100 {
-            try await Task.sleep(nanoseconds: 40_000_000)
-            if !processIsRunning(sleepPid) {
-                reaped = true
-                break
-            }
-        }
+        let reaped = try await pollUntil(timeout: 4) { !processIsRunning(sleepPid) }
         #expect(reaped)
     }
 
@@ -114,27 +114,12 @@ struct ACPTerminalTests {
             cwd: "/tmp",
             outputByteLimit: 1024
         )
-        var trappedPid: pid_t = 0
-        for _ in 0..<50 {
-            try await Task.sleep(nanoseconds: 40_000_000)
-            let snap = t.snapshot(byteLimit: 1024).text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let pid = pid_t(snap) {
-                trappedPid = pid
-                break
-            }
-        }
+        let trappedPid = try await printedPid(of: t)
         #expect(trappedPid != 0)
         t.kill()
         _ = await t.waitForExit()
         // Poll up to ~4 s for the trapped child to die under SIGKILL.
-        var reaped = false
-        for _ in 0..<100 {
-            try await Task.sleep(nanoseconds: 40_000_000)
-            if !processIsRunning(trappedPid) {
-                reaped = true
-                break
-            }
-        }
+        let reaped = try await pollUntil(timeout: 4) { !processIsRunning(trappedPid) }
         #expect(reaped)
     }
 
@@ -153,31 +138,30 @@ struct ACPTerminalTests {
             outputByteLimit: 1024
         )
         // Wait until the shell has printed the grandchild PID.
-        var grandchildPid: pid_t = 0
-        for _ in 0..<50 {
-            try await Task.sleep(nanoseconds: 40_000_000)
-            let snap = t.snapshot(byteLimit: 1024).text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let pid = pid_t(snap) {
-                grandchildPid = pid
-                break
-            }
-        }
+        let grandchildPid = try await printedPid(of: t)
         #expect(grandchildPid != 0)
         t.kill()
         _ = await t.waitForExit()
         // Poll for grandchild death — SIGTERM → process group → child.
-        var reaped = false
-        for _ in 0..<50 {
-            try await Task.sleep(nanoseconds: 40_000_000)
-            if !processIsRunning(grandchildPid) {
-                reaped = true
-                break
-            }
-        }
+        let reaped = try await pollUntil(timeout: 2) { !processIsRunning(grandchildPid) }
         #expect(reaped)
     }
 
     private func processIsRunning(_ pid: pid_t) -> Bool {
+        guard let info = bsdInfo(of: pid) else { return false }
+        return info.pbi_status != UInt32(SZOMB)
+    }
+
+    /// True while `pid` has a process-table entry at all, zombie included.
+    private func processExists(_ pid: pid_t) -> Bool {
+        bsdInfo(of: pid) != nil
+    }
+
+    private func parentPid(of pid: pid_t) -> pid_t? {
+        bsdInfo(of: pid).map { pid_t($0.pbi_ppid) }
+    }
+
+    private func bsdInfo(of pid: pid_t) -> proc_bsdinfo? {
         var info = proc_bsdinfo()
         let size = MemoryLayout<proc_bsdinfo>.stride
         let read = withUnsafeMutablePointer(to: &info) { pointer in
@@ -185,8 +169,30 @@ struct ACPTerminalTests {
                 proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, $0, Int32(size))
             }
         }
-        guard read == Int32(size) else { return false }
-        return info.pbi_status != UInt32(SZOMB)
+        return read == Int32(size) ? info : nil
+    }
+
+    /// Waits (up to ~2 s) for the terminal's output to be a single PID, as
+    /// printed by `echo $!`, and returns it — or 0 when it never appears.
+    private func printedPid(of terminal: ACPTerminal) async throws -> pid_t {
+        var pid: pid_t = 0
+        _ = try await pollUntil(timeout: 2) {
+            let snap = terminal.snapshot(byteLimit: 1024).text.trimmingCharacters(in: .whitespacesAndNewlines)
+            pid = pid_t(snap) ?? 0
+            return pid != 0
+        }
+        return pid
+    }
+
+    /// Polls `condition` every 10 ms until it holds or `timeout` seconds pass.
+    /// Returns whether it held; the ceiling only bounds the failure case.
+    private func pollUntil(timeout: TimeInterval, _ condition: () -> Bool) async throws -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            if condition() { return true }
+            if Date() >= deadline { return false }
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     @Test("kill terminates a long-running process within 3 s")

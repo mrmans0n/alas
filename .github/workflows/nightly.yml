@@ -395,12 +395,17 @@ jobs:
 
       - name: Build release app
         if: steps.skip-check.outputs.skip != 'true'
+        # `-skipMacroValidation` skips the first-run "trust this Swift macro"
+        # prompt that stalls headless builds — see build.yml's Build for
+        # testing step. Missing it here breaks on mlx-swift-lm's
+        # MLXHuggingFaceMacros with "must be enabled before it can be used".
         run: |
           xcodebuild -project Alas.xcodeproj -scheme Alas \
             -configuration Release \
             -derivedDataPath build \
             -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
             -destination 'platform=macOS,arch=arm64' \
+            -skipMacroValidation \
             -quiet build
 
       # Gate signing on main-built refs only — non-main workflow_dispatch

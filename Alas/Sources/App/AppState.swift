@@ -172,6 +172,61 @@ final class AppState {
     /// session-lease layer so two running Alas builds don't fight over a
     /// shared per-worktree database.
     let instanceId: String = UUID().uuidString
+    @ObservationIgnored let localTextModelStore: LocalTextModelStore
+    @ObservationIgnored let localTextReadModelState: @Sendable () async -> LocalTextModelState
+    @ObservationIgnored private let localTextInferenceOverride: (any LocalTextGenerating)?
+    @ObservationIgnored let nextPromptInferenceOverride: (any NextPromptRuntime)?
+    @ObservationIgnored lazy var localTextInference: any LocalTextGenerating =
+        localTextInferenceOverride ?? LocalTextInferenceEngine(store: localTextModelStore, observeMemoryPressure: false)
+    @ObservationIgnored lazy var nextPromptInference: any NextPromptRuntime = makeNextPromptInference()
+    private func makeNextPromptInference() -> any NextPromptRuntime {
+        if let nextPromptInferenceOverride { return nextPromptInferenceOverride }
+        let store = localTextModelStore
+        return NextPromptInference(
+            engine: localTextInference,
+            supported: { [localTextSupported] in localTextSupported },
+            verifyAvailability: {
+                let lease = try await store.acquireVerifiedLease()
+                lease.close()
+            },
+            clock: .init(),
+            scheduleCancellation: { action in _ = Task { await action() } }
+        )
+    }
+    @ObservationIgnored lazy var nextPromptCoordinator = NextPromptCoordinator(engine: nextPromptInference) { [weak self] in
+        self?.nextPromptSnapshot()
+    }
+    @ObservationIgnored lazy var sessionSummaryCoordinator = SessionSummaryCoordinator(engine: localTextInference)
+    @ObservationIgnored let localTextObservers = LocalTextObservers()
+    @ObservationIgnored var localTextInstallation: Task<Void, Never>?
+    let localTextSupported: Bool
+    var localTextModelState: LocalTextModelState = .notInstalled
+    var nextPromptInferenceState: NextPromptInferenceState = .ready
+    var nextPromptRuntimeEnabled = false {
+        didSet { cancelIssueWorktreeNameSuggestionIfUnavailable(wasEnabled: oldValue) }
+    }
+    var nextPromptDisableSavePending = false
+    var nextPromptSettingsError: String?
+    var sessionSummariesRuntimeEnabled = false {
+        didSet { cancelIssueWorktreeNameSuggestionIfUnavailable(wasEnabled: oldValue) }
+    }
+    var sessionSummaryDisableSavePending = false
+    var sessionSummarySettingsError: String?
+    var localTextRemovalFailure: LocalTextModelFailure?
+    var nextPromptOffer: String?
+    @ObservationIgnored var nextPromptSettingsGeneration: UInt64 = 0
+    @ObservationIgnored var sessionSummarySettingsGeneration: UInt64 = 0
+    @ObservationIgnored var localTextModelGeneration: UInt64 = 0
+    @ObservationIgnored var localTextSettingsInspected = false
+    @ObservationIgnored var localTextRuntimeStarted = false
+    var localTextRemovalInProgress = false
+    @ObservationIgnored var nextPromptComposerEpoch: UInt64 = 0
+    @ObservationIgnored var nextPromptShuttingDown = false
+    @ObservationIgnored var nextPromptOwner: SessionOwnerID?
+    @ObservationIgnored var nextPromptSessionID: String?
+    @ObservationIgnored var nextPromptActiveIncarnation: UUID?
+    @ObservationIgnored var nextPromptCompletedTurn: NextPromptCompletedTurn?
+    @ObservationIgnored var nextPromptComposerEnvironment = NextPromptEligibilitySnapshot.Environment()
     var config: AppConfig
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
@@ -226,6 +281,13 @@ final class AppState {
     @ObservationIgnored var attentionAliasRetryNotBefore: Date?
     @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
     @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
+    /// How long a local run-script completion monitor outlives its exited or
+    /// closed terminal before it is cancelled. Injectable so tests don't wait
+    /// out the production grace.
+    @ObservationIgnored let runScriptLocalMonitorGrace: Duration
+    /// The same grace for every monitor, remote ones included; remote
+    /// captures can land well after the terminal is gone.
+    @ObservationIgnored let runScriptMonitorGrace: Duration
     /// Told exactly once when a run settles, keyed by run ID. Only the
     /// scheduler registers here; manual runs are observed through `runRecords`.
     /// The worktree is carried so a worktree teardown can settle every run it
@@ -1326,6 +1388,8 @@ final class AppState {
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         ggStackCache: GGStackCache = .shared,
         runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = { try await RunScriptCompletionMonitor.wait(for: $0) },
+        runScriptLocalMonitorGrace: Duration = .seconds(2),
+        runScriptMonitorGrace: Duration = .seconds(30),
         runHistoryStore: RunHistoryStore? = try? RunHistoryStore(),
         runScheduler: RunScheduler? = nil,
         acpModelCatalog: ACPAgentModelCatalog? = nil,
@@ -1347,7 +1411,12 @@ final class AppState {
         harnessAttentionSettleInterval: TimeInterval = 1.5,
         scheduledAgentReportStore: ScheduledAgentReportStore? = nil,
         scheduledAgentReportDatabasePath: String = Paths.scheduledAgentReportsDB.path,
-        scheduledAgentReportFinalizer: ScheduledAgentReportFinalizer? = nil
+        scheduledAgentReportFinalizer: ScheduledAgentReportFinalizer? = nil,
+        localTextModelStore: LocalTextModelStore? = nil,
+        localTextReadModelState: (@Sendable () async -> LocalTextModelState)? = nil,
+        localTextInference: (any LocalTextGenerating)? = nil,
+        nextPromptInference: (any NextPromptRuntime)? = nil,
+        localTextSupported: Bool = NextPromptInference.isSupported()
     ) {
         self.store = store
         self.scheduledAgentReportDatabasePath = scheduledAgentReportDatabasePath
@@ -1358,6 +1427,12 @@ final class AppState {
                 reason: reason
             )
         }
+        let suggestionStore = localTextModelStore ?? LocalTextModelStore()
+        self.localTextModelStore = suggestionStore
+        self.localTextReadModelState = localTextReadModelState ?? { await suggestionStore.state }
+        self.localTextInferenceOverride = localTextInference
+        self.nextPromptInferenceOverride = nextPromptInference
+        self.localTextSupported = localTextSupported
         self.workspaceStore = workspaceStore
         self.workspaceRemoteTransport = workspaceRemoteTransport
         self.attentionStore = attentionStore ?? AttentionStore()
@@ -1396,6 +1471,8 @@ final class AppState {
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.ggStackCache = ggStackCache
         self.runScriptCompletionWaiter = runScriptCompletionWaiter
+        self.runScriptLocalMonitorGrace = runScriptLocalMonitorGrace
+        self.runScriptMonitorGrace = runScriptMonitorGrace
         self.runHistoryStore = runHistoryStore
         self.runScheduler = runScheduler ?? RunScheduler(store: store)
         self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
@@ -1501,7 +1578,9 @@ final class AppState {
                 }
             }
         }
+        startLocalTextObservers()
         AlasTerminationCoordinator.shared.flush = { [weak self] in
+            await self?.shutdownLocalTextFeatures()
             self?.runScheduler.stop()
             await GGLandingStore.shared.cancelAllAndWait()
             self?.cancelPendingRunScriptLaunches()
@@ -1569,6 +1648,32 @@ final class AppState {
         ))
     }
 
+    /// Worktree name suggestions ride on a local-text capability the user has
+    /// already consented to. Without one, or while the model is not verified
+    /// ready, the suggester never touches the engine or the model assets.
+    var issueWorktreeNameSuggestionsAvailable: Bool {
+        localTextSupported
+            && !nextPromptShuttingDown
+            && !localTextRemovalInProgress
+            && localTextModelState == .ready
+            && (nextPromptRuntimeEnabled || sessionSummariesRuntimeEnabled)
+    }
+
+    /// Worktree names borrow consent from the other local-text capabilities,
+    /// so turning the last one off must also stop an in-flight name request.
+    /// The suggester rechecks availability too; this frees the engine early.
+    private func cancelIssueWorktreeNameSuggestionIfUnavailable(wasEnabled: Bool) {
+        guard wasEnabled, !nextPromptRuntimeEnabled, !sessionSummariesRuntimeEnabled else { return }
+        let engine = localTextInference
+        Task { await engine.cancel(caller: .worktreeName) }
+    }
+
+    func makeIssueWorktreeNameSuggester() -> IssueWorktreeNameSuggester {
+        IssueWorktreeNameSuggester(engine: localTextInference) { [weak self] in
+            self?.issueWorktreeNameSuggestionsAvailable ?? false
+        }
+    }
+
     /// All worktree IDs currently known to the projects manager (including
     /// hidden/archived ones).
     func allWorktreeIds() -> Set<String> {
@@ -1585,11 +1690,9 @@ final class AppState {
             guard let worktree,
                   let manager = acpManager(for: worktree)
             else {
-                try? await acpOrchestrationPersistence.updatePhase(
+                await acpOrchestration.markChildFailed(
                     childSessionId: record.childSessionId,
-                    phase: .failed,
-                    failureMessage: "Alas stopped before delegated session setup completed.",
-                    updatedAt: Int64(Date().timeIntervalSince1970)
+                    message: "Alas stopped before delegated session setup completed."
                 )
                 continue
             }
@@ -1601,7 +1704,7 @@ final class AppState {
                     updatedAt: Int64(Date().timeIntervalSince1970)
                 )
             }
-            delegatedSessionParents[record.childSessionId] = record.parentSessionId
+            rememberDelegatedSessionParent(childID: record.childSessionId, parentID: record.parentSessionId)
             let sessionAlreadyPersisted = await manager.persistedSessionRow(id: record.childSessionId) != nil
             if sessionAlreadyPersisted {
                 _ = manager.placeholderSession(id: record.childSessionId)
@@ -1624,20 +1727,16 @@ final class AppState {
                     into: record.childSessionId
                 )
                 guard accepted else {
-                    try? await acpOrchestrationPersistence.updatePhase(
+                    await acpOrchestration.markChildFailed(
                         childSessionId: record.childSessionId,
-                        phase: .failed,
-                        failureMessage: "Could not restore delegated session prompt.",
-                        updatedAt: Int64(Date().timeIntervalSince1970)
+                        message: "Could not restore delegated session prompt."
                     )
                     continue
                 }
             } else if !sessionAlreadyPersisted {
-                try? await acpOrchestrationPersistence.updatePhase(
+                await acpOrchestration.markChildFailed(
                     childSessionId: record.childSessionId,
-                    phase: .failed,
-                    failureMessage: "Could not restore delegated session prompt.",
-                    updatedAt: Int64(Date().timeIntervalSince1970)
+                    message: "Could not restore delegated session prompt."
                 )
                 continue
             }
@@ -1645,11 +1744,9 @@ final class AppState {
             guard let session = manager.liveSession(for: record.childSessionId),
                   session.agentState == .ready
             else {
-                try? await acpOrchestrationPersistence.updatePhase(
+                await acpOrchestration.markChildFailed(
                     childSessionId: record.childSessionId,
-                    phase: .failed,
-                    failureMessage: recoveredDelegatedSessionFailureMessage(manager.liveSession(for: record.childSessionId)),
-                    updatedAt: Int64(Date().timeIntervalSince1970)
+                    message: recoveredDelegatedSessionFailureMessage(manager.liveSession(for: record.childSessionId))
                 )
                 continue
             }
@@ -1693,7 +1790,7 @@ final class AppState {
         for sessionId in targetSessionIds {
             let childRecord = try? await acpOrchestrationPersistence.parent(childSessionId: sessionId)
             if let childRecord {
-                delegatedSessionParents[childRecord.childSessionId] = childRecord.parentSessionId
+                rememberDelegatedSessionParent(childID: childRecord.childSessionId, parentID: childRecord.parentSessionId)
             }
             guard let manager = await acpManagerForPersistedSession(
                 sessionId: sessionId,
@@ -6548,15 +6645,36 @@ final class AppState {
     /// simply falls back to nil (today's behavior).
     private var providerReviewFileSummaryCache: [ReviewDraftSessionID: [DiffReviewFileSummary]] = [:]
 
-    func makeCLICommandRouter(
-        sessionWorktreeLookup: @escaping (String) -> String?,
-        sessionOwnerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil }
-    ) -> AlasCLICommandRouter {
-        let orchestration = ACPSessionOrchestrationCoordinator(
+    /// Shared orchestration coordinator: the CLI/MCP router, the manager
+    /// turn-completion hooks, and startup reconciliation all talk to one
+    /// instance so outcome delivery has a single producer per instance.
+    @ObservationIgnored
+    private(set) lazy var acpOrchestration: ACPSessionOrchestrationCoordinator = makeOrchestrationCoordinator()
+
+    private func makeOrchestrationCoordinator() -> ACPSessionOrchestrationCoordinator {
+        ACPSessionOrchestrationCoordinator(
             environment: .init(
                 persistence: acpOrchestrationPersistence,
                 instanceId: instanceId,
                 now: { Int64(Date().timeIntervalSince1970) },
+                nowMillis: { Int64(Date().timeIntervalSince1970 * 1000) },
+                blockedRequestKeys: { [weak self] sessionId in
+                    guard let self,
+                          let (_, manager) = self.acpManagers.first(where: { _, manager in
+                              manager.liveSession(for: sessionId) != nil
+                          })
+                    else { return [] }
+                    return manager.blockedRequestKeys(for: sessionId)
+                },
+                escalationDelaySeconds: { [weak self] in
+                    self?.config.harness.acpDelegatedBlockerEscalationSeconds ?? 30
+                },
+                scheduleEscalationCheck: { delay, work in
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(delay))
+                        await work()
+                    }
+                },
                 makeID: { UUID().uuidString },
                 worktree: { [weak self] id in self?.worktree(withId: id) },
                 existingWorktree: { [weak self] projectId, worktreeId in
@@ -6632,7 +6750,7 @@ final class AppState {
                     return await self.createDelegatedWorktree(projectId: projectId, branch: branch, base: base)
                 },
                 rememberParent: { [weak self] childID, parentID in
-                    self?.delegatedSessionParents[childID] = parentID
+                    self?.rememberDelegatedSessionParent(childID: childID, parentID: parentID)
                 },
                 autoRunDefault: { [weak self] in
                     self?.config.harness.acpAutoRunByDefault ?? false
@@ -6640,6 +6758,13 @@ final class AppState {
                 notifyChanged: { }
             )
         )
+    }
+
+    func makeCLICommandRouter(
+        sessionWorktreeLookup: @escaping (String) -> String?,
+        sessionOwnerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil }
+    ) -> AlasCLICommandRouter {
+        let orchestration = acpOrchestration
         return AlasCLICommandRouter(
             sessionWorktreeId: sessionWorktreeLookup,
             sessionOwner: sessionOwnerLookup,
@@ -7448,7 +7573,7 @@ final class AppState {
             return state.root.find(leafId: leafId) != nil
         }?.id
         guard let tabId = owningTabId else { return }
-        cancelRunScriptCompletionTasks(sessionID: leafId, after: .seconds(30))
+        cancelRunScriptCompletionTasks(sessionID: leafId, after: runScriptMonitorGrace)
         guard let outcome = tabs.removeLeaf(
             worktreeId: worktreeId, tabId: tabId, leafId: leafId
         ) else { return }
@@ -11784,7 +11909,26 @@ final class AppState {
     /// Observed, not `@ObservationIgnored`: the agent sidebar reads this to
     /// draw delegated children under their parent, so a newly recorded link
     /// has to invalidate the view.
-    private(set) var delegatedSessionParents: [String: String] = [:]
+    private(set) var delegatedSessionParents: [String: String] = [:] {
+        willSet {
+            if newValue != delegatedSessionParents { nextPromptCoordinator.invalidate() }
+        }
+    }
+
+    func rememberDelegatedSessionParent(childID: String, parentID: String) {
+        delegatedSessionParents[childID] = parentID
+    }
+
+    func nextPromptHasDelegatedWork(parentID: String) -> Bool {
+        acpManagers.values.contains { manager in
+            manager.sessions.values.contains { child in
+                delegatedSessionParents[child.id] == parentID &&
+                (child.agentState == .spawning || child.transcript.streamingState != .idle ||
+                 child.nextPromptWorkCount > 0 || child.hasPendingDelegatedMessages || !child.queue.isEmpty ||
+                 child.pendingQueuePersistenceCount > 0 || child.subagents.values.contains { $0.isRunning })
+            }
+        }
+    }
 
     /// Backfills the links completed in earlier runs. Without this the map only
     /// ever holds delegations this launch created or recovered, and restored
@@ -12246,10 +12390,17 @@ final class AppState {
                 )
             },
             onDelegatedMessageAvailable: { [weak self] sessionId in
+                guard let self, let manager = self.acpManagers[owner] else { return }
+                let session = manager.liveSession(for: sessionId)
+                session?.nextPromptWorkCount += 1
                 Task { @MainActor [weak self] in
-                    guard let self, let manager = self.acpManagers[owner] else { return }
+                    defer { session?.nextPromptWorkCount -= 1 }
+                    guard let self else { return }
                     await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
                 }
+            },
+            onSuccessfulTurn: { [weak self] turn in
+                self?.nextPromptCompleted(turn, owner: owner)
             },
             onQueueChanged: { [weak self] sessionId, retainActivePrompt in
                 self?.restartRetainedACPSessionCleanupIfNeeded(
@@ -12269,6 +12420,16 @@ final class AppState {
                         instanceID: self.instanceId,
                         sessionID: worktree.id
                     )
+                }
+            },
+            onTurnCompleted: { [weak self] completion in
+                Task { @MainActor [weak self] in
+                    await self?.acpOrchestration.childTurnCompleted(completion)
+                }
+            },
+            onChildBlocked: { [weak self] blocker in
+                Task { @MainActor [weak self] in
+                    await self?.acpOrchestration.childBlocked(blocker)
                 }
             },
             onCheckpointCapture: { [weak self] prompt, hasAttachments in
@@ -12336,7 +12497,7 @@ final class AppState {
                 let parentSessionId = self.delegatedSessionParents[sessionId]
                     ?? persistedParent?.parentSessionId
                 if let parentSessionId {
-                    self.delegatedSessionParents[sessionId] = parentSessionId
+                    self.rememberDelegatedSessionParent(childID: sessionId, parentID: parentSessionId)
                 }
                 let configuredServers: [ProjectMCPServer] = {
                     guard let project = self.projects.first(where: { $0.id == worktree.projectId }) else {
@@ -12551,6 +12712,7 @@ final class AppState {
             return (adapterState, configOutcome, userServerNames, skippedServerStatuses, requestedServerStatuses)
         }
         acpManagers[owner] = mgr
+        observeNextPromptSessions(mgr, owner: owner)
         acpHarnessBridge.attach(manager: mgr)
         #if DEBUG
         memoryDiagnostics.attach(manager: mgr)
@@ -12686,12 +12848,25 @@ final class AppState {
                     owner: owner
                 )
             },
+            onSuccessfulTurn: { [weak self] turn in
+                self?.nextPromptCompleted(turn, owner: owner)
+            },
             onQueueChanged: { [weak self] sessionId, retainActivePrompt in
                 self?.restartRetainedACPSessionCleanupIfNeeded(
                     owner: owner,
                     sessionId: sessionId,
                     retainActivePrompt: retainActivePrompt
                 )
+            },
+            onTurnCompleted: { [weak self] completion in
+                Task { @MainActor [weak self] in
+                    await self?.acpOrchestration.childTurnCompleted(completion)
+                }
+            },
+            onChildBlocked: { [weak self] blocker in
+                Task { @MainActor [weak self] in
+                    await self?.acpOrchestration.childBlocked(blocker)
+                }
             },
             launchSpecTransformer: { [weak self] spec in
                 guard let self else { return spec }
@@ -12836,6 +13011,7 @@ final class AppState {
             return (adapterState, configOutcome, userServerNames, skippedServerStatuses, requestedServerStatuses)
         }
         acpManagers[owner] = manager
+        observeNextPromptSessions(manager, owner: owner)
         acpHarnessBridge.attach(manager: manager)
         #if DEBUG
         memoryDiagnostics.attach(manager: manager)
@@ -13025,6 +13201,7 @@ final class AppState {
         // must be torn down explicitly to stop the 2.5s backstop polls and
         // notifier subscriptions from outliving the manager.
         manager.shutdownBackgroundTasks()
+        localTextObservers.managers[owner] = nil
     }
 
     private func finishDisposingACPManager(_ manager: ACPSessionManager) async {
@@ -13544,9 +13721,13 @@ final class AppState {
     }
 
     private func deliverPendingDelegatedMessages(to sessionId: String, manager: ACPSessionManager) async {
+        let session = manager.liveSession(for: sessionId)
+        session?.nextPromptWorkCount += 1
+        defer { session?.nextPromptWorkCount -= 1 }
         guard let messages = try? await acpOrchestrationPersistence.pendingMessages(targetSessionId: sessionId) else {
             return
         }
+        session?.hasPendingDelegatedMessages = !messages.isEmpty
         await manager.attach(to: sessionId, freshlyCreated: false)
         guard manager.isWriter(for: sessionId) else {
             manager.notifyDelegatedMessagesAvailable()
@@ -13560,14 +13741,23 @@ final class AppState {
                 now: Int64(Date().timeIntervalSince1970),
                 staleAfter: 60
             ) else { continue }
-            let accepted = await manager.enqueueDelegatedPrompt(
-                text: claimed.message.prompt,
-                source: ACPDelegatedPromptSource(
-                    sessionId: claimed.message.sourceSessionId,
-                    messageId: claimed.message.id
-                ),
-                into: sessionId
-            )
+            let accepted: Bool
+            switch claimed.message.kind {
+            case .prompt:
+                accepted = await manager.enqueueDelegatedPrompt(
+                    text: claimed.message.prompt,
+                    source: ACPDelegatedPromptSource(
+                        sessionId: claimed.message.sourceSessionId,
+                        messageId: claimed.message.id
+                    ),
+                    into: sessionId
+                )
+            case .notice:
+                accepted = await manager.appendDelegatedNotice(
+                    text: claimed.message.prompt,
+                    into: sessionId
+                )
+            }
             if accepted {
                 try? await acpOrchestrationPersistence.removeDeliveredMessage(
                     id: claimed.message.id,
@@ -13580,6 +13770,9 @@ final class AppState {
                 )
                 manager.notifyDelegatedMessagesAvailable()
             }
+        }
+        if let remaining = try? await acpOrchestrationPersistence.pendingMessages(targetSessionId: sessionId) {
+            session?.hasPendingDelegatedMessages = !remaining.isEmpty
         }
     }
 
@@ -14696,8 +14889,14 @@ extension AppState: RemoteSessionsProvider {
     /// `onResult` fires once (false when no manager owns the id, the manager
     /// refuses, or delivery later fails) so the gateway can restore the text.
     func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
+        await sendPrompt(for: id, text: text, attachments: attachments,
+                         normalUserTurn: true, onResult: onResult)
+    }
+
+    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], normalUserTurn: Bool, onResult: @escaping @MainActor (Bool) -> Void) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.sendPrompt(for: id, text: text, attachments: attachments, onResult: onResult)
+            await mgr.sendPrompt(for: id, text: text, attachments: attachments,
+                                 normalUserTurn: normalUserTurn, onResult: onResult)
             return
         }
         onResult(false)

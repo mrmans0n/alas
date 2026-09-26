@@ -23,6 +23,8 @@ final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendable {
     private let updateCountLock = NSLock()
     private var _yieldedUpdateCount = 0
     private(set) var shutdownCount = 0
+    var rejectsRequestsAfterShutdown = false
+    private(set) var requestsAfterShutdownCount = 0
 
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     var yieldedUpdateCount: Int {
@@ -85,6 +87,10 @@ final class ACPMockClient: ACPRequestHandoffPreparing, @unchecked Sendable {
         _ request: ACPRequest,
         onRequestHandoff: @Sendable () -> Void
     ) async throws -> ACPResponse {
+        if rejectsRequestsAfterShutdown, shutdownCount > 0 {
+            requestsAfterShutdownCount += 1
+            throw ACPClientError.notRunning
+        }
         sent.append(request)
         onRequestHandoff()
         if let script = responseScripts[request.method] {

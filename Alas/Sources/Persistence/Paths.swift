@@ -140,3 +140,9 @@ extension Paths {
         appSupportRoot.appendingPathComponent("run-scripts/global", isDirectory: true)
     }
 }
+
+extension Paths {
+    static var localTextModelsRoot: URL {
+        appSupportRoot.appendingPathComponent("Models/NextPromptSuggestions", isDirectory: true)
+    }
+}

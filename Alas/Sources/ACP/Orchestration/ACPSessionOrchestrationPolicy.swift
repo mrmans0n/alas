@@ -33,6 +33,20 @@ struct ACPOrchestrationAgent: Equatable, Sendable {
     let isACPCapable: Bool
 }
 
+/// What the parent receives when a delegated child's turn ends.
+enum ACPChildOutcomeDisposition: Equatable, Sendable {
+    /// Queue a prompt so the parent runs a turn.
+    case wake
+    /// Append a passive system notice only.
+    case notice
+}
+
+/// Whether a blocked child still warrants waking its parent.
+enum ACPBlockerEscalation: Equatable, Sendable {
+    case wake
+    case stillHandled
+}
+
 enum ACPSessionOrchestrationPolicy {
     enum Error: Swift.Error, Equatable {
         case delegatedSessionCannotCreateChild
@@ -122,6 +136,39 @@ enum ACPSessionOrchestrationPolicy {
         }
 
         return prompt
+    }
+
+    /// Hybrid rule: a child that already messaged its parent during the turn
+    /// costs the parent nothing more than a notice; a child that ended
+    /// silently, or failed, wakes the parent. A cancelled turn means the human
+    /// intervened, so it never wakes.
+    static func outcomeDisposition(
+        result: ACPTurnCompletion.Result,
+        lastParentReportAt: Int64?,
+        turnStartedAt: Int64
+    ) -> ACPChildOutcomeDisposition {
+        switch result {
+        case .failed:
+            return .wake
+        case .cancelled:
+            return .notice
+        case .completed:
+            if let lastParentReportAt, lastParentReportAt >= turnStartedAt {
+                return .notice
+            }
+            return .wake
+        }
+    }
+
+    /// Escalate only while the child is still blocked on the SAME request.
+    /// Matching the specific key matters: a child that cleared one prompt and
+    /// hit another is blocked, but not on the thing the parent was told about,
+    /// and a second block raises its own notice and escalation.
+    static func escalation(
+        blocker: ACPChildBlocker,
+        liveBlockedRequestKeys: Set<String>
+    ) -> ACPBlockerEscalation {
+        liveBlockedRequestKeys.contains(blocker.requestKey) ? .wake : .stillHandled
     }
 
     static func publicState(

@@ -40,6 +40,7 @@ struct EditorDisplayIntegrationTests {
         })
         let tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: directory.appendingPathComponent("buffers")), lsp: manager, tabsDirectory: directory.appendingPathComponent("tabs"), workspaceEditJournal: WorkspaceEditJournal(root: directory.appendingPathComponent("journal")))
         let app = AppState(tabsManager: tabs, lspManager: manager)
+        defer { app.harness.stop() } // Do not leak this AppState's agent-hook listener into later tests.
         let first = tabs.buffer(worktreeId: "first", tabId: "first", worktreeRoot: firstRoot, relativePath: "file.swift")
         let next = tabs.buffer(worktreeId: "next", tabId: "next", worktreeRoot: nextRoot, relativePath: "file.swift")
         await first.awaitLoadForTesting()
@@ -168,6 +169,7 @@ struct EditorDisplayIntegrationTests {
         let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)]), makeClient: { _, _, _, _, _ in client })
         let tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: root.appendingPathComponent("buffers")), lsp: manager, tabsDirectory: root.appendingPathComponent("tabs"), workspaceEditJournal: WorkspaceEditJournal(root: root.appendingPathComponent("journal")))
         let app = AppState(tabsManager: tabs, lspManager: manager)
+        defer { app.harness.stop() } // Do not leak this AppState's agent-hook listener into later tests.
         app.config.code.inlayHints = .init()
         app.config.code.inlayHintsByLanguage = [:]
         let buffer = tabs.buffer(worktreeId: "inlay-action", tabId: "tab", worktreeRoot: root, relativePath: "file.swift")
@@ -365,6 +367,7 @@ struct EditorDisplayIntegrationTests {
         let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)]), makeClient: { _, _, _, _, _ in client })
         let tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: root.appendingPathComponent("buffers")), lsp: manager, tabsDirectory: root.appendingPathComponent("tabs"), workspaceEditJournal: WorkspaceEditJournal(root: root.appendingPathComponent("journal")))
         let app = AppState(tabsManager: tabs, lspManager: manager)
+        defer { app.harness.stop() } // Do not leak this AppState's agent-hook listener into later tests.
         let buffer = tabs.buffer(worktreeId: "projection", tabId: "tab", worktreeRoot: root, relativePath: "file.swift")
         await buffer.awaitLoadForTesting()
         await buffer.awaitWorkspaceEditLifecycle()
@@ -384,11 +387,11 @@ struct EditorDisplayIntegrationTests {
             buffer.close(persistDirtySnapshot: false)
             transport.finish()
         }
-        for _ in 0..<200 where manager.documentStatus(forFile: file, worktreeRoot: root) != .ready { try await Task.sleep(for: .milliseconds(10)) }
+        try await Self.eventually("LSP document ready") { manager.documentStatus(forFile: file, worktreeRoot: root) == .ready }
         view.setSourceSelectedRange(NSRange(location: 3, length: 0))
         try view.displayAdapter?.updateHints([.init(id: "hint", sourceOffset: 2, label: "type:", size: CGSize(width: 50, height: 16))], revision: buffer.editGeneration)
         view.complete(nil)
-        for _ in 0..<200 where completionRequest == nil { try await Task.sleep(for: .milliseconds(10)) }
+        try await Self.eventually("completion request") { completionRequest != nil }
         let request = try #require(completionRequest)
         #expect(request["params"]?["position"]?["line"] == .number("1"))
         #expect(request["params"]?["position"]?["character"] == .number("2"))
@@ -400,10 +403,10 @@ struct EditorDisplayIntegrationTests {
             window.childWindows?.contains(where: { ($0.contentViewController as? NSHostingController<CompletionPopup>)?.rootView.rows.contains(where: { $0.label == "print" }) == true }) == true
         }
         view.insertTab(nil)
-        for _ in 0..<200 where buffer.storage.string == "\npr" { try await Task.sleep(for: .milliseconds(10)) }
+        try await Self.eventually("completion edit") { buffer.storage.string != "\npr" }
         #expect(buffer.storage.string == "import Foo\n\nprint")
         #expect(view.displayAdapter?.document.map.hintRuns.map(\.hint.id) == ["hint"])
-        for _ in 0..<200 where view.sourceSelectedRange != NSRange(location: 17, length: 0) { try await Task.sleep(for: .milliseconds(10)) }
+        try await Self.eventually("completion selection") { view.sourceSelectedRange == NSRange(location: 17, length: 0) }
         #expect(view.sourceSelectedRange == NSRange(location: 17, length: 0))
         try await Self.eventually("completion command edit preview") { window.attachedSheet != nil }
         let followup = try #require(window.attachedSheet?.contentViewController as? NSHostingController<WorkspaceEditPreview>).rootView
@@ -426,14 +429,14 @@ struct EditorDisplayIntegrationTests {
         try await Self.eventually("completion sheet dismissal") { window.attachedSheet == nil }
         #expect(buffer.storage.string == "import Foo\n\nprint")
         buffer.undoManager.undo()
-        for _ in 0..<200 where buffer.storage.string != "\npr" { try await Task.sleep(for: .milliseconds(10)) }
+        try await Self.eventually("completion undo") { buffer.storage.string == "\npr" }
         #expect(buffer.storage.string == "\npr")
         #expect(!buffer.undoManager.canUndo)
         view.setSourceSelectedRange(NSRange(location: 3, length: 0))
         try view.displayAdapter?.updateHints([.init(id: "hint", sourceOffset: 2, label: "type:", size: CGSize(width: 50, height: 16))], revision: buffer.editGeneration)
         view.triggerCommandClick(atUTF16Offset: 2)
         view.signatureHelpManualTriggerHandler?()
-        for _ in 0..<200 where definitionRequest == nil || signatureRequest == nil { try await Task.sleep(for: .milliseconds(10)) }
+        try await Self.eventually("definition and signature requests") { definitionRequest != nil && signatureRequest != nil }
         #expect(definitionRequest?["params"]?["position"]?["character"] == .number("1"))
         #expect(signatureRequest?["params"]?["position"]?["character"] == .number("2"))
         view.setSourceSelectedRange(NSRange(location: 1, length: 2))
@@ -766,6 +769,7 @@ struct EditorDisplayIntegrationTests {
         let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: []))
         let tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: root.appendingPathComponent("buffers")), lsp: manager, tabsDirectory: root.appendingPathComponent("tabs"), workspaceEditJournal: WorkspaceEditJournal(root: root.appendingPathComponent("journal")))
         let app = AppState(tabsManager: tabs, lspManager: manager)
+        defer { app.harness.stop() } // Do not leak this AppState's agent-hook listener into later tests.
         let first = tabs.buffer(worktreeId: "tabs", tabId: "first", worktreeRoot: root, relativePath: "first.txt")
         let second = tabs.buffer(worktreeId: "tabs", tabId: "second", worktreeRoot: root, relativePath: "second.txt")
         for buffer in [first, second] { await buffer.awaitLoadForTesting()
@@ -864,8 +868,13 @@ struct EditorDisplayIntegrationTests {
         .object(["range": .object(["start": .object(["line": .number(String(line)), "character": .number(String(start))]), "end": .object(["line": .number(String(line)), "character": .number(String(end))])]), "newText": .string(text)])
     }
 
+    /// Polls on the main actor until `condition` holds or a wall-clock
+    /// deadline passes. The bound is wall-clock time rather than an iteration
+    /// count, gives a loaded serial CI host room to schedule background work,
+    /// and stays well inside the 60-second test allowance.
     private static func eventually(_ description: String = "editor state", _ condition: () -> Bool) async throws {
-        for _ in 0..<300 {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(10))
         }

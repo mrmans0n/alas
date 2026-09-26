@@ -23,7 +23,11 @@ struct WorktreeCheckpointCaptureTests {
         let fixture = try await CheckpointCaptureFixture.make()
         defer { fixture.remove() }
         try fixture.repo.write("secret", to: ".env")
-        let before = try await WorktreeStateSnapshotter.live.snapshot(target: fixture.target)
+        // `before`/`after` only compare HEAD, index checksum, and path states,
+        // which `WorktreeStateSnapshotter` computes identically without
+        // retaining payload bytes (one streamed `cat-file` per blob instead of
+        // `cat-file -s` plus `cat-file blob`).
+        let before = try await WorktreeStateSnapshotter.live.snapshot(target: fixture.target, retainingPayloads: false)
         let status = try await fixture.repo.status()
         let service = fixture.service()
         let summary = try await service.createManual(target: fixture.target, label: "  Before edit  ")
@@ -38,7 +42,7 @@ struct WorktreeCheckpointCaptureTests {
         #expect(try await fixture.payload(path.index) == Data("staged\n".utf8))
         #expect(try await fixture.payload(path.worktree) == Data("first\n".utf8))
         #expect(manifest.byteCount == 22)
-        let after = try await WorktreeStateSnapshotter.live.snapshot(target: fixture.target)
+        let after = try await WorktreeStateSnapshotter.live.snapshot(target: fixture.target, retainingPayloads: false)
         #expect(after.headOID == before.headOID)
         #expect(after.indexChecksum == before.indexChecksum)
         #expect(after.paths == before.paths)
@@ -166,14 +170,29 @@ private struct CheckpointCaptureFixture: Sendable {
     var target: CheckpointWorktreeTarget { repo.target }
     var blobs: URL { storeRoot.appendingPathComponent(target.lineageID).appendingPathComponent("blobs") }
 
+    /// Copies the per-process `CaptureFixtureTemplate` (HEAD "original",
+    /// index "staged", disk "first") instead of re-running its ten `git`
+    /// processes. The template carries no lineage marker, so every copy mints
+    /// its own lineage here and gets its own checkpoint store namespace.
+    ///
+    /// No `update-index --refresh` after the copy: the only index entry
+    /// differs from disk in size ("staged\n" vs "first\n"), so git classifies
+    /// it as modified without rehashing and a refresh can neither update it
+    /// nor change a byte of the index.
     static func make() async throws -> Self {
-        let repo = try await CheckpointTestRepository.make()
-        try repo.write("original\n", to: "file.swift")
-        try await repo.commitAll("file")
-        try repo.write("staged\n", to: "file.swift")
-        try await repo.stage("file.swift")
-        try repo.write("first\n", to: "file.swift")
-        return Self(repo: repo, storeRoot: URL(fileURLWithPath: "/private/tmp/checkpoint-store-\(UUID().uuidString)"))
+        let template = try await CaptureFixtureTemplate.ready.value
+        let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-test-\(UUID().uuidString)")
+        do {
+            try FileManager.default.copyItem(at: template, to: root)
+            let lineage = try #require(WorktreeService.localLineageID(forWorktreeAt: root))
+            let repo = CheckpointTestRepository(root: root, target: .init(worktreeID: UUID().uuidString, projectID: "test", path: root,
+                                                                           lineageID: lineage, branch: "main", repositoryName: "test",
+                                                                           workspaceName: nil))
+            return Self(repo: repo, storeRoot: URL(fileURLWithPath: "/private/tmp/checkpoint-store-\(UUID().uuidString)"))
+        } catch {
+            try? FileManager.default.removeItem(at: root)
+            throw error
+        }
     }
 
     func service(hooks: CheckpointCaptureHooks = .none) -> WorktreeCheckpointService {
@@ -187,5 +206,32 @@ private struct CheckpointCaptureFixture: Sendable {
     func remove() {
         repo.remove()
         try? FileManager.default.removeItem(at: storeRoot)
+    }
+}
+
+/// The capture fixture's starting state, built once per test process with the
+/// same steps the fixture used to run per test: a `CheckpointTestRepository`
+/// with `file.swift` committed as "original", "staged" staged over it, and
+/// "first" on disk. Building it mints a lineage marker, which is removed so
+/// the template is lineage-free and no two copies share a lineage. A rename
+/// into place keeps every file (and the index's stat data) byte-identical.
+private enum CaptureFixtureTemplate {
+    static let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-capture-template-\(UUID().uuidString)")
+    static let ready = Task<URL, any Error> {
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
+        do {
+            try repo.write("original\n", to: "file.swift")
+            try await repo.commitAll("file")
+            try repo.write("staged\n", to: "file.swift")
+            try await repo.stage("file.swift")
+            try repo.write("first\n", to: "file.swift")
+            try FileManager.default.removeItem(at: repo.root.appendingPathComponent(".git/alas-worktree-lineage"))
+            try FileManager.default.moveItem(at: repo.root, to: CaptureFixtureTemplate.root)
+        } catch {
+            repo.remove()
+            throw error
+        }
+        atexit { try? FileManager.default.removeItem(at: CaptureFixtureTemplate.root) }
+        return CaptureFixtureTemplate.root
     }
 }

@@ -2602,3 +2602,96 @@ private extension URL {
         (scheme == "http" || scheme == "https") && !(host ?? "").isEmpty
     }
 }
+
+// MARK: - Reference chip lookup
+
+extension GitLabCLIProvider {
+    /// `!N` is a merge request and `#N` an issue, so the sigil picks the
+    /// endpoint and the kind up front.
+    func referenceSummary(
+        remote: CodeHostRemote,
+        reference: CodeHostReference,
+        cwd: URL
+    ) async throws -> CodeHostReferenceSummary {
+        let (path, summaryKind): (String, CodeHostReferenceSummary.Kind) = switch reference.sigil {
+        case .bang: ("merge_requests", .reviewRequest)
+        case .hash: ("issues", .issue)
+        }
+        let result = try await runner.run(
+            executable,
+            args: [
+                "api", "projects/\(Self.encodedProjectPath(remote.repositorySlug))/\(path)/\(reference.number)",
+                "--hostname", remote.host, "--output", "json",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            if let error = CodeHostIssueProviderError.classification(
+                provider: kind, remote: remote, number: reference.number, result: result
+            ) {
+                throw error
+            }
+            throw CodeHostProviderError.commandFailed(command: "glab api \(path)", stderr: result.stderr)
+        }
+        return try Self.parseReferenceSummary(result.stdout, kind: summaryKind, requestedNumber: reference.number)
+    }
+
+    static func parseReferenceSummary(
+        _ json: String,
+        kind: CodeHostReferenceSummary.Kind,
+        requestedNumber: Int
+    ) throws -> CodeHostReferenceSummary {
+        struct Response: Decodable {
+            struct Author: Decodable { let username: String? }
+            let iid: Int
+            let title: String
+            let state: String
+            let draft: Bool?
+            let workInProgress: Bool?
+            let author: Author?
+            let createdAt: String?
+            let updatedAt: String?
+            let closedAt: String?
+            let mergedAt: String?
+            let webURL: String?
+            enum CodingKeys: String, CodingKey {
+                case iid, title, state, draft, author
+                case workInProgress = "work_in_progress"
+                case createdAt = "created_at"
+                case updatedAt = "updated_at"
+                case closedAt = "closed_at"
+                case mergedAt = "merged_at"
+                case webURL = "web_url"
+            }
+        }
+        let response: Response
+        do {
+            response = try JSONDecoder().decode(Response.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse GitLab reference output.")
+        }
+        guard response.iid == requestedNumber,
+              let url = try parseOptionalHTTPURL(response.webURL, context: "GitLab reference output is missing a valid URL.")
+        else {
+            throw CodeHostProviderError.malformedOutput("GitLab reference output is missing required fields.")
+        }
+        let state: CodeHostReferenceSummary.State
+        switch response.state.lowercased() {
+        case "merged": state = .merged
+        case "closed", "locked": state = .closed
+        default: state = (response.draft == true || response.workInProgress == true) ? .draft : .open
+        }
+        return CodeHostReferenceSummary(
+            kind: kind,
+            number: response.iid,
+            title: response.title,
+            state: state,
+            author: response.author?.username,
+            createdAt: try parseOptionalGitLabDate(response.createdAt),
+            updatedAt: try parseOptionalGitLabDate(response.updatedAt),
+            closedAt: try parseOptionalGitLabDate(response.closedAt),
+            mergedAt: try parseOptionalGitLabDate(response.mergedAt),
+            url: url
+        )
+    }
+}

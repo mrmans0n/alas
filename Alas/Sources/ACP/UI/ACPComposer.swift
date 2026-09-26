@@ -1,5 +1,7 @@
 import SwiftUI
 import AppKit
+import Combine
+import CryptoKit
 import UniformTypeIdentifiers
 
 typealias ACPComposerSubmitCompletion = @MainActor (_ succeeded: Bool) -> Void
@@ -43,6 +45,15 @@ struct ACPInputField: NSViewRepresentable {
     /// falls back to a synchronous `FileManager` enumerator.
     let filesProvider: (@Sendable () async -> [URL])?
 
+    var nextPromptOffer: String? = nil
+    var takeNextPromptOffer: () -> String? = { nil }
+    var dismissNextPromptOffer: () -> Void = {}
+    var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
+    var nextPromptInputBlocked: () -> Bool = { false }
+    var nextPromptIsDictating: () -> Bool = { false }
+    /// Reference-chip cache for this worktree. `nil` disables reference chips.
+    var upstreamReferences: ACPUpstreamReferenceStore? = nil
+
     func makeNSView(context: Context) -> NSScrollView {
         let textView = ACPNSTextView()
         textView.delegate = context.coordinator
@@ -61,6 +72,9 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.onImageError = onImageError
         textView.registerForDraggedTypes([.fileURL, .png, .tiff])
         context.coordinator.restoreInitialDraft(into: textView)
+        context.coordinator.attachUpstreamReferences(upstreamReferences)
+        configureNextPrompt(textView)
+        textView.invalidateNextPromptSuggestion()
         // Publish the submit closure so the SwiftUI send button can fire
         // the same code path as ⏎.
         let coord = context.coordinator
@@ -85,6 +99,10 @@ struct ACPInputField: NSViewRepresentable {
             coord.insertQuote(message, into: textView)
         }
         let scroll = NSScrollView()
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         scroll.backgroundColor = .clear
@@ -112,6 +130,9 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.theme = context.environment.theme
         context.coordinator.sendOnEnter = sendOnEnter
         context.coordinator.typography = typography
+        if context.coordinator.upstreamReferences !== upstreamReferences {
+            context.coordinator.attachUpstreamReferences(upstreamReferences)
+        }
         if context.coordinator.focusRequest != focusRequest {
             context.coordinator.focusRequest = focusRequest
             if let tv = nsView.documentView as? ACPNSTextView,
@@ -120,6 +141,7 @@ struct ACPInputField: NSViewRepresentable {
             }
         }
         if let tv = nsView.documentView as? ACPNSTextView {
+            configureNextPrompt(tv)
             let baseFont = typography.appKitFont()
             let style = Self.codeBlockStyle(
                 theme: context.environment.theme,
@@ -135,8 +157,36 @@ struct ACPInputField: NSViewRepresentable {
             context.coordinator.syncPersistedDraft(composer.draft, into: tv)
             if suggestionsChanged {
                 tv.reconcileSlashPanel()
+                // A draft restored before the agent listed its commands
+                // gets its pill once the list arrives.
+                tv.pillLeadingCommandIfNeeded()
             }
+            tv.nextPromptOffer = nextPromptOffer
+            if tv.nextPromptGhostText == nil, nextPromptOffer != nil { tv.invalidateNextPromptSuggestion() }
+            tv.onNextPromptStateChange(tv.nextPromptInputState)
+            tv.refreshNextPromptLayout()
         }
+    }
+
+    private func configureNextPrompt(_ textView: ACPNSTextView) {
+        textView.takeNextPromptOffer = takeNextPromptOffer
+        textView.dismissNextPromptOffer = dismissNextPromptOffer
+        textView.onNextPromptStateChange = onNextPromptStateChange
+        textView.nextPromptDraftIsEmpty = { composer.draft.isEmpty }
+        textView.nextPromptInputBlocked = nextPromptInputBlocked
+        textView.nextPromptIsDictating = nextPromptIsDictating
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        guard let width = proposal.width, let textView = nsView.documentView as? ACPNSTextView else { return nil }
+        let contentHeight = min(140, textView.composerContentHeight(for: width))
+        // Fill the offered height like a plain flexible NSView would. Hugging
+        // the content height lets SwiftUI center a short editor vertically in
+        // the composer, so the caret starts mid-box instead of at the top.
+        guard let proposedHeight = proposal.height else {
+            return CGSize(width: width, height: contentHeight)
+        }
+        return CGSize(width: width, height: min(140, max(proposedHeight, contentHeight)))
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
@@ -144,6 +194,9 @@ struct ACPInputField: NSViewRepresentable {
         coordinator.flushPendingRestyleNow()
         coordinator.onStopDictation()
         if let tv = nsView.documentView as? ACPNSTextView {
+            tv.invalidateNextPromptSuggestion()
+            tv.onNextPromptStateChange(.init())
+            tv.onNextPromptStateChange = { _ in }
             coordinator.dropRouter.detach(tv)
             tv.dismissFloatingPanels()
             coordinator.editorUndoManager.removeAllActions()
@@ -196,7 +249,8 @@ struct ACPInputField: NSViewRepresentable {
             onStopDictation: onStopDictation,
             onSubmit: onSubmit,
             filesProvider: filesProvider,
-            dropRouter: dropRouter
+            dropRouter: dropRouter,
+            upstreamReferences: upstreamReferences
         )
     }
 
@@ -223,6 +277,8 @@ struct ACPInputField: NSViewRepresentable {
         let filesProvider: (@Sendable () async -> [URL])?
         let dropRouter: ACPComposerDropRouter
         var promptSuggestions: [ACPPromptSuggestion] = []
+        private(set) var upstreamReferences: ACPUpstreamReferenceStore?
+        private var upstreamObservations: Set<AnyCancellable> = []
         /// Snapshotted at makeNSView time so the AppKit-only slash panel
         /// can render its SwiftUI content with our theme tokens.
         var theme: Theme?
@@ -236,6 +292,10 @@ struct ACPInputField: NSViewRepresentable {
         private var nextSubmitID = 0
         private var pendingSubmitID: Int?
         private var pendingScheduledSubmitIDs: Set<Int> = []
+        var hasPendingNextPromptInput: Bool {
+            pendingImageFileInsertions > 0 || pendingSubmitID != nil || !pendingScheduledSubmitIDs.isEmpty
+        }
+        var hasEmptyNextPromptDraft: Bool { lastSyncedDraft.isEmpty }
         private var pendingImageFileInsertions = 0
         private var imageFileInsertionGeneration = 0
         private var pendingRestyleWork: DispatchWorkItem?
@@ -269,7 +329,8 @@ struct ACPInputField: NSViewRepresentable {
             onStopDictation: @escaping () -> Void = {},
             onSubmit: @escaping ACPComposerSubmitHandler,
             filesProvider: (@Sendable () async -> [URL])? = nil,
-            dropRouter: ACPComposerDropRouter = ACPComposerDropRouter()
+            dropRouter: ACPComposerDropRouter = ACPComposerDropRouter(),
+            upstreamReferences: ACPUpstreamReferenceStore? = nil
         ) {
             self.worktreeRoot = worktreeRoot
             self.initialDraft = initialDraft
@@ -284,6 +345,7 @@ struct ACPInputField: NSViewRepresentable {
             self.onSubmit = onSubmit
             self.filesProvider = filesProvider
             self.dropRouter = dropRouter
+            self.upstreamReferences = upstreamReferences
         }
 
         func textDidBeginEditing(_ notification: Notification) {
@@ -423,6 +485,9 @@ struct ACPInputField: NSViewRepresentable {
             flushPendingRestyleNow()
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
+                // A reference never followed by whitespace (`fix #12⏎`) was
+                // never completed by a keystroke; it is final now.
+                tv.chipUpstreamReferencesIfNeeded(includingCaretToken: true)
             }
             let attributed = textView.attributedString()
             let (text, attachments) = Self.extract(attributed)
@@ -482,13 +547,16 @@ struct ACPInputField: NSViewRepresentable {
         }
 
         func beginPendingImageFileInsertion() -> Int {
+            (textView as? ACPNSTextView)?.invalidateNextPromptSuggestion()
             pendingImageFileInsertions += 1
+            if let tv = textView as? ACPNSTextView { tv.onNextPromptStateChange(tv.nextPromptInputState) }
             return imageFileInsertionGeneration
         }
 
         func finishPendingImageFileInsertion(generation: Int) {
             if generation == imageFileInsertionGeneration {
                 pendingImageFileInsertions = max(0, pendingImageFileInsertions - 1)
+                if let tv = textView as? ACPNSTextView { tv.onNextPromptStateChange(tv.nextPromptInputState) }
             }
         }
 
@@ -519,6 +587,7 @@ struct ACPInputField: NSViewRepresentable {
         private func restore(_ draft: ACPComposerDraft, into textView: NSTextView) {
             guard let storage = textView.textStorage else { return }
             if let tv = textView as? ACPNSTextView {
+                tv.invalidateNextPromptSuggestion()
                 tv.dismissSlashPanel()
                 // Direct storage replacement below never routes through
                 // `didChangeText`, so dismiss the hover preview here.
@@ -527,6 +596,30 @@ struct ACPInputField: NSViewRepresentable {
             invalidatePendingImageFileInsertions()
             restoringDraft = true
             storage.setAttributedString(Self.attributedString(from: draft, typography: typography))
+            ACPLeadingCommand.chipify(storage, suggestions: promptSuggestions, font: typography.appKitFont())
+            if let store = upstreamReferences, let host = store.hostKind {
+                // A restored draft has no real selection yet, so the "still
+                // being typed" caret-skip guard uses the end of the
+                // restored text instead — the last reference in a draft
+                // that was persisted mid-keystroke (e.g. "#12" of an
+                // intended "#123") stays plain text rather than chipping
+                // into something the user didn't finish typing. Shares the
+                // exact same match-finding as `chipUpstreamReferencesIfNeeded()`.
+                let end = (storage.string as NSString).length
+                let matches = ACPUpstreamReferenceDetector.chippableMatches(
+                    in: storage.string, host: host, caret: NSRange(location: end, length: 0)
+                )
+                for match in matches.reversed() {
+                    let attributes = storage.attributes(at: match.range.location, effectiveRange: nil)
+                    storage.replaceCharacters(
+                        in: match.range,
+                        with: ACPUpstreamReferenceChip.chip(
+                            for: match.reference, host: host, store: store, attributes: attributes
+                        )
+                    )
+                    store.ensureLoaded(match.reference)
+                }
+            }
             // `restoringDraft` short-circuits `textDidChange`, where the fence
             // cache is normally refreshed, so refresh it here or it keeps
             // describing the document this one replaced.
@@ -541,6 +634,36 @@ struct ACPInputField: NSViewRepresentable {
             textView.needsDisplay = true
             restoringDraft = false
             lastSyncedDraft = draft
+        }
+
+        /// Swaps the reference-chip store. Chips existing text once the
+        /// remote resolves. `$remote` replays its current value, so an
+        /// already-resolved store chips right away. Repaints chips whenever
+        /// a lookup lands. Both hops go through the main queue so they never
+        /// run nested inside another edit. Combine sink closures are
+        /// nonisolated, so each hops back with `MainActor.assumeIsolated`,
+        /// which holds because delivery is on `DispatchQueue.main`.
+        func attachUpstreamReferences(_ store: ACPUpstreamReferenceStore?) {
+            upstreamReferences = store
+            upstreamObservations.removeAll()
+            guard let store else { return }
+            store.resolveRemote()
+            store.$remote
+                .compactMap { $0 }
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        (self?.textView as? ACPNSTextView)?.chipUpstreamReferencesIfNeeded()
+                    }
+                }
+                .store(in: &upstreamObservations)
+            store.$revision
+                .dropFirst()
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated { self?.textView?.needsDisplay = true }
+                }
+                .store(in: &upstreamObservations)
         }
 
         #if DEBUG
@@ -608,7 +731,7 @@ struct ACPInputField: NSViewRepresentable {
             // walk entirely. This is the common case while typing.
             var hasChip = false
             attributed.enumerateAttributes(in: full) { keys, _, stop in
-                if keys[.attachmentURI] != nil || keys[.imageAttachmentURI] != nil {
+                if keys.isComposerChip {
                     hasChip = true
                     stop.pointee = true
                 }
@@ -619,8 +742,22 @@ struct ACPInputField: NSViewRepresentable {
             }
 
             var segments: [ACPComposerDraft.Segment] = []
+            // A command chip serializes to its `/command` text, merged with
+            // neighbouring text so the draft matches its plain-text form.
+            func appendText(_ text: String) {
+                guard !text.isEmpty else { return }
+                if case .text(let previous) = segments.last {
+                    segments[segments.count - 1] = .text(previous + text)
+                } else {
+                    segments.append(.text(text))
+                }
+            }
             attributed.enumerateAttributes(in: full) { keys, range, _ in
-                if let uri = keys[.imageAttachmentURI] as? String {
+                if let command = keys[.commandChipName] as? String {
+                    appendText(command)
+                } else if let spelling = keys[.upstreamReference] as? String {
+                    appendText(spelling)
+                } else if let uri = keys[.imageAttachmentURI] as? String {
                     let mime = (keys[.imageAttachmentMime] as? String) ?? "image/png"
                     segments.append(.image(uri: uri, mimeType: mime))
                 } else if let uri = keys[.attachmentURI] as? String {
@@ -633,8 +770,7 @@ struct ACPInputField: NSViewRepresentable {
                         segments.append(.mention(displayName: displayName, uri: uri))
                     }
                 } else {
-                    let text = attributed.attributedSubstring(from: range).string
-                    if !text.isEmpty { segments.append(.text(text)) }
+                    appendText(attributed.attributedSubstring(from: range).string)
                 }
             }
             return ACPComposerDraft(segments: segments)
@@ -691,7 +827,11 @@ struct ACPInputField: NSViewRepresentable {
             var atts: [ACPMessage.Attachment] = []
             let full = NSRange(location: 0, length: attributed.length)
             attributed.enumerateAttributes(in: full) { keys, range, _ in
-                if let uri = keys[.imageAttachmentURI] as? String {
+                if let command = keys[.commandChipName] as? String {
+                    text += command
+                } else if let spelling = keys[.upstreamReference] as? String {
+                    text += spelling
+                } else if let uri = keys[.imageAttachmentURI] as? String {
                     let mime = (keys[.imageAttachmentMime] as? String) ?? "image/png"
                     let name = URL(string: uri)?.lastPathComponent
                     atts.append(.init(uri: uri, name: name, mimeType: mime))
@@ -715,6 +855,16 @@ struct ACPInputField: NSViewRepresentable {
     }
 }
 
+extension Dictionary where Key == NSAttributedString.Key, Value == Any {
+    /// A composer chip run (mention, image, command, or upstream reference)
+    /// that restyling must leave alone: resetting its attributes strips the
+    /// attachment.
+    var isComposerChip: Bool {
+        self[.attachmentURI] != nil || self[.imageAttachmentURI] != nil
+            || self[.commandChipName] != nil || self[.upstreamReference] != nil
+    }
+}
+
 extension NSAttributedString.Key {
     static let attachmentURI = NSAttributedString.Key("alas.acp.attachmentURI")
     static let imageAttachmentURI = NSAttributedString.Key("alas.acp.imageAttachmentURI")
@@ -722,6 +872,175 @@ extension NSAttributedString.Key {
 }
 
 final class ACPNSTextView: PairedDelimiterTextView {
+    // Transient presentation only. The owner consumes the opportunity before insertion.
+    var nextPromptOffer: String? {
+        didSet {
+            guard nextPromptOffer != oldValue else { return }
+            refreshNextPromptLayout()
+        }
+    }
+    var takeNextPromptOffer: () -> String? = { nil }
+    var dismissNextPromptOffer: () -> Void = {}
+    var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
+    var nextPromptDraftIsEmpty: () -> Bool = { true }
+    var nextPromptInputBlocked: () -> Bool = { false }
+    var nextPromptIsDictating: () -> Bool = { false }
+    private var nextPromptInvalidationGeneration: UInt64 = 0
+    private var insertingAcceptedNextPrompt = false
+    private var imagePickerPresented = false
+    private var dropPending = false
+
+    var nextPromptInputState: NextPromptEligibilitySnapshot.Environment {
+        var state = NextPromptEligibilitySnapshot.Environment()
+        state.hasComposerFocus = window != nil && window?.firstResponder === self
+        state.hasKeyWindow = window?.isKeyWindow == true
+        state.hasSelection = selectedRanges.count != 1 || selectedRange() != NSRange(location: 0, length: 0)
+        state.hasMarkedText = hasMarkedText()
+        state.isDictating = nextPromptIsDictating() || dictationRange != nil || isApplyingDictationUpdate
+        state.isPickerPresented = slashPanel != nil || mentionPanel != nil || imagePickerPresented
+        state.hasPendingInput = dropPending || nextPromptInputBlocked() || coordinator?.hasPendingNextPromptInput == true
+        return state
+    }
+
+    private var canShowNextPrompt: Bool {
+        let state = nextPromptInputState
+        guard isEditable, state.hasComposerFocus, state.hasKeyWindow, string.isEmpty, nextPromptDraftIsEmpty(),
+              coordinator?.hasEmptyNextPromptDraft == true,
+              !state.hasSelection, !state.hasMarkedText, !state.isDictating,
+              !state.isPickerPresented, !state.hasPendingInput else { return false }
+        return true
+    }
+
+    var nextPromptGhostText: String? {
+        guard canShowNextPrompt, let nextPromptOffer, !nextPromptOffer.isEmpty else { return nil }
+        return nextPromptOffer
+    }
+
+    var nextPromptPresentation: NSAttributedString? {
+        guard let text = nextPromptGhostText else { return nil }
+        let baseFont = font ?? chatTypography.appKitFont()
+        let presentation = NSMutableAttributedString(string: text, attributes: [
+            .font: NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        presentation.append(NSAttributedString(string: "\nTab to accept", attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]))
+        return presentation
+    }
+
+    private var ghostHorizontalInset: CGFloat {
+        textContainerInset.width + (textContainer?.lineFragmentPadding ?? 0) + 1
+    }
+
+    func nextPromptHeight(for width: CGFloat) -> CGFloat {
+        guard let presentation = nextPromptPresentation else { return 0 }
+        let bounds = presentation.boundingRect(
+            with: NSSize(width: max(1, width - 2 * ghostHorizontalInset), height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        return ceil(bounds.height) + 2 * textContainerInset.height
+    }
+
+    func composerContentHeight(for width: CGFloat) -> CGFloat {
+        if let textContainer, let layoutManager {
+            textContainer.containerSize.width = max(1, width - 2 * textContainerInset.width)
+            layoutManager.ensureLayout(for: textContainer)
+        }
+        let editorHeight = textContainer.flatMap { layoutManager?.usedRect(for: $0).height } ?? 0
+        return max(44, editorHeight + 2 * textContainerInset.height, nextPromptHeight(for: width))
+    }
+
+    func refreshNextPromptLayout() {
+        needsDisplay = true
+        invalidateIntrinsicContentSize()
+        enclosingScrollView?.invalidateIntrinsicContentSize()
+        if let scroll = enclosingScrollView {
+            let width = scroll.contentSize.width
+            super.setFrameSize(NSSize(width: width, height: max(scroll.contentSize.height, composerContentHeight(for: width))))
+        }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = newSize.width != frame.width
+        super.setFrameSize(NSSize(width: newSize.width, height: max(newSize.height, nextPromptHeight(for: newSize.width))))
+        if widthChanged { invalidateIntrinsicContentSize() }
+        needsDisplay = true
+    }
+
+    @discardableResult
+    func acceptNextPromptSuggestion() -> Bool {
+        onNextPromptStateChange(nextPromptInputState)
+        guard let displayed = nextPromptGhostText else { return false }
+        let generation = nextPromptInvalidationGeneration
+        guard let accepted = takeNextPromptOffer(), accepted == displayed else {
+            invalidateNextPromptSuggestion()
+            return false
+        }
+        nextPromptOffer = nil
+        guard nextPromptInvalidationGeneration == generation, canShowNextPrompt else {
+            invalidateNextPromptSuggestion()
+            return false
+        }
+        insertingAcceptedNextPrompt = true
+        defer { insertingAcceptedNextPrompt = false }
+        breakUndoCoalescing()
+        undoManager?.beginUndoGrouping()
+        typingAttributes = baseTypingAttributes
+        performNativeTextInsertion {
+            insertText(accepted, replacementRange: selectedRange())
+        }
+        setSelectedRange(NSRange(location: accepted.utf16.count, length: 0))
+        undoManager?.endUndoGrouping()
+        breakUndoCoalescing()
+        return true
+    }
+
+    func invalidateNextPromptSuggestion() {
+        nextPromptInvalidationGeneration &+= 1
+        nextPromptOffer = nil
+        if !insertingAcceptedNextPrompt { dismissNextPromptOffer() }
+    }
+
+    override func accessibilityHelp() -> String? {
+        guard let text = nextPromptGhostText else { return super.accessibilityHelp() }
+        return "Suggestion: \(text) Press Tab or use Accept Suggestion to insert it."
+    }
+
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        guard nextPromptGhostText != nil else { return super.accessibilityCustomActions() }
+        return [NSAccessibilityCustomAction(name: "Accept Suggestion") { [weak self] in
+            self?.acceptNextPromptSuggestion() ?? false
+        }]
+    }
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        invalidateNextPromptSuggestion()
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        onNextPromptStateChange(nextPromptInputState)
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        onNextPromptStateChange(nextPromptInputState)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        onNextPromptStateChange(nextPromptInputState)
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        invalidateNextPromptSuggestion()
+        let result = super.resignFirstResponder()
+        var state = nextPromptInputState
+        state.hasComposerFocus = false
+        onNextPromptStateChange(state)
+        return result
+    }
+
     weak var coordinator: ACPInputField.Coordinator?
     private var chatTypography: ACPChatTypography = .default
 
@@ -784,13 +1103,22 @@ final class ACPNSTextView: PairedDelimiterTextView {
                 excluding: blockRanges
             )
         }
-        needsDisplay = true
+        refreshNextPromptLayout()
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let font = font ?? chatTypography.appKitFont()
         if string.isEmpty {
+            if let presentation = nextPromptPresentation {
+                presentation.draw(
+                    with: NSRect(x: ghostHorizontalInset, y: textContainerInset.height,
+                                 width: max(1, bounds.width - 2 * ghostHorizontalInset),
+                                 height: nextPromptHeight(for: bounds.width)),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading]
+                )
+                return
+            }
             guard !placeholderText.isEmpty else { return }
             let origin = NSPoint(
                 x: textContainerInset.width + textContainer!.lineFragmentPadding + 1,
@@ -827,12 +1155,32 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// drawn (see `draw(_:)`), never inserted into the storage, so it can't
     /// be submitted, persisted as a draft, or restyled.
     var argumentGhostHint: String? {
-        guard slashPanel == nil, let coord = coordinator else { return nil }
-        let text = string
-        guard text.hasPrefix("/") else { return nil }
-        let sel = selectedRange()
-        guard sel.length == 0, sel.location == (text as NSString).length,
-              let suggestion = coord.promptSuggestions.first(where: { text == $0.command + " " }),
+        guard slashPanel == nil, let coord = coordinator, let textStorage else { return nil }
+        return Self.argumentGhostHint(
+            storage: textStorage,
+            selection: selectedRange(),
+            suggestions: coord.promptSuggestions
+        )
+    }
+
+    /// The draft reads as exactly `/cmd ` with the caret at the end, whether
+    /// the command is plain text or a leading command chip.
+    static func argumentGhostHint(
+        storage: NSAttributedString,
+        selection: NSRange,
+        suggestions: [ACPPromptSuggestion]
+    ) -> String? {
+        let length = storage.length
+        guard length > 0, selection.length == 0, selection.location == length else { return nil }
+        let text: String
+        if let command = storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String {
+            guard length == 2, (storage.string as NSString).character(at: 1) == 0x20 else { return nil }
+            text = command + " "
+        } else {
+            text = storage.string
+        }
+        guard text.hasPrefix("/"),
+              let suggestion = suggestions.first(where: { text == $0.command + " " }),
               let hint = suggestion.hint, !hint.isEmpty
         else { return nil }
         return hint
@@ -865,12 +1213,16 @@ final class ACPNSTextView: PairedDelimiterTextView {
         affinity: NSSelectionAffinity,
         stillSelecting stillSelectingFlag: Bool
     ) {
+        invalidateNextPromptSuggestion()
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelectingFlag)
+        onNextPromptStateChange(nextPromptInputState)
         needsDisplay = true
     }
 
     override func didChangeText() {
+        invalidateNextPromptSuggestion()
         super.didChangeText()
+        onNextPromptStateChange(nextPromptInputState)
         // Trigger placeholder redraw when text becomes (non-)empty.
         needsDisplay = true
         // An edit moves or destroys the chip under the cursor — close the
@@ -897,6 +1249,102 @@ final class ACPNSTextView: PairedDelimiterTextView {
         }
     }
 
+    /// Any edit invalidates a pending next-prompt ghost-text offer, then
+    /// intercepts the single whitespace character that completes a
+    /// hand-typed leading command or upstream reference (`#12`, etc.),
+    /// turning it into a chip in the SAME edit as the keystroke instead of
+    /// a follow-up one — see
+    /// `ACPLeadingCommand.chipTarget(completingWith:at:in:suggestions:)` for
+    /// why a follow-up edit is unsafe here. Everything else (fenced-block
+    /// pairing, IME composition, plain typing) still goes through
+    /// `PairedDelimiterTextView`'s own `insertText`.
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        invalidateNextPromptSuggestion()
+        let range = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
+        if let text = insertString as? String,
+           let textStorage, let coordinator,
+           let target = ACPLeadingCommand.chipTarget(
+               completingWith: text, at: range, in: textStorage,
+               suggestions: coordinator.promptSuggestions
+           ) {
+            let chip = NSMutableAttributedString(
+                attributedString: ACPLeadingCommand.chip(for: target.command, font: chatTypography.appKitFont())
+            )
+            chip.append(NSAttributedString(string: text, attributes: baseTypingAttributes))
+            replaceUndoably(range: target.range, with: chip)
+            return
+        }
+        if let text = insertString as? String,
+           let target = upstreamReferenceChipTarget(completing: text, at: range) {
+            replaceUndoably(range: target.range, with: target.replacement)
+            return
+        }
+        super.insertText(insertString, replacementRange: replacementRange)
+    }
+
+    /// A draft restored, or (re)assigned wholesale, before the agent listed
+    /// its commands gets its pill once the list arrives — possibly after the
+    /// user already typed `/command ` as plain text with its own undo
+    /// history. Safe to call from SwiftUI's `updateNSView` — never nested
+    /// inside another edit, unlike the reentrancy the `insertText` override
+    /// above guards against.
+    func pillLeadingCommandIfNeeded() {
+        guard let textStorage, let coordinator, !hasMarkedText(),
+              let target = ACPLeadingCommand.chipTarget(in: textStorage, suggestions: coordinator.promptSuggestions)
+        else { return }
+        let chip = ACPLeadingCommand.chip(for: target.command, font: chatTypography.appKitFont())
+        replaceUndoably(range: target.range, with: chip)
+    }
+
+    /// Replaces `range` with `replacement` as an ordinary undoable edit and
+    /// puts the selection back where it was, shifted around the edit.
+    ///
+    /// The chip transformations that call this run once the plain text they
+    /// replace is already in storage with its own typing-undo record. Every
+    /// earlier attempt to make such a shrinking edit undoable by mutating
+    /// `textStorage` directly — bracketed by `shouldChangeText`/
+    /// `didChangeText`, with a hand-registered inverse, after
+    /// `breakUndoCoalescing()`, inside its own undo group — corrupted that
+    /// record: `NSTextStorage` threw `NSRangeException` from its post-edit
+    /// attribute fixing on the next ⌘Z, and the only safe workaround was to
+    /// wipe the undo stack. Going through `NSTextView`'s own attributed
+    /// `insertText(_:replacementRange:)` instead — the same call the
+    /// fenced-block expansion uses to rewrite a range — lets the text view
+    /// keep its coalescing bookkeeping consistent itself, so undo walks
+    /// cleanly back through the chip to the typed text (pinned by
+    /// `ACPUpstreamReferenceComposerTests`). Delimiter pairing is bypassed
+    /// because the replacement is already final.
+    ///
+    /// The selection is preserved rather than always collapsed to a caret
+    /// right after the chip, which is where `insertText` leaves it: a late
+    /// `available_commands_update` or remote resolution can land while the
+    /// user has kept typing past the token, has a selection past it, or
+    /// simply left their caret before it (`/init body` with the caret still
+    /// at position 0) — forcing any of those to jump would yank the cursor
+    /// out from under them. Each endpoint maps independently: at or after
+    /// the replaced range, it survives shifted by the length delta; at or
+    /// before its start — ONLY for a zero-length caret, which touches none
+    /// of the token's own characters — it's untouched; anywhere else was
+    /// inside the replaced text and lands at the chip's end (also where the
+    /// typed-completion paths above always find their caret).
+    func replaceUndoably(range: NSRange, with replacement: NSAttributedString) {
+        let selectionBefore = selectedRange()
+        performNativeTextInsertion {
+            super.insertText(replacement, replacementRange: range)
+        }
+        let delta = replacement.length - range.length
+        let rangeEnd = NSMaxRange(range)
+        let isEmptySelection = selectionBefore.length == 0
+        func map(_ location: Int) -> Int {
+            if location >= rangeEnd { return location + delta }
+            if isEmptySelection, location <= range.location { return location }
+            return range.location + replacement.length
+        }
+        let newStart = map(selectionBefore.location)
+        let newEnd = map(NSMaxRange(selectionBefore))
+        setSelectedRange(NSRange(location: newStart, length: newEnd - newStart))
+    }
+
     /// Retry-once-on-attach: a restored draft can already contain an active
     /// "/" token before this view is attached to a window — `positionAndShow`
     /// needs the window to place the panel, so `reconcileSlashPanel` is a
@@ -904,6 +1352,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// used by the image chip hover preview.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        invalidateNextPromptSuggestion()
+        onNextPromptStateChange(nextPromptInputState)
         if window != nil {
             reconcileSlashPanel()
         }
@@ -966,6 +1416,16 @@ final class ACPNSTextView: PairedDelimiterTextView {
             }
         }
 
+        if !hasMarkedText(), mentionPanel == nil,
+           event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty {
+            if event.keyCode == 48, acceptNextPromptSuggestion() { return }
+            if event.keyCode == 53, nextPromptGhostText != nil {
+                invalidateNextPromptSuggestion()
+                return
+            }
+        }
+        invalidateNextPromptSuggestion()
+
         // ⌘⏎ always sends, including from inside a code box where bare ⏎ is a
         // newline. Handled here rather than in `doCommandBy` because AppKit
         // does not reliably route Command-Return to `insertNewline:`.
@@ -994,11 +1454,14 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if openUpstreamReference(at: convert(event.locationInWindow, from: nil), event: event) { return }
+        invalidateNextPromptSuggestion()
         super.mouseDown(with: event)
         reconcileSlashPanel()
     }
 
     private func presentMentionPopover() {
+        invalidateNextPromptSuggestion()
         guard let coord = coordinator else { return }
         closeMentionPanel()
         let panel = ACPMentionPanel(
@@ -1012,6 +1475,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             }
         )
         mentionPanel = panel
+        onNextPromptStateChange(nextPromptInputState)
         positionAndShow(panel)
     }
 
@@ -1019,19 +1483,21 @@ final class ACPNSTextView: PairedDelimiterTextView {
         mentionPanel?.close()
         mentionPanel = nil
         mentionStart = -1
+        onNextPromptStateChange(nextPromptInputState)
     }
 
     /// Locate an active `/<word>` token at the caret. Active means: the
     /// `/` starts at the beginning of the buffer or right after
     /// whitespace, and everything between it and the caret is
-    /// command-shaped (letters / digits / `-` / `_` / `:`). Returns the
+    /// command-shaped (letters / digits / `-` / `_` / `:` / `$`, the last
+    /// for skills some agents list as `/$name`). Returns the
     /// `/`'s character index and the current query (without the slash).
     private func currentSlashToken() -> (start: Int, query: String)? {
         let str = (string as NSString)
         let caret = selectedRange().location
         guard caret <= str.length else { return nil }
         var i = caret
-        let allowed: Set<Character> = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_:")
+        let allowed: Set<Character> = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_:$")
         while i > 0 {
             let ch = str.substring(with: NSRange(location: i - 1, length: 1))
             if ch == "/" {
@@ -1071,6 +1537,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     private func presentSlashPanel() {
+        invalidateNextPromptSuggestion()
         // `positionAndShow` needs `window` to place the panel; bail out
         // rather than recording a `slashPanel` that was never actually
         // shown — reconcileSlashPanel would then skip re-presenting it
@@ -1082,6 +1549,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
             theme: theme
         ) { [weak self] s in self?.insertSlash(s) }
         slashPanel = panel
+        onNextPromptStateChange(nextPromptInputState)
         positionAndShow(panel, makeKey: false)
     }
 
@@ -1089,6 +1557,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         slashPanel?.close()
         slashPanel = nil
         slashStart = -1
+        onNextPromptStateChange(nextPromptInputState)
     }
 
     /// Public hooks used by the coordinator's `doCommandBy:` fallback so
@@ -1104,12 +1573,30 @@ final class ACPNSTextView: PairedDelimiterTextView {
     // MARK: - Image chip hover preview
 
     private var imageChipHover: ACPImageChipHoverController?
+    private let commandChipHover = ACPCommandChipHoverController()
+    private let upstreamReferenceHover = ACPUpstreamReferenceHoverController()
 
     /// Character range + file URL when `point` sits on an image chip
     /// (a character tagged with `.imageAttachmentURI`), nil otherwise.
     /// `location` clamps to the container length, which is what the layout
     /// manager answers for glyph-range lookups.
     func imageChipRange(at point: NSPoint) -> (range: NSRange, fileURL: URL)? {
+        guard let hit = chipHit(at: point, key: .imageAttachmentURI),
+              let uri = hit.value as? String,
+              let fileURL = URL(string: uri) else { return nil }
+        return (range: hit.range, fileURL: fileURL)
+    }
+
+    /// Range + suggestion when `point` sits on a leading command chip.
+    func commandChipHit(at point: NSPoint) -> (range: NSRange, suggestion: ACPPromptSuggestion)? {
+        guard let hit = chipHit(at: point, key: .commandChipName),
+              let command = hit.value as? String,
+              let suggestion = coordinator?.promptSuggestions.first(where: { $0.command == command })
+        else { return nil }
+        return (range: hit.range, suggestion: suggestion)
+    }
+
+    private func chipHit(at point: NSPoint, key: NSAttributedString.Key) -> (range: NSRange, value: Any)? {
         guard let layoutManager, let textContainer, let textStorage, textStorage.length > 0 else { return nil }
         // Convert from view space (includes textContainerInset) to container
         // space first, matching how the layout manager maps points to glyphs.
@@ -1125,9 +1612,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
         )
         guard characterIndex != NSNotFound, characterIndex < textStorage.length else { return nil }
         var chipRange = NSRange()
-        let attrs = textStorage.attributes(at: characterIndex, effectiveRange: &chipRange)
-        guard let uri = attrs[.imageAttachmentURI] as? String,
-              let fileURL = URL(string: uri) else { return nil }
+        guard let value = textStorage.attribute(key, at: characterIndex, effectiveRange: &chipRange)
+        else { return nil }
         // The nearest-character lookup can resolve a character even when the
         // point is in blank space beside a glyph (e.g. after an end-of-line
         // chip) — require the chip's glyph rect to actually contain the point.
@@ -1135,7 +1621,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         guard glyphRange.length > 0 else { return nil }
         let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
         guard glyphRect.contains(containerPoint) else { return nil }
-        return (range: chipRange, fileURL: fileURL)
+        return (range: chipRange, value: value)
     }
 
     /// View-space rect of the chip's glyphs (inset 1pt, mirroring the cell
@@ -1195,11 +1681,19 @@ final class ACPNSTextView: PairedDelimiterTextView {
         } else {
             imageChipHoverController().hide()
         }
+        if let chip = commandChipHit(at: point) {
+            commandChipHover.scheduleShow(range: chip.range, suggestion: chip.suggestion, in: self)
+        } else {
+            commandChipHover.hide()
+        }
+        upstreamReferenceHover.update(at: point, in: self, store: coordinator?.upstreamReferences)
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         imageChipHoverController().hide()
+        commandChipHover.hide()
+        upstreamReferenceHover.hide()
     }
 
     /// Observes the enclosing scroll view's clip view while the composer is
@@ -1222,6 +1716,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
             object: clipView
         ) { [weak self] in
             guard let self, self.window != nil else { return }
+            self.commandChipHover.hide()
+            self.upstreamReferenceHover.hide()
             // The pointer's current position decides the post-scroll state:
             // still over a chip re-schedules (no-op while it stays there);
             // anywhere else hides. `window.mouseLocationOutsideOfEventStream`
@@ -1267,6 +1763,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// preview can never linger over a chip the user just changed.
     func dismissImageChipHover() {
         imageChipHover?.hide()
+        commandChipHover.hide()
+        upstreamReferenceHover.hide()
     }
 
     #if DEBUG
@@ -1289,13 +1787,26 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     static let maxImagesPerMessage = 10
 
-    private func currentImageChipCount() -> Int {
-        guard let storage = textStorage else { return 0 }
+    /// Counts image-attachment CHARACTERS, not attribute runs: two adjacent
+    /// image chips sharing the same content-addressed URI (the same file
+    /// pasted twice with no text between them) have equal `.imageAttachmentURI`
+    /// string values, and `enumerateAttribute` coalesces equal adjacent
+    /// values into a single run — undercounting them as one chip instead of
+    /// two, and letting the message grow past `maxImagesPerMessage`.
+    private func imageChipCount(in range: NSRange) -> Int {
+        guard let storage = textStorage, range.length > 0 else { return 0 }
         var count = 0
-        storage.enumerateAttribute(.imageAttachmentURI, in: NSRange(location: 0, length: storage.length)) { v, _, _ in
-            if v != nil { count += 1 }
+        for index in range.location..<NSMaxRange(range) {
+            if storage.attribute(.imageAttachmentURI, at: index, effectiveRange: nil) != nil {
+                count += 1
+            }
         }
         return count
+    }
+
+    private func currentImageChipCount() -> Int {
+        guard let storage = textStorage else { return 0 }
+        return imageChipCount(in: NSRange(location: 0, length: storage.length))
     }
 
     @discardableResult
@@ -1305,6 +1816,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     @discardableResult
     private func insertImage(data: Data, worktreeId: String, replacementRange: NSRange) -> Bool {
+        invalidateNextPromptSuggestion()
         guard currentImageChipCount() < Self.maxImagesPerMessage else {
             coordinator?.reportImageError(.tooManyImages)
             return false
@@ -1341,12 +1853,18 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     func presentImagePicker() {
+        invalidateNextPromptSuggestion()
+        imagePickerPresented = true
+        onNextPromptStateChange(nextPromptInputState)
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.png, .jpeg, .gif, .webP]
         panel.begin { [weak self] response in
-            guard let self, response == .OK else { return }
+            guard let self else { return }
+            self.imagePickerPresented = false
+            self.onNextPromptStateChange(self.nextPromptInputState)
+            guard response == .OK else { return }
             self.insertImageFiles(
                 panel.urls,
                 worktreeId: self.worktreeIdForStaging,
@@ -1510,6 +2028,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
     private var pasteboardHasImage: Bool { hasImage(in: NSPasteboard.general) }
 
     override func paste(_ sender: Any?) {
+        invalidateNextPromptSuggestion()
+        if insertComposerDraft(from: NSPasteboard.general) { return }
         if insertImages(from: NSPasteboard.general) { return }
         if let text = NSPasteboard.general.string(forType: .string) {
             insertPlainText(text)
@@ -1518,18 +2038,326 @@ final class ACPNSTextView: PairedDelimiterTextView {
         super.paste(sender)
     }
 
-    @discardableResult
-    func insertPlainText(_ text: String) -> Bool {
-        guard let textStorage else { return false }
-        let replacementRange = selectedRange()
-        let boundedRange = NSRange(
-            location: min(replacementRange.location, textStorage.length),
-            length: min(replacementRange.length, max(0, textStorage.length - replacementRange.location))
+    // MARK: Chip-preserving copy / paste
+
+    /// Private pasteboard type carrying a composer selection as a JSON,
+    /// MAC-authenticated payload, so chips keep their identity across copy,
+    /// cut, paste, and drag within the app. Written alongside a readable
+    /// `.string` form for every other destination.
+    static let composerDraftPasteboardType = NSPasteboard.PasteboardType("io.alas.acp.composer-draft")
+
+    /// Generated once per process launch and NEVER serialized anywhere,
+    /// including the pasteboard payload itself. NSPasteboard has no
+    /// per-app read protection — any unsandboxed process on the machine can
+    /// publish the exact same named pasteboard type — so decoding untrusted
+    /// JSON there as trusted composer state would let a forged payload
+    /// point an `.image` or `.mention` chip's URI at an arbitrary local
+    /// file the user never picked, which submission then reads or forwards
+    /// to the agent. An earlier version of this fix put a bearer token
+    /// inside the payload it authenticated, which any application reading
+    /// one legitimate copy could scrape and replay in a forgery. Signing
+    /// with an HMAC keyed by a secret that never leaves the process closes
+    /// that: forging a valid signature for chosen content requires the key
+    /// itself, not just an observed (content, signature) pair.
+    private static let pasteboardMACKey = SymmetricKey(size: .bits256)
+
+    private struct AuthenticatedDraftPayload: Codable {
+        let draftJSON: Data
+        /// The pasteboard's own `changeCount` at the moment this payload was
+        /// written, folded into the signed bytes. HMAC integrity alone
+        /// stops tampering but not replay: another application that
+        /// observed one legitimate (draftJSON, mac) pair could republish it
+        /// later — unchanged content, still a valid signature — paired with
+        /// deceptive bait text in `.string`, tricking the user into pasting
+        /// a stale chip they don't expect. `NSPasteboard.changeCount` bumps
+        /// on every `declareTypes`/`clearContents` call to ANY pasteboard
+        /// content, ours or an attacker's, so a payload is only ever valid
+        /// against the exact write that produced it — PROVIDED it's also
+        /// checked against the pasteboard that write actually happened on;
+        /// see `trustedPasteboardWrites`, which closes the gap a bare
+        /// integer comparison leaves (a change count is only unique per
+        /// pasteboard OBJECT, not globally, and another process can pump an
+        /// unrelated pasteboard — e.g. a drag pasteboard — to any small
+        /// target count cheaply).
+        let changeCount: Int
+        let mac: Data
+    }
+
+    /// Tracks, per pasteboard OBJECT (keyed by identity, not by name/type —
+    /// `NSPasteboard.general` is a shared singleton, but a drag session's
+    /// pasteboard is a fresh object each time), the change count established
+    /// by OUR most recent write to it. `changeCount` alone only proves "this
+    /// pasteboard's current count equals this number" — trivial for another
+    /// process to fake by declaring types on its OWN pasteboard repeatedly
+    /// until its independent counter reaches a leaked value, then
+    /// publishing our captured (draftJSON, mac) bytes there. Requiring the
+    /// specific pasteboard OBJECT we wrote to also be the one being read
+    /// from closes that: an attacker's own pasteboard, however they tune
+    /// its count, was never in this table.
+    ///
+    /// The dictionary value RETAINS the pasteboard itself, not just its
+    /// `ObjectIdentifier` — an identifier is only unique for the lifetime of
+    /// the object it names, and once that object deallocates, a later,
+    /// entirely unrelated `NSPasteboard` (an attacker's own, say) can be
+    /// allocated at the same freed address and collide with a stale
+    /// identifier still sitting in this table. Holding a strong reference
+    /// keeps every tracked pasteboard alive for the rest of the process, so
+    /// its address can never be reused while its entry exists. Entries
+    /// accumulate for the process's lifetime — bounded by how many times
+    /// the user actually copies/drags a chip in a session, not worth adding
+    /// eviction for.
+    private static var trustedPasteboardWrites: [ObjectIdentifier: (pasteboard: NSPasteboard, changeCount: Int)] = [:]
+
+    /// Signs `draft`'s JSON encoding, bound to `changeCount`, with the
+    /// process-local MAC key, and records `pboard` as the one this specific
+    /// signature is valid against.
+    private static func signedDraftPayload(_ draft: ACPComposerDraft, changeCount: Int, writtenTo pboard: NSPasteboard) -> Data? {
+        guard let draftJSON = try? JSONEncoder().encode(draft) else { return nil }
+        var signedBytes = draftJSON
+        withUnsafeBytes(of: changeCount) { signedBytes.append(contentsOf: $0) }
+        let mac = HMAC<SHA256>.authenticationCode(for: signedBytes, using: pasteboardMACKey)
+        trustedPasteboardWrites[ObjectIdentifier(pboard)] = (pboard, changeCount)
+        return try? JSONEncoder().encode(
+            AuthenticatedDraftPayload(draftJSON: draftJSON, changeCount: changeCount, mac: Data(mac))
         )
+    }
+
+    /// Verifies and decodes a payload written by `signedDraftPayload`,
+    /// rejecting it unless `pboard`'s CURRENT change count still matches the
+    /// one it was signed against AND `pboard` is the exact object that
+    /// signature was recorded against — see `AuthenticatedDraftPayload` and
+    /// `trustedPasteboardWrites`. Returns nil for anything else, including a
+    /// well-formed JSON draft with no signature, which is exactly what a
+    /// forged pasteboard payload from another application looks like.
+    private static func verifiedDraft(from data: Data, on pboard: NSPasteboard) -> ACPComposerDraft? {
+        guard let payload = try? JSONDecoder().decode(AuthenticatedDraftPayload.self, from: data),
+              payload.changeCount == pboard.changeCount,
+              let trusted = trustedPasteboardWrites[ObjectIdentifier(pboard)],
+              trusted.pasteboard === pboard,
+              trusted.changeCount == payload.changeCount
+        else { return nil }
+        var signedBytes = payload.draftJSON
+        withUnsafeBytes(of: payload.changeCount) { signedBytes.append(contentsOf: $0) }
+        guard HMAC<SHA256>.isValidAuthenticationCode(payload.mac, authenticating: signedBytes, using: pasteboardMACKey)
+        else { return nil }
+        return try? JSONDecoder().decode(ACPComposerDraft.self, from: payload.draftJSON)
+    }
+
+    /// The single selected range as a draft, when it contains at least one
+    /// chip. Chip-free selections return nil and keep NSTextView's own
+    /// pasteboard behavior.
+    private var selectedChipDraft: ACPComposerDraft? {
+        guard selectedRanges.count == 1, let textStorage else { return nil }
+        let range = selectedRange()
+        guard range.length > 0, NSMaxRange(range) <= textStorage.length else { return nil }
+        let fragment = textStorage.attributedSubstring(from: range)
+        var hasChip = false
+        fragment.enumerateAttributes(in: NSRange(location: 0, length: fragment.length)) { keys, _, stop in
+            if keys.isComposerChip {
+                hasChip = true
+                stop.pointee = true
+            }
+        }
+        return hasChip ? ACPInputField.Coordinator.draft(from: fragment) : nil
+    }
+
+    /// A chip is a U+FFFC attachment character, so NSTextView's own
+    /// `.string` representation of it is that placeholder. Selections with
+    /// chips write the chips' text form instead (`/command`, `@filename`),
+    /// plus the private, MAC-authenticated draft type so a paste back into
+    /// a composer restores the chips themselves.
+    ///
+    /// Deliberately does NOT gate on `types.contains(.string)`: NSTextView's
+    /// own `writablePasteboardTypes` is not a reliable signal of what a
+    /// caller actually wants written — it can report an empty array
+    /// (observed outside a full interactive AppKit session, e.g. under a
+    /// test host) while `super.writeSelection` still populates `.string`
+    /// regardless of the `types` it was given. Requiring `.string` to
+    /// appear in that array made this override silently never run in
+    /// exactly that situation.
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard let draft = selectedChipDraft else { return super.writeSelection(to: pboard, types: types) }
+        // declareTypes both establishes ownership and returns the new
+        // change count in one call, so the count that ends up signed is
+        // exactly the one this write produces — nothing else can race it
+        // in between, since setData/setString below don't bump it further.
+        let changeCount = pboard.declareTypes([Self.composerDraftPasteboardType, .string], owner: nil)
+        guard let data = Self.signedDraftPayload(draft, changeCount: changeCount, writtenTo: pboard) else {
+            return super.writeSelection(to: pboard, types: types)
+        }
+        pboard.setData(data, forType: Self.composerDraftPasteboardType)
+        pboard.setString(draft.plainText, forType: .string)
+        return true
+    }
+
+    #if DEBUG
+    /// Test seam: writes a draft to `pboard` through the same
+    /// MAC-authenticated, change-count-bound payload `writeSelection`
+    /// produces, so tests can exercise `readSelection`/`paste` without
+    /// reaching into the private key that guards against pasteboard
+    /// forgery.
+    static func writeComposerDraftForTesting(_ draft: ACPComposerDraft, to pboard: NSPasteboard) {
+        let changeCount = pboard.declareTypes([composerDraftPasteboardType, .string], owner: nil)
+        let data = signedDraftPayload(draft, changeCount: changeCount, writtenTo: pboard)!
+        pboard.setData(data, forType: composerDraftPasteboardType)
+        pboard.setString(draft.plainText, forType: .string)
+    }
+
+    /// Test seam: publishes onto `pboard` a payload that is byte-for-byte
+    /// valid (correct MAC, matching `pboard`'s CURRENT change count) but was
+    /// signed and recorded against a different pasteboard entirely — i.e.
+    /// exactly what an attacker gets by declaring types on their OWN
+    /// pasteboard until its independent counter reaches a number leaked
+    /// from a legitimate copy, then republishing the captured bytes on the
+    /// pasteboard the composer actually reads from (e.g. a drag session's).
+    static func writeReplayedSignedDraftForTesting(_ draft: ACPComposerDraft, onto pboard: NSPasteboard) {
+        let targetCount = pboard.declareTypes([composerDraftPasteboardType, .string], owner: nil)
+        let scratch = NSPasteboard(name: .init("alas-replay-source-\(UUID().uuidString)"))
+        defer { scratch.releaseGlobally() }
+        var scratchCount = scratch.declareTypes([composerDraftPasteboardType], owner: nil)
+        while scratchCount < targetCount {
+            scratchCount = scratch.declareTypes([composerDraftPasteboardType], owner: nil)
+        }
+        precondition(scratchCount == targetCount, "test setup could not align pasteboard change counts")
+        let data = signedDraftPayload(draft, changeCount: targetCount, writtenTo: scratch)!
+        pboard.setData(data, forType: composerDraftPasteboardType)
+        pboard.setString(draft.plainText, forType: .string)
+    }
+    #endif
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        [Self.composerDraftPasteboardType] + super.readablePasteboardTypes
+    }
+
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if type == Self.composerDraftPasteboardType, insertComposerDraft(from: pboard) { return true }
+        return super.readSelection(from: pboard, type: type)
+    }
+
+    /// Drops `.image` segments once the message would exceed
+    /// `maxImagesPerMessage`, reporting the same `.tooManyImages` error the
+    /// normal image-insertion path does. Without this, repeatedly
+    /// copy/pasting a draft that carries an image chip would recreate the
+    /// attachment directly and bypass the cap `insertImage` enforces.
+    /// `replacementRange` is excluded from the existing count: those images
+    /// are about to be removed by this same edit, not kept alongside it.
+    ///
+    /// An `.image` whose staged file no longer exists is skipped WITHOUT
+    /// charging it against the budget: `attributedString(from:)` is going to
+    /// drop it anyway, so charging it here would waste a slot on nothing,
+    /// causing a real image later in the same draft to be rejected as
+    /// overflow even though it would have fit.
+    private func capImages(in draft: ACPComposerDraft, replacementRange: NSRange) -> ACPComposerDraft {
+        let existing = currentImageChipCount() - imageChipCount(in: replacementRange)
+        var budget = Self.maxImagesPerMessage - existing
+        var overflowed = false
+        let segments = draft.segments.filter { segment in
+            guard case .image(let uri, _) = segment else { return true }
+            guard let fileURL = URL(string: uri), FileManager.default.fileExists(atPath: fileURL.path) else {
+                return false
+            }
+            guard budget > 0 else {
+                overflowed = true
+                return false
+            }
+            budget -= 1
+            return true
+        }
+        if overflowed {
+            coordinator?.reportImageError(.tooManyImages)
+        }
+        return ACPComposerDraft(segments: segments)
+    }
+
+    /// Inserts a copied composer selection over the current selection with
+    /// its chips rebuilt. A leading `/command` pasted at the very start of
+    /// the message becomes a pill again, in the same edit as the paste,
+    /// under the same rule as a hand-typed one: it has to be followed by
+    /// whitespace, from the pasted text or the text already after it.
+    ///
+    /// Only accepts the payload when its MAC verifies against this
+    /// process's own key AND `pboard`'s change count still matches the one
+    /// it was signed against — see `pasteboardMACKey` and
+    /// `AuthenticatedDraftPayload.changeCount` — so neither a payload forged
+    /// by another application (the pasteboard type name is not
+    /// access-controlled) nor a stale, replayed one from an earlier
+    /// legitimate copy is ever trusted as composer state; `paste(_:)` falls
+    /// back to that application's plain, readable `.string` instead.
+    @discardableResult
+    private func insertComposerDraft(from pboard: NSPasteboard) -> Bool {
+        guard let data = pboard.data(forType: Self.composerDraftPasteboardType),
+              let decoded = Self.verifiedDraft(from: data, on: pboard),
+              !decoded.isEmpty,
+              let textStorage
+        else { return false }
+        let replacementRange = boundedSelectedRange(in: textStorage)
+        let draft = capImages(in: decoded, replacementRange: replacementRange)
+        // The whole draft was one or more images already at the cap: the
+        // error was reported, and there's nothing left to insert, but the
+        // paste itself was still handled — falling through would let
+        // `paste(_:)` retry with the general pasteboard's plain-text form.
+        guard !draft.isEmpty else { return true }
+        let fragment = NSMutableAttributedString(
+            attributedString: ACPInputField.Coordinator.attributedString(from: draft, typography: chatTypography)
+        )
+        // `draft` was structurally non-empty (it has an `.image` segment),
+        // but `attributedString(from:)` silently drops an `.image` whose
+        // staged file no longer exists on disk — and a copied image chip
+        // commonly has a trailing separator space next to it (`insertImage`
+        // always appends one), which survives as ordinary text even when
+        // the image itself is dropped. Either way, once every chip is gone,
+        // what's left is whitespace with nothing (a U+FFFC character isn't
+        // whitespace, so a surviving chip always fails this check): inserting
+        // it would delete a nonempty selection and leave an orphan space
+        // behind instead of the paste the user expected. Treat this the same
+        // as the all-images-capped case: handled, nothing to insert.
+        guard !fragment.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
+        if replacementRange.location == 0, let coordinator {
+            let tail = NSMaxRange(replacementRange)
+            let combined = NSMutableAttributedString(attributedString: fragment)
+            combined.append(textStorage.attributedSubstring(
+                from: NSRange(location: tail, length: textStorage.length - tail)
+            ))
+            if let target = ACPLeadingCommand.chipTarget(in: combined, suggestions: coordinator.promptSuggestions),
+               NSMaxRange(target.range) <= fragment.length {
+                fragment.replaceCharacters(
+                    in: target.range,
+                    with: ACPLeadingCommand.chip(for: target.command, font: chatTypography.appKitFont())
+                )
+            }
+        }
+        chipUpstreamReferences(in: fragment, replacing: replacementRange)
         let attrs = baseTypingAttributes
         typingAttributes = attrs
         performNativeTextInsertion {
-            insertText(text, replacementRange: boundedRange)
+            insertText(fragment, replacementRange: replacementRange)
+        }
+        typingAttributes = attrs
+        return true
+    }
+
+    private func boundedSelectedRange(in textStorage: NSTextStorage) -> NSRange {
+        let range = selectedRange()
+        let location = min(range.location, textStorage.length)
+        return NSRange(location: location, length: min(range.length, textStorage.length - location))
+    }
+
+    @discardableResult
+    func insertPlainText(_ text: String) -> Bool {
+        guard let textStorage else { return false }
+        let boundedRange = boundedSelectedRange(in: textStorage)
+        let attrs = baseTypingAttributes
+        typingAttributes = attrs
+        let fragment = NSMutableAttributedString(string: text, attributes: attrs)
+        let chipped = chipUpstreamReferences(in: fragment, replacing: boundedRange)
+        performNativeTextInsertion {
+            // Plain strings keep going through the String path so paired
+            // delimiter handling is unchanged when nothing was chipped.
+            if chipped {
+                insertText(fragment, replacementRange: boundedRange)
+            } else {
+                insertText(text, replacementRange: boundedRange)
+            }
         }
         typingAttributes = attrs
         return true
@@ -1553,6 +2381,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// than overwriting it.
     @discardableResult
     func replaceDictationRegion(_ text: String, isFinal: Bool) -> Bool {
+        invalidateNextPromptSuggestion()
         guard let textStorage else { return false }
         let target: NSRange
         if let existing = dictationRange {
@@ -1578,6 +2407,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
         } else {
             dictationRange = inserted
         }
+        onNextPromptStateChange(nextPromptInputState)
         return true
     }
 
@@ -1585,19 +2415,35 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// committed text — used when dictation is toggled off mid-utterance.
     func cancelDictationRegion() {
         dictationRange = nil
+        onNextPromptStateChange(nextPromptInputState)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        hasImage(in: sender.draggingPasteboard) ? .copy : super.draggingEntered(sender)
+        invalidateNextPromptSuggestion()
+        dropPending = true
+        onNextPromptStateChange(nextPromptInputState)
+        return hasImage(in: sender.draggingPasteboard) ? .copy : super.draggingEntered(sender)
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        super.draggingExited(sender)
+        dropPending = false
+        onNextPromptStateChange(nextPromptInputState)
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        invalidateNextPromptSuggestion()
+        defer {
+            dropPending = false
+            onNextPromptStateChange(nextPromptInputState)
+        }
         if insertImages(from: sender.draggingPasteboard) { return true }
         return super.performDragOperation(sender)
     }
 
     @discardableResult
     func insertMention(_ url: URL) -> Bool {
+        invalidateNextPromptSuggestion()
         guard let textStorage else { return false }
         let name = url.lastPathComponent
         let attachment = ACPMentionChipAttachment(displayName: name, uri: url.absoluteString)
@@ -1649,16 +2495,37 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // argument. Falls back to a plain append if we somehow lost the
         // slash range.
         let replacement = suggestion.command + " "
-        if slashStart >= 0, caret >= slashStart {
-            let range = NSRange(location: slashStart, length: caret - slashStart)
-            ts.replaceCharacters(in: range, with: replacement)
-            let newCaret = slashStart + (replacement as NSString).length
-            setSelectedRange(NSRange(location: newCaret, length: 0))
-        } else {
+        guard slashStart >= 0, caret >= slashStart else {
             ts.append(NSAttributedString(string: replacement))
+            closeSlashPanel()
+            didChangeText()
+            return
         }
+        let range = NSRange(location: slashStart, length: caret - slashStart)
+        // Captured before `closeSlashPanel()`, which resets `slashStart`.
+        let isLeadingCommand = slashStart == 0
         closeSlashPanel()
-        didChangeText()
+        // A leading command is what the agent will actually run, so only
+        // that one becomes a pill; mid-message picks stay plain text. The
+        // picked token can be several characters longer than its one-glyph
+        // chip (e.g. accepting `/read-jira-ticket` while `/read-j` is still
+        // live) — the same shrinking edit `replaceUndoably` exists for, so
+        // the leading branch goes through it too instead of a direct
+        // `replaceCharacters` that would leave this keystroke's own typing
+        // undo record targeting a range that no longer exists.
+        if isLeadingCommand {
+            let chip = NSMutableAttributedString(
+                attributedString: ACPLeadingCommand.chip(for: suggestion.command, font: chatTypography.appKitFont())
+            )
+            chip.append(NSAttributedString(string: " ", attributes: baseTypingAttributes))
+            replaceUndoably(range: range, with: chip)
+        } else {
+            ts.replaceCharacters(in: range, with: NSAttributedString(string: replacement, attributes: baseTypingAttributes))
+            // `range.location`, not `slashStart` — `closeSlashPanel()` above
+            // already reset `slashStart` to -1.
+            setSelectedRange(NSRange(location: range.location + (replacement as NSString).length, length: 0))
+            didChangeText()
+        }
     }
 
     private func positionAndShow(_ panel: NSPanel, makeKey: Bool = true) {

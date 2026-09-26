@@ -15,6 +15,11 @@ struct ACPTabView: View {
     var owner: SessionOwnerID? = nil
     var onOpenPreview: (() -> Void)? = nil
     var onStartupRecoveryReady: () -> Void = {}
+    var nextPromptOffer: String? = nil
+    var takeNextPromptOffer: () -> String? = { nil }
+    var dismissNextPromptOffer: () -> Void = {}
+    var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
+    var nextPromptInputBlocked: () -> Bool = { false }
 
     var body: some View {
         Group {
@@ -26,7 +31,12 @@ struct ACPTabView: View {
                     owner: owner,
                     onOpenPreview: onOpenPreview,
                     onStartupRecoveryReady: onStartupRecoveryReady,
-                    manager: manager
+                    manager: manager,
+                    nextPromptOffer: nextPromptOffer,
+                    takeNextPromptOffer: takeNextPromptOffer,
+                    dismissNextPromptOffer: dismissNextPromptOffer,
+                    onNextPromptStateChange: onNextPromptStateChange,
+                    nextPromptInputBlocked: nextPromptInputBlocked
                 )
             } else {
                 unavailable
@@ -85,6 +95,11 @@ private struct ACPManagedTabView: View {
     let onOpenPreview: (() -> Void)?
     let onStartupRecoveryReady: () -> Void
     @ObservedObject var manager: ACPSessionManager
+    var nextPromptOffer: String? = nil
+    var takeNextPromptOffer: () -> String? = { nil }
+    var dismissNextPromptOffer: () -> Void = {}
+    var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
+    var nextPromptInputBlocked: () -> Bool = { false }
 
     var body: some View {
         if let session = manager.placeholderSession(id: sessionId) {
@@ -97,7 +112,12 @@ private struct ACPManagedTabView: View {
                 manager: manager,
                 session: session,
                 onStartupRecoveryReady: onStartupRecoveryReady,
-                transcript: session.transcript
+                transcript: session.transcript,
+                nextPromptOffer: nextPromptOffer,
+                takeNextPromptOffer: takeNextPromptOffer,
+                dismissNextPromptOffer: dismissNextPromptOffer,
+                onNextPromptStateChange: onNextPromptStateChange,
+                nextPromptInputBlocked: nextPromptInputBlocked
             )
             // Refcount this tab's hold on the cached `ACPSession`. When the
             // tab is dismissed (worktree switch, tab close, window close)
@@ -153,6 +173,12 @@ private struct ACPSessionView: View {
     /// `""` scope and persisted allow/reject_always decisions land under the
     /// wrong key.
     @ObservedObject var transcript: ACPTranscript
+    var nextPromptOffer: String? = nil
+    var takeNextPromptOffer: () -> String? = { nil }
+    var dismissNextPromptOffer: () -> Void = {}
+    var onNextPromptStateChange: (NextPromptEligibilitySnapshot.Environment) -> Void = { _ in }
+    var nextPromptInputBlocked: () -> Bool = { false }
+    @State private var pendingComposerDrops = 0
     @State private var updateState: AdapterUpdateState?
     @State private var dismissedLatest: String?
     @Environment(\.theme) private var theme
@@ -185,6 +211,11 @@ private struct ACPSessionView: View {
                     agentLookup: { state.agent(id: $0) },
                     state: state,
                     worktree: worktree,
+                    sessionSummaryCoordinator: state.sessionSummaryCoordinator,
+                    sessionSummariesRequested: sessionSummariesRequested,
+                    sessionSummariesRuntimeEnabled: state.sessionSummariesRuntimeEnabled,
+                    localTextSupported: state.localTextSupported,
+                    localTextModelState: state.localTextModelState,
                     owner: owner,
                     onOpenPreview: onOpenPreview
                 )
@@ -216,12 +247,45 @@ private struct ACPSessionView: View {
                 composerReady: composerCanAcceptInput
             )
         }
+        .onAppear {
+            applySessionSummaryBinding(
+                ACPSessionSummaryBindingPolicy.action(from: nil, to: sessionSummaryBindingInput)
+            )
+        }
+        .onChange(of: sessionSummaryBindingInput) { previous, current in
+            applySessionSummaryBinding(
+                ACPSessionSummaryBindingPolicy.action(from: previous, to: current)
+            )
+        }
         .task(id: sessionId) {
             await hydrateAndAttach()
             onStartupRecoveryReady()
         }
         .onExitCommand {
             handleEscape()
+        }
+    }
+
+    private var sessionSummariesRequested: Bool {
+        state.config.sessionSummariesEnabled && !state.sessionSummaryDisableSavePending
+    }
+
+    private var sessionSummaryBindingInput: ACPSessionSummaryBindingPolicy.Input {
+        .init(
+            requested: sessionSummariesRequested,
+            supported: state.localTextSupported,
+            incarnation: session.incarnation
+        )
+    }
+
+    private func applySessionSummaryBinding(_ action: ACPSessionSummaryBindingPolicy.Action) {
+        switch action {
+        case .none:
+            break
+        case .bind:
+            state.sessionSummaryCoordinator.bind(to: session)
+        case .teardown:
+            state.sessionSummaryCoordinator.teardown()
         }
     }
 
@@ -318,7 +382,6 @@ private struct ACPSessionView: View {
             )
             chatSurface(
                 contentMaxWidth: chatContentMaxWidth,
-                composerMaxWidth: chatProxy.size.width,
                 showMinimap: showMinimap
             )
                 .frame(width: chatProxy.size.width, height: chatProxy.size.height)
@@ -337,11 +400,14 @@ private struct ACPSessionView: View {
               })
         else { return false }
 
+        dismissNextPromptOffer()
+        pendingComposerDrops += 1
         provider.loadDataRepresentation(
             forTypeIdentifier: UTType.alasDropPayload.identifier
         ) { data, _ in
-            guard let data else { return }
             Task { @MainActor in
+                defer { pendingComposerDrops -= 1 }
+                guard let data else { return }
                 _ = composerDropRouter.insert(
                     encoded: data,
                     enabled: !manager.isMirror(sessionId: sessionId)
@@ -353,7 +419,6 @@ private struct ACPSessionView: View {
 
     private func chatSurface(
         contentMaxWidth: CGFloat,
-        composerMaxWidth: CGFloat,
         showMinimap: Bool
     ) -> some View {
         ZStack(alignment: .bottom) {
@@ -361,7 +426,7 @@ private struct ACPSessionView: View {
                 messageList(contentMaxWidth: contentMaxWidth, showMinimap: showMinimap)
                     .transition(.opacity)
             } else if let phase = firstRunConnectingPhase {
-                introStateAndComposer(composerMaxWidth: composerMaxWidth) {
+                introStateAndComposer(contentMaxWidth: contentMaxWidth) {
                     ACPFirstRunConnectingView(
                         agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
                         phase: phase,
@@ -376,7 +441,7 @@ private struct ACPSessionView: View {
                     )
                 }
             } else if isNewEmptySession {
-                introStateAndComposer(composerMaxWidth: composerMaxWidth) {
+                introStateAndComposer(contentMaxWidth: contentMaxWidth) {
                     ACPNewChatEmptyStateView(
                         agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
                         bottomInset: 0,
@@ -405,7 +470,7 @@ private struct ACPSessionView: View {
 
                 composerView(
                     placement: composerPlacement,
-                    contentMaxWidth: composerMaxWidth,
+                    contentMaxWidth: contentMaxWidth,
                     typography: chatTypography
                 )
                 .padding(.trailing, showMinimap && !isConnecting ? MinimapView.width : 0)
@@ -595,12 +660,13 @@ private struct ACPSessionView: View {
                 state.agent(id: agentID)?.displayName ?? agentID
             },
             showMinimap: showMinimap,
-            collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls
+            collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls,
+            upstreamReferences: manager.upstreamReferences.store(for: worktree.path)
         )
     }
 
     private func introStateAndComposer<Intro: View>(
-        composerMaxWidth: CGFloat,
+        contentMaxWidth: CGFloat,
         @ViewBuilder intro: () -> Intro
     ) -> some View {
         VStack(spacing: 0) {
@@ -608,7 +674,7 @@ private struct ACPSessionView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             composerView(
                 placement: .inFlow,
-                contentMaxWidth: composerMaxWidth,
+                contentMaxWidth: contentMaxWidth,
                 typography: chatTypography
             )
         }
@@ -663,7 +729,12 @@ private struct ACPSessionView: View {
                 // folder icon.
                 result += MentionFuzzy.pickerDirectories(forEntries: dirEntries, root: root)
                 return result
-            }
+            },
+            nextPromptOffer: nextPromptOffer,
+            takeNextPromptOffer: takeNextPromptOffer,
+            dismissNextPromptOffer: dismissNextPromptOffer,
+            onNextPromptStateChange: onNextPromptStateChange,
+            nextPromptInputBlocked: { nextPromptInputBlocked() || pendingComposerDrops > 0 || !composerCanAcceptInput }
         ) { text, attachments, intent, draft, onPromptFinished -> Bool in
             // `intent` is already resolved by the composer for keyboard
             // submits; the toolbar send button bypasses the keyboard

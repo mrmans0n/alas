@@ -15,6 +15,26 @@ final class ACPSessionOrchestrationCoordinator {
         let persistence: ACPOrchestrationPersistence
         let instanceId: String
         let now: () -> Int64
+        /// Epoch **milliseconds**, unlike `now` (seconds). Used only where
+        /// millisecond precision matters: recording when a delegated child
+        /// reported to its parent, compared against `ACPTurnCompletion
+        /// .startedAt` (also milliseconds) in `outcomeDisposition`. Defaults
+        /// to a real millisecond clock so existing call sites that don't
+        /// care about this comparison don't need to supply one.
+        let nowMillis: () -> Int64
+        /// Every request the given session is currently blocked on. Supplied
+        /// by `ACPSessionManager`, which is the only place that can see a
+        /// parked permission's real id.
+        let blockedRequestKeys: (String) -> Set<String>
+        /// Seconds before a still-blocked child escalates from notice to wake.
+        /// 0 disables escalation.
+        let escalationDelaySeconds: () -> Int
+        /// Arranges for `work` to run after `delay` seconds. Defaults to a
+        /// no-op, so `childBlocked` schedules nothing in any fixture that
+        /// doesn't override this — every test drives the re-check by calling
+        /// `escalateBlockerIfStillBlocked` directly instead of waiting out a
+        /// real delay. Only `AppState`'s construction (Task 7) sleeps for real.
+        let scheduleEscalationCheck: (Int, @escaping @Sendable () async -> Void) -> Void
         let makeID: () -> String
         let worktree: (String) -> Worktree?
         let existingWorktree: (String, String) -> Worktree?
@@ -27,6 +47,48 @@ final class ACPSessionOrchestrationCoordinator {
         let rememberParent: (String, String) -> Void
         let autoRunDefault: () -> Bool
         let notifyChanged: () -> Void
+
+        init(
+            persistence: ACPOrchestrationPersistence,
+            instanceId: String,
+            now: @escaping () -> Int64,
+            nowMillis: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
+            blockedRequestKeys: @escaping (String) -> Set<String> = { _ in [] },
+            escalationDelaySeconds: @escaping () -> Int = { 30 },
+            scheduleEscalationCheck: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in },
+            makeID: @escaping () -> String,
+            worktree: @escaping (String) -> Worktree?,
+            existingWorktree: @escaping (String, String) -> Worktree?,
+            configuredAgents: @escaping () -> [ACPOrchestrationAgent],
+            availableAgents: @escaping (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPOrchestrationAgent],
+            sessionLocation: @escaping (String) -> SessionLocation?,
+            manager: @escaping (Worktree) -> ACPSessionManager?,
+            newWorktreeDestination: @escaping (String, String) -> URL?,
+            createWorktree: @escaping (String, String, String?) async -> Result<Worktree, WorktreeCreationError>,
+            rememberParent: @escaping (String, String) -> Void,
+            autoRunDefault: @escaping () -> Bool,
+            notifyChanged: @escaping () -> Void
+        ) {
+            self.persistence = persistence
+            self.instanceId = instanceId
+            self.now = now
+            self.nowMillis = nowMillis
+            self.blockedRequestKeys = blockedRequestKeys
+            self.escalationDelaySeconds = escalationDelaySeconds
+            self.scheduleEscalationCheck = scheduleEscalationCheck
+            self.makeID = makeID
+            self.worktree = worktree
+            self.existingWorktree = existingWorktree
+            self.configuredAgents = configuredAgents
+            self.availableAgents = availableAgents
+            self.sessionLocation = sessionLocation
+            self.manager = manager
+            self.newWorktreeDestination = newWorktreeDestination
+            self.createWorktree = createWorktree
+            self.rememberParent = rememberParent
+            self.autoRunDefault = autoRunDefault
+            self.notifyChanged = notifyChanged
+        }
     }
 
     private let environment: Environment
@@ -220,17 +282,16 @@ final class ACPSessionOrchestrationCoordinator {
             } catch {
                 return .error("Could not persist delegated session.")
             }
+            parentSession.nextPromptWorkCount += 1
             environment.notifyChanged()
             Task { @MainActor in
+                defer { parentSession.nextPromptWorkCount -= 1 }
                 let result = await self.environment.createWorktree(origin.projectId, branch, base)
                 switch result {
                 case .success(let worktree):
                     await self.startPersistedChild(childID: childID, prompt: prompt, worktree: worktree)
                 case .failure(let error):
-                    try? await self.environment.persistence.updatePhase(
-                        childSessionId: childID, phase: .failed, failureMessage: error.message, updatedAt: self.environment.now()
-                    )
-                    self.environment.notifyChanged()
+                    await self.markChildFailed(childSessionId: childID, message: error.message)
                 }
             }
             return json(ACPOrchestrationNewResponse(sessionId: childID, state: "creating_worktree", worktreeId: nil))
@@ -296,6 +357,10 @@ final class ACPSessionOrchestrationCoordinator {
             return .error("Could not verify session delegation.")
         }
 
+        let targetSession = environment.sessionLocation(request.targetSessionId)?.manager.liveSession(for: request.targetSessionId)
+        targetSession?.nextPromptWorkCount += 1
+        var deliveryScheduled = false
+        defer { if !deliveryScheduled { targetSession?.nextPromptWorkCount -= 1 } }
         let message = ACPDelegatedMessage(
             id: environment.makeID(),
             sourceSessionId: origin.sessionId,
@@ -308,8 +373,21 @@ final class ACPSessionOrchestrationCoordinator {
         } catch {
             return .error("Could not queue delegated message.")
         }
+        targetSession?.hasPendingDelegatedMessages = true
+        if callerParent?.parentSessionId == request.targetSessionId {
+            // `nowMillis`, not `message.createdAt` (seconds): this is compared
+            // against `ACPTurnCompletion.startedAt`, also milliseconds, in
+            // `outcomeDisposition` — whole-second precision let a report near
+            // the end of one turn be mistaken for covering the next.
+            try? await environment.persistence.markParentReport(
+                childSessionId: origin.sessionId,
+                at: environment.nowMillis()
+            )
+        }
         environment.notifyChanged()
+        deliveryScheduled = true
         Task { @MainActor in
+            defer { targetSession?.nextPromptWorkCount -= 1 }
             await self.deliverPendingMessages(
                 to: request.targetSessionId,
                 callerParent: callerParent,
@@ -317,6 +395,165 @@ final class ACPSessionOrchestrationCoordinator {
             )
         }
         return json(ACPOrchestrationSendResponse(messageId: message.id, state: "queued"))
+    }
+
+    /// Entry point for a delegated child's finished turn. Non-children and
+    /// terminal children are ignored; everything else becomes an inbox row
+    /// for the parent, wake or notice per `outcomeDisposition`.
+    func childTurnCompleted(_ completion: ACPTurnCompletion) async {
+        guard let record = try? await environment.persistence.delegation(childSessionId: completion.sessionId),
+              record.phase != .failed, record.phase != .closed
+        else { return }
+        let disposition = ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: completion.result,
+            lastParentReportAt: record.lastParentReportAt,
+            turnStartedAt: completion.startedAt
+        )
+        let context = outcomeContext(for: record)
+        let prompt: String
+        switch (disposition, completion.result) {
+        case (.notice, _):
+            prompt = ACPDelegatedOutcomeText.notice(context)
+        case (.wake, .failed(let message)):
+            prompt = ACPDelegatedOutcomeText.failure(context, message: message)
+        case (.wake, _):
+            prompt = ACPDelegatedOutcomeText.unreported(context, lastAgentText: completion.lastAgentText)
+        }
+        await enqueueOutcome(.init(
+            id: "outcome-\(record.childSessionId)-\(completion.startedAt)",
+            sourceSessionId: record.childSessionId,
+            targetSessionId: record.parentSessionId,
+            prompt: prompt,
+            createdAt: environment.now(),
+            kind: disposition == .wake ? .prompt : .notice
+        ), child: record)
+    }
+
+    /// Mark a delegated child failed and wake its parent with the reason.
+    /// Idempotent: the outcome id is fixed per child, so repeated calls
+    /// update the phase but enqueue nothing new.
+    func markChildFailed(childSessionId: String, message: String) async {
+        // The fixed outcome id (`outcome-<childId>-failed`) only dedupes via
+        // INSERT OR IGNORE while the row is still in the inbox — once the
+        // parent's outcome is delivered, the row is deleted and a later call
+        // for the same already-failed child would re-enqueue and wake the
+        // parent a second time for one failure. `claimFailedPhase` makes the
+        // transition itself the source of truth: its conditional
+        // `WHERE phase != 'failed'` inside one transaction (mirroring the
+        // inbox's own `claimMessage`) ensures exactly one caller — even
+        // across two Alas instances racing on the same shared SQLite file —
+        // sees `true` and is responsible for the outcome. A separate read
+        // before the write would leave a window where both readers see the
+        // pre-transition phase before either writes.
+        //
+        // The outcome is built here, before the claim, because its text needs
+        // the delegation record — but it is WRITTEN inside the claim's own
+        // transaction, so the phase change and the parent's notification
+        // commit together. Splitting them left a crash window that stranded
+        // the child permanently: phase `.failed`, no outcome, and every later
+        // call correctly losing the claim.
+        guard let record = try? await environment.persistence.delegation(childSessionId: childSessionId)
+        else { return }
+        let outcome = ACPDelegatedMessage(
+            id: "outcome-\(childSessionId)-failed",
+            sourceSessionId: childSessionId,
+            targetSessionId: record.parentSessionId,
+            prompt: ACPDelegatedOutcomeText.failure(outcomeContext(for: record), message: message),
+            createdAt: environment.now(),
+            kind: .prompt
+        )
+        let wonTransition = (try? await environment.persistence.claimFailedPhase(
+            childSessionId: childSessionId,
+            failureMessage: message,
+            updatedAt: environment.now(),
+            outcome: outcome
+        )) ?? false
+        environment.notifyChanged()
+        guard wonTransition else { return }
+        await deliverPendingMessages(
+            to: outcome.targetSessionId,
+            callerParent: record,
+            targetParent: nil
+        )
+    }
+
+    /// A delegated child stopped on something only a human can resolve. The
+    /// parent is noticed at once, then woken only if the same request is still
+    /// unresolved after the configured delay.
+    func childBlocked(_ blocker: ACPChildBlocker) async {
+        guard let record = try? await environment.persistence.delegation(childSessionId: blocker.sessionId),
+              record.phase != .failed, record.phase != .closed
+        else { return }
+        var context = outcomeContext(for: record)
+        context.blockerSummary = blocker.summary
+        await enqueueOutcome(.init(
+            id: "blocker-\(blocker.sessionId)-\(blocker.requestKey)-notice",
+            sourceSessionId: blocker.sessionId,
+            targetSessionId: record.parentSessionId,
+            prompt: ACPDelegatedOutcomeText.blocker(
+                context, kindLabel: blocker.kind.rawValue, waitedSeconds: 0, escalated: false
+            ),
+            createdAt: environment.now(),
+            kind: .notice
+        ), child: record)
+
+        let delay = environment.escalationDelaySeconds()
+        guard delay > 0 else { return }
+        environment.scheduleEscalationCheck(delay) { [weak self] in
+            await self?.escalateBlockerIfStillBlocked(blocker)
+        }
+    }
+
+    /// The delayed re-check, reached in production through
+    /// `scheduleEscalationCheck` and called directly by tests. Reads live
+    /// state rather than tracking timers, so a block the human already
+    /// cleared simply produces nothing and no cancellation is required.
+    func escalateBlockerIfStillBlocked(_ blocker: ACPChildBlocker) async {
+        guard environment.escalationDelaySeconds() > 0,
+              let record = try? await environment.persistence.delegation(childSessionId: blocker.sessionId),
+              record.phase != .failed, record.phase != .closed,
+              case .wake = ACPSessionOrchestrationPolicy.escalation(
+                  blocker: blocker,
+                  liveBlockedRequestKeys: environment.blockedRequestKeys(blocker.sessionId)
+              )
+        else { return }
+        var context = outcomeContext(for: record)
+        context.blockerSummary = blocker.summary
+        await enqueueOutcome(.init(
+            id: "blocker-\(blocker.sessionId)-\(blocker.requestKey)",
+            sourceSessionId: blocker.sessionId,
+            targetSessionId: record.parentSessionId,
+            prompt: ACPDelegatedOutcomeText.blocker(
+                context,
+                kindLabel: blocker.kind.rawValue,
+                waitedSeconds: environment.escalationDelaySeconds(),
+                escalated: true
+            ),
+            createdAt: environment.now(),
+            kind: .prompt
+        ), child: record)
+    }
+
+    private func outcomeContext(for record: ACPDelegationRecord) -> ACPDelegatedOutcomeText.Context {
+        .init(
+            childSessionId: record.childSessionId,
+            agentId: record.agentId,
+            worktreeName: record.childWorktreeId.flatMap { environment.worktree($0)?.name }
+        )
+    }
+
+    private func enqueueOutcome(_ message: ACPDelegatedMessage, child: ACPDelegationRecord) async {
+        do {
+            try await environment.persistence.enqueue(message)
+        } catch {
+            return
+        }
+        environment.notifyChanged()
+        await deliverPendingMessages(
+            to: message.targetSessionId,
+            callerParent: child,
+            targetParent: nil
+        )
     }
 
     private func createChild(
@@ -350,8 +587,11 @@ final class ACPSessionOrchestrationCoordinator {
         } catch {
             return .error("Could not persist delegated session.")
         }
+        let parentSession = environment.sessionLocation(origin.sessionId)?.manager.liveSession(for: origin.sessionId)
+        parentSession?.nextPromptWorkCount += 1
         environment.notifyChanged()
         Task { @MainActor in
+            defer { parentSession?.nextPromptWorkCount -= 1 }
             await self.startPersistedChild(childID: childID, prompt: prompt, worktree: worktree)
         }
         return json(ACPOrchestrationNewResponse(sessionId: childID, state: "starting", worktreeId: worktree.id))
@@ -359,10 +599,7 @@ final class ACPSessionOrchestrationCoordinator {
 
     private func startPersistedChild(childID: String, prompt: String, worktree: Worktree) async {
         guard let manager = environment.manager(worktree) else {
-            try? await environment.persistence.updatePhase(
-                childSessionId: childID, phase: .failed, failureMessage: "Could not create ACP session manager.", updatedAt: environment.now()
-            )
-            environment.notifyChanged()
+            await markChildFailed(childSessionId: childID, message: "Could not create ACP session manager.")
             return
         }
         let record: ACPDelegationRecord?
@@ -388,16 +625,10 @@ final class ACPSessionOrchestrationCoordinator {
                 worktree: worktree
             )
         } catch ACPSessionOrchestrationPolicy.Error.agentUnavailable(let id) {
-            try? await environment.persistence.updatePhase(
-                childSessionId: childID, phase: .failed, failureMessage: "Agent is not enabled or ACP-capable: \(id)", updatedAt: environment.now()
-            )
-            environment.notifyChanged()
+            await markChildFailed(childSessionId: childID, message: "Agent is not enabled or ACP-capable: \(id)")
             return
         } catch {
-            try? await environment.persistence.updatePhase(
-                childSessionId: childID, phase: .failed, failureMessage: "Could not validate delegated session request.", updatedAt: environment.now()
-            )
-            environment.notifyChanged()
+            await markChildFailed(childSessionId: childID, message: "Could not validate delegated session request.")
             return
         }
         try? await environment.persistence.updateChildWorktree(
@@ -419,23 +650,17 @@ final class ACPSessionOrchestrationCoordinator {
             into: childID
         )
         guard accepted else {
-            try? await environment.persistence.updatePhase(
-                childSessionId: childID, phase: .failed, failureMessage: "Could not queue initial prompt.", updatedAt: environment.now()
-            )
-            environment.notifyChanged()
+            await markChildFailed(childSessionId: childID, message: "Could not queue initial prompt.")
             return
         }
         await manager.attach(to: childID, freshlyCreated: true)
         guard let session = manager.liveSession(for: childID),
               session.agentState == .ready
         else {
-            try? await environment.persistence.updatePhase(
+            await markChildFailed(
                 childSessionId: childID,
-                phase: .failed,
-                failureMessage: delegatedChildStartFailureMessage(manager.liveSession(for: childID)),
-                updatedAt: environment.now()
+                message: delegatedChildStartFailureMessage(manager.liveSession(for: childID))
             )
-            environment.notifyChanged()
             return
         }
         try? await environment.persistence.clearPendingInitialPrompt(childSessionId: childID, updatedAt: environment.now())
@@ -471,14 +696,22 @@ final class ACPSessionOrchestrationCoordinator {
         callerParent: ACPDelegationRecord?,
         targetParent: ACPDelegationRecord?
     ) async {
+        let session = environment.sessionLocation(sessionID)?.manager.liveSession(for: sessionID)
+        session?.nextPromptWorkCount += 1
+        defer { session?.nextPromptWorkCount -= 1 }
         guard let target = await resolveDeliveryTarget(
             sessionID: sessionID,
             callerParent: callerParent,
             targetParent: targetParent
         ), let messages = try? await environment.persistence.pendingMessages(targetSessionId: sessionID)
         else { return }
+        let targetSession = target.manager.liveSession(for: sessionID)
+        targetSession?.hasPendingDelegatedMessages = !messages.isEmpty
         for message in messages {
             await deliver(message.id, to: target)
+        }
+        if let remaining = try? await environment.persistence.pendingMessages(targetSessionId: sessionID) {
+            targetSession?.hasPendingDelegatedMessages = !remaining.isEmpty
         }
     }
 
@@ -526,14 +759,23 @@ final class ACPSessionOrchestrationCoordinator {
             target.manager.notifyDelegatedMessagesAvailable()
             return
         }
-        let accepted = await target.manager.enqueueDelegatedPrompt(
-            text: claimed.message.prompt,
-            source: ACPDelegatedPromptSource(
-                sessionId: claimed.message.sourceSessionId,
-                messageId: claimed.message.id
-            ),
-            into: claimed.message.targetSessionId
-        )
+        let accepted: Bool
+        switch claimed.message.kind {
+        case .prompt:
+            accepted = await target.manager.enqueueDelegatedPrompt(
+                text: claimed.message.prompt,
+                source: ACPDelegatedPromptSource(
+                    sessionId: claimed.message.sourceSessionId,
+                    messageId: claimed.message.id
+                ),
+                into: claimed.message.targetSessionId
+            )
+        case .notice:
+            accepted = await target.manager.appendDelegatedNotice(
+                text: claimed.message.prompt,
+                into: claimed.message.targetSessionId
+            )
+        }
         guard accepted else {
             try? await environment.persistence.releaseMessageClaim(id: claimed.message.id, claim: claimed.claim)
             return

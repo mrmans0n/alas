@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import SwiftUI
 import Testing
@@ -67,9 +68,7 @@ struct ACPComposerDraftBridgeTests {
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == ACPComposerDraft(
             segments: [
                 .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
-                .text("\n"),
-                .text("> quoted\n\n"),
-                .text(" tail"),
+                .text("\n> quoted\n\n tail"),
             ]
         ))
         #expect(textView.selectedRange() == NSRange(location: 11, length: 0))
@@ -932,6 +931,491 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.string == "before after")
     }
 
+    // MARK: Chip copy / paste (#1491)
+
+    private static let chipDraft = ACPComposerDraft(segments: [
+        .text("/review "),
+        .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+        .text(" tail"),
+    ])
+
+    /// A composer holding a command pill, a mention chip, and plain text.
+    private func makeChipTextView() -> (ACPNSTextView, ACPInputField.Coordinator, NSWindow) {
+        let (textView, coordinator, window) = makeSlashTextView()
+        textView.textStorage?.setAttributedString(
+            ACPInputField.Coordinator.attributedString(from: Self.chipDraft)
+        )
+        textView.pillLeadingCommandIfNeeded()
+        return (textView, coordinator, window)
+    }
+
+    private func chipKinds(in textView: NSTextView) -> [String] {
+        var kinds: [String] = []
+        let storage = textView.attributedString()
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, _, _ in
+            switch value {
+            case is ACPCommandChipAttachment: kinds.append("command")
+            case is ACPMentionChipAttachment: kinds.append("mention")
+            case .some: kinds.append("other")
+            case nil: break
+            }
+        }
+        return kinds
+    }
+
+    @Test("copying chips writes their text instead of the attachment placeholder")
+    func copyingChipsWritesReadableText() {
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        #expect(chipKinds(in: textView) == ["command", "mention"])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.selectAll(nil)
+
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+
+        #expect(board.string(forType: .string) == "/review @File.swift tail")
+        #expect(board.data(forType: ACPNSTextView.composerDraftPasteboardType) != nil)
+    }
+
+    @Test("copying a chip-free selection keeps NSTextView's own pasteboard output")
+    func copyingPlainTextIsUnchanged() {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        textView.string = "just text"
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.selectAll(nil)
+
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+
+        #expect(board.string(forType: .string) == "just text")
+        #expect(board.data(forType: ACPNSTextView.composerDraftPasteboardType) == nil)
+    }
+
+    @Test("copy then paste into an empty composer restores the command pill and mention chip")
+    func copyPasteRoundTripRestoresChips() {
+        // A private pasteboard, not `.general`: `.general` is a process-wide
+        // singleton other test suites in this same run also read and write,
+        // and an intervening write from one of them between this test's
+        // copy and paste steps would corrupt what gets pasted back. Going
+        // through `writeSelection`/`readSelection` directly exercises the
+        // exact same code `copy(_:)`/`paste(_:)` call, just against a board
+        // only this test touches.
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.selectAll(nil)
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+        #expect(board.string(forType: .string) == "/review @File.swift tail")
+
+        textView.string = ""
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView) == ["command", "mention"])
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == Self.chipDraft)
+        #expect(!textView.string.isEmpty)
+        #expect(textView.selectedRange() == NSRange(location: textView.string.utf16.count, length: 0))
+    }
+
+    @Test("a pasted command away from the message start stays plain text; mentions stay chips")
+    func pastedCommandMidMessageStaysText() {
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.selectAll(nil)
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+
+        // `textView.string = "hi "` would inherit the attributes of the text
+        // it replaces — here, position 0's command chip — via
+        // NSMutableAttributedString's plain-String replace, corrupting "hi "
+        // with a phantom `.commandChipName`. Replacing the whole attributed
+        // string instead gives it no attributes at all.
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "hi "))
+        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView) == ["mention"])
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == ACPComposerDraft(segments: [
+            .text("hi /review "),
+            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .text(" tail"),
+        ]))
+    }
+
+    @Test("a lone copied command pill pasted before existing text becomes a pill again")
+    func lonePillPastedBeforeWhitespaceRepills() {
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.setSelectedRange(NSRange(location: 0, length: 1))
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+        #expect(board.string(forType: .string) == "/review")
+
+        // See the note in `pastedCommandMidMessageStaysText`: replace the
+        // whole attributed string, not just `.string`, so the new text
+        // doesn't inherit the command chip's attributes it's overwriting.
+        textView.textStorage?.setAttributedString(NSAttributedString(string: " the parser"))
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView) == ["command"])
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/review the parser")
+    }
+
+    @Test("pasting chips is one undoable edit and redo brings the chips back")
+    func chipPasteUndoRedo() {
+        let (textView, coordinator, window) = makeChipTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        textView.selectAll(nil)
+        #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
+        // See the note in `pastedCommandMidMessageStaysText`: replace the
+        // whole attributed string, not just `.string`, so the new text
+        // doesn't inherit the just-copied chip's attributes it's overwriting.
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "keep"))
+        textView.setSelectedRange(NSRange(location: 4, length: 0))
+        textView.undoManager?.removeAllActions()
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        #expect(chipKinds(in: textView) == ["mention"])
+
+        textView.undoManager?.undo()
+        #expect(textView.string == "keep")
+        #expect(chipKinds(in: textView).isEmpty)
+
+        textView.undoManager?.redo()
+        #expect(chipKinds(in: textView) == ["mention"])
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "keep/review @File.swift  tail")
+    }
+
+    @Test("the image cap counts adjacent chips sharing the same URI as separate images")
+    func imageCapCountsAdjacentDuplicateURIsSeparately() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        // Nine adjacent chips with no separating text, all pointing at the
+        // SAME content-addressed file — `enumerateAttribute` would coalesce
+        // these into a single run of equal `.imageAttachmentURI` values if
+        // the cap were still counting runs instead of characters. The file
+        // has to actually exist: `attributedString(from:)` drops an
+        // `.image` segment whose URI doesn't resolve to a real file, which
+        // would otherwise mask the very undercount this test checks for.
+        let sameFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-same-image-\(UUID().uuidString).png")
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
+            .write(to: sameFile)
+        defer { try? FileManager.default.removeItem(at: sameFile) }
+        let sameURI = sameFile.absoluteString
+        let storage = NSMutableAttributedString(string: "")
+        for _ in 0..<(ACPNSTextView.maxImagesPerMessage - 1) {
+            let attachment = ACPImageChipAttachment(fileURL: URL(string: sameURI)!, mimeType: "image/png")
+            let chip = NSMutableAttributedString(attachment: attachment)
+            chip.addAttributes([
+                .imageAttachmentURI: sameURI,
+                .imageAttachmentMime: "image/png",
+            ], range: NSRange(location: 0, length: chip.length))
+            storage.append(chip)
+        }
+        textView.textStorage?.setAttributedString(storage)
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+
+        // One more copy of that same image: exactly fits the one remaining
+        // slot if the existing nine are all counted.
+        let draft = ACPComposerDraft(segments: [.image(uri: sameURI, mimeType: "image/png")])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        // Ten distinct chip CHARACTERS even though they'd collapse into
+        // fewer attribute runs (the whole point of the fix).
+        #expect(textView.string.count == ACPNSTextView.maxImagesPerMessage)
+        let errors = await reported.snapshot()
+        #expect(errors.isEmpty)
+
+        // An eleventh copy is correctly rejected now that ten are present.
+        let board2 = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board2.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board2)
+        #expect(textView.readSelection(from: board2, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(textView.string.count == ACPNSTextView.maxImagesPerMessage)
+        let errors2 = await reported.snapshot()
+        #expect(errors2 == [.tooManyImages])
+    }
+
+    @Test("pasting a chip draft with images enforces the per-message image cap")
+    func pastedDraftEnforcesImageCap() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        // Pre-fill the composer with 9 image chips (dummy URIs — only their
+        // presence, not their file, is what the cap counts) so one more
+        // slot remains.
+        let storage = NSMutableAttributedString(string: "")
+        for index in 0..<(ACPNSTextView.maxImagesPerMessage - 1) {
+            let attachment = ACPImageChipAttachment(
+                fileURL: URL(string: "file:///tmp/existing-\(index).png")!,
+                mimeType: "image/png"
+            )
+            let chip = NSMutableAttributedString(attachment: attachment)
+            chip.addAttributes([
+                .imageAttachmentURI: "file:///tmp/existing-\(index).png",
+                .imageAttachmentMime: "image/png",
+            ], range: NSRange(location: 0, length: chip.length))
+            storage.append(chip)
+        }
+        textView.textStorage?.setAttributedString(storage)
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+
+        // A copied draft offering two more images: only one fits in the
+        // remaining slot.
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-cap-\(UUID().uuidString).png")
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
+            .write(to: temp)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let draft = ACPComposerDraft(segments: [
+            .image(uri: temp.absoluteString, mimeType: "image/png"),
+            .image(uri: temp.absoluteString, mimeType: "image/png"),
+            .text(" tail"),
+        ])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        var imageCount = 0
+        let full = NSRange(location: 0, length: textView.attributedString().length)
+        textView.attributedString().enumerateAttribute(.imageAttachmentURI, in: full) { v, _, _ in
+            if v != nil { imageCount += 1 }
+        }
+        #expect(imageCount == ACPNSTextView.maxImagesPerMessage)
+        #expect(textView.string.hasSuffix(" tail"))
+        let errors = await reported.snapshot()
+        #expect(errors == [.tooManyImages])
+    }
+
+    @Test("pasting a draft whose only image no longer exists on disk leaves a nonempty selection untouched")
+    func pastedDraftWithMissingImageFileDoesNotDeleteSelection() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "keep me"))
+        textView.setSelectedRange(NSRange(location: 0, length: 4))
+
+        // A copied image chip whose staged file has since been deleted:
+        // `attributedString(from:)` drops it silently, leaving nothing to
+        // insert even though the draft is structurally non-empty.
+        let missingURI = "file:///tmp/alas-deleted-\(UUID().uuidString).png"
+        let draft = ACPComposerDraft(segments: [.image(uri: missingURI, mimeType: "image/png")])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(textView.string == "keep me")
+    }
+
+    @Test("pasting a draft with a missing image plus its trailing separator space leaves a nonempty selection untouched")
+    func pastedDraftWithMissingImageAndSeparatorDoesNotLeaveOrphanSpace() throws {
+        // `insertImage` always appends a trailing space after the chip, so a
+        // draft copied from a real image chip commonly looks like this: the
+        // image segment plus a lone separator space. If the image is
+        // dropped (missing file), the space alone must not survive as a
+        // 1-character "paste" that still overwrites the selection.
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "keep me"))
+        textView.setSelectedRange(NSRange(location: 0, length: 4))
+
+        let missingURI = "file:///tmp/alas-deleted-\(UUID().uuidString).png"
+        let draft = ACPComposerDraft(segments: [.image(uri: missingURI, mimeType: "image/png"), .text(" ")])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(textView.string == "keep me")
+    }
+
+    @Test("a missing image doesn't consume the one remaining slot a later real image needs")
+    func missingImageDoesNotStealBudgetFromRealImageAfterIt() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        // Exactly one slot left.
+        let storage = NSMutableAttributedString(string: "")
+        for index in 0..<(ACPNSTextView.maxImagesPerMessage - 1) {
+            let attachment = ACPImageChipAttachment(
+                fileURL: URL(string: "file:///tmp/existing-\(index).png")!,
+                mimeType: "image/png"
+            )
+            let chip = NSMutableAttributedString(attachment: attachment)
+            chip.addAttributes([
+                .imageAttachmentURI: "file:///tmp/existing-\(index).png",
+                .imageAttachmentMime: "image/png",
+            ], range: NSRange(location: 0, length: chip.length))
+            storage.append(chip)
+        }
+        textView.textStorage?.setAttributedString(storage)
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+
+        // A missing image ahead of a real one: the missing one must not
+        // consume the last slot the real image needs.
+        let missingURI = "file:///tmp/alas-deleted-\(UUID().uuidString).png"
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-real-\(UUID().uuidString).png")
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
+            .write(to: temp)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let draft = ACPComposerDraft(segments: [
+            .image(uri: missingURI, mimeType: "image/png"),
+            .image(uri: temp.absoluteString, mimeType: "image/png"),
+        ])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        var imageCount = 0
+        let full = NSRange(location: 0, length: textView.attributedString().length)
+        textView.attributedString().enumerateAttribute(.imageAttachmentURI, in: full) { v, _, _ in
+            if v != nil { imageCount += 1 }
+        }
+        #expect(imageCount == ACPNSTextView.maxImagesPerMessage)
+        let errors = await reported.snapshot()
+        #expect(errors.isEmpty)
+    }
+
+    @Test("pasting over a selection that itself holds an image chip does not double-count it against the cap")
+    func pastedDraftExcludesReplacedImagesFromBudget() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        // Fill the composer to the cap (10 image chips), then select the
+        // first one: that selection is about to be replaced by this same
+        // paste, so it must not count against the incoming budget.
+        let storage = NSMutableAttributedString(string: "")
+        for index in 0..<ACPNSTextView.maxImagesPerMessage {
+            let attachment = ACPImageChipAttachment(
+                fileURL: URL(string: "file:///tmp/existing-\(index).png")!,
+                mimeType: "image/png"
+            )
+            let chip = NSMutableAttributedString(attachment: attachment)
+            chip.addAttributes([
+                .imageAttachmentURI: "file:///tmp/existing-\(index).png",
+                .imageAttachmentMime: "image/png",
+            ], range: NSRange(location: 0, length: chip.length))
+            storage.append(chip)
+        }
+        textView.textStorage?.setAttributedString(storage)
+        textView.setSelectedRange(NSRange(location: 0, length: 1))
+
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-cap-\(UUID().uuidString).png")
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
+            .write(to: temp)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let draft = ACPComposerDraft(segments: [.image(uri: temp.absoluteString, mimeType: "image/png")])
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(draft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        var imageCount = 0
+        let full = NSRange(location: 0, length: textView.attributedString().length)
+        textView.attributedString().enumerateAttribute(.imageAttachmentURI, in: full) { v, _, _ in
+            if v != nil { imageCount += 1 }
+        }
+        #expect(imageCount == ACPNSTextView.maxImagesPerMessage)
+        let errors = await reported.snapshot()
+        #expect(errors.isEmpty)
+    }
+
+    @Test("dropping a dragged chip selection reads the draft type and rebuilds the chips")
+    func readSelectionRebuildsChipsFromDraftType() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        #expect(textView.readablePasteboardTypes.first == ACPNSTextView.composerDraftPasteboardType)
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        ACPNSTextView.writeComposerDraftForTesting(Self.chipDraft, to: board)
+
+        #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView) == ["command", "mention"])
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == Self.chipDraft)
+    }
+
+    @Test("a forged pasteboard payload without a valid MAC is not trusted")
+    func forgedPasteboardPayloadIsRejected() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        // Simulates another unsandboxed application publishing the same
+        // named pasteboard type with attacker-controlled JSON — no way to
+        // sign it with Alas's in-process MAC key, so this is exactly what a
+        // forged payload looks like: the raw draft, unsigned.
+        board.declareTypes([ACPNSTextView.composerDraftPasteboardType, .string], owner: nil)
+        board.setData(try JSONEncoder().encode(Self.chipDraft), forType: ACPNSTextView.composerDraftPasteboardType)
+        board.setString("/review @File.swift tail", forType: .string)
+
+        #expect(!textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView).isEmpty)
+        #expect(textView.string.isEmpty)
+    }
+
+    @Test("a signature replayed onto a different pasteboard with a matching change count is not trusted")
+    func replayedSignatureOnDifferentPasteboardIsRejected() throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        // Bytes that verify (correct MAC, current change count matches) but
+        // were signed and recorded against a DIFFERENT pasteboard object —
+        // the scenario a bare change-count comparison alone would miss.
+        ACPNSTextView.writeReplayedSignedDraftForTesting(Self.chipDraft, onto: board)
+
+        #expect(!textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+
+        #expect(chipKinds(in: textView).isEmpty)
+        #expect(textView.string.isEmpty)
+    }
+
     @Test("file drop router inserts the relative path at the retained selection")
     func fileDropRouterInsertsRelativePathAtSelection() throws {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 40))
@@ -1115,7 +1599,7 @@ struct ACPComposerDraftBridgeTests {
         // presentSlashPanel() needs a window to position the panel against.
         // `textView.window` is unowned, so the caller must keep the returned
         // window alive for as long as the text view is used.
-        let window = NSWindow(contentRect: textView.frame, styleMask: [], backing: .buffered, defer: false)
+        let window = NextPromptTestWindow(contentRect: textView.frame, styleMask: [], backing: .buffered, defer: false)
         window.contentView?.addSubview(textView)
         let coordinator = makeCoordinator(sendOnEnter: true, onSubmit: onSubmit)
         coordinator.promptSuggestions = [
@@ -1133,6 +1617,9 @@ struct ACPComposerDraftBridgeTests {
         )
         coordinator.textView = textView
         textView.coordinator = coordinator
+        textView.delegate = coordinator
+        textView.allowsUndo = true
+        window.makeFirstResponder(textView)
         return (textView, coordinator, window)
     }
 
@@ -1342,8 +1829,284 @@ struct ACPComposerDraftBridgeTests {
         textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
 
         #expect(received == nil)
-        #expect(textView.string == "/init ")
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/init ")
+        #expect(textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
         #expect(!textView.isSlashPanelOpen)
+    }
+
+    @MainActor
+    private final class NextPromptGenerator: NextPromptGenerating {
+        var pending: CheckedContinuation<String?, Never>?
+        var started: CheckedContinuation<Void, Never>?
+        func generate(_ request: NextPromptRequest) async throws -> String? {
+            await withCheckedContinuation {
+                pending = $0
+                started?.resume()
+                started = nil
+            }
+        }
+        func waitForStart() async {
+            if pending != nil { return }
+            await withCheckedContinuation { started = $0 }
+        }
+        func cancelAndUnload() async {}
+        func retryAfterFailure() async {}
+    }
+
+    @MainActor
+    private final class NextPromptFixture {
+        let generator = NextPromptGenerator()
+        var eligible = true
+        let id = NextPromptRequestID(sessionID: "s", incarnation: UUID(), promptID: 1,
+                                     transcriptRevision: 1, draftRevision: 0, composerEpoch: 0,
+                                     settingsGeneration: 0, modelGeneration: 0)
+        lazy var suggestionCoordinator = NextPromptCoordinator(engine: generator) { [weak self] in
+            guard let self else { return nil }
+            return .init(id: id, turns: [.init(user: "Compare", assistant: "A tradeoff")], isEligible: eligible)
+        }
+        func offer(_ text: String, in textView: ACPNSTextView) async {
+            let coordinator = suggestionCoordinator
+            coordinator.completed(.init(sessionID: id.sessionID, incarnation: id.incarnation,
+                                        promptID: id.promptID, userMessageID: UUID(), transcriptRevision: 1))
+            await generator.waitForStart()
+            let task = coordinator.generationTask
+            generator.pending?.resume(returning: text)
+            generator.pending = nil
+            await task?.value
+            textView.takeNextPromptOffer = { coordinator.takeOffer() }
+            textView.dismissNextPromptOffer = { coordinator.invalidate() }
+            textView.nextPromptOffer = coordinator.offer
+        }
+    }
+
+    @Test("Tab accepts next prompt once without submitting, with complete undo and redo")
+    func nextPromptTabUndo() async throws {
+        var submitCount = 0
+        let (textView, coordinator, window) = makeSlashTextView { _, _, _, _, _ in
+            submitCount += 1
+            return true
+        }
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        #expect(textView.nextPromptGhostText == "Explain the tradeoff.")
+        #expect(textView.nextPromptPresentation?.string == "Explain the tradeoff.\nTab to accept")
+        #expect(textView.string.isEmpty)
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()).isEmpty)
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0.isEmpty)
+        #expect(textView.accessibilityValue() == "")
+        #expect(textView.accessibilityHelp()?.contains("Explain the tradeoff.") == true)
+        #expect(textView.accessibilityCustomActions()?.map(\.name) == ["Accept Suggestion"])
+        textView.keyDown(with: try keyEvent(keyCode: 48, modifiers: [], characters: "\t"))
+        #expect(textView.string == "Explain the tradeoff.")
+        #expect(submitCount == 0)
+        textView.undoManager?.undo()
+        #expect(textView.string.isEmpty)
+        #expect(fixture.suggestionCoordinator.offer == nil)
+        #expect(textView.nextPromptGhostText == nil)
+        #expect(textView.nextPromptPresentation == nil)
+        textView.undoManager?.redo()
+        #expect(textView.string == "Explain the tradeoff.")
+        #expect(submitCount == 0)
+    }
+
+    @Test("accessibility acceptance uses UTF-16 caret and one complete undo")
+    func nextPromptUnicodeAccessibilityUndo() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let candidate = String(repeating: "👩🏽‍💻", count: 30)
+        #expect(candidate.count <= 160)
+        #expect(candidate.utf16.count > 160)
+        let fixture = NextPromptFixture()
+        await fixture.offer(candidate, in: textView)
+        let action = try #require(textView.accessibilityCustomActions()?.first)
+        #expect(action.handler?() == true)
+        #expect(textView.string == candidate)
+        #expect(textView.selectedRange() == NSRange(location: candidate.utf16.count, length: 0))
+        #expect(textView.accessibilityCustomActions()?.isEmpty != false)
+        textView.undoManager?.undo()
+        #expect(textView.string.isEmpty)
+        #expect(fixture.suggestionCoordinator.offer == nil)
+    }
+
+    @Test("stale next prompt acceptance rechecks takeOffer")
+    func nextPromptStaleAcceptance() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        fixture.eligible = false
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(textView.string.isEmpty)
+        #expect(textView.nextPromptGhostText == nil)
+        #expect(fixture.suggestionCoordinator.offer == nil)
+    }
+
+    @Test(arguments: ["typing", "selection", "marked", "image", "slash", "mention", "focus", "dictation", "remount"])
+    func nextPromptActivitySuppressesSynchronously(_ activity: String) async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        switch activity {
+        case "typing": textView.insertText("x", replacementRange: textView.selectedRange())
+        case "selection": textView.setSelectedRange(NSRange(location: 0, length: 0))
+        case "marked": textView.setMarkedText("", selectedRange: .init(location: 0, length: 0), replacementRange: .init(location: NSNotFound, length: 0))
+        case "image": _ = coordinator.beginPendingImageFileInsertion()
+        case "slash":
+            textView.string = "/i"
+            textView.setSelectedRange(NSRange(location: 2, length: 0))
+            textView.reconcileSlashPanel()
+            #expect(textView.isSlashPanelOpen)
+        case "mention": textView.keyDown(with: try keyEvent(keyCode: 19, modifiers: [], characters: "@"))
+        case "focus": window.makeFirstResponder(nil)
+        case "dictation": textView.replaceDictationRegion("", isFinal: false)
+        default: textView.removeFromSuperview()
+        }
+        #expect(textView.nextPromptGhostText == nil)
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(fixture.suggestionCoordinator.offer == nil)
+        #expect(textView.accessibilityCustomActions()?.isEmpty != false)
+    }
+
+    @Test("next prompt state reports native focus and pending image work synchronously")
+    func nextPromptReportsNativeInputState() {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        var states: [NextPromptEligibilitySnapshot.Environment] = []
+        textView.onNextPromptStateChange = { states.append($0) }
+        window.makeFirstResponder(nil)
+        #expect(states.last?.hasComposerFocus == false)
+        window.makeFirstResponder(textView)
+        #expect(states.last?.hasComposerFocus == true)
+        let generation = coordinator.beginPendingImageFileInsertion()
+        #expect(states.last?.hasPendingInput == true)
+        coordinator.finishPendingImageFileInsertion(generation: generation)
+        #expect(states.last?.hasPendingInput == false)
+    }
+
+    @Test("offer consumption cannot overwrite a draft changed by a synchronous observer")
+    func nextPromptConsumptionRechecksDraft() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        var inserted = false
+        let observation = fixture.suggestionCoordinator.$offer.dropFirst().sink { value in
+            guard value == nil, !inserted else { return }
+            inserted = true
+            textView.insertText("typed", replacementRange: textView.selectedRange())
+        }
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(textView.string == "typed")
+        #expect(fixture.suggestionCoordinator.offer == nil)
+        withExtendedLifetime(observation) {}
+    }
+
+    @Test("offer consumption cannot accept after a synchronous empty-editor selection invalidates it")
+    func nextPromptConsumptionRechecksInvalidation() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        var changedSelection = false
+        let observation = fixture.suggestionCoordinator.$offer.dropFirst().sink { value in
+            guard value == nil, !changedSelection else { return }
+            changedSelection = true
+            textView.setSelectedRange(NSRange(location: 0, length: 0))
+        }
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(changedSelection)
+        #expect(textView.string.isEmpty)
+        #expect(fixture.suggestionCoordinator.offer == nil)
+        withExtendedLifetime(observation) {}
+    }
+
+    @Test("accepted insertion does not dismiss the consumed offer a second time")
+    func nextPromptAcceptanceDoesNotRepublishNil() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        var nilPublications = 0
+        let observation = fixture.suggestionCoordinator.$offer.dropFirst().sink { value in
+            guard value == nil else { return }
+            nilPublications += 1
+            if nilPublications == 2 {
+                textView.insertText("intruder", replacementRange: textView.selectedRange())
+            }
+        }
+        #expect(textView.acceptNextPromptSuggestion())
+        #expect(nilPublications == 1)
+        #expect(textView.string == "Explain the tradeoff.")
+        observation.cancel()
+        textView.undoManager?.undo()
+        #expect(textView.string.isEmpty)
+    }
+
+    @Test("Escape dismisses next prompt without changing draft or undo")
+    func nextPromptEscape() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        textView.keyDown(with: try keyEvent(keyCode: 53, modifiers: [], characters: "\u{1b}"))
+        #expect(textView.string.isEmpty)
+        #expect(textView.undoManager?.canUndo == false)
+        #expect(fixture.suggestionCoordinator.offer == nil)
+    }
+
+    @Test("Shift-Tab never accepts next prompt")
+    func nextPromptShiftTab() async throws {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        textView.keyDown(with: try keyEvent(keyCode: 48, modifiers: .shift, characters: "\t"))
+        #expect(textView.string != "Explain the tradeoff.")
+        #expect(fixture.suggestionCoordinator.offer == nil)
+    }
+
+    @Test(arguments: ["draft", "pending", "dictation"])
+    func nextPromptLiveGuardsRejectWithoutSwiftUIRefresh(_ blocker: String) async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain the tradeoff.", in: textView)
+        switch blocker {
+        case "draft": textView.nextPromptDraftIsEmpty = { false }
+        case "pending": textView.nextPromptInputBlocked = { true }
+        default: textView.nextPromptIsDictating = { true }
+        }
+        #expect(textView.nextPromptGhostText == nil)
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(textView.string.isEmpty)
+        #expect(textView.accessibilityCustomActions()?.isEmpty != false)
+    }
+
+    @Test("a first responder in a non-key window cannot display or accept next prompt")
+    func nextPromptRequiresKeyWindow() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer("Explain this tradeoff.", in: textView)
+        window.resignKey()
+        #expect(window.firstResponder === textView)
+        #expect(textView.nextPromptGhostText == nil)
+        #expect(!textView.acceptNextPromptSuggestion())
+        #expect(textView.string.isEmpty)
+    }
+
+    @Test("next prompt wraps at narrow widths and releases reserved height on dismissal")
+    func nextPromptWrappedHeight() async {
+        let (textView, coordinator, window) = makeSlashTextView()
+        defer { withExtendedLifetime((coordinator, window)) {} }
+        let fixture = NextPromptFixture()
+        await fixture.offer(String(repeating: "Explain this tradeoff. ", count: 6), in: textView)
+        let wide = textView.nextPromptHeight(for: 300)
+        #expect(textView.nextPromptHeight(for: 100) > wide)
+        textView.invalidateNextPromptSuggestion()
+        #expect(textView.nextPromptHeight(for: 100) == 0)
     }
 
     // MARK: - Argument hint ghost text
@@ -1451,9 +2214,230 @@ struct ACPComposerDraftBridgeTests {
 
         textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
 
-        #expect(textView.string == "/read-jira-ticket ")
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/read-jira-ticket ")
         #expect(!textView.isSlashPanelOpen)
         #expect(textView.argumentGhostHint == "<CPCL-XXXX>")
+    }
+
+    @Test("typing whitespace after a hand-typed skill turns it into a pill")
+    func handTypedSkillBecomesPill() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions.append(
+            ACPPromptSuggestion(command: "/$brainstorming:ideas", description: "Ideas")
+        )
+        textView.allowsUndo = true
+        // A real insertText call (not `.string =`) leaves its own undo
+        // record behind, matching production: the pill-forming edit must
+        // coexist with that record — see `replaceUndoably`.
+        textView.insertText("/$brainstorming:ideas", replacementRange: textView.selectedRange())
+        textView.insertText(" ", replacementRange: textView.selectedRange())
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/$brainstorming:ideas")
+        #expect(ACPInputField.Coordinator.extract(storage).0 == "/$brainstorming:ideas ")
+        #expect(textView.selectedRange() == NSRange(location: storage.length, length: 0))
+
+        // ⌘Z types the pill back out. Don't pin how many steps AppKit
+        // coalesced the typing into — only that the first undo removes the
+        // chip without crashing and the history replays cleanly.
+        #expect(textView.undoManager?.canUndo == true)
+        textView.undoManager?.undo()
+        #expect(textView.attributedString().length == 0
+            || textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) == nil)
+        #expect("/$brainstorming:ideas ".hasPrefix(textView.string))
+        while textView.undoManager?.canRedo == true { textView.undoManager?.redo() }
+        #expect(textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/$brainstorming:ideas")
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/$brainstorming:ideas ")
+    }
+
+    @Test("late-arriving suggestions pill a hand-typed command without corrupting undo")
+    func lateSuggestionsPillWithoutCorruptingUndo() throws {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        // The suggestion list is not known yet at typing time — exactly
+        // when `available_commands_update` arrives after the user already
+        // typed the command, the scenario `pillLeadingCommandIfNeeded` (and
+        // the late-arrival call in `updateNSView`) exists for.
+        coordinator.promptSuggestions = []
+        textView.allowsUndo = true
+        textView.insertText("/init ", replacementRange: textView.selectedRange())
+        #expect(textView.string == "/init ")
+        #expect(textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) == nil)
+        // The typing above left its own undo record, which the pill-forming
+        // edit below shrinks the range of.
+        #expect(textView.undoManager?.canUndo == true)
+
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        #expect(ACPInputField.Coordinator.extract(storage).0 == "/init ")
+
+        // Replaying the prior typing's record after a direct storage
+        // mutation used to throw `NSRangeException` out of `NSTextStorage`;
+        // going through NSTextView's own insertText keeps it consistent.
+        #expect(textView.undoManager?.canUndo == true)
+        textView.undoManager?.undo()
+        #expect(textView.attributedString().length == 0
+            || textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) == nil)
+        while textView.undoManager?.canUndo == true { textView.undoManager?.undo() }
+        #expect(textView.string.isEmpty)
+        while textView.undoManager?.canRedo == true { textView.undoManager?.redo() }
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/init ")
+    }
+
+    @Test("accepting a leading command from the picker keeps undo history intact")
+    func pickerAcceptKeepsUndoHistory() throws {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        textView.allowsUndo = true
+        // A real insertText call leaves its own undo record behind, same
+        // precondition as the other undo-safety tests above — this one
+        // exercises the slash-PICKER accept path (`insertSlash`) rather
+        // than the typed-completion or late-arrival paths.
+        textView.insertText("/read-j", replacementRange: textView.selectedRange())
+        #expect(textView.undoManager?.canUndo == true)
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+
+        textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/read-jira-ticket")
+        #expect(ACPInputField.Coordinator.extract(storage).0 == "/read-jira-ticket ")
+        #expect(!textView.isSlashPanelOpen)
+        // The picked token is longer than the typed prefix it replaced and
+        // shrinks to a one-glyph chip; undo still walks back to the typed
+        // text and redo rebuilds the pill.
+        #expect(textView.undoManager?.canUndo == true)
+        textView.undoManager?.undo()
+        #expect(textView.attributedString().length == 0
+            || textView.attributedString().attribute(.commandChipName, at: 0, effectiveRange: nil) == nil)
+        #expect("/read-j".hasPrefix(textView.string))
+        while textView.undoManager?.canRedo == true { textView.undoManager?.redo() }
+        #expect(ACPInputField.Coordinator.extract(textView.attributedString()).0 == "/read-jira-ticket ")
+    }
+
+    @Test("late chipification preserves the caret's position past the command")
+    func lateChipificationPreservesCaretPastCommand() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions = []
+        textView.insertText("/init some text", replacementRange: textView.selectedRange())
+        let fullLength = (textView.string as NSString).length
+        textView.setSelectedRange(NSRange(location: fullLength, length: 0))
+
+        // The suggestion list arrives while the caret is still at the end
+        // of what the user kept typing past the command — it must not get
+        // yanked back to right after the newly formed chip.
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        #expect(ACPInputField.Coordinator.extract(storage).0 == "/init some text")
+        // The command shrank from 5 characters to a 1-character chip (a
+        // delta of -4); the caret shifts by that same delta, staying at
+        // the true end of the message instead of snapping to position 1.
+        #expect(textView.selectedRange() == NSRange(location: fullLength - 4, length: 0))
+    }
+
+    @Test("accepting a mid-message slash suggestion places the caret after it")
+    func midMessageSlashAcceptPlacesCaretCorrectly() throws {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        // Not a leading command (there's a word before the `/`), so this
+        // exercises `insertSlash`'s plain-text branch, which — like the
+        // leading branch above — reads `range.location` for the caret
+        // rather than `slashStart`, since `closeSlashPanel()` already
+        // reset `slashStart` to -1 by the time either branch runs.
+        textView.string = "please /rev"
+        textView.setSelectedRange(NSRange(location: 11, length: 0))
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+
+        textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
+
+        #expect(textView.string == "please /review ")
+        #expect(textView.selectedRange() == NSRange(location: (textView.string as NSString).length, length: 0))
+    }
+
+    @Test("late chipification preserves a selection past the command")
+    func lateChipificationPreservesSelectionPastCommand() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions = []
+        textView.insertText("/init some text", replacementRange: textView.selectedRange())
+        // Select "some", entirely past the leading command.
+        textView.setSelectedRange(NSRange(location: 6, length: 4))
+
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        // The command shrank from 5 characters to a 1-character chip (a
+        // delta of -4); the selection shifts by that same delta, keeping
+        // both its position AND its length — "some" stays selected
+        // instead of collapsing to a caret.
+        #expect(textView.selectedRange() == NSRange(location: 2, length: 4))
+        #expect((storage.string as NSString).substring(with: textView.selectedRange()) == "some")
+    }
+
+    @Test("late chipification preserves the surviving tail of an overlapping selection")
+    func lateChipificationPreservesOverlappingSelectionTail() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions = []
+        textView.insertText("/init some text", replacementRange: textView.selectedRange())
+        // Select the whole message: starts inside the command, extends
+        // into the body.
+        textView.setSelectedRange(NSRange(location: 0, length: 15))
+
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        // The command itself was consumed by the chip; only the body
+        // survives, anchored right after the chip instead of collapsing
+        // to a caret.
+        #expect(textView.selectedRange() == NSRange(location: 1, length: 10))
+        #expect((storage.string as NSString).substring(with: textView.selectedRange()) == " some text")
+    }
+
+    @Test("late chipification leaves a caret before the command untouched")
+    func lateChipificationLeavesLeadingCaretUntouched() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions = []
+        textView.insertText("/init body", replacementRange: textView.selectedRange())
+        // The caret is at the very start, before the command even begins —
+        // it touches none of the command's own characters.
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
+        textView.pillLeadingCommandIfNeeded()
+
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
+        // Nothing before the edit moved, so the caret stays exactly where
+        // it was instead of jumping to after the pill.
+        #expect(textView.selectedRange() == NSRange(location: 0, length: 0))
+    }
+
+    @Test("the slash picker stays open for `$`-prefixed skills")
+    func slashPickerAcceptsDollarSkills() {
+        let (textView, coordinator, window) = makeGhostHintTextView()
+        _ = window
+        coordinator.promptSuggestions.append(ACPPromptSuggestion(command: "/$brainstorming", description: "Ideas"))
+        textView.string = "/$bra"
+        textView.setSelectedRange(NSRange(location: 5, length: 0))
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+        textView.dismissSlashPanel()
     }
 
     @Test("drawing the ghost hint never touches the text storage")
@@ -1696,5 +2680,15 @@ struct ACPComposerDraftBridgeTests {
             .text("\n"),
             .text("queued"),
         ]))
+    }
+}
+
+// These tests run concurrently; OS key-window ownership belongs to the whole process.
+private final class NextPromptTestWindow: NSWindow {
+    private var keyForTest = true
+    override var isKeyWindow: Bool { keyForTest }
+    override func resignKey() {
+        keyForTest = false
+        super.resignKey()
     }
 }

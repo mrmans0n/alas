@@ -6,12 +6,103 @@ import Foundation
 // Concurrent git invocations on macos-26 CI have produced flaky hangs.
 @Suite(.serialized)
 struct GitServiceTests {
-    private func makeRepo(remote: String? = nil) async throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-svc-\(UUID().uuidString)")
+    // MARK: - Repository templates
+
+    /// Real repositories built once per test process and copied into a unique
+    /// directory per test, so each test starts from the same state the old
+    /// per-test init/config/commit(/push) sequences produced without
+    /// re-spawning those git processes every time. None of them track files,
+    /// so a copy needs no index refresh.
+    private struct RepoWithRemote: Sendable {
+        let repo: URL
+        let remote: URL
+    }
+
+    /// `main` with one empty `init` commit, no local config.
+    private static let plainRepoTemplate = Task { try await makePlainRepoTemplate() }
+    /// `main` with a configured identity and no commits.
+    private static let unbornContextRepoTemplate = Task { try await makeContextRepoTemplate(withInitialCommit: false) }
+    /// `main` with a configured identity and one empty `init` commit.
+    private static let contextRepoTemplate = Task { try await makeContextRepoTemplate(withInitialCommit: true) }
+    /// The plain template plus a `develop` branch (checked out), pushed to a
+    /// bare `origin` as `main` and `release/remote-only`, then fetched.
+    private static let branchesRepoTemplate = Task { try await makeBranchesRepoTemplate() }
+    /// Submodule superprojects built from one shared submodule source repo.
+    private static let submoduleSourceTemplate = Task { try await makePlainRepoTemplate() }
+    private static let registeredSubmoduleTemplate = Task {
+        try await makeSubmoduleTemplate(path: "Deps/Submodule", runsUpdate: true)
+    }
+    private static let spacedSubmoduleTemplate = Task {
+        try await makeSubmoduleTemplate(path: "Deps/Space Name", runsUpdate: true)
+    }
+    private static let addedSubmoduleTemplate = Task {
+        try await makeSubmoduleTemplate(path: "Deps/Submodule", runsUpdate: false)
+    }
+
+    private static func templateDirectory() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-svc-template-\(UUID().uuidString)")
+    }
+
+    private static func makePlainRepoTemplate() async throws -> URL {
+        let dir = templateDirectory()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: dir)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: dir)
+        try await templateGitOK(["init", "-q", "-b", "main"], cwd: dir)
+        try await templateGitOK(["commit", "-q", "--allow-empty", "-m", "init"], cwd: dir)
+        return dir
+    }
+
+    private static func makeContextRepoTemplate(withInitialCommit: Bool) async throws -> URL {
+        let dir = templateDirectory()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try await templateGitOK(["init", "-q", "-b", "main"], cwd: dir)
+        try await templateGitOK(["config", "user.email", "t@example.com"], cwd: dir)
+        try await templateGitOK(["config", "user.name", "Test User"], cwd: dir)
+        if withInitialCommit {
+            try await templateGitOK(["commit", "-q", "--allow-empty", "-m", "init"], cwd: dir)
+        }
+        return dir
+    }
+
+    private static func makeBranchesRepoTemplate() async throws -> RepoWithRemote {
+        let root = templateDirectory()
+        let repo = root.appendingPathComponent("repo")
+        let remote = root.appendingPathComponent("remote.git")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: try await plainRepoTemplate.value, to: repo)
+        try await templateGitOK(["checkout", "-q", "-b", "develop"], cwd: repo)
+        try await templateGitOK(["init", "--bare", "-q", remote.path], cwd: root)
+        try await templateGitOK(["remote", "add", "origin", remote.path], cwd: repo)
+        try await templateGitOK(["push", "-q", "origin", "main:main"], cwd: repo)
+        try await templateGitOK(["push", "-q", "origin", "develop:release/remote-only"], cwd: repo)
+        try await templateGitOK(["fetch", "-q", "origin"], cwd: repo)
+        return RepoWithRemote(repo: repo, remote: remote)
+    }
+
+    private static func makeSubmoduleTemplate(path: String, runsUpdate: Bool) async throws -> URL {
+        let submoduleRepo = try await submoduleSourceTemplate.value
+        let dir = templateDirectory()
+        try FileManager.default.copyItem(at: try await plainRepoTemplate.value, to: dir)
+        try await templateGitOK(
+            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, path],
+            cwd: dir
+        )
+        try await templateGitOK(["commit", "-q", "-am", "add submodule"], cwd: dir)
+        if runsUpdate {
+            try await templateGitOK(["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"], cwd: dir)
+        }
+        return dir
+    }
+
+    private static func copy(_ template: URL, prefix: String) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: template, to: dir)
+        return dir
+    }
+
+    private func makeRepo(remote: String? = nil) async throws -> URL {
+        let dir = try Self.copy(try await Self.plainRepoTemplate.value, prefix: "alas-svc")
         if let remote {
             _ = try await Process.git(["remote", "add", "origin", remote], cwd: dir)
         }
@@ -19,20 +110,34 @@ struct GitServiceTests {
     }
 
     private func makeContextSnapshotRepo(withInitialCommit: Bool = true) async throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-context-snapshot-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try await gitOK(["init", "-q", "-b", "main"], cwd: dir)
-        try await gitOK(["config", "user.email", "t@example.com"], cwd: dir)
-        try await gitOK(["config", "user.name", "Test User"], cwd: dir)
-        if withInitialCommit {
-            try await gitOK(["commit", "-q", "--allow-empty", "-m", "init"], cwd: dir)
-        }
-        return dir
+        let template = withInitialCommit ? Self.contextRepoTemplate : Self.unbornContextRepoTemplate
+        return try Self.copy(try await template.value, prefix: "alas-context-snapshot")
+    }
+
+    /// A copy of `branchesRepoTemplate` whose `origin` points at its own copy
+    /// of the bare remote (`refs/remotes/origin/*` survive the copy).
+    private func makeBranchesRepo() async throws -> (repo: URL, remote: URL) {
+        let template = try await Self.branchesRepoTemplate.value
+        let repo = try Self.copy(template.repo, prefix: "alas-svc")
+        let remote = try Self.copy(template.remote, prefix: "alas-remote")
+        try await gitOK(["remote", "set-url", "origin", remote.path], cwd: repo)
+        return (repo, remote)
+    }
+
+    /// A copy of a submodule superproject template. The submodule's gitfile
+    /// and `core.worktree` are relative, so the copy is self-contained; its
+    /// `.gitmodules` URL still names the shared (never mutated) source repo.
+    private func makeSubmoduleRepo(_ template: Task<URL, any Error>) async throws -> URL {
+        try Self.copy(try await template.value, prefix: "alas-svc")
     }
 
     @discardableResult
     private func gitOK(_ args: [String], cwd: URL) async throws -> ProcessResult {
+        try await Self.templateGitOK(args, cwd: cwd)
+    }
+
+    @discardableResult
+    private static func templateGitOK(_ args: [String], cwd: URL) async throws -> ProcessResult {
         let result = try await Process.git(args, cwd: cwd)
         guard result.exitCode == 0 else {
             throw NSError(
@@ -110,20 +215,11 @@ struct GitServiceTests {
     }
 
     @Test func branchesIncludesLocalAndRemoteRefs() async throws {
-        let repo = try await makeRepo()
-        let remote = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-remote-\(UUID().uuidString)")
+        let (repo, remote) = try await makeBranchesRepo()
         defer {
             try? FileManager.default.removeItem(at: repo)
             try? FileManager.default.removeItem(at: remote)
         }
-
-        _ = try await Process.git(["checkout", "-q", "-b", "develop"], cwd: repo)
-        _ = try await Process.git(["init", "--bare", "-q", remote.path], cwd: nil)
-        _ = try await Process.git(["remote", "add", "origin", remote.path], cwd: repo)
-        _ = try await Process.git(["push", "-q", "origin", "main:main"], cwd: repo)
-        _ = try await Process.git(["push", "-q", "origin", "develop:release/remote-only"], cwd: repo)
-        _ = try await Process.git(["fetch", "-q", "origin"], cwd: repo)
 
         let branches = try await GitService().branches(at: repo)
 
@@ -135,20 +231,11 @@ struct GitServiceTests {
     }
 
     @Test func localBranchesExcludesRemoteTrackingBranches() async throws {
-        let repo = try await makeRepo()
-        let remote = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-remote-\(UUID().uuidString)")
+        let (repo, remote) = try await makeBranchesRepo()
         defer {
             try? FileManager.default.removeItem(at: repo)
             try? FileManager.default.removeItem(at: remote)
         }
-
-        _ = try await Process.git(["checkout", "-q", "-b", "develop"], cwd: repo)
-        _ = try await Process.git(["init", "--bare", "-q", remote.path], cwd: nil)
-        _ = try await Process.git(["remote", "add", "origin", remote.path], cwd: repo)
-        _ = try await Process.git(["push", "-q", "origin", "main:main"], cwd: repo)
-        _ = try await Process.git(["push", "-q", "origin", "develop:release/remote-only"], cwd: repo)
-        _ = try await Process.git(["fetch", "-q", "origin"], cwd: repo)
 
         let branches = try await GitService().localBranches(at: repo)
 
@@ -607,8 +694,7 @@ struct GitServiceTests {
         )
         try FileManager.default.createDirectory(at: repo.appendingPathComponent("generated"), withIntermediateDirectories: true)
         try "tracked\n".write(to: repo.appendingPathComponent("generated/keep.txt"), atomically: true, encoding: .utf8)
-        _ = try await Process.git(["add", ".gitignore"], cwd: repo)
-        _ = try await Process.git(["add", "-f", "generated/keep.txt"], cwd: repo)
+        _ = try await Process.git(["add", "-f", ".gitignore", "generated/keep.txt"], cwd: repo)
         _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
 
         let tree = try await GitService().fileTree(worktreePath: repo, statusEntries: [])
@@ -692,8 +778,7 @@ struct GitServiceTests {
         try "generated/\n".write(to: repo.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
         try FileManager.default.createDirectory(at: repo.appendingPathComponent("generated"), withIntermediateDirectories: true)
         try "tracked\n".write(to: repo.appendingPathComponent("generated/keep.txt"), atomically: true, encoding: .utf8)
-        _ = try await Process.git(["add", ".gitignore"], cwd: repo)
-        _ = try await Process.git(["add", "-f", "generated/keep.txt"], cwd: repo)
+        _ = try await Process.git(["add", "-f", ".gitignore", "generated/keep.txt"], cwd: repo)
         _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
 
         let children = try await GitService().fileTreeChildren(worktreePath: repo, path: "generated")
@@ -709,8 +794,7 @@ struct GitServiceTests {
         try "generated/\n".write(to: repo.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
         try FileManager.default.createDirectory(at: repo.appendingPathComponent("generated/nested"), withIntermediateDirectories: true)
         try "tracked\n".write(to: repo.appendingPathComponent("generated/nested/keep.txt"), atomically: true, encoding: .utf8)
-        _ = try await Process.git(["add", ".gitignore"], cwd: repo)
-        _ = try await Process.git(["add", "-f", "generated/nested/keep.txt"], cwd: repo)
+        _ = try await Process.git(["add", "-f", ".gitignore", "generated/nested/keep.txt"], cwd: repo)
         _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
 
         let generatedChildren = try await GitService().fileTreeChildren(worktreePath: repo, path: "generated")
@@ -765,25 +849,9 @@ struct GitServiceTests {
     }
 
     @Test func submodulePathsDetectsRegisteredSubmodules() async throws {
-        let repo = try await makeRepo()
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alassubmodule-\(UUID().uuidString)")
-        defer {
-            try? FileManager.default.removeItem(at: repo)
-            try? FileManager.default.removeItem(at: submoduleRepo)
-        }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: submoduleRepo)
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
-            cwd: repo
-        )
+        // `submodule add` + commit + `submodule update --init`, from a template.
+        let repo = try await makeSubmoduleRepo(Self.registeredSubmoduleTemplate)
+        defer { try? FileManager.default.removeItem(at: repo) }
 
         let svc = GitService()
         let paths = try await svc.submodulePaths(worktreePath: repo)
@@ -791,25 +859,9 @@ struct GitServiceTests {
     }
 
     @Test func submodulePathsHandlesSpacedSubmodulePath() async throws {
-        let repo = try await makeRepo()
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-spaced-sub-\(UUID().uuidString)")
-        defer {
-            try? FileManager.default.removeItem(at: repo)
-            try? FileManager.default.removeItem(at: submoduleRepo)
-        }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: submoduleRepo)
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Space Name"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"],
-            cwd: repo
-        )
+        // `submodule add` + commit + `submodule update --init`, from a template.
+        let repo = try await makeSubmoduleRepo(Self.spacedSubmoduleTemplate)
+        defer { try? FileManager.default.removeItem(at: repo) }
 
         let svc = GitService()
         let paths = try await svc.submodulePaths(worktreePath: repo)
@@ -817,21 +869,9 @@ struct GitServiceTests {
     }
 
     @Test func submodulePathsHandlesDeletedSubmodule() async throws {
-        let repo = try await makeRepo()
-        let submoduleRepo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-deletedsub-\(UUID().uuidString)")
-        defer {
-            try? FileManager.default.removeItem(at: repo)
-            try? FileManager.default.removeItem(at: submoduleRepo)
-        }
-        try FileManager.default.createDirectory(at: submoduleRepo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: submoduleRepo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: submoduleRepo)
-        _ = try await Process.git(
-            ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submoduleRepo.path, "Deps/Submodule"],
-            cwd: repo
-        )
-        _ = try await Process.git(["commit", "-q", "-am", "add submodule"], cwd: repo)
+        // `submodule add` + commit (no update), from a template.
+        let repo = try await makeSubmoduleRepo(Self.addedSubmoduleTemplate)
+        defer { try? FileManager.default.removeItem(at: repo) }
 
         // Remove the submodule directory from disk without running submodule deinit
         try FileManager.default.removeItem(at: repo.appendingPathComponent("Deps/Submodule"))
@@ -842,15 +882,10 @@ struct GitServiceTests {
     }
 
     private func makeRepoWithRemote() async throws -> (URL, URL) {
-        let repo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-revparse-\(UUID().uuidString)")
+        // Configured identity + empty `init` commit on `main`, from a template.
+        let repo = try await makeContextSnapshotRepo()
         let remote = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-revparse-rmt-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
-        _ = try await Process.git(["config", "user.email", "t@e"], cwd: repo)
-        _ = try await Process.git(["config", "user.name", "t"], cwd: repo)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
         _ = try await Process.git(["init", "--bare", "-q", remote.path], cwd: nil)
         _ = try await Process.git(["remote", "add", "origin", remote.path], cwd: repo)
         _ = try await Process.git(["push", "-q", "-u", "origin", "main"], cwd: repo)
@@ -908,14 +943,9 @@ struct GitServiceTests {
         // Repo with a SINGLE root commit. base = "<rootSHA>^" (no parent).
         // rangeChangedFiles must not throw and must treat the missing parent
         // as the canonical empty tree, so all files in the root commit appear.
-        let repo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-root-range-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        let repo = try await makeContextSnapshotRepo(withInitialCommit: false)
         defer { try? FileManager.default.removeItem(at: repo) }
 
-        try await gitOK(["init", "-q", "-b", "main"], cwd: repo)
-        try await gitOK(["config", "user.email", "t@example.com"], cwd: repo)
-        try await gitOK(["config", "user.name", "Test User"], cwd: repo)
         try writeText("hello\n", "hello.txt", in: repo)
         try await gitOK(["add", "."], cwd: repo)
         try await gitOK(["commit", "-q", "-m", "root"], cwd: repo)
@@ -935,14 +965,9 @@ struct GitServiceTests {
     @Test func rangeDiffHandlesRootCommitParentBase() async throws {
         // Same single-commit repo; rangeDiff must return non-empty hunks
         // for the file introduced in the root commit.
-        let repo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-root-rdiff-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        let repo = try await makeContextSnapshotRepo(withInitialCommit: false)
         defer { try? FileManager.default.removeItem(at: repo) }
 
-        try await gitOK(["init", "-q", "-b", "main"], cwd: repo)
-        try await gitOK(["config", "user.email", "t@example.com"], cwd: repo)
-        try await gitOK(["config", "user.name", "Test User"], cwd: repo)
         try writeText("world\n", "world.txt", in: repo)
         try await gitOK(["add", "."], cwd: repo)
         try await gitOK(["commit", "-q", "-m", "root"], cwd: repo)

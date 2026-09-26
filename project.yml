@@ -16,6 +16,15 @@ settings:
     GENERATE_INFOPLIST_FILE: NO
 
 packages:
+  MLXSwiftLM:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    exactVersion: 3.31.4
+  MLXSwift:
+    url: https://github.com/ml-explore/mlx-swift
+    exactVersion: 0.31.4
+  SwiftTransformers:
+    url: https://github.com/huggingface/swift-transformers
+    exactVersion: 1.3.0
   # Only the tree-sitter *runtime* and Swift API come from SwiftPM. The
   # grammars themselves live in ThirdParty/treesitter-pack, a Rust staticlib
   # that depends on them via cargo and exposes languages + highlight queries
@@ -47,6 +56,10 @@ targets:
         buildPhase: resources
       - path: Alas/Resources/MCPLogo-LICENSE.txt
         buildPhase: resources
+      - path: Alas/Resources/LocalTextModelLicenses.txt
+        buildPhase: resources
+      - path: Alas/Resources/LocalTextModelManifest.json
+        buildPhase: resources
       - path: Alas/Resources/RemoteWeb
         buildPhase: resources
         type: folder
@@ -54,10 +67,11 @@ targets:
       path: Alas/Resources/Info.plist
       properties:
         AlasBuildDate: ""
+        AlasBuildConfiguration: "$(CONFIGURATION)"
         AlasGitSHA: ""
         AlasReleaseTrack: stable
         CFBundleDevelopmentRegion: en
-        CFBundleShortVersionString: "0.19.10"
+        CFBundleShortVersionString: "0.19.13"
         CFBundleVersion: "1"
         LSMinimumSystemVersion: "15.0"
         NSHumanReadableCopyright: "Copyright © 2026 Nacho Lopez"
@@ -80,6 +94,16 @@ targets:
       - sdk: AppIntents.framework
       - sdk: Carbon.framework
       - sdk: libsqlite3.tbd
+      - package: MLXSwift
+        product: MLX
+      - package: MLXSwiftLM
+        product: MLXLLM
+      - package: MLXSwiftLM
+        product: MLXLMCommon
+      - package: MLXSwiftLM
+        product: MLXHuggingFace
+      - package: SwiftTransformers
+        product: Tokenizers
       - package: SwiftTreeSitter
         product: SwiftTreeSitter
       - package: Markdown

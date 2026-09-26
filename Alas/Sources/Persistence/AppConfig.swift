@@ -44,6 +44,8 @@ struct AppConfig: Codable, Equatable {
     /// Preview gate for persistent multi-repository Workspaces. This remains
     /// off until the feature has completed its preview acceptance matrix.
     var workspacesEnabled: Bool = false
+    var nextPromptSuggestionsEnabled: Bool = false
+    var sessionSummariesEnabled: Bool = false
     /// Preview gate for the Needs Attention inbox and project affordances.
     /// Events continue collecting while its presentation is disabled.
     var needsAttentionEnabled: Bool = false
@@ -280,6 +282,10 @@ struct AppConfig: Codable, Equatable {
     struct Harness: Codable, Equatable {
         var notifyOnFinish: Bool
         var notifyOnAwaiting: Bool
+        /// Seconds a delegated child may stay blocked on a human decision
+        /// before its parent is woken. The parent always gets a passive
+        /// notice immediately. 0 disables escalation. Default: 30.
+        var acpDelegatedBlockerEscalationSeconds: Int
         var dismissedHookInstallNudges: [String]
         var dismissedACPSetupNudges: [String]
         var confirmCloseChatTabs: Bool
@@ -310,7 +316,7 @@ struct AppConfig: Codable, Equatable {
         var acpDictationLocale: String
 
         enum CodingKeys: String, CodingKey {
-            case notifyOnFinish, notifyOnAwaiting,
+            case notifyOnFinish, notifyOnAwaiting, acpDelegatedBlockerEscalationSeconds,
                  dismissedHookInstallNudges, dismissedACPSetupNudges,
                  confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault, acpLocalTitlesEnabled, acpShowMinimap,
                  acpCollapseFinishedToolCalls,
@@ -318,6 +324,7 @@ struct AppConfig: Codable, Equatable {
         }
 
         init(notifyOnFinish: Bool = true, notifyOnAwaiting: Bool = true,
+             acpDelegatedBlockerEscalationSeconds: Int = 30,
              dismissedHookInstallNudges: [String] = [],
              dismissedACPSetupNudges: [String] = [],
              confirmCloseChatTabs: Bool = false,
@@ -332,6 +339,7 @@ struct AppConfig: Codable, Equatable {
         {
             self.notifyOnFinish = notifyOnFinish
             self.notifyOnAwaiting = notifyOnAwaiting
+            self.acpDelegatedBlockerEscalationSeconds = acpDelegatedBlockerEscalationSeconds
             self.dismissedHookInstallNudges = dismissedHookInstallNudges
             self.dismissedACPSetupNudges = dismissedACPSetupNudges
             self.confirmCloseChatTabs = confirmCloseChatTabs
@@ -349,6 +357,8 @@ struct AppConfig: Codable, Equatable {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             notifyOnFinish = (try? c.decode(Bool.self, forKey: .notifyOnFinish)) ?? true
             notifyOnAwaiting = (try? c.decode(Bool.self, forKey: .notifyOnAwaiting)) ?? true
+            acpDelegatedBlockerEscalationSeconds =
+                (try? c.decode(Int.self, forKey: .acpDelegatedBlockerEscalationSeconds)) ?? 30
             dismissedHookInstallNudges = (try? c.decode([String].self, forKey: .dismissedHookInstallNudges)) ?? []
             dismissedACPSetupNudges = (try? c.decode([String].self, forKey: .dismissedACPSetupNudges)) ?? []
             confirmCloseChatTabs = (try? c.decode(Bool.self, forKey: .confirmCloseChatTabs)) ?? false
@@ -581,6 +591,8 @@ struct AppConfig: Codable, Equatable {
         ),
         files: Files(showIgnored: true, bookmarksPaneHeight: nil),
         workspacesEnabled: false,
+        nextPromptSuggestionsEnabled: false,
+        sessionSummariesEnabled: false,
         needsAttentionEnabled: false,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
@@ -674,6 +686,8 @@ extension AppConfig {
              files,
              remote,
              workspacesEnabled,
+             nextPromptSuggestionsEnabled,
+             sessionSummariesEnabled,
              needsAttentionEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
@@ -917,6 +931,8 @@ extension AppConfig {
         // Workspace preview is opt-in. Configs written before the preview
         // must continue to load with the feature disabled.
         workspacesEnabled = (try? c.decode(Bool.self, forKey: .workspacesEnabled)) ?? false
+        nextPromptSuggestionsEnabled = (try? c.decode(Bool.self, forKey: .nextPromptSuggestionsEnabled)) ?? false
+        sessionSummariesEnabled = (try? c.decode(Bool.self, forKey: .sessionSummariesEnabled)) ?? false
         // Needs Attention remains opt-in while its entry points are in preview.
         needsAttentionEnabled = (try? c.decode(Bool.self, forKey: .needsAttentionEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []

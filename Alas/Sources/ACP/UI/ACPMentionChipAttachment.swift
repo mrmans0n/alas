@@ -93,7 +93,9 @@ private final class ACPMentionChipCell: NSTextAttachmentCell {
     }
 }
 
-private enum ACPMentionChipMetrics {
+enum ACPMentionChipMetrics {
+    static let height: CGFloat = 18
+
     static var labelFont: NSFont {
         NSFont.monospacedSystemFont(ofSize: 11.5, weight: .medium)
     }
@@ -101,7 +103,7 @@ private enum ACPMentionChipMetrics {
     static func cellSize(for label: String) -> NSSize {
         let attrs: [NSAttributedString.Key: Any] = [.font: labelFont]
         let textSize = (label as NSString).size(withAttributes: attrs)
-        return NSSize(width: ceil(textSize.width) + 14, height: 18)
+        return NSSize(width: ceil(textSize.width) + 14, height: height)
     }
 
     static func baselineOffset(for font: NSFont, attachmentHeight: CGFloat) -> CGFloat {

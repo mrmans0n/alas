@@ -6,6 +6,11 @@ struct ACPToolbar: View {
     let agentLookup: (String) -> AgentDefinition?
     let state: AppState
     let worktree: Worktree
+    @ObservedObject var sessionSummaryCoordinator: SessionSummaryCoordinator
+    let sessionSummariesRequested: Bool
+    let sessionSummariesRuntimeEnabled: Bool
+    let localTextSupported: Bool
+    let localTextModelState: LocalTextModelState
     var owner: SessionOwnerID? = nil
     var onOpenPreview: (() -> Void)? = nil
     @Environment(\.theme) private var theme
@@ -60,6 +65,14 @@ struct ACPToolbar: View {
             }
             ACPPlanPill(transcript: session.transcript)
                 .layoutPriority(1)
+            ACPSessionSummaryControl(
+                coordinator: sessionSummaryCoordinator,
+                session: session,
+                requested: sessionSummariesRequested,
+                runtimeEnabled: sessionSummariesRuntimeEnabled,
+                supported: localTextSupported,
+                model: localTextModelState
+            )
             Spacer(minLength: 0)
             if let onOpenPreview {
                 Button(action: onOpenPreview) {

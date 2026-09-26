@@ -215,15 +215,9 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
             try? FileManager.default.removeItem(at: repoB)
             try? FileManager.default.removeItem(at: checkoutRoot)
         }
-        try FileManager.default.createDirectory(at: repoA, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: repoB, withIntermediateDirectories: true)
+        let headA = try await SeedRepositoryTemplate.copy(to: repoA)
+        let headB = try await SeedRepositoryTemplate.copy(to: repoB)
         try FileManager.default.createDirectory(at: checkoutRoot, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repoA)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repoA)
-        let headA = try await Process.git(["rev-parse", "HEAD"], cwd: repoA).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repoB)
-        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repoB)
-        let headB = try await Process.git(["rev-parse", "HEAD"], cwd: repoB).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("alas-\(suffix)-workspace-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: workspaceURL) }
@@ -584,11 +578,7 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
             memberAvailability: WorkspaceCheckoutMemberAvailability = .available
         ) async throws -> Fixture {
             let repo = FileManager.default.temporaryDirectory.appendingPathComponent("alas-\(suffix)-\(UUID().uuidString)")
-            try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-            _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
-            _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
-            let head = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
-                .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            let head = try await SeedRepositoryTemplate.copy(to: repo)
             // A dedicated root, not the shared temp directory: root cleanup
             // inspects every entry under `rootPath` that isn't a managed
             // member, and the shared temp directory is full of unrelated
@@ -651,5 +641,43 @@ struct WorkspaceOwnedWorktreeDeletionGuardTests {
 
             return Fixture(state: state, workspaceStore: workspaceStore, project: project, worktree: worktree, repo: repo, linked: linked, checkoutRoot: checkoutRoot, workspaceURL: workspaceURL, checkoutID: checkoutID)
         }
+    }
+}
+
+/// The repository every test here starts from — `git init -q -b main`
+/// plus one empty `init` commit — built once per test process and copied
+/// per repository instead of spawning `init`, `commit`, and `rev-parse`
+/// each time. The copy is taken before anything registers the repository
+/// (no project, lineage marker, or linked worktree exists yet, and a plain
+/// repository records no absolute paths), so each copy is an independent
+/// repository that picks up its own lineage and worktrees afterwards. The
+/// empty commit tracks nothing, so the copied index has no stat entries
+/// that could go stale.
+private enum SeedRepositoryTemplate {
+    static let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("alas-deletion-guard-template-\(UUID().uuidString)")
+    static let ready = Task<String, any Error> {
+        let root = SeedRepositoryTemplate.root
+        do {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            for args in [["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"]] {
+                let result = try await Process.git(args, cwd: root)
+                guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+            }
+            let head = try await Process.git(["rev-parse", "HEAD"], cwd: root)
+            guard head.exitCode == 0 else { throw ProcessError.nonZeroExit(head.exitCode, head.stderr) }
+            atexit { try? FileManager.default.removeItem(at: SeedRepositoryTemplate.root) }
+            return head.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            try? FileManager.default.removeItem(at: root)
+            throw error
+        }
+    }
+
+    /// Copies the template to `destination` and returns its HEAD commit.
+    static func copy(to destination: URL) async throws -> String {
+        let head = try await ready.value
+        try FileManager.default.copyItem(at: root, to: destination)
+        return head
     }
 }

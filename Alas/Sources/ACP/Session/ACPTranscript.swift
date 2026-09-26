@@ -8,7 +8,9 @@ import Combine
 /// state no longer invalidate the message list.
 @MainActor
 final class ACPTranscript: ObservableObject {
+    var onNextPromptActivity: (() -> Void)?
     @Published var messages: [ACPMessage] = [] {
+        willSet { onNextPromptActivity?() }
         didSet {
             let mutation = pendingMessagesMutation
             // Incremental mutation helpers maintain timestamps directly. Only
@@ -58,12 +60,12 @@ final class ACPTranscript: ObservableObject {
     /// Mutation log consumed by remote-web gateways for incremental deltas.
     /// Recording is enabled only while at least one gateway is subscribed.
     let changeLog = ACPTranscriptChangeLog()
-    @Published var streamingState: ACPSession.StreamingState = .idle
-    @Published var pendingPermission: ACPSession.PendingPermission?
-    @Published var pendingQuestion: ACPSession.PendingQuestion?
-    @Published var pendingPlan: ACPSession.PendingPlan?
-    @Published var pendingUserInputs: [ACPUserInputRequest] = []
-    @Published var urlElicitationWaits: [ACPURLElicitationWait] = []
+    @Published var streamingState: ACPSession.StreamingState = .idle { willSet { onNextPromptActivity?() } }
+    @Published var pendingPermission: ACPSession.PendingPermission? { willSet { onNextPromptActivity?() } }
+    @Published var pendingQuestion: ACPSession.PendingQuestion? { willSet { onNextPromptActivity?() } }
+    @Published var pendingPlan: ACPSession.PendingPlan? { willSet { onNextPromptActivity?() } }
+    @Published var pendingUserInputs: [ACPUserInputRequest] = [] { willSet { onNextPromptActivity?() } }
+    @Published var urlElicitationWaits: [ACPURLElicitationWait] = [] { willSet { onNextPromptActivity?() } }
     /// Items of the plan emitted for the current turn. Updated when the
     /// transcript array changes so high-frequency streaming ticks do not scan
     /// the full message list from `ACPSessionView` / plan UI bodies.
@@ -561,6 +563,7 @@ final class ACPTranscript: ObservableObject {
     /// below is intentionally NOT throttled — every chunk still records a
     /// per-index dirty entry for remote-web gateway consumers.
     func noteStreamingChange(at index: Int) {
+        onNextPromptActivity?()
         if changeLog.isTracking, messages.indices.contains(index) {
             changeLog.record(index: index)
         }

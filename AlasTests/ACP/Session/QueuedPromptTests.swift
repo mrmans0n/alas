@@ -59,10 +59,18 @@ struct QueuedPromptTests {
         let n = q.normalizedAfterRestore()
         #expect(n.status == .pending)
         // A legacy mid-send row without dispatch provenance may have reached
-        // the agent, so it is marked uncertain and the error is replaced by
-        // the uncertainty notice.
+        // the agent, so it is marked uncertain — while an existing, specific
+        // error survives normalization.
         #expect(n.deliveryUncertain)
-        #expect(n.lastError == QueuedPrompt.deliveryUncertaintyMessage)
+        #expect(n.lastError == "boom")
+
+        // A legacy row with no prior error takes the uncertainty notice.
+        let errored = QueuedPrompt(id: UUID(), blocks: [.text("x")],
+                                   enqueuedAt: .init(), status: .sending, lastError: nil)
+        let notified = errored.normalizedAfterRestore()
+        #expect(notified.status == .pending)
+        #expect(notified.deliveryUncertain)
+        #expect(notified.lastError == QueuedPrompt.deliveryUncertaintyMessage)
 
         // Explicit provenance (or an opt-out) keeps the caller's lastError.
         let provenanced = QueuedPrompt(id: UUID(), blocks: [.text("x")],

@@ -272,4 +272,37 @@ struct ACPMCPPromptPreambleTests {
         #expect(mcp.contains(expected))
         #expect(cli.contains(expected))
     }
+
+    @Test("root preamble tells parents they will be notified about delegated children")
+    func rootMentionsOutcomeNotifications() throws {
+        let mcp = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: false, userServerNames: [], mode: .mcp))
+        #expect(mcp.contains("you do not need to poll session_list"))
+        let cli = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: false, userServerNames: [],
+            mode: .cli(serverAvailability: .notInstalled)))
+        #expect(cli.contains("you do not need to poll `alas session list`"))
+    }
+
+    @Test("delegated preamble does not mention outcome notifications")
+    func delegatedOmitsOutcomeNotifications() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: true, userServerNames: []))
+        #expect(!text.contains("you do not need to poll"))
+    }
+
+    @Test("root preamble explains blocked children and the approval boundary")
+    func rootMentionsBlockedChildren() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: false, userServerNames: [], mode: .mcp))
+        #expect(text.contains("blocked"))
+        #expect(text.contains("cannot answer"))
+    }
+
+    @Test("delegated preamble does not mention blocked children")
+    func delegatedOmitsBlockedChildren() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: true, userServerNames: []))
+        #expect(!text.contains("cannot answer"))
+    }
 }

@@ -8,10 +8,61 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 🐛 Fixes
 
-- Submit a required federated elicitation array with an empty selection: "required" now means the property must be present, and only a declared `minItems` constrains the item count.
-- Report a failed submit to the composer and to remote clients when the writer lease is lost mid-send, and close a remote ACP session whose creation completed after its chat was disposed.
 - After transient report-finalization retries succeed, continue scheduled cleanup and completion notifications; skip duplicate zmx kills after verified scheduled-script termination and let quit-time drains return when kill subprocesses finish, without waiting on MainActor bookkeeping; verify cleanup reachability against branches advertised by `origin` (#1465).
 - Serialize terminal and ACP writer admission with cleanup staging; retain worktrees with ignored data, unpublished submodule state, or unverified terminal kills; preserve report-history pagination boundaries and refreshes.
+
+## [0.19.12] - 2026-09-26
+
+### ✨ Features
+
+- Add on-device ACP session summaries and resume cards, backed by a shared local text model runtime (#1506).
+- Recognize GitHub and GitLab pull request, merge request, and issue references in the composer and transcript, with inline chips and previews (#1522).
+- Render ACP skills and slash commands as pills in the composer and transcript (#1474).
+- Notify parent sessions automatically when delegated children finish or fail (#1499).
+- Tell parent sessions when a delegated child blocks on a human decision (#1524).
+- Redesign the native peer sidebar to match the repository tree (#1493).
+
+### 🐛 Fixes
+
+- Preserve typed reference chips through editing, copy, paste, and undo (#1497, #1529).
+- Close deferred delegated-outcome gaps (#1507).
+- Remove the checkpoint staging tree after a completed restore (#1528).
+- Fix ACP composer sizing and a duplicate `insertText` override that broke the main build (#1494, #1496).
+- Compile memory-pressure cancellation under Swift 6.3 strict concurrency.
+
+### 🏗️ Internal
+
+- Replace timing sleeps with deterministic waits across the test suites (#1500, #1501, #1502, #1505, #1511, #1514, #1515, #1516, #1517, #1518, #1520, #1521).
+- Prune oversized suites, speed up Git-heavy suites, add test-growth reporting, and document the Swift test cost policy (#1503, #1504, #1510, #1512, #1519, #1530).
+- Add the Swift Testing expert skill and fix nightly macro validation (#1508, #1509).
+
+## [0.19.11] - 2026-09-25
+
+### ✨ Features
+
+- Add an opt-in, Debug-only experiment that suggests the next ACP prompt on-device and lets the user accept it with Tab (#1476).
+
+### 🐛 Fixes
+
+- Move the agent-hook socket accept loop off Swift's cooperative pool so long-lived listeners cannot starve async work or tests (#1473).
+
+### 🏗️ Internal
+
+- Wait for runs to reach the running state in tests instead of relying on a fixed delay (#1475).
+- Update SwiftTransformers from 1.3.0 to 1.3.4 (#1478).
+
+## [0.19.10] - 2026-09-25
+
+### ✨ Features
+
+- Group web-client sessions by their owning server and derive badge counts from gateway state (#1470).
+
+### 🐛 Fixes
+
+- Keep the ACP composer aligned with the transcript column on wide panes instead of stretching it across the window (#1471).
+- Submit a required federated elicitation array with an empty selection: "required" now means the property must be present, and only a declared `minItems` constrains the item count (#1469).
+- Report a failed submit to the composer and to remote clients when the writer lease is lost mid-send, and close a remote ACP session whose creation completed after its chat was disposed (#1468).
+- Hide the new-chat empty state as soon as a prompt is queued (#1472).
 
 ## [0.19.9] - 2026-09-25
 

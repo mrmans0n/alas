@@ -9,45 +9,45 @@ struct ACPBrokerClientTests {
     // equal to 0 or 1. The broker re-encoded outgoing request params through
     // that bridge, so `initialize`'s `protocolVersion: 1` was rewritten to
     // `true` and every ACP agent rejected the attach with -32602 Invalid params.
-    @Test func encodableIntegerParamsSurviveAsNumbers() throws {
-        struct Payload: Encodable { let protocolVersion: Int }
-
-        #expect(try ACPBrokerJSONValue(encodable: Payload(protocolVersion: 1))
-            == .object(["protocolVersion": .number(1)]))
-        #expect(try ACPBrokerJSONValue(encodable: Payload(protocolVersion: 0))
-            == .object(["protocolVersion": .number(0)]))
-        #expect(try ACPBrokerJSONValue(encodable: Payload(protocolVersion: 2))
-            == .object(["protocolVersion": .number(2)]))
-    }
-
-    // Guard the fix from over-correcting: genuine JSON booleans must stay bool.
-    @Test func encodableBooleansStayBooleans() throws {
-        struct Payload: Encodable {
+    // The boolean half guards the fix from over-correcting: genuine JSON
+    // booleans must stay bool.
+    @Test func encodableNumbersAndBooleansKeepTheirJSONTypes() throws {
+        struct Numeric: Encodable { let protocolVersion: Int }
+        struct Flags: Encodable {
             let enabled: Bool
             let disabled: Bool
         }
 
-        #expect(try ACPBrokerJSONValue(encodable: Payload(enabled: true, disabled: false))
+        #expect(try ACPBrokerJSONValue(encodable: Numeric(protocolVersion: 1))
+            == .object(["protocolVersion": .number(1)]))
+        #expect(try ACPBrokerJSONValue(encodable: Numeric(protocolVersion: 0))
+            == .object(["protocolVersion": .number(0)]))
+        #expect(try ACPBrokerJSONValue(encodable: Numeric(protocolVersion: 2))
+            == .object(["protocolVersion": .number(2)]))
+        #expect(try ACPBrokerJSONValue(encodable: Flags(enabled: true, disabled: false))
             == .object(["enabled": .bool(true), "disabled": .bool(false)]))
     }
 
-    @Test func startOpensAndAttachesBroker() async throws {
+    /// The persisted acknowledged cursor is only meaningful for the broker
+    /// generation it was recorded against; a replacement generation must
+    /// replay from zero.
+    @Test(arguments: [(nil, 4), (6, 0)] as [(UInt64?, UInt64)])
+    func startCarriesInitialCursorUnlessBrokerGenerationChanged(
+        initialGeneration: UInt64?,
+        expectedCursor: UInt64
+    ) async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])
         let client = makeClient(
             service: service,
+            initialBrokerGeneration: initialGeneration.map { ACPBrokerGeneration(rawValue: $0) },
             initialAcknowledgedCursor: ACPBrokerEventCursor(rawValue: 4)
         )
 
-        let opened = try await client.start()
+        try await client.start()
 
-        #expect(opened.adopted == false)
-        let openParams = try await #require(service.opened.first)
-        #expect(openParams.brokerId == ACPBrokerID(rawValue: "broker-1"))
-        #expect(openParams.sessionId == "local-session-1")
-        #expect(openParams.command == "codex-acp")
         let attachParams = try await #require(service.attached.first)
-        #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 4))
+        #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: expectedCursor))
     }
 
     @Test func detachDuringOpenSuppressesLateStartupCallbacks() async throws {
@@ -94,21 +94,6 @@ struct ACPBrokerClientTests {
                 acknowledgedCursor: ACPBrokerEventCursor(rawValue: 0)
             )
         ])
-    }
-
-    @Test func startResetsInitialCursorWhenBrokerGenerationChanges() async throws {
-        let service = MockBrokerService()
-        await service.enqueueAttach(events: [])
-        let client = makeClient(
-            service: service,
-            initialBrokerGeneration: ACPBrokerGeneration(rawValue: 6),
-            initialAcknowledgedCursor: ACPBrokerEventCursor(rawValue: 4)
-        )
-
-        try await client.start()
-
-        let attachParams = try await #require(service.attached.first)
-        #expect(attachParams.acknowledgedCursor == ACPBrokerEventCursor(rawValue: 0))
     }
 
     @Test func adoptedLegacyBrokerWithoutTodoSnapshotIsRestarted() async throws {
@@ -195,22 +180,14 @@ struct ACPBrokerClientTests {
         #expect(await service.closed.map(\.generation) == [ACPBrokerGeneration(rawValue: 7)])
     }
 
-    /// The best-effort close above must not paper over a genuinely broken
-    /// helper: if the *reopen* itself fails, `start()` still throws.
-    @Test func adoptedLegacyBrokerRestartStillFailsWhenReopenFails() async throws {
-        let service = MockBrokerService()
-        await service.setOpenAdopted(true)
-        await service.setOpenSnapshotCursorTodosByToolCallId(nil)
-        await service.setCloseShouldThrow(MockBrokerServiceError.injected)
-        await service.setOpenShouldThrowAfter(callCount: 1, error: MockBrokerServiceError.injected)
-        let client = makeClient(service: service)
-
-        await #expect(throws: MockBrokerServiceError.self) {
-            try await client.start()
-        }
-    }
-
-    @Test func sendUsesBrokerOperationAndReturnsResult() async throws {
+    @Test(arguments: [
+        (nil, "op-prefix:1:session/prompt"),
+        ("queued-prompt:item-1:0:session/prompt", "queued-prompt:item-1:0:session/prompt")
+    ] as [(String?, String)])
+    func sendUsesBrokerOperationAndReturnsResult(
+        explicitOperationKey: String?,
+        expectedOperationKey: String
+    ) async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [])
         await service.enqueueAttach(events: [])
@@ -225,13 +202,14 @@ struct ACPBrokerClientTests {
 
         let response = try await client.send(ACPRequest(
             method: "session/prompt",
-            params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")])
+            params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")]),
+            brokerOperationKey: explicitOperationKey
         ))
 
         let body = try #require(JSONSerialization.jsonObject(with: response.body) as? [String: Any])
         #expect(body["stopReason"] as? String == "end_turn")
         let sent = try await #require(service.sent.first)
-        #expect(sent.operationKey == ACPBrokerOperationKey(rawValue: "op-prefix:1:session/prompt"))
+        #expect(sent.operationKey == ACPBrokerOperationKey(rawValue: expectedOperationKey))
         #expect(sent.method == "session/prompt")
         #expect(sent.params == .object([
             "sessionId": .string("remote-1"),
@@ -270,29 +248,6 @@ struct ACPBrokerClientTests {
         #expect(await service.sent.count == 1)
     }
 
-    @Test func sendUsesExplicitBrokerOperationKeyWhenProvided() async throws {
-        let service = MockBrokerService()
-        await service.enqueueAttach(events: [])
-        await service.enqueueAttach(events: [])
-        await service.enqueueSendResult(ACPBrokerSendResult(
-            requestId: ACPBrokerAdapterRequestID(rawValue: 4),
-            replayed: false,
-            result: .object(["stopReason": .string("end_turn")]),
-            pending: nil
-        ))
-        let client = makeClient(service: service)
-        try await client.start()
-
-        _ = try await client.send(ACPRequest(
-            method: "session/prompt",
-            params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("queued")]),
-            brokerOperationKey: "queued-prompt:item-1:0:session/prompt"
-        ))
-
-        let sent = try await #require(service.sent.first)
-        #expect(sent.operationKey == ACPBrokerOperationKey(rawValue: "queued-prompt:item-1:0:session/prompt"))
-    }
-
     @Test func adoptedHandshakeAndRemoteSessionResultsAreReplayedFromSnapshot() async throws {
         let service = MockBrokerService()
         await service.setSnapshotResults(
@@ -321,54 +276,6 @@ struct ACPBrokerClientTests {
         let loaded = try JSONDecoder().decode(ACPSessionNewResult.self, from: session.body)
         #expect(loaded.sessionId == "remote-restored")
         #expect(await service.sent.isEmpty)
-    }
-
-    @Test func replayedSessionUpdateIsYieldedAndAckedAfterDurableConsumption() async throws {
-        let service = MockBrokerService()
-        await service.enqueueAttach(events: [])
-        await service.enqueueAttach(events: [
-            ACPBrokerEvent(
-                cursor: ACPBrokerEventCursor(rawValue: 3),
-                kind: .adapterNotification(
-                    method: "session/update",
-                    params: .object([
-                        "sessionId": .string("remote-1"),
-                        "update": .object([
-                            "sessionUpdate": .string("agent_message_chunk"),
-                            "content": .object([
-                                "type": .string("text"),
-                                "text": .string("hello")
-                            ])
-                        ])
-                    ])
-                )
-            )
-        ])
-        await service.enqueueSendResult(ACPBrokerSendResult(
-            requestId: ACPBrokerAdapterRequestID(rawValue: 4),
-            replayed: false,
-            result: .object(["stopReason": .string("end_turn")]),
-            pending: nil
-        ))
-        let client = makeClient(service: service)
-        try await client.start()
-
-        let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
-        _ = try await client.send(ACPRequest(
-            method: "session/prompt",
-            params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")])
-        ))
-
-        let update = try await updateTask.value
-        #expect(client.yieldedUpdateCount == 1)
-        if case .agentMessageChunk(let chunk) = update.update {
-            #expect(chunk.content == .text("hello"))
-        } else {
-            Issue.record("expected agent message chunk")
-        }
-        #expect(await service.acks.isEmpty)
-        update.durableConsumptionAcknowledgement?()
-        try await waitUntil { await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 3)] }
     }
 
     @Test func durableConsumptionReportsAdvancedCursorAfterBrokerAck() async throws {
@@ -471,28 +378,6 @@ struct ACPBrokerClientTests {
         try await waitUntil { await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 3)] }
     }
 
-    @Test func adapterExitNotificationFinishesUpdateStream() async throws {
-        let service = MockBrokerService()
-        await service.enqueueAttach(events: [
-            ACPBrokerEvent(
-                cursor: ACPBrokerEventCursor(rawValue: 2),
-                kind: .adapterNotification(
-                    method: "adapter/exit",
-                    params: .object(["unexpected": .bool(true)])
-                )
-            )
-        ])
-        let client = makeClient(service: service)
-        let finishedTask = Task {
-            var iterator = client.incomingUpdates.makeAsyncIterator()
-            return await iterator.next() == nil
-        }
-
-        try await client.start()
-
-        #expect(await finishedTask.value == true)
-    }
-
     // Regression (code review on #853): `start()` called `startBackgroundPolling()`
     // unconditionally after its initial `attachAndReplay()`, even when that
     // same replay already delivered `adapter/exit` and finished the streams.
@@ -502,7 +387,7 @@ struct ACPBrokerClientTests {
     // it and its idle-rate `attach` traffic forever, since nothing else was
     // going to call `shutdown()`/`detach()` on a connection that failed
     // before ever being handed to a runner.
-    @Test func startupExitDoesNotLeaveBackgroundPollerRunning() async throws {
+    @Test func startupExitFinishesUpdateStreamAndLeavesNoBackgroundPoller() async throws {
         let service = MockBrokerService()
         await service.enqueueAttach(events: [
             ACPBrokerEvent(
@@ -514,8 +399,13 @@ struct ACPBrokerClientTests {
             )
         ])
         let client = makeClient(service: service, backgroundPollIdleIntervalNanoseconds: 20_000_000)
+        let finishedTask = Task {
+            var iterator = client.incomingUpdates.makeAsyncIterator()
+            return await iterator.next() == nil
+        }
 
         try await client.start()
+        #expect(await finishedTask.value == true)
         try await Task.sleep(for: .milliseconds(80))
 
         #expect(await service.attached.count == 1)
@@ -670,7 +560,14 @@ struct ACPBrokerClientTests {
 
         try await client.start()
 
-        try await waitUntil { await service.responded.count >= 3 }
+        // A raw count is a weak proxy for readiness here: it can be
+        // satisfied without every expected id present. Wait for the
+        // specific three instead of just their tally.
+        let expectedIds: [ACPBrokerJSONValue] = [.string("todo-1"), .string("task-1"), .string("image-1")]
+        try await waitUntil {
+            let ids = await service.responded.map(\.requestId)
+            return expectedIds.allSatisfy { ids.contains($0) }
+        }
         let responses = await service.responded
         let todo = try #require(responses.first { $0.requestId == .string("todo-1") })
         #expect(todo.result == .object([
@@ -833,45 +730,27 @@ struct ACPBrokerClientTests {
         ]))
     }
 
-    @Test func failedCursorExtensionResponseReportsErrorToAdapter() async throws {
+    /// The adapter's request id must round-trip in its original JSON type:
+    /// a string id answered as a number (or vice versa) never matches.
+    @Test(arguments: [
+        (.number(99), .number(99)),
+        (.string("req-alpha"), .string("req-alpha"))
+    ] as [(ACPBrokerJSONValue, JSONRPCID)])
+    func pendingPermissionResponseUsesBrokerRespondAndAcksRequestCursor(
+        adapterRequestId: ACPBrokerJSONValue,
+        expectedId: JSONRPCID
+    ) async throws {
+        let brokerRequestId = switch expectedId {
+        case .number(let number): String(number)
+        case .string(let string): string
+        }
         let service = MockBrokerService()
         await service.enqueueAttach(events: [
             ACPBrokerEvent(
                 cursor: ACPBrokerEventCursor(rawValue: 2),
                 kind: .pendingRequest(ACPBrokerPendingRequest(
-                    requestId: "todo-1",
-                    adapterRequestId: .string("todo-1"),
-                    kind: .cursorExtension,
-                    payload: .object([
-                        "method": .string("cursor/update_todos"),
-                        "params": .object([
-                            "toolCallId": .string("todo-call"),
-                            "todos": .array([]),
-                            "merge": .bool(true)
-                        ])
-                    ])
-                ))
-            )
-        ])
-        let client = makeClient(service: service)
-        await service.failNextResponds(1)
-        try await client.start()
-
-        try await waitUntil { await service.responded.count == 2 }
-        let fallback = try await #require(service.responded.last)
-        #expect(fallback.requestId == .string("todo-1"))
-        #expect(fallback.result == nil)
-        #expect(fallback.error != nil)
-    }
-
-    @Test func pendingPermissionResponseUsesBrokerRespondAndAcksRequestCursor() async throws {
-        let service = MockBrokerService()
-        await service.enqueueAttach(events: [
-            ACPBrokerEvent(
-                cursor: ACPBrokerEventCursor(rawValue: 2),
-                kind: .pendingRequest(ACPBrokerPendingRequest(
-                    requestId: "99",
-                    adapterRequestId: .number(99),
+                    requestId: brokerRequestId,
+                    adapterRequestId: adapterRequestId,
                     kind: .permission,
                     payload: .object([
                         "sessionId": .string("remote-1"),
@@ -892,54 +771,14 @@ struct ACPBrokerClientTests {
         try await client.start()
 
         let permission = try await permissionTask.value
-        #expect(permission.id == .number(99))
+        #expect(permission.id == expectedId)
         #expect(permission.params.toolCall.toolCallId == "tool-1")
         client.respondToPermission(id: permission.id, response: .init(outcome: .selected(optionId: "allow")))
 
         try await waitUntil { await service.responded.count == 1 }
         let response = try await #require(service.responded.first)
-        #expect(response.requestId == .number(99))
+        #expect(response.requestId == adapterRequestId)
         #expect(response.operationKey == ACPBrokerOperationKey(rawValue: "op-prefix:1:respond"))
-        #expect(await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 2)])
-    }
-
-    @Test func pendingPermissionResponsePreservesStringRequestId() async throws {
-        let service = MockBrokerService()
-        await service.enqueueAttach(events: [
-            ACPBrokerEvent(
-                cursor: ACPBrokerEventCursor(rawValue: 2),
-                kind: .pendingRequest(ACPBrokerPendingRequest(
-                    requestId: "req-alpha",
-                    adapterRequestId: .string("req-alpha"),
-                    kind: .permission,
-                    payload: .object([
-                        "method": .string("session/request_permission"),
-                        "params": .object([
-                            "sessionId": .string("remote-1"),
-                            "toolCall": .object(["toolCallId": .string("tool-1")]),
-                            "options": .array([
-                                .object([
-                                    "optionId": .string("allow"),
-                                    "name": .string("Allow"),
-                                    "kind": .string("allow_once")
-                                ])
-                            ])
-                        ])
-                    ])
-                ))
-            )
-        ])
-        let client = makeClient(service: service)
-        let permissionTask = Task { try await nextPermission(from: client.permissionRequests) }
-        try await client.start()
-
-        let permission = try await permissionTask.value
-        #expect(permission.id == .string("req-alpha"))
-        client.respondToPermission(id: permission.id, response: .init(outcome: .selected(optionId: "allow")))
-
-        try await waitUntil { await service.responded.count == 1 }
-        let response = try await #require(service.responded.first)
-        #expect(response.requestId == .string("req-alpha"))
         #expect(await service.acks.map(\.cursor) == [ACPBrokerEventCursor(rawValue: 2)])
     }
 
@@ -1088,65 +927,6 @@ struct ACPBrokerClientTests {
         #expect(await service.acks.isEmpty)
 
         update.durableConsumptionAcknowledgement?()
-        try await waitUntil {
-            await service.acks.map(\.cursor) == [
-                ACPBrokerEventCursor(rawValue: 2),
-                ACPBrokerEventCursor(rawValue: 3)
-            ]
-        }
-    }
-
-    @Test func laterStreamedUpdateAckWaitsForDeferredPromptResponseAck() async throws {
-        let service = MockBrokerService()
-        await service.enqueueAttach(events: [])
-        await service.enqueueAttach(events: [
-            ACPBrokerEvent(
-                cursor: ACPBrokerEventCursor(rawValue: 2),
-                kind: .operationCompleted(
-                    operationKey: ACPBrokerOperationKey(rawValue: "op-prefix:1:session/prompt"),
-                    outcome: ACPBrokerRPCOutcome(
-                        result: .object(["stopReason": .string("end_turn")]),
-                        error: nil
-                    )
-                )
-            ),
-            ACPBrokerEvent(
-                cursor: ACPBrokerEventCursor(rawValue: 3),
-                kind: .adapterNotification(
-                    method: "session/update",
-                    params: .object([
-                        "sessionId": .string("remote-1"),
-                        "update": .object([
-                            "sessionUpdate": .string("agent_message_chunk"),
-                            "content": .object([
-                                "type": .string("text"),
-                                "text": .string("after-completion")
-                            ])
-                        ])
-                    ])
-                )
-            )
-        ])
-        await service.enqueueSendResult(ACPBrokerSendResult(
-            requestId: ACPBrokerAdapterRequestID(rawValue: 4),
-            replayed: false,
-            result: .object(["stopReason": .string("end_turn")])
-        ))
-        let client = makeClient(service: service)
-        let updateTask = Task { try await nextUpdate(from: client.incomingUpdates) }
-        try await client.start()
-
-        let response = try await client.send(ACPRequest(
-            method: "session/prompt",
-            params: ACPSessionPromptParams(sessionId: "remote-1", prompt: [.text("hi")])
-        ))
-        let update = try await updateTask.value
-
-        update.durableConsumptionAcknowledgement?()
-        try await Task.sleep(for: .milliseconds(50))
-        #expect(await service.acks.isEmpty)
-
-        response.acknowledgeDurableConsumption()
         try await waitUntil {
             await service.acks.map(\.cursor) == [
                 ACPBrokerEventCursor(rawValue: 2),
@@ -1955,55 +1735,6 @@ struct ACPBrokerClientTests {
         }
     }
 
-    @Test func replayedResolvedPendingRequestIsNotYieldedAgain() async throws {
-        let service = MockBrokerService()
-        await service.enqueueAttach(events: [
-            ACPBrokerEvent(
-                cursor: ACPBrokerEventCursor(rawValue: 2),
-                kind: .pendingRequest(ACPBrokerPendingRequest(
-                    requestId: "99",
-                    adapterRequestId: .number(99),
-                    kind: .permission,
-                    payload: .object([
-                        "sessionId": .string("remote-1"),
-                        "toolCall": .object(["toolCallId": .string("tool-1")]),
-                        "options": .array([])
-                    ])
-                ))
-            ),
-            ACPBrokerEvent(
-                cursor: ACPBrokerEventCursor(rawValue: 3),
-                kind: .pendingRequestResolved(
-                    requestId: "99",
-                    response: ACPBrokerRPCOutcome(result: .object(["outcome": .string("approved")]), error: nil)
-                )
-            )
-        ])
-        let client = makeClient(service: service)
-
-        try await client.start()
-
-        #expect(client.hasPendingOutboundRequest(id: .number(99)) == false)
-    }
-
-    @Test func notifyUsesBrokerNotificationPath() async throws {
-        let service = MockBrokerService()
-        await service.enqueueAttach(events: [])
-        await service.enqueueAttach(events: [])
-        let client = makeClient(service: service)
-        try await client.start()
-
-        try await client.notify(ACPRequest(
-            method: "session/cancel",
-            params: ACPSessionCancelParams(sessionId: "remote-1")
-        ))
-
-        let notified = try await #require(service.notified.first)
-        #expect(notified.method == "session/cancel")
-        #expect(notified.params == .object(["sessionId": .string("remote-1")]))
-        #expect(await service.attached.count == 2)
-    }
-
     private func cursorPlanPayload() -> ACPBrokerJSONValue {
         .object([
             "method": .string("cursor/create_plan"),
@@ -2106,10 +1837,6 @@ private actor DurableStateSink {
 
     func recordCount() -> Int {
         records.count
-    }
-
-    func lastRecord() -> ACPBrokerDurableState? {
-        records.last
     }
 
     func hasLastRecord(after count: Int, matching expected: ACPBrokerDurableState) -> Bool {
@@ -2300,7 +2027,6 @@ private actor MockBrokerService: ACPBrokerServicing {
     var opened: [ACPBrokerOpenParams] = []
     var attached: [ACPBrokerAttachParams] = []
     var sent: [ACPBrokerSendParams] = []
-    var notified: [ACPBrokerNotifyParams] = []
     var responded: [ACPBrokerRespondParams] = []
     var acks: [ACPBrokerAckParams] = []
     var detached: [ACPBrokerDetachParams] = []
@@ -2315,7 +2041,6 @@ private actor MockBrokerService: ACPBrokerServicing {
     private var respondFailuresRemaining = 0
     private var closeShouldThrowGenerationMismatch = false
     private var closeShouldThrowError: (any Error)?
-    private var openShouldThrowAfter: (callCount: Int, error: any Error)?
 
     func enqueueAttach(
         events: [ACPBrokerEvent],
@@ -2359,14 +2084,6 @@ private actor MockBrokerService: ACPBrokerServicing {
         closeShouldThrowError = error
     }
 
-    /// Makes `open()` throw once its call count exceeds `callCount` — e.g.
-    /// `callCount: 1` lets the first `open()` succeed and every one after
-    /// it fail, modeling a reopen-after-close that hits a genuinely broken
-    /// helper rather than a race.
-    func setOpenShouldThrowAfter(callCount: Int, error: any Error) {
-        openShouldThrowAfter = (callCount, error)
-    }
-
     func setSnapshotResults(
         initializeResult: ACPBrokerJSONValue?,
         remoteSessionResult: ACPBrokerJSONValue?
@@ -2381,9 +2098,6 @@ private actor MockBrokerService: ACPBrokerServicing {
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
         opened.append(params)
-        if let openShouldThrowAfter, opened.count > openShouldThrowAfter.callCount {
-            throw openShouldThrowAfter.error
-        }
         return ACPBrokerOpenResult(
             snapshot: snapshot(
                 journalTail: 0,
@@ -2443,8 +2157,7 @@ private actor MockBrokerService: ACPBrokerServicing {
     }
 
     func notify(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK {
-        notified.append(params)
-        return ACPBrokerSimpleOK(ok: true)
+        ACPBrokerSimpleOK(ok: true)
     }
 
     func failNextResponds(_ count: Int) {

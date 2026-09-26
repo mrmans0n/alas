@@ -30,6 +30,52 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
         }
     }
 
+    /// Human-readable text for the clipboard: each chip becomes the text it
+    /// stands for (`@filename` for a mention; a command chip is already a
+    /// `/command` text segment), and image chips, which have no text form,
+    /// drop out instead of leaking the U+FFFC attachment placeholder. A
+    /// mention normally has its own separating space folded into the
+    /// following `.text` segment, but some rebuild paths (queued-content
+    /// restoration) can hand back a mention directly abutting text with no
+    /// leading whitespace — insert one here rather than concatenate
+    /// `@File.swiftright here`.
+    var plainText: String {
+        var result = ""
+        for (index, segment) in segments.enumerated() {
+            switch segment {
+            case .text(let value):
+                result += value
+            case .mention(let displayName, _):
+                result += "@" + displayName
+                if !nextSegmentStartsWithWhitespace(after: index) {
+                    result += " "
+                }
+            case .image:
+                break
+            }
+        }
+        return result
+    }
+
+    /// Whether the segment right after `index` opens with whitespace (or
+    /// there's nothing after it, needing no separator). An `.image` segment
+    /// contributes no text of its own, so it defers to whatever comes after
+    /// it in turn.
+    private func nextSegmentStartsWithWhitespace(after index: Int) -> Bool {
+        var next = index + 1
+        while next < segments.count {
+            switch segments[next] {
+            case .text(let value):
+                return value.first?.isWhitespace ?? false
+            case .mention:
+                return false
+            case .image:
+                next += 1
+            }
+        }
+        return true
+    }
+
     /// Character offset, into the flattened message text, of each `.image`
     /// segment in order. Mirrors how `ACPInputField.Coordinator.extract`
     /// concatenates a submitted draft into a single string: a `.text`

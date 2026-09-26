@@ -19,16 +19,36 @@ struct AgentHookSocketServerTests {
     private func awaitEvent<T>(
         on server: AgentHookSocketServer,
         timeoutMs: UInt64,
-        _ trigger: () throws -> T
+        _ trigger: () async throws -> T
     ) async throws -> (T, AgentHookEvent?) {
         let holder = EventHolder()
         server.onEvent = { event in holder.deliver(event) }
-        let triggerResult = try trigger()
+        let triggerResult = try await trigger()
         let received = await holder.wait(timeoutMs: timeoutMs)
         return (triggerResult, received)
     }
 
-    private func sendToSocket(path: String, payload: String) throws -> String {
+    /// Performs the blocking client round-trip on a dedicated thread.
+    ///
+    /// The server serves every client on a detached Swift task, i.e. on the
+    /// cooperative pool. Blocking a cooperative thread here in `read` while
+    /// waiting for that task's reply can starve it on a narrow CI runner: the
+    /// reply never gets written and `read` fails with EAGAIN when
+    /// SO_RCVTIMEO fires (run 35322676722, subprocess-4-1). A plain `Thread`
+    /// keeps the wait off the pool the server needs.
+    private func sendToSocket(path: String, payload: String) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            let thread = Thread {
+                continuation.resume(with: Result {
+                    try Self.blockingSendToSocket(path: path, payload: payload)
+                })
+            }
+            thread.name = "AgentHookSocketServerTests.client"
+            thread.start()
+        }
+    }
+
+    private static func blockingSendToSocket(path: String, payload: String) throws -> String {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw POSIXError(.EIO) }
         defer { close(fd) }
@@ -95,7 +115,7 @@ struct AgentHookSocketServerTests {
         return String(decoding: response, as: UTF8.self)
     }
 
-    private func posixError() -> POSIXError {
+    private static func posixError() -> POSIXError {
         POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 
@@ -108,7 +128,7 @@ struct AgentHookSocketServerTests {
 
         let json = #"{"v":1,"event":"busy","agent":"claude","session_id":"s1","pid":123}"#
         let (response, received) = try await awaitEvent(on: server, timeoutMs: 5000) {
-            try sendToSocket(path: path, payload: json)
+            try await sendToSocket(path: path, payload: json)
         }
 
         #expect(response.contains("\"ok\":true") || response.contains("\"ok\": true"))
@@ -126,7 +146,7 @@ struct AgentHookSocketServerTests {
 
         let json = #"{"v":1,"event":"SessionStart","agent":"claude","session_id":"s1","pid":123}"#
         let (response, received) = try await awaitEvent(on: server, timeoutMs: 5000) {
-            try sendToSocket(path: path, payload: json)
+            try await sendToSocket(path: path, payload: json)
         }
 
         #expect(response.contains("\"ok\":true") || response.contains("\"ok\": true"))
@@ -140,7 +160,7 @@ struct AgentHookSocketServerTests {
         let server = AgentHookSocketServer(socketPath: path)
         defer { server.shutdown() }
 
-        let response = try sendToSocket(path: path, payload: "not json")
+        let response = try await sendToSocket(path: path, payload: "not json")
         #expect(response.contains("\"ok\":false") || response.contains("\"ok\": false"))
     }
 
@@ -173,7 +193,7 @@ struct AgentHookSocketServerTests {
         let json = #"{"v":1,"event":"future_event","agent":"claude","session_id":"s1"}"#
         // Short timeout: we're asserting no event ever fires.
         let (response, received) = try await awaitEvent(on: server, timeoutMs: 300) {
-            try sendToSocket(path: path, payload: json)
+            try await sendToSocket(path: path, payload: json)
         }
 
         #expect(response.contains("\"ok\":true") || response.contains("\"ok\": true"))

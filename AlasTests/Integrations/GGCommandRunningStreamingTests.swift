@@ -62,12 +62,18 @@ struct GGCommandRunningStreamingTests {
     /// stack up badly to matter.
     private static let detachedChildWatchdogTimeout: TimeInterval = 3
 
+    /// SIGTERM grace for the detached-child tests, standing in for the
+    /// production 2s. The children under test ignore SIGTERM, so the grace
+    /// always runs to completion; it only has to outlast the fork that
+    /// spawns the detached child, which takes milliseconds.
+    private static let detachedChildTerminationGrace: UInt64 = 500_000_000
+
     /// Worst case for a `detachedChildWatchdogTimeout` run: the timeout
-    /// itself, then `terminateAndWait`'s 2s SIGTERM grace, its 1s SIGKILL
-    /// sweep, and the termination handler's 2s stdout/stderr EOF wait.
-    /// Tripping this ceiling early would cancel the stream and change the
-    /// very termination path under test, so leave real headroom over that
-    /// ~8s.
+    /// itself, then `terminateAndWait`'s SIGTERM grace (at most the
+    /// production 2s), its 1s SIGKILL sweep, and the termination handler's
+    /// 2s stdout/stderr EOF wait. Tripping this ceiling early would cancel
+    /// the stream and change the very termination path under test, so leave
+    /// real headroom over that ~8s.
     private static let detachedChildCollectCeiling: UInt64 = 15
 
     @Test func terminationHandlerDoesNotRetainProcessTree() throws {
@@ -337,7 +343,8 @@ struct GGCommandRunningStreamingTests {
             args: ["-c", script],
             cwd: nil,
             env: env,
-            timeout: Self.detachedChildWatchdogTimeout
+            timeout: Self.detachedChildWatchdogTimeout,
+            terminationGraceNanoseconds: Self.detachedChildTerminationGrace
         )
 
         _ = try? await collectWithTimeout(stream, seconds: Self.detachedChildCollectCeiling)
@@ -410,7 +417,11 @@ struct GGCommandRunningStreamingTests {
             args: ["-c", script],
             cwd: nil,
             env: env,
-            timeout: Self.detachedChildWatchdogTimeout
+            timeout: Self.detachedChildWatchdogTimeout,
+            // The late child is only found by the 100ms environment scan and
+            // must get its SIGTERM *within* the grace for the marker to be
+            // written, so give it several scans' worth, not the bare minimum.
+            terminationGraceNanoseconds: 1_000_000_000
         )
 
         _ = try? await collectWithTimeout(stream, seconds: Self.detachedChildCollectCeiling)
@@ -444,7 +455,8 @@ struct GGCommandRunningStreamingTests {
             executable: "/usr/bin/python3",
             args: ["-c", script],
             cwd: nil,
-            env: env
+            env: env,
+            terminationGraceNanoseconds: Self.detachedChildTerminationGrace
         )
 
         _ = try await collectWithTimeout(stream)

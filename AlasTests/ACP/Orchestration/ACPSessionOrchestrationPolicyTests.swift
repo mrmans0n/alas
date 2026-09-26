@@ -216,4 +216,58 @@ struct ACPSessionOrchestrationPolicyTests {
             archived: true
         ) == .closed)
     }
+
+    @Test("completed turn that reported to the parent only notices")
+    func completedReportedNotices() {
+        #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: .completed, lastParentReportAt: 120, turnStartedAt: 100) == .notice)
+    }
+
+    @Test("completed turn without a report wakes the parent")
+    func completedUnreportedWakes() {
+        #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: .completed, lastParentReportAt: nil, turnStartedAt: 100) == .wake)
+        #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: .completed, lastParentReportAt: 99, turnStartedAt: 100) == .wake)
+    }
+
+    @Test("a report at the exact turn start counts as reported")
+    func reportAtTurnStartCounts() {
+        #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: .completed, lastParentReportAt: 100, turnStartedAt: 100) == .notice)
+    }
+
+    @Test("failed turn always wakes, cancelled turn only notices")
+    func failedWakesCancelledNotices() {
+        #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: .failed("boom"), lastParentReportAt: 500, turnStartedAt: 100) == .wake)
+        #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
+            result: .cancelled, lastParentReportAt: nil, turnStartedAt: 100) == .notice)
+    }
+
+    private func blocker(_ key: String = "n42") -> ACPChildBlocker {
+        .init(sessionId: "child", requestKey: key, kind: .permission, summary: "Write file")
+    }
+
+    @Test("escalates only while the same request is still blocked")
+    func escalatesOnlyForTheSameRequest() {
+        #expect(ACPSessionOrchestrationPolicy.escalation(
+            blocker: blocker(), liveBlockedRequestKeys: ["n42"]) == .wake)
+        #expect(ACPSessionOrchestrationPolicy.escalation(
+            blocker: blocker(), liveBlockedRequestKeys: ["n42", "u123"]) == .wake)
+    }
+
+    @Test("does not escalate once the request is resolved")
+    func doesNotEscalateWhenResolved() {
+        #expect(ACPSessionOrchestrationPolicy.escalation(
+            blocker: blocker(), liveBlockedRequestKeys: []) == .stillHandled)
+    }
+
+    @Test("a different pending request is not proof the original still blocks")
+    func differentKeyDoesNotEscalate() {
+        // The child cleared n42 and is now blocked on something else. Waking
+        // about n42 would tell the parent the wrong thing.
+        #expect(ACPSessionOrchestrationPolicy.escalation(
+            blocker: blocker(), liveBlockedRequestKeys: ["n99"]) == .stillHandled)
+    }
 }

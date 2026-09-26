@@ -204,6 +204,8 @@ final class ACPSessionManager: ObservableObject {
     let usesRemoteHostRegistry: Bool
     let persistence: ACPSessionPersistence
     let changeNotifier: ACPChangeNotifier
+    /// Reference-chip caches, one per worktree, shared by composer and transcript.
+    let upstreamReferences = ACPUpstreamReferenceStore.Registry()
     private let delegatedMessageNotifier: ACPChangeNotifier
     /// Called by each runner's write handler to check whether the target path
     /// has an open, dirty editor buffer. `nil` disables the check (no notices).
@@ -225,6 +227,9 @@ final class ACPSessionManager: ObservableObject {
     /// final lease checks and staging rename; `nil` means admission was
     /// refused because cleanup currently holds the lock.
     private let writerAdmissionProbe: (@Sendable () async -> CheckpointDeletionLease?)?
+    private let onSuccessfulTurn: @MainActor (NextPromptCompletedTurn) -> Void
+    private let onTurnCompleted: ((ACPTurnCompletion) -> Void)?
+    private let onChildBlocked: ((ACPChildBlocker) -> Void)?
     private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
@@ -269,7 +274,14 @@ final class ACPSessionManager: ObservableObject {
     /// `alasCLIEnvProvider`, so AppState can wire it without threading it
     /// through every manager construction call site.
     var externalMCPStatusProvider: ExternalMCPStatusProvider?
-    @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
+    @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:] {
+        willSet {
+            for (id, session) in sessions where newValue[id] !== session {
+                session.nextPromptActivity.send()
+                session.nextPromptTeardown.send()
+            }
+        }
+    }
     @Published private(set) var recent: [ACPSessionRow] = []
     @Published private(set) var persistenceError: String?
     @Published private var persistedRows: [ACPSession.ID: ACPSessionRow] = [:]
@@ -298,6 +310,24 @@ final class ACPSessionManager: ObservableObject {
 
     /// Live session object if cached (does not trigger hydration).
     func liveSession(for id: ACPSession.ID) -> ACPSession? { sessions[id] }
+
+    /// Every request this session is currently blocked on, by stable key.
+    ///
+    /// Assembled here rather than read off the transcript because
+    /// `transcript.pendingPermission` is published with a hardcoded
+    /// `.number(0)` id — it proves a permission is pending but not which one.
+    /// The runner's policy holds the real id.
+    func blockedRequestKeys(for sessionId: ACPSession.ID) -> Set<String> {
+        guard let session = sessions[sessionId] else { return [] }
+        var keys = Set(session.transcript.pendingUserInputs.map { ACPChildBlocker.requestKey($0.id) })
+        if let plan = session.transcript.pendingPlan {
+            keys.insert(ACPChildBlocker.requestKey(plan.id))
+        }
+        if let permissionKey = runners[sessionId]?.blockedPermissionRequestKey {
+            keys.insert(permissionKey)
+        }
+        return keys
+    }
 
     func retainedCleanupHasActivePromptWork(for id: ACPSession.ID) -> Bool {
         runners[id]?.hasRetainedCleanupPromptWork == true
@@ -426,12 +456,17 @@ final class ACPSessionManager: ObservableObject {
     /// land between the gateway's `isWriter` gate and here, and `submit`'s
     /// `.idle`/`.disconnected` path would otherwise enqueue + persist the prompt
     /// as a mirror — injecting it into a session another instance now drives.
-    func sendPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
+    func sendPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], normalUserTurn: Bool = true, onResult: @escaping @MainActor (Bool) -> Void) async {
+        let suggestionSession = sessions[id]
+        suggestionSession?.nextPromptWorkCount += 1
+        defer { suggestionSession?.nextPromptWorkCount -= 1 }
         guard await confirmedWriterLease(for: id) else {
             onResult(false)
             return
         }
         let accepted = submit(sessionId: id, text: text, attachments: attachments, intent: .auto,
+                              draft: nil, waitForModelModeSelections: true,
+                              normalUserTurn: normalUserTurn,
                               onCompleted: { ok in onResult(ok) })
         if !accepted { onResult(false) }   // submit refused synchronously; onCompleted won't fire
     }
@@ -738,6 +773,9 @@ final class ACPSessionManager: ObservableObject {
     /// `ACPSubmitRoute.resolve` handles the degenerate idle+empty case by
     /// falling back to a plain send.
     func steerPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
+        let suggestionSession = sessions[id]
+        suggestionSession?.nextPromptWorkCount += 1
+        defer { suggestionSession?.nextPromptWorkCount -= 1 }
         guard await confirmedWriterLease(for: id) else {
             onResult(false)
             return
@@ -851,11 +889,14 @@ final class ACPSessionManager: ObservableObject {
         onInvalidated: @escaping @MainActor () -> Void,
         operation: @escaping @MainActor () async -> Void
     ) {
+        let suggestionSession = sessions[id]
+        suggestionSession?.nextPromptWorkCount += 1
         let generation = modelModeSelectionGenerations[id] ?? UUID()
         modelModeSelectionGenerations[id] = generation
         let previousTask = modelModeSelectionTails[id]?.task
         let token = UUID()
         let task = Task { @MainActor [weak self] in
+            defer { suggestionSession?.nextPromptWorkCount -= 1 }
             await previousTask?.value
             guard let self,
                   self.modelModeSelectionGenerations[id] == generation
@@ -1401,9 +1442,21 @@ final class ACPSessionManager: ObservableObject {
     }
 
     /// Sessions for which THIS instance holds the writer lease (backing store).
-    var _ownedLeases: Set<ACPSession.ID> = []
+    var _ownedLeases: Set<ACPSession.ID> = [] {
+        willSet {
+            for id in _ownedLeases.subtracting(newValue) { sessions[id]?.nextPromptActivity.send() }
+        }
+    }
     private var ownedLeaseTokens: [ACPSession.ID: String] = [:]
-    private var observedLeases: [ACPSession.ID: ACPSessionLease?] = [:]
+    private var observedLeases: [ACPSession.ID: ACPSessionLease?] = [:] {
+        willSet {
+            let previous = observedLeases
+            for id in _ownedLeases where newValue[id] != previous[id] {
+                let lease = newValue[id] ?? nil
+                if lease?.ownerInstance != instanceId { sessions[id]?.nextPromptActivity.send() }
+            }
+        }
+    }
     /// Per-session periodic heartbeat tasks (backing store).
     var _heartbeatTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Per-session debounced write tasks for `composer_drafts`. The
@@ -1430,7 +1483,12 @@ final class ACPSessionManager: ObservableObject {
     var beforeBrokerClientRegistrationForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
     var afterBrokerClientShutdownRequestedForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
     var beforeRestartRunnerStopForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
+    var afterRestartRetiringConnectionDetachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
     var beforeTakeoverAttachForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
+    var afterRunnerRegistrationForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
+    var pendingFreshBrokerNamespacesForTesting: Set<ACPSession.ID> {
+        pendingFreshBrokerNamespaces
+    }
 #endif
     private var resolvedRemoteAdapters: [String: ACPResolvedRemoteAdapter] = [:]
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
@@ -1484,7 +1542,17 @@ final class ACPSessionManager: ObservableObject {
         var remoteSessionId: String?
         var sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
     }
+    private struct PendingRemoteSessionResult {
+        let sessionId: String
+        let connection: ACPConnection
+        let sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
+    }
     private var attachingConnections: [ACPSession.ID: AttachingConnection] = [:]
+    /// Sessions whose default broker namespace a recent teardown timeout
+    /// flagged as potentially wedged, but whose owning attach attempt has
+    /// since been deregistered without consuming the requirement. The next
+    /// attach routes through the isolated namespace until one succeeds.
+    private var pendingFreshBrokerNamespaces: Set<ACPSession.ID> = []
     private struct AttachmentWaiter {
         let continuation: CheckedContinuation<Bool, Never>
         let arrivedAfterTemporaryDetach: Bool
@@ -1500,7 +1568,18 @@ final class ACPSessionManager: ObservableObject {
         var brokerClientStartupID: UUID?
         var isolatedBrokerStartupIDs = Set<UUID>()
         var connection: ACPConnection?
+        var retiringConnection: ACPConnection?
+        var connectionIsInitializedForRemoteClose = false
+        var sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
+        var connectionShutdownRequested = false
+        var retiringRunner: ACPSessionRunner?
         var shutdownRequestedBrokerStartupIDs = Set<UUID>()
+        var shouldCloseRemoteResultOnCompletion = false
+        var remoteSessionCreationsInFlight = 0
+        var pendingRemoteSessionResults: [PendingRemoteSessionResult] = []
+        var remoteSessionCreationWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
+        var remoteSessionCreationCloseError: (any Error)?
+        var remoteSessionCreationCleanupScheduled = false
     }
     private var attachmentAttempts: [ACPSession.ID: AttachmentAttempt] = [:]
     /// Invalidates takeover work suspended while mirroring the final writer snapshot.
@@ -1545,8 +1624,11 @@ final class ACPSessionManager: ObservableObject {
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)? = nil,
          onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
+         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
          onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
          writerAdmissionProbe: (@Sendable () async -> CheckpointDeletionLease?)? = nil,
+         onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
+         onChildBlocked: ((ACPChildBlocker) -> Void)? = nil,
          onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          delegatedMessageNotifier: ACPChangeNotifier? = nil,
@@ -1589,6 +1671,9 @@ final class ACPSessionManager: ObservableObject {
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
         self.onQueueChanged = onQueueChanged
         self.writerAdmissionProbe = writerAdmissionProbe
+        self.onSuccessfulTurn = onSuccessfulTurn
+        self.onTurnCompleted = onTurnCompleted
+        self.onChildBlocked = onChildBlocked
         self.onCheckpointCapture = onCheckpointCapture
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
@@ -1724,6 +1809,8 @@ final class ACPSessionManager: ObservableObject {
         guard let source = sessions[sourceSessionID], source.hydrationState == .ready else {
             throw ACPSessionForkCreationError.sourceUnavailable
         }
+        source.nextPromptWorkCount += 1
+        defer { source.nextPromptWorkCount -= 1 }
         let acquiredSnapshotLease: Bool
         if !_ownedLeases.contains(sourceSessionID) {
             guard await acquireWriterLease(sessionId: sourceSessionID) else {
@@ -2315,6 +2402,7 @@ final class ACPSessionManager: ObservableObject {
         guard let current = visibleSessionCounts[id], current > 0 else { return }
         let next = current - 1
         if next == 0 {
+            sessions[id]?.nextPromptActivity.send()
             visibleSessionCounts.removeValue(forKey: id)
         } else {
             visibleSessionCounts[id] = next
@@ -3428,6 +3516,7 @@ final class ACPSessionManager: ObservableObject {
     private func startTranscriptFallbackSession(
         targetSessionID: ACPSession.ID,
         sourceRemoteSessionID: String,
+        attempt: AttachmentAttempt,
         connection: ACPConnection,
         sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities,
         wireMCPServers: [ACPMCPServer]
@@ -3439,14 +3528,20 @@ final class ACPSessionManager: ObservableObject {
             sessionCapabilities: sessionCapabilities
         )
         do {
-            let result = try await connection.newSession(
-                cwd: worktreePath,
-                mcpServers: wireMCPServers,
-                brokerOperationKey: Self.brokerStartupOperationKey(
-                    sessionId: targetSessionID,
-                    method: "session/new"
+            let result = try await performRemoteSessionCreation(
+                for: attempt,
+                using: connection,
+                sessionCapabilities: sessionCapabilities
+            ) {
+                try await connection.newSession(
+                    cwd: worktreePath,
+                    mcpServers: wireMCPServers,
+                    brokerOperationKey: Self.brokerStartupOperationKey(
+                        sessionId: targetSessionID,
+                        method: "session/new"
+                    )
                 )
-            )
+            }
             await releaseReplayedForkCompletionForTranscriptFallback(
                 targetSessionID: targetSessionID,
                 sourceRemoteSessionID: sourceRemoteSessionID,
@@ -3469,6 +3564,7 @@ final class ACPSessionManager: ObservableObject {
         session: ACPSession,
         fork: ACPSessionForkRecord,
         initialized: ACPInitializeOutcome,
+        attempt: AttachmentAttempt,
         connection: ACPConnection,
         wireMCPServers: [ACPMCPServer]
     ) async throws -> (result: ACPSessionNewResult, createdFreshRemoteSession: Bool) {
@@ -3528,16 +3624,22 @@ final class ACPSessionManager: ObservableObject {
            sourceBoundaryMatches {
             let result: ACPSessionNewResult
             do {
-                result = try await connection.forkSession(
-                    cwd: worktreePath,
-                    sessionId: sourceRemoteSessionID,
-                    mcpServers: wireMCPServers,
-                    brokerOperationKey: Self.brokerStartupOperationKey(
-                        sessionId: session.id,
-                        method: "session/fork",
-                        remoteSessionId: sourceRemoteSessionID
+                result = try await performRemoteSessionCreation(
+                    for: attempt,
+                    using: connection,
+                    sessionCapabilities: initialized.sessionCapabilities
+                ) {
+                    try await connection.forkSession(
+                        cwd: worktreePath,
+                        sessionId: sourceRemoteSessionID,
+                        mcpServers: wireMCPServers,
+                        brokerOperationKey: Self.brokerStartupOperationKey(
+                            sessionId: session.id,
+                            method: "session/fork",
+                            remoteSessionId: sourceRemoteSessionID
+                        )
                     )
-                )
+                }
             } catch {
                 // A successful durable broker completion must retry the
                 // stable fork key so its returned session can be persisted.
@@ -3577,6 +3679,7 @@ final class ACPSessionManager: ObservableObject {
                 let fallback = try await startTranscriptFallbackSession(
                     targetSessionID: session.id,
                     sourceRemoteSessionID: sourceRemoteSessionID,
+                    attempt: attempt,
                     connection: connection,
                     sessionCapabilities: initialized.sessionCapabilities,
                     wireMCPServers: wireMCPServers
@@ -3591,8 +3694,10 @@ final class ACPSessionManager: ObservableObject {
                     remoteSessionID: result.sessionId
                 )
             } catch {
-                try? await closeRemoteSession(
-                    id: result.sessionId,
+                await closeTrackedRemoteSessionResult(
+                    result,
+                    sessionId: session.id,
+                    attempt: attempt,
                     using: connection,
                     sessionCapabilities: initialized.sessionCapabilities
                 )
@@ -3647,20 +3752,27 @@ final class ACPSessionManager: ObservableObject {
             let result = try await startTranscriptFallbackSession(
                 targetSessionID: session.id,
                 sourceRemoteSessionID: sourceRemoteSessionID,
+                attempt: attempt,
                 connection: connection,
                 sessionCapabilities: initialized.sessionCapabilities,
                 wireMCPServers: wireMCPServers
             )
             return (result, true)
         }
-        let result = try await connection.newSession(
-            cwd: worktreePath,
-            mcpServers: wireMCPServers,
-            brokerOperationKey: Self.brokerStartupOperationKey(
-                sessionId: session.id,
-                method: "session/new"
+        let result = try await performRemoteSessionCreation(
+            for: attempt,
+            using: connection,
+            sessionCapabilities: initialized.sessionCapabilities
+        ) {
+            try await connection.newSession(
+                cwd: worktreePath,
+                mcpServers: wireMCPServers,
+                brokerOperationKey: Self.brokerStartupOperationKey(
+                    sessionId: session.id,
+                    method: "session/new"
+                )
             )
-        )
+        }
         return (result, true)
     }
 
@@ -4359,6 +4471,10 @@ extension ACPSessionManager {
     /// old agent process is still alive.
     func shutdownBackgroundTasks() {
         isDisposed = true   // must be first: in-flight attach resumes after this and checks the flag
+        for session in sessions.values {
+            session.nextPromptActivity.send()
+            session.nextPromptTeardown.send()
+        }
         for sid in Array(mirrorTokens.keys) { endMirroring(sessionId: sid) }
         for sid in Array(writerWatchTokens.keys) { stopWriterWatch(sessionId: sid) }
         for (_, task) in _heartbeatTasks { task.cancel() }
@@ -4624,7 +4740,8 @@ extension ACPSessionManager {
     /// already exists for this session, returns immediately. On cold start,
     /// runs the setup check; if ready, spawns the process, initialises ACP,
     /// and calls `session/new` (new sessions) or `session/load` (reopened).
-    func attach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async {
+    @discardableResult
+    func attach(to sessionId: ACPSession.ID, freshlyCreated: Bool) async -> UUID? {
         if let attempt = attachmentAttempts[sessionId] {
             let retryAfterDetachedAttachment = await withCheckedContinuation { continuation in
                 attempt.waiters.append(.init(
@@ -4632,20 +4749,23 @@ extension ACPSessionManager {
                     arrivedAfterTemporaryDetach: cancelledInFlightAttachments.contains(sessionId)
                 ))
             }
-            guard retryAfterDetachedAttachment else { return }
+            guard retryAfterDetachedAttachment else { return attempt.id }
             await waitForTeardown(sessionId: sessionId)
             // A detach can cancel the in-flight attempt while this caller is
             // waiting. Re-enter `attach` so concurrent reconnects coalesce
             // again, rather than all starting a replacement attachment.
-            await attach(to: sessionId, freshlyCreated: freshlyCreated)
-            return
+            return await attach(to: sessionId, freshlyCreated: freshlyCreated)
         }
         if let session = sessions[sessionId],
            case .ready = session.agentState,
            runners[sessionId] != nil {
-            return
+            return nil
         }
         let attempt = AttachmentAttempt()
+        // A prior attempt may have flagged the default namespace as wedged
+        // after it was already deregistered (see
+        // `pendingFreshBrokerNamespaces`); carry the requirement forward.
+        attempt.requiresFreshBrokerNamespace = pendingFreshBrokerNamespaces.contains(sessionId)
         attachmentAttempts[sessionId] = attempt
         connectionOwnerIDs[sessionId] = attempt.id
         brokerCallbackOwnerIDs[sessionId] = nil
@@ -4654,6 +4774,7 @@ extension ACPSessionManager {
             to: sessionId,
             freshlyCreated: freshlyCreated
         )
+        return attempt.id
     }
 
     private func runAttachmentAttempt(
@@ -4675,8 +4796,12 @@ extension ACPSessionManager {
         await waitForTeardown(sessionId: sessionId)
         guard let session = sessions[sessionId],
               isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
-        else { return }
+        else {
+            await detachRetiringConnectionIfNeeded(for: attempt, sessionId: sessionId)
+            return
+        }
         await performAttach(to: sessionId, freshlyCreated: freshlyCreated, attempt: attempt)
+        await detachRetiringConnectionIfNeeded(for: attempt, sessionId: sessionId)
     }
 
     private func isCurrentAttachment(
@@ -4685,6 +4810,32 @@ extension ACPSessionManager {
         session: ACPSession
     ) -> Bool {
         attachmentAttempts[sessionId] === attempt && sessions[sessionId] === session
+    }
+
+    private func detachRetiringConnectionIfNeeded(
+        for attempt: AttachmentAttempt,
+        sessionId: ACPSession.ID
+    ) async {
+        guard let connection = attempt.retiringConnection else { return }
+        // Keep the field set while the bounded operation is suspended: a
+        // nested restart or disposal landing in that window is the only
+        // other teardown-visible reader (`restartConnection` /
+        // `tearDownSession`), and it must be able to claim the connection
+        // if the transport wedges.
+        let outcome = await runBounded(timeout: restartTeardownTimeout) {
+            if attempt.shouldCloseRemoteResultOnCompletion {
+                await connection.shutdown()
+            } else {
+                await connection.detach()
+            }
+        }
+        attempt.retiringConnection = nil
+        if connection.client is ACPBrokerClient, case .timedOut = outcome {
+            attempt.requiresFreshBrokerNamespace = true
+            // This attempt may be deregistered before anything consumes the
+            // requirement; keep it alive for the next attach.
+            pendingFreshBrokerNamespaces.insert(sessionId)
+        }
     }
 
     private func supersedeAttachmentAttempt(for sessionId: ACPSession.ID) -> AttachmentAttempt? {
@@ -5097,6 +5248,7 @@ extension ACPSessionManager {
         // know whether this attach created a fresh remote session (the
         // preamble is only sent once, on first prompt).
         attempt.connection = connection
+        attempt.connectionIsInitializedForRemoteClose = false
         attachingConnections[sessionId] = .init(connection: connection)
         defer {
             if isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
@@ -5146,12 +5298,28 @@ extension ACPSessionManager {
             client: connection.client,
             onInputAwaiting: { [weak self] session, request in
                 self?.onInputAwaiting?(session, request)
+                let trimmedTitle = request.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let trimmedMessage = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
+                let summary = !trimmedTitle.isEmpty ? trimmedTitle : (!trimmedMessage.isEmpty ? trimmedMessage : "a question")
+                self?.onChildBlocked?(ACPChildBlocker(
+                    sessionId: session.id,
+                    requestKey: ACPChildBlocker.requestKey(request.id),
+                    kind: .question,
+                    summary: summary
+                ))
             },
             onInputResolved: { [weak self] in
                 self?.runners[sessionId]?.flushQueueIfIdle()
             },
             onPlanAwaiting: { [weak self] session, request in
                 self?.onPlanAwaiting?(session, request)
+                let trimmedName = request.params.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                self?.onChildBlocked?(ACPChildBlocker(
+                    sessionId: session.id,
+                    requestKey: ACPChildBlocker.requestKey(request.id),
+                    kind: .plan,
+                    summary: !trimmedName.isEmpty ? trimmedName : "a plan"
+                ))
             },
             onPlanRejected: { [weak self, weak session] reason in
                 guard let self, let session else { return }
@@ -5183,14 +5351,20 @@ extension ACPSessionManager {
                 )
             )
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
-                await connection.shutdown()
+                if !attempt.connectionShutdownRequested {
+                    await connection.shutdown()
+                }
                 return
             }
             guard !disposingAttachments.contains(sessionId), !isDisposed else {
-                await connection.shutdown()
+                if !attempt.connectionShutdownRequested {
+                    await connection.shutdown()
+                }
                 await releaseWriterLease(sessionId: sessionId, attempt: attempt)
                 return
             }
+            attempt.connectionIsInitializedForRemoteClose = true
+            attempt.sessionCapabilities = initialized.sessionCapabilities
             if var attaching = attachingConnections[sessionId], attaching.connection === connection {
                 attaching.sessionCapabilities = initialized.sessionCapabilities
                 attachingConnections[sessionId] = attaching
@@ -5198,6 +5372,55 @@ extension ACPSessionManager {
             session.promptCapabilities = initialized.promptCapabilities
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods
+            if let retiringConnection = attempt.retiringConnection {
+                // Keep the field set while the bounded detach is suspended:
+                // a nested restart or disposal landing during that window is
+                // the only other teardown-visible reader
+                // (`restartConnection` / `tearDownSession`), and it must be
+                // able to claim the connection if the detach wedges.
+                let detachOutcome = await runBounded(timeout: restartTeardownTimeout) {
+                    await retiringConnection.detach()
+                }
+                attempt.retiringConnection = nil
+                if retiringConnection.client is ACPBrokerClient,
+                   case .timedOut = detachOutcome {
+                    attempt.requiresFreshBrokerNamespace = true
+                    pendingFreshBrokerNamespaces.insert(sessionId)
+                }
+#if DEBUG
+                await afterRestartRetiringConnectionDetachForTesting?(sessionId)
+#endif
+                guard sessions[sessionId] === session,
+                      isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session),
+                      !disposingAttachments.contains(sessionId), !isDisposed
+                else { return }
+                if attempt.requiresFreshBrokerNamespace {
+                    // The timeout landed after this connection was created
+                    // and initialized, so `makeBrokerConnectionWithRecovery`
+                    // never consulted the flag. `requiresFreshBrokerNamespace`
+                    // would otherwise stay unconsumed for this attach: the
+                    // default namespace is the one the timeout identified as
+                    // wedged, and reusing it risks replaying a stuck broker.
+                    // Tear this connection down (isolated namespaces were
+                    // never wedged by construction — the wedged one was
+                    // their retirement source) and re-enter the restart flow,
+                    // which builds its replacement attempt with the flag set
+                    // and routes the next attach through the isolated
+                    // namespace. Nested restarts serialize on
+                    // `restartingConnections`, and the deferred teardown below
+                    // sees the superseded attempt only after its cleanup.
+                    let currentStartupID = attempt.brokerClientStartupID
+                    let connectionIsolated = currentStartupID.map {
+                        attempt.isolatedBrokerStartupIDs.contains($0)
+                    } ?? false
+                    if !connectionIsolated {
+                        await connection.shutdown()
+                        stderrTask.cancel()
+                        await restartConnection(to: sessionId)
+                        return
+                    }
+                }
+            }
             // Deliberately not reset here (unlike promptCapabilities/authMethods,
             // which are re-derived from every `initialize` response): a broker-
             // adopted reattach to an already-running agent serves `initialize`
@@ -5467,6 +5690,21 @@ extension ACPSessionManager {
                                               else { return }
                                               self.onQueueChanged?(sessionId, self.retainedCleanupHasActivePromptWork(for: sessionId))
                                           },
+                                          onSuccessfulTurn: { [weak self] turn in
+                                              self?.onSuccessfulTurn(turn)
+                                          },
+                                          onTurnCompleted: { [weak self] completion in
+                                              guard let self,
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                              else { return }
+                                              self.onTurnCompleted?(completion)
+                                          },
+                                          onPermissionBlocked: { [weak self] blocker in
+                                              guard let self,
+                                                    self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
+                                              else { return }
+                                              self.onChildBlocked?(blocker)
+                                          },
                                           onQueuedPromptDispatchRegistration: { [weak self] itemId in
                                               guard let self,
                                                     self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID,
@@ -5599,34 +5837,61 @@ extension ACPSessionManager {
                     session: session,
                     fork: fork,
                     initialized: initialized,
+                    attempt: attempt,
                     connection: connection,
                     wireMCPServers: wireMCPServers
                 )
                 result = started.result
                 createdFreshRemoteSession = started.createdFreshRemoteSession
-            } else if freshlyCreated {
-                result = try await connection.newSession(
-                    cwd: worktreePath,
-                    mcpServers: wireMCPServers,
-                    brokerOperationKey: Self.brokerStartupOperationKey(
-                        sessionId: sessionId,
-                        method: "session/new"
-                    )
-                )
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
-                    // Teardown fenced this attempt out while `session/new` was
-                    // in flight (dispose closes the session and drops the
-                    // attempt). The agent still created the remote session, so
-                    // this late result is the only handle on it — close it
-                    // here; no later guard will run.
-                    if disposingAttachments.contains(sessionId) || isDisposed {
-                        try? await closeRemoteSession(
-                            id: result.sessionId,
-                            using: connection,
-                            sessionCapabilities: initialized.sessionCapabilities
-                        )
+                    // Teardown fenced this attempt out while the remote
+                    // session was created (dispose closes the session and
+                    // drops the attempt). When the close path is not already
+                    // tracking this creation (`shouldCloseRemoteResultOnCompletion`),
+                    // the agent still created the remote session, so this
+                    // late result is the only handle on it — close it here;
+                    // no later guard will run.
+                    if !attempt.shouldCloseRemoteResultOnCompletion {
+                        if disposingAttachments.contains(sessionId) || isDisposed {
+                            try? await closeRemoteSession(
+                                id: result.sessionId,
+                                using: connection,
+                                sessionCapabilities: initialized.sessionCapabilities
+                            )
+                        }
+                        await connection.shutdown()
                     }
-                    await connection.shutdown()
+                    return
+                }
+            } else if freshlyCreated {
+                result = try await performRemoteSessionCreation(
+                    for: attempt,
+                    using: connection,
+                    sessionCapabilities: initialized.sessionCapabilities
+                ) {
+                    try await connection.newSession(
+                        cwd: worktreePath,
+                        mcpServers: wireMCPServers,
+                        brokerOperationKey: Self.brokerStartupOperationKey(
+                            sessionId: sessionId,
+                            method: "session/new"
+                        )
+                    )
+                }
+                guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
+                    // Same late-result ownership as the fork guard above:
+                    // the tracked remote-close path closes (and only then
+                    // shuts down) through the disposal machinery.
+                    if !attempt.shouldCloseRemoteResultOnCompletion {
+                        if disposingAttachments.contains(sessionId) || isDisposed {
+                            try? await closeRemoteSession(
+                                id: result.sessionId,
+                                using: connection,
+                                sessionCapabilities: initialized.sessionCapabilities
+                            )
+                        }
+                        await connection.shutdown()
+                    }
                     return
                 }
                 createdFreshRemoteSession = true
@@ -5674,16 +5939,24 @@ extension ACPSessionManager {
                         guard session.origin == .alasCreated,
                               ACPAuthFailure.message(from: error) == nil
                         else { throw error }
-                        result = try await connection.newSession(
-                            cwd: worktreePath,
-                            mcpServers: wireMCPServers,
-                            brokerOperationKey: Self.brokerStartupOperationKey(
-                                sessionId: sessionId,
-                                method: "session/new"
+                        result = try await performRemoteSessionCreation(
+                            for: attempt,
+                            using: connection,
+                            sessionCapabilities: initialized.sessionCapabilities
+                        ) {
+                            try await connection.newSession(
+                                cwd: worktreePath,
+                                mcpServers: wireMCPServers,
+                                brokerOperationKey: Self.brokerStartupOperationKey(
+                                    sessionId: sessionId,
+                                    method: "session/new"
+                                )
                             )
-                        )
+                        }
                         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
-                            await connection.shutdown()
+                            if !attempt.shouldCloseRemoteResultOnCompletion {
+                                await connection.shutdown()
+                            }
                             return
                         }
                         createdFreshRemoteSession = true
@@ -5835,16 +6108,24 @@ extension ACPSessionManager {
                         if ACPAuthFailure.message(from: error) != nil {
                             throw error
                         }
-                        result = try await connection.newSession(
-                            cwd: worktreePath,
-                            mcpServers: wireMCPServers,
-                            brokerOperationKey: Self.brokerStartupOperationKey(
-                                sessionId: sessionId,
-                                method: "session/new"
+                        result = try await performRemoteSessionCreation(
+                            for: attempt,
+                            using: connection,
+                            sessionCapabilities: initialized.sessionCapabilities
+                        ) {
+                            try await connection.newSession(
+                                cwd: worktreePath,
+                                mcpServers: wireMCPServers,
+                                brokerOperationKey: Self.brokerStartupOperationKey(
+                                    sessionId: sessionId,
+                                    method: "session/new"
+                                )
                             )
-                        )
+                        }
                         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
-                            await connection.shutdown()
+                            if !attempt.shouldCloseRemoteResultOnCompletion {
+                                await connection.shutdown()
+                            }
                             return
                         }
                         createdFreshRemoteSession = true
@@ -5872,16 +6153,24 @@ extension ACPSessionManager {
                     throw ACPSessionAttachError.remoteSessionUnsupported
                 }
             } else {
-                result = try await connection.newSession(
-                    cwd: worktreePath,
-                    mcpServers: wireMCPServers,
-                    brokerOperationKey: Self.brokerStartupOperationKey(
-                        sessionId: sessionId,
-                        method: "session/new"
+                result = try await performRemoteSessionCreation(
+                    for: attempt,
+                    using: connection,
+                    sessionCapabilities: initialized.sessionCapabilities
+                ) {
+                    try await connection.newSession(
+                        cwd: worktreePath,
+                        mcpServers: wireMCPServers,
+                        brokerOperationKey: Self.brokerStartupOperationKey(
+                            sessionId: sessionId,
+                            method: "session/new"
+                        )
                     )
-                )
+                }
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
-                    await connection.shutdown()
+                    if !attempt.shouldCloseRemoteResultOnCompletion {
+                        await connection.shutdown()
+                    }
                     return
                 }
                 createdFreshRemoteSession = true
@@ -5914,21 +6203,15 @@ extension ACPSessionManager {
                 }
             }
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
-                try? await closeRemoteSession(
-                    id: result.sessionId,
-                    using: connection,
-                    sessionCapabilities: initialized.sessionCapabilities
-                )
-                await connection.shutdown()
+                if !attempt.shouldCloseRemoteResultOnCompletion {
+                    await connection.shutdown()
+                }
                 return
             }
             if disposingAttachments.contains(sessionId) || isDisposed {
-                try? await closeRemoteSession(
-                    id: result.sessionId,
-                    using: connection,
-                    sessionCapabilities: initialized.sessionCapabilities
-                )
-                await connection.shutdown()
+                if !attempt.shouldCloseRemoteResultOnCompletion {
+                    await connection.shutdown()
+                }
                 await abandonEarlyListenerRunnerIfNeeded()
                 await releaseWriterLease(sessionId: sessionId, attempt: attempt)
                 return
@@ -5936,6 +6219,7 @@ extension ACPSessionManager {
             if var attaching = attachingConnections[sessionId], attaching.connection === connection {
                 attaching.remoteSessionId = result.sessionId
                 attachingConnections[sessionId] = attaching
+                claimRemoteSessionCreationResult(result, for: attempt)
             }
             let providers: [ACPProviderInfo] = if initialized.providerCapabilities != nil {
                 (try? await connection.listProviders()) ?? []
@@ -6090,6 +6374,13 @@ extension ACPSessionManager {
             runners[sessionId] = runner
             keepElicitationCoordinator = true
             attachSucceeded = true
+            // The attach survived on whatever namespace it used; the pending
+            // fresh-namespace requirement is satisfied.
+            pendingFreshBrokerNamespaces.remove(sessionId)
+#if DEBUG
+            await afterRunnerRegistrationForTesting?(sessionId)
+#endif
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
             // Drain a pending model/mode picked during the post-takeover window.
             // The load result just above overwrote `currentModel`/`currentMode`
             // with the agent's restored values. Reapply + persist the user's
@@ -6397,8 +6688,11 @@ extension ACPSessionManager {
             if isRecovering {
                 session.beginConnectionRecoveryAttempt()
             }
-            await attach(to: sessionId, freshlyCreated: false)
-            if isRecovering, session.agentState != .ready {
+            let attachmentOwnerID = await attach(to: sessionId, freshlyCreated: false)
+            if isRecovering,
+               attachmentOwnerID != nil,
+               connectionOwnerIDs[sessionId] == attachmentOwnerID,
+               session.agentState != .ready {
                 session.exhaustConnectionRecovery()
             }
         }
@@ -6438,9 +6732,9 @@ extension ACPSessionManager {
         defer {
             if attachmentAttempts[sessionId] === replacementAttempt {
                 _ = supersedeAttachmentAttempt(for: sessionId)
-                if sessions[sessionId] !== session {
-                    disposingAttachments.remove(sessionId)
-                }
+            }
+            if sessions[sessionId] !== session {
+                disposingAttachments.remove(sessionId)
             }
         }
         connectionOwnerIDs[sessionId] = replacementAttempt.id
@@ -6449,15 +6743,37 @@ extension ACPSessionManager {
         let oldLeaseToken = oldAttempt?.leaseToken ?? ownedLeaseTokens[sessionId]
         let oldAttachingConnection = attachingConnections.removeValue(forKey: sessionId)?.connection
         let oldRunner = runners.removeValue(forKey: sessionId)
+        replacementAttempt.retiringRunner = oldRunner
         let unhandedQueueDispatches = oldRunner?.takeUnhandedQueueDispatchesForTeardown() ?? []
         let oldAttemptConnection = oldAttempt?.connection
         let oldConnection = oldAttemptConnection ?? oldAttachingConnection ?? oldRunner?.connection
         let oldBrokerClient = oldAttempt?.brokerClient ?? (oldConnection?.client as? ACPBrokerClient)
+        let inheritedRetiringConnection = oldAttempt?.retiringConnection
+        oldAttempt?.retiringConnection = nil
+        let retiringConnection = inheritedRetiringConnection
+            // Runner registration precedes completion of model/mode/config
+            // restoration, so the active attach attempt may still reference
+            // this same connection. Once a runner owns it, keep it alive
+            // until the replacement initializes regardless of that attempt.
+            ?? oldRunner?.connection
+        replacementAttempt.retiringConnection = retiringConnection
+        replacementAttempt.connection = oldConnection === retiringConnection ? nil : oldConnection
+        // A previous attempt may have discovered a wedged broker after its
+        // own replacement connection was already attached; that attach then
+        // delegated here. Honor the flag it could not consume itself, and a
+        // pending requirement left behind by an already-deregistered attempt.
+        replacementAttempt.requiresFreshBrokerNamespace =
+            (oldAttempt?.requiresFreshBrokerNamespace ?? false)
+            || pendingFreshBrokerNamespaces.contains(sessionId)
 #if DEBUG
         await beforeRestartRunnerStopForTesting?(sessionId)
 #endif
+        guard sessions[sessionId] === session,
+              isCurrentAttachment(sessionId: sessionId, attempt: replacementAttempt, session: session)
+        else { return }
         oldRunner?.invalidateActivePrompt()
         oldRunner?.stop()
+        replacementAttempt.retiringRunner = nil
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
         stopHeartbeat(sessionId: sessionId)
         stopWriterWatch(sessionId: sessionId)
@@ -6493,18 +6809,21 @@ extension ACPSessionManager {
             else { return }
         }
         if let oldConnection {
-            let shutdownOutcome = await runBounded(timeout: restartTeardownTimeout) {
-                if oldAttemptConnection != nil {
-                    // A startup RPC may still be pending in the broker. Detach
-                    // leaves that process alive, so close this attempt's
-                    // generation before retrying with its stable operation key.
-                    await oldConnection.shutdown()
-                } else {
-                    await oldConnection.detach()
+            if oldConnection !== replacementAttempt.retiringConnection {
+                let shutdownOutcome = await runBounded(timeout: restartTeardownTimeout) {
+                    if oldAttemptConnection != nil {
+                        // A startup RPC may still be pending in the broker. Detach
+                        // leaves that process alive, so close this attempt's
+                        // generation before retrying with its stable operation key.
+                        await oldConnection.shutdown()
+                    } else {
+                        await oldConnection.detach()
+                    }
                 }
-            }
-            if oldBrokerClient != nil, case .timedOut = shutdownOutcome {
-                replacementAttempt.requiresFreshBrokerNamespace = true
+                if oldBrokerClient != nil, case .timedOut = shutdownOutcome {
+                    replacementAttempt.requiresFreshBrokerNamespace = true
+                    pendingFreshBrokerNamespaces.insert(sessionId)
+                }
             }
         } else if let oldBrokerClient {
             let shutdownOutcome = await runBounded(timeout: restartTeardownTimeout) {
@@ -6512,6 +6831,7 @@ extension ACPSessionManager {
             }
             if case .timedOut = shutdownOutcome {
                 replacementAttempt.requiresFreshBrokerNamespace = true
+                pendingFreshBrokerNamespaces.insert(sessionId)
             }
         }
         guard sessions[sessionId] === session,
@@ -6532,7 +6852,9 @@ extension ACPSessionManager {
             to: sessionId,
             freshlyCreated: freshlyCreated
         )
-        if wasRecovering, session.agentState != .ready {
+        if wasRecovering,
+           connectionOwnerIDs[sessionId] == replacementAttempt.id,
+           session.agentState != .ready {
             session.exhaustConnectionRecovery()
         }
     }
@@ -6787,6 +7109,7 @@ extension ACPSessionManager {
         attachments: [ACPMessage.Attachment],
         draft: ACPComposerDraft? = nil,
         scheduledAt: Date? = nil,
+        normalUserTurn: Bool = false,
         into sessionId: ACPSession.ID,
         onQueuedPromptEnqueued: (@MainActor (UUID) -> Void)? = nil,
         onPersisted: (@MainActor (_ persisted: Bool) -> Void)? = nil
@@ -6799,9 +7122,11 @@ extension ACPSessionManager {
         let scheduledId: UUID?
         if let scheduledAt {
             scheduledId = session.enqueueScheduled(blocks: blocks, scheduledAt: scheduledAt, draft: draft)
+            if normalUserTurn, let scheduledId { session.normalQueuedTurnIDs.insert(scheduledId) }
         } else {
             let queuedPromptId = UUID()
             session.enqueue(id: queuedPromptId, blocks: blocks, draft: draft)
+            if normalUserTurn { session.normalQueuedTurnIDs.insert(queuedPromptId) }
             onQueuedPromptEnqueued?(queuedPromptId)
             scheduledId = nil
         }
@@ -6859,6 +7184,9 @@ extension ACPSessionManager {
         into sessionId: ACPSession.ID
     ) async -> Bool {
         guard var session = sessions[sessionId] else { return false }
+        let suggestionSession = session
+        suggestionSession.nextPromptWorkCount += 1
+        defer { suggestionSession.nextPromptWorkCount -= 1 }
         guard !session.queue.contains(where: { $0.delegatedSource?.messageId == source.messageId }) else {
             return true
         }
@@ -6895,6 +7223,28 @@ extension ACPSessionManager {
         return true
     }
 
+    /// Append a delegated system notice to a session's transcript without
+    /// running a turn. Requires a live runner so the row is persisted under
+    /// the lease; callers treat `false` like a rejected delegated prompt and
+    /// release their inbox claim.
+    func appendDelegatedNotice(text: String, into sessionId: ACPSession.ID) async -> Bool {
+        guard sessions[sessionId] != nil else { return false }
+        await awaitBackfill(id: sessionId)
+        guard let runner = runners[sessionId], isWriter(for: sessionId) else { return false }
+        // Report whether the notice actually reached the store, not merely
+        // that the write was attempted: the caller deletes the durable inbox
+        // row on `true`, so a fence-rejected or failed write must come back
+        // `false` and leave that row in place for the next delivery.
+        //
+        // On `false` the in-memory transcript keeps the appended notice even
+        // though nothing persisted, so a retry inside the same session can
+        // briefly show the line twice. It self-heals on reload — the failed
+        // write means only the retried copy is in the store. Suppressing
+        // even that needs `.systemNotice` to carry a delegated source to
+        // dedupe against, which is tracked separately.
+        return await runner.appendAndPersistSystemNoticeAwaitingResult(text)
+    }
+
     @discardableResult
     func enqueuePrompt(
         id: UUID,
@@ -6902,6 +7252,9 @@ extension ACPSessionManager {
         into sessionId: ACPSession.ID
     ) async -> Bool {
         guard var session = sessions[sessionId] else { return false }
+        let suggestionSession = session
+        suggestionSession.nextPromptWorkCount += 1
+        defer { suggestionSession.nextPromptWorkCount -= 1 }
         let source = ACPDelegatedPromptSource(
             sessionId: "mission:\(sessionId)",
             messageId: id.uuidString
@@ -6986,10 +7339,12 @@ extension ACPSessionManager {
         intent: ACPSubmitIntent,
         draft: ACPComposerDraft?,
         waitForModelModeSelections: Bool,
+        normalUserTurn: Bool = true,
         onCompleted: @escaping @MainActor (Bool) -> Void,
         onDispatchRegistered: (@Sendable () -> Void)? = nil
     ) -> Bool {
         guard let session = sessions[sessionId] else { return false }
+        session.nextPromptActivity.send()
         if case .needsAuth = session.setupState {
             return false
         }
@@ -7052,6 +7407,7 @@ extension ACPSessionManager {
                             intent: intent,
                             draft: draft,
                             waitForModelModeSelections: false,
+                            normalUserTurn: normalUserTurn,
                             onCompleted: onCompleted,
                             onDispatchRegistered: { continuation.resume() }
                         )
@@ -7078,6 +7434,7 @@ extension ACPSessionManager {
                     attachments: attachments,
                     draft: draft,
                     scheduledAt: scheduledAt,
+                    normalUserTurn: normalUserTurn,
                     into: sessionId,
                     onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                     onPersisted: onScheduledPersisted
@@ -7096,6 +7453,7 @@ extension ACPSessionManager {
                 attachments: attachments,
                 intent: intent,
                 draft: draft,
+                normalUserTurn: normalUserTurn,
                 onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onDispatchRegistered: { onDispatchRegistered?() },
                 onPromptFinished: { succeeded in onCompleted(succeeded) }
@@ -7110,6 +7468,7 @@ extension ACPSessionManager {
                 attachments: attachments,
                 draft: draft,
                 scheduledAt: scheduledAt,
+                normalUserTurn: normalUserTurn,
                 into: sessionId,
                 onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onPersisted: onScheduledPersisted
@@ -7131,6 +7490,7 @@ extension ACPSessionManager {
                 attachments: attachments,
                 draft: draft,
                 scheduledAt: scheduledAt,
+                normalUserTurn: normalUserTurn,
                 into: sessionId,
                 onQueuedPromptEnqueued: onQueuedPromptEnqueued,
                 onPersisted: onScheduledPersisted
@@ -7244,6 +7604,7 @@ extension ACPSessionManager {
     }
 
     func disposeSession(id: ACPSession.ID) async throws {
+        sessions[id]?.nextPromptActivity.send()
         if let task = disposalTasks[id] {
             try await task.value
             return
@@ -7258,7 +7619,9 @@ extension ACPSessionManager {
     }
 
     func disposeAllLiveSessions() async {
-        let ids = Set(runners.keys).union(attachingSessions.keys)
+        let ids = Set(runners.keys)
+            .union(attachingSessions.keys)
+            .union(attachmentAttempts.keys)
         for id in ids {
             try? await disposeSession(id: id)
         }
@@ -7266,6 +7629,135 @@ extension ACPSessionManager {
 
     func detach(sessionId: ACPSession.ID) async {
         try? await tearDownSession(sessionId: sessionId, closeRemote: false)
+    }
+
+    private func performRemoteSessionCreation(
+        for attempt: AttachmentAttempt,
+        using connection: ACPConnection,
+        sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?,
+        operation: () async throws -> ACPSessionNewResult
+    ) async throws -> ACPSessionNewResult {
+        attempt.remoteSessionCreationsInFlight += 1
+        do {
+            let result = try await operation()
+            if attempt.shouldCloseRemoteResultOnCompletion {
+                // Keep the attempt counted until the close finishes so teardown
+                // cannot shut down the transport between session/new and close.
+                do {
+                    try await closeRemoteSession(
+                        id: result.sessionId,
+                        using: connection,
+                        sessionCapabilities: sessionCapabilities
+                    )
+                } catch {
+                    attempt.remoteSessionCreationCloseError = error
+                }
+            } else {
+                attempt.pendingRemoteSessionResults.append(.init(
+                    sessionId: result.sessionId,
+                    connection: connection,
+                    sessionCapabilities: sessionCapabilities
+                ))
+            }
+            finishRemoteSessionCreation(for: attempt)
+            return result
+        } catch {
+            finishRemoteSessionCreation(for: attempt)
+            throw error
+        }
+    }
+
+    private func finishRemoteSessionCreation(for attempt: AttachmentAttempt) {
+        attempt.remoteSessionCreationsInFlight = max(0, attempt.remoteSessionCreationsInFlight - 1)
+        guard attempt.remoteSessionCreationsInFlight == 0 else { return }
+        let waiters = Array(attempt.remoteSessionCreationWaiters.values)
+        attempt.remoteSessionCreationWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: true)
+        }
+    }
+
+    private func waitForRemoteSessionCreations(
+        for attempt: AttachmentAttempt,
+        timeout: Duration = .seconds(2)
+    ) async -> Bool {
+        guard attempt.remoteSessionCreationsInFlight > 0 else { return true }
+        let waiterID = UUID()
+        return await withCheckedContinuation { continuation in
+            attempt.remoteSessionCreationWaiters[waiterID] = continuation
+            Task { @MainActor [weak attempt] in
+                try? await Task.sleep(for: timeout)
+                guard let continuation = attempt?.remoteSessionCreationWaiters.removeValue(forKey: waiterID) else {
+                    return
+                }
+                continuation.resume(returning: false)
+            }
+        }
+    }
+
+    private func closePendingRemoteSessionResults(for attempt: AttachmentAttempt) async -> (any Error)? {
+        let pendingResults = attempt.pendingRemoteSessionResults
+        attempt.pendingRemoteSessionResults.removeAll()
+        var closeError: (any Error)?
+        for pending in pendingResults {
+            do {
+                try await closeRemoteSession(
+                    id: pending.sessionId,
+                    using: pending.connection,
+                    sessionCapabilities: pending.sessionCapabilities
+                )
+            } catch {
+                if closeError == nil { closeError = error }
+            }
+        }
+        return closeError
+    }
+
+    private func scheduleRemoteSessionCreationCleanup(
+        for attempt: AttachmentAttempt,
+        using connection: ACPConnection
+    ) {
+        guard !attempt.remoteSessionCreationCleanupScheduled else { return }
+        attempt.remoteSessionCreationCleanupScheduled = true
+        Task { @MainActor [weak self, weak attempt] in
+            guard let self, let attempt else {
+                await connection.shutdown()
+                return
+            }
+            // Disposal returns after its short bound, but keep the transport
+            // alive briefly so a delayed session/new response can still be
+            // closed. If it never resolves, shut down after the extended grace.
+            _ = await self.waitForRemoteSessionCreations(for: attempt, timeout: .seconds(30))
+            _ = await self.closePendingRemoteSessionResults(for: attempt)
+            await connection.shutdown()
+        }
+    }
+
+    private func claimRemoteSessionCreationResult(
+        _ result: ACPSessionNewResult,
+        for attempt: AttachmentAttempt
+    ) {
+        attempt.pendingRemoteSessionResults.removeAll { $0.sessionId == result.sessionId }
+    }
+
+    private func closeTrackedRemoteSessionResult(
+        _ result: ACPSessionNewResult,
+        sessionId: ACPSession.ID,
+        attempt: AttachmentAttempt,
+        using connection: ACPConnection,
+        sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
+    ) async {
+        guard !attempt.shouldCloseRemoteResultOnCompletion,
+              attachmentAttempts[sessionId] === attempt
+        else { return }
+        attempt.remoteSessionCreationsInFlight += 1
+        claimRemoteSessionCreationResult(result, for: attempt)
+        try? await closeRemoteSession(
+            id: result.sessionId,
+            using: connection,
+            sessionCapabilities: sessionCapabilities
+        )
+        finishRemoteSessionCreation(for: attempt)
     }
 
     private func closeRemoteSession(
@@ -7342,6 +7834,7 @@ extension ACPSessionManager {
     }
 
     private func tearDownSession(sessionId: ACPSession.ID, closeRemote: Bool) async throws {
+        sessions[sessionId]?.nextPromptActivity.send()
         teardownCounts[sessionId, default: 0] += 1
         takeoverAttemptIDs.removeValue(forKey: sessionId)
         defer {
@@ -7359,9 +7852,11 @@ extension ACPSessionManager {
         discardDeferredModelModeUpdates(for: sessionId)
         let session = sessions[sessionId]
         let shouldCloseRemote = closeRemote && session?.agentState != .disconnected
-        let remoteSessionId = session?.remoteSessionId
         let sessionCapabilities = session?.sessionCapabilities
         let attempt = attachmentAttempts[sessionId]
+        if closeRemote {
+            attempt?.shouldCloseRemoteResultOnCompletion = true
+        }
         if attempt != nil {
             disposingAttachments.insert(sessionId)
             if !closeRemote {
@@ -7369,6 +7864,8 @@ extension ACPSessionManager {
             }
         }
         let attemptConnection = attempt?.connection
+        let retiringConnection = attempt?.retiringConnection
+        attempt?.retiringConnection = nil
         let isolatedStartupID: UUID?
         if let attempt,
            let startupID = attempt.brokerClientStartupID,
@@ -7385,7 +7882,24 @@ extension ACPSessionManager {
         connectionOwnerIDs[sessionId] = nil
         brokerCallbackOwnerIDs[sessionId] = nil
         let attaching = attachingConnections.removeValue(forKey: sessionId)
-        let runner = runners.removeValue(forKey: sessionId)
+        if attemptConnection != nil || attaching != nil {
+            attempt?.connectionShutdownRequested = true
+        }
+        let remoteSessionId = attaching?.remoteSessionId ?? session?.remoteSessionId
+        let runner = runners.removeValue(forKey: sessionId) ?? attempt?.retiringRunner
+        attempt?.retiringRunner = nil
+        let remoteCloseConnection: ACPConnection? = if attempt?.connectionIsInitializedForRemoteClose == true {
+            attemptConnection ?? attaching?.connection ?? runner?.connection
+        } else {
+            retiringConnection ?? runner?.connection ?? attaching?.connection ?? attemptConnection
+        }
+        let remoteCloseCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities? = if remoteCloseConnection === attemptConnection {
+            attempt?.sessionCapabilities ?? attaching?.sessionCapabilities ?? session?.sessionCapabilities
+        } else if remoteCloseConnection === attaching?.connection {
+            attaching?.sessionCapabilities ?? session?.sessionCapabilities ?? sessionCapabilities
+        } else {
+            sessionCapabilities
+        }
         let unhandedQueueDispatches = runner?.takeUnhandedQueueDispatchesForTeardown() ?? []
         // Reset transient session state SYNCHRONOUSLY before any await.
         // The steer task is unstructured and can resume during the
@@ -7414,6 +7928,25 @@ extension ACPSessionManager {
             )
         }
         var closeError: (any Error)?
+        var deferConnectionShutdownForRemoteSessionCreation = false
+        if closeRemote, let attempt {
+            let remoteSessionCreationFinished = await waitForRemoteSessionCreations(for: attempt)
+            if remoteSessionCreationFinished {
+                closeError = attempt.remoteSessionCreationCloseError
+            } else {
+                deferConnectionShutdownForRemoteSessionCreation = true
+                closeError = SessionDisposalError.timedOut
+                if let connection = attempt.connection ?? attaching?.connection ?? runner?.connection
+                    ?? attemptConnection ?? retiringConnection {
+                    scheduleRemoteSessionCreationCleanup(for: attempt, using: connection)
+                } else {
+                    deferConnectionShutdownForRemoteSessionCreation = false
+                }
+            }
+            if let pendingCloseError = await closePendingRemoteSessionResults(for: attempt), closeError == nil {
+                closeError = pendingCloseError
+            }
+        }
         if let runner {
             // Invalidate the in-flight prompt BEFORE shutting down the
             // connection. The unstructured `sendNow` task survives stop()
@@ -7431,40 +7964,47 @@ extension ACPSessionManager {
                 persistQueue(for: session)
                 await flushPersistence()
             }
-            if shouldCloseRemote, let remoteSessionId, !remoteSessionId.isEmpty {
+            if shouldCloseRemote, let remoteSessionId, !remoteSessionId.isEmpty,
+               let remoteCloseConnection {
                 do {
                     try await closeRemoteSession(
                         id: remoteSessionId,
-                        using: runner.connection,
-                        sessionCapabilities: sessionCapabilities
+                        using: remoteCloseConnection,
+                        sessionCapabilities: remoteCloseCapabilities
                     )
                 } catch {
                     closeError = error
                 }
             }
             if closeRemote {
-                let shutdownOutcome = await runBounded(timeout: .seconds(2)) {
-                    await runner.connection.shutdown()
-                }
-                if case .timedOut = shutdownOutcome, closeError == nil {
-                    closeError = SessionDisposalError.timedOut
+                if !deferConnectionShutdownForRemoteSessionCreation {
+                    let shutdownOutcome = await runBounded(timeout: .seconds(2)) {
+                        await runner.connection.shutdown()
+                    }
+                    if case .timedOut = shutdownOutcome, closeError == nil {
+                        closeError = SessionDisposalError.timedOut
+                    }
                 }
             } else {
                 await runner.connection.shutdown()
             }
         } else if let attaching {
-            if shouldCloseRemote, let remoteSessionId = attaching.remoteSessionId, !remoteSessionId.isEmpty {
+            if shouldCloseRemote, let remoteSessionId, !remoteSessionId.isEmpty,
+               let remoteCloseConnection {
                 do {
                     try await closeRemoteSession(
                         id: remoteSessionId,
-                        using: attaching.connection,
-                        sessionCapabilities: attaching.sessionCapabilities
+                        using: remoteCloseConnection,
+                        sessionCapabilities: remoteCloseCapabilities
                     )
                 } catch {
                     closeError = error
                 }
             }
-            if let attempt, let isolatedStartupID {
+            if deferConnectionShutdownForRemoteSessionCreation {
+                // The cleanup task shuts this connection down after the RPC
+                // resolves, preserving the only transport that can close its result.
+            } else if let attempt, let isolatedStartupID {
                 await shutdownBrokerClient(for: attempt, startupID: isolatedStartupID, isolated: true)
             } else if closeRemote {
                 let shutdownOutcome = await runBounded(timeout: .seconds(2)) {
@@ -7478,17 +8018,22 @@ extension ACPSessionManager {
             }
         } else if let attemptConnection {
             if shouldCloseRemote, let remoteSessionId, !remoteSessionId.isEmpty {
-                do {
-                    try await closeRemoteSession(
-                        id: remoteSessionId,
-                        using: attemptConnection,
-                        sessionCapabilities: sessionCapabilities
-                    )
-                } catch {
-                    closeError = error
+                if let remoteCloseConnection {
+                    do {
+                        try await closeRemoteSession(
+                            id: remoteSessionId,
+                            using: remoteCloseConnection,
+                            sessionCapabilities: remoteCloseCapabilities
+                        )
+                    } catch {
+                        closeError = error
+                    }
                 }
             }
-            if let attempt, let isolatedStartupID {
+            if deferConnectionShutdownForRemoteSessionCreation {
+                // The cleanup task shuts this connection down after the RPC
+                // resolves, preserving the only transport that can close its result.
+            } else if let attempt, let isolatedStartupID {
                 await shutdownBrokerClient(for: attempt, startupID: isolatedStartupID, isolated: true)
             } else if closeRemote {
                 let shutdownOutcome = await runBounded(timeout: .seconds(2)) {
@@ -7499,6 +8044,30 @@ extension ACPSessionManager {
                 }
             } else {
                 await attemptConnection.detach()
+            }
+        } else if shouldCloseRemote, let remoteSessionId, !remoteSessionId.isEmpty,
+                  let remoteCloseConnection {
+            do {
+                try await closeRemoteSession(
+                    id: remoteSessionId,
+                    using: remoteCloseConnection,
+                    sessionCapabilities: remoteCloseCapabilities
+                )
+            } catch {
+                closeError = error
+            }
+        }
+        let primaryConnection = runner?.connection ?? attaching?.connection ?? attemptConnection
+        if let retiringConnection, retiringConnection !== primaryConnection {
+            let retirementOutcome = await runBounded(timeout: .seconds(2)) {
+                if closeRemote {
+                    await retiringConnection.shutdown()
+                } else {
+                    await retiringConnection.detach()
+                }
+            }
+            if case .timedOut = retirementOutcome, closeError == nil {
+                closeError = SessionDisposalError.timedOut
             }
         }
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()

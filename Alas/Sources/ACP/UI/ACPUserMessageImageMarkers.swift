@@ -18,14 +18,26 @@ enum ACPUserMessageImageMarkers {
     /// but still consumes a number so the remaining markers stay aligned
     /// with their thumbnails. `text` is returned unchanged when no image has
     /// a usable offset.
-    static func displayText(text: String, attachments: [ACPMessage.Attachment]) -> String {
+    static func displayText(
+        text: String,
+        attachments: [ACPMessage.Attachment],
+        offsetAdjustment: Int = 0
+    ) -> String {
         let images = attachments.enumerated().filter { $0.element.mimeType?.hasPrefix("image/") == true }
         guard !images.isEmpty else { return text }
         let chars = Array(text)
         let needsNumbering = images.count > 1
+        // `offsetAdjustment` lets a caller that renders only part of the
+        // message (a leading command's pill sits outside this text; only
+        // its `rest` is passed here) re-anchor offsets captured against the
+        // FULL message. An offset that lands before this slice starts — an
+        // image attached before a leading command, whose offset is 0 in the
+        // full message — clamps to the front of `rest` instead of being
+        // dropped; the marker still shows, just no longer glued to a pill
+        // it can't render next to.
         let markers: [(offset: Int, label: String)] = images.enumerated().compactMap { position, item in
             guard let offset = item.element.textOffset else { return nil }
-            let clamped = min(max(offset, 0), chars.count)
+            let clamped = min(max(offset + offsetAdjustment, 0), chars.count)
             let label = needsNumbering ? "🖼 \(position + 1)" : "🖼 image"
             return (clamped, label)
         }

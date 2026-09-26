@@ -59,6 +59,20 @@ actor ACPOrchestrationPersistence {
         )
     }
 
+    func claimFailedPhase(
+        childSessionId: String,
+        failureMessage: String,
+        updatedAt: Int64,
+        outcome: ACPDelegatedMessage
+    ) throws -> Bool {
+        try openedStore().claimFailedPhase(
+            childSessionId: childSessionId,
+            failureMessage: failureMessage,
+            updatedAt: updatedAt,
+            outcome: outcome
+        )
+    }
+
     func updateChildWorktree(
         childSessionId: String,
         worktreeId: String,
@@ -75,6 +89,10 @@ actor ACPOrchestrationPersistence {
 
     func clearPendingInitialPrompt(childSessionId: String, updatedAt: Int64) throws {
         try openedStore().clearPendingInitialPrompt(childSessionId: childSessionId, updatedAt: updatedAt)
+    }
+
+    func markParentReport(childSessionId: String, at reportedAt: Int64) throws {
+        try openedStore().markParentReport(childSessionId: childSessionId, at: reportedAt)
     }
 
     func enqueue(_ message: ACPDelegatedMessage) throws {

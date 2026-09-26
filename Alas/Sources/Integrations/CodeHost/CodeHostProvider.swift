@@ -124,6 +124,12 @@ protocol CodeHostProvider: Sendable {
         cwd: URL
     ) async throws -> ReviewRequest?
     func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest
+    /// One lightweight lookup for a reference chip's hover card.
+    func referenceSummary(
+        remote: CodeHostRemote,
+        reference: CodeHostReference,
+        cwd: URL
+    ) async throws -> CodeHostReferenceSummary
     func createReviewRequest(
         remote: CodeHostRemote,
         branch: String,
@@ -288,6 +294,14 @@ extension CodeHostProvider {
     }
 
     func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest {
+        throw CodeHostProviderError.unsupportedProvider(remote.kind)
+    }
+
+    func referenceSummary(
+        remote: CodeHostRemote,
+        reference: CodeHostReference,
+        cwd: URL
+    ) async throws -> CodeHostReferenceSummary {
         throw CodeHostProviderError.unsupportedProvider(remote.kind)
     }
 

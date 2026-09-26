@@ -146,14 +146,17 @@ struct ProcessGGCommandRunner: GGCommandRunning {
     /// executable/args so tests can exercise the readability-handler /
     /// write-end-close pattern against a trivial subprocess (e.g.
     /// `/bin/sh -c ...`) without depending on the `gg` binary being
-    /// installed.
+    /// installed. `terminationGraceNanoseconds` is how long the process tree
+    /// gets to exit after SIGTERM/SIGINT before it is SIGKILLed; tests shorten
+    /// it so they don't sit through the production grace period.
     static func streamProcess(
         executable: String,
         args: [String],
         cwd: URL?,
         env: [String: String]?,
         timeout: TimeInterval? = Process.defaultTimeout,
-        interruption: GGStreamingCancellation? = nil
+        interruption: GGStreamingCancellation? = nil,
+        terminationGraceNanoseconds: UInt64 = 2_000_000_000
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let processTreeID = UUID().uuidString
@@ -227,7 +230,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                 processTree.rootDidExit()
                 let status = proc.terminationStatus
                 Task {
-                    processTree.terminateAndWait()
+                    processTree.terminateAndWait(graceNanoseconds: terminationGraceNanoseconds)
                     // Bound the wait the same way `Process+Git.swift` does:
                     // a stuck handler (e.g. a wedged dispatch queue) must
                     // not hang the stream forever.
@@ -268,7 +271,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     wrapperIdentity: wrapperIdentity
                 )
                 interruption?.install {
-                    Task.detached { processTree.interruptAndWait() }
+                    Task.detached { processTree.interruptAndWait(graceNanoseconds: terminationGraceNanoseconds) }
                 }
                 let watchdog = timeout.map { timeout in
                     Task {
@@ -280,7 +283,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                                 "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
                                 stderr
                             )
-                            processTree.terminateAndWait()
+                            processTree.terminateAndWait(graceNanoseconds: terminationGraceNanoseconds)
                         }
                     }
                 }
@@ -289,11 +292,11 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     interruption?.cancel()
                     switch termination {
                     case .cancelled:
-                        processTree.interruptAndWait()
+                        processTree.interruptAndWait(graceNanoseconds: terminationGraceNanoseconds)
                     case .finished:
-                        processTree.terminateAndWait()
+                        processTree.terminateAndWait(graceNanoseconds: terminationGraceNanoseconds)
                     @unknown default:
-                        processTree.terminateAndWait()
+                        processTree.terminateAndWait(graceNanoseconds: terminationGraceNanoseconds)
                     }
                 }
                 installStdoutHandler()
@@ -457,6 +460,10 @@ private final class StderrAccumulator: @unchecked Sendable {
 /// Stateless read-only facade over the gg CLI (peer to `GitService`).
 struct GGService {
     var runner: GGCommandRunning = ProcessGGCommandRunner()
+    /// How long `sync --jsonl` waits for gg to exit after its terminal
+    /// summary. Covers the streaming runner's cleanup (2 s SIGTERM grace plus
+    /// 1 s SIGKILL sweep) and its 2 s pipe drain, with headroom.
+    var syncPostSummaryDeadlineNanoseconds: UInt64 = 6_000_000_000
 
     private static let supportedSchemaVersion = 1
 
@@ -651,13 +658,14 @@ struct GGService {
                                 "gg sync ended without a summary event."
                             )
                         }
+                        let postSummaryDeadline = syncPostSummaryDeadlineNanoseconds
                         try await withThrowingTaskGroup(of: Void.self) { group in
                             group.addTask {
                                 for try await _ in lines {}
                             }
                             group.addTask {
                                 // Cleanup may take three seconds, followed by up to two seconds draining pipes.
-                                try await Task.sleep(nanoseconds: 6_000_000_000)
+                                try await Task.sleep(nanoseconds: postSummaryDeadline)
                                 throw GGServiceError.commandFailed(
                                     stderr: "gg sync did not exit after summary."
                                 )

@@ -287,4 +287,163 @@ struct ACPOrchestrationStoreTests {
 
         #expect(try store.pendingMessages(targetSessionId: "parent") == [])
     }
+
+    @Test("migrates a v1 database to v2 and decodes old messages as prompts")
+    func migratesV1ToV2() throws {
+        let path = temporaryPath()
+        do {
+            let db = try SQLiteDatabase(path: path, busyTimeoutMilliseconds: 5_000)
+            try db.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+            try db.exec("INSERT INTO schema_version (version) VALUES (1)")
+            try db.exec("""
+            CREATE TABLE delegations (
+                child_session_id TEXT PRIMARY KEY, parent_session_id TEXT NOT NULL,
+                project_id TEXT NOT NULL, parent_worktree_id TEXT NOT NULL,
+                child_worktree_id TEXT, agent_id TEXT NOT NULL, worktree_request BLOB NOT NULL,
+                pending_initial_prompt TEXT, phase TEXT NOT NULL, failure_message TEXT,
+                created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+            )
+            """)
+            try db.exec("""
+            CREATE TABLE delegated_messages (
+                id TEXT PRIMARY KEY, source_session_id TEXT NOT NULL,
+                target_session_id TEXT NOT NULL, prompt TEXT NOT NULL,
+                created_at INTEGER NOT NULL, claim_instance_id TEXT,
+                claim_token TEXT, claim_expires_at INTEGER
+            )
+            """)
+            try db.exec("""
+            INSERT INTO delegated_messages (id, source_session_id, target_session_id, prompt, created_at)
+            VALUES ('m1', 'child', 'parent', 'hello', 5)
+            """)
+        }
+
+        let store = try ACPOrchestrationStore(path: path)
+        #expect(try store.currentSchemaVersion() == 2)
+        let pending = try store.pendingMessages(targetSessionId: "parent")
+        #expect(pending.count == 1)
+        #expect(pending.first?.kind == .prompt)
+        #expect(pending.first?.prompt == "hello")
+    }
+
+    @Test("two instances opening the same v1 database back-to-back both migrate cleanly")
+    func concurrentV1ToV2MigrationDoesNotWedgeSecondInstance() throws {
+        // Simulates two Alas instances racing to open a freshly-shipped
+        // v1 database for the first time. `migrateToV2()`'s `ALTER TABLE
+        // ... ADD COLUMN` statements aren't idempotent, so without
+        // `migrate()` wrapping its read-check-migrate sequence in a
+        // transaction, the second instance to construct a store here would
+        // read schema version 1, attempt `migrateToV2()` again, and throw a
+        // duplicate-column error — permanently wedging its delegation store
+        // (per `ACPOrchestrationPersistence.openedStore()`'s failure cache).
+        let path = temporaryPath()
+        do {
+            let db = try SQLiteDatabase(path: path, busyTimeoutMilliseconds: 5_000)
+            try db.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+            try db.exec("INSERT INTO schema_version (version) VALUES (1)")
+            try db.exec("""
+            CREATE TABLE delegations (
+                child_session_id TEXT PRIMARY KEY, parent_session_id TEXT NOT NULL,
+                project_id TEXT NOT NULL, parent_worktree_id TEXT NOT NULL,
+                child_worktree_id TEXT, agent_id TEXT NOT NULL, worktree_request BLOB NOT NULL,
+                pending_initial_prompt TEXT, phase TEXT NOT NULL, failure_message TEXT,
+                created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+            )
+            """)
+            try db.exec("""
+            CREATE TABLE delegated_messages (
+                id TEXT PRIMARY KEY, source_session_id TEXT NOT NULL,
+                target_session_id TEXT NOT NULL, prompt TEXT NOT NULL,
+                created_at INTEGER NOT NULL, claim_instance_id TEXT,
+                claim_token TEXT, claim_expires_at INTEGER
+            )
+            """)
+        }
+
+        // Both instances construct against the SAME on-disk file. With the
+        // transactional fix, the second construction's `BEGIN IMMEDIATE`
+        // blocks until the first's migration commits, then observes schema
+        // version 2 already and no-ops instead of erroring.
+        let first = try ACPOrchestrationStore(path: path)
+        let second = try ACPOrchestrationStore(path: path)
+
+        #expect(try first.currentSchemaVersion() == 2)
+        #expect(try second.currentSchemaVersion() == 2)
+    }
+
+    @Test("round-trips message kind")
+    func roundTripsMessageKind() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        try store.enqueue(.init(
+            id: "n1", sourceSessionId: "child", targetSessionId: "parent",
+            prompt: "Delegated session child (codex) finished its turn.", createdAt: 7, kind: .notice
+        ))
+        try store.enqueue(.init(
+            id: "p1", sourceSessionId: "child", targetSessionId: "parent",
+            prompt: "wake", createdAt: 8
+        ))
+        let pending = try store.pendingMessages(targetSessionId: "parent")
+        #expect(pending.map(\.kind) == [.notice, .prompt])
+    }
+
+    @Test("records and reads last parent report time")
+    func marksParentReport() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        try store.insert(newRecord())
+        #expect(try store.delegation(childSessionId: "child")?.lastParentReportAt == nil)
+        try store.markParentReport(childSessionId: "child", at: 640)
+        #expect(try store.delegation(childSessionId: "child")?.lastParentReportAt == 640)
+    }
+
+    private func failureOutcome() -> ACPDelegatedMessage {
+        .init(
+            id: "outcome-child-failed",
+            sourceSessionId: "child",
+            targetSessionId: "parent",
+            prompt: "[alas system] Delegated session child (codex) failed: boom.",
+            createdAt: 700,
+            kind: .prompt
+        )
+    }
+
+    @Test("claiming the failed phase commits the parent's outcome with it")
+    func claimFailedPhaseCommitsOutcomeTogether() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        try store.insert(newRecord())
+
+        #expect(try store.claimFailedPhase(
+            childSessionId: "child", failureMessage: "boom", updatedAt: 700, outcome: failureOutcome()
+        ))
+
+        let record = try #require(try store.delegation(childSessionId: "child"))
+        #expect(record.phase == .failed)
+        #expect(record.failureMessage == "boom")
+        let pending = try store.pendingMessages(targetSessionId: "parent")
+        #expect(pending.map(\.id) == ["outcome-child-failed"])
+        #expect(pending.first?.kind == .prompt)
+    }
+
+    @Test("a losing failed-phase claim writes no second outcome")
+    func claimFailedPhaseLoserEnqueuesNothing() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        try store.insert(newRecord())
+        #expect(try store.claimFailedPhase(
+            childSessionId: "child", failureMessage: "boom", updatedAt: 700, outcome: failureOutcome()
+        ))
+        // Simulate the first outcome having been delivered and removed, which
+        // is what previously let a fixed id be re-inserted and wake twice.
+        let claim = try #require(try store.claimMessage(
+            id: "outcome-child-failed", instanceId: "i", token: "t", now: 700, staleAfter: 60
+        ))
+        try store.removeDeliveredMessage(id: "outcome-child-failed", claim: claim.claim)
+        #expect(try store.pendingMessages(targetSessionId: "parent").isEmpty)
+
+        #expect(try store.claimFailedPhase(
+            childSessionId: "child", failureMessage: "boom again", updatedAt: 800, outcome: failureOutcome()
+        ) == false)
+
+        #expect(try store.pendingMessages(targetSessionId: "parent").isEmpty)
+        // The losing caller must not overwrite the recorded reason either.
+        #expect(try store.delegation(childSessionId: "child")?.failureMessage == "boom")
+    }
 }

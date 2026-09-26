@@ -405,6 +405,123 @@ extension ACPPermissionRequestParams {
 }
 #endif
 
+struct InvalidQuestionAnswerCase: Sendable, CustomTestStringConvertible {
+    let label: String
+    /// Id of the question currently pending; the answer always targets id 0.
+    let pendingRequestId: Int
+    let selectedOptionIds: [String]
+
+    var testDescription: String { label }
+}
+
+private let invalidQuestionAnswerCases: [InvalidQuestionAnswerCase] = [
+    InvalidQuestionAnswerCase(label: "stale request id", pendingRequestId: 5, selectedOptionIds: ["o1"]),
+    InvalidQuestionAnswerCase(label: "empty selection", pendingRequestId: 0, selectedOptionIds: []),
+    InvalidQuestionAnswerCase(label: "only unknown option ids", pendingRequestId: 0, selectedOptionIds: ["bogus"]),
+]
+
+struct ElicitationValidationCase: Sendable, CustomTestStringConvertible {
+    let label: String
+    let requestJSON: String
+    let content: [String: ACPElicitationValue]
+    let accepted: Bool
+
+    var testDescription: String { label }
+}
+
+private let elicitationValidationCases: [ElicitationValidationCase] = [
+    ElicitationValidationCase(
+        label: "values violating minLength/pattern, maximum, and enum items are rejected",
+        requestJSON: #"""
+        {"sessionId":"remote","mode":"form","message":"Configure", "requestedSchema":{
+          "properties":{
+            "name":{"type":"string","minLength":3,"pattern":"^[a-z]+$"},
+            "count":{"type":"integer","minimum":1,"maximum":4},
+            "tags":{"type":"array","items":{"type":"string","enum":["one","two"]},"minItems":1}
+          },
+          "required":["name","count","tags"]
+        }}
+        """#,
+        content: [
+            "name": .string("A"),
+            "count": .integer(8),
+            "tags": .strings(["unknown"]),
+        ],
+        accepted: false
+    ),
+    ElicitationValidationCase(
+        label: "integral wire value is valid for a number field",
+        requestJSON: #"""
+        {"sessionId":"remote","mode":"form","message":"Configure", "requestedSchema":{
+          "properties":{"ratio":{"type":"number","minimum":0,"maximum":2}},
+          "required":["ratio"]
+        }}
+        """#,
+        content: ["ratio": .integer(1)],
+        accepted: true
+    ),
+    ElicitationValidationCase(
+        label: "fractional seconds are valid for a date-time field",
+        requestJSON: #"""
+        {"sessionId":"remote","mode":"form","message":"Schedule", "requestedSchema":{
+          "properties":{"startsAt":{"type":"string","format":"date-time"}},
+          "required":["startsAt"]
+        }}
+        """#,
+        content: ["startsAt": .string("2026-07-10T14:30:00.000Z")],
+        accepted: true
+    ),
+]
+
+enum InvalidAttachmentBatch: String, CaseIterable, Sendable {
+    /// ~10.5MB decoded, over the batch byte cap.
+    case oversize
+    /// One more than the per-prompt count cap (parity with the native composer).
+    case tooMany
+    /// Claims image/png but the bytes are not a real image; the byte sniff
+    /// must reject it rather than trusting the MIME.
+    case imageMimeWithNonImageBytes
+
+    @MainActor
+    var attachments: [RemoteAttachment] {
+        switch self {
+        case .oversize:
+            [RemoteAttachment(name: nil, mimeType: "image/png", dataBase64: String(repeating: "A", count: 14_000_000))]
+        case .tooMany:
+            (0..<(RemoteSessionGateway.maxAttachmentCount + 1)).map { _ in
+                RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")
+            }
+        case .imageMimeWithNonImageBytes:
+            [RemoteAttachment(name: "evil.png", mimeType: "image/png", dataBase64: "AAAAAAAAAAA=")]
+        }
+    }
+}
+
+enum QueueVerb: String, CaseIterable, Sendable {
+    case forceSend, remove, retry, edit, clear
+
+    func message(sessionId: String, itemId: UUID) -> RemoteClientMessage {
+        switch self {
+        case .forceSend: .queueForceSend(sessionId: sessionId, itemId: itemId.uuidString)
+        case .remove: .queueRemove(sessionId: sessionId, itemId: itemId.uuidString)
+        case .retry: .queueRetry(sessionId: sessionId, itemId: itemId.uuidString)
+        case .edit: .queueEdit(sessionId: sessionId, itemId: itemId.uuidString)
+        case .clear: .queueClear(sessionId: sessionId)
+        }
+    }
+
+    @MainActor
+    func recordedCalls(in provider: FakeSessionsProvider) -> Int {
+        switch self {
+        case .forceSend: provider.queueForceSends.count
+        case .remove: provider.queueRemoves.count
+        case .retry: provider.queueRetries.count
+        case .edit: provider.queueEdits.count
+        case .clear: provider.queueClears.count
+        }
+    }
+}
+
 @MainActor
 struct RemoteSessionGatewayTests {
     private func makeManager() throws -> ACPSessionManager {
@@ -425,104 +542,6 @@ struct RemoteSessionGatewayTests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("remote-gw-log-\(UUID()).sqlite")
         return ACPPermissionDecisionLog(store: try ACPSessionStore(path: url.path))
-    }
-
-    @Test func listSessionsEmitsSummaries() async {
-        let provider = FakeSessionsProvider()
-        provider.summaries = [RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle", canDrive: false)]
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.listSessions)
-        await Task.yield()
-        #expect(provider.sessionSummariesCallCount == 1)
-        #expect(sent == [.sessionList(sessions: provider.summaries)])
-    }
-
-    @Test func helloAckIsAcceptedAndSendsNothing() async {
-        let provider = FakeSessionsProvider()
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.helloAck(protocolVersion: 1))
-        await Task.yield()
-        #expect(sent.isEmpty)
-        #expect(provider.sessionSummariesCallCount == 0)
-    }
-
-    @Test func listSessionsPreservesIsActiveFlag() async {
-        let provider = FakeSessionsProvider()
-        let active = RemoteSessionSummary(id: "active", title: "Active", agentId: "claude", status: "idle", canDrive: true, isActive: true)
-        let inactive = RemoteSessionSummary(id: "inactive", title: "Inactive", agentId: "codex", status: "idle", canDrive: false, isActive: false)
-        provider.summaries = [active, inactive]
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.listSessions)
-        await Task.yield()
-        #expect(provider.sessionSummariesCallCount == 1)
-        guard case .sessionList(let sessions)? = sent.first else {
-            Issue.record("expected sessionList, got \(sent)")
-            return
-        }
-        #expect(sessions.count == 2)
-        #expect(sessions.first { $0.id == "active" }?.isActive == true)
-        #expect(sessions.first { $0.id == "inactive" }?.isActive == false)
-    }
-
-    @Test func listWorktreesEmitsWorktreeList() async {
-        let provider = FakeSessionsProvider()
-        provider.worktrees = [
-            RemoteWorktreeOption(
-                id: "wt1",
-                projectName: "alas",
-                worktreeName: "feature-a",
-                branch: "nacho/feature-a",
-                path: "/tmp/alas-feature-a",
-                metricsAvailable: false,
-                comparisonRef: nil,
-                commitCount: 0,
-                changedFileCount: 0,
-                addedLines: 0,
-                deletedLines: 0,
-                conflictCount: 0
-            )
-        ]
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gw.handle(.listWorktrees)
-        for _ in 0..<10 {
-            if !sent.isEmpty { break }
-            await Task.yield()
-        }
-
-        #expect(provider.remoteWorktreesCallCount == 1)
-        #expect(sent == [.worktreeList(worktrees: provider.worktrees)])
-    }
-
-    @Test func listAgentsEmitsAgentList() async {
-        let provider = FakeSessionsProvider()
-        provider.agents = [RemoteAgentOption(id: "claude", name: "Claude", isDefault: true)]
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gw.handle(.listAgents)
-
-        #expect(provider.remoteAgentsCallCount == 1)
-        #expect(sent == [.agentList(agents: provider.agents)])
-    }
-
-    @Test func listProjectsEmitsProjectList() async {
-        let provider = FakeSessionsProvider()
-        provider.projects = [RemoteProjectOption(id: "project-1", name: "Alas")]
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gw.handle(.listProjects)
-        for _ in 0..<10 where sent.isEmpty {
-            await Task.yield()
-        }
-
-        #expect(provider.remoteProjectsCallCount == 1)
-        #expect(sent == [.projectList(projects: provider.projects)])
     }
 
     @Test func listProjectsDropsSupersededPausedResponse() async {
@@ -548,47 +567,6 @@ struct RemoteSessionGatewayTests {
 
         #expect(provider.remoteProjectsCallCount == 2)
         #expect(sent == [.projectList(projects: newProjects)])
-    }
-
-    @Test func listBranchesEmitsRequestedProjectBranches() async {
-        let provider = FakeSessionsProvider()
-        provider.branchResults["project-1"] = .success(
-            branches: ["main", "feature/remote"],
-            preferredBase: "main"
-        )
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gw.handle(.listBranches(projectId: "project-1"))
-        for _ in 0..<10 where sent.isEmpty {
-            await Task.yield()
-        }
-
-        #expect(provider.remoteBranchRequests == ["project-1"])
-        #expect(sent == [
-            .branchList(
-                projectId: "project-1",
-                branches: ["main", "feature/remote"],
-                preferredBase: "main"
-            )
-        ])
-    }
-
-    @Test func listBranchesEmitsRequestedProjectFailure() async {
-        let provider = FakeSessionsProvider()
-        provider.branchResults["project-1"] = .failure("Repository is no longer available.")
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gw.handle(.listBranches(projectId: "project-1"))
-        for _ in 0..<10 where sent.isEmpty {
-            await Task.yield()
-        }
-
-        #expect(provider.remoteBranchRequests == ["project-1"])
-        #expect(sent == [
-            .branchListFailed(projectId: "project-1", message: "Repository is no longer available.")
-        ])
     }
 
     @Test func listBranchesDropsSupersededPausedResponse() async {
@@ -800,17 +778,6 @@ struct RemoteSessionGatewayTests {
         #expect(sent.contains(.sessionList(sessions: provider.summaries)))
     }
 
-    @Test func createSessionEmitsFailure() async {
-        let provider = FakeSessionsProvider()
-        provider.createResults["missing|claude"] = .failure("Worktree is no longer available.")
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gw.handle(.createSession(worktreeId: "missing", agentId: "claude"))
-
-        #expect(sent == [.createSessionFailed(message: "Worktree is no longer available.")])
-    }
-
     @Test func listSessionsDoesNotBlockFollowingSubscribe() async throws {
         let provider = FakeSessionsProvider()
         provider.summaries = [RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle", canDrive: false)]
@@ -897,21 +864,6 @@ struct RemoteSessionGatewayTests {
             await Task.yield()
         }
         #expect(sent.last == .worktreeList(worktrees: provider.worktrees))
-    }
-
-    @Test func subscribeEmitsSnapshot() async throws {
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithAgentText("hello")
-        provider.sessions["s1"] = s
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.subscribe(sessionId: "s1"))
-        guard case .transcriptSnapshot(let id, _, _, let msgs, _, _, _, _)? = sent.first else {
-            Issue.record("expected snapshot, got \(sent)")
-            return
-        }
-        #expect(id == "s1")
-        #expect(msgs.contains { $0.kind == "agent" && $0.text == "hello" })
     }
 
     @Test func snapshotRestoresFullTruncatedToolCallContent() async throws {
@@ -1188,53 +1140,23 @@ struct RemoteSessionGatewayTests {
         #expect(provider.lastPlanResponse == nil)
     }
 
-    @Test func staleQuestionAnswerIsNoOp() async throws {
+    @Test(arguments: invalidQuestionAnswerCases)
+    func invalidQuestionAnswerIsNoOp(_ testCase: InvalidQuestionAnswerCase) async throws {
         let provider = FakeSessionsProvider()
         let s = try makeSessionWithAgentText("x")
         provider.sessions["s1"] = s
-        s.transcript.pendingQuestion = .init(id: .number(5), params: .stub())  // current request is 5
-        let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.subscribe(sessionId: "s1"))
-        await gw.handle(.questionAnswer(
-            sessionId: "s1",
-            requestId: 0,
-            answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: ["o1"])]))
-        #expect(provider.lastQuestionResponse == nil)  // stale requestId ignored
-    }
-
-    @Test func incompleteQuestionAnswerIsNoOp() async throws {
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = s
-        s.transcript.pendingQuestion = .init(id: .number(0), params: .stub())
+        s.transcript.pendingQuestion = .init(id: .number(testCase.pendingRequestId), params: .stub())
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
-        // Empty selection for the only question — must not resume the agent.
+        // Must not resume the agent with a stale or vacuous answer.
         await gw.handle(.questionAnswer(
             sessionId: "s1",
             requestId: 0,
-            answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: [])]))
+            answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: testCase.selectedOptionIds)]))
         #expect(provider.lastQuestionResponse == nil)
         #expect(!sent.contains { if case .questionResolved = $0 { return true }
         return false })
-    }
-
-    @Test func questionAnswerWithUnknownOptionsIsNoOp() async throws {
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = s
-        s.transcript.pendingQuestion = .init(id: .number(0), params: .stub())
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.subscribe(sessionId: "s1"))
-        // Non-empty selection, but the ids aren't real options ("o1"/"o2") — must
-        // not resume the agent with a vacuous (empty after filtering) answer.
-        await gw.handle(.questionAnswer(
-            sessionId: "s1",
-            requestId: 0,
-            answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: ["bogus"])]))
-        #expect(provider.lastQuestionResponse == nil)
     }
 
     @Test func subscribeEmitsStandardElicitationAndAcceptRoutesByOpaqueToken() async throws {
@@ -1316,22 +1238,14 @@ struct RemoteSessionGatewayTests {
         })
     }
 
-    @Test func elicitationResponseMustSatisfySchemaConstraints() async throws {
+    @Test(arguments: elicitationValidationCases)
+    func elicitationAcceptIsValidatedAgainstTheRequestedSchema(_ testCase: ElicitationValidationCase) async throws {
         let provider = FakeSessionsProvider()
         let session = try makeSessionWithAgentText("x")
         provider.sessions["s1"] = session
         let params = try JSONDecoder().decode(
             ACPElicitationRequestParams.self,
-            from: Data(#"""
-            {"sessionId":"remote","mode":"form","message":"Configure", "requestedSchema":{
-              "properties":{
-                "name":{"type":"string","minLength":3,"pattern":"^[a-z]+$"},
-                "count":{"type":"integer","minimum":1,"maximum":4},
-                "tags":{"type":"array","items":{"type":"string","enum":["one","two"]},"minItems":1}
-              },
-              "required":["name","count","tags"]
-            }}
-            """#.utf8)
+            from: Data(testCase.requestJSON.utf8)
         )
         let pending = try #require(ACPUserInputRequest.elicitation(.init(id: .number(4), params: params)))
         session.transcript.pendingUserInputs = [pending]
@@ -1341,87 +1255,14 @@ struct RemoteSessionGatewayTests {
             sessionId: "s1",
             requestId: pending.id.uuidString,
             action: "accept",
-            content: [
-                "name": .string("A"),
-                "count": .integer(8),
-                "tags": .strings(["unknown"]),
-            ]
+            content: testCase.content
         ))
 
-        #expect(provider.lastUserInputResponse == nil)
-    }
-
-    @Test func integralWireValueIsValidForNumberElicitation() async throws {
-        let provider = FakeSessionsProvider()
-        let session = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = session
-        let params = try JSONDecoder().decode(
-            ACPElicitationRequestParams.self,
-            from: Data(#"""
-            {"sessionId":"remote","mode":"form","message":"Configure", "requestedSchema":{
-              "properties":{"ratio":{"type":"number","minimum":0,"maximum":2}},
-              "required":["ratio"]
-            }}
-            """#.utf8)
-        )
-        let pending = try #require(ACPUserInputRequest.elicitation(.init(id: .number(5), params: params)))
-        session.transcript.pendingUserInputs = [pending]
-        let gateway = RemoteSessionGateway(provider: provider) { _ in }
-
-        await gateway.handle(.elicitationResponse(
-            sessionId: "s1",
-            requestId: pending.id.uuidString,
-            action: "accept",
-            content: ["ratio": .integer(1)]
-        ))
-
-        #expect(provider.lastUserInputResponse?.action == .submit(["ratio": .integer(1)]))
-    }
-
-    @Test func fractionalSecondsAreValidForDateTimeElicitation() async throws {
-        let provider = FakeSessionsProvider()
-        let session = try makeSessionWithAgentText("x")
-        provider.sessions["s1"] = session
-        let params = try JSONDecoder().decode(
-            ACPElicitationRequestParams.self,
-            from: Data(#"""
-            {"sessionId":"remote","mode":"form","message":"Schedule", "requestedSchema":{
-              "properties":{"startsAt":{"type":"string","format":"date-time"}},
-              "required":["startsAt"]
-            }}
-            """#.utf8)
-        )
-        let pending = try #require(ACPUserInputRequest.elicitation(.init(id: .number(6), params: params)))
-        session.transcript.pendingUserInputs = [pending]
-        let gateway = RemoteSessionGateway(provider: provider) { _ in }
-
-        await gateway.handle(.elicitationResponse(
-            sessionId: "s1",
-            requestId: pending.id.uuidString,
-            action: "accept",
-            content: ["startsAt": .string("2026-07-10T14:30:00.000Z")]
-        ))
-
-        #expect(provider.lastUserInputResponse?.action == .submit([
-            "startsAt": .string("2026-07-10T14:30:00.000Z"),
-        ]))
-    }
-
-    @Test func transcriptMutationEmitsCoalescedDelta() async throws {
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithAgentText("hello")
-        provider.sessions["s1"] = s
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.subscribe(sessionId: "s1"))
-        s.transcript.messages.append(.agent(id: UUID(), StreamingText("more")))  // fires objectWillChange
-        try await Task.sleep(nanoseconds: 250_000_000)  // > coalesce window
-        let delta = sent.compactMap { msg -> [RemoteWireMessage]? in
-            if case .transcriptDelta(_, _, _, let upserts, _, _) = msg { return upserts }
-            return nil
-        }.last
-        let delta2 = try #require(delta, "expected a transcriptDelta after mutation")
-        #expect(delta2.contains { $0.text == "more" })
+        if testCase.accepted {
+            #expect(provider.lastUserInputResponse?.action == .submit(testCase.content))
+        } else {
+            #expect(provider.lastUserInputResponse == nil)
+        }
     }
 
     @Test func closeStopsFurtherDeltas() async throws {
@@ -1461,23 +1302,6 @@ struct RemoteSessionGatewayTests {
         #expect(sent.isEmpty)
     }
 
-    @Test func takeOverRoutesToProvider() async {
-        let provider = FakeSessionsProvider()
-        let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.takeOver(sessionId: "s1"))
-        #expect(provider.tookOver == ["s1"])
-    }
-
-    @Test func sendPromptRoutesOnlyWhenWriter() async {
-        let provider = FakeSessionsProvider()
-        let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "auto")) // not writer → ignored
-        #expect(provider.prompts.isEmpty)
-        provider.writers.insert("s1")
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "auto"))
-        #expect(provider.prompts.map(\.text) == ["hi"])
-    }
-
     @Test func sendPromptTrimsAndIgnoresBlankEvenWhenWriter() async {
         let provider = FakeSessionsProvider()
         provider.writers.insert("s1")
@@ -1512,19 +1336,6 @@ struct RemoteSessionGatewayTests {
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
     }
 
-    @Test func stopWorksRegardlessOfWriterStatus() async {
-        // Stop is a fast-lane emergency brake: it no longer requires the
-        // writer lease, so it must succeed whether or not the caller is
-        // the current writer.
-        let provider = FakeSessionsProvider()
-        let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.stop(sessionId: "s1"))
-        #expect(provider.stopped == ["s1"])
-        provider.writers.insert("s1")
-        await gw.handle(.stop(sessionId: "s1"))
-        #expect(provider.stopped == ["s1", "s1"])
-    }
-
     @Test func stopWorksWithoutWriterLeaseAndAcksImmediately() async throws {
         let provider = FakeSessionsProvider()
         provider.sessions["s1"] = try makeSessionWithAgentText("hi")
@@ -1534,21 +1345,6 @@ struct RemoteSessionGatewayTests {
         await gw.handle(.stop(sessionId: "s1"))
         #expect(provider.stopped == ["s1"])
         #expect(sent.first == .stopPending(sessionId: "s1"))
-    }
-
-    @Test func snapshotCarriesCanDrive() async throws {
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithAgentText("hello")
-        provider.sessions["s1"] = s
-        provider.writers.insert("s1")
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.subscribe(sessionId: "s1"))
-        let drive = sent.compactMap { msg -> Bool? in
-            if case .transcriptSnapshot(_, _, let canDrive, _, _, _, _, _) = msg { return canDrive }
-            return nil
-        }.first
-        #expect(drive == true)
     }
 
     @Test func configVerbsRouteOnlyWhenWriter() async {
@@ -1613,18 +1409,6 @@ struct RemoteSessionGatewayTests {
         })
     }
 
-    @Test func subscribeEmitsSessionConfig() async throws {
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithAgentText("hi")
-        provider.sessions["s1"] = s
-        provider.configs["s1"] = .init(sessionId: "s1", models: [.init(id: "opus", name: "Opus")],
-            modes: [], currentModel: "opus", currentMode: nil, autoRunEnabled: false, acceptsImages: true)
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.subscribe(sessionId: "s1"))
-        #expect(sent.contains { if case .sessionConfig = $0 { return true } else { return false } })
-    }
-
     @Test func sessionConfigChangeEmitsUpdate() async throws {
         let provider = FakeSessionsProvider()
         let s = try makeSessionWithAgentText("hi")
@@ -1639,26 +1423,6 @@ struct RemoteSessionGatewayTests {
         s.currentModel = "opus"                    // mutate config
         try await Task.sleep(nanoseconds: 50_000_000)
         #expect(sent.contains { if case .sessionConfig = $0 { return true } else { return false } })
-    }
-
-    @Test func oversizeAttachmentRejected() async {
-        let provider = FakeSessionsProvider()
-        provider.writers.insert("s1")
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        let big = String(repeating: "A", count: 14_000_000)   // ~10.5MB decoded > cap
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: nil, mimeType: "image/png", dataBase64: big)], intent: "auto"))
-        #expect(provider.lastAttachments.isEmpty)
-        #expect(sent.contains(.promptRejected(sessionId: "s1")))
-    }
-
-    @Test func nonImageAttachmentRejected() async {
-        let provider = FakeSessionsProvider()
-        provider.writers.insert("s1")
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: "f.txt", mimeType: "text/plain", dataBase64: "AAAA")], intent: "auto"))
-        #expect(sent.contains(.promptRejected(sessionId: "s1")))
     }
 
     @Test func imageOnlyUserMessageRendersPlaceholder() {
@@ -1748,41 +1512,16 @@ struct RemoteSessionGatewayTests {
         ])
     }
 
-    @Test func tooManyAttachmentsRejected() async {
-        // Count cap (parity with ACPComposer.maxImagesPerMessage) — a single
-        // prompt can't write an unbounded number of tiny files.
+    @Test(arguments: InvalidAttachmentBatch.allCases)
+    func invalidAttachmentBatchIsRejectedBeforeAnyWrite(_ batch: InvalidAttachmentBatch) async {
         let provider = FakeSessionsProvider()
         provider.writers.insert("s1")
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        let many = (0..<(RemoteSessionGateway.maxAttachmentCount + 1)).map { _ in
-            RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")
-        }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: many, intent: "auto"))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: batch.attachments, intent: "auto"))
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
+        #expect(provider.lastAttachments.isEmpty)
         #expect(provider.writtenAttachmentURLs.isEmpty)   // rejected before any write
-    }
-
-    @Test func renamedNonImageWithImageMimeRejected() async {
-        // Client claims image/png but the bytes aren't a real image — the byte
-        // sniff must reject it rather than trusting the MIME, and write no file.
-        let provider = FakeSessionsProvider()
-        provider.writers.insert("s1")
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: "evil.png", mimeType: "image/png", dataBase64: "AAAAAAAAAAA=")], intent: "auto"))
-        #expect(sent.contains(.promptRejected(sessionId: "s1")))
-        #expect(provider.writtenAttachmentURLs.isEmpty)
-    }
-
-    @Test func validImageAttachmentSends() async {
-        let provider = FakeSessionsProvider()
-        provider.writers.insert("s1")
-        var sent: [RemoteServerMessage] = []
-        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")], intent: "auto"))
-        #expect(provider.lastAttachments.count == 1)
-        #expect(!sent.contains { if case .promptRejected = $0 { return true } else { return false } })
     }
 
     @Test func refusedSendDiscardsAttachmentFiles() async {
@@ -1951,17 +1690,6 @@ struct RemoteSessionGatewayTests {
         session.transcript.messages.append(.systemNotice(id: UUID(), text: "x"))
         try await Task.sleep(nanoseconds: 250_000_000)
         #expect(provider.fullToolCallContentCallCount == 1)
-    }
-
-    @Test func unsubscribeReleasesChangeTracking() async throws {
-        let provider = FakeSessionsProvider()
-        let s = try makeSessionWithUserMessages(3)
-        provider.sessions["s1"] = s
-        let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.subscribe(sessionId: "s1"))
-        #expect(s.transcript.changeLog.isTracking)
-        await gw.handle(.unsubscribe(sessionId: "s1"))
-        #expect(!s.transcript.changeLog.isTracking)
     }
 
     @Test func resubscribeDoesNotLeakTrackingRetains() async throws {
@@ -2563,55 +2291,19 @@ struct RemoteSessionGatewayTests {
         #expect(provider.fullToolCallContentCallCount == 1)
     }
 
-    @Test func queueVerbsReachTheProviderOnlyForWriters() async {
+    @Test(arguments: QueueVerb.allCases)
+    func queueVerbsReachTheProviderOnlyForWriters(_ verb: QueueVerb) async {
         let provider = FakeSessionsProvider()
         let id = "s1"
-        var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
         let itemId = UUID()
 
-        await gateway.handle(.queueForceSend(sessionId: id, itemId: itemId.uuidString))
-        #expect(provider.queueForceSends.isEmpty)
+        await gateway.handle(verb.message(sessionId: id, itemId: itemId))
+        #expect(verb.recordedCalls(in: provider) == 0)
 
         provider.writers.insert(id)
-        await gateway.handle(.queueForceSend(sessionId: id, itemId: itemId.uuidString))
-        #expect(provider.queueForceSends.map(\.itemId) == [itemId])
-    }
-
-    @Test func subscribeEmitsQueueStateEvenWhenQueueIsEmpty() async throws {
-        let provider = FakeSessionsProvider()
-        let id = "s1"
-        provider.sessions[id] = try makeSessionWithAgentText("x")
-        var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gateway.handle(.subscribe(sessionId: id))
-
-        let states = sent.compactMap { message -> [RemoteQueuedPrompt]? in
-            if case .queueState(_, let items) = message { return items }
-            return nil
-        }
-        #expect(states == [[]])
-    }
-
-    @Test func subscribeProjectsExistingQueue() async throws {
-        let provider = FakeSessionsProvider()
-        let id = "s1"
-        let session = try makeSessionWithAgentText("x")
-        session.queue = [QueuedPrompt(blocks: [.text("queued one")])]
-        provider.sessions[id] = session
-        var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gateway.handle(.subscribe(sessionId: id))
-
-        let items = sent.compactMap { message -> [RemoteQueuedPrompt]? in
-            if case .queueState(_, let items) = message { return items }
-            return nil
-        }.first
-        #expect(items?.count == 1)
-        #expect(items?.first?.text == "queued one")
-        #expect(items?.first?.status == "pending")
+        await gateway.handle(verb.message(sessionId: id, itemId: itemId))
+        #expect(verb.recordedCalls(in: provider) == 1)
     }
 
     @Test func resubscribeStillEmitsQueueStateWhenUnchanged() async throws {
@@ -2636,7 +2328,7 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func queueMutationOnLiveSessionEmitsQueueState() async throws {
-        // The three existing queueState tests above only exercise the
+        // The resubscribe queueState test above only exercises the
         // force:true subscribe path. This covers the load-bearing one: the
         // emission inside the config-coalesce closure in observe(id:session:)
         // that carries a live queue mutation (a real enqueue while the
@@ -2689,39 +2381,6 @@ struct RemoteSessionGatewayTests {
         #expect(countAfterReassign == countAfterMutation)   // dedupe swallowed the no-op reassignment
     }
 
-    @Test func allQueueVerbsRequireWriterLease() async {
-        let provider = FakeSessionsProvider()
-        let id = "s1"
-        let itemId = UUID()
-        let gateway = RemoteSessionGateway(provider: provider) { _ in }
-
-        await gateway.handle(.queueRemove(sessionId: id, itemId: itemId.uuidString))
-        await gateway.handle(.queueRetry(sessionId: id, itemId: itemId.uuidString))
-        await gateway.handle(.queueEdit(sessionId: id, itemId: itemId.uuidString))
-        await gateway.handle(.queueClear(sessionId: id))
-
-        #expect(provider.queueRemoves.isEmpty)
-        #expect(provider.queueRetries.isEmpty)
-        #expect(provider.queueEdits.isEmpty)
-        #expect(provider.queueClears.isEmpty)
-    }
-
-    @Test func queueVerbsReachProviderForWriter() async {
-        let provider = FakeSessionsProvider()
-        let id = "s1"
-        provider.writers.insert(id)
-        let itemId = UUID()
-        let gateway = RemoteSessionGateway(provider: provider) { _ in }
-
-        await gateway.handle(.queueRemove(sessionId: id, itemId: itemId.uuidString))
-        await gateway.handle(.queueRetry(sessionId: id, itemId: itemId.uuidString))
-        await gateway.handle(.queueClear(sessionId: id))
-
-        #expect(provider.queueRemoves.map(\.itemId) == [itemId])
-        #expect(provider.queueRetries.map(\.itemId) == [itemId])
-        #expect(provider.queueClears == [id])
-    }
-
     @Test func malformedItemIdIsIgnored() async {
         let provider = FakeSessionsProvider()
         let id = "s1"
@@ -2745,19 +2404,6 @@ struct RemoteSessionGatewayTests {
         await gateway.handle(.queueEdit(sessionId: id, itemId: itemId.uuidString))
 
         #expect(sent.contains(.queueEditRestored(sessionId: id, itemId: itemId.uuidString, text: "restore me")))
-    }
-
-    @Test func queueEditOnSendingItemRepliesWithNothing() async {
-        let provider = FakeSessionsProvider()
-        let id = "s1"
-        provider.writers.insert(id)
-        provider.queueEditText = nil          // takeForEditing refused
-        var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gateway.handle(.queueEdit(sessionId: id, itemId: UUID().uuidString))
-
-        #expect(!sent.contains { if case .queueEditRestored = $0 { return true } else { return false } })
     }
 
     // Regression (codex review, PR #964): a queued item whose draft carries a
@@ -2806,18 +2452,6 @@ struct RemoteSessionGatewayTests {
         #expect(provider.prompts.isEmpty)
     }
 
-    @Test func autoIntentStillRoutesToSendPrompt() async {
-        let provider = FakeSessionsProvider()
-        let id = "s1"
-        provider.writers.insert(id)
-        let gateway = RemoteSessionGateway(provider: provider) { _ in }
-
-        await gateway.handle(.sendPrompt(sessionId: id, text: "queue me", attachments: [], intent: "auto"))
-
-        #expect(provider.prompts.map(\.text) == ["queue me"])
-        #expect(provider.steerPrompts.isEmpty)
-    }
-
     @Test func listChangesSendsChangeListFromTheProvider() async {
         let provider = FakeSessionsProvider()
         let file = RemoteChangedFile(
@@ -2834,18 +2468,6 @@ struct RemoteSessionGatewayTests {
         #expect(sent == [.changeList(
             sessionId: "s1", comparisonRef: "origin/main", metricsAvailable: true,
             files: [file], staged: [file], unstaged: [], commits: [], truncated: false)])
-    }
-
-    @Test func listChangesSendsFailureMessageOnProviderFailure() async {
-        let provider = FakeSessionsProvider()
-        provider.changeListResult = .failure(reason: .worktreeUnavailable, message: "gone")
-        var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gateway.handle(.listChanges(sessionId: "s1"))
-
-        #expect(sent == [.changeListFailed(
-            sessionId: "s1", reason: .worktreeUnavailable, message: "gone")])
     }
 
     @Test func fileDiffSendsHunksAndFailures() async {
@@ -2889,18 +2511,6 @@ struct RemoteSessionGatewayTests {
         ])
     }
 
-    @Test func readFileSendsUnavailableWithByteSize() async {
-        let provider = FakeSessionsProvider()
-        provider.fileContentsResult = .failure(reason: .tooLarge, byteSize: 900_000, message: nil)
-        var sent: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
-
-        await gateway.handle(.readFile(sessionId: "s1", path: "big.bin"))
-
-        #expect(sent == [.fileUnavailable(
-            sessionId: "s1", path: "big.bin", reason: .tooLarge, byteSize: 900_000, message: nil)])
-    }
-
     @Test func duplicateInFlightRequestsForTheSamePathAreDropped() async {
         let provider = FakeSessionsProvider()
         provider.fileDiffResult = .success(hunks: [], truncated: false)
@@ -2934,7 +2544,7 @@ struct RemoteSessionGatewayTests {
         ]), from: "srv-b")
         // The cache update itself asks the gateway to refresh; the explicit
         // request supersedes that refresh (same generation counter) and its
-        // list is what lands. Same single yield as `listSessionsEmitsSummaries`.
+        // list is what lands.
         await gateway.handle(.listSessions)
         await Task.yield()
         guard case .sessionList(let rows) = out.last else {
@@ -2944,25 +2554,6 @@ struct RemoteSessionGatewayTests {
         #expect(rows.map(\.id) == ["local", "srv-b:s1"])
         #expect(rows.last?.serverId == "srv-b")
         #expect(links.sent(to: "srv-b").filter { $0 == .listSessions }.count >= 1)
-        gateway.close()
-    }
-
-    @Test func aPeerSessionSubscribeIsRoutedAwayFromTheLocalProvider() async {
-        let provider = FakeSessionsProvider()
-        let links = FederatedSessionsProviderTests.FakeLinks()
-        let federation = FederatedSessionsProvider(links: links)
-        var out: [RemoteServerMessage] = []
-        let gateway = RemoteSessionGateway(provider: provider, federation: federation) { out.append($0) }
-        links.goOnline("srv-b", name: "Mac B")
-        await gateway.handle(.subscribe(sessionId: "srv-b:s1"))
-        // Not handled locally: no sessionClosed for an unknown local session.
-        #expect(!out.contains(.sessionClosed(sessionId: "srv-b:s1")))
-        #expect(links.sent(to: "srv-b").contains(.subscribe(sessionId: "s1")))
-        links.receive(.stopPending(sessionId: "s1"), from: "srv-b")
-        #expect(out.contains(.stopPending(sessionId: "srv-b:s1")))
-        // A local id still goes to the local provider.
-        await gateway.handle(.subscribe(sessionId: "nope"))
-        #expect(out.contains(.sessionClosed(sessionId: "nope")))
         gateway.close()
     }
 

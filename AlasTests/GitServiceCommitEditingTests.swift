@@ -4,14 +4,60 @@ import Testing
 
 @Suite(.serialized)
 struct GitServiceCommitEditingTests {
-    private func makeRepo() async throws -> URL {
+    private struct RepoTemplate: Sendable {
+        let url: URL
+        let baseSha: String?
+    }
+
+    /// Real git repositories built once per test process and copied into a
+    /// unique directory per test, so each test starts from the same state as
+    /// the old per-test `init` + `config` (+ `base` commit) sequence without
+    /// re-spawning those git processes every time.
+    private static let emptyRepoTemplate = Task { try await makeTemplate(committingBase: false) }
+    private static let baseRepoTemplate = Task { try await makeTemplate(committingBase: true) }
+
+    private static func makeTemplate(committingBase: Bool) async throws -> RepoTemplate {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-edit-template-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try await checkedGit(["init", "-q", "-b", "main"], cwd: dir)
+        try await checkedGit(["config", "user.email", "t@example.com"], cwd: dir)
+        try await checkedGit(["config", "user.name", "Tester"], cwd: dir)
+        guard committingBase else { return RepoTemplate(url: dir, baseSha: nil) }
+        try "base\n".write(to: dir.appendingPathComponent("base.txt"), atomically: true, encoding: .utf8)
+        try await checkedGit(["add", "--", "base.txt"], cwd: dir)
+        try await checkedGit(["commit", "-q", "-m", "base"], cwd: dir)
+        let base = try await checkedGit(["rev-parse", "HEAD"], cwd: dir)
+        return RepoTemplate(url: dir, baseSha: base)
+    }
+
+    @discardableResult
+    private static func checkedGit(_ args: [String], cwd: URL) async throws -> String {
+        let result = try await Process.git(args, cwd: cwd)
+        guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func copy(_ template: RepoTemplate) throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-edit-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: dir)
-        _ = try await Process.git(["config", "user.email", "t@example.com"], cwd: dir)
-        _ = try await Process.git(["config", "user.name", "Tester"], cwd: dir)
+        try FileManager.default.copyItem(at: template.url, to: dir)
         return dir
+    }
+
+    private func makeRepo() async throws -> URL {
+        try Self.copy(try await Self.emptyRepoTemplate.value)
+    }
+
+    /// A repo whose only commit is `base`, adding `base.txt` ("base\n").
+    private func makeRepoWithBase() async throws -> (repo: URL, base: String) {
+        let template = try await Self.baseRepoTemplate.value
+        let repo = try Self.copy(template)
+        // Copied files get new inodes and ctimes; refresh the index's stat
+        // cache so the copy matches a freshly committed repo.
+        try await Self.checkedGit(["update-index", "-q", "--refresh"], cwd: repo)
+        let base = try #require(template.baseSha)
+        return (repo, base)
     }
 
     private func write(_ repo: URL, _ path: String, _ text: String) throws {
@@ -84,9 +130,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordPreservesGGTrailersEvenWhenTheEditedBodyReplacesThem() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let target = try await commitWithBody(
             repo,
             subject: "target",
@@ -111,9 +156,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordKeepsGGIDInsideFencedExample() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let body = "Example output:\n\n```\nGG-ID: generated-id\n```"
         let target = try await commitWithBody(
             repo,
@@ -143,9 +187,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordPreservesGGTrailersBeforeCherryPickAnnotation() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let annotation = "(cherry picked from commit abc123)"
         let target = try await commitWithBody(
             repo,
@@ -168,9 +211,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordPreservesGGTrailersBeforeCherryPickAnnotationAndSignoff() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let annotation = "(cherry picked from commit abc123)"
         let signoff = "Signed-off-by: Developer <developer@example.com>"
         let target = try await commitWithBody(
@@ -194,9 +236,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordKeepsGGTrailersInsideExistingTrailerBlock() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let signoff = "Signed-off-by: Developer <developer@example.com>"
         let target = try await commitWithBody(
             repo,
@@ -219,9 +260,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordPreservesGGTrailerContinuation() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let reviewer = "Reviewed-by: Developer <developer@example.com>\n  with context"
         let target = try await commitWithBody(
             repo,
@@ -244,9 +284,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordPreservesIndentedGGTrailer() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let signoff = "Signed-off-by: Developer <developer@example.com>"
         let target = try await commitWithBody(
             repo,
@@ -269,9 +308,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordPreservesGGTrailerAfterWhitespaceOnlySeparator() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let target = try await commitWithBody(
             repo,
             subject: "target",
@@ -293,9 +331,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordPreservesGGTrailerBeforePatchDivider() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let target = try await commitWithBody(
             repo,
             subject: "target",
@@ -317,9 +354,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordPreservesGGTrailerBeforePatchDividerSeparatedByBlankLine() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let target = try await commitWithBody(
             repo,
             subject: "target",
@@ -341,9 +377,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordPreservesGGTrailerBeforeVersionedPatchDivider() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let divider = "--- 2.43.0"
         let target = try await commitWithBody(
             repo,
@@ -366,9 +401,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordDoesNotTreatIndentedDividerAsPatchSuffix() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let target = try await commitWithBody(
             repo,
             subject: "target",
@@ -390,9 +424,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordDoesNotSplitEditedTrailerContinuation() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let signoff = "Signed-off-by: Developer <developer@example.com>"
         let target = try await commitWithBody(
             repo,
@@ -418,9 +451,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordRemovesNonterminalReplacementGGTrailer() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let target = try await commitWithBody(
             repo,
             subject: "target",
@@ -445,9 +477,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordRemovesShadowTrailerContinuation() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let target = try await commitWithBody(
             repo,
             subject: "target",
@@ -472,9 +503,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordPreservesGGExampleWhenRestoringProtectedTrailer() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let example = "```\nGG-ID: generated-id\n```"
         let target = try await commitWithBody(
             repo,
@@ -497,9 +527,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordAllowsNewGGTrailerWhenNoMetadataIsProtected() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let target = try await commit(repo, subject: "target", files: ["target.txt": "target\n"])
 
         let result = try await GitService().editCommit(
@@ -516,9 +545,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordAboveFoldCommitPreservesDescendant() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let target = try await commit(repo, subject: "old target", files: ["a.txt": "a1\n"])
         let descendant = try await commit(repo, subject: "descendant", files: ["b.txt": "b1\n"])
 
@@ -538,9 +566,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func concurrentEditsForSameWorktreeAreSerialized() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let target = try await commit(repo, subject: "old target", files: ["a.txt": "a1\n"])
         _ = try await commit(repo, subject: "descendant", files: ["b.txt": "b1\n"])
 
@@ -592,9 +619,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordRejectsBelowFoldCommit() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         _ = try await commit(repo, subject: "above", files: ["a.txt": "a\n"])
 
         await #expect(throws: CommitEditError.self) {
@@ -608,9 +634,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordRejectsDirtyWorktree() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let target = try await commit(repo, subject: "target", files: ["a.txt": "a\n"])
         try write(repo, "dirty.txt", "dirty\n")
 
@@ -625,9 +650,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordPreservesAuthorDate() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         try write(repo, "dated.txt", "dated\n")
         _ = try await Process.git(["add", "--", "dated.txt"], cwd: repo)
         _ = try await Process.git([
@@ -648,9 +672,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordEmptyTargetCommitPreservesDescendantOrder() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "empty target"], cwd: repo)
         let target = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -669,9 +692,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func rewordTargetWithEmptyDescendantReplaysEmptyDescendant() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let target = try await commit(repo, subject: "target", files: ["target.txt": "target\n"])
         _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "empty descendant"], cwd: repo)
         let descendant = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
@@ -730,9 +752,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func dropAddedFileThatWouldEmptyCommitIsRejected() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let target = try await commit(repo, subject: "target", files: ["new.txt": "new\n"])
 
         await #expect(throws: CommitEditError.self) {
@@ -766,9 +787,8 @@ struct GitServiceCommitEditingTests {
     }
 
     @Test func dropHunkRejectsAddedFileAndLeavesRepoUnchanged() async throws {
-        let repo = try await makeRepo()
+        let (repo, base) = try await makeRepoWithBase()
         defer { try? FileManager.default.removeItem(at: repo) }
-        let base = try await commit(repo, subject: "base", files: ["base.txt": "base\n"])
         let target = try await commit(repo, subject: "target", files: ["new.txt": "new\n", "keep.txt": "keep\n"])
         let beforeHead = try await head(repo)
         let rawDiff = try await Process.git(["diff", "\(target)^", target, "--", "new.txt"], cwd: repo)

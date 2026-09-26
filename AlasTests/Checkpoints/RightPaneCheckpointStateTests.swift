@@ -180,11 +180,41 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
     func recoveryCoordinationHistory() -> [CheckpointCoordinationSnapshot] { recoveryCoordinations }
 }
 
+/// `CheckpointTestRepository.make()` runs seven git commands per call. These
+/// tests only need that same real repository in a fresh directory, so it is
+/// built once per test process and copied per test.
+private enum CheckpointRepositoryTemplate {
+    private static let template = Task { () async throws -> URL in
+        let repository = try await CheckpointTestRepository.make()
+        // make() stamped a lineage marker into the template's git directory.
+        // Drop it so every copy mints its own lineage, as a fresh repo does.
+        try FileManager.default.removeItem(at: repository.root.appendingPathComponent(".git/alas-worktree-lineage"))
+        return repository.root
+    }
+
+    static func copy() async throws -> CheckpointTestRepository {
+        let source = try await template.value
+        let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-test-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: source, to: root)
+        do {
+            let lineage = try #require(WorktreeService.localLineageID(forWorktreeAt: root))
+            return CheckpointTestRepository(
+                root: root,
+                target: .init(worktreeID: UUID().uuidString, projectID: "test", path: root, lineageID: lineage,
+                              branch: "main", repositoryName: "test", workspaceName: nil)
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: root)
+            throw error
+        }
+    }
+}
+
 @MainActor
 @Suite("Right pane checkpoint state")
 struct RightPaneCheckpointStateTests {
     @Test func createRejectsBlankLabelsAndPublishesCaptureOnlyAfterTheServiceSucceeds() async throws {
-        let repository = try await CheckpointTestRepository.make()
+        let repository = try await CheckpointRepositoryTemplate.copy()
         defer { repository.remove() }
         let service = try RecordingCheckpointService(target: repository.target)
         let worktree = Worktree(
@@ -212,7 +242,7 @@ struct RightPaneCheckpointStateTests {
     }
 
     @Test func targetedCheckpointRefreshPublishesExternalAutomaticCaptures() async throws {
-        let repository = try await CheckpointTestRepository.make()
+        let repository = try await CheckpointRepositoryTemplate.copy()
         defer { repository.remove() }
         let service = try RecordingCheckpointService(target: repository.target)
         let state = makeState(repository: repository, service: service)
@@ -229,7 +259,7 @@ struct RightPaneCheckpointStateTests {
     }
 
     @Test func targetedCheckpointRefreshCannotBeReplacedByAnOlderFullRefresh() async throws {
-        let repository = try await CheckpointTestRepository.make()
+        let repository = try await CheckpointRepositoryTemplate.copy()
         defer { repository.remove() }
         let service = try RecordingCheckpointService(target: repository.target)
         let state = makeState(repository: repository, service: service)
@@ -248,7 +278,7 @@ struct RightPaneCheckpointStateTests {
     }
 
     @Test func remoteWorktreesExposeTheApprovedReasonWithoutCallingTheService() async throws {
-        let repository = try await CheckpointTestRepository.make()
+        let repository = try await CheckpointRepositoryTemplate.copy()
         defer { repository.remove() }
         let service = try RecordingCheckpointService(target: repository.target)
         RemoteHostRegistry.shared.register(root: repository.root.path, host: "remote.example")
@@ -273,7 +303,7 @@ struct RightPaneCheckpointStateTests {
     }
 
     @Test func previewRestoreAndRecoveryCoordinateUsingConcreteAffectedPaths() async throws {
-        let repository = try await CheckpointTestRepository.make()
+        let repository = try await CheckpointRepositoryTemplate.copy()
         defer { repository.remove() }
         let service = try RecordingCheckpointService(target: repository.target)
         let state = makeState(repository: repository, service: service)
@@ -315,7 +345,7 @@ struct RightPaneCheckpointStateTests {
     }
 
     @Test func failedCheckpointDeleteRefreshesTheChangesSnapshot() async throws {
-        let repository = try await CheckpointTestRepository.make()
+        let repository = try await CheckpointRepositoryTemplate.copy()
         defer { repository.remove() }
         let service = try RecordingCheckpointService(target: repository.target)
         let state = makeState(repository: repository, service: service)
@@ -329,7 +359,7 @@ struct RightPaneCheckpointStateTests {
     }
 
     @Test func failedCheckpointCaptureRefreshesTheChangesSnapshot() async throws {
-        let repository = try await CheckpointTestRepository.make()
+        let repository = try await CheckpointRepositoryTemplate.copy()
         defer { repository.remove() }
         let service = try RecordingCheckpointService(target: repository.target)
         let state = makeState(repository: repository, service: service)
@@ -345,7 +375,7 @@ struct RightPaneCheckpointStateTests {
     }
 
     @Test func checkpointMutationsStayBlockedUntilJournalDiscoverySucceeds() async throws {
-        let repository = try await CheckpointTestRepository.make()
+        let repository = try await CheckpointRepositoryTemplate.copy()
         defer { repository.remove() }
         let service = try RecordingCheckpointService(target: repository.target)
         let state = makeState(repository: repository, service: service)
@@ -364,7 +394,7 @@ struct RightPaneCheckpointStateTests {
     }
 
     @Test func mutationAdmissionRevalidatesJournalsAfterSuccessfulDiscovery() async throws {
-        let repository = try await CheckpointTestRepository.make()
+        let repository = try await CheckpointRepositoryTemplate.copy()
         defer { repository.remove() }
         let service = try RecordingCheckpointService(target: repository.target)
         let state = makeState(repository: repository, service: service)
@@ -388,7 +418,7 @@ struct RightPaneCheckpointStateTests {
     }
 
     @Test func queuedStageMutationRevalidatesJournalsBeforeTouchingIndex() async throws {
-        let repository = try await CheckpointTestRepository.make()
+        let repository = try await CheckpointRepositoryTemplate.copy()
         defer { repository.remove() }
         try repository.write("changed\n", to: "file.txt")
         let service = try RecordingCheckpointService(target: repository.target)
@@ -418,7 +448,7 @@ struct RightPaneCheckpointStateTests {
     }
 
     @Test func unavailableCheckpointSummaryEvictsExpandedManifestCache() async throws {
-        let repository = try await CheckpointTestRepository.make()
+        let repository = try await CheckpointRepositoryTemplate.copy()
         defer { repository.remove() }
         let service = try RecordingCheckpointService(target: repository.target)
         let state = makeState(repository: repository, service: service)
@@ -438,7 +468,7 @@ struct RightPaneCheckpointStateTests {
     }
 
     @Test func interruptedRestoreDisablesNewCheckpointMutationsButAllowsRecovery() async throws {
-        let repository = try await CheckpointTestRepository.make()
+        let repository = try await CheckpointRepositoryTemplate.copy()
         defer { repository.remove() }
         let service = try RecordingCheckpointService(target: repository.target)
         let state = makeState(repository: repository, service: service)
@@ -481,7 +511,7 @@ struct RightPaneCheckpointStateTests {
     }
 
     @Test func interruptedRestoreBlocksQueuedHeadChangingGitActions() async throws {
-        let repository = try await CheckpointTestRepository.make()
+        let repository = try await CheckpointRepositoryTemplate.copy()
         defer { repository.remove() }
         let service = try RecordingCheckpointService(target: repository.target)
         let state = makeState(repository: repository, service: service)

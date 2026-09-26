@@ -5,6 +5,68 @@ import Testing
 @MainActor
 @Suite("ACP session orchestration coordinator")
 struct ACPSessionOrchestrationCoordinatorTests {
+    @Test("pending delegated message delivery suppresses a parent completion before queue insertion")
+    func pendingMessageDeliveryBlocksNextPromptOpportunity() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let persistence = ACPOrchestrationPersistence(path: root.appendingPathComponent("delegations.sqlite").path)
+        let manager = ACPSessionManager(worktreeId: "w", worktreePath: root.path,
+            store: try ACPSessionStore(path: root.appendingPathComponent("sessions.sqlite").path),
+            setupEvaluator: { _ in .missing(reason: "Test delivery remains local") })
+        defer { manager.shutdownBackgroundTasks() }
+        let parent = manager.createSession(id: "parent", agentId: "codex", autoRunDefault: false)
+        _ = manager.createSession(id: "child", agentId: "codex", autoRunDefault: false)
+        await manager.flushPersistence()
+        parent.agentState = .ready
+        let userID = parent.recordUserPrompt(text: "Explain the parser.", attachments: [])
+        parent.transcript.appendMessage(.agent(id: UUID(), StreamingText("It reads tokens.")))
+        let turn = NextPromptCompletedTurn(sessionID: parent.id, incarnation: parent.incarnation,
+            promptID: parent.allocatePromptID(), userMessageID: userID,
+            transcriptRevision: parent.transcript.messagesGeneration)
+        var facts = NextPromptEligibilitySnapshot.Environment()
+        facts.isEnabled = true
+        facts.hasVerifiedModel = true
+        facts.isRuntimeAvailable = true
+        facts.isAppActive = true
+        facts.isActiveVisibleWriter = true
+        facts.hasComposerFocus = true
+        let environment = facts
+        #expect(NextPromptEligibilitySnapshot.live(session: parent, turn: turn, environment: environment) != nil)
+        try await persistence.insert(.init(childSessionId: "child", parentSessionId: "parent", projectId: "p",
+            parentWorktreeId: "w", childWorktreeId: "w", agentId: "codex", worktreeRequest: .current(worktreeId: "w"),
+            phase: .ready, failureMessage: nil, createdAt: 1, updatedAt: 1))
+        var observedPendingDelivery = false
+        let coordinator = ACPSessionOrchestrationCoordinator(environment: .init(
+            persistence: persistence, instanceId: "test", now: { 2 }, makeID: { UUID().uuidString },
+            worktree: { _ in nil }, existingWorktree: { _, _ in nil }, configuredAgents: { [] },
+            availableAgents: { _, _ in [] }, sessionLocation: { id in
+                guard manager.liveSession(for: id) != nil else { return nil }
+                return .init(origin: .init(sessionId: id, projectId: "p", worktreeId: "w"), manager: manager)
+            }, manager: { _ in manager }, newWorktreeDestination: { _, _ in nil },
+            createWorktree: { _, _, _ in .failure(.init(message: "unused")) }, rememberParent: { _, _ in },
+            autoRunDefault: { false }, notifyChanged: {
+                observedPendingDelivery = true
+                #expect(parent.queue.isEmpty)
+                #expect(parent.nextPromptWorkCount > 0)
+                #expect(parent.hasPendingDelegatedMessages)
+                #expect(NextPromptEligibilitySnapshot.live(session: parent, turn: turn, environment: environment) == nil)
+            }))
+        let response = await coordinator.send(origin: .init(sessionId: "child", projectId: "p", worktreeId: "w"),
+                                              request: .init(targetSessionId: "parent", prompt: "Check the edge case."))
+        guard case .text = response else {
+            Issue.record("Expected queued delegated message")
+            return
+        }
+        #expect(observedPendingDelivery)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while parent.nextPromptWorkCount != 0 {
+            try #require(ContinuousClock.now < deadline)
+            await Task.yield()
+        }
+        #expect(parent.hasPendingDelegatedMessages)
+    }
+
     @Test("child remains failed when initial attach needs setup")
     func childStartPersistsAttachSetupFailure() async throws {
         let orchestrationPath = FileManager.default.temporaryDirectory
@@ -440,6 +502,219 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(manager.liveSession(for: "child")?.agentId == "codex")
     }
 
+    private struct OutcomeFixture {
+        let coordinator: ACPSessionOrchestrationCoordinator
+        let persistence: ACPOrchestrationPersistence
+        let manager: ACPSessionManager
+    }
+
+    /// A parent session that exists but cannot attach (missing agent), so
+    /// delivery leaves rows pending and unclaimed for inspection.
+    private func makeOutcomeFixture(
+        parentReachable: Bool = true,
+        blockedKeys: Set<String> = [],
+        escalationSeconds: Int = 30,
+        scheduleEscalationCheck: @escaping (Int, @escaping @Sendable () async -> Void) -> Void = { _, _ in }
+    ) throws -> OutcomeFixture {
+        let orchestrationPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-orchestration-outcome-\(UUID().uuidString).sqlite").path
+        let sessionPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-orchestration-outcome-session-\(UUID().uuidString).sqlite").path
+        let persistence = ACPOrchestrationPersistence(path: orchestrationPath)
+        let manager = ACPSessionManager(
+            worktreeId: "worktree",
+            worktreePath: "/tmp/worktree",
+            store: try ACPSessionStore(path: sessionPath),
+            setupEvaluator: { _ in .missing(reason: "Install Codex") }
+        )
+        _ = manager.createSession(id: "parent", agentId: "codex", autoRunDefault: false)
+        let worktree = Worktree(
+            id: "worktree", projectId: "project", name: "feature-x", branch: "feature-x",
+            path: URL(fileURLWithPath: "/tmp/worktree"), status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        let coordinator = ACPSessionOrchestrationCoordinator(environment: .init(
+            persistence: persistence,
+            instanceId: "instance",
+            now: { 900 },
+            nowMillis: { 900 },
+            blockedRequestKeys: { _ in blockedKeys },
+            escalationDelaySeconds: { escalationSeconds },
+            scheduleEscalationCheck: scheduleEscalationCheck,
+            makeID: { UUID().uuidString },
+            worktree: { parentReachable && $0 == worktree.id ? worktree : nil },
+            existingWorktree: { _, _ in nil },
+            configuredAgents: { [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)] },
+            availableAgents: { _, _ in [ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true)] },
+            sessionLocation: { sessionId in
+                parentReachable && sessionId == "parent"
+                    ? .init(origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"), manager: manager)
+                    : nil
+            },
+            manager: { _ in parentReachable ? manager : nil },
+            newWorktreeDestination: { _, _ in nil },
+            createWorktree: { _, _, _ in .failure(.init(message: "unused")) },
+            rememberParent: { _, _ in },
+            autoRunDefault: { false },
+            notifyChanged: {}
+        ))
+        return .init(coordinator: coordinator, persistence: persistence, manager: manager)
+    }
+
+    private func insertReadyChild(_ persistence: ACPOrchestrationPersistence) async throws {
+        try await persistence.insert(.init(
+            childSessionId: "child", parentSessionId: "parent", projectId: "project",
+            parentWorktreeId: "worktree", childWorktreeId: "worktree", agentId: "codex",
+            worktreeRequest: .current(worktreeId: "worktree"), pendingInitialPrompt: nil,
+            phase: .ready, failureMessage: nil, createdAt: 100, updatedAt: 100
+        ))
+    }
+
+    private func completion(
+        result: ACPTurnCompletion.Result = .completed,
+        startedAt: Int64 = 500,
+        lastAgentText: String? = "Parser fixed."
+    ) -> ACPTurnCompletion {
+        .init(sessionId: "child", startedAt: startedAt, result: result,
+              delegatedSource: nil, lastAgentText: lastAgentText)
+    }
+
+    @Test("unreported child completion wakes the parent")
+    func unreportedCompletionWakesParent() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childTurnCompleted(completion())
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.count == 1)
+        #expect(pending.first?.id == "outcome-child-500")
+        #expect(pending.first?.kind == .prompt)
+        #expect(pending.first?.sourceSessionId == "child")
+        #expect(pending.first?.prompt.contains("finished its turn without sending a result") == true)
+        #expect(pending.first?.prompt.contains("Parser fixed.") == true)
+        #expect(pending.first?.prompt.contains("worktree feature-x") == true)
+    }
+
+    @Test("reported child completion only notices the parent")
+    func reportedCompletionNotices() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+        try await fixture.persistence.markParentReport(childSessionId: "child", at: 600)
+
+        await fixture.coordinator.childTurnCompleted(completion(startedAt: 500))
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.count == 1)
+        #expect(pending.first?.kind == .notice)
+        #expect(pending.first?.prompt == "Delegated session child (codex, worktree feature-x) finished its turn.")
+    }
+
+    @Test("an earlier report does not cover a later turn")
+    func earlierReportDoesNotCoverLaterTurn() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+        try await fixture.persistence.markParentReport(childSessionId: "child", at: 600)
+
+        await fixture.coordinator.childTurnCompleted(completion(startedAt: 700))
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.map(\.kind) == [.prompt])
+        #expect(pending.first?.id == "outcome-child-700")
+    }
+
+    @Test("failed and cancelled turns produce wake and notice respectively")
+    func failedAndCancelledTurns() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childTurnCompleted(completion(result: .failed("prompt failed: boom"), startedAt: 10))
+        await fixture.coordinator.childTurnCompleted(completion(result: .cancelled, startedAt: 20))
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.map(\.kind) == [.prompt, .notice])
+        #expect(pending.first?.prompt == "[alas system] Delegated session child (codex, worktree feature-x) failed: prompt failed: boom.")
+    }
+
+    @Test("duplicate completion events enqueue nothing new")
+    func duplicateCompletionIsIdempotent() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childTurnCompleted(completion())
+        await fixture.coordinator.childTurnCompleted(completion())
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").count == 1)
+    }
+
+    @Test("sessions without a delegation record produce no outcome")
+    func nonDelegatedSessionIsIgnored() async throws {
+        let fixture = try makeOutcomeFixture()
+
+        await fixture.coordinator.childTurnCompleted(completion())
+
+        #expect(try await fixture.persistence.pendingMessageTargetSessionIds().isEmpty)
+    }
+
+    @Test("terminal children do not produce turn outcomes")
+    func terminalChildIsIgnored() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+        try await fixture.persistence.updatePhase(childSessionId: "child", phase: .closed, failureMessage: nil, updatedAt: 200)
+
+        await fixture.coordinator.childTurnCompleted(completion())
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+    }
+
+    @Test("markChildFailed records the phase and wakes the parent once")
+    func markChildFailedWakesParent() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.markChildFailed(childSessionId: "child", message: "Agent is not enabled or ACP-capable: codex")
+        await fixture.coordinator.markChildFailed(childSessionId: "child", message: "Agent is not enabled or ACP-capable: codex")
+
+        let record = try #require(try await fixture.persistence.delegation(childSessionId: "child"))
+        #expect(record.phase == .failed)
+        #expect(record.failureMessage == "Agent is not enabled or ACP-capable: codex")
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.count == 1)
+        #expect(pending.first?.id == "outcome-child-failed")
+        #expect(pending.first?.kind == .prompt)
+    }
+
+    @Test("parent unavailable leaves the outcome pending without a claim")
+    func parentUnavailableLeavesRowPending() async throws {
+        let fixture = try makeOutcomeFixture(parentReachable: false)
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childTurnCompleted(completion())
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.count == 1)
+        let store = try ACPOrchestrationStore(path: fixture.persistence.path)
+        #expect(try store.claimedMessage(id: "outcome-child-500") == nil)
+    }
+
+    @Test("a child's session_send to its parent records the report time")
+    func sendToParentMarksReport() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        let response = await fixture.coordinator.send(
+            origin: .init(sessionId: "child", projectId: "project", worktreeId: "worktree"),
+            request: .init(targetSessionId: "parent", prompt: "Done: parser fixed.")
+        )
+
+        guard case .text = response else {
+            Issue.record("Expected a queued response, got \(response)")
+            return
+        }
+        let record = try #require(try await fixture.persistence.delegation(childSessionId: "child"))
+        #expect(record.lastParentReportAt == 900)
+    }
+
     private func eventuallyLoadDelegation(
         persistence: ACPOrchestrationPersistence,
         childSessionId: String,
@@ -453,5 +728,130 @@ struct ACPSessionOrchestrationCoordinatorTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         return try #require(try await persistence.delegation(childSessionId: childSessionId))
+    }
+
+    private func testBlocker(_ key: String = "n42") -> ACPChildBlocker {
+        .init(sessionId: "child", requestKey: key, kind: .permission, summary: "Write file")
+    }
+
+    @Test("a blocked child notices its parent immediately")
+    func blockedChildNoticesParent() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childBlocked(testBlocker())
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.count == 1)
+        #expect(pending.first?.kind == .notice)
+        #expect(pending.first?.id == "blocker-child-n42-notice")
+        #expect(pending.first?.prompt.contains("waiting for a human decision") == true)
+    }
+
+    @Test("a still-blocked child escalates to a wake")
+    func stillBlockedChildEscalates() async throws {
+        let fixture = try makeOutcomeFixture(blockedKeys: ["n42"])
+        try await insertReadyChild(fixture.persistence)
+        await fixture.coordinator.childBlocked(testBlocker())
+
+        await fixture.coordinator.escalateBlockerIfStillBlocked(testBlocker())
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.map(\.kind) == [.notice, .prompt])
+        #expect(pending.last?.id == "blocker-child-n42")
+        #expect(pending.last?.prompt.contains("cannot approve") == true)
+    }
+
+    @Test("a resolved block never escalates")
+    func resolvedBlockDoesNotEscalate() async throws {
+        let fixture = try makeOutcomeFixture(blockedKeys: [])
+        try await insertReadyChild(fixture.persistence)
+        await fixture.coordinator.childBlocked(testBlocker())
+
+        await fixture.coordinator.escalateBlockerIfStillBlocked(testBlocker())
+
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.map(\.kind) == [.notice])
+    }
+
+    @Test("being blocked on a different request does not escalate the first")
+    func differentBlockDoesNotEscalate() async throws {
+        let fixture = try makeOutcomeFixture(blockedKeys: ["n99"])
+        try await insertReadyChild(fixture.persistence)
+        await fixture.coordinator.childBlocked(testBlocker())
+
+        await fixture.coordinator.escalateBlockerIfStillBlocked(testBlocker())
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.kind) == [.notice])
+    }
+
+    @Test("repeated detection of the same block adds nothing")
+    func repeatedBlockIsIdempotent() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childBlocked(testBlocker())
+        await fixture.coordinator.childBlocked(testBlocker())
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").count == 1)
+    }
+
+    @Test("a session with no delegation record produces no blocker outcome")
+    func nonDelegatedBlockIsIgnored() async throws {
+        let fixture = try makeOutcomeFixture()
+
+        await fixture.coordinator.childBlocked(testBlocker())
+
+        #expect(try await fixture.persistence.pendingMessageTargetSessionIds().isEmpty)
+    }
+
+    @Test("a terminal child produces no blocker outcome")
+    func terminalChildBlockIsIgnored() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+        try await fixture.persistence.updatePhase(
+            childSessionId: "child", phase: .closed, failureMessage: nil, updatedAt: 200
+        )
+
+        await fixture.coordinator.childBlocked(testBlocker())
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+    }
+
+    @Test("escalation disabled by config notices but never wakes")
+    func escalationDisabledNoticesOnly() async throws {
+        let fixture = try makeOutcomeFixture(blockedKeys: ["n42"], escalationSeconds: 0)
+        try await insertReadyChild(fixture.persistence)
+
+        await fixture.coordinator.childBlocked(testBlocker())
+        await fixture.coordinator.escalateBlockerIfStillBlocked(testBlocker())
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").map(\.kind) == [.notice])
+    }
+
+    @Test("a positive delay schedules exactly one re-check; a zero delay schedules none")
+    func schedulesTheReCheckOnlyWhenEnabled() async throws {
+        // Proves the scheduling wiring directly, rather than only inferring it
+        // from every other test's fixture leaving the default no-op scheduler
+        // in place and simply not hanging.
+        final class ScheduleRecorder: @unchecked Sendable {
+            var calls: [Int] = []
+        }
+        let recorder = ScheduleRecorder()
+        let fixture = try makeOutcomeFixture(
+            escalationSeconds: 30,
+            scheduleEscalationCheck: { delay, _ in recorder.calls.append(delay) }
+        )
+        try await insertReadyChild(fixture.persistence)
+        await fixture.coordinator.childBlocked(testBlocker())
+        #expect(recorder.calls == [30])
+
+        let disabledFixture = try makeOutcomeFixture(
+            escalationSeconds: 0,
+            scheduleEscalationCheck: { delay, _ in recorder.calls.append(delay) }
+        )
+        try await insertReadyChild(disabledFixture.persistence)
+        await disabledFixture.coordinator.childBlocked(testBlocker())
+        #expect(recorder.calls == [30])
     }
 }
