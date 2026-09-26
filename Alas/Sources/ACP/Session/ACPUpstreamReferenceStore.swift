@@ -41,6 +41,9 @@ final class ACPUpstreamReferenceStore: ObservableObject {
     }
 
     static let staleAfter: TimeInterval = 300
+    /// Caps simultaneous `gh`/`glab` processes: a message referencing many
+    /// PRs/issues at once must not fork one subprocess per reference.
+    private static let maxConcurrentLoads = 4
 
     let worktreeRoot: URL
     @Published private(set) var remote: CodeHostRemote?
@@ -52,6 +55,8 @@ final class ACPUpstreamReferenceStore: ObservableObject {
     private var entries: [CodeHostReference: (entry: Entry, at: Date)] = [:]
     private var loads: [CodeHostReference: Task<Void, Never>] = [:]
     private var remoteTask: Task<Void, Never>?
+    private var activeLoadCount = 0
+    private var loadSlotWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(worktreeRoot: URL, environment: Environment = .live) {
         self.worktreeRoot = worktreeRoot
@@ -125,17 +130,48 @@ final class ACPUpstreamReferenceStore: ObservableObject {
             set(reference, .loading)
         }
         let root = worktreeRoot
+        // The task is created (and occupies `loads[reference]`) immediately,
+        // so a second `ensureLoaded` call for the same reference is still
+        // deduplicated even while this one is queued behind the concurrency
+        // cap below — only the actual `gh`/`glab` process is deferred.
         loads[reference] = Task { [weak self] in
+            await self?.acquireLoadSlot()
+            guard let self else { return }
             let outcome: Entry
             do {
                 outcome = .loaded(try await provider.referenceSummary(remote: remote, reference: reference, cwd: root))
             } catch {
                 outcome = .failed(await Self.failure(for: error, provider: provider, remote: remote, cwd: root))
             }
-            guard let self else { return }
+            self.releaseLoadSlot()
             self.loads[reference] = nil
             guard self.remote == remote else { return }
             self.set(reference, outcome)
+        }
+    }
+
+    /// Blocks until fewer than `maxConcurrentLoads` lookups are in flight.
+    /// Returns immediately when a slot is free.
+    private func acquireLoadSlot() async {
+        guard activeLoadCount >= Self.maxConcurrentLoads else {
+            activeLoadCount += 1
+            return
+        }
+        await withCheckedContinuation { loadSlotWaiters.append($0) }
+        // A queued waiter's slot was handed off directly by `releaseLoadSlot`
+        // without ever decrementing `activeLoadCount`, so it's already
+        // occupying a slot once resumed — no increment here.
+    }
+
+    /// Releases this call's slot. If another lookup is queued, its slot is
+    /// handed off directly (the count is left unchanged) rather than freed
+    /// and re-claimed, which would let two `ensureLoaded` calls race for the
+    /// same just-freed slot and briefly exceed the cap.
+    private func releaseLoadSlot() {
+        if !loadSlotWaiters.isEmpty {
+            loadSlotWaiters.removeFirst().resume()
+        } else {
+            activeLoadCount -= 1
         }
     }
 

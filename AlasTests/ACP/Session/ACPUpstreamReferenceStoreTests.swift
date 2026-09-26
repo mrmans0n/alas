@@ -74,6 +74,71 @@ struct ACPUpstreamReferenceStoreTests {
         #expect(store.revision > revisionBefore)
     }
 
+    @Test("at most four lookups run concurrently; the rest queue behind them")
+    func concurrencyIsCapped() async {
+        actor Gate {
+            private var inFlight = 0
+            private var peakInFlight = 0
+            private var released = false
+            private var reachedFour: CheckedContinuation<Void, Never>?
+            private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+            func enter() {
+                inFlight += 1
+                peakInFlight = max(peakInFlight, inFlight)
+                if inFlight == 4, let reachedFour {
+                    self.reachedFour = nil
+                    reachedFour.resume()
+                }
+            }
+
+            func exit() { inFlight -= 1 }
+
+            func waitUntilFourInFlight() async {
+                if inFlight >= 4 { return }
+                await withCheckedContinuation { reachedFour = $0 }
+            }
+
+            func waitForRelease() async {
+                guard !released else { return }
+                await withCheckedContinuation { releaseWaiters.append($0) }
+            }
+
+            func releaseAll() {
+                released = true
+                releaseWaiters.forEach { $0.resume() }
+                releaseWaiters.removeAll()
+            }
+
+            func currentInFlight() -> Int { inFlight }
+            func maxInFlight() -> Int { peakInFlight }
+        }
+
+        let gate = Gate()
+        var provider = StubReferenceProvider()
+        provider.respond = { reference in
+            await gate.enter()
+            await gate.waitForRelease()
+            await gate.exit()
+            return UpstreamReferenceFixtures.summary(.reviewRequest, reference.number)
+        }
+        let store = await UpstreamReferenceFixtures.store(provider: provider)
+
+        for number in 1...6 {
+            store.ensureLoaded(CodeHostReference(sigil: .hash, number: number))
+        }
+        await gate.waitUntilFourInFlight()
+
+        #expect(await gate.currentInFlight() == 4)
+        #expect(await provider.calls.count == 4)
+
+        await gate.releaseAll()
+        await store.waitForPendingLoads()
+
+        #expect(await provider.calls.count == 6)
+        #expect(await gate.maxInFlight() == 4)
+    }
+
     @Test("a result is reused for five minutes, then refreshed on the next request")
     func staleRefresh() async {
         let provider = StubReferenceProvider()
