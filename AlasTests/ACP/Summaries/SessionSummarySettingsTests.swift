@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 @testable import Alas
 
@@ -17,6 +18,11 @@ struct SessionSummarySettingsTests {
         #expect(!state.sessionSummariesRuntimeEnabled)
         #expect(state.config.sessionSummariesEnabled)
         #expect(state.sessionSummaryDisableSavePending)
+        #expect(LocalTextModelSettings.sessionSummaryReadyDetail(
+            requested: state.config.sessionSummariesEnabled,
+            runtimeEnabled: state.sessionSummariesRuntimeEnabled,
+            disableSavePending: state.sessionSummaryDisableSavePending
+        ) == "Model installed. Session summaries are off for this session.")
 
         await state.retrySessionSummarySettings()
 
@@ -255,6 +261,31 @@ struct SessionSummarySettingsTests {
 
         #expect(state.localTextModelState == .notInstalled)
         #expect(fixture.transport.requestCount == 0)
+        await state.shutdownLocalTextFeatures()
+    }
+
+    @Test func removalProgressInvalidatesObservedActionAvailability() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let engine = SuspendedRemovalEngine()
+        let state = makeState(fixture, SummarySettingsStore(), engine: engine)
+        await state.inspectLocalTextModel()
+        state.localTextRuntimeStarted = true
+        let invalidations = LockedCounter()
+        withObservationTracking {
+            _ = state.canRemoveLocalTextModel
+        } onChange: {
+            invalidations.increment()
+        }
+
+        let removal = Task { await state.removeLocalTextModel() }
+        await engine.waitUntilUnloading()
+
+        #expect(state.localTextRemovalInProgress)
+        #expect(!state.canRemoveLocalTextModel)
+        #expect(invalidations.value == 1)
+        await engine.finishUnloading()
+        await removal.value
         await state.shutdownLocalTextFeatures()
     }
 

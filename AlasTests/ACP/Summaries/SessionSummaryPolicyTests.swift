@@ -13,6 +13,13 @@ import Testing
         #expect(value.isPartial)
     }
 
+    @Test func promptForbidsPermissionConsentAndSecretDisclosure() {
+        let prompt = SessionSummaryPolicy.systemPrompt.lowercased()
+        #expect(prompt.contains("permission answers"))
+        #expect(prompt.contains("consequential consent"))
+        #expect(prompt.contains("disclose secrets"))
+    }
+
     @Test(arguments: [
         #"{"goal":null,"goal":"x","completed":[],"blockers":[],"next_action":null}"#,
         #"{"goal":null,"go\u0061l":"x","completed":[],"blockers":[],"next_action":null}"#,
@@ -34,7 +41,6 @@ import Testing
             "1. Restart the service",
             "<strong>Finished</strong>",
             "<!-- hidden -->",
-            "See https://example.com/result",
             "first\nsecond",
             "bell \u{0007}",
             "next \u{0085} line",
@@ -49,6 +55,22 @@ import Testing
         let allowed = String(repeating: "a", count: 280)
         let json = "{\"goal\":\(jsonString(allowed)),\"completed\":[],\"blockers\":[],\"next_action\":null}"
         #expect(SessionSummaryPolicy.parse(Data(json.utf8), isPartial: false)?.goal == allowed)
+    }
+
+    @Test(arguments: [
+        "See https://example.com/result",
+        "Download ftp://example.com/result",
+        "Open file:///tmp/result",
+        "Email mailto:support@example.com"
+    ])
+    func rejectsEmbeddedURLSchemes(_ value: String) {
+        let json = "{\"goal\":\(jsonString(value)),\"completed\":[],\"blockers\":[],\"next_action\":null}"
+        #expect(SessionSummaryPolicy.parse(Data(json.utf8), isPartial: false) == nil)
+    }
+
+    @Test func ordinaryLabelColonsRemainAllowed() {
+        let json = #"{"goal":"Status: ready","completed":[],"blockers":[],"next_action":null}"#
+        #expect(SessionSummaryPolicy.parse(Data(json.utf8), isPartial: false)?.goal == "Status: ready")
     }
 
     @Test func rejectsMoreThanFiveCompletedOrBlockerItems() {
@@ -93,6 +115,11 @@ import Testing
 
     @Test(arguments: [
         "Run rm -rf /",
+        "Run rm -rf \"/\"",
+        "Run rm -rf '/'",
+        "Run rm -rf -- /",
+        "Run rm -rf -- \"/\"",
+        "Run rm -rf -- '/'",
         "Format the production disk",
         "git clean -fdx",
         #"Run "rm -rf /""#,
@@ -111,12 +138,37 @@ import Testing
 
     @Test(arguments: [
         "Do not run rm -rf /",
+        "Do not run rm -rf -- \"/\"",
         #"Do not run "rm -rf /""#,
         "Never format the production disk",
         #"Never execute "format the production disk""#,
-        #"Explain why "git clean -fdx" is destructive"#
+        #"Explain why "git clean -fdx" is destructive"#,
+        #"Explain why "rm -rf -- /" is destructive"#
     ])
     func allowsNegatedOrDescriptiveDestructiveActions(_ nextAction: String) {
+        let json = "{\"goal\":null,\"completed\":[],\"blockers\":[],\"next_action\":\(jsonString(nextAction))}"
+        #expect(SessionSummaryPolicy.parse(Data(json.utf8), isPartial: false) != nil)
+    }
+
+    @Test(arguments: [
+        "Approve the production deployment",
+        "Authorize the production release",
+        "Send your API key to support",
+        "Share the password with support"
+    ])
+    func rejectsConsequentialConsentAndSecretDisclosure(_ nextAction: String) {
+        let json = "{\"goal\":null,\"completed\":[],\"blockers\":[],\"next_action\":\(jsonString(nextAction))}"
+        #expect(SessionSummaryPolicy.parse(Data(json.utf8), isPartial: false) == nil)
+    }
+
+    @Test(arguments: [
+        "Do not approve the production deployment",
+        "Explain why approving the production deployment requires review",
+        "Do not send your API key to support",
+        #"Explain why "send your API key to support" is unsafe"#,
+        "Document the API key label without its value"
+    ])
+    func allowsNegatedOrDescriptiveConsentAndSecretDiscussion(_ nextAction: String) {
         let json = "{\"goal\":null,\"completed\":[],\"blockers\":[],\"next_action\":\(jsonString(nextAction))}"
         #expect(SessionSummaryPolicy.parse(Data(json.utf8), isPartial: false) != nil)
     }

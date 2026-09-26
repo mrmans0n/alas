@@ -20,6 +20,7 @@ final class SessionSummaryCoordinator: ObservableObject {
 
     private let engine: any LocalTextGenerating
     private var cache: [UUID: CacheEntry] = [:]
+    private var cacheTeardownObservations: [UUID: AnyCancellable] = [:]
     private var generationTask: Task<Void, Never>?
     private var cancellationBarrier: Task<Void, Never>?
     private var activityReconciliationTask: Task<Void, Never>?
@@ -86,7 +87,7 @@ final class SessionSummaryCoordinator: ObservableObject {
     }
 
     func invalidate(_ session: ACPSession) {
-        cache[session.incarnation] = nil
+        evictCache(for: session.incarnation)
         guard boundSession === session else { return }
         requestGeneration &+= 1
         cancelCurrentGeneration()
@@ -102,6 +103,7 @@ final class SessionSummaryCoordinator: ObservableObject {
         observations.removeAll()
         boundSession = nil
         cache.removeAll()
+        cacheTeardownObservations.removeAll()
         phase = .idle
         presentationGeneration &+= 1
     }
@@ -117,7 +119,7 @@ final class SessionSummaryCoordinator: ObservableObject {
                 _ = publishPhase(.result(cached.summary), generation: requestGeneration, session: session)
                 return nil
             }
-            cache[session.incarnation] = nil
+            evictCache(for: session.incarnation)
         }
 
         requestGeneration &+= 1
@@ -218,7 +220,7 @@ final class SessionSummaryCoordinator: ObservableObject {
             return
         }
 
-        cache[session.incarnation] = .init(summary: summary, revision: context.revision)
+        storeCache(summary, revision: context.revision, for: session)
         guard publishPhase(
             .result(summary),
             generation: generation,
@@ -309,19 +311,37 @@ final class SessionSummaryCoordinator: ObservableObject {
               cached.revision == retainedRevision else { return }
         let revision = SessionSummaryContext.snapshot(session: session)?.revision
         if revision != cached.revision {
-            cache[session.incarnation] = nil
+            evictCache(for: session.incarnation)
         }
         activityReconciliationTask = nil
     }
 
     private func endSession(_ session: ACPSession) {
-        cache[session.incarnation] = nil
+        evictCache(for: session.incarnation)
         requestGeneration &+= 1
         cancelCurrentGeneration()
         phase = .idle
         presentationGeneration &+= 1
         observations.removeAll()
         boundSession = nil
+    }
+
+    private func storeCache(
+        _ summary: SessionSummary,
+        revision: SessionSummarySourceRevision,
+        for session: ACPSession
+    ) {
+        let incarnation = session.incarnation
+        cache[incarnation] = .init(summary: summary, revision: revision)
+        guard cacheTeardownObservations[incarnation] == nil else { return }
+        cacheTeardownObservations[incarnation] = session.nextPromptTeardown.sink { [weak self] in
+            self?.evictCache(for: incarnation)
+        }
+    }
+
+    private func evictCache(for incarnation: UUID) {
+        cache[incarnation] = nil
+        cacheTeardownObservations[incarnation] = nil
     }
 
     private func cancelCurrentGeneration() {

@@ -215,7 +215,7 @@ final class AppState {
     @ObservationIgnored var localTextModelGeneration: UInt64 = 0
     @ObservationIgnored var localTextSettingsInspected = false
     @ObservationIgnored var localTextRuntimeStarted = false
-    @ObservationIgnored var localTextRemovalInProgress = false
+    var localTextRemovalInProgress = false
     @ObservationIgnored var nextPromptComposerEpoch: UInt64 = 0
     @ObservationIgnored var nextPromptShuttingDown = false
     @ObservationIgnored var nextPromptOwner: SessionOwnerID?

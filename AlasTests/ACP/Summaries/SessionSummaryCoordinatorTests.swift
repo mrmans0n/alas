@@ -133,6 +133,20 @@ struct SessionSummaryCoordinatorTests {
         await generation.value
     }
 
+    @Test func deletedCachedSessionIsEvictedAfterCoordinatorRebinds() async {
+        let fixture = SummaryCoordinatorFixture()
+        await fixture.finishSummary()
+        let other = fixture.makeSession(id: "other")
+        fixture.coordinator.bind(to: other)
+
+        fixture.session.nextPromptTeardown.send()
+        fixture.coordinator.bind(to: fixture.session)
+        await fixture.engine.enqueue(fixture.result)
+        await fixture.coordinator.summary(for: fixture.session)
+
+        #expect(await fixture.engine.requestCount == 2)
+    }
+
     @Test(arguments: [
         "transcript", "goal", "plan", "agent", "hydration", "stream", "composer", "queue",
         "queue persistence", "permission", "question", "pending plan", "user input", "url elicitation",
