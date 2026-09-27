@@ -1633,6 +1633,16 @@ final class AppState {
         }
     }
 
+    /// A pending Qwen title would be discarded anyway once titles are off;
+    /// cancelling frees the shared engine instead of running to its timeout.
+    func setACPLocalTitlesEnabled(_ enabled: Bool) async {
+        let wasEnabled = config.harness.acpLocalTitlesEnabled
+        config.harness.acpLocalTitlesEnabled = enabled
+        saveConfig()
+        guard wasEnabled, !enabled else { return }
+        await localTextInference.cancel(caller: .sessionTitle)
+    }
+
     func makeQwenTitleFallback() -> ACPQwenTitleFallback {
         ACPQwenTitleFallback(engine: localTextInference) { [weak self] in
             self?.qwenFallbackTitlesAvailable ?? false

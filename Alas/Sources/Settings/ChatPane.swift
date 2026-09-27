@@ -136,7 +136,10 @@ struct ChatPane: View {
                     }
                     SettingsRow(name: RowLabels.onDeviceFallbackTitles,
                                 desc: "When the agent doesn't name a chat, use an on-device model to suggest a title. Available on macOS 26 or later.") {
-                        AlasToggle(on: state.bind(\.harness.acpLocalTitlesEnabled))
+                        AlasToggle(on: Binding(
+                            get: { state.config.harness.acpLocalTitlesEnabled },
+                            set: { enabled in Task { await state.setACPLocalTitlesEnabled(enabled) } }
+                        ))
                             .accessibilityLabel(RowLabels.onDeviceFallbackTitles)
                             .accessibilityValue(state.config.harness.acpLocalTitlesEnabled ? "On" : "Off")
                     }

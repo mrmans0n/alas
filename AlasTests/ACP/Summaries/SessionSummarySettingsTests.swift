@@ -380,6 +380,18 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
+    @Test func disablingFallbackTitlesCancelsAPendingQwenTitle() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let engine = SettingsFeatureEngine()
+        let state = makeState(fixture, SummarySettingsStore(), engine: engine)
+
+        await state.setACPLocalTitlesEnabled(false)
+
+        #expect(!state.config.harness.acpLocalTitlesEnabled)
+        #expect(await engine.cancelledCallers == [.sessionTitle])
+    }
+
     private func makeState(
         _ fixture: LocalTextModelFixture,
         _ persistence: SummarySettingsStore,
