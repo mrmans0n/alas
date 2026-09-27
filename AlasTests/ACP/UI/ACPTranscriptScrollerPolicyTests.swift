@@ -255,7 +255,7 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(ids == ["tc-a", "tc-b", "tc-c", "__composer_spacer__"])
     }
 
-    @Test("finished tool calls fold into a group row ahead of the active tool when collapsing is on")
+    @Test("tool calls, running ones included, fold into one group row when collapsing is on")
     func toolCallsFoldWhenCollapsingOn() throws {
         let host = makeHost(collapsesFinishedToolCalls: true)
         host.transcript.messages = [tool("a"), tool("b"), tool("c", status: "in_progress")]
@@ -263,7 +263,7 @@ struct ACPTranscriptScrollerRowSpecsTests {
         host.transcript.visibleTail = nil
 
         let specs = ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
-        #expect(specs.map(\.id) == ["tcg-tc-a", "tc-c", "__composer_spacer__"])
+        #expect(specs.map(\.id) == ["tcg-tc-a", "__composer_spacer__"])
         let group = try #require(specs.first { $0.id == "tcg-tc-a" })
         #expect(group.keepsMountedOffscreen == false)
     }
@@ -470,7 +470,7 @@ struct ACPTranscriptScrollerRowSpecsTests {
         host.transcript.visibleTail = nil
 
         let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host).map(\.id)
-        #expect(ids == ["tcg-tc-a", "__fork_divider__", "tcg-tc-c", "__composer_spacer__"])
+        #expect(ids == ["tc-a", "__fork_divider__", "tcg-tc-c", "__composer_spacer__"])
     }
 
     @Test("the fork divider is emitted once when the boundary row is followed by a later row")

@@ -17,15 +17,20 @@ struct ACPTranscriptToolCallGroup: Equatable {
     /// contains it. Its buffer is resolved by the scroller only for the
     /// collapsed header; expanded groups already render the member itself.
     let currentNarrationIndex: Int?
+    /// The trailing run of a turn that is still running. Drives the
+    /// "Exploring…/Running…" label and automatic expansion.
+    let isLive: Bool
 
     init(
         members: [ACPTranscriptVisibleRow],
         kind: Kind = .activity,
-        currentNarrationIndex: Int? = nil
+        currentNarrationIndex: Int? = nil,
+        isLive: Bool = false
     ) {
         self.members = members
         self.kind = kind
         self.currentNarrationIndex = currentNarrationIndex
+        self.isLive = isLive
     }
 
     /// Derived from the first member so the id stays stable while the run
@@ -98,6 +103,8 @@ enum ACPToolCallGrouping {
         /// Narration row currently receiving streamed text. If folding hides
         /// this row, its group header surfaces a bounded live preview.
         var currentNarrationIndex: Int? = nil
+        /// Whether the latest turn is still running; only then can a group be live.
+        var isTurnActive: Bool = false
     }
 
     /// An explicit allowlist, not a blocklist: an adapter-specific status
@@ -160,13 +167,15 @@ enum ACPToolCallGrouping {
         })
     }
 
-    /// Thinking and finished ordinary tool calls share an activity group.
-    /// Active calls, context compaction, subagents, file edits, and readable
+    /// Thinking and ordinary tool calls — finished, running, or pending —
+    /// share an activity group. Unknown statuses (e.g. a call awaiting
+    /// permission), context compaction, subagents, file edits, and readable
     /// messages end the run so they remain visible outside the disclosure.
     static func isCollapsible(_ message: ACPMessage) -> Bool {
         if case .thought = message { return true }
         guard case .toolCall(let toolCall) = message,
-              isFinished(status: toolCall.status),
+              isFinished(status: toolCall.status)
+                || toolCall.status == "in_progress" || toolCall.status == "pending",
               ACPContextCompaction(toolCall: toolCall) == nil,
               ACPSubagentRowDescriptor(toolCall: toolCall) == nil
         else { return false }
@@ -197,6 +206,18 @@ enum ACPToolCallGrouping {
             breakAfterIndex: options.breakAfterIndex,
             messageCreatedAt: messageCreatedAt
         )
+        // The last row only makes a live group when nothing readable follows
+        // it (plans never become rows, so they don't count).
+        let liveTailIndex: Int? = {
+            guard options.isTurnActive, let last = rows.last,
+                  messages.indices.contains(last.index),
+                  messages[(last.index + 1)...].allSatisfy({
+                      if case .plan = $0 { return true }
+                      return false
+                  })
+            else { return nil }
+            return last.index
+        }()
         var result: [ACPTranscriptRenderRow] = []
         result.reserveCapacity(rows.count)
         var run: [ACPTranscriptVisibleRow] = []
@@ -205,18 +226,28 @@ enum ACPToolCallGrouping {
 
         func flushRun() {
             if !run.isEmpty {
-                let group = ACPTranscriptToolCallGroup(
-                    members: run,
-                    kind: runKind ?? .activity,
-                    currentNarrationIndex: runCurrentNarrationIndex
-                )
-                if isExpanded(group) {
-                    result.append(.toolCallGroupHeader(group))
-                    for member in group.members {
-                        result.append(.toolCallGroupMember(member, groupId: group.id))
-                    }
+                let kind = runKind ?? .activity
+                if kind == .activity, run.count == 1,
+                   messages.indices.contains(run[0].index),
+                   case .toolCall = messages[run[0].index] {
+                    // A lone call reads better as its own one-line row than
+                    // as a disclosure hiding a single line.
+                    result.append(.message(run[0]))
                 } else {
-                    result.append(.toolCallGroup(group))
+                    let group = ACPTranscriptToolCallGroup(
+                        members: run,
+                        kind: kind,
+                        currentNarrationIndex: runCurrentNarrationIndex,
+                        isLive: kind == .activity && run[run.count - 1].index == liveTailIndex
+                    )
+                    if isExpanded(group) {
+                        result.append(.toolCallGroupHeader(group))
+                        for member in group.members {
+                            result.append(.toolCallGroupMember(member, groupId: group.id))
+                        }
+                    } else {
+                        result.append(.toolCallGroup(group))
+                    }
                 }
             }
             run.removeAll(keepingCapacity: true)

@@ -29,6 +29,7 @@ struct ACPToolCallGroupingTests {
         currentTurnAnswerIndex: Int? = nil,
         priorCurrentTurnCommentaryIndices: Set<Int> = [],
         currentNarrationIndex: Int? = nil,
+        isTurnActive: Bool = false,
         createdAts: [Int: Date] = [:]
     ) -> [ACPTranscriptRenderRow] {
         let rows = ACPTranscriptVisibleRow.rows(
@@ -42,7 +43,8 @@ struct ACPToolCallGroupingTests {
                 breakAfterIndex: breakAfterIndex,
                 currentTurnAnswerIndex: currentTurnAnswerIndex,
                 priorCurrentTurnCommentaryIndices: priorCurrentTurnCommentaryIndices,
-                currentNarrationIndex: currentNarrationIndex
+                currentNarrationIndex: currentNarrationIndex,
+                isTurnActive: isTurnActive
             ),
             messageCreatedAt: { createdAts[$0] },
             isExpanded: { _ in expandAll }
@@ -50,6 +52,15 @@ struct ACPToolCallGroupingTests {
     }
 
     private func ids(_ rows: [ACPTranscriptRenderRow]) -> [String] { rows.map(\.id) }
+
+    private func groups(_ rows: [ACPTranscriptRenderRow]) -> [ACPTranscriptToolCallGroup] {
+        rows.compactMap { row in
+            switch row {
+            case .toolCallGroup(let group), .toolCallGroupHeader(let group): group
+            default: nil
+            }
+        }
+    }
 
     @Test("disabled grouping keeps every row as a plain message row")
     func disabledKeepsMessageRows() {
@@ -96,29 +107,30 @@ struct ACPToolCallGroupingTests {
         #expect(ids(folded) == ["tcg-tc-a"])
     }
 
-    @Test("a single finished tool call still folds into a one-member group")
-    func singleFinishedToolFolds() throws {
+    @Test("a lone tool call between messages is a plain row, not a one-member group")
+    func loneToolCallIsPlainRow() throws {
         let before = ACPMessage.user(id: UUID(), messageId: "u1", text: "hi", attachments: [])
         let after = ACPMessage.user(id: UUID(), messageId: "u2", text: "thanks", attachments: [])
         let folded = fold([before, tool("a"), after])
-        #expect(ids(folded) == ["acp-user:u1", "tcg-tc-a", "acp-user:u2"])
-        guard case .toolCallGroup(let group) = try #require(folded.dropFirst().first) else {
-            Issue.record("expected a tool-call group")
+        #expect(ids(folded) == ["acp-user:u1", "tc-a", "acp-user:u2"])
+        guard case .message = folded[1] else {
+            Issue.record("expected a plain message row")
             return
         }
-        #expect(group.members.map(\.stableId) == ["tc-a"])
     }
 
-    @Test("an active tool call ends the run and stays visible after the group")
-    func activeToolEndsRun() {
-        let folded = fold([tool("a"), tool("b"), tool("c", status: "in_progress")])
-        #expect(ids(folded) == ["tcg-tc-a", "tc-c"])
+    @Test("a running or pending tool call joins the group instead of ending it", arguments: ["in_progress", "pending"])
+    func liveToolJoinsRun(status: String) {
+        #expect(ids(fold([tool("a"), tool("b", status: status), tool("c")])) == ["tcg-tc-a"])
     }
 
-    @Test("a pending tool call is treated as active")
-    func pendingToolIsActive() {
-        let folded = fold([tool("a"), tool("b"), tool("c", status: "pending"), tool("d")])
-        #expect(ids(folded) == ["tcg-tc-a", "tc-c", "tcg-tc-d"])
+    @Test("only the trailing group of an active turn is live")
+    func onlyTrailingGroupIsLive() {
+        let prose = ACPMessage.agent(id: UUID(), messageId: "m1", StreamingText("text"))
+        let plan = ACPMessage.plan(id: UUID(), [.init(content: "x", status: "pending")])
+        let messages = [tool("a"), tool("b"), prose, tool("c"), tool("d", status: "in_progress"), plan]
+        #expect(groups(fold(messages, isTurnActive: true)).map(\.isLive) == [false, true])
+        #expect(groups(fold(messages)).map(\.isLive) == [false, false])
     }
 
     @Test("agent text between tool calls splits the run")
@@ -150,10 +162,10 @@ struct ACPToolCallGroupingTests {
         let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("hmm"))
         let progress = ACPMessage.agent(id: UUID(), messageId: "p1", StreamingText("Tests pass"))
         #expect(ids(fold([thought, tool("a"), progress, tool("b")])) == [
-            "tcg-acp-thought:t1", "acp-agent:p1", "tcg-tc-b",
+            "tcg-acp-thought:t1", "acp-agent:p1", "tc-b",
         ])
         #expect(ids(fold([tool("a"), thought, tool("b")], breakAfterIndex: 1)) == [
-            "tcg-tc-a", "tcg-tc-b",
+            "tcg-tc-a", "tc-b",
         ])
     }
 
@@ -184,11 +196,12 @@ struct ACPToolCallGroupingTests {
         let messages: [ACPMessage] = [
             .user(id: UUID(), messageId: "u", text: "Investigate", attachments: []),
             tool("a"),
+            tool("a2"),
             fork ? tool("boundary") : agent("note", "Keep this explanation visible", phase: .finalAnswer),
             tool("b"),
             agent("answer", "Done", phase: .finalAnswer),
         ]
-        let rows = fold(messages, breakAfterIndex: fork ? 2 : nil, currentTurnAnswerIndex: 4)
+        let rows = fold(messages, breakAfterIndex: fork ? 3 : nil, currentTurnAnswerIndex: 5)
         let groups = rows.compactMap { row -> ACPTranscriptToolCallGroup? in
             if case .toolCallGroup(let group) = row { return group }
             return nil
@@ -263,7 +276,7 @@ struct ACPToolCallGroupingTests {
         let folded = fold([user, ordinary, tool("a"), latestUpdate])
 
         #expect(ids(folded) == [
-            "acp-user:u1", "acp-agent:a1", "tcg-tc-a", "acp-agent:p1",
+            "acp-user:u1", "acp-agent:a1", "tc-a", "acp-agent:p1",
         ])
     }
 
@@ -440,7 +453,7 @@ struct ACPToolCallGroupingTests {
         // boundary" check keeps inherited and post-fork calls apart.
         let plan = ACPMessage.plan(id: UUID(), [.init(content: "x", status: "pending")])
         let folded = fold([tool("a"), plan, tool("c"), tool("d")], breakAfterIndex: 1)
-        #expect(ids(folded) == ["tcg-tc-a", "tcg-tc-c"])
+        #expect(ids(folded) == ["tc-a", "tcg-tc-c"])
     }
 
     @Test("a run that starts after the fork boundary is not split by it")

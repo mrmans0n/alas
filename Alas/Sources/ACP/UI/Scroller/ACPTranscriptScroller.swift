@@ -668,7 +668,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     messages: host.transcript.messages,
                     isStreaming: host.transcript.streamingState == .streaming,
                     lastContentTouchIndex: host.transcript.lastContentTouchIndex
-                )
+                ),
+                isTurnActive: host.transcript.streamingState != .idle
             )
         }
 

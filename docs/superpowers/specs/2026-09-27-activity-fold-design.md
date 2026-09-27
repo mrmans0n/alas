@@ -40,13 +40,13 @@ precision.
 
 ### 1. Grouping rules — `ACPToolCallGrouping`
 
-- `isCollapsible` accepts tool calls in any status (running and pending
-  included), still excluding context compaction and subagents. `.fileEdit`
-  remains non-collapsible.
-- `flushRun`: a run containing exactly one tool call and nothing else is
-  emitted as a plain `.message` row (drawn as a bare line). Runs with two or
-  more members, or with a thought, still form a group. A run containing only a
-  thought keeps today's behavior.
+- `isCollapsible` accepts tool calls with finished, `in_progress`, or
+  `pending` status (unknown statuses such as a permission wait stay visible),
+  still excluding context compaction and subagents. `.fileEdit` remains
+  non-collapsible.
+- `flushRun`: an `.activity` run containing exactly one tool call and nothing
+  else is emitted as a plain `.message` row. Completed-turn runs always form
+  a group so they keep "Worked for …".
 - `completedTurnKinds` is unchanged.
 - Consequence: absorb-on-finish no longer happens.
 
