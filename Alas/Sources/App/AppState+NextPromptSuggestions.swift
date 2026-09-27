@@ -11,10 +11,12 @@ final class LocalTextObservers {
     var pressure: DispatchSourceMemoryPressure?
     var modelStarted = false
     var nextPromptStarted = false
+    var startupInspection: Task<Void, Never>?
 
     func cancel() {
         tasks.forEach { $0.cancel() }
         tasks.removeAll()
+        startupInspection = nil
         notifications.removeAll()
         managers.removeAll()
         sessions.removeAll()
@@ -36,14 +38,16 @@ extension AppState {
 
         ensureLocalTextObserversStarted()
 
-        localTextObservers.tasks.append(Task { [weak self] in
+        let inspection = Task { [weak self] in
             guard let self else { return }
             await self.inspectLocalTextModel()
             guard self.localTextModelState == .ready else { return }
             self.nextPromptRuntimeEnabled = self.config.nextPromptSuggestionsEnabled
             self.sessionSummariesRuntimeEnabled = self.config.sessionSummariesEnabled
             if self.sessionSummariesRuntimeEnabled { self.localTextRuntimeStarted = true }
-        })
+        }
+        localTextObservers.startupInspection = inspection
+        localTextObservers.tasks.append(inspection)
     }
 
     func ensureLocalTextObserversStarted() {

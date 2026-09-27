@@ -1653,9 +1653,11 @@ final class AppState {
     }
 
     func makeQwenTitleFallback() -> ACPQwenTitleFallback {
-        ACPQwenTitleFallback(engine: localTextInference) { [weak self] in
-            self?.qwenFallbackTitlesAvailable ?? false
-        }
+        ACPQwenTitleFallback(
+            engine: localTextInference,
+            isAvailable: { [weak self] in self?.qwenFallbackTitlesAvailable ?? false },
+            waitForStartupInspection: { [weak self] in await self?.localTextObservers.startupInspection?.value }
+        )
     }
 
     func makeIssueWorktreeNameSuggester() -> IssueWorktreeNameSuggester {

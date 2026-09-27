@@ -82,6 +82,27 @@ struct ACPLocalTitleRoutingTests {
     }
 
     @Test @MainActor
+    func waitsForStartupInspectionBeforeCheckingQwenAvailability() async {
+        let availability = TitleAvailability()
+        availability.isAvailable = false
+        let engine = TitleEngine(outcome: .success("Fix sign-in race"))
+        let fallback = ACPQwenTitleFallback(
+            engine: engine,
+            isAvailable: { availability.isAvailable },
+            waitForStartupInspection: { availability.isAvailable = true }
+        )
+
+        let title = await ACPLocalTitleGenerator.generate(
+            from: "Fix the sign-in race",
+            fallback: fallback,
+            foundationModelAvailable: { false },
+            foundationModel: { _ in nil }
+        )
+
+        #expect(title == "Fix sign-in race")
+    }
+
+    @Test @MainActor
     func revokedConsentDiscardsALateQwenTitle() async {
         let availability = TitleAvailability()
         let engine = TitleEngine(outcome: .success("Fix sign-in race")) {

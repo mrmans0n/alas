@@ -136,8 +136,12 @@ enum ACPLocalTitleGenerator {
 struct ACPQwenTitleFallback: Sendable {
     let engine: any LocalTextGenerating
     let isAvailable: @MainActor @Sendable () -> Bool
+    /// Consent flags stay off until launch-time model inspection finishes, so a
+    /// first prompt sent right after launch would otherwise never get a title.
+    var waitForStartupInspection: @MainActor @Sendable () async -> Void = {}
 
     func generate(from candidate: String) async -> String? {
+        await waitForStartupInspection()
         guard await isAvailable(), let prompt = ACPLocalTitleGenerator.prompt(for: candidate) else { return nil }
         let request = LocalTextGenerationRequest(
             messageCandidates: [[
