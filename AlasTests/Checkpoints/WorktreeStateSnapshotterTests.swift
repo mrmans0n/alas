@@ -248,6 +248,67 @@ struct WorktreeStateSnapshotterTests {
         }
     }
 
+    @Test func batchedBlobReadsKeepFramingUnderPipeBufferPressure() async throws {
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
+        defer { repo.remove() }
+        // More requests and output than a pipe buffer holds, plus one
+        // multi-megabyte object and bodies containing the framing bytes.
+        var expected: [String: Data] = ["empty": Data(), "framing": Data("x missing\n\0blob 3\n".utf8),
+                                        "large": Data((0..<(3 * 1024 * 1024)).map { UInt8(truncatingIfNeeded: $0 &* 31) })]
+        for number in 0..<2_000 { expected["small/\(number)"] = Data("object \(number)\n".utf8) }
+        for (path, bytes) in expected { try repo.write(bytes, to: path) }
+        try await repo.git(["add", "-A"])
+        let records = String(decoding: try await repo.git(["ls-files", "--stage", "-z"]), as: UTF8.self)
+        var oids: [String: String] = [:]
+        for record in records.split(separator: "\0") {
+            let fields = record.split(separator: "\t", maxSplits: 1)
+            oids[String(fields[1])] = String(fields[0].split(separator: " ")[1])
+        }
+        let git = LiveCheckpointGitRunner()
+        let requested = Array(Set(oids.values)).sorted()
+
+        let sizes = try await git.blobSizes(oids: requested, cwd: repo.root)
+        let contents = try await git.blobContents(oids: requested, cwd: repo.root)
+        let references = try await git.blobReferences(oids: requested, cwd: repo.root)
+
+        for (path, bytes) in expected {
+            let oid = try #require(oids[path])
+            #expect(sizes[oid] == Int64(bytes.count))
+            #expect(contents[oid] == bytes)
+            #expect(references[oid] == CheckpointBlobReference.make(for: bytes))
+        }
+    }
+
+    @Test func cancelledBatchedBlobReadStopsWithCancellation() async throws {
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
+        defer { repo.remove() }
+        try repo.write("staged\n", to: "file.swift")
+        try await repo.stage("file.swift")
+        let oid = String(decoding: try await repo.git(["rev-parse", ":file.swift"]), as: UTF8.self).trimmingCharacters(in: .newlines)
+        let read = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await LiveCheckpointGitRunner().blobSizes(oids: [oid], cwd: repo.root)
+        }
+
+        await #expect(throws: CancellationError.self) { try await read.value }
+    }
+
+    @Test(arguments: [true, false])
+    func missingTrackedObjectFailsCapture(retainingPayloads: Bool) async throws {
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
+        defer { repo.remove() }
+        try repo.write("staged\n", to: "file.swift")
+        try await repo.stage("file.swift")
+        let oid = String(decoding: try await repo.git(["rev-parse", ":file.swift"]), as: UTF8.self)
+            .trimmingCharacters(in: .newlines)
+        try FileManager.default.removeItem(at: repo.root.appendingPathComponent(".git/objects")
+            .appendingPathComponent(String(oid.prefix(2))).appendingPathComponent(String(oid.dropFirst(2))))
+
+        await #expect(throws: CheckpointSnapshotError.invalidGitOutput) {
+            try await WorktreeStateSnapshotter.live.snapshot(target: repo.target, retainingPayloads: retainingPayloads)
+        }
+    }
+
     @Test func fingerprintIsStableAndChangesWithDiskBytes() async throws {
         let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }

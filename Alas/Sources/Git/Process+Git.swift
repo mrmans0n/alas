@@ -661,7 +661,7 @@ func decodeUTF8DroppingIncompleteTrailingScalar(_ data: Data) -> String {
     return String(decoding: data, as: UTF8.self)
 }
 
-private func terminateProcessWithEscalation(_ process: Process) {
+func terminateProcessWithEscalation(_ process: Process) {
     guard process.isRunning else { return }
     let pid = process.processIdentifier
     process.terminate()
