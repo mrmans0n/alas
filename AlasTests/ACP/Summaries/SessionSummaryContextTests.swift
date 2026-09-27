@@ -211,12 +211,17 @@ import Testing
         #expect(SessionSummaryContext.snapshot(session: session) == nil)
         #expect(SessionSummaryIdleFacts.current(session: session, composer: session.composer).isIdle)
 
-        session.autoRunEnabled = true
-        #expect(SessionSummaryIdleFacts.current(session: session, composer: session.composer).isIdle)
-
         session.composer.replaceDraft(.init(segments: [.text("draft")]))
 
         #expect(!SessionSummaryIdleFacts.current(session: session, composer: session.composer).isIdle)
+    }
+
+    @Test func autoRunSessionWithoutTurnIsIdle() {
+        let session = makeSession(messages: [])
+        session.agentState = .ready
+        session.autoRunEnabled = true
+
+        #expect(SessionSummaryIdleFacts.current(session: session, composer: session.composer).isIdle)
     }
 
     private func makeSession(messages: [ACPMessage]) -> ACPSession {
