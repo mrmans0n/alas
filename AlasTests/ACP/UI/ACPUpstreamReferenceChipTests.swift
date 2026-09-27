@@ -41,6 +41,29 @@ struct ACPUpstreamReferenceChipTests {
         #expect(referenceChipCount(storage) == 1)
     }
 
+    @Test("hover hit-testing finds chips below a paragraph's first line")
+    func hitTestsChipsOnLaterLines() async throws {
+        let store = await UpstreamReferenceFixtures.store()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+        let textView = ACPMarkdownInlineNSTextView()
+        textView.isEditable = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        window.contentView?.addSubview(textView)
+        let storage = NSMutableAttributedString(
+            string: "Source: GitHub\nRepository: x/y\nReference: #12\nURL: foo",
+            attributes: [.font: NSFont.systemFont(ofSize: 13)]
+        )
+        ACPUpstreamReferenceChip.chipify(storage, host: .github, store: store)
+        textView.textStorage?.setAttributedString(storage)
+        textView.frame = NSRect(x: 0, y: 0, width: 400, height: 80)
+
+        let chip = NSRange(location: (storage.string as NSString).range(of: "\u{FFFC}").location, length: 1)
+        let rect = try #require(textView.upstreamReferenceAnchorRect(for: chip))
+        #expect(textView.upstreamReferenceHit(at: NSPoint(x: rect.midX, y: rect.midY))?.range == chip)
+    }
+
     @Test("plain text flattening is nil without reference chips")
     func plainTextNilWithoutChips() {
         #expect(ACPUpstreamReferenceChip.plainText(of: NSAttributedString(string: "#12")) == nil)
