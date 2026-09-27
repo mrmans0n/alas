@@ -225,8 +225,9 @@ struct ReviewTabView: View {
 
     @MainActor
     private func loadRequestedReviewSnapshotIfNeeded() async {
-        guard matchedSnapshot == nil,
-              let activeSnapshot,
+        guard let activeSnapshot,
+              reviewRefreshSettled,
+              !tabState.matches(activeSnapshot),
               let remote = activeSnapshot.remote,
               remote.kind == tabState.provider,
               remote.repositorySlug == tabState.repositorySlug,
@@ -235,7 +236,10 @@ struct ReviewTabView: View {
         else { return }
         guard let request = try? await provider.reviewRequest(
             remote: remote, number: tabState.number, cwd: worktree.path
-        ) else { return }
+        ) else {
+            requestedReviewSnapshot = nil
+            return
+        }
         let checks = (try? await provider.checks(remote: remote, request: request, cwd: worktree.path)) ?? []
         let candidate = ReviewLoopSnapshot(
             local: activeSnapshot.local, remote: remote, reviewRequest: request.withChecks(checks),
@@ -260,7 +264,7 @@ struct ReviewTabView: View {
     }
 
     private var canMergeReviewRequest: Bool {
-        guard let snapshot = matchedSnapshot else { return false }
+        guard let snapshot = activeSnapshot, tabState.matches(snapshot) else { return false }
         return ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
     }
 
