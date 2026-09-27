@@ -387,6 +387,14 @@ final class ReviewLoopState {
         )
     }
 
+    func withChecks(_ request: ReviewRequest, remote: CodeHostRemote) async throws -> ReviewRequest {
+        guard let provider = providerRegistry.provider(for: remote.kind) else {
+            throw CodeHostProviderError.unsupportedProvider(remote.kind)
+        }
+        let checks = try await provider.checks(remote: remote, request: request, cwd: worktreePath)
+        return request.withChecks(checks)
+    }
+
     func settledSnapshot(forRefreshGeneration generation: Int) -> ReviewLoopSnapshot? {
         guard refreshGeneration == generation, !isRefreshing else { return nil }
         return snapshot

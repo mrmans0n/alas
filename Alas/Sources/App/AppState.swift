@@ -1515,20 +1515,26 @@ final class AppState {
                     guard let request = try? await reviewLoop.currentReviewRequest(
                         remote: lookup.remote, branch: lookup.branch,
                         headOwner: lookup.headOwner, baseBranch: lookup.baseBranch
-                    ), request.url == lookup.createdURL,
+                    ), request.url == lookup.createdURL
+                    else { continue }
+                    let checkedRequest = try? await reviewLoop.withChecks(request, remote: lookup.remote)
+                    guard
                         let currentSnapshot = reviewLoop.settledSnapshot(forRefreshGeneration: generation)
                     else { continue }
                     let found = ReviewLoopSnapshot(
-                        local: currentSnapshot.local, remote: lookup.remote, reviewRequest: request,
+                        local: currentSnapshot.local, remote: lookup.remote,
+                        reviewRequest: checkedRequest ?? request,
                         providerAvailable: currentSnapshot.providerAvailable,
                         providerAuthenticated: currentSnapshot.providerAuthenticated,
                         providerCapabilities: currentSnapshot.providerCapabilities, errorMessage: nil
                     )
-                    _ = reviewLoop.adoptDiscoveredReviewRequest(
-                        request, remote: lookup.remote, branch: lookup.branch,
-                        headOwner: lookup.headOwner, baseBranch: lookup.baseBranch,
-                        refreshGeneration: generation
-                    )
+                    if let checkedRequest {
+                        _ = reviewLoop.adoptDiscoveredReviewRequest(
+                            checkedRequest, remote: lookup.remote, branch: lookup.branch,
+                            headOwner: lookup.headOwner, baseBranch: lookup.baseBranch,
+                            refreshGeneration: generation
+                        )
+                    }
                     _ = self.tabs.transitionPendingCreatedReview(worktreeId: worktreeID, snapshot: found)
                 }
             }

@@ -159,8 +159,12 @@ struct ReviewLoopStateTests {
     }
 
     @Test(arguments: ["feature/review-loop", "other-branch"])
-    func delayedCreatedReviewDiscoveryUpdatesOnlyItsActiveBranch(activeBranch: String) async {
-        let provider = FakeCodeHostProvider(kind: .github)
+    func delayedCreatedReviewDiscoveryUpdatesOnlyItsActiveBranch(activeBranch: String) async throws {
+        let check = ReviewCheck(
+            id: "build", name: "Build", workflow: nil, bucket: .pending,
+            detailURL: nil, completedAt: nil
+        )
+        let provider = FakeCodeHostProvider(kind: .github, checks: [check])
         let state = ReviewLoopState(
             worktreePath: URL(fileURLWithPath: "/tmp/alas-delayed-created-review"),
             baseBranch: "main",
@@ -171,13 +175,15 @@ struct ReviewLoopStateTests {
         await state.refresh(local: Self.makeLocal(branchName: activeBranch), remotes: [Self.makeGitHubRemote()])
         #expect(state.snapshot?.reviewRequest == nil)
 
+        let checkedRequest = try await state.withChecks(request, remote: remote)
         let adopted = state.adoptDiscoveredReviewRequest(
-            request, remote: remote, branch: "feature/review-loop", headOwner: nil,
+            checkedRequest, remote: remote, branch: "feature/review-loop", headOwner: nil,
             baseBranch: "main", refreshGeneration: state.refreshGeneration
         )
 
         #expect((adopted?.reviewRequest?.number == 42) == (activeBranch == "feature/review-loop"))
         #expect((state.snapshot?.reviewRequest?.number == 42) == (activeBranch == "feature/review-loop"))
+        #expect(state.snapshot?.reviewRequest?.checks == (activeBranch == "feature/review-loop" ? [check] : nil))
     }
 
     @Test func rightPaneStoreForwardsCompletedRemoteReviewSnapshot() {
