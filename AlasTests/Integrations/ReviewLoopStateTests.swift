@@ -107,6 +107,39 @@ struct ReviewLoopStateTests {
         }
     }
 
+    @Test(arguments: [CodeHostKind.github, .gitlab])
+    func recoveredReviewLookupUsesOriginalGitRemoteName(kind: CodeHostKind) async throws {
+        let host = kind == .github ? "github.com" : "gitlab.example.com"
+        let provider = FakeCodeHostProvider(kind: kind)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-recovered-review-remote"),
+            baseBranch: "origin/main",
+            providerRegistry: CodeHostProviderRegistry(providers: [kind: provider])
+        )
+        let remotes = [
+            GitRemote(name: "origin", url: "https://\(host)/fork/repo.git"),
+            GitRemote(name: "upstream", url: "https://\(host)/upstream/repo.git"),
+        ]
+        await state.refresh(local: Self.makeLocal(), remotes: remotes)
+        let recovered = CodeHostRemote(
+            kind: kind, host: host, owner: "upstream", repository: "repo",
+            remoteName: "origin", webURL: URL(string: "https://\(host)/upstream/repo")!
+        )
+
+        _ = try await state.currentReviewRequest(
+            remote: recovered, branch: "feature", headOwner: nil, baseBranch: "upstream/main"
+        )
+
+        let lookup = try #require(provider.lookupTargets.last)
+        #expect(lookup.remote.remoteName == "upstream")
+        switch kind {
+        case .github:
+            #expect(GitHubCLIProvider.normalizedBaseBranch(lookup.baseBranch, remoteName: lookup.remote.remoteName) == "main")
+        case .gitlab:
+            #expect(GitLabCLIProvider.normalizedBaseBranch(lookup.baseBranch, remoteName: lookup.remote.remoteName) == "main")
+        }
+    }
+
     @Test func rightPaneStoreForwardsCompletedRemoteReviewSnapshot() {
         let store = RightPaneStore()
         let worktree = Worktree(

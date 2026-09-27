@@ -17,6 +17,7 @@ final class ReviewLoopState {
     private let worktreePath: URL
     private var baseBranch: String
     private let providerRegistry: CodeHostProviderRegistry
+    @ObservationIgnored private var lastRemotes: [GitRemote] = []
     private(set) var refreshGeneration: Int = 0
 
     private(set) var snapshot: ReviewLoopSnapshot?
@@ -175,6 +176,7 @@ final class ReviewLoopState {
 
     func refresh(_ attempt: ReviewLoopRefreshAttempt, remotes: [GitRemote]) async {
         guard isCurrentRefresh(attempt.generation) else { return }
+        lastRemotes = remotes
         guard let baseLocal = attempt.local else {
             isRefreshing = false
             return
@@ -370,8 +372,17 @@ final class ReviewLoopState {
         guard let provider = providerRegistry.provider(for: remote.kind) else {
             throw CodeHostProviderError.unsupportedProvider(remote.kind)
         }
+        let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
+            forBaseBranch: baseBranch, remotes: lastRemotes
+        )
+        let resolvedRemote = CodeHostRemoteDetector.detectAll(
+            from: lastRemotes, supportedKinds: [remote.kind], preferredRemoteName: preferredRemoteName
+        ).first {
+            $0.host.lowercased() == remote.host.lowercased()
+                && $0.repositorySlug == remote.repositorySlug
+        } ?? remote
         return try await provider.currentReviewRequest(
-            remote: remote, branch: branch, headOwner: headOwner,
+            remote: resolvedRemote, branch: branch, headOwner: headOwner,
             baseBranch: baseBranch, cwd: worktreePath
         )
     }
