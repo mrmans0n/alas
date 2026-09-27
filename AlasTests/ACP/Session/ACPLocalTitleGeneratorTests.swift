@@ -181,6 +181,38 @@ struct ACPLocalTitleRoutingTests {
     }
 
     @Test @MainActor
+    func cancellingAQueuedTitleStopsWaitingForTheActiveOne() async throws {
+        let availability = TitleAvailability()
+        let engine = GatedTitleEngine()
+        let fallback = ACPQwenTitleFallback(
+            engine: engine,
+            isAvailable: {
+                availability.checks += 1
+                if availability.checks == 2 {
+                    Task { @MainActor in Task { @MainActor in availability.secondJobScheduled = true } }
+                }
+                return availability.isAvailable
+            },
+            requests: ACPQwenTitleRequests()
+        )
+        let active = Task { await fallback.generate(from: "Fix the sign-in race") }
+        try #require(await awaitCondition { engine.waitingCount == 1 })
+        let queued = Task {
+            defer { availability.queuedFinished = true }
+            return await fallback.generate(from: "Add dark mode support")
+        }
+        try #require(await awaitCondition { availability.secondJobScheduled })
+
+        queued.cancel()
+
+        #expect(await awaitCondition { availability.queuedFinished })
+        #expect(engine.waitingCount == 1)
+        engine.releaseNext()
+        #expect(await active.value == "Fix sign-in race")
+        #expect(await queued.value == nil)
+    }
+
+    @Test @MainActor
     func revokedConsentDiscardsALateQwenTitle() async {
         let availability = TitleAvailability()
         let engine = TitleEngine(outcome: .success("Fix sign-in race")) {
@@ -217,6 +249,7 @@ private final class TitleAvailability {
     var isAvailable = true
     var checks = 0
     var secondJobScheduled = false
+    var queuedFinished = false
 }
 
 /// Holds every call until released and records how many ran at once.

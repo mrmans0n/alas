@@ -167,19 +167,8 @@ struct ACPQwenTitleFallback: Sendable {
     /// Readiness can span a model download; a cancelled title must not keep
     /// its stopped session runner alive until then.
     private func waitForReadinessUnlessCancelled() async {
-        let waiter = ReadinessWaiter()
         let wait = waitForLocalTextReadiness
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                waiter.install(continuation)
-                Task { @MainActor in
-                    await wait()
-                    waiter.resume()
-                }
-            }
-        } onCancel: {
-            waiter.resume()
-        }
+        await waitUnlessCancelled { await wait() }
     }
 
     /// Checking consent and tracking the job in one main-actor turn means a
@@ -192,7 +181,7 @@ struct ACPQwenTitleFallback: Sendable {
         let job = Task { () -> LocalTextGenerationResult? in
             // Automatic engine jobs preempt each other, so titles for concurrent
             // sessions queue rather than cancel one another.
-            _ = await previous?.value
+            if let previous { await waitUnlessCancelled { _ = await previous.value } }
             guard !Task.isCancelled else { return nil }
             return try? await engine.generate(request, caller: .sessionTitle, priority: .automatic)
         }
@@ -223,9 +212,26 @@ final class ACPQwenTitleRequests {
     }
 }
 
-/// Resumes its continuation exactly once, whichever of readiness or
+/// Awaiting another task's value ignores the caller's cancellation; this
+/// returns as soon as either `operation` finishes or the caller is cancelled.
+private func waitUnlessCancelled(_ operation: @escaping @Sendable () async -> Void) async {
+    let waiter = CancellableWaiter()
+    await withTaskCancellationHandler {
+        await withCheckedContinuation { continuation in
+            waiter.install(continuation)
+            Task {
+                await operation()
+                waiter.resume()
+            }
+        }
+    } onCancel: {
+        waiter.resume()
+    }
+}
+
+/// Resumes its continuation exactly once, whichever of completion or
 /// cancellation arrives first.
-private final class ReadinessWaiter: Sendable {
+private final class CancellableWaiter: Sendable {
     private struct State {
         var continuation: CheckedContinuation<Void, Never>?
         var resumed = false
