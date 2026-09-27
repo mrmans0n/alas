@@ -4,6 +4,39 @@ import Foundation
 
 @MainActor
 struct TabsManagerTests {
+    @Test func createdReviewKeepsDraftTabWhenCommentsRemain() throws {
+        let worktreeId = "created-review-with-comments"
+        let commentsURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: commentsURL) }
+        let comments = ReviewDraftCommentStore(url: commentsURL)
+        let sessionID = ReviewDraftSessionID.draftReviewRequest(
+            worktreeID: worktreeId, repositoryPath: URL(fileURLWithPath: "/tmp/review-comments"),
+            base: "main", head: "feature"
+        )
+        try comments.save(ReviewDraftComment(
+            id: "comment-1", sessionID: sessionID,
+            fileID: DiffReviewFileID(namespace: "draft", path: "File.swift"),
+            path: "File.swift", anchor: .file, bodyMarkdown: "Keep this note",
+            state: .active, createdAt: .now, updatedAt: .now
+        ))
+        let manager = TabsManager(store: MemoryStore(), draftCommentStore: comments)
+        let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
+        let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
+        let missing = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+        let found = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: .placeholder(remote: remote, number: 42), providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+        let draft = manager.openOrFocusDraftReviewRequest(worktreeId: worktreeId, snapshot: missing)
+        _ = manager.updateDraftReviewRequest(worktreeId: worktreeId, tabId: draft.id) {
+            $0.createdURL = found.reviewRequest?.url
+        }
+
+        let review = try #require(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: found))
+
+        #expect(manager.activeTabId(forWorktree: worktreeId) == review.id)
+        #expect(manager.tabs(forWorktree: worktreeId).map(\.id) == [draft.id, review.id])
+        #expect(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: found) == nil)
+        #expect(try comments.load(sessionID: sessionID).map(\.bodyMarkdown) == ["Keep this note"])
+    }
+
     @Test func createdReviewReplacesItsDraftAfterLaterRefreshWithoutStealingAnotherTab() throws {
         let manager = TabsManager(store: MemoryStore())
         let worktreeId = "created-review"
@@ -43,7 +76,7 @@ struct TabsManagerTests {
         let operations = CommitPublishOperations(
             createCommit: { _, _, _ in .init(commitSHA: "abc", comparisonBase: "main", editorTitle: "abc Subject") },
             currentHeadSHA: { "abc" }, remoteBranchContainsCommit: { _, _ in false }, push: { _, _ in },
-            currentReviewRequestExists: { _ in false }, createReviewRequest: { _, _, _ in found.reviewRequest!.url },
+            currentReviewRequestExists: { _ in false }, currentReviewRequestURL: { _ in nil }, createReviewRequest: { _, _, _ in found.reviewRequest!.url },
             syncGG: { _ in }, refreshAfterCompletion: {}
         )
         let task = try #require(manager.runCommitPublish(worktreeId: worktreeId, tabId: draft.id,

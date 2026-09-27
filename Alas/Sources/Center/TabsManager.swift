@@ -49,6 +49,7 @@ final class TabsManager {
     private let store: any PersistenceStoreProtocol
     private let tabsDirectory: URL
     private let bufferStore: EditorBufferStore
+    private let draftCommentStore: ReviewDraftCommentStore
     private var buffers: [BufferKey: EditorBuffer] = [:]
     private var bufferKeys: [TabID: BufferKey] = [:]
     /// Canonical ownership for every live in-worktree tab. `buffers` is only
@@ -93,13 +94,15 @@ final class TabsManager {
         lsp: WorkspaceLSPManager? = nil,
         store: any PersistenceStoreProtocol = PersistenceStore(),
         tabsDirectory: URL = Paths.tabsDir,
-        workspaceEditJournal: WorkspaceEditJournal = WorkspaceEditJournal()
+        workspaceEditJournal: WorkspaceEditJournal = WorkspaceEditJournal(),
+        draftCommentStore: ReviewDraftCommentStore = ReviewDraftCommentStore()
     ) {
         self.bufferStore = bufferStore
         self.lsp = lsp
         self.store = store
         self.tabsDirectory = tabsDirectory
         self.workspaceEditJournal = workspaceEditJournal
+        self.draftCommentStore = draftCommentStore
     }
 
     func tabs(forWorktree id: String) -> [Tab] {
@@ -1493,7 +1496,8 @@ final class TabsManager {
             let matches: Bool
             switch tab {
             case .draftReviewRequest(let state):
-                matches = state.createdURL == request.url
+                matches = state.didOpenCreatedReview != true
+                    && state.createdURL == request.url
                     && state.provider == request.provider
                     && state.repositorySlug == request.remote.repositorySlug
             case .commitEditor(let state):
@@ -1528,6 +1532,23 @@ final class TabsManager {
         var state = ReviewPRTabState(worktreeId: worktreeId, snapshot: snapshot)
         state.createdAt = Date()
         let review = Tab.reviewPR(state)
+        if case .draftReviewRequest(var draft) = file.tabs[index], hasDraftReviewComments(worktreeId: worktreeId) {
+            draft.didOpenCreatedReview = true
+            file.tabs[index] = .draftReviewRequest(draft)
+            if let existingIndex = file.tabs.firstIndex(where: { $0.id == review.id }) {
+                file.tabs[existingIndex] = review
+            } else {
+                file.tabs.insert(review, at: index + 1)
+            }
+            if file.activeTabId == tabId { file.activeTabId = review.id }
+            do {
+                try persistThrowing(file, worktreeId: worktreeId)
+                byWorktree[worktreeId] = file
+                return review
+            } catch {
+                return nil
+            }
+        }
         if let existingIndex = file.tabs.firstIndex(where: { $0.id == review.id && $0.id != tabId }) {
             file.tabs[existingIndex] = review
             file.tabs.remove(at: index)
@@ -1542,6 +1563,13 @@ final class TabsManager {
             return review
         } catch {
             return nil
+        }
+    }
+
+    private func hasDraftReviewComments(worktreeId: String) -> Bool {
+        guard let comments = try? draftCommentStore.loadAll() else { return true }
+        return comments.contains {
+            $0.sessionID.sourceKind == .draftReviewRequest && $0.sessionID.isFor(worktreeID: worktreeId)
         }
     }
 

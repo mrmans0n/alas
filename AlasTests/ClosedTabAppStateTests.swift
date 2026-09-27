@@ -264,7 +264,7 @@ struct ClosedTabAppStateTests {
             currentHeadSHA: { "commit-sha" },
             remoteBranchContainsCommit: { _, _ in false },
             push: { _, _ in },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in },
             refreshAfterCompletion: {}

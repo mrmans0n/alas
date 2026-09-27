@@ -670,6 +670,7 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
     var createAsDraft: Bool
     var selectedPath: String?
     var createdURL: URL?
+    var didOpenCreatedReview: Bool?
 
     var displayTitle: String {
         if createdURL != nil { return "\(provider.reviewRequestLabel) created" }
@@ -698,6 +699,7 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
         self.createAsDraft = false
         self.selectedPath = nil
         self.createdURL = nil
+        self.didOpenCreatedReview = nil
     }
 
     mutating func refreshSnapshotMetadata(from snapshot: ReviewLoopSnapshot) {

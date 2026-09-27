@@ -117,7 +117,7 @@ struct CommitPublishOperations {
     var push: (_ target: CommitPublishReviewTarget, _ commitSHA: String) async throws -> Void
     var configureUpstreamTracking: (_ target: CommitPublishReviewTarget) async throws -> Void = { _ in }
     var currentReviewRequestExists: (_ target: CommitPublishReviewTarget) async throws -> Bool
-    var currentReviewRequestURL: (_ target: CommitPublishReviewTarget) async throws -> URL? = { _ in nil }
+    var currentReviewRequestURL: (_ target: CommitPublishReviewTarget) async throws -> URL?
     var createReviewRequest: (_ target: CommitPublishReviewTarget, _ subject: String, _ body: String) async throws -> URL
     var syncGG: (_ execution: CommitPublishSyncExecutionMarker) async throws -> Void
     var syncGGForTarget: (_ target: GGStackTargetIdentity, _ execution: CommitPublishSyncExecutionMarker) async throws -> Void = { _, _ in }
