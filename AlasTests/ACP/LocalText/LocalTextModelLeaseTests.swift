@@ -28,25 +28,30 @@ struct LocalTextModelLeaseTests {
         let lease = try await fixture.store.acquireVerifiedLease()
         lease.close()
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        process.arguments = ["-c", """
-        import os,fcntl,sys
-        f=os.open(sys.argv[1],os.O_RDWR|os.O_NOFOLLOW)
-        fcntl.flock(f,fcntl.LOCK_SH|fcntl.LOCK_NB)
-        print('R',flush=True)
-        sys.stdin.buffer.read(1)
-        fcntl.flock(f,fcntl.LOCK_UN)
-        print('U',flush=True)
-        sys.stdin.buffer.read(1)
-        fcntl.flock(f,fcntl.LOCK_SH|fcntl.LOCK_NB)
-        print('R',flush=True)
-        sys.stdin.buffer.read(1)
-        os.close(f)
+        // Perl is a plain binary; /usr/bin/python3 is an xcrun shim that
+        // resolves a toolchain first.
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+        process.arguments = ["-e", """
+        use Fcntl qw(:DEFAULT :flock);
+        $| = 1;
+        sysopen(my $f, $ARGV[0], O_RDWR | O_NOFOLLOW) or die "open: $!";
+        flock($f, LOCK_SH | LOCK_NB) or die "lock: $!";
+        print "R\\n"; sysread(STDIN, my $b, 1);
+        flock($f, LOCK_UN) or die "unlock: $!";
+        print "U\\n"; sysread(STDIN, $b, 1);
+        flock($f, LOCK_SH | LOCK_NB) or die "relock: $!";
+        print "R\\n"; sysread(STDIN, $b, 1);
+        close($f);
         """, fixture.root.appendingPathComponent(".lock").path]
-        let input = Pipe(), output = Pipe()
+        let input = Pipe(), output = Pipe(), errors = Pipe()
         process.standardInput = input
         process.standardOutput = output
+        process.standardError = errors
         try process.run()
+        // Without the parent's write ends, a child that exits early gives the
+        // reads below EOF instead of blocking them until the time limit.
+        try? output.fileHandleForWriting.close()
+        try? errors.fileHandleForWriting.close()
         defer {
             try? input.fileHandleForWriting.close()
             if process.isRunning {
@@ -56,18 +61,23 @@ struct LocalTextModelLeaseTests {
             }
             if !process.isRunning { process.waitUntilExit() }
         }
-        func response() throws -> String {
-            String(data: try output.fileHandleForReading.read(upToCount: 2) ?? Data(), encoding: .utf8) ?? ""
+        func expectResponse(_ expected: String, sourceLocation: SourceLocation = #_sourceLocation) throws {
+            let actual = String(decoding: try output.fileHandleForReading.read(upToCount: 2) ?? Data(), as: UTF8.self)
+            guard actual != expected else { return }
+            // An empty reply means the child exited, so its stderr is complete.
+            let childErrors = actual.isEmpty ? String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self) : ""
+            Issue.record("Lock holder replied \(actual.debugDescription), expected \(expected.debugDescription). \(childErrors)",
+                         sourceLocation: sourceLocation)
         }
-        #expect(try response() == "R\n")
+        try expectResponse("R\n")
         await #expect(throws: LocalTextModelFailure.busy) { try await fixture.store.remove() }
         await fixture.store.install()
         #expect(await fixture.store.state == .failed(.busy))
         try input.fileHandleForWriting.write(contentsOf: Data([1]))
-        #expect(try response() == "U\n")
+        try expectResponse("U\n")
         try await fixture.store.remove()
         try input.fileHandleForWriting.write(contentsOf: Data([1]))
-        #expect(try response() == "R\n")
+        try expectResponse("R\n")
         await fixture.store.install()
         #expect(await fixture.store.state == .failed(.busy))
         await #expect(throws: LocalTextModelFailure.busy) { try await fixture.store.remove() }
