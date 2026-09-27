@@ -3,6 +3,20 @@ import Testing
 @testable import Alas
 
 struct CheckpointRestorePreparationTests {
+    @Test(arguments: [
+        ([Int64](), [[Int64]]()),
+        ([40, 30, 10, 100, 1], [[40], [30, 10], [100], [1]]),
+        ([64, 0, 1], [[64, 0], [1]]),
+    ])
+    func preparedIndexHashingBatchesStayWithinTheByteBudget(megabytes: [Int64], expected: [[Int64]]) {
+        let blobs = megabytes.enumerated().map { index, size in
+            CheckpointBlobReference(sha256: String(repeating: String(index, radix: 16), count: 64), byteCount: size * 1024 * 1024)
+        }
+        let batches = CheckpointRestoreTransaction.hashBatches(blobs)
+        #expect(batches.map { $0.map { $0.byteCount / (1024 * 1024) } } == expected)
+        #expect(batches.flatMap { $0 } == blobs)
+    }
+
     @Test func prepareBuildsDesiredIndexAndLeavesTheWorktreeUntouched() async throws {
         let fixture = try await RestorePreparationFixture.make()
         defer { fixture.remove() }

@@ -135,8 +135,11 @@ struct ChatPane: View {
                         ))
                     }
                     SettingsRow(name: RowLabels.onDeviceFallbackTitles,
-                                desc: "When the agent doesn't name a chat, use an on-device model to suggest a title. Available on macOS 26 or later.") {
-                        AlasToggle(on: state.bind(\.harness.acpLocalTitlesEnabled))
+                                desc: "When the agent doesn't name a chat, use an on-device model to suggest a title: Apple Intelligence on macOS 26 or later, or the already-installed local model while next-prompt suggestions or session summaries are on.") {
+                        AlasToggle(on: Binding(
+                            get: { state.config.harness.acpLocalTitlesEnabled },
+                            set: { state.setACPLocalTitlesEnabled($0) }
+                        ))
                             .accessibilityLabel(RowLabels.onDeviceFallbackTitles)
                             .accessibilityValue(state.config.harness.acpLocalTitlesEnabled ? "On" : "Off")
                     }

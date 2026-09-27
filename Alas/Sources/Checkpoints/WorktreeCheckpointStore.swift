@@ -167,20 +167,26 @@ actor WorktreeCheckpointStore {
                 }
                 try fileSystem.removeIfPresent(blob)
             }
+            // Each blob's bytes are synced here; its directory entry becomes
+            // durable with the single blobs/ sync below.
             let temporaryBlob = layout.blobs.appendingPathComponent(".\(reference.sha256).tmp")
-            try fileSystem.writeDurable(data, to: temporaryBlob, mode: 0o600)
+            try fileSystem.write(data, to: temporaryBlob, mode: 0o600, durability: .file)
             do {
-                try fileSystem.moveExclusively(temporaryBlob, to: blob)
+                try fileSystem.moveExclusively(temporaryBlob, to: blob, synchronizingParent: false)
             } catch CheckpointFileSystemError.posix(operation: "link", code: EEXIST) {
                 try fileSystem.removeIfPresent(temporaryBlob)
             }
         }
+        // No manifest may durably reference a blob whose entry is not durable,
+        // so this sync precedes the entry move below. It also covers a reused
+        // blob left by a publish that stopped before its own sync.
+        if !publication.blobs.isEmpty { try fileSystem.synchronizeDirectory(layout.blobs) }
         let entry = layout.entries.appendingPathComponent(manifest.id.uuidString.lowercased(), isDirectory: true)
         guard !exists(entry) else { throw CheckpointStoreError.checkpointNotFound }
         let temporary = layout.entries.appendingPathComponent(".\(manifest.id.uuidString.lowercased()).tmp", isDirectory: true)
         try fileSystem.createDirectoryExclusively(temporary, mode: 0o700)
+        // writeDurable syncs `temporary` after placing manifest.json in it.
         try fileSystem.writeDurable(JSONEncoder.checkpoints.encode(manifest), to: temporary.appendingPathComponent("manifest.json"), mode: 0o600)
-        try fileSystem.synchronizeDirectory(temporary)
         try fileSystem.move(temporary, to: entry)
 
         let next = snapshot(lineageID: manifest.lineageID, manifests: candidates, unavailable: currentCatalog.summaries.filter { $0.unavailableReason != nil }, byteCount: bytes)
@@ -226,7 +232,8 @@ actor WorktreeCheckpointStore {
         return data
     }
 
-    func materializeBlob(_ reference: CheckpointBlobReference, lineageID: String, to destination: URL, mode: mode_t) throws {
+    func materializeBlob(_ reference: CheckpointBlobReference, lineageID: String, to destination: URL, mode: mode_t,
+                         durability: CheckpointWriteDurability = .fileAndDirectory) throws {
         try validate(lineageID)
         try reference.validate()
         let source = blobURL(reference, layout: paths(lineageID))
@@ -234,7 +241,7 @@ actor WorktreeCheckpointStore {
         guard try blobFileSize(reference, layout: paths(lineageID)) == reference.byteCount else {
             throw CheckpointStoreError.blobDoesNotMatchReference
         }
-        try copyBlob(source, reference: reference, to: destination, mode: mode)
+        try copyBlob(source, reference: reference, to: destination, mode: mode, durability: durability)
     }
 
     func delete(id: CheckpointID, lineageID: String) throws -> CheckpointCatalogSnapshot {
@@ -381,7 +388,9 @@ actor WorktreeCheckpointStore {
     private func withLineageLock<T>(lineageID: String, _ body: () throws -> T) throws -> T {
         let layout = paths(lineageID)
         let lock = try acquireLineageLock(layout: layout)
-        defer { try? removeDirectoryTreeIfPresent(lock) }
+        // Release durability does not matter: a lock that reappears after a
+        // crash has a durable owner.json with a dead PID and is reclaimed.
+        defer { try? removeDirectoryTreeIfPresent(lock, synchronizing: false) }
         try removeAbandonedBlobTemporaries(layout: layout)
         return try body()
     }
@@ -394,8 +403,8 @@ actor WorktreeCheckpointStore {
                 try fileSystem.createDirectoryExclusively(lock, mode: 0o700)
                 do {
                     let owner = CheckpointStoreLockOwner(pid: getpid(), createdAt: Date())
+                    // writeDurable also syncs the lock directory.
                     try fileSystem.writeDurable(JSONEncoder.checkpoints.encode(owner), to: lock.appendingPathComponent("owner.json"), mode: 0o600)
-                    try fileSystem.synchronizeDirectory(lock)
                 } catch {
                     try? fileSystem.removeIfPresent(lock.appendingPathComponent("owner.json"))
                     try? fileSystem.removeIfPresent(lock)
@@ -632,7 +641,8 @@ actor WorktreeCheckpointStore {
         return hash == reference.sha256
     }
 
-    private func copyBlob(_ source: URL, reference: CheckpointBlobReference, to destination: URL, mode: mode_t) throws {
+    private func copyBlob(_ source: URL, reference: CheckpointBlobReference, to destination: URL, mode: mode_t,
+                          durability: CheckpointWriteDurability) throws {
         let parent = destination.deletingLastPathComponent()
         let temporary = parent.appendingPathComponent(".alas-checkpoint-\(UUID().uuidString)")
         let sourceHandle = try FileHandle(forReadingFrom: source)
@@ -656,11 +666,13 @@ actor WorktreeCheckpointStore {
                 throw CheckpointStoreError.blobDoesNotMatchReference
             }
             guard Darwin.fchmod(descriptor, mode) == 0 else { throw CheckpointFileSystemError.posix(operation: "fchmod", code: errno) }
-            guard Darwin.fsync(descriptor) == 0 else { throw CheckpointFileSystemError.posix(operation: "fsync", code: errno) }
+            if durability != .none {
+                guard Darwin.fsync(descriptor) == 0 else { throw CheckpointFileSystemError.posix(operation: "fsync", code: errno) }
+            }
             guard Darwin.close(descriptor) == 0 else { throw CheckpointFileSystemError.posix(operation: "close", code: errno) }
             descriptorIsOpen = false
             guard Darwin.rename(temporary.path, destination.path) == 0 else { throw CheckpointFileSystemError.posix(operation: "rename", code: errno) }
-            try fileSystem.synchronizeDirectory(parent)
+            if durability == .fileAndDirectory { try fileSystem.synchronizeDirectory(parent) }
         } catch {
             if descriptorIsOpen { _ = Darwin.close(descriptor) }
             _ = Darwin.unlink(temporary.path)
@@ -808,21 +820,24 @@ actor WorktreeCheckpointStore {
             throw CheckpointStoreError.invalidRestoreJournal
         }
         guard exists(staging) else { return false }
-        try removeDirectoryTreeIfPresent(staging)
+        // Cleanup is retried while the journal exists, so only "staging gone
+        // before journal unlinked" must be durable: one parent sync.
+        try removeDirectoryTreeIfPresent(staging, synchronizing: false)
+        try fileSystem.synchronizeDirectory(staging.deletingLastPathComponent())
         try fileSystem.removeIfPresent(url)
         return true
     }
 
-    private func removeDirectoryTreeIfPresent(_ url: URL) throws {
+    private func removeDirectoryTreeIfPresent(_ url: URL, synchronizing: Bool = true) throws {
         guard exists(url) else { return }
         for child in try fileSystem.list(url) {
             if try isPhysicalDirectory(child) {
-                try removeDirectoryTreeIfPresent(child)
+                try removeDirectoryTreeIfPresent(child, synchronizing: synchronizing)
             } else {
-                try fileSystem.removeIfPresent(child)
+                try fileSystem.removeIfPresent(child, synchronizingParent: synchronizing)
             }
         }
-        try fileSystem.removeIfPresent(url)
+        try fileSystem.removeIfPresent(url, synchronizingParent: synchronizing)
     }
 
     private func isPhysicalDirectory(_ url: URL) throws -> Bool {

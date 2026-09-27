@@ -198,17 +198,18 @@ final class AppState {
     }
     @ObservationIgnored lazy var sessionSummaryCoordinator = SessionSummaryCoordinator(engine: localTextInference)
     @ObservationIgnored let localTextObservers = LocalTextObservers()
+    @ObservationIgnored let qwenTitleRequests = ACPQwenTitleRequests()
     @ObservationIgnored var localTextInstallation: Task<Void, Never>?
     let localTextSupported: Bool
     var localTextModelState: LocalTextModelState = .notInstalled
     var nextPromptInferenceState: NextPromptInferenceState = .ready
     var nextPromptRuntimeEnabled = false {
-        didSet { cancelIssueWorktreeNameSuggestionIfUnavailable(wasEnabled: oldValue) }
+        didSet { cancelBorrowedLocalTextRequestsIfUnavailable(wasEnabled: oldValue) }
     }
     var nextPromptDisableSavePending = false
     var nextPromptSettingsError: String?
     var sessionSummariesRuntimeEnabled = false {
-        didSet { cancelIssueWorktreeNameSuggestionIfUnavailable(wasEnabled: oldValue) }
+        didSet { cancelBorrowedLocalTextRequestsIfUnavailable(wasEnabled: oldValue) }
     }
     var sessionSummaryDisableSavePending = false
     var sessionSummarySettingsError: String?
@@ -1609,6 +1610,16 @@ final class AppState {
     /// already consented to. Without one, or while the model is not verified
     /// ready, the suggester never touches the engine or the model assets.
     var issueWorktreeNameSuggestionsAvailable: Bool {
+        borrowedLocalTextConsentAvailable
+    }
+
+    /// Qwen titles borrow the same consent as worktree names and only apply
+    /// where Foundation Models is unavailable (see `ACPLocalTitleGenerator`).
+    var qwenFallbackTitlesAvailable: Bool {
+        config.harness.acpLocalTitlesEnabled && borrowedLocalTextConsentAvailable
+    }
+
+    private var borrowedLocalTextConsentAvailable: Bool {
         localTextSupported
             && !nextPromptShuttingDown
             && !localTextRemovalInProgress
@@ -1620,13 +1631,35 @@ final class AppState {
         issueWorktreeNameAppleSuggestionsAvailable || issueWorktreeNameSuggestionsAvailable
     }
 
-    /// Worktree names borrow consent from the other local-text capabilities,
-    /// so turning the last one off must also stop an in-flight name request.
-    /// The suggester rechecks availability too; this frees the engine early.
-    private func cancelIssueWorktreeNameSuggestionIfUnavailable(wasEnabled: Bool) {
+    /// Worktree names and Qwen titles borrow consent from the other local-text capabilities,
+    /// so turning the last one off must also stop their in-flight requests.
+    /// Both recheck availability too; this frees the engine early. Titles are
+    /// cancelled through their tracked jobs, synchronously: a delayed
+    /// caller-wide engine cancel could hit a title started after consent returns.
+    private func cancelBorrowedLocalTextRequestsIfUnavailable(wasEnabled: Bool) {
         guard wasEnabled, !nextPromptRuntimeEnabled, !sessionSummariesRuntimeEnabled else { return }
+        qwenTitleRequests.cancelAll()
         let engine = localTextInference
         Task { await engine.cancel(caller: .worktreeName) }
+    }
+
+    /// A pending Qwen title would be discarded anyway once titles are off;
+    /// cancelling frees the shared engine instead of running to its timeout.
+    func setACPLocalTitlesEnabled(_ enabled: Bool) {
+        let wasEnabled = config.harness.acpLocalTitlesEnabled
+        config.harness.acpLocalTitlesEnabled = enabled
+        saveConfig()
+        guard wasEnabled, !enabled else { return }
+        qwenTitleRequests.cancelAll()
+    }
+
+    func makeQwenTitleFallback() -> ACPQwenTitleFallback {
+        ACPQwenTitleFallback(
+            engine: localTextInference,
+            isAvailable: { [weak self] in self?.qwenFallbackTitlesAvailable ?? false },
+            waitForLocalTextReadiness: { [weak self] in await self?.waitForLocalTextReadiness() },
+            requests: qwenTitleRequests
+        )
     }
 
     func makeIssueWorktreeNameSuggester() -> IssueWorktreeNameSuggester {
@@ -12034,6 +12067,7 @@ final class AppState {
             localTitlesEnabled: { [weak self] in
                 self?.config.harness.acpLocalTitlesEnabled ?? false
             },
+            qwenTitleFallback: makeQwenTitleFallback(),
             onInputAwaiting: { [weak self] session, request in
                 guard let self,
                       self.config.harness.notifyOnAwaiting,
@@ -12480,6 +12514,7 @@ final class AppState {
             localTitlesEnabled: { [weak self] in
                 self?.config.harness.acpLocalTitlesEnabled ?? false
             },
+            qwenTitleFallback: makeQwenTitleFallback(),
             onInputAwaiting: { [weak self] session, request in
                 guard let self,
                       self.config.harness.notifyOnAwaiting

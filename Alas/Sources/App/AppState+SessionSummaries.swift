@@ -14,7 +14,7 @@ extension AppState {
             return
         }
         ensureLocalTextObserversStarted()
-        await prepareSessionSummaries(generation: generation)
+        await trackLocalTextReadiness { await self.prepareSessionSummaries(generation: generation) }
     }
 
     func retrySessionSummarySettings() async {
@@ -25,7 +25,8 @@ extension AppState {
         }
         guard config.sessionSummariesEnabled, localTextSupported, !nextPromptShuttingDown else { return }
         beginSessionSummarySettingsChange()
-        await prepareSessionSummaries(generation: sessionSummarySettingsGeneration)
+        let generation = sessionSummarySettingsGeneration
+        await trackLocalTextReadiness { await self.prepareSessionSummaries(generation: generation) }
     }
 
     func disableSessionSummaries() async {
