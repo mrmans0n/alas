@@ -1328,6 +1328,34 @@ final class TabsManager {
     }
 
     @discardableResult
+    func openCreatedReviewAfterDraftClose(
+        worktreeId: String, remote: CodeHostRemote, url: URL, title: String
+    ) -> Tab? {
+        guard let number = Int(url.lastPathComponent), number > 0,
+              remote.reviewRequestURL(number: number) == url,
+              var file = byWorktree[worktreeId]
+        else { return nil }
+        let state = ReviewPRTabState(
+            worktreeId: worktreeId, remote: remote, number: number, url: url, title: title
+        )
+        let review = Tab.reviewPR(state)
+        if let index = file.tabs.firstIndex(where: { $0.id == review.id }) {
+            file.tabs[index] = review
+        } else {
+            file.tabs.append(review)
+        }
+        if file.activeTabId == nil { file.activeTabId = review.id }
+        do {
+            try persistThrowing(file, worktreeId: worktreeId)
+            byWorktree[worktreeId] = file
+            onCreatedReview?(worktreeId, state)
+            return review
+        } catch {
+            return nil
+        }
+    }
+
+    @discardableResult
     func openOrFocusDraftCommit(
         worktreeId: String,
         resetAmend: Bool = false,

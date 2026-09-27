@@ -18,6 +18,27 @@ struct TabsManagerReviewRequestDraftTests {
         #expect(manager.activeTabId(forWorktree: worktreeId) == first.id)
     }
 
+    @Test func createdReviewStillOpensWhenDraftClosesDuringCreation() throws {
+        let worktreeId = "review-request-draft-closed-during-creation"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let snapshot = Self.snapshot()
+        let draft = manager.openOrFocusDraftReviewRequest(worktreeId: worktreeId, snapshot: snapshot)
+        let remote = try #require(snapshot.remote)
+        let url = remote.reviewRequestURL(number: 42)
+        var notifiedURL: URL?
+        manager.onCreatedReview = { _, review in notifiedURL = review.url }
+
+        manager.close(worktreeId: worktreeId, tabId: draft.id)
+        let review = try #require(manager.openCreatedReviewAfterDraftClose(
+            worktreeId: worktreeId, remote: remote, url: url, title: "Created review"
+        ))
+
+        #expect(manager.tabs(forWorktree: worktreeId).map(\.id) == [review.id])
+        #expect(manager.activeTabId(forWorktree: worktreeId) == review.id)
+        #expect(notifiedURL == url)
+    }
+
     @Test func focusesSameDraftTargetPreservingEdits() {
         let worktreeId = "review-request-draft-same-target"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

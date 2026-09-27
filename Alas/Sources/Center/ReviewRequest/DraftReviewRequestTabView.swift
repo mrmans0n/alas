@@ -456,20 +456,21 @@ struct DraftReviewRequestTabView: View {
         selectedPath = tabState.selectedPath
     }
 
+    @discardableResult
     private func persist(
         title: String? = nil,
         body: String? = nil,
         createAsDraft: Bool? = nil,
         selectedPath: String?? = nil,
         createdURL: URL?? = nil
-    ) {
+    ) -> Bool {
         appState.tabs.updateDraftReviewRequest(worktreeId: worktreeId, tabId: tabState.id) { state in
             if let title { state.title = title }
             if let body { state.body = body }
             if let createAsDraft { state.createAsDraft = createAsDraft }
             if let selectedPath { state.selectedPath = selectedPath }
             if let createdURL { state.createdURL = createdURL }
-        }
+        } != nil
     }
 
     private func loadContext() async {
@@ -669,7 +670,11 @@ struct DraftReviewRequestTabView: View {
                     error = "Review state is still loading."
                     return
                 }
-                persist(createdURL: url)
+                if !persist(createdURL: url), let remote = snapshot.remote {
+                    _ = appState.tabs.openCreatedReviewAfterDraftClose(
+                        worktreeId: worktreeId, remote: remote, url: url, title: titleSnapshot
+                    )
+                }
                 await appState.rightPaneStore.refresh(
                     worktreeId: worktreeId,
                     forceReviewLoopRemote: true
