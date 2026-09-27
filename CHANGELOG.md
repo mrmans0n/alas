@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.14] - 2026-09-27
+
+### ✨ Features
+
+- Add a Prepare action that pushes the branch and creates a GitHub pull request or GitLab merge request (#1546).
+- Render remote peer sessions with native ACP transcript cards and show upstream pull request, merge request, and issue context in transcripts (#1537, #1556).
+- Show file mention paths in composer popovers (#1535).
+- Prefer Apple Intelligence for worktree name suggestions and fall back to an installed Qwen model for session titles (#1543, #1544).
+- Enable MLX inference in release builds (#1549).
+
+### 🐛 Fixes
+
+- Bound and evenly space next-prompt fallback candidates (#1534, #1538).
+- Defer mount changes while compensating transcript row height (#1539).
+
+### 🏗️ Internal
+
+- Reduce checkpoint Git and disk overhead by reusing resolved paths, batching object reads and index listings, hashing prepared blobs in one call, and removing incidental `fsync` calls (#1545, #1547, #1554, #1555).
+- Rebalance CI test batches and stabilize run, local-text, settings, and concurrency-sensitive tests (#1533, #1536, #1540, #1542, #1550).
+- Document the conventional commit title format.
+
 ## [0.19.13] - 2026-09-26
 
 ### ✨ Features
