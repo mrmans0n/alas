@@ -28,7 +28,7 @@ struct ACPToolCallGroupingTests {
         expandAll: Bool = false,
         currentTurnAnswerIndex: Int? = nil,
         priorCurrentTurnCommentaryIndices: Set<Int> = [],
-        currentNarrationIndex: Int? = nil,
+        isTurnActive: Bool = false,
         createdAts: [Int: Date] = [:]
     ) -> [ACPTranscriptRenderRow] {
         let rows = ACPTranscriptVisibleRow.rows(
@@ -42,7 +42,7 @@ struct ACPToolCallGroupingTests {
                 breakAfterIndex: breakAfterIndex,
                 currentTurnAnswerIndex: currentTurnAnswerIndex,
                 priorCurrentTurnCommentaryIndices: priorCurrentTurnCommentaryIndices,
-                currentNarrationIndex: currentNarrationIndex
+                isTurnActive: isTurnActive
             ),
             messageCreatedAt: { createdAts[$0] },
             isExpanded: { _ in expandAll }
@@ -50,6 +50,15 @@ struct ACPToolCallGroupingTests {
     }
 
     private func ids(_ rows: [ACPTranscriptRenderRow]) -> [String] { rows.map(\.id) }
+
+    private func groups(_ rows: [ACPTranscriptRenderRow]) -> [ACPTranscriptToolCallGroup] {
+        rows.compactMap { row in
+            switch row {
+            case .toolCallGroup(let group), .toolCallGroupHeader(let group): group
+            default: nil
+            }
+        }
+    }
 
     @Test("disabled grouping keeps every row as a plain message row")
     func disabledKeepsMessageRows() {
@@ -96,29 +105,41 @@ struct ACPToolCallGroupingTests {
         #expect(ids(folded) == ["tcg-tc-a"])
     }
 
-    @Test("a single finished tool call still folds into a one-member group")
-    func singleFinishedToolFolds() throws {
+    @Test("a lone tool call between messages is a plain row, not a one-member group")
+    func loneToolCallIsPlainRow() throws {
         let before = ACPMessage.user(id: UUID(), messageId: "u1", text: "hi", attachments: [])
         let after = ACPMessage.user(id: UUID(), messageId: "u2", text: "thanks", attachments: [])
         let folded = fold([before, tool("a"), after])
-        #expect(ids(folded) == ["acp-user:u1", "tcg-tc-a", "acp-user:u2"])
-        guard case .toolCallGroup(let group) = try #require(folded.dropFirst().first) else {
-            Issue.record("expected a tool-call group")
+        #expect(ids(folded) == ["acp-user:u1", "tc-a", "acp-user:u2"])
+        guard case .message = folded[1] else {
+            Issue.record("expected a plain message row")
             return
         }
-        #expect(group.members.map(\.stableId) == ["tc-a"])
     }
 
-    @Test("an active tool call ends the run and stays visible after the group")
-    func activeToolEndsRun() {
-        let folded = fold([tool("a"), tool("b"), tool("c", status: "in_progress")])
-        #expect(ids(folded) == ["tcg-tc-a", "tc-c"])
+    @Test("a lone thought is a plain row, not a one-member group")
+    func loneThoughtIsPlainRow() throws {
+        let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("hmm"))
+        let folded = fold([thought])
+        #expect(ids(folded) == ["acp-thought:t1"])
+        guard case .message = try #require(folded.first) else {
+            Issue.record("expected a plain message row")
+            return
+        }
     }
 
-    @Test("a pending tool call is treated as active")
-    func pendingToolIsActive() {
-        let folded = fold([tool("a"), tool("b"), tool("c", status: "pending"), tool("d")])
-        #expect(ids(folded) == ["tcg-tc-a", "tc-c", "tcg-tc-d"])
+    @Test("a running or pending tool call joins the group instead of ending it", arguments: ["in_progress", "pending"])
+    func liveToolJoinsRun(status: String) {
+        #expect(ids(fold([tool("a"), tool("b", status: status), tool("c")])) == ["tcg-tc-a"])
+    }
+
+    @Test("only the trailing group of an active turn is live")
+    func onlyTrailingGroupIsLive() {
+        let prose = ACPMessage.agent(id: UUID(), messageId: "m1", StreamingText("text"))
+        let plan = ACPMessage.plan(id: UUID(), [.init(content: "x", status: "pending")])
+        let messages = [tool("a"), tool("b"), prose, tool("c"), tool("d", status: "in_progress"), plan]
+        #expect(groups(fold(messages, isTurnActive: true)).map(\.isLive) == [false, true])
+        #expect(groups(fold(messages)).map(\.isLive) == [false, false])
     }
 
     @Test("agent text between tool calls splits the run")
@@ -150,10 +171,10 @@ struct ACPToolCallGroupingTests {
         let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("hmm"))
         let progress = ACPMessage.agent(id: UUID(), messageId: "p1", StreamingText("Tests pass"))
         #expect(ids(fold([thought, tool("a"), progress, tool("b")])) == [
-            "tcg-acp-thought:t1", "acp-agent:p1", "tcg-tc-b",
+            "tcg-acp-thought:t1", "acp-agent:p1", "tc-b",
         ])
         #expect(ids(fold([tool("a"), thought, tool("b")], breakAfterIndex: 1)) == [
-            "tcg-tc-a", "tcg-tc-b",
+            "tcg-tc-a", "tc-b",
         ])
     }
 
@@ -184,11 +205,12 @@ struct ACPToolCallGroupingTests {
         let messages: [ACPMessage] = [
             .user(id: UUID(), messageId: "u", text: "Investigate", attachments: []),
             tool("a"),
+            tool("a2"),
             fork ? tool("boundary") : agent("note", "Keep this explanation visible", phase: .finalAnswer),
             tool("b"),
             agent("answer", "Done", phase: .finalAnswer),
         ]
-        let rows = fold(messages, breakAfterIndex: fork ? 2 : nil, currentTurnAnswerIndex: 4)
+        let rows = fold(messages, breakAfterIndex: fork ? 3 : nil, currentTurnAnswerIndex: 5)
         let groups = rows.compactMap { row -> ACPTranscriptToolCallGroup? in
             if case .toolCallGroup(let group) = row { return group }
             return nil
@@ -238,22 +260,6 @@ struct ACPToolCallGroupingTests {
         #expect(group.members.map(\.stableId) == ["acp-agent:p1", "tc-a"])
     }
 
-    @Test("a collapsed group identifies the live narration without splitting the run")
-    func collapsedGroupCarriesLiveNarration() throws {
-        let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("Inspecting the scroller"))
-        let folded = fold(
-            [tool("a"), thought, tool("b")],
-            currentNarrationIndex: 1
-        )
-
-        #expect(ids(folded) == ["tcg-tc-a"])
-        guard case .toolCallGroup(let group) = try #require(folded.first) else {
-            Issue.record("expected one collapsed activity group")
-            return
-        }
-        #expect(group.currentNarrationIndex == 1)
-    }
-
     @Test("the live-status fold never hides earlier ordinary agent prose")
     func currentTurnKeepsOrdinaryAgentProseVisible() {
         let user = ACPMessage.user(id: UUID(), messageId: "u1", text: "Fix it", attachments: [])
@@ -263,7 +269,7 @@ struct ACPToolCallGroupingTests {
         let folded = fold([user, ordinary, tool("a"), latestUpdate])
 
         #expect(ids(folded) == [
-            "acp-user:u1", "acp-agent:a1", "tcg-tc-a", "acp-agent:p1",
+            "acp-user:u1", "acp-agent:a1", "tc-a", "acp-agent:p1",
         ])
     }
 
@@ -292,8 +298,7 @@ struct ACPToolCallGroupingTests {
             return
         }
         let summary = ACPToolCallGroupSummary(toolCalls: [toolCall], kind: group.kind)
-        #expect(summary.collapsedLabel == "Worked for 2m 5s · 1 tool call")
-        #expect(summary.expandedLabel == "Hide work · 1 tool call")
+        #expect(summary.label == "Worked for 2m 5s · read 1 file")
     }
 
     @Test("only an idle non-commentary tail completes the current turn")
@@ -440,7 +445,7 @@ struct ACPToolCallGroupingTests {
         // boundary" check keeps inherited and post-fork calls apart.
         let plan = ACPMessage.plan(id: UUID(), [.init(content: "x", status: "pending")])
         let folded = fold([tool("a"), plan, tool("c"), tool("d")], breakAfterIndex: 1)
-        #expect(ids(folded) == ["tcg-tc-a", "tcg-tc-c"])
+        #expect(ids(folded) == ["tc-a", "tcg-tc-c"])
     }
 
     @Test("a run that starts after the fork boundary is not split by it")
@@ -516,8 +521,12 @@ struct ACPToolCallGroupingTests {
 
 @Suite("ACP tool-call group summary")
 struct ACPToolCallGroupSummaryTests {
-    private func tool(_ id: String, status: String = "completed") -> ACPMessage.ToolCall {
-        .init(toolCallId: id, title: id, kind: "read", status: status)
+    private func tool(_ id: String, kind: String = "read", status: String = "completed") -> ACPMessage.ToolCall {
+        .init(toolCallId: id, title: id, kind: kind, status: status)
+    }
+
+    private func calls(_ kinds: [String]) -> [ACPMessage.ToolCall] {
+        kinds.enumerated().map { tool("t\($0.offset)", kind: $0.element) }
     }
 
     @Test("counts members and failures")
@@ -527,6 +536,7 @@ struct ACPToolCallGroupSummaryTests {
         ])
         #expect(summary.count == 3)
         #expect(summary.failedCount == 1)
+        #expect(summary.label == "Read 3 files · 1 failed")
     }
 
     @Test("only the terminal 'failed' status counts as a failure")
@@ -540,24 +550,32 @@ struct ACPToolCallGroupSummaryTests {
         #expect(!ACPToolCallGroupSummary.isFailed(status: "completed"))
     }
 
-    @Test("collapsed label pluralizes and appends the failure count")
-    func collapsedLabel() {
-        #expect(ACPToolCallGroupSummary(toolCalls: []).collapsedLabel == "Activity")
-        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a"), tool("b")]).collapsedLabel == "b · 2 tool calls")
-        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a")]).collapsedLabel == "a · 1 tool call")
-        #expect(ACPToolCallGroupSummary(toolCalls: [
-            tool("a"), tool("b", status: "failed"), tool("c"),
-        ]).collapsedLabel == "c · 3 tool calls · 1 failed")
+    @Test("the label counts tool verbs in first-appearance order", arguments: [
+        (["read"], "Read 1 file"),
+        (["read", "read", "search"], "Read 2 files, searched 1 time"),
+        (["execute", "read", "execute", "execute"], "Ran 3 commands, read 1 file"),
+        (["edit", "fetch"], "Edited 1 file, used 1 tool"),
+        ([], "Thought"),
+    ])
+    func labelCountsVerbs(kinds: [String], expected: String) {
+        #expect(ACPToolCallGroupSummary(toolCalls: calls(kinds)).label == expected)
     }
 
-    @Test("expanded label offers to hide the bundle and keeps the failure count")
-    func expandedLabel() {
-        #expect(ACPToolCallGroupSummary(toolCalls: []).expandedLabel == "Hide activity")
-        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a"), tool("b"), tool("c")]).expandedLabel == "Hide activity · 3 tool calls")
-        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a")]).expandedLabel == "Hide activity · 1 tool call")
-        #expect(ACPToolCallGroupSummary(toolCalls: [
-            tool("a"), tool("b", status: "failed"), tool("c"),
-        ]).expandedLabel == "Hide activity · 3 tool calls · 1 failed")
+    @Test("a live group says what it is doing and how far it got", arguments: [
+        (["read", "search", "read"], "Exploring · 3 so far"),
+        (["read", "execute"], "Running · 2 so far"),
+        ([], "Thinking"),
+    ])
+    func liveLabel(kinds: [String], expected: String) {
+        #expect(ACPToolCallGroupSummary(toolCalls: calls(kinds), isLive: true).label == expected)
+    }
+
+    @Test("the label flags running members when the group itself is not the live tail")
+    func labelFlagsRunningMembersWhenNotLive() {
+        let summary = ACPToolCallGroupSummary(toolCalls: [
+            tool("a", kind: "execute"), tool("b", kind: "execute", status: "in_progress"),
+        ])
+        #expect(summary.label == "Ran 2 commands · 1 running")
     }
 }
 
@@ -877,6 +895,53 @@ struct ACPMinimapGroupSpanTests {
 @MainActor
 @Suite("ACP tool-call group expansion seeds")
 struct ACPToolCallGroupExpansionSeedsTests {
+    private func group(_ ids: [String], live: Bool) -> ACPTranscriptToolCallGroup {
+        ACPTranscriptToolCallGroup(
+            members: ids.enumerated().map { ACPTranscriptVisibleRow(index: $0.offset, stableId: $0.element) },
+            isLive: live
+        )
+    }
+
+    @Test("an untouched group is expanded exactly while it is the live tail", arguments: [true, false])
+    func untouchedGroupFollowsLiveness(live: Bool) {
+        #expect(ACPToolCallGroupExpansionSeeds().isExpanded(group(["tc-a", "tc-b"], live: live)) == live)
+    }
+
+    @Test("collapsing a live group keeps it collapsed as it grows, until expanded again")
+    func explicitCollapseOverridesLiveness() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        var changes = 0
+        seeds.onChange = { changes += 1 }
+        seeds.setExpanded(false, members: ["tc-a", "tc-b"])
+        #expect(changes == 1)
+        #expect(!seeds.isExpanded(group(["tc-a", "tc-b", "tc-c"], live: true)))
+
+        seeds.setExpanded(true, members: ["tc-a", "tc-b", "tc-c"])
+        #expect(seeds.isExpanded(group(["tc-a", "tc-b", "tc-c"], live: false)))
+    }
+
+    @Test("an explicit collapse survives the window trimming its originally-collapsed members as a live group keeps growing")
+    func explicitCollapseSurvivesWindowTrimAsLiveGroupGrows() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        seeds.setExpanded(false, members: ["tc-a", "tc-b"])
+
+        // Every render syncs before checking expansion (mirroring
+        // `syncLineage`), so a member overlapping the collapsed set folds
+        // newer members in even as older ones scroll out of the window.
+        seeds.syncCollapsed(members: ["tc-b", "tc-c"])
+
+        // The window later trims "tc-a" and "tc-b" out entirely; only
+        // "tc-c" (synced above) and the newest member remain visible.
+        #expect(!seeds.isExpanded(group(["tc-c", "tc-d"], live: true)))
+    }
+
+    @Test("syncCollapsed on a never-collapsed group is a no-op")
+    func syncCollapsedNoOpWhenNeverCollapsed() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        seeds.syncCollapsed(members: ["tc-a", "tc-b"])
+        #expect(seeds.isExpanded(group(["tc-a", "tc-b"], live: true)))
+    }
+
     @Test("a group is not expanded until one of its members is recorded")
     func notExpandedInitially() {
         let seeds = ACPToolCallGroupExpansionSeeds()

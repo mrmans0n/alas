@@ -255,7 +255,7 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(ids == ["tc-a", "tc-b", "tc-c", "__composer_spacer__"])
     }
 
-    @Test("finished tool calls fold into a group row ahead of the active tool when collapsing is on")
+    @Test("tool calls, running ones included, fold into one group row when collapsing is on")
     func toolCallsFoldWhenCollapsingOn() throws {
         let host = makeHost(collapsesFinishedToolCalls: true)
         host.transcript.messages = [tool("a"), tool("b"), tool("c", status: "in_progress")]
@@ -263,7 +263,7 @@ struct ACPTranscriptScrollerRowSpecsTests {
         host.transcript.visibleTail = nil
 
         let specs = ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
-        #expect(specs.map(\.id) == ["tcg-tc-a", "tc-c", "__composer_spacer__"])
+        #expect(specs.map(\.id) == ["tcg-tc-a", "__composer_spacer__"])
         let group = try #require(specs.first { $0.id == "tcg-tc-a" })
         #expect(group.keepsMountedOffscreen == false)
     }
@@ -284,27 +284,19 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(!before.isEqual(to: after))
     }
 
-    @Test("group row token changes when hidden narration becomes live")
-    func groupTokenChangesOnLiveNarration() throws {
+    @Test("the trailing group of a streaming turn renders expanded")
+    func liveTrailingGroupRendersExpanded() {
         let host = makeHost(collapsesFinishedToolCalls: true)
-        let thought = ACPMessage.thought(
-            id: UUID(),
-            messageId: "thinking",
-            StreamingText("Inspecting the transcript")
-        )
-        host.transcript.messages = [tool("a"), thought]
+        host.transcript.messages = [tool("a"), tool("b", status: "in_progress")]
         host.transcript.visibleHead = 0
         host.transcript.visibleTail = nil
-
-        let idle = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
-            .first { $0.id == "tcg-tc-a" }?.equalityToken)
-
-        host.transcript.lastContentTouchIndex = 1
         host.transcript.streamingState = .streaming
-        let live = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
-            .first { $0.id == "tcg-tc-a" }?.equalityToken)
 
-        #expect(!idle.isEqual(to: live))
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(
+            host: host, expansionSeeds: ACPToolCallGroupExpansionSeeds()
+        ).map(\.id)
+        // Streaming may append synthetic tail rows; only the fold matters here.
+        #expect(Array(ids.prefix(3)) == ["tcg-tc-a", "tc-a", "tc-b"])
     }
 
     @Test("group row token changes when the bundle's expanded state changes")
@@ -386,26 +378,6 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(expanded.filter { $0 != "tcg-tc-a" } == ungrouped)
     }
 
-    @Test("retitling the latest tool refreshes the collapsed activity description")
-    func latestToolTitleChangesHeaderToken() throws {
-        let host = makeHost(collapsesFinishedToolCalls: true)
-        host.transcript.messages = [tool("a"), tool("b")]
-        host.transcript.visibleHead = 0
-        host.transcript.visibleTail = nil
-        let before = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
-            .first { $0.id == "tcg-tc-a" }?.equalityToken)
-
-        // The displayed activity changes even when the counts stay the same.
-        host.transcript.messages = [
-            tool("a"),
-            .toolCall(.init(toolCallId: "b", title: "Read something else", kind: "read", status: "completed")),
-        ]
-        let after = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
-            .first { $0.id == "tcg-tc-a" }?.equalityToken)
-
-        #expect(!before.isEqual(to: after))
-    }
-
     @Test("the fork divider follows an expanded bundle's last member, not its header")
     func forkDividerFollowsExpandedBundleLastMember() {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
@@ -470,7 +442,7 @@ struct ACPTranscriptScrollerRowSpecsTests {
         host.transcript.visibleTail = nil
 
         let ids = ACPTranscriptScroller.Coordinator.rowSpecs(host: host).map(\.id)
-        #expect(ids == ["tcg-tc-a", "__fork_divider__", "tcg-tc-c", "__composer_spacer__"])
+        #expect(ids == ["tc-a", "__fork_divider__", "tcg-tc-c", "__composer_spacer__"])
     }
 
     @Test("the fork divider is emitted once when the boundary row is followed by a later row")

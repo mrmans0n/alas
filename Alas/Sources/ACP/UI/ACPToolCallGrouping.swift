@@ -13,19 +13,18 @@ struct ACPTranscriptToolCallGroup: Equatable {
     /// In transcript order; never empty.
     let members: [ACPTranscriptVisibleRow]
     let kind: Kind
-    /// The hidden narration row that is still receiving text, if this group
-    /// contains it. Its buffer is resolved by the scroller only for the
-    /// collapsed header; expanded groups already render the member itself.
-    let currentNarrationIndex: Int?
+    /// The trailing run of a turn that is still running. Drives the
+    /// "Exploring…/Running…" label and automatic expansion.
+    let isLive: Bool
 
     init(
         members: [ACPTranscriptVisibleRow],
         kind: Kind = .activity,
-        currentNarrationIndex: Int? = nil
+        isLive: Bool = false
     ) {
         self.members = members
         self.kind = kind
-        self.currentNarrationIndex = currentNarrationIndex
+        self.isLive = isLive
     }
 
     /// Derived from the first member so the id stays stable while the run
@@ -47,7 +46,7 @@ struct ACPTranscriptToolCallGroup: Equatable {
 ///
 /// A COLLAPSED bundle is one row standing in for all its members
 /// (`toolCallGroup`). An EXPANDED bundle is a header row carrying the
-/// "Hide N tools" toggle (`toolCallGroupHeader`) followed by one row per
+/// disclosure toggle (`toolCallGroupHeader`) followed by one row per
 /// member (`toolCallGroupMember`) — deliberately NOT one tall row with the
 /// cards nested inside it.
 ///
@@ -95,9 +94,8 @@ enum ACPToolCallGrouping {
         /// Commentary rows before the newest agent update in the current turn.
         /// Carried in the cache key so late phase adoption can regroup them.
         var priorCurrentTurnCommentaryIndices: Set<Int> = []
-        /// Narration row currently receiving streamed text. If folding hides
-        /// this row, its group header surfaces a bounded live preview.
-        var currentNarrationIndex: Int? = nil
+        /// Whether the latest turn is still running; only then can a group be live.
+        var isTurnActive: Bool = false
     }
 
     /// An explicit allowlist, not a blocklist: an adapter-specific status
@@ -160,13 +158,28 @@ enum ACPToolCallGrouping {
         })
     }
 
-    /// Thinking and finished ordinary tool calls share an activity group.
-    /// Active calls, context compaction, subagents, file edits, and readable
+    /// Whether a lone member of an `.activity` run reads better as a bare
+    /// line than as a one-member disclosure. Tool calls and thoughts both
+    /// already carry their own verb/label in their own row, so wrapping
+    /// either alone in a group just hides one line behind a click — and for
+    /// a thought specifically, an auto-expanded live group would otherwise
+    /// show "Thinking" twice (the header, then the thought's own label).
+    private static func isBareRowEligible(_ message: ACPMessage) -> Bool {
+        switch message {
+        case .toolCall, .thought: true
+        default: false
+        }
+    }
+
+    /// Thinking and ordinary tool calls — finished, running, or pending —
+    /// share an activity group. Unknown statuses (e.g. a call awaiting
+    /// permission), context compaction, subagents, file edits, and readable
     /// messages end the run so they remain visible outside the disclosure.
     static func isCollapsible(_ message: ACPMessage) -> Bool {
         if case .thought = message { return true }
         guard case .toolCall(let toolCall) = message,
-              isFinished(status: toolCall.status),
+              isFinished(status: toolCall.status)
+                || toolCall.status == "in_progress" || toolCall.status == "pending",
               ACPContextCompaction(toolCall: toolCall) == nil,
               ACPSubagentRowDescriptor(toolCall: toolCall) == nil
         else { return false }
@@ -197,31 +210,50 @@ enum ACPToolCallGrouping {
             breakAfterIndex: options.breakAfterIndex,
             messageCreatedAt: messageCreatedAt
         )
+        // The last row only makes a live group when nothing readable follows
+        // it (plans never become rows, so they don't count).
+        let liveTailIndex: Int? = {
+            guard options.isTurnActive, let last = rows.last,
+                  messages.indices.contains(last.index),
+                  messages[(last.index + 1)...].allSatisfy({
+                      if case .plan = $0 { return true }
+                      return false
+                  })
+            else { return nil }
+            return last.index
+        }()
         var result: [ACPTranscriptRenderRow] = []
         result.reserveCapacity(rows.count)
         var run: [ACPTranscriptVisibleRow] = []
         var runKind: ACPTranscriptToolCallGroup.Kind?
-        var runCurrentNarrationIndex: Int?
 
         func flushRun() {
             if !run.isEmpty {
-                let group = ACPTranscriptToolCallGroup(
-                    members: run,
-                    kind: runKind ?? .activity,
-                    currentNarrationIndex: runCurrentNarrationIndex
-                )
-                if isExpanded(group) {
-                    result.append(.toolCallGroupHeader(group))
-                    for member in group.members {
-                        result.append(.toolCallGroupMember(member, groupId: group.id))
-                    }
+                let kind = runKind ?? .activity
+                if kind == .activity, run.count == 1,
+                   messages.indices.contains(run[0].index),
+                   isBareRowEligible(messages[run[0].index]) {
+                    // A lone call or thought reads better as its own
+                    // one-line row than as a disclosure hiding a single line.
+                    result.append(.message(run[0]))
                 } else {
-                    result.append(.toolCallGroup(group))
+                    let group = ACPTranscriptToolCallGroup(
+                        members: run,
+                        kind: kind,
+                        isLive: kind == .activity && run[run.count - 1].index == liveTailIndex
+                    )
+                    if isExpanded(group) {
+                        result.append(.toolCallGroupHeader(group))
+                        for member in group.members {
+                            result.append(.toolCallGroupMember(member, groupId: group.id))
+                        }
+                    } else {
+                        result.append(.toolCallGroup(group))
+                    }
                 }
             }
             run.removeAll(keepingCapacity: true)
             runKind = nil
-            runCurrentNarrationIndex = nil
         }
 
         for row in rows {
@@ -246,9 +278,6 @@ enum ACPToolCallGrouping {
                 }
                 runKind = kind
                 run.append(row)
-                if row.index == options.currentNarrationIndex {
-                    runCurrentNarrationIndex = row.index
-                }
                 if row.index == options.breakAfterIndex { flushRun() }
             } else {
                 flushRun()
@@ -361,21 +390,49 @@ enum ACPToolCallGrouping {
     }
 }
 
-/// Header facts for a collapsed activity or completed-work bundle.
+/// Header facts for an activity or completed-work bundle.
 struct ACPToolCallGroupSummary: Equatable {
+    enum Verb: Equatable {
+        case read, search, run, edit, other
+    }
+
+    struct VerbCount: Equatable {
+        let verb: Verb
+        var count: Int
+    }
+
     let count: Int
     let failedCount: Int
+    /// Members still running or waiting when this group is not itself the
+    /// live tail (e.g. a parallel call that outlives the narration that
+    /// followed it out of the group). The live-tail case already says so
+    /// via `isLive`; this covers the rest.
+    let runningCount: Int
     let kind: ACPTranscriptToolCallGroup.Kind
-    let latestToolTitle: String?
+    let isLive: Bool
+    /// In first-appearance order.
+    let verbCounts: [VerbCount]
 
     init(
         toolCalls: [ACPMessage.ToolCall],
-        kind: ACPTranscriptToolCallGroup.Kind = .activity
+        kind: ACPTranscriptToolCallGroup.Kind = .activity,
+        isLive: Bool = false
     ) {
         count = toolCalls.count
         failedCount = toolCalls.filter { Self.isFailed(status: $0.status) }.count
+        runningCount = toolCalls.filter { $0.status == "in_progress" || $0.status == "pending" }.count
         self.kind = kind
-        latestToolTitle = toolCalls.last?.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.isLive = isLive
+        var counts: [VerbCount] = []
+        for toolCall in toolCalls {
+            let verb = Self.verb(for: ACPToolCallPresentation.resolve(toolCall))
+            if let index = counts.firstIndex(where: { $0.verb == verb }) {
+                counts[index].count += 1
+            } else {
+                counts.append(VerbCount(verb: verb, count: 1))
+            }
+        }
+        verbCounts = counts
     }
 
     /// Only "failed" can reach a bundle: "error" is not a terminal status
@@ -385,23 +442,54 @@ struct ACPToolCallGroupSummary: Equatable {
         status == "failed"
     }
 
-    var collapsedLabel: String {
-        switch kind {
-        case .activity:
-            (latestToolTitle.flatMap { $0.isEmpty ? nil : $0 } ?? "Activity") + toolSuffix + failureSuffix
-        case .completedTurn(let duration):
-            completedLabel(duration: duration) + toolSuffix + failureSuffix
+    static func verb(for presentation: ACPToolCallPresentation) -> Verb {
+        switch presentation.label {
+        case "Read", "Viewed Image": .read
+        case "Searched", "Find", "Web Search", "Opened Page": .search
+        case "Ran": .run
+        case "Edit": .edit
+        default: .other
         }
     }
 
-    /// Keeps the failure count visible while open: it's the reason a reader
-    /// most likely expanded the bundle in the first place.
-    var expandedLabel: String {
+    /// Same text collapsed or expanded; the chevron carries the state.
+    var label: String {
+        let failure = failedCount > 0 ? " · \(failedCount) failed" : ""
+        if isLive, count > 0 {
+            return (isExploring ? "Exploring" : "Running") + " · \(count) so far" + failure
+        }
+        let counts = verbCounts.map(Self.phrase).joined(separator: ", ")
+        let running = runningCount > 0 ? " · \(runningCount) running" : ""
         switch kind {
         case .activity:
-            "Hide activity" + toolSuffix + failureSuffix
-        case .completedTurn:
-            "Hide work" + toolSuffix + failureSuffix
+            guard !counts.isEmpty else { return isLive ? "Thinking" : "Thought" }
+            return counts.prefix(1).uppercased() + counts.dropFirst() + running + failure
+        case .completedTurn(let duration):
+            return completedLabel(duration: duration) + (counts.isEmpty ? "" : " · " + counts) + running + failure
+        }
+    }
+
+    var iconSystemName: String {
+        if case .completedTurn = kind { return "clock" }
+        guard count > 0 else { return "brain" }
+        let exploring = verbCounts
+            .filter { $0.verb == .read || $0.verb == .search }
+            .reduce(0) { $0 + $1.count }
+        return exploring * 2 >= count ? "magnifyingglass" : "terminal"
+    }
+
+    private var isExploring: Bool {
+        verbCounts.allSatisfy { $0.verb == .read || $0.verb == .search }
+    }
+
+    private static func phrase(_ entry: VerbCount) -> String {
+        let n = entry.count
+        return switch entry.verb {
+        case .read: "read \(n) \(n == 1 ? "file" : "files")"
+        case .search: "searched \(n) \(n == 1 ? "time" : "times")"
+        case .run: "ran \(n) \(n == 1 ? "command" : "commands")"
+        case .edit: "edited \(n) \(n == 1 ? "file" : "files")"
+        case .other: "used \(n) \(n == 1 ? "tool" : "tools")"
         }
     }
 
@@ -417,14 +505,6 @@ struct ACPToolCallGroupSummary: Equatable {
         let hours = seconds / 3_600
         let minutes = (seconds % 3_600) / 60
         return minutes == 0 ? "Worked for \(hours)h" : "Worked for \(hours)h \(minutes)m"
-    }
-
-    private var toolSuffix: String {
-        count > 0 ? " · \(count) \(count == 1 ? "tool call" : "tool calls")" : ""
-    }
-
-    private var failureSuffix: String {
-        failedCount > 0 ? " · \(failedCount) failed" : ""
     }
 }
 
@@ -475,6 +555,11 @@ final class ACPToolCallGroupExpansionSeeds {
     /// invalidated by collapse (see `setExpanded`), disambiguates the two.
     private var lineageByMemberId: [String: UUID] = [:]
 
+    /// Members of runs the user explicitly collapsed. Needed because a live
+    /// run is expanded automatically; without this, collapsing it would be
+    /// undone by the next render.
+    private var collapsedMemberIds: Set<String> = []
+
     func isExpanded(members: [String]) -> Bool {
         members.contains { lineageByMemberId[$0] != nil }
     }
@@ -486,6 +571,7 @@ final class ACPToolCallGroupExpansionSeeds {
             // otherwise this is a fresh expand action.
             let lineage = members.compactMap { lineageByMemberId[$0] }.first ?? UUID()
             for member in members { lineageByMemberId[member] = lineage }
+            collapsedMemberIds.subtract(members)
         } else {
             // Clear every member sharing ANY lineage referenced by the
             // current members — not just the ones passed in — so a
@@ -493,17 +579,22 @@ final class ACPToolCallGroupExpansionSeeds {
             // members currently outside the window that `syncLineage`
             // previously folded into the same run.
             let lineages = Set(members.compactMap { lineageByMemberId[$0] })
-            guard !lineages.isEmpty else { return }
-            lineageByMemberId = lineageByMemberId.filter { !lineages.contains($0.value) }
+            if !lineages.isEmpty {
+                lineageByMemberId = lineageByMemberId.filter { !lineages.contains($0.value) }
+            }
+            collapsedMemberIds.formUnion(members)
         }
         generation &+= 1
         onChange?()
     }
 
-    /// Whether `group` should render expanded. Convenience over
-    /// `isExpanded(members:)` for the fold, which works in whole groups.
+    /// Whether `group` should render expanded: the user's explicit choice
+    /// when there is one, otherwise open only while it is the live tail.
     func isExpanded(_ group: ACPTranscriptToolCallGroup) -> Bool {
-        isExpanded(members: group.members.map(\.stableId))
+        let members = group.members.map(\.stableId)
+        if isExpanded(members: members) { return true }
+        if members.contains(where: collapsedMemberIds.contains) { return false }
+        return group.isLive
     }
 
     /// Folds `members` into whichever lineage is already present among
@@ -534,5 +625,19 @@ final class ACPToolCallGroupExpansionSeeds {
             }
         }
         for member in members { lineageByMemberId[member] = canonical }
+    }
+
+    /// Folds `members` into the collapsed override when any of them already
+    /// carry it. Mirrors `syncLineage`'s handling of expansion: called on
+    /// every render (not only at collapse time), so a live group that keeps
+    /// growing at the tail stays collapsed even after the render window
+    /// trims out the members the user originally collapsed — otherwise,
+    /// once none of a group's currently-visible members are in
+    /// `collapsedMemberIds`, `isExpanded(_:)` falls through to `isLive` and
+    /// the group silently re-expands. A no-op when none of `members` is
+    /// currently collapsed.
+    func syncCollapsed(members: [String]) {
+        guard members.contains(where: collapsedMemberIds.contains) else { return }
+        collapsedMemberIds.formUnion(members)
     }
 }

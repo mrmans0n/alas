@@ -57,24 +57,22 @@ struct ACPToolCallCard: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    glyph
-                    Text(presentation.label)
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .tracking(0.6)
-                        .textCase(.uppercase)
+                    Image(systemName: presentation.iconSystemName)
+                        .font(.system(size: 11))
+                        .frame(width: 16)
                         .foregroundStyle(theme.color("fg-faint"))
-                    if !toolCall.title.isEmpty && toolCall.title.lowercased() != presentation.label.lowercased() {
-                        FileChip(path: toolCall.title, lines: nil, iconSystemName: nil)
-                    }
-                    if let first = toolCall.locations.first {
-                        FileChip(path: first, lines: nil, iconSystemName: nil)
-                    }
-                    if !expanded, let preview = toolCall.preview, !preview.isEmpty {
-                        Text(preview)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(theme.color("fg-faint"))
+                        .accessibilityHidden(true)
+                    Text(presentation.label)
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.color("fg-faint"))
+                    if let target = ACPToolCallPresentation.target(for: toolCall, label: presentation.label) {
+                        Text(verbatim: target)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(theme.color("fg-dim"))
                             .lineLimit(1)
                             .truncationMode(.middle)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 4))
                     }
                     Spacer(minLength: 6)
                     if isHovering, let messageCreatedAt {
@@ -97,7 +95,8 @@ struct ACPToolCallCard: View {
                         .foregroundStyle(theme.color("fg-faint"))
                         .rotationEffect(.degrees(expanded ? 180 : 0))
                 }
-                .padding(.horizontal, 10).padding(.vertical, 7)
+                .padding(.horizontal, expanded ? 10 : 0)
+                .padding(.vertical, expanded ? 7 : 3)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -107,9 +106,13 @@ struct ACPToolCallCard: View {
                 expandedBody
             }
         }
-        .background(theme.color("bg-1").opacity(0.5))
+        .background(expanded ? theme.color("bg-1").opacity(0.5) : .clear)
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(borderColor, lineWidth: 0.5))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(borderColor, lineWidth: 0.5)
+                .opacity(expanded ? 1 : 0)
+        )
         // `expandedContent` is keyed to SwiftUI view identity, not to the
         // tool call's id. If SwiftUI recycles this card for a different
         // tool call at the same position (e.g. during prepend / reorder),
@@ -224,9 +227,7 @@ struct ACPToolCallCard: View {
             // Static dot while waiting for permission / queue.
             Circle().fill(theme.color("fg-faint")).frame(width: 5, height: 5)
         case "completed":
-            Image(systemName: "checkmark")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(theme.color("add"))
+            EmptyView()
         case "failed":
             Image(systemName: "xmark")
                 .font(.system(size: 9, weight: .bold))
@@ -248,18 +249,6 @@ struct ACPToolCallCard: View {
 
     private var presentation: ACPToolCallPresentation {
         ACPToolCallPresentation.resolve(toolCall)
-    }
-
-    @ViewBuilder
-    private var glyph: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 4)
-                .fill(theme.color("bg-0").opacity(0.8))
-            Image(systemName: presentation.iconSystemName)
-                .font(.system(size: 10))
-                .foregroundStyle(theme.color("accent"))
-        }
-        .frame(width: 18, height: 18)
     }
 }
 

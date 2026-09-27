@@ -256,6 +256,19 @@ struct ACPToolCallPresentationTests {
         #expect(image.size.height > 0)
     }
 
+    @Test("the one-line target drops a repeated verb and falls back to the first location", arguments: [
+        ("Read host/engine.test.ts", [String](), "Read", "host/engine.test.ts"),
+        ("git status --short", [], "Ran", "git status --short"),
+        ("Read", ["/tmp/a.swift"], "Read", "/tmp/a.swift"),
+        ("", [], "Tool", nil),
+    ] as [(String, [String], String, String?)])
+    func oneLineTarget(title: String, locations: [String], label: String, expected: String?) {
+        let toolCall = ACPMessage.ToolCall(
+            toolCallId: "t", title: title, status: "completed", locations: locations
+        )
+        #expect(ACPToolCallPresentation.target(for: toolCall, label: label) == expected)
+    }
+
     private func toolCall(
         title: String,
         kind: String? = nil,
