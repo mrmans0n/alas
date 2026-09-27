@@ -397,6 +397,7 @@ struct ReviewPRTabState: Codable, Equatable, Identifiable {
     let provider: CodeHostKind
     let repositorySlug: String
     let number: Int
+    var requestRemote: CodeHostRemote?
     var url: URL
     var title: String
     var createdAt: Date?
@@ -412,6 +413,7 @@ struct ReviewPRTabState: Codable, Equatable, Identifiable {
         self.provider = request?.provider ?? remote?.kind ?? .github
         self.repositorySlug = remote?.repositorySlug ?? ""
         self.number = request?.number ?? 0
+        self.requestRemote = remote
         self.url = request?.url ?? remote?.webURL ?? URL(fileURLWithPath: "/")
         self.title = request?.title ?? ""
         self.createdAt = nil
@@ -428,8 +430,19 @@ struct ReviewPRTabState: Codable, Equatable, Identifiable {
 
     mutating func refreshSnapshotMetadata(from snapshot: ReviewLoopSnapshot) {
         guard let request = snapshot.reviewRequest else { return }
+        requestRemote = request.remote
         url = request.url
         title = request.title
+    }
+
+    func lookupRemote(activeRemote: CodeHostRemote?) -> CodeHostRemote? {
+        if let requestRemote { return requestRemote }
+        guard let activeRemote,
+              activeRemote.kind == provider,
+              activeRemote.repositorySlug == repositorySlug,
+              activeRemote.host.lowercased() == url.host?.lowercased()
+        else { return nil }
+        return activeRemote
     }
 
     func matches(_ snapshot: ReviewLoopSnapshot) -> Bool {

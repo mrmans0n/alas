@@ -165,6 +165,19 @@ struct TabsManagerTests {
         let lookup = try #require(manager.pendingCreatedReviewLookups(worktreeId: worktreeId, snapshot: changed).first)
         #expect(lookup.remote == upstream)
         #expect(lookup.createdURL == createdURL)
+
+        let discovered = ReviewLoopSnapshot(
+            local: local, remote: upstream,
+            reviewRequest: .placeholder(remote: upstream, number: 42),
+            providerAvailable: true, providerAuthenticated: true,
+            providerCapabilities: .githubCLI, errorMessage: nil
+        )
+        let review = try #require(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: discovered))
+        guard case .reviewPR(let reviewState) = review else {
+            Issue.record("Expected review tab")
+            return
+        }
+        #expect(reviewState.lookupRemote(activeRemote: origin) == upstream)
     }
 
     @Test func createdReviewReplacesCompletedCommitEditorAfterLaterRefresh() async throws {

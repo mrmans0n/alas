@@ -228,10 +228,7 @@ struct ReviewTabView: View {
         guard let activeSnapshot,
               reviewRefreshSettled,
               !tabState.matches(activeSnapshot),
-              let remote = activeSnapshot.remote,
-              remote.kind == tabState.provider,
-              remote.repositorySlug == tabState.repositorySlug,
-              remote.host.lowercased() == tabState.url.host?.lowercased(),
+              let remote = tabState.lookupRemote(activeRemote: activeSnapshot.remote),
               let provider = CodeHostProviderRegistry.live().provider(for: remote.kind)
         else { return }
         guard let request = try? await provider.reviewRequest(
