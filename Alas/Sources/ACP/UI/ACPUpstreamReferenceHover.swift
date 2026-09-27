@@ -157,23 +157,26 @@ final class ACPUpstreamReferenceHoverController {
 }
 
 extension NSTextView {
-    /// The reference chip under `point` (view coordinates). Uses
-    /// `characterIndexForInsertion` and `firstRect`, which work under both
-    /// TextKit 1 and 2, so a TextKit 2 transcript paragraph is never forced
-    /// into compatibility mode by touching `layoutManager`.
+    /// The reference chip under `point` (view coordinates). Checks each
+    /// chip's `firstRect`, which works under both TextKit 1 and 2, so a
+    /// TextKit 2 transcript paragraph is never forced into compatibility
+    /// mode by touching `layoutManager`. `characterIndexForInsertion` is
+    /// not used: under TextKit 2 it resolves points below the first line
+    /// to the wrong line, so only first-line chips were ever hit.
     func upstreamReferenceHit(at point: NSPoint) -> (range: NSRange, attachment: ACPUpstreamReferenceChipAttachment)? {
         guard let textStorage, textStorage.length > 0 else { return nil }
-        let insertion = characterIndexForInsertion(at: point)
-        for index in [insertion, insertion - 1] where index >= 0 && index < textStorage.length {
-            guard let attachment = textStorage.attribute(.attachment, at: index, effectiveRange: nil)
-                    as? ACPUpstreamReferenceChipAttachment
-            else { continue }
-            let range = NSRange(location: index, length: 1)
+        var hit: (range: NSRange, attachment: ACPUpstreamReferenceChipAttachment)?
+        textStorage.enumerateAttribute(
+            .attachment, in: NSRange(location: 0, length: textStorage.length)
+        ) { value, range, stop in
+            guard let attachment = value as? ACPUpstreamReferenceChipAttachment else { return }
+            let range = NSRange(location: range.location, length: 1)
             if let rect = upstreamReferenceAnchorRect(for: range), rect.insetBy(dx: -1, dy: -1).contains(point) {
-                return (range, attachment)
+                hit = (range, attachment)
+                stop.pointee = true
             }
         }
-        return nil
+        return hit
     }
 
     /// View-space rect of the chip at `range`.
