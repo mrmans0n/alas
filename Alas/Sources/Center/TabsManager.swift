@@ -1549,7 +1549,7 @@ final class TabsManager {
             switch tab {
             case .draftReviewRequest(let state):
                 guard let createdURL = state.createdURL, state.didOpenCreatedReview != true,
-                      let remote = snapshot.remote,
+                      let remote = state.creationRemote ?? snapshot.remote,
                       remote.kind == state.provider,
                       remote.repositorySlug == state.repositorySlug
                 else { return nil }

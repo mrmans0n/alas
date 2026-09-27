@@ -19,7 +19,7 @@ struct TabsManagerTests {
             path: "File.swift", anchor: .file, bodyMarkdown: "Keep this note",
             state: .active, createdAt: .now, updatedAt: .now
         ))
-        let manager = TabsManager(store: MemoryStore(), draftCommentStore: comments)
+        let manager = TabsManager(store: RestoreMemoryStore(), draftCommentStore: comments)
         let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
         let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
         let missing = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
@@ -59,7 +59,7 @@ struct TabsManagerTests {
             path: "File.swift", anchor: .file, bodyMarkdown: "Keep A",
             state: .active, createdAt: .now, updatedAt: .now
         ))
-        let manager = TabsManager(store: MemoryStore(), draftCommentStore: comments)
+        let manager = TabsManager(store: RestoreMemoryStore(), draftCommentStore: comments)
         let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
         let localA = ReviewLoopLocalState(branchName: "feature-a", headSHA: "aaa", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
         let localB = ReviewLoopLocalState(branchName: "feature-b", headSHA: "bbb", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
@@ -96,7 +96,7 @@ struct TabsManagerTests {
             path: "File.swift", anchor: .file, bodyMarkdown: "Keep A",
             state: .active, createdAt: .now, updatedAt: .now
         ))
-        let manager = TabsManager(store: MemoryStore(), draftCommentStore: comments)
+        let manager = TabsManager(store: RestoreMemoryStore(), draftCommentStore: comments)
         let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
         let localA = ReviewLoopLocalState(branchName: "feature-a", headSHA: "aaa", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
         let localB = ReviewLoopLocalState(branchName: "feature-b", headSHA: "bbb", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
@@ -117,7 +117,7 @@ struct TabsManagerTests {
     }
 
     @Test func createdReviewReplacesItsDraftAfterLaterRefreshWithoutStealingAnotherTab() throws {
-        let manager = TabsManager(store: MemoryStore())
+        let manager = TabsManager(store: RestoreMemoryStore())
         let worktreeId = "created-review"
         let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
         let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, upstreamAheadCommitCount: 0, needsPush: false)
@@ -148,8 +148,27 @@ struct TabsManagerTests {
         #expect(state.number == 42)
     }
 
+    @Test func delayedDraftDiscoveryUsesCreationRemoteAfterRemoteChanges() throws {
+        let manager = TabsManager(store: RestoreMemoryStore())
+        let worktreeId = "created-review-remote-switch"
+        let upstream = CodeHostRemote(kind: .github, host: "github.com", owner: "upstream", repository: "repo", remoteName: "upstream", webURL: URL(string: "https://github.com/upstream/repo")!)
+        let origin = CodeHostRemote(kind: .github, host: "github.com", owner: "fork", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/fork/repo")!)
+        let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
+        let source = ReviewLoopSnapshot(local: local, remote: upstream, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+        let changed = ReviewLoopSnapshot(local: local, remote: origin, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+        let createdURL = URL(string: "https://github.com/upstream/repo/pull/42")!
+        let draft = manager.openOrFocusDraftReviewRequest(worktreeId: worktreeId, snapshot: source)
+        _ = manager.updateDraftReviewRequest(worktreeId: worktreeId, tabId: draft.id) {
+            $0.createdURL = createdURL
+        }
+
+        let lookup = try #require(manager.pendingCreatedReviewLookups(worktreeId: worktreeId, snapshot: changed).first)
+        #expect(lookup.remote == upstream)
+        #expect(lookup.createdURL == createdURL)
+    }
+
     @Test func createdReviewReplacesCompletedCommitEditorAfterLaterRefresh() async throws {
-        let manager = TabsManager(store: MemoryStore())
+        let manager = TabsManager(store: RestoreMemoryStore())
         let worktreeId = "published-review"
         let remote = CodeHostRemote(kind: .gitlab, host: "gitlab.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://gitlab.com/owner/repo")!)
         let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, upstreamAheadCommitCount: 0, needsPush: false)

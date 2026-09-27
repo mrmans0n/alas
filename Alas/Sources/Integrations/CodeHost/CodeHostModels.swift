@@ -50,7 +50,7 @@ enum CodeHostKind: String, Codable, Equatable, Sendable {
     }
 }
 
-struct CodeHostRemote: Equatable, Sendable {
+struct CodeHostRemote: Codable, Equatable, Sendable {
     let kind: CodeHostKind
     let host: String
     let owner: String

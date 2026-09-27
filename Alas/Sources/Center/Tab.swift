@@ -661,6 +661,7 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
     let worktreeId: String
     let provider: CodeHostKind
     let repositorySlug: String
+    var creationRemote: CodeHostRemote?
     let branchName: String
     let baseBranch: String
     var upstreamBranchName: String?
@@ -685,6 +686,7 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
         self.worktreeId = worktreeId
         self.provider = provider
         self.repositorySlug = snapshot.remote?.repositorySlug ?? ""
+        self.creationRemote = snapshot.remote
         self.branchName = snapshot.local.branchName
         self.baseBranch = snapshot.local.baseBranch
         self.upstreamBranchName = snapshot.local.upstreamBranchName
