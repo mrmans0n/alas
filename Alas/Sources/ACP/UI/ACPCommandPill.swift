@@ -95,7 +95,9 @@ enum ACPSlashCommand {
     /// counting a backtick run still open at `location` as code — the same
     /// open-span rule as the upstream-reference keystroke path.
     static func isInCode(_ location: Int, in string: NSString) -> Bool {
-        let prefix = string.substring(to: location) as NSString
+        // Through the character AT `location`, so a span left open before
+        // it extends over it rather than ending exactly on it.
+        let prefix = string.substring(to: min(location + 1, string.length)) as NSString
         return (codeRanges(in: string) + ACPUpstreamReferenceDetector.codeRanges(in: prefix, unclosedRunsExtendToEnd: true))
             .contains { NSLocationInRange(location, $0) }
     }

@@ -57,6 +57,7 @@ struct ACPCommandPillTests {
         ("please /review", "/review"),
         ("please/review", nil),
         ("please `/review", nil),
+        ("please `example /review", nil),
         ("```\n/review", nil),
     ] as [(String, String?)])
     func keystrokeChipTarget(text: String, expected: String?) {
