@@ -3,12 +3,12 @@ import Testing
 @testable import Alas
 
 struct RunFailureBriefPolicyTests {
-    private static let valid = #"{"summary": " The Net tests failed to compile. ", "cause": "Bar.swift calls baz, which is not defined.", "checks": ["Whether baz was renamed in Sources/Baz.swift."]}"#
+    private static let valid = #"{"summary": " The Net test run failed to compile. ", "cause": "Bar.swift calls baz, which is not defined.", "checks": ["Whether baz was renamed in Sources/Baz.swift."]}"#
 
     @Test(arguments: [valid, "```json\n\(valid)\n```"])
     func parseAcceptsAStrictBriefOptionallyInsideAJSONFence(output: String) {
         #expect(RunFailureBriefPolicy.parse(output) == RunFailureBrief(
-            summary: "The Net tests failed to compile.",
+            summary: "The Net test run failed to compile.",
             cause: "Bar.swift calls baz, which is not defined.",
             checks: ["Whether baz was renamed in Sources/Baz.swift."]
         ))
@@ -25,6 +25,8 @@ struct RunFailureBriefPolicyTests {
         #"{"summary": "s", "cause": "c", "checks": ["Run swift build again."]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["Look at it, then rerun the script."]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["Whether git reset --hard helps."]}"#,
+        #"{"summary": "s", "cause": "You should install Xcode.", "checks": ["k"]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["Try running swift test."]}"#,
         "The Net tests failed to compile.",
         "",
     ])

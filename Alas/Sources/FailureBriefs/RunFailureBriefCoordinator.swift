@@ -27,6 +27,8 @@ final class RunFailureBriefCoordinator {
     private var states: [String: State] = [:]
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var owners: [String: Owner] = [:]
+    /// The shared MLX engine preempts one automatic job with the next, so briefs take turns.
+    @ObservationIgnored private var lastGeneration: Task<Void, Never>?
 
     func state(for runID: String) -> State? {
         states[runID]
@@ -40,7 +42,8 @@ final class RunFailureBriefCoordinator {
         cancelInFlight(worktreeID: failure.worktreeID, scriptKey: failure.scriptKey)
         let runID = failure.runID
         owners[runID] = Owner(worktreeID: failure.worktreeID, scriptKey: failure.scriptKey)
-        tasks[runID] = Task { [weak self] in
+        let previousGeneration = lastGeneration
+        let task = Task { [weak self] in
             let output = await loadOutput()
             guard !Task.isCancelled else { return }
             let excerpt: FailureLogExcerpt? = if let output {
@@ -54,6 +57,8 @@ final class RunFailureBriefCoordinator {
                 return
             }
             self.states[runID] = .generating(excerpt)
+            await previousGeneration?.value
+            guard !Task.isCancelled, case .generating = self.states[runID] else { return }
             let brief = await generate(RunFailureBriefInput(
                 scriptName: failure.scriptName,
                 exitCode: failure.exitCode,
@@ -62,6 +67,8 @@ final class RunFailureBriefCoordinator {
             guard !Task.isCancelled, case .generating = self.states[runID] else { return }
             self.states[runID] = brief.map { .ready(excerpt, $0) } ?? .unavailable(excerpt)
         }
+        tasks[runID] = task
+        lastGeneration = task
     }
 
     /// New output from the same script supersedes a brief that is still being written.

@@ -7,6 +7,8 @@ struct LocalTextSafetyTests {
         ("auth with sk-live_abcdefghijklmnopqrstuvwx failed", "auth with [redacted] failed"),
         ("password: hunter22 was rejected", "password: [redacted] was rejected"),
         ("API_KEY=abc123; retrying", "API_KEY=[redacted]; retrying"),
+        ("password: correcthorsebattery", "password: [redacted]"),
+        ("secret: abc", "secret: [redacted]"),
         ("error: build failed", "error: build failed"),
     ])
     func redactingCredentialsMasksSecretsAndKeepsSurroundingText(input: String, expected: String) {
@@ -19,7 +21,6 @@ struct LocalTextSafetyTests {
     @Test(arguments: [
         "SyntaxError: Unexpected token: punc (})",
         "error: invalid token: expired",
-        "Password: authentication failed",
     ])
     func redactingCredentialsLeavesDiagnosticsWithoutSecretsIntact(line: String) {
         #expect(LocalTextSafety.redactingCredentials(line) == line)

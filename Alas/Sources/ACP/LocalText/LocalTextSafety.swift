@@ -7,7 +7,7 @@ enum LocalTextSafety {
         pattern: #"(?i)\b(?:api[_-]?key|access[_-]?key|password|secret|token)\b\s*[:=]\s*([^\s;,]+)"#
     )
     private static let assignmentRedactionRegex = try! NSRegularExpression(
-        pattern: #"(?i)\b(?:api[_-]?key|access[_-]?key|password|secret|token)\b\s*([:=])\s*([^\s;,]+)"#
+        pattern: #"(?i)\b(api[_-]?key|access[_-]?key|password|secret|token)\b\s*([:=])\s*([^\s;,]+)"#
     )
     private static let placeholderValues: Set<String> = [
         "[redacted]", "redacted", "placeholder", "example", "changeme",
@@ -35,20 +35,21 @@ enum LocalTextSafety {
         let mutable = NSMutableString(string: masked)
         let matches = assignmentRedactionRegex.matches(in: masked, range: NSRange(location: 0, length: mutable.length))
         for match in matches.reversed() {
-            let separator = mutable.substring(with: match.range(at: 1))
-            let value = mutable.substring(with: match.range(at: 2))
-            guard isSecretValue(value, separator: separator) else { continue }
-            mutable.replaceCharacters(in: match.range(at: 2), with: "[redacted]")
+            let key = mutable.substring(with: match.range(at: 1))
+            let separator = mutable.substring(with: match.range(at: 2))
+            let value = mutable.substring(with: match.range(at: 3))
+            guard isSecretValue(value, key: key, separator: separator) else { continue }
+            mutable.replaceCharacters(in: match.range(at: 3), with: "[redacted]")
         }
         return mutable as String
     }
 
-    /// `key: word` is common in diagnostics ("Unexpected token: punc"), so colon
-    /// values only count as secrets when they look generated.
-    private static func isSecretValue(_ value: String, separator: String) -> Bool {
+    /// Parsers print `token: <word>` ("Unexpected token: punc"), so only that key
+    /// needs a generated-looking value before its colon form counts as a secret.
+    private static func isSecretValue(_ value: String, key: String, separator: String) -> Bool {
         let bare = value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`."))
         if placeholderValues.contains(bare.lowercased()) { return false }
-        if separator == "=" { return true }
+        if separator == "=" || key.lowercased() != "token" { return true }
         return bare.count >= 8 && bare.contains(where: \.isNumber)
     }
 

@@ -58,6 +58,29 @@ struct RunFailureBriefCoordinatorTests {
     }
 
     @Test
+    func briefsForDifferentScriptsGenerateOneAtATime() async throws {
+        let coordinator = RunFailureBriefCoordinator()
+        let generator = ControlledBriefGenerator()
+        coordinator.start(Self.failure("a", scriptKey: "build"), loadOutput: { Self.log }, generate: generator.generate)
+        await generator.nextCall()
+        coordinator.start(Self.failure("b", scriptKey: "test"), loadOutput: { Self.log }, generate: generator.generate)
+
+        let deadline = ContinuousClock.now + .seconds(5)
+        while coordinator.state(for: "b") == nil, ContinuousClock.now < deadline { await Task.yield() }
+        #expect(generator.callCount == 1)
+
+        generator.resolve(0, with: Self.brief)
+        await generator.nextCall()
+        generator.resolve(1, with: Self.brief)
+        await coordinator.awaitSettled(runID: "a")
+        await coordinator.awaitSettled(runID: "b")
+
+        let excerpt = try #require(FailureLogSelection.select(Self.log))
+        #expect(coordinator.state(for: "a") == .ready(excerpt, Self.brief))
+        #expect(coordinator.state(for: "b") == .ready(excerpt, Self.brief))
+    }
+
+    @Test
     func withoutAModelTheObservedExcerptIsStillAvailable() async throws {
         let coordinator = RunFailureBriefCoordinator()
 
@@ -68,9 +91,9 @@ struct RunFailureBriefCoordinatorTests {
         #expect(coordinator.state(for: "run") == .unavailable(excerpt))
     }
 
-    private static func failure(_ runID: String) -> RunScriptFailure {
+    private static func failure(_ runID: String, scriptKey: String = "test") -> RunScriptFailure {
         RunScriptFailure(
-            id: runID, runID: runID, scriptKey: "test", scriptName: "Test",
+            id: runID, runID: runID, scriptKey: scriptKey, scriptName: "Test",
             worktreeID: "wt", branch: "main", exitCode: 1, completedAt: Date()
         )
     }
@@ -96,6 +119,8 @@ private final class ControlledBriefGenerator {
             }
         }
     }
+
+    var callCount: Int { continuations.count }
 
     func nextCall() async {
         var iterator = calls

@@ -32,7 +32,7 @@ enum RunFailureBriefPolicy {
     private static let excerptCharacterBudgets = [3_000, 1_200, 400]
     private static let scriptNameLimit = 200
     private static let destructivePattern = #"(?i)\b(?:re-?run|git\s+(?:reset|push|clean|checkout|rebase)|rm\s+-|sudo)\b"#
-    private static let imperativeActionPattern = #"(?i)^(?:please\s+)?(?:run|execute|install|uninstall|delete|remove|reset|revert|push|commit|rm|kill)\b"#
+    private static let actionInstructionPattern = #"(?i)(?:^|[.;:!]\s+|\b(?:try|please|consider|then|and|you\s+(?:should|could|can|must|need\s+to|may\s+want\s+to))\s+)(?:re-?run(?:ning)?|run(?:ning)?|execut(?:e|ing)|(?:un)?install(?:ing)?|delet(?:e|ing)|remov(?:e|ing)|reset(?:ting)?|revert(?:ing)?|push(?:ing)?|commit(?:ting)?|rm|kill(?:ing)?)\b"#
 
     static func request(for input: RunFailureBriefInput) -> LocalTextGenerationRequest {
         LocalTextGenerationRequest(
@@ -82,9 +82,7 @@ enum RunFailureBriefPolicy {
               (1...maximumChecks).contains(rawChecks.count)
         else { return nil }
         let checks = rawChecks.compactMap(field)
-        guard checks.count == rawChecks.count,
-              !checks.contains(where: { $0.range(of: imperativeActionPattern, options: .regularExpression) != nil })
-        else { return nil }
+        guard checks.count == rawChecks.count else { return nil }
         return RunFailureBrief(summary: summary, cause: cause, checks: checks)
     }
 
@@ -123,7 +121,8 @@ enum RunFailureBriefPolicy {
               text.count <= maximumFieldLength,
               !text.contains(where: \.isNewline),
               !LocalTextSafety.containsCredential(text),
-              !LocalTextSafety.containsActiveAction(text, pattern: destructivePattern, includingQuotedCommands: true)
+              !LocalTextSafety.containsActiveAction(text, pattern: destructivePattern, includingQuotedCommands: true),
+              text.range(of: actionInstructionPattern, options: .regularExpression) == nil
         else { return nil }
         return text
     }
