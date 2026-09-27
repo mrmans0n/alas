@@ -404,7 +404,7 @@ struct SessionSummarySettingsTests {
         defer { fixture.removeTemporaryRoot() }
         let state = makeState(fixture, SummarySettingsStore(), engine: SettingsFeatureEngine())
         let enable = Task { await state.enableSessionSummaries() }
-        while !state.config.sessionSummariesEnabled { await Task.yield() }
+        try #require(await awaitCondition { state.config.sessionSummariesEnabled })
 
         let title = await state.makeQwenTitleFallback().generate(from: "Fix the sign-in race")
 
@@ -413,31 +413,29 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
-    @Test func titleWaitsForEveryOverlappingReadinessPreparation() async throws {
+    @Test func readinessWaitsForEveryOverlappingPreparation() async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let state = makeState(fixture, SummarySettingsStore(), engine: SettingsFeatureEngine())
         let slow = ManualGate()
         let fast = ManualGate()
         let slowPreparation = Task { await state.trackLocalTextReadiness { await slow.wait() } }
-        while !slow.isWaiting { await Task.yield() }
+        try #require(await awaitCondition { slow.isWaiting })
         let fastPreparation = Task { await state.trackLocalTextReadiness { await fast.wait() } }
-        while !fast.isWaiting { await Task.yield() }
-        // Only the slower preparation grants the capability the title needs.
-        let fallback = ACPQwenTitleFallback(
-            engine: SettingsFeatureEngine(),
-            isAvailable: { slow.isOpen },
-            waitForLocalTextReadiness: { await state.waitForLocalTextReadiness() }
-        )
-        let title = Task { await fallback.generate(from: "Fix the sign-in race") }
+        try #require(await awaitCondition { fast.isWaiting })
+        // The waiter reads the slow gate in the same main-actor job that
+        // resumes it, so returning after only the later preparation reads false.
+        let waiter = Task {
+            await state.waitForLocalTextReadiness()
+            return slow.isOpen
+        }
 
         fast.open()
         await fastPreparation.value
-        for _ in 0..<10 { await Task.yield() }
         slow.open()
         await slowPreparation.value
 
-        #expect(await title.value == "Fix sign-in race")
+        #expect(await waiter.value)
         await state.shutdownLocalTextFeatures()
     }
 

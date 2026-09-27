@@ -103,7 +103,7 @@ struct ACPLocalTitleRoutingTests {
     }
 
     @Test @MainActor
-    func revokingConsentCancelsAQwenTitleBeforeTheEngineRunsIt() async {
+    func revokingConsentCancelsAQwenTitleBeforeTheEngineRunsIt() async throws {
         let availability = TitleAvailability()
         let requests = ACPQwenTitleRequests()
         let engine = SuspendingTitleEngine()
@@ -116,7 +116,7 @@ struct ACPLocalTitleRoutingTests {
             requests: requests
         )
         let title = Task { await fallback.generate(from: "Fix the sign-in race") }
-        while availability.checks == 0 { await Task.yield() }
+        try #require(await awaitCondition { availability.checks > 0 })
 
         // Consent is revoked after the availability check, possibly before the
         // job reaches the engine, where engine.cancel(caller:) would miss it.
@@ -128,7 +128,7 @@ struct ACPLocalTitleRoutingTests {
     }
 
     @Test @MainActor
-    func cancellingATitleStopsWaitingForReadiness() async {
+    func cancellingATitleStopsWaitingForReadiness() async throws {
         let readiness = PendingReadiness()
         let engine = TitleEngine(outcome: .success("Fix sign-in race"))
         let fallback = ACPQwenTitleFallback(
@@ -140,13 +140,11 @@ struct ACPLocalTitleRoutingTests {
             defer { readiness.titleFinished = true }
             return await fallback.generate(from: "Fix the sign-in race")
         }
-        while !readiness.isWaiting { await Task.yield() }
+        try #require(await awaitCondition { readiness.isWaiting })
 
         title.cancel()
-        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-        while !readiness.titleFinished, ContinuousClock.now < deadline { await Task.yield() }
 
-        #expect(readiness.titleFinished)
+        #expect(await awaitCondition { readiness.titleFinished })
         readiness.open()
         #expect(await title.value == nil)
         #expect(await engine.calls == 0)
@@ -170,6 +168,18 @@ struct ACPLocalTitleRoutingTests {
         #expect(title == nil)
         #expect(await engine.calls == 1)
     }
+}
+
+/// Polls on the main actor until `condition` holds or the deadline passes, so a
+/// regression fails the test instead of hanging the suite.
+@MainActor
+func awaitCondition(within timeout: Duration = .seconds(10), _ condition: () -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now.advanced(by: timeout)
+    while !condition() {
+        guard ContinuousClock.now < deadline else { return false }
+        await Task.yield()
+    }
+    return true
 }
 
 @MainActor
