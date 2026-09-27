@@ -32,64 +32,20 @@ struct ACPSessionSummaryPresentationTests {
         ) == .none)
     }
 
-    @Test func hiddenWhenDisabledOrUnsupported() {
-        #expect(!ACPSessionSummaryPresentation(
-            requested: false,
-            runtimeEnabled: false,
-            supported: true,
-            model: .ready,
-            idle: true,
-            phase: .idle
-        ).isVisible)
-        #expect(!ACPSessionSummaryPresentation(
-            requested: true,
-            runtimeEnabled: true,
-            supported: false,
-            model: .ready,
-            idle: true,
-            phase: .idle
-        ).isVisible)
+    @Test func visibleOnlyWhenAClickCanSummarize() {
+        #expect(presentation(phase: .idle).isVisible)
     }
 
-    @Test func visibleButDisabledWhileModelUnavailableOrSessionBusy() {
-        let unavailable = ACPSessionSummaryPresentation(
-            requested: true,
-            runtimeEnabled: false,
-            supported: true,
-            model: .notInstalled,
-            idle: true,
+    @Test(arguments: ["requested", "supported", "runtime", "model", "idle"])
+    func hiddenWhenAnyPreconditionFails(_ failing: String) {
+        #expect(!ACPSessionSummaryPresentation(
+            requested: failing != "requested",
+            runtimeEnabled: failing != "runtime",
+            supported: failing != "supported",
+            model: failing == "model" ? .downloading(received: 50, expected: 100) : .ready,
+            idle: failing != "idle",
             phase: .idle
-        )
-        #expect(unavailable.isVisible)
-        #expect(!unavailable.isEnabled)
-        #expect(unavailable.help == "Install the on-device model in Settings to summarize this session.")
-
-        let busy = ACPSessionSummaryPresentation(
-            requested: true,
-            runtimeEnabled: true,
-            supported: true,
-            model: .ready,
-            idle: false,
-            phase: .idle
-        )
-        #expect(busy.isVisible)
-        #expect(!busy.isEnabled)
-        #expect(busy.help == "Wait until the session is idle to summarize it.")
-    }
-
-    @Test func requestedCapabilityStaysVisibleWhileRuntimeAndModelAreNotReady() {
-        let presentation = ACPSessionSummaryPresentation(
-            requested: true,
-            runtimeEnabled: false,
-            supported: true,
-            model: .downloading(received: 50, expected: 100),
-            idle: true,
-            phase: .idle
-        )
-
-        #expect(presentation.isVisible)
-        #expect(!presentation.isEnabled)
-        #expect(presentation.help == "The on-device model is downloading.")
+        ).isVisible)
     }
 
     @Test func loadingResultFirstFailureAndRefreshFailureMapToDistinctAccessibleStatus() {
