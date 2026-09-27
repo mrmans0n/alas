@@ -1773,7 +1773,7 @@ final class TabsManager {
            target.remote.reviewRequestURL(number: number) == url {
             let state = ReviewPRTabState(
                 worktreeId: worktreeId, remote: target.remote,
-                number: number, url: url, title: checkpoint.commitTitle
+                number: number, url: url, title: checkpoint.subject
             )
             let review = Tab.reviewPR(state)
             if let idx = file.tabs.firstIndex(where: { $0.id == review.id }) {

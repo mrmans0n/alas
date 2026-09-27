@@ -210,6 +210,7 @@ struct CommitPublishWorkflowTests {
         }
         #expect(reviewState.url == createdURL)
         #expect(reviewState.number == 42)
+        #expect(reviewState.title == "Subject")
     }
 
     @Test func tabsManagerStopsBeforeRemoteMutationWhenCheckpointCannotPersist() async throws {
