@@ -53,7 +53,7 @@ enum FailureLogSelection {
             lines: indices.map { index in
                 let text = privateKeyLines.contains(index)
                     ? "[redacted private key]"
-                    : LocalTextSafety.redactingCredentials(String(lines[index].prefix(maximumLineLength)))
+                    : String(LocalTextSafety.redactingCredentials(lines[index]).prefix(maximumLineLength))
                 return .init(number: index + 1, text: text)
             },
             matchedErrors: !matches.isEmpty,
@@ -73,11 +73,25 @@ enum FailureLogSelection {
         for (index, line) in lines.enumerated() {
             if line.contains("PRIVATE KEY-----") {
                 result.insert(index)
-                inside = line.contains("-----BEGIN")
+                let isBegin = line.contains("-----BEGIN")
+                if !isBegin && !inside {
+                    // The output tail can start mid-key, leaving an END with no BEGIN.
+                    var previous = index - 1
+                    while previous >= 0, isKeyBody(lines[previous]) {
+                        result.insert(previous)
+                        previous -= 1
+                    }
+                }
+                inside = isBegin
             } else if inside {
                 result.insert(index)
             }
         }
         return result
+    }
+
+    private static func isKeyBody(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return !trimmed.isEmpty && trimmed.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "+/=".contains($0)) }
     }
 }

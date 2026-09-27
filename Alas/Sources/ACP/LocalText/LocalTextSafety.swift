@@ -6,6 +6,9 @@ enum LocalTextSafety {
     private static let assignmentRegex = try! NSRegularExpression(
         pattern: #"(?i)\b(?:api[_-]?key|access[_-]?key|password|secret|token)\b\s*[:=]\s*([^\s;,]+)"#
     )
+    private static let assignmentRedactionRegex = try! NSRegularExpression(
+        pattern: #"(?i)\b(?:api[_-]?key|access[_-]?key|password|secret|token)\b\s*([:=])\s*([^\s;,]+)"#
+    )
     private static let placeholderValues: Set<String> = [
         "[redacted]", "redacted", "placeholder", "example", "changeme",
         "<api_key>", "<access_key>", "<password>", "<secret>", "<token>",
@@ -30,11 +33,23 @@ enum LocalTextSafety {
             .replacingOccurrences(of: privateKeyHeaderPattern + ".*", with: "[redacted private key]", options: .regularExpression)
             .replacingOccurrences(of: tokenPattern, with: "[redacted]", options: .regularExpression)
         let mutable = NSMutableString(string: masked)
-        let matches = assignmentRegex.matches(in: masked, range: NSRange(location: 0, length: mutable.length))
+        let matches = assignmentRedactionRegex.matches(in: masked, range: NSRange(location: 0, length: mutable.length))
         for match in matches.reversed() {
-            mutable.replaceCharacters(in: match.range(at: 1), with: "[redacted]")
+            let separator = mutable.substring(with: match.range(at: 1))
+            let value = mutable.substring(with: match.range(at: 2))
+            guard isSecretValue(value, separator: separator) else { continue }
+            mutable.replaceCharacters(in: match.range(at: 2), with: "[redacted]")
         }
         return mutable as String
+    }
+
+    /// `key: word` is common in diagnostics ("Unexpected token: punc"), so colon
+    /// values only count as secrets when they look generated.
+    private static func isSecretValue(_ value: String, separator: String) -> Bool {
+        let bare = value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`."))
+        if placeholderValues.contains(bare.lowercased()) { return false }
+        if separator == "=" { return true }
+        return bare.count >= 8 && bare.contains(where: \.isNumber)
     }
 
     static func containsActiveAction(

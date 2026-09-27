@@ -42,6 +42,33 @@ struct FailureLogSelectionTests {
     }
 
     @Test
+    func aPrivateKeyCutByTheOutputTailIsStillRedacted() throws {
+        let log = """
+        QUJDREVGR0hJSktMTU5PUFFSU1RVVldY
+        YWJjZGVmZ2hpams=
+        -----END OPENSSH PRIVATE KEY-----
+        done
+        """
+
+        let excerpt = try #require(FailureLogSelection.select(log))
+
+        #expect(excerpt.lines.map(\.text) == [
+            "[redacted private key]", "[redacted private key]", "[redacted private key]", "done",
+        ])
+    }
+
+    @Test
+    func aTokenStraddlingTheLineCapIsRedactedBeforeTruncation() throws {
+        let prefix = "error: " + String(repeating: "x", count: FailureLogSelection.maximumLineLength - 20)
+        let log = prefix + " ghp_abcdefghijklmnopqrstuvwxyz0123456789 end"
+
+        let excerpt = try #require(FailureLogSelection.select(log))
+
+        #expect(excerpt.lines.count == 1)
+        #expect(!excerpt.lines[0].text.contains("ghp_"))
+    }
+
+    @Test
     func outputWithoutErrorMarkersFallsBackToItsFinalLines() throws {
         let log = (1...30).map { "step \($0)" }.joined(separator: "\n") + "\n\n"
 

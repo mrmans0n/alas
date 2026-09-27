@@ -15,4 +15,13 @@ struct LocalTextSafetyTests {
         #expect(redacted == expected)
         #expect(!LocalTextSafety.containsCredential(redacted))
     }
+
+    @Test(arguments: [
+        "SyntaxError: Unexpected token: punc (})",
+        "error: invalid token: expired",
+        "Password: authentication failed",
+    ])
+    func redactingCredentialsLeavesDiagnosticsWithoutSecretsIntact(line: String) {
+        #expect(LocalTextSafety.redactingCredentials(line) == line)
+    }
 }
