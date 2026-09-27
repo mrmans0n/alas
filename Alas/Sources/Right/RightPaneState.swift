@@ -350,6 +350,7 @@ final class RightPaneState: GGSplitCommitServicing {
     /// Off-critical-path gg stack load. Cancelled+restarted per refresh so a
     /// slow `gg ls --json` never blocks the Changes-pane snapshot.
     @ObservationIgnored private var ggStackRefreshTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var ggExplicitStackRefreshID: UUID? = nil
     @ObservationIgnored var ggStackRefreshDeferredUntilMutationEnds = false
     @ObservationIgnored private var ggStackRefreshDeferralGeneration: UInt = 0
     /// A refresh result may still arrive after its task was cancelled. Only
@@ -1978,7 +1979,8 @@ final class RightPaneState: GGSplitCommitServicing {
 
     private func scheduleDeferredGGStackRefreshIfNeeded() {
         guard ggStackRefreshDeferredUntilMutationEnds,
-              ggActionState.inFlightAction == nil
+              ggActionState.inFlightAction == nil,
+              ggExplicitStackRefreshID == nil
         else { return }
         ggStackRefreshTask?.cancel()
         ggStackRefreshTask = Task { @MainActor [weak self] in
@@ -1999,9 +2001,15 @@ final class RightPaneState: GGSplitCommitServicing {
         ggStackRefreshGeneration &+= 1
         ggStackRefreshTask?.cancel()
         ggStackRemoteMetadataCache = remoteMetadata
+        let refreshID = UUID()
+        ggExplicitStackRefreshID = refreshID
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.refreshGGStack(forceRemote: true)
+            if self.ggExplicitStackRefreshID == refreshID {
+                self.ggExplicitStackRefreshID = nil
+                self.scheduleDeferredGGStackRefreshIfNeeded()
+            }
         }
         ggStackRefreshTask = task
         return task

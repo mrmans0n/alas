@@ -302,6 +302,8 @@ extension WebPreviewBrowser {
                                                 isAuthorized: isAuthorized)
             try checkAutomation(operation: operation, deadline: deadline)
             try checkAuthorized(isAuthorized)
+            // A click may start navigation before its script returns.
+            automationState.expectNavigation(for: operation)
             let result = try await callAutomationScript(Self.clickScript, operation: operation, deadline: deadline, arguments: [
                 "elementID": elementID,
                 "prefix": automationState.expectedDocumentPrefix(for: generation)
