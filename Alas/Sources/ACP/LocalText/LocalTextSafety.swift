@@ -5,6 +5,7 @@ enum LocalTextSafety {
     private static let tokenPattern = #"\b(?:ghp_|gho_|ghu_|ghs_)[A-Za-z0-9]{36}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+|\bsk[-_](?:test[-_])?[A-Za-z0-9_-]{20,}\b"#
     private static let urlUserinfoPattern = #"(?i)\b([a-z][a-z0-9+.-]*://[^\s/@:]+:)(?!\[redacted\]@)[^\s/@]+@"#
     private static let authorizationHeaderPattern = #"(?i)\b(authorization\s*[:=]\s*[a-z-]+\s+)(?!\[redacted\]).+"#
+    private static let authorizationJSONPattern = #"(?i)"(authorization)"\s*:\s*(?!\[redacted\])(?:\\"(?:(?!\\").)*\\"|"[^"]*")"#
     private static let assignmentRegex = try! NSRegularExpression(
         pattern: #"(?i)\b(?:api[_-]?key|access[_-]?key|password|secret|token)\b\s*[:=]\s*([^\s;,]+)"#
     )
@@ -19,7 +20,8 @@ enum LocalTextSafety {
 
     static func containsCredential(_ text: String) -> Bool {
         if matches(text, privateKeyHeaderPattern) || matches(text, tokenPattern)
-            || matches(text, authorizationHeaderPattern) || matches(text, urlUserinfoPattern) {
+            || matches(text, authorizationHeaderPattern) || matches(text, authorizationJSONPattern)
+            || matches(text, urlUserinfoPattern) {
             return true
         }
         let ns = text as NSString
@@ -38,6 +40,7 @@ enum LocalTextSafety {
             .replacingOccurrences(of: privateKeyHeaderPattern + ".*", with: "[redacted private key]", options: .regularExpression)
             .replacingOccurrences(of: tokenPattern, with: "[redacted]", options: .regularExpression)
             .replacingOccurrences(of: authorizationHeaderPattern, with: "$1[redacted]", options: .regularExpression)
+            .replacingOccurrences(of: authorizationJSONPattern, with: "\"$1\":[redacted]", options: .regularExpression)
             .replacingOccurrences(of: urlUserinfoPattern, with: "$1[redacted]@", options: .regularExpression)
         let mutable = NSMutableString(string: masked)
         let matches = assignmentRedactionRegex.matches(in: masked, range: NSRange(location: 0, length: mutable.length))
