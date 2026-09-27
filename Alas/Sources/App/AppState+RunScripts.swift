@@ -632,8 +632,12 @@ extension AppState {
             failure,
             loadOutput: { [weak self] in await self?.persistedRunOutput(runID: runID) },
             resolveGenerator: { [weak self] in
-                await self?.waitForLocalTextReadiness()
-                return self?.makeRunFailureBriefGenerator()
+                guard let self else { return nil }
+                if !LocalTextAppleIntelligence.isAvailable {
+                    // MLX is the only route left, so wait for it; Apple never needs this.
+                    await self.waitForLocalTextReadiness()
+                }
+                return self.makeRunFailureBriefGenerator()
             }
         )
     }
