@@ -60,12 +60,13 @@ enum LocalTextSafety {
         return mutable as String
     }
 
-    /// Parsers print `token: <word>` ("Unexpected token: punc"), so only that key
-    /// needs a generated-looking value before its colon form counts as a secret.
+    /// Parsers print `token: <word>` ("Unexpected token: punc"), so only that key's
+    /// unquoted colon form needs a generated-looking value to count as a secret.
     private static func isSecretValue(_ value: String, key: String, separator: String) -> Bool {
         let bare = value.trimmingCharacters(in: CharacterSet(charactersIn: "\\\"'`."))
         if placeholderValues.contains(bare.lowercased()) { return false }
-        if separator == "=" || key.lowercased() != "token" { return true }
+        let isQuoted = value.first.map { "\"'\\".contains($0) } ?? false
+        if separator == "=" || key.lowercased() != "token" || isQuoted { return true }
         return bare.count >= 8 && bare.contains(where: \.isNumber)
     }
 

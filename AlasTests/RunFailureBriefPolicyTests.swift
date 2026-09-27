@@ -40,6 +40,9 @@ struct RunFailureBriefPolicyTests {
         #"{"summary": "s", "cause": "c", "checks": ["npm test -- --verbose"]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["cargo test"]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["make clean"]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["/usr/bin/swift test"]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["./gradlew test"]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["Use `./gradlew test` to reproduce it."]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["The output of `swift build` for the Net target."]}"#,
         "The Net tests failed to compile.",
         "",
@@ -64,6 +67,7 @@ struct RunFailureBriefPolicyTests {
         "The command was run under the wrong shell.",
         "Swift concurrency checks flagged the actor.",
         "Make sure the SDK path exists.",
+        "/usr/lib/libfoo.dylib is missing from the runner.",
     ])
     func parseKeepsDescriptiveTextThatOnlyResemblesActionsOrSecrets(cause: String) {
         let output = #"{"summary": "s", "cause": "\#(cause)", "checks": ["k"]}"#

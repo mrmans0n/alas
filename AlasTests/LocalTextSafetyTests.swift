@@ -18,6 +18,7 @@ struct LocalTextSafetyTests {
         (#"error: {"password":"hunter22","user":"a"}"#, #"error: {"password":[redacted],"user":"a"}"#),
         (#"error: {\"password\":\"correct horse battery\"}"#, #"error: {\"password\":[redacted]}"#),
         (#"auth {"token": "abcd1234efgh"} rejected"#, #"auth {"token": [redacted]} rejected"#),
+        (#"auth {"token":"correcthorsebattery"} rejected"#, #"auth {"token":[redacted]} rejected"#),
         ("DATABASE_PASSWORD=correcthorsebattery", "DATABASE_PASSWORD=[redacted]"),
         ("AWS_SECRET_ACCESS_KEY=abc123 exported", "AWS_SECRET_ACCESS_KEY=[redacted] exported"),
         ("GITHUB_TOKEN=github_pat_abc", "GITHUB_TOKEN=[redacted]"),
