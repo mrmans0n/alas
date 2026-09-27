@@ -9,6 +9,7 @@ struct LocalTextSafetyTests {
         ("API_KEY=abc123; retrying", "API_KEY=[redacted]; retrying"),
         ("password: correcthorsebattery", "password: [redacted]"),
         ("secret: abc", "secret: [redacted]"),
+        ("error: password=\"correct horse battery\" rejected", "error: password=[redacted] rejected"),
         ("error: build failed", "error: build failed"),
     ])
     func redactingCredentialsMasksSecretsAndKeepsSurroundingText(input: String, expected: String) {

@@ -32,7 +32,7 @@ enum RunFailureBriefPolicy {
     private static let excerptCharacterBudgets = [3_000, 1_200, 400]
     private static let scriptNameLimit = 200
     private static let destructivePattern = #"(?i)\b(?:re-?run|git\s+(?:reset|push|clean|checkout|rebase)|rm\s+-|sudo)\b"#
-    private static let actionInstructionPattern = #"(?i)(?:^|[.;:!]\s+|\b(?:try|please|consider|then|and|you\s+(?:should|could|can|must|need\s+to|may\s+want\s+to))\s+)(?:re-?run(?:ning)?|run(?:ning)?|execut(?:e|ing)|(?:un)?install(?:ing)?|delet(?:e|ing)|remov(?:e|ing)|reset(?:ting)?|revert(?:ing)?|push(?:ing)?|commit(?:ting)?|rm|kill(?:ing)?)\b"#
+    private static let actionInstructionPattern = #"(?i)(?:(?:^|[.;:!]\s+|\b(?:please|then|you\s+(?:should|could|can|must|need\s+to|may\s+want\s+to))\s+)(?:try\s+(?:to\s+)?)?(?:re-?run|run|execute|(?:un)?install|delete|remove|reset|revert|push|commit|rm|kill)\b|\b(?:try|consider)\s+(?:re-?running|running|executing|(?:un)?installing|deleting|removing|resetting|reverting|pushing|committing|killing)\b)"#
 
     static func request(for input: RunFailureBriefInput) -> LocalTextGenerationRequest {
         LocalTextGenerationRequest(
@@ -120,7 +120,7 @@ enum RunFailureBriefPolicy {
         guard !text.isEmpty,
               text.count <= maximumFieldLength,
               !text.contains(where: \.isNewline),
-              !LocalTextSafety.containsCredential(text),
+              LocalTextSafety.redactingCredentials(text) == text,
               !LocalTextSafety.containsActiveAction(text, pattern: destructivePattern, includingQuotedCommands: true),
               text.range(of: actionInstructionPattern, options: .regularExpression) == nil
         else { return nil }

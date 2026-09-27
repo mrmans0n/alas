@@ -34,6 +34,17 @@ struct RunFailureBriefPolicyTests {
         #expect(RunFailureBriefPolicy.parse(output) == nil)
     }
 
+    @Test(arguments: [
+        "Running the tests failed because the SDK is missing.",
+        "Installing dependencies failed with a checksum mismatch.",
+        "The parser hit Unexpected token: punc in app.js.",
+    ])
+    func parseKeepsDescriptiveTextThatOnlyResemblesActionsOrSecrets(cause: String) {
+        let output = #"{"summary": "s", "cause": "\#(cause)", "checks": ["k"]}"#
+
+        #expect(RunFailureBriefPolicy.parse(output)?.cause == cause)
+    }
+
     @Test
     func parseRejectsOverlongFields() {
         let long = String(repeating: "a", count: RunFailureBriefPolicy.maximumFieldLength + 1)
