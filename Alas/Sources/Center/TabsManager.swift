@@ -1264,6 +1264,24 @@ final class TabsManager {
             persist(worktreeId)
             return tab
         }
+        if var file = byWorktree[worktreeId],
+           snapshot.local.upstreamBranchName != nil,
+           let idx = file.tabs.firstIndex(where: {
+               guard case .draftReviewRequest(let existing) = $0 else { return false }
+               return existing.provider == baseState.provider
+                   && existing.repositorySlug == baseState.repositorySlug
+                   && existing.baseBranch == baseState.baseBranch
+                   && existing.reviewBranchName == baseState.reviewBranchName
+           }),
+           case .draftReviewRequest(var existing) = file.tabs[idx] {
+            existing.refreshSnapshotMetadata(from: snapshot)
+            let tab = Tab.draftReviewRequest(existing)
+            file.tabs[idx] = tab
+            file.activeTabId = tab.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return tab
+        }
 
         let tab = Tab.reviewSession(baseState)
         append(tab, to: worktreeId)
@@ -1532,7 +1550,7 @@ final class TabsManager {
         var state = ReviewPRTabState(worktreeId: worktreeId, snapshot: snapshot)
         state.createdAt = Date()
         let review = Tab.reviewPR(state)
-        if case .draftReviewRequest(var draft) = file.tabs[index], hasDraftReviewComments(worktreeId: worktreeId) {
+        if case .draftReviewRequest(var draft) = file.tabs[index], hasDraftReviewComments(draft) {
             draft.didOpenCreatedReview = true
             file.tabs[index] = .draftReviewRequest(draft)
             if let existingIndex = file.tabs.firstIndex(where: { $0.id == review.id }) {
@@ -1566,10 +1584,12 @@ final class TabsManager {
         }
     }
 
-    private func hasDraftReviewComments(worktreeId: String) -> Bool {
+    private func hasDraftReviewComments(_ draft: DraftReviewRequestTabState) -> Bool {
         guard let comments = try? draftCommentStore.loadAll() else { return true }
         return comments.contains {
-            $0.sessionID.sourceKind == .draftReviewRequest && $0.sessionID.isFor(worktreeID: worktreeId)
+            $0.sessionID.matchesDraftReviewRequest(
+                worktreeID: draft.worktreeId, base: draft.baseBranch, head: draft.branchName
+            )
         }
     }
 

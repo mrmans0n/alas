@@ -663,6 +663,7 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
     let repositorySlug: String
     let branchName: String
     let baseBranch: String
+    var upstreamBranchName: String?
     var headOwner: String?
     var headSHA: String
     var title: String
@@ -671,6 +672,8 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
     var selectedPath: String?
     var createdURL: URL?
     var didOpenCreatedReview: Bool?
+
+    var reviewBranchName: String { upstreamBranchName ?? branchName }
 
     var displayTitle: String {
         if createdURL != nil { return "\(provider.reviewRequestLabel) created" }
@@ -682,14 +685,15 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
         self.worktreeId = worktreeId
         self.provider = provider
         self.repositorySlug = snapshot.remote?.repositorySlug ?? ""
-        self.branchName = snapshot.local.upstreamBranchName ?? snapshot.local.branchName
+        self.branchName = snapshot.local.branchName
         self.baseBranch = snapshot.local.baseBranch
+        self.upstreamBranchName = snapshot.local.upstreamBranchName
         self.id = [
             "draft-review-request",
             worktreeId,
             provider.rawValue,
             self.repositorySlug,
-            self.branchName,
+            snapshot.local.branchName,
             snapshot.local.baseBranch,
         ].joined(separator: ":")
         self.headOwner = snapshot.local.headRemoteOwner
@@ -703,6 +707,7 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
     }
 
     mutating func refreshSnapshotMetadata(from snapshot: ReviewLoopSnapshot) {
+        upstreamBranchName = snapshot.local.upstreamBranchName
         headOwner = snapshot.local.headRemoteOwner
         headSHA = snapshot.local.headSHA
     }
@@ -710,7 +715,7 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
     func matchesTarget(_ snapshot: ReviewLoopSnapshot) -> Bool {
         snapshot.remote?.kind == provider
             && snapshot.remote?.repositorySlug == repositorySlug
-            && (snapshot.local.upstreamBranchName ?? snapshot.local.branchName) == branchName
+            && (snapshot.local.upstreamBranchName ?? snapshot.local.branchName) == reviewBranchName
             && snapshot.local.baseBranch == baseBranch
             && snapshot.local.headSHA == headSHA
     }

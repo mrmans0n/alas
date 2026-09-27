@@ -73,6 +73,15 @@ struct ReviewDraftSessionID: Codable, Equatable, Hashable, Sendable, RawRepresen
         make(.draftReviewRequest, [worktreeID, repositoryPath.standardizedFileURL.path, base, head])
     }
 
+    func matchesDraftReviewRequest(worktreeID: String, base: String, head: String) -> Bool {
+        guard sourceKind == .draftReviewRequest else { return false }
+        let parts = rawValue.split(separator: Self.separator, omittingEmptySubsequences: false).map(String.init)
+        return parts.count == 5
+            && parts[1] == Self.escape(worktreeID)
+            && parts[3] == Self.escape(base)
+            && parts[4] == Self.escape(head)
+    }
+
     /// Every factory puts the worktree ID in field 1, so a session ID can be
     /// scoped to a worktree without decoding the rest of its fields.
     func isFor(worktreeID: String) -> Bool {

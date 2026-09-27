@@ -655,7 +655,7 @@ struct DraftReviewRequestTabView: View {
                     .reviewLoop
                     .createReviewRequest(
                         snapshot: snapshot,
-                        branch: tabState.branchName,
+                        branch: tabState.reviewBranchName,
                         headOwner: tabState.headOwner,
                         baseBranch: tabState.baseBranch,
                         title: titleSnapshot,

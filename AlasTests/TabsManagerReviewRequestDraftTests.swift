@@ -119,6 +119,37 @@ struct TabsManagerReviewRequestDraftTests {
         #expect(manager.tabs(forWorktree: worktreeId).count == 1)
     }
 
+    @Test func persistedDraftWithoutUpstreamMetadataReopensWithItsEdits() throws {
+        let worktreeId = "review-request-draft-legacy-upstream"
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = PersistenceStore()
+        let snapshot = Self.snapshot(branchName: "local-feature")
+        var legacy = DraftReviewRequestTabState(worktreeId: worktreeId, snapshot: snapshot)
+        legacy.upstreamBranchName = nil
+        legacy.title = "Saved title"
+        legacy.body = "Saved body"
+        legacy.createdURL = URL(string: "https://github.com/mrmans0n/alas/pull/42")!
+        try store.write(TabsFile(tabs: [.draftReviewRequest(legacy)], activeTabId: legacy.id),
+            to: directory.appendingPathComponent("\(worktreeId).json"))
+        let manager = TabsManager(store: store, tabsDirectory: directory)
+        manager.loadAll(worktreeIds: [worktreeId])
+
+        let reopened = manager.openOrFocusDraftReviewRequest(worktreeId: worktreeId, snapshot: snapshot)
+
+        #expect(reopened.id == legacy.id)
+        #expect(manager.tabs(forWorktree: worktreeId).count == 1)
+        guard case .draftReviewRequest(let state) = reopened else {
+            Issue.record("Expected draft review request tab")
+            return
+        }
+        #expect(state.title == "Saved title")
+        #expect(state.body == "Saved body")
+        #expect(state.createdURL == legacy.createdURL)
+        #expect(state.reviewBranchName == "feature/pr-drafts")
+    }
+
     @Test func createdReviewSurvivesHeadAdvanceAndRefocusUntilDiscovered() throws {
         let worktreeId = "review-request-draft-pending-created-url"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
