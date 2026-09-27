@@ -101,11 +101,10 @@ struct ACPSessionSummaryControl: View {
             }
         }
         .buttonStyle(.toolbarControl)
-        .disabled(!presentation.isEnabled)
         .onHover { hovering = $0 }
-        .help(presentation.help)
+        .help(ACPSessionSummaryPresentation.help)
         .accessibilityLabel("Summarize Session")
-        .accessibilityHint(presentation.help)
+        .accessibilityHint(ACPSessionSummaryPresentation.help)
         .accessibilityValue(presentation.accessibilityValue)
         .accessibilityAddTraits(popoverOpen ? .isSelected : [])
         .accessibilityIdentifier("acp-session-summary")

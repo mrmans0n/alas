@@ -31,6 +31,8 @@ struct SessionSummaryIdleFacts: Equatable, Sendable {
     let hasRunningSubagent: Bool
     let retrying: Bool
     let recovering: Bool
+    /// Part of the source revision so toggling it stales a summary, but not an
+    /// idle blocker: an auto-run session with no turn in flight is idle.
     let autoRunEnabled: Bool
 
     var isIdle: Bool {
@@ -39,7 +41,7 @@ struct SessionSummaryIdleFacts: Equatable, Sendable {
             && !pendingPermission && !pendingQuestion
             && !pendingPlan && pendingUserInputCount == 0 && urlElicitationCount == 0
             && pendingWorkCount == 0 && !hasPendingDelegatedMessages && !hasRunningSubagent && !retrying
-            && !recovering && !autoRunEnabled
+            && !recovering
     }
 }
 
