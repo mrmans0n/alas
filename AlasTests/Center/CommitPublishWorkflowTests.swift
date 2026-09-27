@@ -67,6 +67,27 @@ struct CommitPublishWorkflowTests {
         #expect(workflow.lastError == nil)
     }
 
+    @Test func retryKeepsCheckpointWhenExistingReviewURLIsUnavailable() async throws {
+        let checkpoint = WorkflowHarness().checkpoint(nextPhase: .createReviewRequest)
+        var changes: [CommitPublishCheckpoint?] = []
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
+            currentHeadSHA: { "commit-sha" }, remoteBranchContainsCommit: { _, _ in true }, push: { _, _ in },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { _ in nil },
+            createReviewRequest: { _, _, _ in
+                Issue.record("Unexpected creation")
+                return URL(string: "https://github.com/owner/repository/pull/42")!
+            },
+            syncGG: { _ in }, refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) { changes.append($0) }
+
+        await workflow.resume(checkpoint)
+
+        #expect(workflow.lastError as? CommitPublishWorkflowError == .reviewURLUnavailable)
+        #expect(!changes.contains(where: { $0 == nil }))
+    }
+
     @Test func ownerReleasesCompletedRunBeforeRefreshWithoutClearingNewerFailure() async throws {
         let refreshGate = AsyncGate()
         var failSync = false

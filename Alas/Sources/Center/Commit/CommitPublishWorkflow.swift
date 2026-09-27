@@ -281,6 +281,7 @@ enum CommitPublishWorkflowError: LocalizedError, Equatable {
     case incompatiblePushRemote
     case pushDestinationChanged
     case publishedAmend
+    case reviewURLUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -298,6 +299,8 @@ enum CommitPublishWorkflowError: LocalizedError, Equatable {
             return "The push destination changed. Restore the captured remote URL before retrying."
         case .publishedAmend:
             return "This commit is already published. Commit locally or turn off Amend before publishing."
+        case .reviewURLUnavailable:
+            return "The review request URL is not available yet. Retry publishing to finish."
         }
     }
 }
@@ -437,7 +440,10 @@ final class CommitPublishWorkflow {
                     let requestExists = try await operations.currentReviewRequestExists(target)
                     try Task.checkCancellation()
                     if requestExists {
-                        checkpoint.createdReviewURL = try await operations.currentReviewRequestURL(target)
+                        guard let url = try await operations.currentReviewRequestURL(target) else {
+                            throw CommitPublishWorkflowError.reviewURLUnavailable
+                        }
+                        checkpoint.createdReviewURL = url
                         try onCheckpointChange(checkpoint)
                     } else {
                         checkpoint.createdReviewURL = try await operations.createReviewRequest(target, checkpoint.subject, checkpoint.body)
