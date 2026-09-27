@@ -527,7 +527,7 @@ struct NewWorktreeDialog: View {
     /// The deterministic seed is already in the field; this only upgrades its
     /// title component if the local model answers before the user edits it.
     private func startNameSuggestion() {
-        guard state.issueWorktreeNameSuggestionsAvailable,
+        guard state.issueWorktreeNameSuggestionAvailable,
               let request = issueState.beginNameSuggestion() else { return }
         let suggester = state.makeIssueWorktreeNameSuggester()
         nameSuggestionTask = Task { @MainActor in

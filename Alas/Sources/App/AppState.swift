@@ -1600,6 +1600,11 @@ final class AppState {
         ))
     }
 
+    /// Apple Intelligence borrows consent from the existing local-title setting.
+    var issueWorktreeNameAppleSuggestionsAvailable: Bool {
+        config.harness.acpLocalTitlesEnabled && IssueWorktreeNameAppleIntelligence.isAvailable
+    }
+
     /// Worktree name suggestions ride on a local-text capability the user has
     /// already consented to. Without one, or while the model is not verified
     /// ready, the suggester never touches the engine or the model assets.
@@ -1609,6 +1614,10 @@ final class AppState {
             && !localTextRemovalInProgress
             && localTextModelState == .ready
             && (nextPromptRuntimeEnabled || sessionSummariesRuntimeEnabled)
+    }
+
+    var issueWorktreeNameSuggestionAvailable: Bool {
+        issueWorktreeNameAppleSuggestionsAvailable || issueWorktreeNameSuggestionsAvailable
     }
 
     /// Worktree names borrow consent from the other local-text capabilities,
@@ -1621,9 +1630,18 @@ final class AppState {
     }
 
     func makeIssueWorktreeNameSuggester() -> IssueWorktreeNameSuggester {
-        IssueWorktreeNameSuggester(engine: localTextInference) { [weak self] in
-            self?.issueWorktreeNameSuggestionsAvailable ?? false
-        }
+        IssueWorktreeNameSuggester(
+            engine: localTextInference,
+            isAppleIntelligenceAvailable: { [weak self] in
+                self?.issueWorktreeNameAppleSuggestionsAvailable ?? false
+            },
+            generateWithAppleIntelligence: { request in
+                await IssueWorktreeNameAppleIntelligence.generate(request)
+            },
+            isMLXAvailable: { [weak self] in
+                self?.issueWorktreeNameSuggestionsAvailable ?? false
+            }
+        )
     }
 
     /// All worktree IDs currently known to the projects manager (including
