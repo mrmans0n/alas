@@ -1969,6 +1969,7 @@ final class RightPaneState: GGSplitCommitServicing {
         let remoteMetadata = ggStack
         ggStackRefreshGeneration &+= 1
         ggStackRefreshTask?.cancel()
+        ggStackRefreshDeferredUntilMutationEnds = false
         ggStackRemoteMetadataCache = remoteMetadata
         let task = Task { @MainActor [weak self] in
             guard let self else { return }

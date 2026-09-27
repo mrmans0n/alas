@@ -304,10 +304,8 @@ private final class ReentrantSyncFakeGGRunner: GGCommandRunning, @unchecked Send
     }
 }
 
-/// Provides the three real calls made by a sync mutation: preflight stack
-/// read, sync output, and post-sync stack refresh. The post-sync refresh
-/// remains suspended until cancellation so a replacement gate refresh can
-/// prove it owns that work through `ggStackRefreshTask`.
+/// Holds the post-sync and replacement reads so the mutation can finish
+/// while the replacement refresh is still waiting for its result.
 private actor PostMutationRefreshCancellationRunner: GGCommandRunning {
     private let preflightResult = ProcessResult(
         exitCode: 0,
@@ -330,6 +328,9 @@ private actor PostMutationRefreshCancellationRunner: GGCommandRunning {
     private var postSyncReadWaiters: [CheckedContinuation<Void, Never>] = []
     private var postSyncReadCancellationWaiters: [CheckedContinuation<Void, Never>] = []
     private var postSyncReadContinuation: CheckedContinuation<ProcessResult, Error>?
+    private var replacementReadSuspended = false
+    private var replacementReadWaiters: [CheckedContinuation<Void, Never>] = []
+    private var replacementReadContinuation: CheckedContinuation<ProcessResult, Never>?
 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         if args == ["sync", "--help"] {
@@ -358,7 +359,13 @@ private actor PostMutationRefreshCancellationRunner: GGCommandRunning {
                 Task { await self.cancelPostSyncRead() }
             }
         case 3:
-            return replacementResult
+            return await withCheckedContinuation { continuation in
+                replacementReadSuspended = true
+                replacementReadContinuation = continuation
+                let waiters = replacementReadWaiters
+                replacementReadWaiters.removeAll()
+                for waiter in waiters { waiter.resume() }
+            }
         default:
             return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected stack read")
         }
@@ -378,9 +385,19 @@ private actor PostMutationRefreshCancellationRunner: GGCommandRunning {
         await withCheckedContinuation { postSyncReadCancellationWaiters.append($0) }
     }
 
-    func releasePostSyncRead() {
-        postSyncReadContinuation?.resume(returning: replacementResult)
+    func waitUntilReplacementReadSuspends() async {
+        if replacementReadSuspended { return }
+        await withCheckedContinuation { replacementReadWaiters.append($0) }
+    }
+
+    func finishPostSyncReadCancellation() {
+        postSyncReadContinuation?.resume(throwing: CancellationError())
         postSyncReadContinuation = nil
+    }
+
+    func releaseReplacementRead() {
+        replacementReadContinuation?.resume(returning: replacementResult)
+        replacementReadContinuation = nil
     }
 
     private func cancelPostSyncRead() {
@@ -388,8 +405,6 @@ private actor PostMutationRefreshCancellationRunner: GGCommandRunning {
         let waiters = postSyncReadCancellationWaiters
         postSyncReadCancellationWaiters.removeAll()
         for waiter in waiters { waiter.resume() }
-        postSyncReadContinuation?.resume(throwing: CancellationError())
-        postSyncReadContinuation = nil
     }
 }
 
@@ -2672,18 +2687,18 @@ struct RightPaneGGStackTests {
         let operation = state.runGGMutation(.sync)
         await runner.waitUntilPostSyncReadSuspends()
 
-        await state.reevaluateGGGate().value
-
+        let replacement = state.reevaluateGGGate()
         await runner.waitUntilPostSyncReadCancellationIsObserved()
-        // Cancellation is observed before the coordinator finishes clearing its busy state.
+        await runner.waitUntilReplacementReadSuspends()
+        await runner.finishPostSyncReadCancellation()
         await operation?.value
+        await runner.releaseReplacementRead()
+        await replacement.value
         #expect(await runner.didObservePostSyncReadCancellation())
         #expect(state.ggStack?.name == "replacement-stack")
         #expect(state.ggActionState.inFlightAction == nil)
         #expect(state.ggActionState.lastActionSummary == "Synced")
         #expect(state.ggActionState.syncProgress.isEmpty)
-
-        await runner.releasePostSyncRead()
     }
 
     @Test func reevaluatingGGGateKeepsCompatibleLoadedStackVisible() async throws {
