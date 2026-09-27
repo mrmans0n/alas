@@ -33,6 +33,9 @@ struct RunFailureBriefPolicyTests {
         #"{"summary": "s", "cause": "c", "checks": ["Remove logs containing secrets."]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["Kill job 123."]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["Run scripts with verbose logging."]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["You can check by running swift test."]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["Verify by running swift test."]}"#,
+        #"{"summary": "s", "cause": "The fix is to reinstall the SDK.", "checks": ["k"]}"#,
         "The Net tests failed to compile.",
         "",
     ])
@@ -47,6 +50,7 @@ struct RunFailureBriefPolicyTests {
         "Run script failed because the SDK is missing.",
         "Commit failed because the hook rejected it.",
         "The first run failed after the SDK update.",
+        "The tests could not run because the simulator is missing.",
     ])
     func parseKeepsDescriptiveTextThatOnlyResemblesActionsOrSecrets(cause: String) {
         let output = #"{"summary": "s", "cause": "\#(cause)", "checks": ["k"]}"#

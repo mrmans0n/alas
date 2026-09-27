@@ -32,7 +32,10 @@ enum RunFailureBriefPolicy {
     private static let excerptCharacterBudgets = [3_000, 1_200, 400]
     private static let scriptNameLimit = 200
     private static let destructivePattern = #"(?i)\b(?:re-?run|git\s+(?:reset|push|clean|checkout|rebase)|rm\s+-|sudo)\b"#
-    private static let actionInstructionPattern = #"(?i)(?:(?:^|[.;:!,]\s+|\b(?:please|then|first(?:ly)?|second(?:ly)?|next|finally|also|now|just|you\s+(?:should|could|can|must|need\s+to|may\s+want\s+to))\s+)(?:try\s+(?:to\s+)?)?(?:re-?run|run|execute|(?:un)?install|delete|remove|reset|revert|push|commit|rm|kill)\b(?!(?:\s+(?:steps?|phases?|hooks?|scripts?|commands?|jobs?|stages?))?\s+(?:failed|fails|failing|was|were|is|errored|crashed|exited|timed\s+out|hung|stalled|returned)\b)|\b(?:try|consider)\s+(?:re-?running|running|executing|(?:un)?installing|deleting|removing|resetting|reverting|pushing|committing|killing)\b)"#
+    /// Reject by default: any base-form action verb counts unless it names a thing that
+    /// failed ("Run script failed"); negated uses are skipped by `containsActiveAction`.
+    private static let actionVerbPattern = #"(?i)\b(?:re-?run|run|execute|(?:un|re)?install|delete|remove|reset|revert|push|commit|rm|kill)\b(?!(?:\s+(?:steps?|phases?|hooks?|scripts?|commands?|jobs?|stages?))?\s+(?:failed|fails|failing|was|were|is|errored|crashed|exited|timed\s+out|hung|stalled|returned)\b)"#
+    private static let actionGerundPattern = #"(?i)\b(?:try|consider|by|recommend|suggest|keep)\s+(?:re-?running|running|executing|(?:un|re)?installing|deleting|removing|resetting|reverting|pushing|committing|killing)\b"#
 
     static func request(for input: RunFailureBriefInput) -> LocalTextGenerationRequest {
         LocalTextGenerationRequest(
@@ -122,7 +125,8 @@ enum RunFailureBriefPolicy {
               !text.contains(where: \.isNewline),
               LocalTextSafety.redactingCredentials(text) == text,
               !LocalTextSafety.containsActiveAction(text, pattern: destructivePattern, includingQuotedCommands: true),
-              text.range(of: actionInstructionPattern, options: .regularExpression) == nil
+              !LocalTextSafety.containsActiveAction(text, pattern: actionVerbPattern, includingQuotedCommands: true),
+              text.range(of: actionGerundPattern, options: .regularExpression) == nil
         else { return nil }
         return text
     }
