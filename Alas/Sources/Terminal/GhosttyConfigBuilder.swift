@@ -63,6 +63,12 @@ enum GhosttyConfigBuilder {
         }
         lines.append("background = \(bg)")
         lines.append("foreground = \(fg)")
+        // Ghostty's default 16 colors assume a dark background.
+        if !theme.darkMode {
+            for (index, color) in ANSIColor.lightPalette.enumerated() {
+                lines.append("palette = \(index)=\(color)")
+            }
+        }
 
         // Disable Ghostty's shell integration globally. Every interactive
         // pane in Alas launches through `zmx attach …`, and Ghostty's bash

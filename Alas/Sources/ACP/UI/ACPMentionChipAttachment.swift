@@ -58,7 +58,7 @@ private final class ACPMentionChipCell: NSTextAttachmentCell {
         path.lineWidth = 0.75
         path.stroke()
 
-        let textColor = accent.blended(withFraction: 0.55, of: .white) ?? .white
+        let textColor = accent.chipLabelColor
         let attrs: [NSAttributedString.Key: Any] = [
             .font: ACPMentionChipMetrics.labelFont,
             .foregroundColor: textColor,

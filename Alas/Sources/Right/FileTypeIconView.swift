@@ -16,6 +16,10 @@ enum FileTypeIcon {
 
     static let nerdFontName = "JetBrainsMonoNF-Regular"
 
+    /// Brand hues are mostly bright enough to vanish on the light theme, so
+    /// icons are darkened this much there.
+    static let lightThemeDarkening = 0.35
+
     static func info(for filename: String) -> Info {
         let lower = filename.lowercased()
 
@@ -62,7 +66,7 @@ enum FileTypeIcon {
         "exs":   ("\u{E653}", "7E57C2"),
         "hs":    ("\u{E61F}", "5D4F85"),
         "lhs":   ("\u{E61F}", "5D4F85"),
-        "lua":   ("\u{E620}", "000080"),
+        "lua":   ("\u{E620}", "4A5CD6"),
         "clj":   ("\u{E642}", "91DC47"),
         "cljs":  ("\u{E642}", "91DC47"),
         "cljc":  ("\u{E642}", "91DC47"),
@@ -72,7 +76,7 @@ enum FileTypeIcon {
         "zig":   ("\u{E6A9}", "F7A41D"),
         "scala": ("\u{E68E}", "DC322F"),
         "nim":   ("\u{E677}", "FFC200"),
-        "cr":    ("\u{E62F}", "000000"),
+        "cr":    ("\u{E62F}", "7A8089"),
         "ml":    ("\u{E67A}", "EC6813"),
         "mli":   ("\u{E67A}", "EC6813"),
         "c":     ("\u{E649}", "5A89BF"),
@@ -256,7 +260,9 @@ struct FileTypeIconView: View {
             NerdFontGlyphView(symbol: info.symbol, hex: info.hex)
                 .frame(width: size, height: size)
         case .text:
-            let color = Color(hex: info.hex)
+            let color = theme.darkMode
+                ? Color(hex: info.hex)
+                : Color.blend(Color(hex: info.hex), .black, t: FileTypeIcon.lightThemeDarkening)
             Text(info.symbol)
                 .font(.custom(FileTypeIcon.nerdFontName, size: fontPx(for: info.symbol)))
                 .foregroundColor(color)
@@ -333,6 +339,12 @@ final class GlyphDrawingView: NSView {
 
     override var isFlipped: Bool { true }
 
+    // The fill resolves per appearance (see `lightThemeDarkening`).
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
@@ -351,7 +363,12 @@ final class GlyphDrawingView: NSView {
         let scaledHeight = bounds.height * scale
 
         context.saveGState()
-        context.setFillColor(NSColor(hex: hex).cgColor)
+        let base = NSColor(hex: hex)
+        let fill = NSColor.appearanceAware(
+            dark: base,
+            light: base.blended(withFraction: FileTypeIcon.lightThemeDarkening, of: .black) ?? base
+        )
+        context.setFillColor(fill.cgColor)
         context.translateBy(
             x: target.midX - scaledWidth / 2 - bounds.minX * scale,
             y: target.midY + scaledHeight / 2 + bounds.minY * scale

@@ -79,8 +79,14 @@ enum ACPMarkdownLiveStyler {
         apply(regex: italicUnder, in: storage, range: target, attrs: italicAttrs, excluding: excludedRanges)
         apply(regex: code, in: storage, range: target, attrs: [
             .font: codeFont,
-            .foregroundColor: NSColor(calibratedRed: 0.78, green: 0.86, blue: 0.92, alpha: 1),
-            .backgroundColor: NSColor.white.withAlphaComponent(0.06),
+            .foregroundColor: NSColor.appearanceAware(
+                dark: NSColor(calibratedRed: 0.78, green: 0.86, blue: 0.92, alpha: 1),
+                light: NSColor(calibratedRed: 0.16, green: 0.32, blue: 0.44, alpha: 1)
+            ),
+            .backgroundColor: NSColor.appearanceAware(
+                dark: NSColor.white.withAlphaComponent(0.06),
+                light: NSColor.black.withAlphaComponent(0.06)
+            ),
         ], excluding: excludedRanges)
     }
 

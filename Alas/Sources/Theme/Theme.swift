@@ -11,7 +11,19 @@ struct Theme: Codable, Equatable, Hashable {
     /// `ThemeStore.setAccent(_:)` based on `config.accent`. Stored as a hex
     /// SwiftUI Color via the Color(hex:) extension so we can also derive a
     /// muted variant if needed in future.
-    var accentOverrideHex: String? = nil
+    var accentOverrideHex: String? = nil {
+        didSet { accentOverride = accentOverrideHex.map(resolveAccentOverride) }
+    }
+
+    /// `accentOverrideHex` resolved once per assignment. The named accents
+    /// are pastels tuned for dark surfaces; on the light theme they wash out
+    /// (and `accent-soft` vanishes), so they are darkened until text in them
+    /// clears 4.5:1 on the light section-header band.
+    private(set) var accentOverride: Color? = nil
+
+    private func resolveAccentOverride(_ hex: String) -> Color {
+        darkMode ? Color(hex: hex) : Color.blend(Color(hex: hex), .black, t: 0.45)
+    }
 
     /// Token-name → precomputed `Color` overrides that win over the raw
     /// OKLCH lookup. Populated by `applyingSidebarTextContrast(_:)` when
@@ -83,12 +95,13 @@ struct Theme: Codable, Equatable, Hashable {
         if let override = resolvedColorOverrides[token] {
             return override
         }
-        if let hex = accentOverrideHex {
+        if let accent = accentOverride {
             if token == "accent" {
-                return Color(hex: hex)
+                return accent
             }
             if token == "accent-soft" {
-                return Color(hex: hex).opacity(0.18)
+                // Matches the bundled `accent-soft` alpha of each theme.
+                return accent.opacity(darkMode ? 0.18 : 0.30)
             }
         }
         if let resolved = resolvedColors[token] {
@@ -148,5 +161,22 @@ extension Color {
         let bl = aN.blueComponent  + (bN.blueComponent  - aN.blueComponent)  * CGFloat(t)
         let al = aN.alphaComponent + (bN.alphaComponent - aN.alphaComponent) * CGFloat(t)
         return Color(.sRGB, red: r, green: g, blue: bl, opacity: al)
+    }
+}
+
+extension NSColor {
+    /// Resolves per appearance, so AppKit drawing with no `Theme` in reach
+    /// still follows the in-app theme (which drives `NSApp.appearance`).
+    static func appearanceAware(dark: NSColor, light: NSColor) -> NSColor {
+        NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light }
+    }
+
+    /// Label color for text over a translucent wash of `self`: lightened on
+    /// dark surfaces, darkened on light ones so it keeps its contrast.
+    var chipLabelColor: NSColor {
+        .appearanceAware(
+            dark: blended(withFraction: 0.55, of: .white) ?? .white,
+            light: blended(withFraction: 0.45, of: .black) ?? .black
+        )
     }
 }

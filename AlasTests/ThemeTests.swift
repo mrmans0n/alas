@@ -40,6 +40,12 @@ struct ThemeTests {
         #expect(theme.color("accent") == Color(hex: "#123456"))
     }
 
+    @Test func lightThemeDarkensAccentOverride() throws {
+        var theme = try Theme.loadBundled(id: "light")
+        theme.accentOverrideHex = "#5fb7c4"
+        #expect(theme.color("accent") == Color.blend(Color(hex: "#5fb7c4"), .black, t: 0.45))
+    }
+
     @Test func colorLookupUsesRuntimeOverrideBeforePrecomputedToken() throws {
         var theme = try Theme.loadBundled(id: "cool-slate")
         theme.resolvedColorOverrides["fg"] = .white

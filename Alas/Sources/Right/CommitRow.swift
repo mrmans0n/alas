@@ -211,7 +211,7 @@ struct CommitRow: View {
             if let tag = commit.conventionalTag {
                 Text(tag)
                     .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                    .foregroundColor(tagColor(tag))
+                    .foregroundColor(tagLabelColor(tag))
                     .padding(.horizontal, 5).padding(.vertical, 1)
                     .background(tagColor(tag).opacity(0.14))
                     .clipShape(RoundedRectangle(cornerRadius: 3))
@@ -280,6 +280,12 @@ struct CommitRow: View {
             .frame(width: 14, height: 14)
             .background(authorColor(commit.author))
             .clipShape(Circle())
+    }
+
+    /// The tag hues are tuned for dark surfaces; on light they are darkened
+    /// so the text holds up over its own 14% wash.
+    private func tagLabelColor(_ tag: String) -> Color {
+        theme.darkMode ? tagColor(tag) : Color.blend(tagColor(tag), .black, t: 0.45)
     }
 
     private func tagColor(_ tag: String) -> Color {

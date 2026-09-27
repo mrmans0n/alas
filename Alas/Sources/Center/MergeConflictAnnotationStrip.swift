@@ -29,7 +29,7 @@ struct MergeConflictAnnotationStrip: View {
         } else {
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "text.bubble")
-                    .foregroundColor(theme.color("fg-subtle"))
+                    .foregroundColor(theme.color("fg-dim"))
                     .font(.system(size: 10))
                     .padding(.top, 2)
                 Button(action: { isExpanded.toggle() }) {
@@ -41,7 +41,7 @@ struct MergeConflictAnnotationStrip: View {
                             Text(verbatim: "LOCAL (\(localLabel)): \(explanation.localIntent)")
                             Text(verbatim: "REMOTE (\(remoteLabel)): \(explanation.remoteIntent)")
                             Text("On-device explanation. It may be wrong and changes nothing in the file.")
-                                .foregroundColor(theme.color("fg-subtle"))
+                                .foregroundColor(theme.color("fg-dim"))
                         }
                     }
                     .font(.system(size: 11))
@@ -62,7 +62,7 @@ struct MergeConflictAnnotationStrip: View {
                 }) {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .medium))
-                        .foregroundColor(theme.color("fg-subtle"))
+                        .foregroundColor(theme.color("fg-dim"))
                         .padding(.top, 2)
                 }
                 .buttonStyle(.plain)

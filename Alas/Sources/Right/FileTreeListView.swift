@@ -126,7 +126,7 @@ struct FileTreeListView: View {
                             }
                         }
                         .contentShape(Rectangle())
-                        .background(chain.chainPaths.contains(revealPath ?? "") ? theme.color("bg-hover") : Color.clear)
+                        .background(chain.chainPaths.contains(revealPath ?? "") ? theme.color("bg-3") : Color.clear)
                         // Key the row on the chain's root (stable) rather than its
                         // terminal, which moves deeper as levels load. A stable id
                         // lets SwiftUI update the label in place while the chain
@@ -205,7 +205,7 @@ struct FileTreeListView: View {
                         }
                     }
                     .contentShape(Rectangle())
-                    .background(node.path == revealPath ? theme.color("bg-hover") : Color.clear)
+                    .background(node.path == revealPath ? theme.color("bg-3") : Color.clear)
                     .id("\(idPrefix)\(node.id)")
                 }
                 .buttonStyle(.plain)

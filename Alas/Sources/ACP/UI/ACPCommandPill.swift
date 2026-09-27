@@ -15,7 +15,7 @@ enum ACPCommandPillStyle {
     static let tint = NSColor.systemPurple
     static let capWidth: CGFloat = 18
     static let nameHorizontalPadding: CGFloat = 6
-    static var nameColor: NSColor { tint.blended(withFraction: 0.55, of: .white) ?? .white }
+    static var nameColor: NSColor { tint.chipLabelColor }
 
     static func displayName(for command: String) -> String {
         command.hasPrefix("/") ? String(command.dropFirst()) : command

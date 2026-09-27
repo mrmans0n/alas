@@ -41,7 +41,7 @@ struct ACPImageThumbnail: View {
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 96, height: 96)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.15), lineWidth: 0.5))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.15), lineWidth: 0.5))
                 .overlay(alignment: .topLeading) { indexBadge }
         } placeholder: {
             RoundedRectangle(cornerRadius: 8)

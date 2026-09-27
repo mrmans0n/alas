@@ -93,6 +93,9 @@ private struct TerminalLiveBody: View {
 
 private extension ANSIColor {
     func swiftUIColor(theme: Theme) -> Color? {
+        if !theme.darkMode, let index = paletteIndex {
+            return Color(hex: ANSIColor.lightPalette[index])
+        }
         switch self {
         case .default: return nil
         case .black: return .black

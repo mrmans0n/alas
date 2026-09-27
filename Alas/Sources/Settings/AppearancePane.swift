@@ -76,7 +76,7 @@ struct AppearancePane: View {
                                 } label: {
                                     Circle().fill(color).frame(width: 24, height: 24)
                                         .overlay(
-                                            Circle().strokeBorder(.white, lineWidth: state.config.accent == id ? 2 : 0)
+                                            Circle().strokeBorder(theme.darkMode ? Color.white : theme.color("fg"), lineWidth: state.config.accent == id ? 2 : 0)
                                         )
                                 }
                                 .buttonStyle(.plain)

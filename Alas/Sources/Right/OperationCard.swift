@@ -7,6 +7,13 @@ struct OperationCard: View {
     let onSkip: () -> Void
     let onAbort: () -> Void
 
+    @Environment(\.theme) private var theme
+
+    /// System orange text and black hairlines assume a dark surface; the
+    /// light theme uses its own `warn` and `line` instead.
+    private var tint: Color { theme.darkMode ? .orange : theme.color("warn") }
+    private var rule: Color { theme.darkMode ? .black.opacity(0.3) : theme.color("line") }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             header
@@ -20,21 +27,21 @@ struct OperationCard: View {
         .padding(10)
         .background(
             LinearGradient(
-                colors: [Color.orange.opacity(0.25), Color.orange.opacity(0.10)],
+                colors: [tint.opacity(0.25), tint.opacity(0.10)],
                 startPoint: .top,
                 endPoint: .bottom
             )
         )
-        .overlay(Rectangle().frame(height: 1).foregroundColor(.black.opacity(0.3)), alignment: .bottom)
+        .overlay(Rectangle().frame(height: 1).foregroundColor(rule), alignment: .bottom)
     }
 
     private var header: some View {
         HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.orange)
+                .foregroundColor(tint)
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.orange)
+                .foregroundColor(tint)
         }
     }
 
@@ -77,8 +84,8 @@ struct OperationCard: View {
         let fraction = Double(done + current) / Double(max(plan.commits.count, 1))
         return GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                Rectangle().fill(Color.black.opacity(0.3))
-                Rectangle().fill(Color.orange).frame(width: proxy.size.width * fraction)
+                Rectangle().fill(rule)
+                Rectangle().fill(tint).frame(width: proxy.size.width * fraction)
             }
         }
         .frame(height: 4)
@@ -115,7 +122,7 @@ struct OperationCard: View {
     }
     private func color(_ s: RebasePlanCommit.State) -> Color {
         switch s { case .done: return .green
-        case .current: return .orange
+        case .current: return tint
         case .pending: return .secondary }
     }
 
