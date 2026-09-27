@@ -34,6 +34,7 @@ struct RunFailureBriefPolicyTests {
     @Test(arguments: [
         "Run swift test with --verbose to see the full failure.",
         "Rerun the job after fixing the import.",
+        "Whether sudo is available on this runner.",
     ])
     func parseKeepsOrdinaryNonDestructiveSuggestions(check: String) {
         let output = #"{"summary": "s", "cause": "c", "checks": ["\#(check)"]}"#

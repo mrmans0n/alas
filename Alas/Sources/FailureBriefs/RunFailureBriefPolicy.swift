@@ -31,7 +31,7 @@ enum RunFailureBriefPolicy {
 
     private static let excerptCharacterBudgets = [3_000, 1_200, 400]
     private static let scriptNameLimit = 200
-    private static let destructivePattern = #"(?i)\b(?:git\s+(?:reset\s+--hard|push\s+--force|clean\s+-[a-z]*f)|rm\s+-[a-z]*r[a-z]*|sudo)\b"#
+    private static let destructivePattern = #"(?i)\b(?:git\s+(?:reset\s+--hard|push\s+--force|clean\s+-[a-z]*f)|rm\s+-[a-z]*r[a-z]*)\b"#
 
     static func request(for input: RunFailureBriefInput) -> LocalTextGenerationRequest {
         LocalTextGenerationRequest(
