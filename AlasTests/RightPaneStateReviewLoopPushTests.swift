@@ -73,7 +73,10 @@ struct RightPaneStateReviewLoopPushTests {
         await state.performReviewLoopPush(
             .pushAndCreateReviewRequest, snapshot: snapshot, appState: appState,
             push: { ProcessResult(exitCode: 1, stdout: "", stderr: "rejected") },
-            refresh: { refreshCalled = true; return true }
+            refresh: {
+                refreshCalled = true
+                return true
+            }
         )
 
         #expect(!refreshCalled)
