@@ -314,9 +314,22 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
     }
 
     nonisolated static func isSupported() -> Bool {
-        guard Bundle.main.object(forInfoDictionaryKey: "AlasBuildConfiguration") as? String == "Debug",
-              machineIdentifier().hasPrefix("arm64") else { return false }
-        return MTLCreateSystemDefaultDevice()?.supportsFamily(.apple7) == true
+        isSupported(
+            buildConfiguration: Bundle.main.object(forInfoDictionaryKey: "AlasBuildConfiguration") as? String,
+            machineIdentifier: machineIdentifier(),
+            supportsApple7GPU: MTLCreateSystemDefaultDevice()?.supportsFamily(.apple7) == true
+        )
+    }
+
+    nonisolated static func isSupported(
+        buildConfiguration: String?,
+        machineIdentifier: String,
+        supportsApple7GPU: Bool
+    ) -> Bool {
+        guard buildConfiguration == "Debug" || buildConfiguration == "Release",
+              machineIdentifier.hasPrefix("arm64"),
+              supportsApple7GPU else { return false }
+        return true
     }
 
     private nonisolated static func machineIdentifier() -> String {
