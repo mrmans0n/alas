@@ -42,6 +42,8 @@ struct RunFailureBriefPolicyTests {
         #"{"summary": "s", "cause": "c", "checks": ["make clean"]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["/usr/bin/swift test"]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["./gradlew test"]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["Use swift test to reproduce it."]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["Try cargo test."]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["Use `./gradlew test` to reproduce it."]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["The output of `swift build` for the Net target."]}"#,
         "The Net tests failed to compile.",

@@ -9,6 +9,7 @@ struct LocalTextSafetyTests {
         ("curl failed: Authorization: Bearer abcDEF123456xyz", "curl failed: Authorization: Bearer [redacted]"),
         ("401 with Authorization: Basic dXNlcjpwYXNz", "401 with Authorization: Basic [redacted]"),
         ("403 with Authorization: token opaqueValue", "403 with Authorization: token [redacted]"),
+        (#"401 Authorization: Digest username="alice", realm="prod", response="6629fae4""#, "401 Authorization: Digest [redacted]"),
         ("fatal: https://alice:s3cr3t@example.com/repo.git", "fatal: https://alice:[redacted]@example.com/repo.git"),
         ("jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl rejected", "jwt [redacted] rejected"),
         ("password: hunter22 was rejected", "password: [redacted]"),
@@ -38,6 +39,7 @@ struct LocalTextSafetyTests {
         "SyntaxError: Unexpected token: punc (})",
         "error: invalid token: expired",
         "Basic authentication failed for the registry",
+        "Bearer authentication failed",
     ])
     func redactingCredentialsLeavesDiagnosticsWithoutSecretsIntact(line: String) {
         #expect(LocalTextSafety.redactingCredentials(line) == line)
