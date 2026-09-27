@@ -1659,7 +1659,7 @@ final class AppState {
         ACPQwenTitleFallback(
             engine: localTextInference,
             isAvailable: { [weak self] in self?.qwenFallbackTitlesAvailable ?? false },
-            waitForStartupInspection: { [weak self] in await self?.localTextObservers.startupInspection?.value },
+            waitForLocalTextReadiness: { [weak self] in await self?.localTextObservers.readiness?.value },
             requests: qwenTitleRequests
         )
     }

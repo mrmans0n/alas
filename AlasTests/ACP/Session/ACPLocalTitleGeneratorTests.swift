@@ -82,14 +82,14 @@ struct ACPLocalTitleRoutingTests {
     }
 
     @Test @MainActor
-    func waitsForStartupInspectionBeforeCheckingQwenAvailability() async {
+    func waitsForLocalTextReadinessBeforeCheckingQwenAvailability() async {
         let availability = TitleAvailability()
         availability.isAvailable = false
         let engine = TitleEngine(outcome: .success("Fix sign-in race"))
         let fallback = ACPQwenTitleFallback(
             engine: engine,
             isAvailable: { availability.isAvailable },
-            waitForStartupInspection: { availability.isAvailable = true }
+            waitForLocalTextReadiness: { availability.isAvailable = true }
         )
 
         let title = await ACPLocalTitleGenerator.generate(
@@ -153,18 +153,27 @@ private final class TitleAvailability {
     var checks = 0
 }
 
+/// Suspends until its caller is cancelled, like the real engine's generation.
 private actor SuspendingTitleEngine: LocalTextGenerating {
     private(set) var observedCancellation = false
+    private var suspended: CheckedContinuation<Void, Never>?
 
     func generate(_ request: LocalTextGenerationRequest, caller: LocalTextCaller,
                   priority: LocalTextJobPriority) async throws -> LocalTextGenerationResult {
-        do {
-            try await Task.sleep(for: .seconds(60))
-        } catch {
-            observedCancellation = true
-            throw LocalTextInferenceFailure.cancelled
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled { continuation.resume() } else { suspended = continuation }
+            }
+        } onCancel: {
+            Task { await self.resume() }
         }
-        return .init(text: "Too late", selectedCandidateIndex: 0)
+        observedCancellation = true
+        throw LocalTextInferenceFailure.cancelled
+    }
+
+    private func resume() {
+        suspended?.resume()
+        suspended = nil
     }
 
     func cancel(caller: LocalTextCaller) async {}

@@ -399,6 +399,20 @@ struct SessionSummarySettingsTests {
         #expect(await engine.cancelledCallers == [.sessionTitle])
     }
 
+    @Test func titleRequestedWhileEnablingAnInstalledModelWaitsForReadiness() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let state = makeState(fixture, SummarySettingsStore(), engine: SettingsFeatureEngine())
+        let enable = Task { await state.enableSessionSummaries() }
+        while !state.config.sessionSummariesEnabled { await Task.yield() }
+
+        let title = await state.makeQwenTitleFallback().generate(from: "Fix the sign-in race")
+
+        await enable.value
+        #expect(title == "Fix sign-in race")
+        await state.shutdownLocalTextFeatures()
+    }
+
     private func makeState(
         _ fixture: LocalTextModelFixture,
         _ persistence: SummarySettingsStore,
@@ -438,6 +452,7 @@ private actor SettingsFeatureEngine: LocalTextGenerating {
         if case .sessionSummary = caller {
             return try await withCheckedThrowingContinuation { summaryContinuation = $0 }
         }
+        if caller == .sessionTitle { return .init(text: "Fix sign-in race", selectedCandidateIndex: 0) }
         return .init(text: #"{"suggestion":"Show an example."}"#, selectedCandidateIndex: 0)
     }
 

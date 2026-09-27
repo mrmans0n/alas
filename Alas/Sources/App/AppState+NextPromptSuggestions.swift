@@ -11,12 +11,12 @@ final class LocalTextObservers {
     var pressure: DispatchSourceMemoryPressure?
     var modelStarted = false
     var nextPromptStarted = false
-    var startupInspection: Task<Void, Never>?
+    var readiness: Task<Void, Never>?
 
     func cancel() {
         tasks.forEach { $0.cancel() }
         tasks.removeAll()
-        startupInspection = nil
+        readiness = nil
         notifications.removeAll()
         managers.removeAll()
         sessions.removeAll()
@@ -46,7 +46,7 @@ extension AppState {
             self.sessionSummariesRuntimeEnabled = self.config.sessionSummariesEnabled
             if self.sessionSummariesRuntimeEnabled { self.localTextRuntimeStarted = true }
         }
-        localTextObservers.startupInspection = inspection
+        localTextObservers.readiness = inspection
         localTextObservers.tasks.append(inspection)
     }
 
@@ -106,6 +106,14 @@ extension AppState {
         }
     }
 
+    /// Qwen titles wait on this, so a prompt sent while an installed model is
+    /// still being inspected or enabled is not permanently left untitled.
+    func trackLocalTextReadiness(_ preparation: @escaping @MainActor () async -> Void) async {
+        let task = Task { await preparation() }
+        localTextObservers.readiness = task
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+    }
+
     func inspectLocalTextModel() async {
         await localTextModelStore.inspect() // Relaunch never resumes a missing/interrupted install.
         updateLocalTextModelState(await localTextReadModelState())
@@ -147,7 +155,7 @@ extension AppState {
             return
         }
         ensureLocalTextObserversStarted()
-        await prepareNextPromptSuggestions(generation: generation)
+        await trackLocalTextReadiness { await self.prepareNextPromptSuggestions(generation: generation) }
     }
 
     func retryNextPromptSuggestions() async {
@@ -158,7 +166,8 @@ extension AppState {
         }
         guard config.nextPromptSuggestionsEnabled, localTextSupported, !nextPromptShuttingDown else { return }
         beginNextPromptSettingsChange()
-        await prepareNextPromptSuggestions(generation: nextPromptSettingsGeneration)
+        let generation = nextPromptSettingsGeneration
+        await trackLocalTextReadiness { await self.prepareNextPromptSuggestions(generation: generation) }
     }
 
     private func prepareNextPromptSuggestions(generation: UInt64) async {

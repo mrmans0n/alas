@@ -108,6 +108,8 @@ actor LocalTextInferenceEngine: LocalTextGenerating {
                   priority: LocalTextJobPriority) async throws -> LocalTextGenerationResult {
         try validate(request)
         guard supported() else { throw LocalTextInferenceFailure.unsupported }
+        // A caller cancelled before arriving must not preempt the active job.
+        guard !Task.isCancelled else { throw LocalTextInferenceFailure.cancelled }
 
         idleTask?.cancel()
         idleTask = nil

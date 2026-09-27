@@ -138,11 +138,11 @@ struct ACPQwenTitleFallback: Sendable {
     let isAvailable: @MainActor @Sendable () -> Bool
     /// Consent flags stay off until launch-time model inspection finishes, so a
     /// first prompt sent right after launch would otherwise never get a title.
-    var waitForStartupInspection: @MainActor @Sendable () async -> Void = {}
+    var waitForLocalTextReadiness: @MainActor @Sendable () async -> Void = {}
     var requests: ACPQwenTitleRequests?
 
     func generate(from candidate: String) async -> String? {
-        await waitForStartupInspection()
+        await waitForLocalTextReadiness()
         guard let prompt = ACPLocalTitleGenerator.prompt(for: candidate) else { return nil }
         let request = LocalTextGenerationRequest(
             messageCandidates: [[
