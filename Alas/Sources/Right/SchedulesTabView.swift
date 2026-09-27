@@ -212,6 +212,7 @@ private struct ScheduleCard: View {
     @State private var menuHovered = false
     @State private var isConfirmingDelete = false
     @State private var isShowingHistory = false
+    @State private var expandedReports: Set<String> = []
 
     var body: some View {
         let scheduleState = state.runScheduler.state(for: schedule.id)
@@ -379,6 +380,9 @@ private struct ScheduleCard: View {
             ForEach(firing.runs, id: \.runID) { run in
                 runLink(run)
             }
+            ForEach(firing.agentReports ?? [], id: \.worktreeID) { report in
+                agentReport(report, key: "\(firing.id)-\(report.worktreeID)")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, 8)
@@ -417,6 +421,50 @@ private struct ScheduleCard: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
+    }
+
+    /// The agent's final message, collapsed to a few lines until clicked. The
+    /// heading opens the worktree while it is still visible, which is where
+    /// the full session lives.
+    private func agentReport(_ report: RunScheduleFiring.AgentReport, key: String) -> some View {
+        let isExpanded = expandedReports.contains(key)
+        let heading = "\(report.agentName) in \(report.branch)"
+        return VStack(alignment: .leading, spacing: 1) {
+            if let project = state.visibleProjectForWorktree(report.worktreeID) {
+                Button {
+                    state.focusGlobalWorktree(id: report.worktreeID, projectId: project.id)
+                } label: {
+                    HStack(spacing: 3) {
+                        Icon(name: "sparkle", size: 8, color: theme.color("accent"))
+                        Text(heading)
+                            .font(.system(size: 9.5))
+                            .foregroundColor(theme.color("accent"))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Open \(report.branch), where the session is")
+            } else {
+                Text(heading)
+                    .font(.system(size: 9.5))
+                    .foregroundColor(theme.color("fg-faint"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Text(report.text)
+                .font(.system(size: 9.5))
+                .foregroundColor(theme.color("fg-muted"))
+                .lineLimit(isExpanded ? nil : 3)
+                .textSelection(.enabled)
+                .onTapGesture {
+                    if isExpanded { expandedReports.remove(key) } else { expandedReports.insert(key) }
+                }
+                .help(isExpanded ? "Click to collapse" : "Click to show the whole report")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("schedule-firing-report-\(key)")
     }
 
     private var actionLabel: String {
@@ -465,7 +513,7 @@ private struct ScheduleCard: View {
         switch scheduleState.lastOutcome {
         case .none, .skipped: return .idle
         case .succeeded: return .success
-        case .failed, .launchFailed: return .failure
+        case .failed, .launchFailed, .agentFailed: return .failure
         case .stopped, .unknown: return .warning
         }
     }
@@ -484,7 +532,7 @@ private struct ScheduleCard: View {
         switch outcome {
         case .none, .skipped: theme.color("fg-faint")
         case .succeeded: theme.color("add")
-        case .failed, .launchFailed: theme.color("del")
+        case .failed, .launchFailed, .agentFailed: theme.color("del")
         case .stopped, .unknown: theme.color("warn")
         }
     }

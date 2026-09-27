@@ -71,16 +71,14 @@ extension AppState {
         } onCancel: {
             for run in runs { run.cancel() }
         }
-        var outcomes: [RunScheduleOutcome] = []
-        var references: [RunScheduleFiring.RunReference] = []
-        for report in reports {
-            outcomes.append(report.outcome)
-            references.append(contentsOf: report.runs)
-        }
         // Every target's run is linked, not just the one whose outcome won:
         // a fan-out that failed in one project should still let the user open
         // the reports of the projects that did run.
-        return RunScheduleRunReport(outcome: .combined(outcomes), runs: references)
+        return RunScheduleRunReport(
+            outcome: .combined(reports.map(\.outcome)),
+            runs: reports.flatMap(\.runs),
+            agentReports: reports.flatMap(\.agentReports)
+        )
     }
 
     /// Whether a firing's run can actually be opened.
@@ -256,10 +254,11 @@ extension AppState {
         guard let composition = schedule.composition else {
             return RunScheduleRunReport(outcome: .succeeded, runs: references)
         }
-        let agent = await launchScheduledAgent(
+        var agent = await launchScheduledAgent(
             for: schedule, composition: composition, worktree: worktree, project: project
         )
-        return RunScheduleRunReport(outcome: agent, runs: references)
+        agent.runs = references
+        return agent
     }
 
     /// Announces a failure that no other channel will report. A scheduled
@@ -446,14 +445,24 @@ extension AppState {
         composition: RunScheduleComposition,
         worktree: Worktree,
         project: ProjectConfig
-    ) async -> RunScheduleOutcome {
+    ) async -> RunScheduleRunReport {
         let agentId = composition.agentId ?? defaultAgentID(projectId: project.id, worktreeRoot: worktree.path)
         guard let agentId else {
             let message = "No agent is configured to launch for \(project.name)."
             reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
-            return .launchFailed(message)
+            return RunScheduleRunReport(outcome: .launchFailed(message))
         }
         let launchSurface = Self.scheduledLaunchSurface(agentId: agentId, composition: composition)
+        // Expected before the launch, because a turn that ends while the
+        // launch is still returning must not be missed.
+        if case .acp(_, let prepared?) = launchSurface, Self.awaitsScheduledTurn(prepared) {
+            scheduledAgentTurns.expect(prepared.sessionID)
+        }
+        defer {
+            if case .acp(_, let prepared?) = launchSurface {
+                scheduledAgentTurns.abandon(prepared.sessionID)
+            }
+        }
         let tab: Tab?
         do {
             tab = try await launchWorktreeSurface(launchSurface, worktree: worktree, project: project)
@@ -463,7 +472,9 @@ extension AppState {
             // failure would leave the worktree in a retryable failed state
             // and raise failure notifications for work deliberately stopped.
             if Task.isCancelled || error is CancellationError {
-                return .skipped(reason: "The schedule was removed while its agent was launching.")
+                return RunScheduleRunReport(
+                    outcome: .skipped(reason: "The schedule was removed while its agent was launching.")
+                )
             }
             markWorktreeLaunchFailed(
                 worktree: worktree,
@@ -477,11 +488,11 @@ extension AppState {
             runScheduleLogger.error(
                 "Scheduled agent launch failed for \(schedule.id, privacy: .public): \(String(describing: error), privacy: .public)"
             )
-            return .launchFailed(error.localizedDescription)
+            return RunScheduleRunReport(outcome: .launchFailed(error.localizedDescription))
         }
         let agentName = agentRegistry.agents.first { $0.id == agentId }?.displayName ?? agentId
         if case .acp(_, let prepared?) = launchSurface {
-            return scheduledChatSessionOutcome(
+            return await scheduledChatSessionOutcome(
                 prepared, schedule: schedule, worktree: worktree, project: project, agentName: agentName
             )
         }
@@ -501,7 +512,7 @@ extension AppState {
                 agentID: agentId
             )
         }
-        return .succeeded
+        return RunScheduleRunReport(outcome: .succeeded)
     }
 
     /// What became of a scheduled chat session once its launch returned.
@@ -515,30 +526,37 @@ extension AppState {
     /// A model the agent refused is not: the agent is running, on its own
     /// default, and only the choice was lost. Said in the app so the user
     /// learns why the transcript names a different model.
+    ///
+    /// A prompt sent automatically is then awaited: the firing stays running
+    /// until that turn ends, and its outcome and the agent's final message
+    /// become the firing's result and report. A prompt left in the composer
+    /// is the user's to send, so launching is all there is to report.
     private func scheduledChatSessionOutcome(
         _ prepared: PreparedWorktreeACPPrompt,
         schedule: RunSchedule,
         worktree: Worktree,
         project: ProjectConfig,
         agentName: String
-    ) -> RunScheduleOutcome {
+    ) async -> RunScheduleRunReport {
         // Mirrors the terminal path's cancellation handling: the schedule
         // was removed while the agent was launching, so nothing is wrong —
         // `openPreparedWorktreeACPSession` bailed before enqueueing the
         // prompt or attaching, and the session sitting idle is not a
         // failure worth reporting.
         guard !Task.isCancelled else {
-            return .skipped(reason: "The schedule was removed while its agent was launching.")
+            return RunScheduleRunReport(
+                outcome: .skipped(reason: "The schedule was removed while its agent was launching.")
+            )
         }
         guard let session = acpManager(forWorktreeId: worktree.id)?.liveSession(for: prepared.sessionID) else {
             let message = "Could not open a chat session for \(agentName) in \(worktree.branch)."
             reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
-            return .launchFailed(message)
+            return RunScheduleRunReport(outcome: .launchFailed(message))
         }
         if let reason = session.lastError {
             let message = "\(agentName) could not start in \(worktree.branch): \(reason)"
             reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
-            return .launchFailed(message)
+            return RunScheduleRunReport(outcome: .launchFailed(message))
         }
         inAppNotifications.post(
             "\(schedule.name): launched \(agentName) in \(worktree.branch)",
@@ -553,7 +571,56 @@ extension AppState {
                 worktreeID: worktree.id
             )
         }
-        return .succeeded
+        guard Self.awaitsScheduledTurn(prepared) else {
+            return RunScheduleRunReport(outcome: .succeeded)
+        }
+        let completion = await scheduledAgentTurns.wait(
+            for: prepared.sessionID, timeout: Self.scheduledAgentTurnTimeout
+        )
+        guard !Task.isCancelled else {
+            return RunScheduleRunReport(
+                outcome: .skipped(reason: "The schedule was removed while its agent was working.")
+            )
+        }
+        let outcome = RunScheduleOutcome(completion?.result)
+        switch completion?.result {
+        case .completed:
+            inAppNotifications.post(
+                "\(schedule.name): \(agentName) finished in \(worktree.branch)",
+                severity: .success,
+                worktreeID: worktree.id
+            )
+        case .failed(let message):
+            reportScheduleFailure(
+                schedule, reason: "\(agentName) failed in \(worktree.branch): \(message)",
+                project: project, worktree: worktree
+            )
+        case .cancelled:
+            // Stopped by the user, who already knows.
+            break
+        case nil:
+            reportScheduleFailure(
+                schedule, reason: "\(agentName) was still working in \(worktree.branch) after 4 hours; stopped waiting.",
+                project: project, worktree: worktree
+            )
+        }
+        guard let text = completion?.lastAgentText else { return RunScheduleRunReport(outcome: outcome) }
+        return RunScheduleRunReport(outcome: outcome, agentReports: [RunScheduleFiring.AgentReport(
+            worktreeID: worktree.id,
+            branch: worktree.branch,
+            agentName: agentName,
+            text: text
+        )])
+    }
+
+    /// How long a firing waits for its chat agent's turn before it stops
+    /// waiting, so an agent stuck on a question cannot hold the schedule
+    /// forever. The agent itself is left running.
+    static let scheduledAgentTurnTimeout: Duration = .seconds(4 * 60 * 60)
+
+    /// Only a prompt the schedule sends itself starts a turn worth awaiting.
+    nonisolated static func awaitsScheduledTurn(_ prepared: PreparedWorktreeACPPrompt) -> Bool {
+        prepared.sendsAutomatically && !prepared.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // MARK: - Prompt delivery
@@ -745,5 +812,75 @@ extension AppState {
         guard let session = terminal.registry.session(for: sessionID) else { return false }
         session.surface.sendText(text)
         return true
+    }
+}
+
+/// Hands each scheduled chat session's first finished turn to the firing
+/// waiting on it. A session is expected before its launch starts, so a turn
+/// that ends before anyone waits is kept until someone does; every other
+/// session's turns are ignored.
+@MainActor
+final class ScheduledAgentTurns {
+    private enum Slot {
+        case expected
+        case finished(ACPTurnCompletion)
+        case waiting(CheckedContinuation<ACPTurnCompletion?, Never>)
+    }
+
+    private var slots: [ACPSession.ID: Slot] = [:]
+
+    func expect(_ sessionID: ACPSession.ID) {
+        slots[sessionID] = .expected
+    }
+
+    func deliver(_ completion: ACPTurnCompletion) {
+        switch slots[completion.sessionId] {
+        case .expected:
+            slots[completion.sessionId] = .finished(completion)
+        case .waiting(let continuation):
+            slots[completion.sessionId] = nil
+            continuation.resume(returning: completion)
+        case .finished, nil:
+            break
+        }
+    }
+
+    /// The session's first finished turn, or nil when the session was never
+    /// expected, the timeout passed, or the waiting task was cancelled.
+    func wait(for sessionID: ACPSession.ID, timeout: Duration) async -> ACPTurnCompletion? {
+        switch slots[sessionID] {
+        case .finished(let completion):
+            slots[sessionID] = nil
+            return completion
+        case .expected:
+            break
+        case .waiting, nil:
+            return nil
+        }
+        let timer = Task { [weak self] in
+            guard (try? await Task.sleep(for: timeout)) != nil else { return }
+            self?.abandon(sessionID)
+        }
+        defer { timer.cancel() }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { slots[sessionID] = .waiting($0) }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.abandon(sessionID) }
+        }
+    }
+
+    /// A stopped runner reports no turn, so closing a session mid-turn has to
+    /// end the wait here, as a stop.
+    func sessionClosed(_ sessionID: ACPSession.ID) {
+        deliver(ACPTurnCompletion(
+            sessionId: sessionID, startedAt: 0, result: .cancelled, delegatedSource: nil, lastAgentText: nil
+        ))
+    }
+
+    /// Forgets the session, releasing its waiter with nil.
+    func abandon(_ sessionID: ACPSession.ID) {
+        if case .waiting(let continuation) = slots.removeValue(forKey: sessionID) {
+            continuation.resume(returning: nil)
+        }
     }
 }

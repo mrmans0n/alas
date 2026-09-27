@@ -403,7 +403,8 @@ final class RunScheduler {
                 finishedAt: settledAt,
                 wasManual: invocation == .manual,
                 outcome: report.outcome,
-                runs: report.runs
+                runs: report.runs,
+                agentReports: report.agentReports
             ))
             if self.schedules.contains(where: { $0.id == schedule.id }) {
                 self.states[schedule.id] = state

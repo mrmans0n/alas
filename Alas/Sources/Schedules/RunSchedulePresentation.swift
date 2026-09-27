@@ -206,6 +206,7 @@ enum RunSchedulePresentation {
         case .unknown: "Outcome unknown"
         case .skipped(let reason): "Skipped: \(reason)"
         case .launchFailed(let message): "Launch failed: \(message)"
+        case .agentFailed(let message): "Agent failed: \(message)"
         }
     }
 
