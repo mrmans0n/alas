@@ -4,6 +4,18 @@ import Testing
 
 @MainActor
 struct CommitPublishWorkflowTests {
+    @Test func createdReviewURLSurvivesCheckpointRestore() throws {
+        var checkpoint = CommitPublishCheckpoint(
+            commitSHA: "abc", baseRef: "main", commitTitle: "abc Subject", subject: "Subject", body: "",
+            destination: .gg(), nextPhase: .sync
+        )
+        checkpoint.createdReviewURL = URL(string: "https://github.com/owner/repo/pull/42")!
+
+        let restored = try JSONDecoder().decode(CommitPublishCheckpoint.self, from: JSONEncoder().encode(checkpoint))
+
+        #expect(restored.createdReviewURL == checkpoint.createdReviewURL)
+    }
+
     @Test func ownerReleasesCompletedRunBeforeRefreshWithoutClearingNewerFailure() async throws {
         let refreshGate = AsyncGate()
         var failSync = false

@@ -284,7 +284,7 @@ final class ReviewLoopState {
         do {
             let request = try await provider.currentReviewRequest(
                 remote: remote,
-                branch: local.branchName,
+                branch: local.upstreamBranchName ?? local.branchName,
                 headOwner: local.headRemoteOwner,
                 baseBranch: local.baseBranch,
                 cwd: worktreePath

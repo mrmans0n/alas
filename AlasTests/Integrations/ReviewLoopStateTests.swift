@@ -5,6 +5,23 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct ReviewLoopStateTests {
+    @Test func refreshLooksUpReviewUsingTrackedUpstreamBranch() async throws {
+        let provider = FakeCodeHostProvider(kind: .github)
+        let state = ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp/alas-upstream-review"), baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider]))
+        let local = ReviewLoopLocalState(
+            branchName: "local-feature", headSHA: "abc", baseBranch: "main",
+            hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0,
+            hasUpstream: true, upstreamRemoteName: "origin", upstreamBranchName: "review-feature", needsPush: false
+        )
+        provider.requestForBranch["review-feature"] = Self.makeReviewRequest(remote: Self.makeRemote(), checks: [])
+
+        await state.refresh(local: local, remotes: [Self.makeGitHubRemote()])
+
+        #expect(provider.lookupTargets.last?.branch == "review-feature")
+        #expect(state.snapshot?.reviewRequest?.number == 42)
+    }
+
     @Test func drawerAcknowledgesOnlyExplicitExpansionOfLoadedReviewRequest() async throws {
         let provider = FakeCodeHostProvider(kind: .github)
         provider.request = Self.makeReviewRequest(remote: Self.makeRemote(), checks: [])

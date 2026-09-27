@@ -401,5 +401,6 @@ struct CommitPublishCheckpoint: Codable, Equatable, Sendable {
         destination = try container.decode(CommitPublishDestination.self, forKey: .destination)
         nextPhase = try container.decode(CommitPublishPhase.self, forKey: .nextPhase)
         ggRecoveryOperationID = try container.decodeIfPresent(String.self, forKey: .ggRecoveryOperationID)
+        createdReviewURL = try container.decodeIfPresent(URL.self, forKey: .createdReviewURL)
     }
 }
