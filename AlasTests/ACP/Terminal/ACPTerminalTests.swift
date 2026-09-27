@@ -61,18 +61,19 @@ struct ACPTerminalTests {
     @Test("release reaches a backgrounded descendant after root exited")
     func releaseReachesOrphans() async throws {
         // Backgrounded sleep inherits the pipe write end, so the root
-        // can exit but the EOF on our read end never fires. The parent
-        // stays alive for ~8 s after the fork so the periodic descendant
-        // tracker — a `.utility`-priority background task polling roughly
-        // once a second — gets several chances to capture the BG sleep
-        // before exit even under CI-loaded scheduling delays (a 3s window
-        // left only 2-3 attempts and has been observed missing all of
-        // them); once the root exits, kill() relies on that captured set
-        // to reach the orphan and let EOF finally arrive.
+        // can exit but the EOF on our read end never fires. Once the root
+        // exits, kill() relies on the periodic descendant tracker's captured
+        // set to reach the orphan and let EOF finally arrive. The root waits
+        // for a flag file instead of a fixed delay, so it exits only after
+        // the tracker (a `.utility` task polling about once a second, which
+        // CI load has delayed past fixed 3 s and 8 s windows) has captured
+        // the orphan.
+        let flag = FileManager.default.temporaryDirectory.appendingPathComponent("torphan-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: flag) }
         let t = try ACPTerminal(
             id: "torphan",
             command: "/bin/sh",
-            args: ["-c", "sleep 60 & echo $!; sleep 8"],
+            args: ["-c", "sleep 60 & echo $!; while [ ! -e \"$0\" ]; do sleep 0.05; done", flag.path],
             env: [:],
             cwd: "/tmp",
             outputByteLimit: 1024
@@ -82,18 +83,19 @@ struct ACPTerminalTests {
         // The backgrounded sleep's parent is the root shell while it runs.
         let rootPid = parentPid(of: sleepPid)
         #expect(rootPid != nil)
-        // Wait for sh to finish its `sleep 8` and be reaped, so we're
-        // genuinely in the orphaned-pipe state when release runs. Polling the
-        // root's disappearance (rather than sleeping a fixed 8.5 s) releases
-        // as soon as that state exists, and never too early under load.
+        let tracked = try await pollUntil(timeout: 30) { t.hasTrackedDescendant(sleepPid) }
+        try #require(tracked)
+        try Data().write(to: flag)
+        // Wait for sh to exit and be reaped, and for `terminationHandler` to
+        // record it, so we're genuinely in the orphaned-pipe state when
+        // release runs and `kill()` takes the cached-descendant path instead
+        // of a process-group signal that would also reach the orphan.
         let rootReaped = try await pollUntil(timeout: 20) {
             rootPid.map { !processExists($0) } ?? false
         }
         #expect(rootReaped)
-        // Foundation's `terminationHandler` (which marks the root exited, so
-        // `kill()` takes the cached-descendant path instead of a process-group
-        // signal that would also reach the orphan) runs just after the reap.
-        try await Task.sleep(for: .milliseconds(300))
+        let exitRecorded = try await pollUntil(timeout: 20) { t.rootHasExited }
+        #expect(exitRecorded)
         #expect(t.exitStatus == nil)
         t.release()
         _ = await t.waitForExit()
