@@ -550,6 +550,11 @@ final class ACPToolCallGroupExpansionSeeds {
     /// invalidated by collapse (see `setExpanded`), disambiguates the two.
     private var lineageByMemberId: [String: UUID] = [:]
 
+    /// Members of runs the user explicitly collapsed. Needed because a live
+    /// run is expanded automatically; without this, collapsing it would be
+    /// undone by the next render.
+    private var collapsedMemberIds: Set<String> = []
+
     func isExpanded(members: [String]) -> Bool {
         members.contains { lineageByMemberId[$0] != nil }
     }
@@ -561,6 +566,7 @@ final class ACPToolCallGroupExpansionSeeds {
             // otherwise this is a fresh expand action.
             let lineage = members.compactMap { lineageByMemberId[$0] }.first ?? UUID()
             for member in members { lineageByMemberId[member] = lineage }
+            collapsedMemberIds.subtract(members)
         } else {
             // Clear every member sharing ANY lineage referenced by the
             // current members — not just the ones passed in — so a
@@ -568,17 +574,22 @@ final class ACPToolCallGroupExpansionSeeds {
             // members currently outside the window that `syncLineage`
             // previously folded into the same run.
             let lineages = Set(members.compactMap { lineageByMemberId[$0] })
-            guard !lineages.isEmpty else { return }
-            lineageByMemberId = lineageByMemberId.filter { !lineages.contains($0.value) }
+            if !lineages.isEmpty {
+                lineageByMemberId = lineageByMemberId.filter { !lineages.contains($0.value) }
+            }
+            collapsedMemberIds.formUnion(members)
         }
         generation &+= 1
         onChange?()
     }
 
-    /// Whether `group` should render expanded. Convenience over
-    /// `isExpanded(members:)` for the fold, which works in whole groups.
+    /// Whether `group` should render expanded: the user's explicit choice
+    /// when there is one, otherwise open only while it is the live tail.
     func isExpanded(_ group: ACPTranscriptToolCallGroup) -> Bool {
-        isExpanded(members: group.members.map(\.stableId))
+        let members = group.members.map(\.stableId)
+        if isExpanded(members: members) { return true }
+        if members.contains(where: collapsedMemberIds.contains) { return false }
+        return group.isLive
     }
 
     /// Folds `members` into whichever lineage is already present among

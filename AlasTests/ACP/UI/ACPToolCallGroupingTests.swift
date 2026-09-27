@@ -894,6 +894,31 @@ struct ACPMinimapGroupSpanTests {
 @MainActor
 @Suite("ACP tool-call group expansion seeds")
 struct ACPToolCallGroupExpansionSeedsTests {
+    private func group(_ ids: [String], live: Bool) -> ACPTranscriptToolCallGroup {
+        ACPTranscriptToolCallGroup(
+            members: ids.enumerated().map { ACPTranscriptVisibleRow(index: $0.offset, stableId: $0.element) },
+            isLive: live
+        )
+    }
+
+    @Test("an untouched group is expanded exactly while it is the live tail", arguments: [true, false])
+    func untouchedGroupFollowsLiveness(live: Bool) {
+        #expect(ACPToolCallGroupExpansionSeeds().isExpanded(group(["tc-a", "tc-b"], live: live)) == live)
+    }
+
+    @Test("collapsing a live group keeps it collapsed as it grows, until expanded again")
+    func explicitCollapseOverridesLiveness() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        var changes = 0
+        seeds.onChange = { changes += 1 }
+        seeds.setExpanded(false, members: ["tc-a", "tc-b"])
+        #expect(changes == 1)
+        #expect(!seeds.isExpanded(group(["tc-a", "tc-b", "tc-c"], live: true)))
+
+        seeds.setExpanded(true, members: ["tc-a", "tc-b", "tc-c"])
+        #expect(seeds.isExpanded(group(["tc-a", "tc-b", "tc-c"], live: false)))
+    }
+
     @Test("a group is not expanded until one of its members is recorded")
     func notExpandedInitially() {
         let seeds = ACPToolCallGroupExpansionSeeds()

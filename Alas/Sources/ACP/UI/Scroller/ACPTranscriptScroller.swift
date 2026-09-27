@@ -783,7 +783,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // visible still clears the whole run — see
             // `ACPToolCallGroupExpansionSeeds.syncLineage`.
             expansionSeeds.syncLineage(members: memberStableIds)
-            let expanded = expansionSeeds.isExpanded(members: memberStableIds)
+            let expanded = expansionSeeds.isExpanded(group)
             let liveNarration = expanded ? nil : groupLiveNarration(host: host, group: group)
             // The render window is an input to the header's absorb pulse, not
             // to its appearance: a bundle grows both when a call finishes and

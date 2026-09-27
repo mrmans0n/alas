@@ -284,27 +284,19 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(!before.isEqual(to: after))
     }
 
-    @Test("group row token changes when hidden narration becomes live")
-    func groupTokenChangesOnLiveNarration() throws {
+    @Test("the trailing group of a streaming turn renders expanded")
+    func liveTrailingGroupRendersExpanded() {
         let host = makeHost(collapsesFinishedToolCalls: true)
-        let thought = ACPMessage.thought(
-            id: UUID(),
-            messageId: "thinking",
-            StreamingText("Inspecting the transcript")
-        )
-        host.transcript.messages = [tool("a"), thought]
+        host.transcript.messages = [tool("a"), tool("b", status: "in_progress")]
         host.transcript.visibleHead = 0
         host.transcript.visibleTail = nil
-
-        let idle = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
-            .first { $0.id == "tcg-tc-a" }?.equalityToken)
-
-        host.transcript.lastContentTouchIndex = 1
         host.transcript.streamingState = .streaming
-        let live = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
-            .first { $0.id == "tcg-tc-a" }?.equalityToken)
 
-        #expect(!idle.isEqual(to: live))
+        let ids = ACPTranscriptScroller.Coordinator.rowSpecs(
+            host: host, expansionSeeds: ACPToolCallGroupExpansionSeeds()
+        ).map(\.id)
+        // Streaming may append synthetic tail rows; only the fold matters here.
+        #expect(Array(ids.prefix(3)) == ["tcg-tc-a", "tc-a", "tc-b"])
     }
 
     @Test("group row token changes when the bundle's expanded state changes")
