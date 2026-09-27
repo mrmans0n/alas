@@ -754,14 +754,52 @@ struct CheckpointRestoreTransaction: Sendable {
             guard let now = current.paths[path] else { throw CheckpointRestoreError.missingCurrentPath(path) }
             return (path, saved[path]?.index ?? now.head)
         }
-        // Materialize each distinct blob once and hash them all in one process.
+        // Materialize each distinct blob once and hash them with one process
+        // per batch. The byte budget bounds the temporary copies on disk.
         var blobs: [CheckpointBlobReference] = []
         var seen = Set<CheckpointBlobReference>()
         for (path, state) in desired where state.kind != .absent {
             guard let blob = state.blob, state.mode != nil else { throw CheckpointRestoreError.missingDesiredPath(path) }
             if seen.insert(blob).inserted { blobs.append(blob) }
         }
-        let stagingRoot = preparedIndex.deletingLastPathComponent()
+        var oidByBlob: [CheckpointBlobReference: String] = [:]
+        for batch in Self.hashBatches(blobs) {
+            oidByBlob.merge(try await writeBlobs(batch, stagingRoot: preparedIndex.deletingLastPathComponent(), target: target)) { $1 }
+        }
+        for (path, state) in desired {
+            if state.kind == .absent {
+                try await runGit(["update-index", "--force-remove", "--", path], target: target, index: preparedIndex)
+                continue
+            }
+            guard let blob = state.blob, let mode = state.mode, let oid = oidByBlob[blob] else {
+                throw CheckpointRestoreError.missingDesiredPath(path)
+            }
+            try await runGit(["update-index", "--add", "--cacheinfo", mode, oid, path], target: target, index: preparedIndex)
+        }
+    }
+
+    static let hashBatchByteBudget: Int64 = 64 * 1024 * 1024
+
+    /// Splits blobs into consecutive batches of at most `hashBatchByteBudget`
+    /// bytes. A larger blob gets a batch of its own.
+    static func hashBatches(_ blobs: [CheckpointBlobReference]) -> [[CheckpointBlobReference]] {
+        var batches: [[CheckpointBlobReference]] = []
+        var byteCount: Int64 = 0
+        for blob in blobs {
+            if batches.isEmpty || byteCount + blob.byteCount > hashBatchByteBudget {
+                batches.append([])
+                byteCount = 0
+            }
+            batches[batches.count - 1].append(blob)
+            byteCount += blob.byteCount
+        }
+        return batches
+    }
+
+    /// Materializes `blobs` into the staging root, hashes them with one
+    /// `hash-object -w --stdin-paths`, and removes the copies.
+    private func writeBlobs(_ blobs: [CheckpointBlobReference], stagingRoot: URL,
+                            target: CheckpointWorktreeTarget) async throws -> [CheckpointBlobReference: String] {
         var materialized: [URL] = []
         defer { for url in materialized { try? fileSystem.removeIfPresent(url) } }
         for blob in blobs {
@@ -773,17 +811,7 @@ struct CheckpointRestoreTransaction: Sendable {
         // where `hash-object --stdin-paths` resolves relative paths from.
         let oids = try await git.writeBlobs(relativePaths: materialized.map { "\(stagingRoot.lastPathComponent)/\($0.lastPathComponent)" },
                                             cwd: target.path)
-        let oidByBlob = Dictionary(uniqueKeysWithValues: zip(blobs, oids))
-        for (path, state) in desired {
-            if state.kind == .absent {
-                try await runGit(["update-index", "--force-remove", "--", path], target: target, index: preparedIndex)
-                continue
-            }
-            guard let blob = state.blob, let mode = state.mode, let oid = oidByBlob[blob] else {
-                throw CheckpointRestoreError.missingDesiredPath(path)
-            }
-            try await runGit(["update-index", "--add", "--cacheinfo", mode, oid, path], target: target, index: preparedIndex)
-        }
+        return Dictionary(uniqueKeysWithValues: zip(blobs, oids))
     }
 
     private func materialize(_ state: CheckpointFileState, at url: URL, target: CheckpointWorktreeTarget) async throws {
