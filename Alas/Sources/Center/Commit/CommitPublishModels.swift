@@ -364,6 +364,7 @@ struct CommitPublishCheckpoint: Codable, Equatable, Sendable {
     let destination: CommitPublishDestination
     var nextPhase: CommitPublishPhase
     var ggRecoveryOperationID: String?
+    var createdReviewURL: URL?
 
     init(
         commitSHA: String,
@@ -383,10 +384,11 @@ struct CommitPublishCheckpoint: Codable, Equatable, Sendable {
         self.destination = destination
         self.nextPhase = nextPhase
         self.ggRecoveryOperationID = ggRecoveryOperationID
+        self.createdReviewURL = nil
     }
 
     private enum CodingKeys: String, CodingKey {
-        case commitSHA, baseRef, commitTitle, subject, body, destination, nextPhase, ggRecoveryOperationID
+        case commitSHA, baseRef, commitTitle, subject, body, destination, nextPhase, ggRecoveryOperationID, createdReviewURL
     }
 
     init(from decoder: Decoder) throws {

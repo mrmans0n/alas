@@ -1498,7 +1498,8 @@ final class TabsManager {
                     && state.repositorySlug == request.remote.repositorySlug
             case .commitEditor(let state):
                 if let target = state.pendingCreatedReviewTarget {
-                    matches = target.provider == request.provider
+                    matches = state.pendingCreatedReviewURL == request.url
+                        && target.provider == request.provider
                         && target.host.lowercased() == request.remote.host.lowercased()
                         && target.repositorySlug == request.remote.repositorySlug
                         && target.branch == snapshot.local.branchName
@@ -1589,7 +1590,8 @@ final class TabsManager {
     private func completeCommitPublish(worktreeId: String, tabId: TabID, checkpoint: CommitPublishCheckpoint) throws -> Tab? {
         guard var file = byWorktree[worktreeId] else { return nil }
         let pendingCreatedReviewTarget: CommitPublishReviewTarget?
-        if case .review(let target) = checkpoint.destination, !target.reviewRequestExisted {
+        if case .review(let target) = checkpoint.destination,
+           !target.reviewRequestExisted, checkpoint.createdReviewURL != nil {
             pendingCreatedReviewTarget = target
         } else {
             pendingCreatedReviewTarget = nil
@@ -1601,7 +1603,8 @@ final class TabsManager {
             baseRef: checkpoint.baseRef,
             newSha: checkpoint.commitSHA,
             title: checkpoint.commitTitle,
-            pendingCreatedReviewTarget: pendingCreatedReviewTarget
+            pendingCreatedReviewTarget: pendingCreatedReviewTarget,
+            pendingCreatedReviewURL: checkpoint.createdReviewURL
         ) {
             try persistThrowing(file, worktreeId: worktreeId)
             byWorktree[worktreeId] = file
@@ -1621,7 +1624,8 @@ final class TabsManager {
         baseRef: String,
         newSha: String,
         title: String,
-        pendingCreatedReviewTarget: CommitPublishReviewTarget? = nil
+        pendingCreatedReviewTarget: CommitPublishReviewTarget? = nil,
+        pendingCreatedReviewURL: URL? = nil
     ) -> Tab? {
         guard let idx = file.tabs.firstIndex(where: { $0.id == draftTabId }),
               case .draftCommit = file.tabs[idx]
@@ -1631,6 +1635,7 @@ final class TabsManager {
                   existing.currentSha == newSha else { continue }
             existing.title = title
             existing.pendingCreatedReviewTarget = pendingCreatedReviewTarget
+            existing.pendingCreatedReviewURL = pendingCreatedReviewURL
             let tab = Tab.commitEditor(existing)
             file.tabs[existingIdx] = tab
             file.tabs.remove(at: idx)
@@ -1646,6 +1651,7 @@ final class TabsManager {
             title: title
         )
         editor.pendingCreatedReviewTarget = pendingCreatedReviewTarget
+        editor.pendingCreatedReviewURL = pendingCreatedReviewURL
         let tab = Tab.commitEditor(editor)
         file.tabs[idx] = tab
         if file.activeTabId == draftTabId {

@@ -53,6 +53,8 @@ struct TabsManagerTests {
         let editor = try #require(manager.commitEditorTab(worktreeId: worktreeId, currentSha: "abc"))
 
         #expect(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: missing) == nil)
+        let unrelated = ReviewLoopSnapshot(local: advanced, remote: remote, reviewRequest: .placeholder(remote: remote, number: 8), providerAvailable: true, providerAuthenticated: true, providerCapabilities: .gitlabCLI, errorMessage: nil)
+        #expect(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: unrelated) == nil)
         let review = try #require(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: found))
 
         #expect(manager.activeTabId(forWorktree: worktreeId) == review.id)

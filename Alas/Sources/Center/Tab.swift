@@ -557,6 +557,7 @@ struct CommitEditorTabState: Codable, Equatable, Identifiable {
     var currentSha: String
     var title: String
     var pendingCreatedReviewTarget: CommitPublishReviewTarget?
+    var pendingCreatedReviewURL: URL?
 
     init(worktreeId: String, baseRef: String, originalSha: String, currentSha: String, title: String) {
         self.id = "commit-editor:\(worktreeId):\(originalSha)"
@@ -566,6 +567,7 @@ struct CommitEditorTabState: Codable, Equatable, Identifiable {
         self.currentSha = currentSha
         self.title = title
         self.pendingCreatedReviewTarget = nil
+        self.pendingCreatedReviewURL = nil
     }
 }
 

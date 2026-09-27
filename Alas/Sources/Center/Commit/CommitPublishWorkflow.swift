@@ -432,7 +432,8 @@ final class CommitPublishWorkflow {
                     let requestExists = try await operations.currentReviewRequestExists(target)
                     try Task.checkCancellation()
                     if !requestExists {
-                        _ = try await operations.createReviewRequest(target, checkpoint.subject, checkpoint.body)
+                        checkpoint.createdReviewURL = try await operations.createReviewRequest(target, checkpoint.subject, checkpoint.body)
+                        try onCheckpointChange(checkpoint)
                     }
                 }
                 try await complete(runID)
