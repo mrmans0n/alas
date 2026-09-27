@@ -486,7 +486,6 @@ extension AppState {
             startedAt: Date(),
             portConflict: conflict
         ))
-        runFailureBriefs.cancelInFlight(worktreeID: worktree.id, scriptKey: script.key)
 
         let launchID = UUID()
         pendingScriptLaunches[launchKey] = PendingRunScriptLaunch(
@@ -540,6 +539,7 @@ extension AppState {
                         worktree: worktree
                     )
                     runRecords.markRunning(runID: runID, sessionID: sessionID)
+                    runFailureBriefs.cancelInFlight(worktreeID: worktree.id, scriptKey: script.key)
                     if runScriptSessionForegroundPidIsMissing(sessionID: sessionID) {
                         cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: runScriptLocalMonitorGrace, includeRemote: false)
                         cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: runScriptMonitorGrace)
@@ -631,7 +631,10 @@ extension AppState {
         runFailureBriefs.start(
             failure,
             loadOutput: { [weak self] in await self?.persistedRunOutput(runID: runID) },
-            generate: makeRunFailureBriefGenerator()
+            resolveGenerator: { [weak self] in
+                await self?.waitForLocalTextReadiness()
+                return self?.makeRunFailureBriefGenerator()
+            }
         )
     }
 

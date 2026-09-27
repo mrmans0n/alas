@@ -56,6 +56,8 @@ struct RunFailureBriefPolicyTests {
         "The test was unable to run.",
         "The process may run out of memory.",
         "The compiler cannot execute the plugin.",
+        "The tests were run with an unsupported SDK.",
+        "The command was run under the wrong shell.",
     ])
     func parseKeepsDescriptiveTextThatOnlyResemblesActionsOrSecrets(cause: String) {
         let output = #"{"summary": "s", "cause": "\#(cause)", "checks": ["k"]}"#

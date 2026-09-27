@@ -37,7 +37,7 @@ final class RunFailureBriefCoordinator {
     func start(
         _ failure: RunScriptFailure,
         loadOutput: @escaping @MainActor @Sendable () async -> RunHistoryOutput?,
-        generate: Generate?
+        resolveGenerator: @escaping @MainActor @Sendable () async -> Generate?
     ) {
         cancelInFlight(worktreeID: failure.worktreeID, scriptKey: failure.scriptKey)
         let runID = failure.runID
@@ -55,6 +55,8 @@ final class RunFailureBriefCoordinator {
             case .unavailable?, nil:
                 excerpt = nil
             }
+            // Resolved after the output loads so a model still becoming ready at launch is used.
+            let generate = excerpt == nil ? nil : await resolveGenerator()
             guard let self, !Task.isCancelled else { return }
             guard let excerpt, let generate else {
                 self.states[runID] = .unavailable(excerpt)
