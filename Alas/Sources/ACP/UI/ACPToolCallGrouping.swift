@@ -158,6 +158,19 @@ enum ACPToolCallGrouping {
         })
     }
 
+    /// Whether a lone member of an `.activity` run reads better as a bare
+    /// line than as a one-member disclosure. Tool calls and thoughts both
+    /// already carry their own verb/label in their own row, so wrapping
+    /// either alone in a group just hides one line behind a click — and for
+    /// a thought specifically, an auto-expanded live group would otherwise
+    /// show "Thinking" twice (the header, then the thought's own label).
+    private static func isBareRowEligible(_ message: ACPMessage) -> Bool {
+        switch message {
+        case .toolCall, .thought: true
+        default: false
+        }
+    }
+
     /// Thinking and ordinary tool calls — finished, running, or pending —
     /// share an activity group. Unknown statuses (e.g. a call awaiting
     /// permission), context compaction, subagents, file edits, and readable
@@ -219,9 +232,9 @@ enum ACPToolCallGrouping {
                 let kind = runKind ?? .activity
                 if kind == .activity, run.count == 1,
                    messages.indices.contains(run[0].index),
-                   case .toolCall = messages[run[0].index] {
-                    // A lone call reads better as its own one-line row than
-                    // as a disclosure hiding a single line.
+                   isBareRowEligible(messages[run[0].index]) {
+                    // A lone call or thought reads better as its own
+                    // one-line row than as a disclosure hiding a single line.
                     result.append(.message(run[0]))
                 } else {
                     let group = ACPTranscriptToolCallGroup(
@@ -390,6 +403,11 @@ struct ACPToolCallGroupSummary: Equatable {
 
     let count: Int
     let failedCount: Int
+    /// Members still running or waiting when this group is not itself the
+    /// live tail (e.g. a parallel call that outlives the narration that
+    /// followed it out of the group). The live-tail case already says so
+    /// via `isLive`; this covers the rest.
+    let runningCount: Int
     let kind: ACPTranscriptToolCallGroup.Kind
     let isLive: Bool
     /// In first-appearance order.
@@ -402,6 +420,7 @@ struct ACPToolCallGroupSummary: Equatable {
     ) {
         count = toolCalls.count
         failedCount = toolCalls.filter { Self.isFailed(status: $0.status) }.count
+        runningCount = toolCalls.filter { $0.status == "in_progress" || $0.status == "pending" }.count
         self.kind = kind
         self.isLive = isLive
         var counts: [VerbCount] = []
@@ -440,12 +459,13 @@ struct ACPToolCallGroupSummary: Equatable {
             return (isExploring ? "Exploring" : "Running") + " · \(count) so far" + failure
         }
         let counts = verbCounts.map(Self.phrase).joined(separator: ", ")
+        let running = runningCount > 0 ? " · \(runningCount) running" : ""
         switch kind {
         case .activity:
             guard !counts.isEmpty else { return isLive ? "Thinking" : "Thought" }
-            return counts.prefix(1).uppercased() + counts.dropFirst() + failure
+            return counts.prefix(1).uppercased() + counts.dropFirst() + running + failure
         case .completedTurn(let duration):
-            return completedLabel(duration: duration) + (counts.isEmpty ? "" : " · " + counts) + failure
+            return completedLabel(duration: duration) + (counts.isEmpty ? "" : " · " + counts) + running + failure
         }
     }
 

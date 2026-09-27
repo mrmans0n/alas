@@ -117,6 +117,17 @@ struct ACPToolCallGroupingTests {
         }
     }
 
+    @Test("a lone thought is a plain row, not a one-member group")
+    func loneThoughtIsPlainRow() throws {
+        let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("hmm"))
+        let folded = fold([thought])
+        #expect(ids(folded) == ["acp-thought:t1"])
+        guard case .message = try #require(folded.first) else {
+            Issue.record("expected a plain message row")
+            return
+        }
+    }
+
     @Test("a running or pending tool call joins the group instead of ending it", arguments: ["in_progress", "pending"])
     func liveToolJoinsRun(status: String) {
         #expect(ids(fold([tool("a"), tool("b", status: status), tool("c")])) == ["tcg-tc-a"])
@@ -557,6 +568,14 @@ struct ACPToolCallGroupSummaryTests {
     ])
     func liveLabel(kinds: [String], expected: String) {
         #expect(ACPToolCallGroupSummary(toolCalls: calls(kinds), isLive: true).label == expected)
+    }
+
+    @Test("the label flags running members when the group itself is not the live tail")
+    func labelFlagsRunningMembersWhenNotLive() {
+        let summary = ACPToolCallGroupSummary(toolCalls: [
+            tool("a", kind: "execute"), tool("b", kind: "execute", status: "in_progress"),
+        ])
+        #expect(summary.label == "Ran 2 commands · 1 running")
     }
 }
 
