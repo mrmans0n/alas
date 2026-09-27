@@ -377,6 +377,7 @@ struct RemotePeerManagerTests {
     private func awaitCapturedCounterCode(from requests: Requests) async -> String? {
         let deadline = ContinuousClock.now.advanced(by: .seconds(2))
         while ContinuousClock.now < deadline {
+            if Task.isCancelled { return nil }
             if let last = requests.seen.last,
                let body = try? self.body(of: last),
                let ad = body["peer"] as? [String: Any],
