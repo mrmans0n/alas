@@ -307,6 +307,7 @@ private final class ReentrantSyncFakeGGRunner: GGCommandRunning, @unchecked Send
 /// Holds the post-sync and replacement reads so the mutation can finish
 /// while the replacement refresh is still waiting for its result.
 private actor PostMutationRefreshCancellationRunner: GGCommandRunning {
+    private let replacementFails: Bool
     private let preflightResult = ProcessResult(
         exitCode: 0,
         stdout: GGStackModelsTests.fixture,
@@ -331,6 +332,10 @@ private actor PostMutationRefreshCancellationRunner: GGCommandRunning {
     private var replacementReadSuspended = false
     private var replacementReadWaiters: [CheckedContinuation<Void, Never>] = []
     private var replacementReadContinuation: CheckedContinuation<ProcessResult, Never>?
+
+    init(replacementFails: Bool = false) {
+        self.replacementFails = replacementFails
+    }
 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         if args == ["sync", "--help"] {
@@ -366,6 +371,8 @@ private actor PostMutationRefreshCancellationRunner: GGCommandRunning {
                 replacementReadWaiters.removeAll()
                 for waiter in waiters { waiter.resume() }
             }
+        case 4 where replacementFails:
+            return replacementResult
         default:
             return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected stack read")
         }
@@ -396,7 +403,10 @@ private actor PostMutationRefreshCancellationRunner: GGCommandRunning {
     }
 
     func releaseReplacementRead() {
-        replacementReadContinuation?.resume(returning: replacementResult)
+        let result = replacementFails
+            ? ProcessResult(exitCode: 1, stdout: "", stderr: "replacement read failed")
+            : replacementResult
+        replacementReadContinuation?.resume(returning: result)
         replacementReadContinuation = nil
     }
 
@@ -2699,6 +2709,33 @@ struct RightPaneGGStackTests {
         #expect(state.ggActionState.inFlightAction == nil)
         #expect(state.ggActionState.lastActionSummary == "Synced")
         #expect(state.ggActionState.syncProgress.isEmpty)
+    }
+
+    @Test func failedReplacementRefreshRetriesAfterMutation() async {
+        let worktree = makeWorktree()
+        let runner = PostMutationRefreshCancellationRunner(replacementFails: true)
+        let state = await makeMutationReadyState(worktree: worktree)
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = [
+            commit(sha: String(repeating: "s", count: 40), stackShaped: true),
+        ]
+
+        let operation = state.runGGMutation(.sync)
+        await runner.waitUntilPostSyncReadSuspends()
+        let replacement = state.reevaluateGGGate()
+        await runner.waitUntilPostSyncReadCancellationIsObserved()
+        await runner.waitUntilReplacementReadSuspends()
+        await runner.finishPostSyncReadCancellation()
+        await operation?.value
+        await runner.releaseReplacementRead()
+        await replacement.value
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while state.ggStack?.name != "replacement-stack", ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        #expect(state.ggStack?.name == "replacement-stack")
     }
 
     @Test func reevaluatingGGGateKeepsCompatibleLoadedStackVisible() async throws {
