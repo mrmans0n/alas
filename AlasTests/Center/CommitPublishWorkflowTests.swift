@@ -16,6 +16,29 @@ struct CommitPublishWorkflowTests {
         #expect(restored.createdReviewURL == checkpoint.createdReviewURL)
     }
 
+    @Test func retryRecoversCreatedReviewURLBeforeCompleting() async throws {
+        let url = URL(string: "https://github.com/owner/repository/pull/42")!
+        var savedURL: URL?
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
+            currentHeadSHA: { "commit-sha" }, remoteBranchContainsCommit: { _, _ in true }, push: { _, _ in },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { _ in url },
+            createReviewRequest: { _, _, _ in
+                Issue.record("Unexpected creation")
+                return url
+            },
+            syncGG: { _ in }, refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) { checkpoint in
+            if let checkpoint { savedURL = checkpoint.createdReviewURL }
+        }
+
+        await workflow.resume(WorkflowHarness().checkpoint(nextPhase: .createReviewRequest))
+
+        #expect(savedURL == url)
+        #expect(workflow.lastError == nil)
+    }
+
     @Test func ownerReleasesCompletedRunBeforeRefreshWithoutClearingNewerFailure() async throws {
         let refreshGate = AsyncGate()
         var failSync = false

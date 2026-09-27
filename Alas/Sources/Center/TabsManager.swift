@@ -1502,7 +1502,6 @@ final class TabsManager {
                         && target.provider == request.provider
                         && target.host.lowercased() == request.remote.host.lowercased()
                         && target.repositorySlug == request.remote.repositorySlug
-                        && target.branch == snapshot.local.branchName
                         && target.baseBranch == snapshot.local.baseBranch
                 } else {
                     matches = false

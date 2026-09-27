@@ -117,6 +117,7 @@ struct CommitPublishOperations {
     var push: (_ target: CommitPublishReviewTarget, _ commitSHA: String) async throws -> Void
     var configureUpstreamTracking: (_ target: CommitPublishReviewTarget) async throws -> Void = { _ in }
     var currentReviewRequestExists: (_ target: CommitPublishReviewTarget) async throws -> Bool
+    var currentReviewRequestURL: (_ target: CommitPublishReviewTarget) async throws -> URL? = { _ in nil }
     var createReviewRequest: (_ target: CommitPublishReviewTarget, _ subject: String, _ body: String) async throws -> URL
     var syncGG: (_ execution: CommitPublishSyncExecutionMarker) async throws -> Void
     var syncGGForTarget: (_ target: GGStackTargetIdentity, _ execution: CommitPublishSyncExecutionMarker) async throws -> Void = { _, _ in }
@@ -238,6 +239,10 @@ struct CommitPublishOperations {
             currentReviewRequestExists: { target in
                 try await reviewLoop.currentReviewRequest(remote: target.remote, branch: target.upstreamBranch ?? target.branch,
                     headOwner: target.headOwner, baseBranch: target.baseBranch) != nil
+            },
+            currentReviewRequestURL: { target in
+                try await reviewLoop.currentReviewRequest(remote: target.remote, branch: target.upstreamBranch ?? target.branch,
+                    headOwner: target.headOwner, baseBranch: target.baseBranch)?.url
             },
             createReviewRequest: { target, subject, body in
                 try await reviewLoop.createReviewRequest(remote: target.remote, branch: target.upstreamBranch ?? target.branch,
@@ -431,7 +436,10 @@ final class CommitPublishWorkflow {
                     try Task.checkCancellation()
                     let requestExists = try await operations.currentReviewRequestExists(target)
                     try Task.checkCancellation()
-                    if !requestExists {
+                    if requestExists, checkpoint.createdReviewURL == nil {
+                        checkpoint.createdReviewURL = try await operations.currentReviewRequestURL(target)
+                        try onCheckpointChange(checkpoint)
+                    } else if !requestExists {
                         checkpoint.createdReviewURL = try await operations.createReviewRequest(target, checkpoint.subject, checkpoint.body)
                         try onCheckpointChange(checkpoint)
                     }
