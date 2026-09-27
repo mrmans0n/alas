@@ -838,7 +838,7 @@ struct ACPComposer: View {
     }
     private var autoRunFg: Color {
         session.autoRunEnabled
-            ? Color.blend(theme.color("caution"), .white, t: 0.55)
+            ? ACPSelectChip.labelForeground(accent: theme.color("caution"), theme: theme)
             : theme.color("fg-muted")
     }
 
@@ -851,7 +851,7 @@ struct ACPComposer: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(
                     dictation.state == .listening
-                        ? Color.blend(theme.color("caution"), .white, t: 0.55)
+                        ? ACPSelectChip.labelForeground(accent: theme.color("caution"), theme: theme)
                         : theme.color("fg-muted")
                 )
                 .frame(width: 28, height: 24)
@@ -1010,7 +1010,9 @@ struct ACPComposer: View {
 
     private func fastModeFg(isEnabled: Bool) -> Color {
         isEnabled
-            ? Color.blend(cursorFastAccent, .white, t: 0.45)
+            ? (theme.darkMode
+                ? Color.blend(cursorFastAccent, .white, t: 0.45)
+                : ACPSelectChip.labelForeground(accent: cursorFastAccent, theme: theme))
             : theme.color("fg-muted")
     }
 
@@ -1071,12 +1073,14 @@ struct ACPComposer: View {
         }
     }
 
+    // Cursor's own hues are tuned for dark surfaces; on light the theme's
+    // matching status tokens keep the chips legible.
     private var cursorContextAccent: Color {
-        Color(.sRGB, red: 0.28, green: 0.72, blue: 0.88, opacity: 1)
+        theme.darkMode ? Color(.sRGB, red: 0.28, green: 0.72, blue: 0.88, opacity: 1) : theme.color("info")
     }
 
     private var cursorFastAccent: Color {
-        Color(.sRGB, red: 0.48, green: 0.82, blue: 0.42, opacity: 1)
+        theme.darkMode ? Color(.sRGB, red: 0.48, green: 0.82, blue: 0.42, opacity: 1) : theme.color("add")
     }
 
     private var booleanConfigOptions: [ACPConfigOption] {

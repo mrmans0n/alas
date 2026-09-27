@@ -25,6 +25,38 @@ enum ANSIColor: Equatable {
     case rgb(red: Int, green: Int, blue: Int)
 }
 
+extension ANSIColor {
+    /// The 16 base colors for light surfaces (GitHub Light's terminal
+    /// palette), indexed like `paletteIndex`. The stock palette's white,
+    /// yellow, and bright variants vanish on a light background.
+    static let lightPalette: [String] = [
+        "#24292F", "#CF222E", "#116329", "#4D2D00", "#0969DA", "#8250DF", "#1B7C83", "#6E7781",
+        "#57606A", "#A40E26", "#1A7F37", "#633C01", "#218BFF", "#A475F9", "#3192AA", "#8C959F",
+    ]
+
+    var paletteIndex: Int? {
+        switch self {
+        case .default, .rgb: nil
+        case .black: 0
+        case .red: 1
+        case .green: 2
+        case .yellow: 3
+        case .blue: 4
+        case .magenta: 5
+        case .cyan: 6
+        case .white: 7
+        case .brightBlack: 8
+        case .brightRed: 9
+        case .brightGreen: 10
+        case .brightYellow: 11
+        case .brightBlue: 12
+        case .brightMagenta: 13
+        case .brightCyan: 14
+        case .brightWhite: 15
+        }
+    }
+}
+
 /// Bounded, incrementally parsed ANSI output for live terminal rendering.
 /// The parser consumes each pipe byte exactly once while this buffer retains
 /// only the tail that can reasonably be displayed in the transcript row.

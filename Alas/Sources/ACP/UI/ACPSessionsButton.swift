@@ -243,7 +243,7 @@ private struct SessionsPopover: View {
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(isCurrent ? theme.color("accent").opacity(0.10) : Color.clear)
+            .background(isCurrent ? theme.color("accent").opacity(theme.darkMode ? 0.10 : 0.18) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 5))
             .contentShape(Rectangle())
         }

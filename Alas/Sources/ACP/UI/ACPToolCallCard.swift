@@ -360,7 +360,7 @@ private struct ACPToolCallAssetView: View {
                 .padding(6)
         }
             .frame(width: 160, height: 120)
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.15), lineWidth: 0.5))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.15), lineWidth: 0.5))
     }
 
     private var imagePlaceholder: some View {
@@ -372,7 +372,7 @@ private struct ACPToolCallAssetView: View {
                 .foregroundStyle(theme.color("fg-faint"))
         }
         .frame(width: 160, height: 120)
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.15), lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.15), lineWidth: 0.5))
     }
 
     private func compactRow(iconSystemName: String, title: String, detail: String?) -> some View {
@@ -427,7 +427,7 @@ private struct RemoteToolCallAssetImage: View {
                         .padding(6)
                 }
                 .frame(width: 160, height: 120)
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.15), lineWidth: 0.5))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.15), lineWidth: 0.5))
             } else {
                 placeholder
             }

@@ -296,12 +296,12 @@ final class ACPSlashPickerPanel: NSPanel {
         blur.material = .menu
         blur.blendingMode = .behindWindow
         blur.state = .active
-        blur.appearance = NSAppearance(named: .vibrantDark)
+        blur.appearance = NSAppearance(named: theme.darkMode ? .vibrantDark : .vibrantLight)
         blur.wantsLayer = true
         blur.layer?.cornerRadius = 10
         blur.layer?.masksToBounds = true
         blur.layer?.borderWidth = 0.5
-        blur.layer?.borderColor = NSColor(white: 1, alpha: 0.10).cgColor
+        blur.layer?.borderColor = NSColor(white: theme.darkMode ? 1 : 0, alpha: 0.10).cgColor
         blur.autoresizingMask = [.width, .height]
         content.addSubview(blur)
 

@@ -18,7 +18,7 @@ enum ACPUpstreamReferenceChipStyle {
     }
 
     static func nameColor(for kind: CodeHostReferenceSummary.Kind?) -> NSColor {
-        tint(for: kind).blended(withFraction: 0.55, of: .white) ?? .white
+        tint(for: kind).chipLabelColor
     }
 
     static func size(for spelling: String) -> NSSize {

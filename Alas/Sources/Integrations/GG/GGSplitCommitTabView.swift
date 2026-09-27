@@ -362,7 +362,7 @@ struct GGSplitCommitTabView: View {
         .clipShape(.rect(cornerRadius: 8))
         .overlay {
             RoundedRectangle(cornerRadius: 8)
-                .stroke(isActive ? theme.color("accent") : theme.color("border"), lineWidth: isActive ? 2 : 1)
+                .stroke(isActive ? theme.color("accent") : theme.color("line"), lineWidth: isActive ? 2 : 1)
         }
     }
 

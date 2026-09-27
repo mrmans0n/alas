@@ -599,13 +599,18 @@ private struct ProjectDialog: View {
                     Circle()
                         .fill(Color(hex: hex))
                         .frame(width: 22, height: 22)
-                        .overlay(Circle().strokeBorder(.white, lineWidth: iconColor == hex ? 2 : 0))
+                        .overlay(Circle().strokeBorder(selectedSwatchRing, lineWidth: iconColor == hex ? 2 : 0))
                 }
                 .buttonStyle(.plain)
             }
             AlasField(text: $iconColor, placeholder: ProjectIcon.defaultColor, monospaced: true)
                 .frame(width: 96)
         }
+    }
+
+    /// A white ring disappears into light swatches on the light theme.
+    private var selectedSwatchRing: Color {
+        theme.darkMode ? .white : theme.color("fg")
     }
 
     /// Toggles the squircle fill off. The palette stays live because the color
@@ -618,7 +623,7 @@ private struct ProjectDialog: View {
                 .clipShape(Circle())
                 .overlay(
                     Circle().strokeBorder(
-                        iconTransparent ? .white : theme.color("line"),
+                        iconTransparent ? selectedSwatchRing : theme.color("line"),
                         lineWidth: iconTransparent ? 2 : 0.5
                     )
                 )

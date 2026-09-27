@@ -164,7 +164,7 @@ private struct ACPImageChipHoverPreview: View {
             .background(Color(nsColor: .windowBackgroundColor))
             .overlay(
                 Rectangle()
-                    .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
+                    .strokeBorder(.primary.opacity(0.15), lineWidth: 0.5)
             )
     }
 }

@@ -100,11 +100,12 @@ struct ImageDiffControls: View {
 
     private func changedChip(percent: Double) -> some View {
         let percent = String(format: "%.1f%%", percent)
+        let pink = Color(red: 0.96, green: 0.45, blue: 0.71)
         return Text("\(percent) changed")
             .font(.system(size: 9.5, weight: .semibold))
             .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(Color(red: 0.96, green: 0.45, blue: 0.71).opacity(0.18))
-            .foregroundColor(Color(red: 0.96, green: 0.45, blue: 0.71))
+            .background(pink.opacity(0.18))
+            .foregroundColor(theme.darkMode ? pink : Color.blend(pink, .black, t: 0.45))
             .clipShape(RoundedRectangle(cornerRadius: 3))
     }
 

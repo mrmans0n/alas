@@ -18,7 +18,7 @@ struct DeleteFailedWorktreeView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 22))
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 30))
-                    .foregroundColor(theme.color("warning"))
+                    .foregroundColor(theme.color("warn"))
             }
             Text("Delete failed")
                 .font(.system(size: 15, weight: .semibold))

@@ -14,7 +14,7 @@ struct EditorNavigationResultsView: View {
         if store.isPresented {
             VStack(spacing: 0) {
                 Rectangle()
-                    .fill(theme.color("border"))
+                    .fill(theme.color("line"))
                     .frame(height: 1)
                     .gesture(resizeGesture)
                 header
@@ -49,7 +49,7 @@ struct EditorNavigationResultsView: View {
             if store.resultsAreStale {
                 Text("Stale")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(theme.color("warning"))
+                    .foregroundStyle(theme.color("warn"))
                     .accessibilityLabel("Reference results are stale")
                 Button("Rerun", action: onRerun)
                     .buttonStyle(.plain)
@@ -60,7 +60,7 @@ struct EditorNavigationResultsView: View {
             if let statusMessage = store.statusMessage {
                 Text(statusMessage)
                     .font(.system(size: 11))
-                    .foregroundStyle(theme.color("warning"))
+                    .foregroundStyle(theme.color("warn"))
                     .lineLimit(1)
             }
             Spacer()
@@ -84,7 +84,7 @@ struct EditorNavigationResultsView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let error = store.errorMessage {
             Text(error)
-                .foregroundStyle(theme.color("red"))
+                .foregroundStyle(theme.color("del"))
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         } else if store.results.isEmpty {

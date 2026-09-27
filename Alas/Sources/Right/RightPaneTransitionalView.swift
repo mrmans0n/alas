@@ -113,7 +113,7 @@ private struct CompactStateLabel: View {
         VStack(spacing: 10) {
             Image(systemName: systemIcon)
                 .font(.system(size: 22))
-                .foregroundColor(theme.color("warning"))
+                .foregroundColor(theme.color("warn"))
             Text(text)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(theme.color("fg-muted"))

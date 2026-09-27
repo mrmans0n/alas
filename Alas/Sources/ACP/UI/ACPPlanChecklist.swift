@@ -53,7 +53,7 @@ struct ACPPlanChecklist: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12).padding(.vertical, 5)
-        .background(item.status == "in_progress" ? theme.color("accent").opacity(0.10) : Color.clear)
+        .background(item.status == "in_progress" ? theme.color("accent").opacity(theme.darkMode ? 0.10 : 0.18) : Color.clear)
     }
 
     @ViewBuilder
