@@ -4,6 +4,34 @@ import Testing
 @testable import Alas
 
 struct LocalTextModelLeaseTests {
+    private static func readReply(from handle: FileHandle, timeoutMilliseconds: Int32 = 10_000) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            let thread = Thread {
+                continuation.resume(with: Result {
+                    var descriptor = pollfd(fd: handle.fileDescriptor, events: Int16(POLLIN), revents: 0)
+                    let ready = poll(&descriptor, 1, timeoutMilliseconds)
+                    guard ready > 0 else {
+                        throw ready == 0 ? POSIXError(.ETIMEDOUT) : POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    }
+                    return String(decoding: try handle.read(upToCount: 2) ?? Data(), as: UTF8.self)
+                })
+            }
+            thread.name = "LocalTextModelLeaseTests.childReply"
+            thread.start()
+        }
+    }
+
+    @Test func silentChildReplyExpires() async throws {
+        let pipe = Pipe()
+        defer {
+            try? pipe.fileHandleForReading.close()
+            try? pipe.fileHandleForWriting.close()
+        }
+        await #expect(throws: POSIXError(.ETIMEDOUT)) {
+            try await Self.readReply(from: pipe.fileHandleForReading, timeoutMilliseconds: 50)
+        }
+    }
+
     @Test func readerExcludesIndependentWriterAndKeepsStableLock() async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
@@ -61,23 +89,23 @@ struct LocalTextModelLeaseTests {
             }
             if !process.isRunning { process.waitUntilExit() }
         }
-        func expectResponse(_ expected: String, sourceLocation: SourceLocation = #_sourceLocation) throws {
-            let actual = String(decoding: try output.fileHandleForReading.read(upToCount: 2) ?? Data(), as: UTF8.self)
+        func expectResponse(_ expected: String, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+            let actual = try await Self.readReply(from: output.fileHandleForReading)
             guard actual != expected else { return }
             // An empty reply means the child exited, so its stderr is complete.
             let childErrors = actual.isEmpty ? String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self) : ""
             Issue.record("Lock holder replied \(actual.debugDescription), expected \(expected.debugDescription). \(childErrors)",
                          sourceLocation: sourceLocation)
         }
-        try expectResponse("R\n")
+        try await expectResponse("R\n")
         await #expect(throws: LocalTextModelFailure.busy) { try await fixture.store.remove() }
         await fixture.store.install()
         #expect(await fixture.store.state == .failed(.busy))
         try input.fileHandleForWriting.write(contentsOf: Data([1]))
-        try expectResponse("U\n")
+        try await expectResponse("U\n")
         try await fixture.store.remove()
         try input.fileHandleForWriting.write(contentsOf: Data([1]))
-        try expectResponse("R\n")
+        try await expectResponse("R\n")
         await fixture.store.install()
         #expect(await fixture.store.state == .failed(.busy))
         await #expect(throws: LocalTextModelFailure.busy) { try await fixture.store.remove() }
