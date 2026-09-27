@@ -95,7 +95,9 @@ struct ChangesPreparationModel: Equatable {
         aheadCommitCount: Int = 0,
         local: ReviewLoopLocalState? = nil,
         readinessActions: [ReviewReadinessModel.Action],
-        publishAvailability: CommitPublishAvailability? = nil
+        publishAvailability: CommitPublishAvailability? = nil,
+        pushAndCreateReviewRequestLabel: String? = nil,
+        pushAndCreateReviewRequestInFlight: Bool = false
     ) {
         let builtReviewAction: ReviewAction?
         if let summary = ReviewChangesTriggerSummary.summary(for: changes) {
@@ -135,7 +137,11 @@ struct ChangesPreparationModel: Equatable {
         let availableActions = publishAction == nil ? readinessActions : readinessActions.filter {
             $0.kind != .pushBranch && $0.kind != .createReviewRequest
         }
-        let builtActions = Self.compactReviewRequestActions(from: availableActions)
+        let builtActions = Self.compactReviewRequestActions(
+            from: availableActions,
+            pushAndCreateReviewRequestLabel: pushAndCreateReviewRequestLabel,
+            pushAndCreateReviewRequestInFlight: pushAndCreateReviewRequestInFlight
+        )
         let effectiveAheadCommitCount = local?.aheadCommitCount ?? aheadCommitCount
         reviewRequestActions = Self.applyingHideRules(
             builtActions,
@@ -348,7 +354,9 @@ struct ChangesPreparationModel: Equatable {
     }
 
     private static func compactReviewRequestActions(
-        from actions: [ReviewReadinessModel.Action]
+        from actions: [ReviewReadinessModel.Action],
+        pushAndCreateReviewRequestLabel: String?,
+        pushAndCreateReviewRequestInFlight: Bool
     ) -> [ReviewRequestAction] {
         if let merge = actions.first(where: { $0.kind == .merge }) {
             var pair = [convert(merge)]
@@ -356,6 +364,26 @@ struct ChangesPreparationModel: Equatable {
                 pair.append(convert(review))
             }
             return pair
+        }
+        if pushAndCreateReviewRequestInFlight, let label = pushAndCreateReviewRequestLabel {
+            return [convert(ReviewReadinessModel.Action(
+                kind: .pushAndCreateReviewRequest,
+                title: "Push & create \(label)",
+                isEnabled: false,
+                isInFlight: true
+            ))]
+        }
+        if let label = pushAndCreateReviewRequestLabel,
+           let push = actions.first(where: { $0.kind == .pushBranch }),
+           push.isEnabled, !push.isInFlight {
+            return [
+                convert(push),
+                convert(ReviewReadinessModel.Action(
+                    kind: .pushAndCreateReviewRequest,
+                    title: "Push & create \(label)",
+                    isEnabled: true
+                )),
+            ]
         }
         if let single = compactSingleAction(from: actions) {
             return [single]
@@ -394,7 +422,7 @@ struct ChangesPreparationModel: Equatable {
         local: ReviewLoopLocalState?,
         aheadCommitCount: Int
     ) -> [ReviewRequestAction] {
-        guard actions.count == 1, let only = actions.first else { return actions }
+        guard let only = actions.first else { return actions }
         if only.kind == .refresh,
            !only.isInFlight,
            !hasReviewAction,
