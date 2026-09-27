@@ -397,6 +397,7 @@ struct ReviewPRTabState: Codable, Equatable, Identifiable {
     let provider: CodeHostKind
     let repositorySlug: String
     let number: Int
+    var requestRemote: CodeHostRemote?
     var url: URL
     var title: String
 
@@ -411,6 +412,7 @@ struct ReviewPRTabState: Codable, Equatable, Identifiable {
         self.provider = request?.provider ?? remote?.kind ?? .github
         self.repositorySlug = remote?.repositorySlug ?? ""
         self.number = request?.number ?? 0
+        self.requestRemote = remote
         self.url = request?.url ?? remote?.webURL ?? URL(fileURLWithPath: "/")
         self.title = request?.title ?? ""
         let host = remote?.host ?? self.url.host ?? ""
@@ -424,10 +426,33 @@ struct ReviewPRTabState: Codable, Equatable, Identifiable {
         ].joined(separator: ":")
     }
 
+    init(worktreeId: String, remote: CodeHostRemote, number: Int, url: URL, title: String) {
+        self.worktreeId = worktreeId
+        self.provider = remote.kind
+        self.repositorySlug = remote.repositorySlug
+        self.number = number
+        self.requestRemote = remote
+        self.url = url
+        self.title = title
+        self.id = [
+            "review-pr", worktreeId, provider.rawValue, remote.host,
+            repositorySlug, "\(number)"
+        ].joined(separator: ":")
+    }
+
     mutating func refreshSnapshotMetadata(from snapshot: ReviewLoopSnapshot) {
         guard let request = snapshot.reviewRequest else { return }
+        requestRemote = request.remote
         url = request.url
         title = request.title
+    }
+
+    func lookupRemote(activeRemote: CodeHostRemote?, knownRemotes: [CodeHostRemote] = []) -> CodeHostRemote? {
+        if let requestRemote { return requestRemote }
+        return CodeHostRemote.recoveredReviewRequestRemote(
+            provider: provider, repositorySlug: repositorySlug, number: number,
+            url: url, knownRemotes: knownRemotes + [activeRemote].compactMap { $0 }
+        )
     }
 
     func matches(_ snapshot: ReviewLoopSnapshot) -> Bool {
@@ -554,6 +579,8 @@ struct CommitEditorTabState: Codable, Equatable, Identifiable {
     let originalSha: String
     var currentSha: String
     var title: String
+    var pendingCreatedReviewTarget: CommitPublishReviewTarget?
+    var pendingCreatedReviewURL: URL?
 
     init(worktreeId: String, baseRef: String, originalSha: String, currentSha: String, title: String) {
         self.id = "commit-editor:\(worktreeId):\(originalSha)"
@@ -562,6 +589,8 @@ struct CommitEditorTabState: Codable, Equatable, Identifiable {
         self.originalSha = originalSha
         self.currentSha = currentSha
         self.title = title
+        self.pendingCreatedReviewTarget = nil
+        self.pendingCreatedReviewURL = nil
     }
 }
 
@@ -655,8 +684,10 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
     let worktreeId: String
     let provider: CodeHostKind
     let repositorySlug: String
+    var creationRemote: CodeHostRemote?
     let branchName: String
     let baseBranch: String
+    var upstreamBranchName: String?
     var headOwner: String?
     var headSHA: String
     var title: String
@@ -664,6 +695,9 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
     var createAsDraft: Bool
     var selectedPath: String?
     var createdURL: URL?
+    var didOpenCreatedReview: Bool?
+
+    var reviewBranchName: String { upstreamBranchName ?? branchName }
 
     var displayTitle: String {
         if createdURL != nil { return "\(provider.reviewRequestLabel) created" }
@@ -675,8 +709,10 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
         self.worktreeId = worktreeId
         self.provider = provider
         self.repositorySlug = snapshot.remote?.repositorySlug ?? ""
+        self.creationRemote = snapshot.remote
         self.branchName = snapshot.local.branchName
         self.baseBranch = snapshot.local.baseBranch
+        self.upstreamBranchName = snapshot.local.upstreamBranchName
         self.id = [
             "draft-review-request",
             worktreeId,
@@ -692,20 +728,23 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
         self.createAsDraft = false
         self.selectedPath = nil
         self.createdURL = nil
+        self.didOpenCreatedReview = nil
     }
 
     mutating func refreshSnapshotMetadata(from snapshot: ReviewLoopSnapshot) {
-        if headSHA != snapshot.local.headSHA {
-            createdURL = nil
+        if createdURL == nil || upstreamBranchName == nil {
+            upstreamBranchName = snapshot.local.upstreamBranchName
         }
-        headOwner = snapshot.local.headRemoteOwner
+        if createdURL == nil || headOwner == nil {
+            headOwner = snapshot.local.headRemoteOwner
+        }
         headSHA = snapshot.local.headSHA
     }
 
     func matchesTarget(_ snapshot: ReviewLoopSnapshot) -> Bool {
         snapshot.remote?.kind == provider
             && snapshot.remote?.repositorySlug == repositorySlug
-            && snapshot.local.branchName == branchName
+            && (snapshot.local.upstreamBranchName ?? snapshot.local.branchName) == reviewBranchName
             && snapshot.local.baseBranch == baseBranch
             && snapshot.local.headSHA == headSHA
     }

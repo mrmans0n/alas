@@ -18,6 +18,27 @@ struct TabsManagerReviewRequestDraftTests {
         #expect(manager.activeTabId(forWorktree: worktreeId) == first.id)
     }
 
+    @Test func createdReviewStillOpensWhenDraftClosesDuringCreation() throws {
+        let worktreeId = "review-request-draft-closed-during-creation"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let snapshot = Self.snapshot()
+        let draft = manager.openOrFocusDraftReviewRequest(worktreeId: worktreeId, snapshot: snapshot)
+        let remote = try #require(snapshot.remote)
+        let url = remote.reviewRequestURL(number: 42)
+        var notifiedURL: URL?
+        manager.onCreatedReview = { _, review in notifiedURL = review.url }
+
+        manager.close(worktreeId: worktreeId, tabId: draft.id)
+        let review = try #require(manager.openCreatedReviewAfterDraftClose(
+            worktreeId: worktreeId, remote: remote, url: url, title: "Created review"
+        ))
+
+        #expect(manager.tabs(forWorktree: worktreeId).map(\.id) == [review.id])
+        #expect(manager.activeTabId(forWorktree: worktreeId) == review.id)
+        #expect(notifiedURL == url)
+    }
+
     @Test func focusesSameDraftTargetPreservingEdits() {
         let worktreeId = "review-request-draft-same-target"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
@@ -94,8 +115,93 @@ struct TabsManagerReviewRequestDraftTests {
         #expect(state.body == "## Summary\n- Adds a tab")
     }
 
-    @Test func sameDraftTargetClearsCreatedURLWhenHeadChanges() {
-        let worktreeId = "review-request-draft-clear-created-url"
+    @Test func localBranchRenameKeepsPendingCreatedReviewDraft() {
+        let worktreeId = "review-request-draft-renamed-local-branch"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let first = manager.openOrFocusDraftReviewRequest(
+            worktreeId: worktreeId, snapshot: Self.snapshot(branchName: "local-feature")
+        )
+        let createdURL = URL(string: "https://github.com/mrmans0n/alas/pull/42")!
+        _ = manager.updateDraftReviewRequest(worktreeId: worktreeId, tabId: first.id) {
+            $0.createdURL = createdURL
+        }
+
+        let second = manager.openOrFocusDraftReviewRequest(
+            worktreeId: worktreeId, snapshot: Self.snapshot(branchName: "renamed-feature")
+        )
+
+        #expect(second.id == first.id)
+        guard case .draftReviewRequest(let state) = second else {
+            Issue.record("Expected draft review request tab")
+            return
+        }
+        #expect(state.createdURL == createdURL)
+        #expect(manager.tabs(forWorktree: worktreeId).count == 1)
+    }
+
+    @Test func persistedPendingDraftWithoutUpstreamMetadataSurvivesLocalRename() throws {
+        let worktreeId = "review-request-draft-legacy-upstream"
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = PersistenceStore()
+        let snapshot = Self.snapshot(branchName: "local-feature")
+        var legacy = DraftReviewRequestTabState(worktreeId: worktreeId, snapshot: snapshot)
+        legacy.upstreamBranchName = nil
+        legacy.title = "Saved title"
+        legacy.body = "Saved body"
+        legacy.createdURL = URL(string: "https://github.com/mrmans0n/alas/pull/42")!
+        try store.write(TabsFile(tabs: [.draftReviewRequest(legacy)], activeTabId: legacy.id),
+            to: directory.appendingPathComponent("\(worktreeId).json"))
+        let manager = TabsManager(store: store, tabsDirectory: directory)
+        manager.loadAll(worktreeIds: [worktreeId])
+
+        let reopened = manager.openOrFocusDraftReviewRequest(
+            worktreeId: worktreeId, snapshot: Self.snapshot(branchName: "renamed-feature"),
+            existingLocalBranches: ["renamed-feature"]
+        )
+
+        #expect(reopened.id == legacy.id)
+        #expect(manager.tabs(forWorktree: worktreeId).count == 1)
+        guard case .draftReviewRequest(let state) = reopened else {
+            Issue.record("Expected draft review request tab")
+            return
+        }
+        #expect(state.title == "Saved title")
+        #expect(state.body == "Saved body")
+        #expect(state.createdURL == legacy.createdURL)
+        #expect(state.reviewBranchName == "feature/pr-drafts")
+    }
+
+    @Test func legacyPendingDraftDoesNotFollowAnotherBranchAtSameCommit() {
+        let worktreeId = "review-request-draft-legacy-distinct-branch"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let first = manager.openOrFocusDraftReviewRequest(
+            worktreeId: worktreeId, snapshot: Self.snapshot(branchName: "branch-a")
+        )
+        _ = manager.updateDraftReviewRequest(worktreeId: worktreeId, tabId: first.id) { state in
+            state.upstreamBranchName = nil
+            state.createdURL = URL(string: "https://github.com/mrmans0n/alas/pull/42")!
+        }
+
+        let second = manager.openOrFocusDraftReviewRequest(
+            worktreeId: worktreeId, snapshot: Self.snapshot(branchName: "branch-b"),
+            existingLocalBranches: ["branch-a", "branch-b"]
+        )
+
+        #expect(second.id != first.id)
+        #expect(manager.tabs(forWorktree: worktreeId).count == 2)
+        guard case .draftReviewRequest(let state) = second else {
+            Issue.record("Expected draft review request tab")
+            return
+        }
+        #expect(state.createdURL == nil)
+    }
+
+    @Test func createdReviewSurvivesHeadAdvanceAndRefocusUntilDiscovered() throws {
+        let worktreeId = "review-request-draft-pending-created-url"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
         let manager = TabsManager()
         let first = manager.openOrFocusDraftReviewRequest(
@@ -117,7 +223,16 @@ struct TabsManagerReviewRequestDraftTests {
             return
         }
         #expect(state.headSHA == "def456")
-        #expect(state.createdURL == nil)
+        #expect(state.createdURL == URL(string: "https://github.com/mrmans0n/alas/pull/42"))
+        let refreshed = Self.snapshot(headSHA: "def456")
+        let found = ReviewLoopSnapshot(
+            local: refreshed.local, remote: refreshed.remote,
+            reviewRequest: .placeholder(remote: try #require(refreshed.remote), number: 42),
+            providerAvailable: true, providerAuthenticated: true,
+            providerCapabilities: .githubCLI, errorMessage: nil
+        )
+        let review = try #require(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: found))
+        #expect(manager.activeTabId(forWorktree: worktreeId) == review.id)
     }
 
     @Test func updatesDraftReviewRequestFields() {
@@ -160,11 +275,11 @@ struct TabsManagerReviewRequestDraftTests {
         #expect(decoded.createdURL == URL(string: "https://github.com/mrmans0n/alas/pull/42")!)
     }
 
-    @Test func draftReviewRequestTargetRequiresSameBranchBaseProviderRepoAndHead() {
+    @Test func draftReviewRequestTargetFollowsUpstreamAcrossLocalRename() {
         let state = DraftReviewRequestTabState(worktreeId: "wt-1", snapshot: Self.snapshot())
 
         #expect(state.matchesTarget(Self.snapshot()))
-        #expect(!state.matchesTarget(Self.snapshot(branchName: "feature/other")))
+        #expect(state.matchesTarget(Self.snapshot(branchName: "feature/other")))
         #expect(!state.matchesTarget(Self.snapshot(baseBranch: "origin/release")))
         #expect(!state.matchesTarget(Self.snapshot(provider: .gitlab)))
         #expect(!state.matchesTarget(Self.snapshot(owner: "other")))

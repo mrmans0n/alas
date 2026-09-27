@@ -82,6 +82,24 @@ enum ReviewTabLoadKey {
     }
 }
 
+enum ReviewTabRequestedFetchGate {
+    static func accepts(
+        expectedKey: String, currentKey: String,
+        expectedGeneration: Int, currentGeneration: Int,
+        isCancelled: Bool, refreshSettled: Bool
+    ) -> Bool {
+        !isCancelled && refreshSettled
+            && expectedKey == currentKey
+            && expectedGeneration == currentGeneration
+    }
+}
+
+enum ReviewTabBranchContext {
+    static func canReview(tabState: ReviewPRTabState, activeSnapshot: ReviewLoopSnapshot?, refreshSettled: Bool) -> Bool {
+        refreshSettled && activeSnapshot.map(tabState.matches) == true
+    }
+}
+
 struct ReviewTabView: View {
     let worktree: Worktree
     let tabState: ReviewPRTabState
@@ -93,6 +111,7 @@ struct ReviewTabView: View {
 
     @Environment(\.theme) private var theme
     @State private var session: ReviewChangesLoadedSession?
+    @State private var loadedReviewRequestDiff = false
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var selectedFileID: ReviewChangesFileID?
@@ -110,6 +129,7 @@ struct ReviewTabView: View {
     @State private var showVerdictSheet = false
     @State private var wrapLines = false
     @State private var showWhitespace = false
+    @State private var requestedReviewSnapshot: ReviewLoopSnapshot?
 
     var body: some View {
         GeometryReader { geometry in
@@ -157,6 +177,7 @@ struct ReviewTabView: View {
             .modifier(RepoHookApprovalPresentationHandler(approvalQueue: appState.repoHookApprovalQueue))
         }
         .task(id: loadKey) {
+            await loadRequestedReviewSnapshotIfNeeded()
             let completesStartupRecovery = ReviewTabStartupRecoveryReadiness.shouldComplete(
                 hasReviewRequest: reviewRequest != nil,
                 reviewRefreshSettled: reviewRefreshSettled
@@ -200,8 +221,58 @@ struct ReviewTabView: View {
     }
 
     private var matchedSnapshot: ReviewLoopSnapshot? {
-        guard let snap = activeSnapshot, tabState.matches(snap) else { return nil }
-        return snap
+        if let snap = activeSnapshot, tabState.matches(snap) { return snap }
+        if let requestedReviewSnapshot, tabState.matches(requestedReviewSnapshot) { return requestedReviewSnapshot }
+        return nil
+    }
+
+    @MainActor
+    private func loadRequestedReviewSnapshotIfNeeded() async {
+        guard let activeSnapshot,
+              reviewRefreshSettled,
+              !tabState.matches(activeSnapshot),
+              let reviewLoop = appState.rightPaneStore.activeState(worktreeId: tabState.worktreeId)?.reviewLoop
+        else { return }
+        let expectedKey = loadKey
+        let expectedGeneration = reviewLoop.refreshGeneration
+        let gitRemotes = (try? await GitService().remotes(worktreePath: worktree.path)) ?? []
+        guard ReviewTabRequestedFetchGate.accepts(
+            expectedKey: expectedKey, currentKey: loadKey,
+            expectedGeneration: expectedGeneration, currentGeneration: reviewLoop.refreshGeneration,
+            isCancelled: Task.isCancelled, refreshSettled: reviewRefreshSettled
+        ) else { return }
+        let knownRemotes = CodeHostRemoteDetector.detectAll(from: gitRemotes)
+        guard let remote = tabState.lookupRemote(activeRemote: activeSnapshot.remote, knownRemotes: knownRemotes),
+              let provider = CodeHostProviderRegistry.live().provider(for: remote.kind)
+        else { return }
+        guard let request = try? await provider.reviewRequest(
+            remote: remote, number: tabState.number, cwd: worktree.path
+        ) else {
+            if ReviewTabRequestedFetchGate.accepts(
+                expectedKey: expectedKey, currentKey: loadKey,
+                expectedGeneration: expectedGeneration, currentGeneration: reviewLoop.refreshGeneration,
+                isCancelled: Task.isCancelled, refreshSettled: reviewRefreshSettled
+            ) { requestedReviewSnapshot = nil }
+            return
+        }
+        guard ReviewTabRequestedFetchGate.accepts(
+            expectedKey: expectedKey, currentKey: loadKey,
+            expectedGeneration: expectedGeneration, currentGeneration: reviewLoop.refreshGeneration,
+            isCancelled: Task.isCancelled, refreshSettled: reviewRefreshSettled
+        ) else { return }
+        let checks = (try? await provider.checks(remote: remote, request: request, cwd: worktree.path)) ?? []
+        guard ReviewTabRequestedFetchGate.accepts(
+            expectedKey: expectedKey, currentKey: loadKey,
+            expectedGeneration: expectedGeneration, currentGeneration: reviewLoop.refreshGeneration,
+            isCancelled: Task.isCancelled, refreshSettled: reviewRefreshSettled
+        ) else { return }
+        let candidate = ReviewLoopSnapshot(
+            local: activeSnapshot.local, remote: remote, reviewRequest: request.withChecks(checks),
+            providerAvailable: activeSnapshot.providerAvailable,
+            providerAuthenticated: activeSnapshot.providerAuthenticated,
+            providerCapabilities: provider.capabilities, errorMessage: nil
+        )
+        if tabState.matches(candidate) { requestedReviewSnapshot = candidate }
     }
 
     private var reviewRequest: ReviewRequest? {
@@ -214,11 +285,17 @@ struct ReviewTabView: View {
     }
 
     private var capabilities: CodeHostProviderCapabilities {
-        matchedSnapshot?.providerCapabilities ?? .readOnly
+        canReviewActiveBranch ? (matchedSnapshot?.providerCapabilities ?? .readOnly) : .readOnly
+    }
+
+    private var canReviewActiveBranch: Bool {
+        ReviewTabBranchContext.canReview(
+            tabState: tabState, activeSnapshot: activeSnapshot, refreshSettled: reviewRefreshSettled
+        )
     }
 
     private var canMergeReviewRequest: Bool {
-        guard let snapshot = matchedSnapshot else { return false }
+        guard let snapshot = activeSnapshot, tabState.matches(snapshot) else { return false }
         return ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
     }
 
@@ -244,7 +321,13 @@ struct ReviewTabView: View {
 
     @ViewBuilder
     private var content: some View {
-        if ReviewTabLoadingPresentation.showsBlockingLoader(isLoading: isLoading, hasSession: session != nil) {
+        if reviewRequest != nil && !canReviewActiveBranch && !loadedReviewRequestDiff {
+            stateView(
+                title: "Review request is on another branch",
+                detail: "Switch to its branch to inspect changes and comment.",
+                color: theme.color("fg-dim")
+            )
+        } else if ReviewTabLoadingPresentation.showsBlockingLoader(isLoading: isLoading, hasSession: session != nil) {
             stateView(title: "Loading changes...", detail: nil, color: theme.color("fg-dim"))
         } else if ReviewTabLoadingPresentation.showsLoadError(loadError: loadError, isLoading: isLoading, hasSession: session != nil),
                   let loadError {
@@ -266,7 +349,7 @@ struct ReviewTabView: View {
         HStack(spacing: 0) {
             content()
 
-            if let pendingReview,
+            if canReviewActiveBranch, let pendingReview,
                ReviewTabPendingReviewPresentation.showsRail(
                    stagedCount: pendingReview.staged.count,
                    loadedFileCount: fileCount
@@ -441,13 +524,14 @@ struct ReviewTabView: View {
             codeFontFamily: appState.config.code.fontFamily,
             codeFontSize: CGFloat(appState.config.code.fontSize),
             showsSourceBadges: true,
+            allowsDraftCommentCreation: canReviewActiveBranch,
             allowsNonLineDraftCommentCreation: false,
             lspContextForFile: { file in
                 makeLSPContext(relativePath: file.summary.path)
             },
             lineScrollCommand: pendingCommentScrollCommand,
             onSaveDraftComment: { fileID, path, _, anchor, body in
-                guard let pr = pendingReview else { return }
+                guard canReviewActiveBranch, let pr = pendingReview else { return }
                 guard case .line(let side, let line, let endLine, _) = anchor else { return }
                 pr.stage(StagedComment(
                     id: UUID(),
@@ -487,8 +571,10 @@ struct ReviewTabView: View {
             annotations: annotations,
             canReply: capabilities.canReply,
             canResolve: capabilities.canResolve,
+            canEdit: capabilities.canEditComment,
+            canDelete: capabilities.canDeleteComment,
             onStageReply: { fileID, inlineThread, body in
-                guard let pr = pendingReview else { return }
+                guard canReviewActiveBranch, let pr = pendingReview else { return }
                 pr.stage(StagedComment(
                     id: UUID(),
                     threadID: inlineThread.id,
@@ -533,7 +619,8 @@ struct ReviewTabView: View {
     }
 
     private func replyAction(thread: ReviewThread, body: String) {
-        guard let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
+        guard canReviewActiveBranch, capabilities.canReply,
+              let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
         let optimisticComment = ReviewComment(
             id: UUID().uuidString,
             author: nil,
@@ -565,7 +652,8 @@ struct ReviewTabView: View {
     }
 
     private func resolveAction(thread: ReviewThread) {
-        guard let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
+        guard canReviewActiveBranch, capabilities.canResolve,
+              let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
         isWriting = true
         localThreads = ReviewThreadMutations.applyResolve(to: localThreads, threadID: thread.id)
         Task { @MainActor in
@@ -581,7 +669,8 @@ struct ReviewTabView: View {
     }
 
     private func unresolveAction(thread: ReviewThread) {
-        guard let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
+        guard canReviewActiveBranch, capabilities.canResolve,
+              let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
         isWriting = true
         localThreads = ReviewThreadMutations.applyUnresolve(to: localThreads, threadID: thread.id)
         Task { @MainActor in
@@ -597,7 +686,7 @@ struct ReviewTabView: View {
     }
 
     private func editAction(thread: ReviewThread, comment: ReviewComment, newBody: String) {
-        guard capabilities.canEditComment,
+        guard canReviewActiveBranch, capabilities.canEditComment,
               let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
         let original = comment
         isWriting = true
@@ -615,7 +704,7 @@ struct ReviewTabView: View {
     }
 
     private func deleteAction(thread: ReviewThread, comment: ReviewComment) {
-        guard capabilities.canDeleteComment,
+        guard canReviewActiveBranch, capabilities.canDeleteComment,
               let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
         isWriting = true
         localThreads = ReviewThreadMutations.applyDelete(to: localThreads, threadID: thread.id, commentID: comment.id)
@@ -732,12 +821,19 @@ struct ReviewTabView: View {
                     !Task.isCancelled
                 else { return false }
                 loaded = prSession
+                loadedReviewRequestDiff = true
             } else {
+                if !canReviewActiveBranch {
+                    session = nil
+                    loadedReviewRequestDiff = false
+                    return true
+                }
                 loaded = try await loader.load(worktreePath: worktree.path)
                 guard
                     requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
                     !Task.isCancelled
                 else { return false }
+                loadedReviewRequestDiff = false
             }
 
             session = loaded
@@ -779,7 +875,8 @@ struct ReviewTabView: View {
 
     @MainActor
     private func submitReviewAction(verdict: ReviewVerdict, body: String) {
-        guard let pr = pendingReview,
+        guard canReviewActiveBranch, capabilities.canSubmitReview,
+              let pr = pendingReview,
               let provider,
               let request = reviewRequest,
               let remote = reviewRequest?.remote

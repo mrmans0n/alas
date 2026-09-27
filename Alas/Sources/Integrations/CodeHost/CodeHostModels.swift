@@ -50,7 +50,7 @@ enum CodeHostKind: String, Codable, Equatable, Sendable {
     }
 }
 
-struct CodeHostRemote: Equatable, Sendable {
+struct CodeHostRemote: Codable, Equatable, Sendable {
     let kind: CodeHostKind
     let host: String
     let owner: String
@@ -77,6 +77,37 @@ struct CodeHostRemote: Equatable, Sendable {
             return webURL.appendingPathComponent("-")
                 .appendingPathComponent("merge_requests").appendingPathComponent("\(number)")
         }
+    }
+
+    static func recoveredReviewRequestRemote(
+        provider: CodeHostKind,
+        repositorySlug: String,
+        number: Int,
+        url: URL,
+        knownRemotes: [CodeHostRemote]
+    ) -> CodeHostRemote? {
+        if let known = knownRemotes.first(where: {
+            $0.kind == provider && $0.repositorySlug == repositorySlug
+                && $0.reviewRequestURL(number: number) == url
+        }) { return known }
+
+        let slug = repositorySlug.split(separator: "/").map(String.init)
+        guard number > 0, slug.count >= 2,
+              provider == .gitlab || slug.count == 2,
+              let host = url.host,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme, scheme == "https" || scheme == "http"
+        else { return nil }
+        components.path = "/" + repositorySlug
+        components.query = nil
+        components.fragment = nil
+        guard let webURL = components.url else { return nil }
+        let remote = CodeHostRemote(
+            kind: provider, host: host,
+            owner: slug.dropLast().joined(separator: "/"), repository: slug.last!,
+            remoteName: "origin", webURL: webURL
+        )
+        return remote.reviewRequestURL(number: number) == url ? remote : nil
     }
 }
 
@@ -577,7 +608,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
             remote: remote,
             number: number,
             title: "",
-            url: remote.webURL,
+            url: remote.reviewRequestURL(number: number),
             state: .open,
             isDraft: false,
             headRefName: "",

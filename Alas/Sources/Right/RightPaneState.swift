@@ -1240,7 +1240,13 @@ final class RightPaneState: GGSplitCommitServicing {
             }
         case .createReviewRequest:
             guard let snapshot = reviewLoop.snapshot else { return }
-            appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktree.id, snapshot: snapshot)
+            guard appState.tabs.requiresLegacyDraftBranchVerification(worktreeId: worktree.id, snapshot: snapshot) else {
+                appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktree.id, snapshot: snapshot)
+                return
+            }
+            Task { @MainActor in
+                await openLegacyReviewRequestDraft(snapshot: snapshot, appState: appState)
+            }
         case .rerunFailedChecks:
             guard let snapshot = reviewLoop.snapshot else { return }
             guard reviewLoop.beginAction(action) else { return }
@@ -1285,10 +1291,33 @@ final class RightPaneState: GGSplitCommitServicing {
                     sidebarError = reviewLoop.lastError ?? "Pushed branch, but could not prepare the review request draft. Refresh and try again."
                     return
                 }
-                appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktree.id, snapshot: current)
+                if appState.tabs.requiresLegacyDraftBranchVerification(worktreeId: worktree.id, snapshot: current) {
+                    await openLegacyReviewRequestDraft(snapshot: current, appState: appState)
+                } else {
+                    appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktree.id, snapshot: current)
+                }
             }
         } catch {
             sidebarError = error.localizedDescription
+        }
+    }
+
+    func openLegacyReviewRequestDraft(
+        snapshot: ReviewLoopSnapshot,
+        appState: AppState,
+        localBranches: (URL) async throws -> [String] = { try await GitService().localBranches(at: $0) }
+    ) async {
+        do {
+            let branches = try await localBranches(worktree.path)
+            guard reviewLoop.snapshot?.local.branchName == snapshot.local.branchName,
+                  reviewLoop.snapshot?.local.headSHA == snapshot.local.headSHA
+            else { return }
+            appState.tabs.openOrFocusDraftReviewRequest(
+                worktreeId: worktree.id, snapshot: snapshot,
+                existingLocalBranches: Set(branches)
+            )
+        } catch {
+            sidebarError = "Could not verify local branches: \(error.localizedDescription)"
         }
     }
 

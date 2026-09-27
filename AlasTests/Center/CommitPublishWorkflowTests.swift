@@ -4,13 +4,98 @@ import Testing
 
 @MainActor
 struct CommitPublishWorkflowTests {
+    @Test func createdReviewURLSurvivesCheckpointRestore() throws {
+        var checkpoint = CommitPublishCheckpoint(
+            commitSHA: "abc", baseRef: "main", commitTitle: "abc Subject", subject: "Subject", body: "",
+            destination: .gg(), nextPhase: .sync
+        )
+        checkpoint.createdReviewURL = URL(string: "https://github.com/owner/repo/pull/42")!
+
+        let restored = try JSONDecoder().decode(CommitPublishCheckpoint.self, from: JSONEncoder().encode(checkpoint))
+
+        #expect(restored.createdReviewURL == checkpoint.createdReviewURL)
+    }
+
+    @Test func retryRecoversCreatedReviewURLBeforeCompleting() async throws {
+        let url = URL(string: "https://github.com/owner/repository/pull/42")!
+        var savedURL: URL?
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
+            currentHeadSHA: { "commit-sha" }, remoteBranchContainsCommit: { _, _ in true }, push: { _, _ in },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { _ in url },
+            createReviewRequest: { _, _, _ in
+                Issue.record("Unexpected creation")
+                return url
+            },
+            syncGG: { _ in }, refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) { checkpoint in
+            if let checkpoint { savedURL = checkpoint.createdReviewURL }
+        }
+
+        await workflow.resume(WorkflowHarness().checkpoint(nextPhase: .createReviewRequest))
+
+        #expect(savedURL == url)
+        #expect(workflow.lastError == nil)
+    }
+
+    @Test func retryWithCreatedURLSkipsStaleLookupAndCreation() async throws {
+        let url = URL(string: "https://github.com/owner/repository/pull/42")!
+        var checkpoint = WorkflowHarness().checkpoint(nextPhase: .createReviewRequest)
+        checkpoint.createdReviewURL = url
+        var lookupCount = 0
+        var createCount = 0
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
+            currentHeadSHA: { "commit-sha" }, remoteBranchContainsCommit: { _, _ in true }, push: { _, _ in },
+            currentReviewRequestExists: { _ in
+                lookupCount += 1
+                return false
+            },
+            currentReviewRequestURL: { _ in nil },
+            createReviewRequest: { _, _, _ in
+                createCount += 1
+                return url
+            },
+            syncGG: { _ in }, refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) { _ in }
+
+        await workflow.resume(checkpoint)
+
+        #expect(lookupCount == 0)
+        #expect(createCount == 0)
+        #expect(workflow.lastError == nil)
+    }
+
+    @Test func retryKeepsCheckpointWhenExistingReviewURLIsUnavailable() async throws {
+        let checkpoint = WorkflowHarness().checkpoint(nextPhase: .createReviewRequest)
+        var changes: [CommitPublishCheckpoint?] = []
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
+            currentHeadSHA: { "commit-sha" }, remoteBranchContainsCommit: { _, _ in true }, push: { _, _ in },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { _ in nil },
+            createReviewRequest: { _, _, _ in
+                Issue.record("Unexpected creation")
+                return URL(string: "https://github.com/owner/repository/pull/42")!
+            },
+            syncGG: { _ in }, refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) { changes.append($0) }
+
+        await workflow.resume(checkpoint)
+
+        #expect(workflow.lastError as? CommitPublishWorkflowError == .reviewURLUnavailable)
+        #expect(!changes.contains(where: { $0 == nil }))
+    }
+
     @Test func ownerReleasesCompletedRunBeforeRefreshWithoutClearingNewerFailure() async throws {
         let refreshGate = AsyncGate()
         var failSync = false
         let operations = CommitPublishOperations(
             createCommit: { _, _, _ in .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title") },
             currentHeadSHA: { "committed" }, remoteBranchContainsCommit: { _, _ in false }, push: { _, _ in },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in
                 if failSync { throw NSError(domain: "Publish", code: 1, userInfo: [NSLocalizedDescriptionKey: "Second failed"]) }
@@ -50,7 +135,7 @@ struct CommitPublishWorkflowTests {
             }, currentHeadSHA: { "committed" }, remoteBranchContainsCommit: { _, _ in false },
             push: { _, _ in pushes += 1
             await gate.waitForFirstCall() },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { _, _, _ in Issue.record("Unexpected creation")
             return target.webURL },
             syncGG: { _ in }, refreshAfterCompletion: {}
@@ -84,6 +169,50 @@ struct CommitPublishWorkflowTests {
         #expect(manager.commitEditorTab(worktreeId: "remount-publish", currentSha: "committed") != nil)
     }
 
+    @Test func closingDraftDuringPublishStillOpensCreatedReview() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let manager = TabsManager(tabsDirectory: directory)
+        let worktreeId = "closed-publish-created-review"
+        let draft = manager.openOrFocusDraftCommit(worktreeId: worktreeId)
+        let gate = AsyncGate()
+        let target = WorkflowHarness().target
+        let createdURL = URL(string: "https://github.com/owner/repository/pull/42")!
+        var notifiedReview: ReviewPRTabState?
+        manager.onCreatedReview = { _, review in notifiedReview = review }
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in
+                .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title")
+            }, currentHeadSHA: { "committed" }, remoteBranchContainsCommit: { _, _ in false },
+            push: { _, _ in await gate.waitForFirstCall() },
+            currentReviewRequestExists: { _ in false }, currentReviewRequestURL: { _ in nil },
+            createReviewRequest: { _, _, _ in createdURL },
+            syncGG: { _ in }, refreshAfterCompletion: {}
+        )
+        let task = try #require(manager.runCommitPublish(
+            worktreeId: worktreeId, tabId: draft.id,
+            subject: "Subject", body: "Body", amend: false, operations: operations,
+            prepareDestination: { .review(target) }
+        ))
+        await gate.waitUntilEntered()
+        manager.close(worktreeId: worktreeId, tabId: draft.id)
+
+        await gate.release()
+        await task.value
+
+        #expect(manager.stashedDraft(worktreeId: worktreeId) == nil)
+        #expect(notifiedReview?.url == createdURL)
+        guard let first = manager.tabs(forWorktree: worktreeId).first,
+              case .reviewPR(let reviewState) = first else {
+            Issue.record("Expected created review tab")
+            return
+        }
+        #expect(reviewState.url == createdURL)
+        #expect(reviewState.number == 42)
+        #expect(reviewState.title == "Subject")
+    }
+
     @Test func tabsManagerStopsBeforeRemoteMutationWhenCheckpointCannotPersist() async throws {
         let manager = TabsManager(store: FailingTabsStore())
         let draft = manager.openOrFocusDraftCommit(worktreeId: "checkpoint-persist-failure")
@@ -102,7 +231,7 @@ struct CommitPublishWorkflowTests {
                 return false
             },
             push: { _, _ in calls.append("push") },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in },
             refreshAfterCompletion: {}
@@ -145,6 +274,7 @@ struct CommitPublishWorkflowTests {
                 store.failWrites = true
                 return true
             },
+            currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in },
             refreshAfterCompletion: {}
@@ -186,7 +316,7 @@ struct CommitPublishWorkflowTests {
             currentHeadSHA: { throw WorkflowHarness.Failure.head },
             remoteBranchContainsCommit: { _, _ in false },
             push: { _, _ in },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in },
             refreshAfterCompletion: {}
@@ -216,7 +346,7 @@ struct CommitPublishWorkflowTests {
             currentHeadSHA: { headSHA },
             remoteBranchContainsCommit: { _, _ in false },
             push: { _, _ in },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in Issue.record("Unexpected untargeted sync") },
             syncGGForTarget: { _, execution in
@@ -242,7 +372,7 @@ struct CommitPublishWorkflowTests {
         await workflow.start(subject: "Subject", body: "Body", amend: false, destination: .review(harness.target))
 
         #expect(harness.calls == ["commit", "head", "remoteContainsCommit", "push", "lookupPR", "createPR"])
-        #expect(harness.checkpointPhases == [.push, .createReviewRequest])
+        #expect(harness.checkpointPhases == [.push, .createReviewRequest, .createReviewRequest])
         #expect(harness.checkpoint == nil)
         #expect(workflow.activity == .idle)
         #expect(workflow.lastError == nil)
@@ -311,7 +441,7 @@ struct CommitPublishWorkflowTests {
                 return .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title")
             },
             currentHeadSHA: { "committed" }, remoteBranchContainsCommit: { _, _ in false },
-            push: { _, _ in calls.append("push") }, currentReviewRequestExists: { _ in true },
+            push: { _, _ in calls.append("push") }, currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL }, syncGG: { _ in }, refreshAfterCompletion: {}
         )
         let workflow = CommitPublishWorkflow(operations: operations) { _ in }
@@ -335,7 +465,7 @@ struct CommitPublishWorkflowTests {
                 return .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title")
             },
             currentHeadSHA: { "committed" }, remoteBranchContainsCommit: { _, _ in false }, push: { _, _ in },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL }, syncGG: { _ in }, refreshAfterCompletion: {}
         )
         let workflow = CommitPublishWorkflow(operations: operations) { _ in }
@@ -355,7 +485,7 @@ struct CommitPublishWorkflowTests {
             createCommit: { _, _, _ in Issue.record("Unexpected commit")
             return .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title") },
             currentHeadSHA: { "commit-sha" }, remoteBranchContainsCommit: { _, _ in false }, push: { _, _ in },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL }, syncGG: { _ in },
             syncGGForTarget: { _, _ in Issue.record("Unexpected sync") },
             refreshAfterCompletion: {}
@@ -378,7 +508,7 @@ struct CommitPublishWorkflowTests {
             currentHeadSHA: { "rebased-sha" },
             remoteBranchContainsCommit: { _, _ in false },
             push: { _, _ in },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in Issue.record("Unexpected untargeted sync") },
             syncGGForTarget: { target, _ in syncedTargets.append(target) },
@@ -410,7 +540,7 @@ struct CommitPublishWorkflowTests {
             currentHeadSHA: { headSHA },
             remoteBranchContainsCommit: { _, _ in false },
             push: { _, _ in },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in Issue.record("Unexpected untargeted sync") },
             syncGGForTarget: { target, _ in syncedTargets.append(target) },
@@ -438,7 +568,7 @@ struct CommitPublishWorkflowTests {
             currentHeadSHA: { headSHA },
             remoteBranchContainsCommit: { _, _ in false },
             push: { _, _ in },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in Issue.record("Unexpected untargeted sync") },
             syncGGForTarget: { target, _ in
@@ -472,7 +602,7 @@ struct CommitPublishWorkflowTests {
             currentHeadSHA: { headSHA },
             remoteBranchContainsCommit: { _, _ in false },
             push: { _, _ in },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in Issue.record("Unexpected untargeted sync") },
             syncGGForTarget: { target, execution in
@@ -505,7 +635,7 @@ struct CommitPublishWorkflowTests {
             currentHeadSHA: { headSHA },
             remoteBranchContainsCommit: { _, _ in false },
             push: { _, _ in },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in Issue.record("Unexpected untargeted sync") },
             syncGGForTarget: { target, _ in syncedTargets.append(target) },
@@ -536,7 +666,7 @@ struct CommitPublishWorkflowTests {
             currentHeadSHA: { headSHA },
             remoteBranchContainsCommit: { _, _ in false },
             push: { _, _ in },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in Issue.record("Unexpected untargeted sync") },
             syncGGForTarget: { target, execution in
@@ -568,7 +698,7 @@ struct CommitPublishWorkflowTests {
             currentHeadSHA: { headSHA },
             remoteBranchContainsCommit: { _, _ in false },
             push: { _, _ in },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in Issue.record("Unexpected untargeted sync") },
             syncGGForTarget: { target, _ in syncedTargets.append(target) },
@@ -617,7 +747,7 @@ struct CommitPublishWorkflowTests {
             currentHeadSHA: { "manual-sha" },
             remoteBranchContainsCommit: { _, _ in false },
             push: { _, _ in },
-            currentReviewRequestExists: { _ in true },
+            currentReviewRequestExists: { _ in true }, currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in Issue.record("Unexpected untargeted sync") },
             syncGGForTarget: { target, _ in syncedTargets.append(target) },
@@ -897,6 +1027,7 @@ struct CommitPublishWorkflowTests {
                 calls.append("lookupPR")
                 return true
             },
+            currentReviewRequestURL: { target in target.webURL },
             createReviewRequest: { target, _, _ in
                 calls.append("createPR")
                 return target.webURL
@@ -929,6 +1060,7 @@ struct CommitPublishWorkflowTests {
                 calls.append("lookupPR")
                 return false
             },
+            currentReviewRequestURL: { _ in nil },
             createReviewRequest: { target, _, _ in
                 calls.append("createPR")
                 return target.webURL
@@ -1157,6 +1289,7 @@ private final class WorkflowHarness {
                     if let lookupError { throw lookupError }
                     return reviewRequestExists
                 },
+                currentReviewRequestURL: { target in target.webURL },
                 createReviewRequest: { [unowned self] _, _, _ in
                     calls.append("createPR")
                     if let createRequestError { throw createRequestError }

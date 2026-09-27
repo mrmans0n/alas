@@ -5,6 +5,23 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct ReviewLoopStateTests {
+    @Test func refreshLooksUpReviewUsingTrackedUpstreamBranch() async throws {
+        let provider = FakeCodeHostProvider(kind: .github)
+        let state = ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp/alas-upstream-review"), baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider]))
+        let local = ReviewLoopLocalState(
+            branchName: "local-feature", headSHA: "abc", baseBranch: "main",
+            hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0,
+            hasUpstream: true, upstreamRemoteName: "origin", upstreamBranchName: "review-feature", needsPush: false
+        )
+        provider.requestForBranch["review-feature"] = Self.makeReviewRequest(remote: Self.makeRemote(), checks: [])
+
+        await state.refresh(local: local, remotes: [Self.makeGitHubRemote()])
+
+        #expect(provider.lookupTargets.last?.branch == "review-feature")
+        #expect(state.snapshot?.reviewRequest?.number == 42)
+    }
+
     @Test func drawerAcknowledgesOnlyExplicitExpansionOfLoadedReviewRequest() async throws {
         let provider = FakeCodeHostProvider(kind: .github)
         provider.request = Self.makeReviewRequest(remote: Self.makeRemote(), checks: [])
@@ -88,6 +105,85 @@ struct ReviewLoopStateTests {
         await #expect(throws: CodeHostProviderError.unsupportedProvider(.gitlab)) {
             try await unsupported.createReviewRequest(remote: remote, branch: "captured", headOwner: nil, baseBranch: "main", title: "Title", body: "Body", draft: false)
         }
+    }
+
+    @Test(arguments: [CodeHostKind.github, .gitlab])
+    func recoveredReviewLookupUsesOriginalGitRemoteName(kind: CodeHostKind) async throws {
+        let host = kind == .github ? "github.com" : "gitlab.example.com"
+        let provider = FakeCodeHostProvider(kind: kind)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-recovered-review-remote"),
+            baseBranch: "origin/main",
+            providerRegistry: CodeHostProviderRegistry(providers: [kind: provider])
+        )
+        let remotes = [
+            GitRemote(name: "origin", url: "https://\(host)/fork/repo.git"),
+            GitRemote(name: "upstream", url: "https://\(host)/upstream/repo.git"),
+        ]
+        await state.refresh(local: Self.makeLocal(), remotes: remotes)
+        let recovered = CodeHostRemote(
+            kind: kind, host: host, owner: "upstream", repository: "repo",
+            remoteName: "origin", webURL: URL(string: "https://\(host)/upstream/repo")!
+        )
+
+        _ = try await state.currentReviewRequest(
+            remote: recovered, branch: "feature", headOwner: nil, baseBranch: "upstream/main"
+        )
+
+        let lookup = try #require(provider.lookupTargets.last)
+        #expect(lookup.remote.remoteName == "upstream")
+        switch kind {
+        case .github:
+            #expect(GitHubCLIProvider.normalizedBaseBranch(lookup.baseBranch, remoteName: lookup.remote.remoteName) == "main")
+        case .gitlab:
+            #expect(GitLabCLIProvider.normalizedBaseBranch(lookup.baseBranch, remoteName: lookup.remote.remoteName) == "main")
+        }
+    }
+
+    @Test func staleCreatedReviewLookupCannotUseNewerRefreshContext() async {
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-created-review-lookup-generation"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: FakeCodeHostProvider(kind: .github)])
+        )
+        let remotes = [Self.makeGitHubRemote()]
+        await state.refresh(local: Self.makeLocal(headSHA: "old"), remotes: remotes)
+        let oldGeneration = state.refreshGeneration
+
+        let next = state.beginLocalRefresh(local: Self.makeLocal(headSHA: "new"))
+        #expect(state.settledSnapshot(forRefreshGeneration: oldGeneration) == nil)
+        await state.refresh(next, remotes: remotes)
+
+        #expect(state.settledSnapshot(forRefreshGeneration: oldGeneration) == nil)
+        #expect(state.settledSnapshot(forRefreshGeneration: state.refreshGeneration)?.local.headSHA == "new")
+    }
+
+    @Test(arguments: ["feature/review-loop", "other-branch"])
+    func delayedCreatedReviewDiscoveryUpdatesOnlyItsActiveBranch(activeBranch: String) async throws {
+        let check = ReviewCheck(
+            id: "build", name: "Build", workflow: nil, bucket: .pending,
+            detailURL: nil, completedAt: nil
+        )
+        let provider = FakeCodeHostProvider(kind: .github, checks: [check])
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-delayed-created-review"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+        let remote = Self.makeRemote()
+        let request = Self.makeReviewRequest(remote: remote, checks: [])
+        await state.refresh(local: Self.makeLocal(branchName: activeBranch), remotes: [Self.makeGitHubRemote()])
+        #expect(state.snapshot?.reviewRequest == nil)
+
+        let checkedRequest = try await state.withChecks(request, remote: remote)
+        let adopted = state.adoptDiscoveredReviewRequest(
+            checkedRequest, remote: remote, branch: "feature/review-loop", headOwner: nil,
+            baseBranch: "main", refreshGeneration: state.refreshGeneration
+        )
+
+        #expect((adopted?.reviewRequest?.number == 42) == (activeBranch == "feature/review-loop"))
+        #expect((state.snapshot?.reviewRequest?.number == 42) == (activeBranch == "feature/review-loop"))
+        #expect(state.snapshot?.reviewRequest?.checks == (activeBranch == "feature/review-loop" ? [check] : nil))
     }
 
     @Test func rightPaneStoreForwardsCompletedRemoteReviewSnapshot() {
@@ -736,6 +832,30 @@ struct ReviewLoopStateTests {
         #expect(provider.mergeRequestCalls == [
             FakeCodeHostProvider.MergeRequestCall(number: 42, method: .squash, deleteBranch: true),
         ])
+    }
+
+    @Test func mergeRevalidatesUsingTrackedUpstreamBranch() async throws {
+        let remote = Self.makeRemote()
+        let provider = FakeCodeHostProvider(kind: .github, capabilities: .githubCLI)
+        provider.requestForBranch["review-feature"] = Self.makeReviewRequest(
+            remote: remote, headRefName: "review-feature", headSHA: "abc123",
+            headRepositoryOwner: "mrmans0n", reviewDecision: .approved,
+            includeActionableThread: false, checks: []
+        )
+        let state = ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp/alas-upstream-merge"), baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider]))
+        let local = ReviewLoopLocalState(
+            branchName: "local-feature", headSHA: "abc123", baseBranch: "main",
+            hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0,
+            hasUpstream: true, upstreamRemoteName: "origin", upstreamBranchName: "review-feature", needsPush: false
+        )
+        await state.refresh(local: local, remotes: [Self.makeGitHubRemote()])
+        let snapshot = try #require(state.snapshot)
+
+        let outcome = await state.merge(snapshot: snapshot)
+
+        #expect(outcome == .merged)
+        #expect(provider.lookupTargets.map(\.branch) == ["review-feature", "review-feature"])
     }
 
     @Test func mergeReportsQueuedOutcomeForQueueRequest() async throws {

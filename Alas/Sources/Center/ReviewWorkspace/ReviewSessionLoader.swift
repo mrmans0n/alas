@@ -44,7 +44,12 @@ enum ReviewSessionLauncher {
         onFailure: ((any Error) -> Void)? = nil
     ) -> Bool {
         do {
-            if let record = try findActive(target.id) {
+            if var record = try findActive(target.id) {
+                if record.target != target {
+                    record.target = target
+                    record.updatedAt = now()
+                    try save(record)
+                }
                 open(record)
                 return true
             }

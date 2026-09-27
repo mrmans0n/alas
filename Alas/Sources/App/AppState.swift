@@ -368,6 +368,13 @@ final class AppState {
         manager.onCommitPublishCompletion = { [weak self] worktreeId, tabId in
             self?.closedTabHistory.purgeCommitPublishDraft(worktreeID: worktreeId, tabID: tabId)
         }
+        manager.onCreatedReview = { [weak self] worktreeId, review in
+            self?.inAppNotifications.post(
+                "\(review.provider.reviewRequestLabel) \(review.provider == .gitlab ? "!" : "#")\(review.number) created",
+                severity: .success,
+                worktreeID: worktreeId
+            )
+        }
         _tabs = manager
         return manager
     }
@@ -1496,6 +1503,42 @@ final class AppState {
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
         // refreshAll() returns.
         rightPaneStore.appState = self
+        rightPaneStore.reviewSnapshotDidChange = { [weak self] worktreeID, _, snapshot in
+            guard let self else { return }
+            let lookups = self.tabs.resolveCreatedReviewsOnRefresh(worktreeId: worktreeID, snapshot: snapshot)
+            guard !lookups.isEmpty else { return }
+            guard let reviewLoop = self.rightPaneStore.activeState(worktreeId: worktreeID)?.reviewLoop else { return }
+            let generation = reviewLoop.refreshGeneration
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                for lookup in lookups {
+                    guard let request = try? await reviewLoop.currentReviewRequest(
+                        remote: lookup.remote, branch: lookup.branch,
+                        headOwner: lookup.headOwner, baseBranch: lookup.baseBranch
+                    ), request.url == lookup.createdURL
+                    else { continue }
+                    let checkedRequest = try? await reviewLoop.withChecks(request, remote: lookup.remote)
+                    guard
+                        let currentSnapshot = reviewLoop.settledSnapshot(forRefreshGeneration: generation)
+                    else { continue }
+                    let found = ReviewLoopSnapshot(
+                        local: currentSnapshot.local, remote: lookup.remote,
+                        reviewRequest: checkedRequest ?? request,
+                        providerAvailable: currentSnapshot.providerAvailable,
+                        providerAuthenticated: currentSnapshot.providerAuthenticated,
+                        providerCapabilities: currentSnapshot.providerCapabilities, errorMessage: nil
+                    )
+                    if let checkedRequest {
+                        _ = reviewLoop.adoptDiscoveredReviewRequest(
+                            checkedRequest, remote: lookup.remote, branch: lookup.branch,
+                            headOwner: lookup.headOwner, baseBranch: lookup.baseBranch,
+                            refreshGeneration: generation
+                        )
+                    }
+                    _ = self.tabs.transitionPendingCreatedReview(worktreeId: worktreeID, snapshot: found)
+                }
+            }
+        }
         rightPaneStore.attentionSnapshotDidChange = { [weak self] worktreeID, snapshot in
             self?.observeRightPaneAttention(worktreeID: worktreeID, snapshot: snapshot)
         }

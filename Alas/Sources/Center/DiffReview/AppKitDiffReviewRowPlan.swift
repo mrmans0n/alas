@@ -39,6 +39,8 @@ struct AppKitDiffReviewActionPresence: Equatable {
     var canCreateDraftComment = false
     var canReply = false
     var canResolve = false
+    var canEdit = true
+    var canDelete = true
     var canAddToReview = false
     var canUnstageHunk = false
     var hunkUnstageEnabled = false
@@ -1412,6 +1414,8 @@ struct AppKitDiffReviewImageThreadRowBody: View {
             onDelete: { input.state.actionRelay.delete($0, in: thread) },
             canReply: input.actionPresence.canReply && thread.viewerCanReply,
             canResolve: input.actionPresence.canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
+            canEdit: input.actionPresence.canEdit,
+            canDelete: input.actionPresence.canDelete,
             canAddToReview: input.actionPresence.canAddToReview,
             editorState: input.state.bindingForThreadCommentEditor(thread.id),
             onActiveChange: { active in
@@ -1623,6 +1627,8 @@ struct AppKitDiffReviewThreadRowBody: View {
                 onDelete: { input.state.actionRelay.delete($0, in: thread) },
                 canReply: input.actionPresence.canReply && thread.viewerCanReply,
                 canResolve: input.actionPresence.canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
+                canEdit: input.actionPresence.canEdit,
+                canDelete: input.actionPresence.canDelete,
                 canAddToReview: input.actionPresence.canAddToReview,
                 editorState: input.state.bindingForThreadCommentEditor(thread.id),
                 onActiveChange: { active in

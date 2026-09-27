@@ -233,12 +233,15 @@ struct ReviewSessionTarget: Codable, Equatable, Hashable, Identifiable, Sendable
         repositorySlug: String,
         base: String,
         head: String,
-        headSHA: String?
+        headSHA: String?,
+        draftSessionHead: String? = nil
     ) -> Self {
         let path = standardizedPath(repositoryPath)
         let normalizedSlug = standardizedRepositorySlug(repositorySlug)
         return ReviewSessionTarget(
-            id: makeID(.draftReviewRequest, [worktreeID, path, provider.rawValue, normalizedSlug, base, head, headSHA ?? ""]),
+            id: makeID(.draftReviewRequest, [
+                worktreeID, path, provider.rawValue, normalizedSlug, base, draftSessionHead ?? head, headSHA ?? ""
+            ]),
             kind: .draftReviewRequest,
             worktreeID: worktreeID,
             repositoryPath: standardizedURL(repositoryPath),
@@ -247,7 +250,10 @@ struct ReviewSessionTarget: Codable, Equatable, Hashable, Identifiable, Sendable
             providerDescription: "\(provider.displayName) \(normalizedSlug)",
             providerURL: nil,
             revisionDescription: headSHA,
-            draftSessionID: .draftReviewRequest(worktreeID: worktreeID, repositoryPath: repositoryPath, base: base, head: head),
+            draftSessionID: .draftReviewRequest(
+                worktreeID: worktreeID, repositoryPath: repositoryPath,
+                base: base, head: draftSessionHead ?? head
+            ),
             payload: .draftReviewRequest(
                 provider: provider,
                 repositorySlug: normalizedSlug,

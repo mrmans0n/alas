@@ -147,7 +147,8 @@ struct DraftReviewRequestTabView: View {
     static func reviewSessionTarget(
         worktreeID: String,
         repositoryPath: URL,
-        tabState: DraftReviewRequestTabState
+        tabState: DraftReviewRequestTabState,
+        currentBranch: String? = nil
     ) -> ReviewSessionTarget {
         ReviewSessionTarget.draftReviewRequest(
             worktreeID: worktreeID,
@@ -155,8 +156,9 @@ struct DraftReviewRequestTabView: View {
             provider: tabState.provider,
             repositorySlug: tabState.repositorySlug,
             base: tabState.baseBranch,
-            head: tabState.branchName,
-            headSHA: tabState.headSHA
+            head: currentBranch ?? tabState.branchName,
+            headSHA: tabState.headSHA,
+            draftSessionHead: tabState.branchName
         )
     }
 
@@ -330,7 +332,8 @@ struct DraftReviewRequestTabView: View {
                     target: Self.reviewSessionTarget(
                         worktreeID: worktreeId,
                         repositoryPath: worktreePath,
-                        tabState: tabState
+                        tabState: tabState,
+                        currentBranch: matchingSnapshot?.local.branchName
                     )
                 )
             }
@@ -453,20 +456,21 @@ struct DraftReviewRequestTabView: View {
         selectedPath = tabState.selectedPath
     }
 
+    @discardableResult
     private func persist(
         title: String? = nil,
         body: String? = nil,
         createAsDraft: Bool? = nil,
         selectedPath: String?? = nil,
         createdURL: URL?? = nil
-    ) {
+    ) -> Bool {
         appState.tabs.updateDraftReviewRequest(worktreeId: worktreeId, tabId: tabState.id) { state in
             if let title { state.title = title }
             if let body { state.body = body }
             if let createAsDraft { state.createAsDraft = createAsDraft }
             if let selectedPath { state.selectedPath = selectedPath }
             if let createdURL { state.createdURL = createdURL }
-        }
+        } != nil
     }
 
     private func loadContext() async {
@@ -655,7 +659,7 @@ struct DraftReviewRequestTabView: View {
                     .reviewLoop
                     .createReviewRequest(
                         snapshot: snapshot,
-                        branch: tabState.branchName,
+                        branch: tabState.reviewBranchName,
                         headOwner: tabState.headOwner,
                         baseBranch: tabState.baseBranch,
                         title: titleSnapshot,
@@ -666,11 +670,18 @@ struct DraftReviewRequestTabView: View {
                     error = "Review state is still loading."
                     return
                 }
-                persist(createdURL: url)
+                if !persist(createdURL: url), let remote = snapshot.remote {
+                    _ = appState.tabs.openCreatedReviewAfterDraftClose(
+                        worktreeId: worktreeId, remote: remote, url: url, title: titleSnapshot
+                    )
+                }
                 await appState.rightPaneStore.refresh(
                     worktreeId: worktreeId,
                     forceReviewLoopRemote: true
                 )
+                if let snapshot = appState.rightPaneStore.activeState(worktreeId: worktreeId)?.reviewLoop.snapshot {
+                    _ = appState.tabs.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: snapshot)
+                }
             } catch {
                 self.error = (error as NSError).localizedDescription
             }

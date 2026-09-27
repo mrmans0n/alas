@@ -12,6 +12,14 @@ struct TabsFile: Codable {
     var stashedDraft: DraftCommitTabState? = nil
 }
 
+struct PendingCreatedReviewLookup {
+    let remote: CodeHostRemote
+    let branch: String
+    let headOwner: String?
+    let baseBranch: String
+    let createdURL: URL
+}
+
 extension TabsFile {
     // Custom decoder skips unknown/removed Tab cases instead of failing the
     // entire file when users upgrade from an older build that had more cases.
@@ -49,6 +57,7 @@ final class TabsManager {
     private let store: any PersistenceStoreProtocol
     private let tabsDirectory: URL
     private let bufferStore: EditorBufferStore
+    private let draftCommentStore: ReviewDraftCommentStore
     private var buffers: [BufferKey: EditorBuffer] = [:]
     private var bufferKeys: [TabID: BufferKey] = [:]
     /// Canonical ownership for every live in-worktree tab. `buffers` is only
@@ -71,6 +80,7 @@ final class TabsManager {
     @ObservationIgnored private var webPreviewBrowsers: [String: WebPreviewBrowser] = [:]
     private var commitPublishSessions: [TabID: CommitPublishSession] = [:]
     @ObservationIgnored var onCommitPublishCompletion: ((String, TabID) -> Void)?
+    @ObservationIgnored var onCreatedReview: ((String, ReviewPRTabState) -> Void)?
     /// Tracks which tab IDs have already had `openExternalDocument` fired so
     /// that cache-hit calls to `externalBuffer` don't double-count the ref.
     private var openedExternalDocs: Set<TabID> = []
@@ -93,13 +103,15 @@ final class TabsManager {
         lsp: WorkspaceLSPManager? = nil,
         store: any PersistenceStoreProtocol = PersistenceStore(),
         tabsDirectory: URL = Paths.tabsDir,
-        workspaceEditJournal: WorkspaceEditJournal = WorkspaceEditJournal()
+        workspaceEditJournal: WorkspaceEditJournal = WorkspaceEditJournal(),
+        draftCommentStore: ReviewDraftCommentStore = ReviewDraftCommentStore()
     ) {
         self.bufferStore = bufferStore
         self.lsp = lsp
         self.store = store
         self.tabsDirectory = tabsDirectory
         self.workspaceEditJournal = workspaceEditJournal
+        self.draftCommentStore = draftCommentStore
     }
 
     func tabs(forWorktree id: String) -> [Tab] {
@@ -1261,7 +1273,6 @@ final class TabsManager {
             persist(worktreeId)
             return tab
         }
-
         let tab = Tab.reviewSession(baseState)
         append(tab, to: worktreeId)
         return tab
@@ -1314,6 +1325,34 @@ final class TabsManager {
         let tab = Tab.reviewPR(baseState)
         append(tab, to: worktreeId)
         return tab
+    }
+
+    @discardableResult
+    func openCreatedReviewAfterDraftClose(
+        worktreeId: String, remote: CodeHostRemote, url: URL, title: String
+    ) -> Tab? {
+        guard let number = Int(url.lastPathComponent), number > 0,
+              remote.reviewRequestURL(number: number) == url,
+              var file = byWorktree[worktreeId]
+        else { return nil }
+        let state = ReviewPRTabState(
+            worktreeId: worktreeId, remote: remote, number: number, url: url, title: title
+        )
+        let review = Tab.reviewPR(state)
+        if let index = file.tabs.firstIndex(where: { $0.id == review.id }) {
+            file.tabs[index] = review
+        } else {
+            file.tabs.append(review)
+        }
+        if file.activeTabId == nil { file.activeTabId = review.id }
+        do {
+            try persistThrowing(file, worktreeId: worktreeId)
+            byWorktree[worktreeId] = file
+            onCreatedReview?(worktreeId, state)
+            return review
+        } catch {
+            return nil
+        }
     }
 
     @discardableResult
@@ -1450,7 +1489,11 @@ final class TabsManager {
     }
 
     @discardableResult
-    func openOrFocusDraftReviewRequest(worktreeId: String, snapshot: ReviewLoopSnapshot) -> Tab {
+    func openOrFocusDraftReviewRequest(
+        worktreeId: String,
+        snapshot: ReviewLoopSnapshot,
+        existingLocalBranches: Set<String>? = nil
+    ) -> Tab {
         let baseState = DraftReviewRequestTabState(worktreeId: worktreeId, snapshot: snapshot)
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: { $0.id == baseState.id }),
@@ -1463,9 +1506,46 @@ final class TabsManager {
             persist(worktreeId)
             return tab
         }
+        if var file = byWorktree[worktreeId],
+           snapshot.local.upstreamBranchName != nil,
+           let idx = file.tabs.firstIndex(where: {
+               guard case .draftReviewRequest(let existing) = $0 else { return false }
+               let legacyPendingMatch = existing.createdURL != nil
+                   && existing.upstreamBranchName == nil
+                   && existing.headSHA == baseState.headSHA
+                   && existing.headOwner == baseState.headOwner
+                   && existingLocalBranches?.contains(existing.branchName) == false
+                   && existingLocalBranches?.contains(baseState.branchName) == true
+               return existing.provider == baseState.provider
+                   && existing.repositorySlug == baseState.repositorySlug
+                   && existing.baseBranch == baseState.baseBranch
+                   && (existing.reviewBranchName == baseState.reviewBranchName || legacyPendingMatch)
+           }),
+           case .draftReviewRequest(var existing) = file.tabs[idx] {
+            existing.refreshSnapshotMetadata(from: snapshot)
+            let tab = Tab.draftReviewRequest(existing)
+            file.tabs[idx] = tab
+            file.activeTabId = tab.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return tab
+        }
         let tab = Tab.draftReviewRequest(baseState)
         append(tab, to: worktreeId)
         return tab
+    }
+
+    func requiresLegacyDraftBranchVerification(worktreeId: String, snapshot: ReviewLoopSnapshot) -> Bool {
+        tabs(forWorktree: worktreeId).contains { tab in
+            guard case .draftReviewRequest(let state) = tab else { return false }
+            return state.createdURL != nil
+                && state.upstreamBranchName == nil
+                && state.branchName != snapshot.local.branchName
+                && state.provider == snapshot.remote?.kind
+                && state.repositorySlug == snapshot.remote?.repositorySlug
+                && state.baseBranch == snapshot.local.baseBranch
+                && state.headSHA == snapshot.local.headSHA
+        }
     }
 
     @discardableResult
@@ -1484,6 +1564,171 @@ final class TabsManager {
         byWorktree[worktreeId] = file
         persist(worktreeId)
         return tab
+    }
+
+    @discardableResult
+    func transitionPendingCreatedReview(worktreeId: String, snapshot: ReviewLoopSnapshot) -> Tab? {
+        guard let request = snapshot.reviewRequest else { return nil }
+        for tab in tabs(forWorktree: worktreeId) {
+            let matches: Bool
+            switch tab {
+            case .draftReviewRequest(let state):
+                matches = state.didOpenCreatedReview != true
+                    && state.createdURL == request.url
+                    && state.provider == request.provider
+                    && state.repositorySlug == request.remote.repositorySlug
+            case .commitEditor(let state):
+                if let target = state.pendingCreatedReviewTarget {
+                    matches = state.pendingCreatedReviewURL == request.url
+                        && target.provider == request.provider
+                        && target.host.lowercased() == request.remote.host.lowercased()
+                        && target.repositorySlug == request.remote.repositorySlug
+                } else {
+                    matches = false
+                }
+            default:
+                matches = false
+            }
+            if matches {
+                return transitionToCreatedReview(worktreeId: worktreeId, replacing: tab.id, snapshot: snapshot)
+            }
+        }
+        return nil
+    }
+
+    func resolveCreatedReviewsOnRefresh(worktreeId: String, snapshot: ReviewLoopSnapshot) -> [PendingCreatedReviewLookup] {
+        _ = transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: snapshot)
+        return pendingCreatedReviewLookups(worktreeId: worktreeId, snapshot: snapshot)
+    }
+
+    func pendingCreatedReviewLookups(worktreeId: String, snapshot: ReviewLoopSnapshot) -> [PendingCreatedReviewLookup] {
+        tabs(forWorktree: worktreeId).compactMap { tab in
+            switch tab {
+            case .draftReviewRequest(let state):
+                guard let createdURL = state.createdURL, state.didOpenCreatedReview != true,
+                      let remote = state.creationRemote
+                          ?? Self.recoveredCreationRemote(state: state, createdURL: createdURL, activeRemote: snapshot.remote),
+                      remote.kind == state.provider,
+                      remote.repositorySlug == state.repositorySlug
+                else { return nil }
+                return PendingCreatedReviewLookup(
+                    remote: remote, branch: state.reviewBranchName, headOwner: state.headOwner,
+                    baseBranch: state.baseBranch, createdURL: createdURL
+                )
+            case .commitEditor(let state):
+                guard let target = state.pendingCreatedReviewTarget,
+                      let createdURL = state.pendingCreatedReviewURL
+                else { return nil }
+                return PendingCreatedReviewLookup(
+                    remote: target.remote, branch: target.upstreamBranch ?? target.branch,
+                    headOwner: target.headOwner, baseBranch: target.baseBranch, createdURL: createdURL
+                )
+            default:
+                return nil
+            }
+        }
+    }
+
+    private static func recoveredCreationRemote(
+        state: DraftReviewRequestTabState, createdURL: URL, activeRemote: CodeHostRemote?
+    ) -> CodeHostRemote? {
+        if let activeRemote,
+           activeRemote.kind == state.provider,
+           activeRemote.repositorySlug == state.repositorySlug,
+           activeRemote.host.lowercased() == createdURL.host?.lowercased() {
+            return activeRemote
+        }
+        let slug = state.repositorySlug.split(separator: "/").map(String.init)
+        guard slug.count >= 2,
+              state.provider == .gitlab || slug.count == 2,
+              let host = createdURL.host,
+              var components = URLComponents(url: createdURL, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme, scheme == "https" || scheme == "http"
+        else { return nil }
+        var path = createdURL.pathComponents
+        if path.first == "/" { path.removeFirst() }
+        let suffix = Array(path.dropFirst(slug.count))
+        let expectedPrefix = Array(path.prefix(slug.count))
+        let reviewPath: [String]
+        switch state.provider {
+        case .github: reviewPath = ["pull"]
+        case .gitlab: reviewPath = ["-", "merge_requests"]
+        }
+        guard expectedPrefix == slug,
+              suffix.count == reviewPath.count + 1,
+              Array(suffix.dropLast()) == reviewPath,
+              let number = Int(suffix.last ?? ""), number > 0
+        else { return nil }
+        components.path = "/" + state.repositorySlug
+        components.query = nil
+        components.fragment = nil
+        guard let webURL = components.url else { return nil }
+        return CodeHostRemote(
+            kind: state.provider, host: host,
+            owner: slug.dropLast().joined(separator: "/"), repository: slug.last!,
+            remoteName: activeRemote?.remoteName ?? "origin", webURL: webURL
+        )
+    }
+
+    @discardableResult
+    func transitionToCreatedReview(worktreeId: String, replacing tabId: TabID, snapshot: ReviewLoopSnapshot) -> Tab? {
+        guard snapshot.reviewRequest != nil,
+              var file = byWorktree[worktreeId],
+              let index = file.tabs.firstIndex(where: { $0.id == tabId })
+        else { return nil }
+        switch file.tabs[index] {
+        case .draftReviewRequest, .commitEditor: break
+        default: return nil
+        }
+        let state = ReviewPRTabState(worktreeId: worktreeId, snapshot: snapshot)
+        let review = Tab.reviewPR(state)
+        if case .draftReviewRequest(var draft) = file.tabs[index], hasDraftReviewComments(draft) {
+            if draft.reviewBranchName == (snapshot.local.upstreamBranchName ?? snapshot.local.branchName),
+               draft.baseBranch == snapshot.local.baseBranch {
+                draft.refreshSnapshotMetadata(from: snapshot)
+            }
+            draft.didOpenCreatedReview = true
+            file.tabs[index] = .draftReviewRequest(draft)
+            if let existingIndex = file.tabs.firstIndex(where: { $0.id == review.id }) {
+                file.tabs[existingIndex] = review
+            } else {
+                file.tabs.insert(review, at: index + 1)
+            }
+            if file.activeTabId == tabId { file.activeTabId = review.id }
+            do {
+                try persistThrowing(file, worktreeId: worktreeId)
+                byWorktree[worktreeId] = file
+                onCreatedReview?(worktreeId, state)
+                return review
+            } catch {
+                return nil
+            }
+        }
+        if let existingIndex = file.tabs.firstIndex(where: { $0.id == review.id && $0.id != tabId }) {
+            file.tabs[existingIndex] = review
+            file.tabs.remove(at: index)
+            if file.activeTabId == tabId { file.activeTabId = review.id }
+        } else {
+            file.tabs[index] = review
+            if file.activeTabId == tabId { file.activeTabId = review.id }
+        }
+        do {
+            try persistThrowing(file, worktreeId: worktreeId)
+            byWorktree[worktreeId] = file
+            onCreatedReview?(worktreeId, state)
+            return review
+        } catch {
+            return nil
+        }
+    }
+
+    private func hasDraftReviewComments(_ draft: DraftReviewRequestTabState) -> Bool {
+        guard let comments = try? draftCommentStore.loadAll() else { return true }
+        return comments.contains {
+            $0.sessionID.matchesDraftReviewRequest(
+                worktreeID: draft.worktreeId, base: draft.baseBranch, head: draft.branchName
+            )
+        }
     }
 
     /// Clear any stashed draft commit state for the given worktree.
@@ -1528,19 +1773,49 @@ final class TabsManager {
     @discardableResult
     private func completeCommitPublish(worktreeId: String, tabId: TabID, checkpoint: CommitPublishCheckpoint) throws -> Tab? {
         guard var file = byWorktree[worktreeId] else { return nil }
+        let pendingCreatedReviewTarget: CommitPublishReviewTarget?
+        if case .review(let target) = checkpoint.destination,
+           !target.reviewRequestExisted, checkpoint.createdReviewURL != nil {
+            pendingCreatedReviewTarget = target
+        } else {
+            pendingCreatedReviewTarget = nil
+        }
         if let tab = replaceDraftWithCommitEditor(
             in: &file,
             worktreeId: worktreeId,
             draftTabId: tabId,
             baseRef: checkpoint.baseRef,
             newSha: checkpoint.commitSHA,
-            title: checkpoint.commitTitle
+            title: checkpoint.commitTitle,
+            pendingCreatedReviewTarget: pendingCreatedReviewTarget,
+            pendingCreatedReviewURL: checkpoint.createdReviewURL
         ) {
             try persistThrowing(file, worktreeId: worktreeId)
             byWorktree[worktreeId] = file
             return tab
         }
         guard file.stashedDraft != nil else { return nil }
+        if let target = pendingCreatedReviewTarget,
+           let url = checkpoint.createdReviewURL,
+           let number = Int(url.lastPathComponent), number > 0,
+           target.remote.reviewRequestURL(number: number) == url {
+            let state = ReviewPRTabState(
+                worktreeId: worktreeId, remote: target.remote,
+                number: number, url: url, title: checkpoint.subject
+            )
+            let review = Tab.reviewPR(state)
+            if let idx = file.tabs.firstIndex(where: { $0.id == review.id }) {
+                file.tabs[idx] = review
+            } else {
+                file.tabs.append(review)
+            }
+            if file.activeTabId == nil { file.activeTabId = review.id }
+            file.stashedDraft = nil
+            try persistThrowing(file, worktreeId: worktreeId)
+            byWorktree[worktreeId] = file
+            onCreatedReview?(worktreeId, state)
+            return review
+        }
         file.stashedDraft = nil
         try persistThrowing(file, worktreeId: worktreeId)
         byWorktree[worktreeId] = file
@@ -1553,7 +1828,9 @@ final class TabsManager {
         draftTabId: TabID,
         baseRef: String,
         newSha: String,
-        title: String
+        title: String,
+        pendingCreatedReviewTarget: CommitPublishReviewTarget? = nil,
+        pendingCreatedReviewURL: URL? = nil
     ) -> Tab? {
         guard let idx = file.tabs.firstIndex(where: { $0.id == draftTabId }),
               case .draftCommit = file.tabs[idx]
@@ -1562,20 +1839,24 @@ final class TabsManager {
             guard case .commitEditor(var existing) = file.tabs[existingIdx],
                   existing.currentSha == newSha else { continue }
             existing.title = title
+            existing.pendingCreatedReviewTarget = pendingCreatedReviewTarget
+            existing.pendingCreatedReviewURL = pendingCreatedReviewURL
             let tab = Tab.commitEditor(existing)
             file.tabs[existingIdx] = tab
             file.tabs.remove(at: idx)
-            file.activeTabId = tab.id
+            if file.activeTabId == draftTabId { file.activeTabId = tab.id }
             file.stashedDraft = nil
             return tab
         }
-        let editor = CommitEditorTabState(
+        var editor = CommitEditorTabState(
             worktreeId: worktreeId,
             baseRef: baseRef,
             originalSha: newSha,
             currentSha: newSha,
             title: title
         )
+        editor.pendingCreatedReviewTarget = pendingCreatedReviewTarget
+        editor.pendingCreatedReviewURL = pendingCreatedReviewURL
         let tab = Tab.commitEditor(editor)
         file.tabs[idx] = tab
         if file.activeTabId == draftTabId {

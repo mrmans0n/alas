@@ -71,6 +71,50 @@ struct ReviewRequestDraftTests {
         #expect(second.id.rawValue.contains("def456"))
     }
 
+    @Test func renamedLocalBranchLaunchesReviewWithCurrentHeadAndSavedComments() {
+        let repositoryPath = URL(fileURLWithPath: "/repo")
+        let tabState = DraftReviewRequestTabState(
+            worktreeId: "wt",
+            snapshot: Self.snapshot(branchName: "local-feature", needsPush: false, aheadCommitCount: 2)
+        )
+        let target = DraftReviewRequestTabView.reviewSessionTarget(
+            worktreeID: "wt", repositoryPath: repositoryPath,
+            tabState: tabState, currentBranch: "renamed-feature"
+        )
+
+        #expect(target.payload == .draftReviewRequest(
+            provider: .github, repositorySlug: "mrmans0n/alas",
+            base: "origin/main", head: "renamed-feature", headSHA: "abc123"
+        ))
+        #expect(target.draftSessionID == .draftReviewRequest(
+            worktreeID: "wt", repositoryPath: repositoryPath,
+            base: "origin/main", head: "local-feature"
+        ))
+        let originalTarget = DraftReviewRequestTabView.reviewSessionTarget(
+            worktreeID: "wt", repositoryPath: repositoryPath, tabState: tabState
+        )
+        #expect(target.id == originalTarget.id)
+        var activeRecord = ReviewSessionRecord(
+            id: originalTarget.id, target: originalTarget,
+            createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+        )
+        var saves = 0
+        let opened = ReviewSessionLauncher.openOrFocus(
+            target: target,
+            findActive: { id in id == activeRecord.id ? activeRecord : nil },
+            save: { record in
+                activeRecord = record
+                saves += 1
+            },
+            open: { _ in }
+        )
+        #expect(opened)
+        #expect(saves == 1)
+        #expect(activeRecord.id == originalTarget.id)
+        #expect(activeRecord.target.payload == target.payload)
+        #expect(activeRecord.createdAt == Date(timeIntervalSince1970: 0))
+    }
+
     @Test func draftReviewRequestLauncherIsDisabledForStaleTargets() {
         #expect(DraftReviewRequestTabView.canLaunchReviewSession(targetMismatchMessage: nil))
         #expect(!DraftReviewRequestTabView.canLaunchReviewSession(

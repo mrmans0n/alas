@@ -17,6 +17,7 @@ final class ReviewLoopState {
     private let worktreePath: URL
     private var baseBranch: String
     private let providerRegistry: CodeHostProviderRegistry
+    @ObservationIgnored private var lastRemotes: [GitRemote] = []
     private(set) var refreshGeneration: Int = 0
 
     private(set) var snapshot: ReviewLoopSnapshot?
@@ -175,6 +176,7 @@ final class ReviewLoopState {
 
     func refresh(_ attempt: ReviewLoopRefreshAttempt, remotes: [GitRemote]) async {
         guard isCurrentRefresh(attempt.generation) else { return }
+        lastRemotes = remotes
         guard let baseLocal = attempt.local else {
             isRefreshing = false
             return
@@ -284,7 +286,7 @@ final class ReviewLoopState {
         do {
             let request = try await provider.currentReviewRequest(
                 remote: remote,
-                branch: local.branchName,
+                branch: local.upstreamBranchName ?? local.branchName,
                 headOwner: local.headRemoteOwner,
                 baseBranch: local.baseBranch,
                 cwd: worktreePath
@@ -334,7 +336,7 @@ final class ReviewLoopState {
     ) async throws -> URL {
         try await createReviewRequest(
             snapshot: snapshot,
-            branch: snapshot.local.branchName,
+            branch: snapshot.local.upstreamBranchName ?? snapshot.local.branchName,
             headOwner: snapshot.local.headRemoteOwner,
             baseBranch: snapshot.local.baseBranch,
             title: title,
@@ -370,10 +372,52 @@ final class ReviewLoopState {
         guard let provider = providerRegistry.provider(for: remote.kind) else {
             throw CodeHostProviderError.unsupportedProvider(remote.kind)
         }
+        let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
+            forBaseBranch: baseBranch, remotes: lastRemotes
+        )
+        let resolvedRemote = CodeHostRemoteDetector.detectAll(
+            from: lastRemotes, supportedKinds: [remote.kind], preferredRemoteName: preferredRemoteName
+        ).first {
+            $0.host.lowercased() == remote.host.lowercased()
+                && $0.repositorySlug == remote.repositorySlug
+        } ?? remote
         return try await provider.currentReviewRequest(
-            remote: remote, branch: branch, headOwner: headOwner,
+            remote: resolvedRemote, branch: branch, headOwner: headOwner,
             baseBranch: baseBranch, cwd: worktreePath
         )
+    }
+
+    func withChecks(_ request: ReviewRequest, remote: CodeHostRemote) async throws -> ReviewRequest {
+        guard let provider = providerRegistry.provider(for: remote.kind) else {
+            throw CodeHostProviderError.unsupportedProvider(remote.kind)
+        }
+        let checks = try await provider.checks(remote: remote, request: request, cwd: worktreePath)
+        return request.withChecks(checks)
+    }
+
+    func settledSnapshot(forRefreshGeneration generation: Int) -> ReviewLoopSnapshot? {
+        guard refreshGeneration == generation, !isRefreshing else { return nil }
+        return snapshot
+    }
+
+    @discardableResult
+    func adoptDiscoveredReviewRequest(
+        _ request: ReviewRequest, remote: CodeHostRemote, branch: String,
+        headOwner: String?, baseBranch: String, refreshGeneration generation: Int
+    ) -> ReviewLoopSnapshot? {
+        guard let current = settledSnapshot(forRefreshGeneration: generation),
+              (current.local.upstreamBranchName ?? current.local.branchName) == branch,
+              current.local.baseBranch == baseBranch,
+              headOwner == nil || current.local.headRemoteOwner == headOwner
+        else { return nil }
+        let found = ReviewLoopSnapshot(
+            local: current.local, remote: remote, reviewRequest: request,
+            providerAvailable: current.providerAvailable,
+            providerAuthenticated: current.providerAuthenticated,
+            providerCapabilities: current.providerCapabilities, errorMessage: nil
+        )
+        snapshot = found
+        return found
     }
 
     func createReviewRequest(
@@ -415,7 +459,7 @@ final class ReviewLoopState {
         do {
             try await provider.rerunFailedChecks(
                 remote: remote,
-                branch: snapshot.local.branchName,
+                branch: snapshot.local.upstreamBranchName ?? snapshot.local.branchName,
                 headSHA: snapshot.local.headSHA,
                 request: snapshot.reviewRequest,
                 cwd: worktreePath
@@ -443,7 +487,7 @@ final class ReviewLoopState {
             // state and re-run the full merge gate.
             guard let fresh = try await provider.currentReviewRequest(
                 remote: remote,
-                branch: snapshot.local.branchName,
+                branch: snapshot.local.upstreamBranchName ?? snapshot.local.branchName,
                 headOwner: snapshot.local.headRemoteOwner,
                 baseBranch: snapshot.local.baseBranch,
                 cwd: worktreePath

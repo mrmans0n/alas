@@ -663,7 +663,12 @@ struct DraftCommitTabView: View {
         var operations = CommitPublishOperations.live(
             worktreePath: worktreePath, reviewLoop: rps.reviewLoop, comparisonBase: comparisonBase,
             syncGG: { execution in try await rps.syncGGForCommitPublish(markExecutionStarted: execution.markStarted) },
-            refreshAfterCompletion: { _ = await rps.refresh(forceReviewLoopRemote: true) }
+            refreshAfterCompletion: {
+                _ = await rps.refresh(forceReviewLoopRemote: true)
+                if let snapshot = rps.reviewLoop.snapshot {
+                    _ = appState.tabs.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: snapshot)
+                }
+            }
         )
         operations.validateGGTarget = { try await rps.validateGGTargetForCommitPublish($0) }
         operations.syncGGForTarget = { try await rps.syncGGForCommitPublish(target: $0, markExecutionStarted: $1.markStarted) }

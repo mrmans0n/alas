@@ -117,6 +117,7 @@ struct CommitPublishOperations {
     var push: (_ target: CommitPublishReviewTarget, _ commitSHA: String) async throws -> Void
     var configureUpstreamTracking: (_ target: CommitPublishReviewTarget) async throws -> Void = { _ in }
     var currentReviewRequestExists: (_ target: CommitPublishReviewTarget) async throws -> Bool
+    var currentReviewRequestURL: (_ target: CommitPublishReviewTarget) async throws -> URL?
     var createReviewRequest: (_ target: CommitPublishReviewTarget, _ subject: String, _ body: String) async throws -> URL
     var syncGG: (_ execution: CommitPublishSyncExecutionMarker) async throws -> Void
     var syncGGForTarget: (_ target: GGStackTargetIdentity, _ execution: CommitPublishSyncExecutionMarker) async throws -> Void = { _, _ in }
@@ -239,6 +240,10 @@ struct CommitPublishOperations {
                 try await reviewLoop.currentReviewRequest(remote: target.remote, branch: target.upstreamBranch ?? target.branch,
                     headOwner: target.headOwner, baseBranch: target.baseBranch) != nil
             },
+            currentReviewRequestURL: { target in
+                try await reviewLoop.currentReviewRequest(remote: target.remote, branch: target.upstreamBranch ?? target.branch,
+                    headOwner: target.headOwner, baseBranch: target.baseBranch)?.url
+            },
             createReviewRequest: { target, subject, body in
                 try await reviewLoop.createReviewRequest(remote: target.remote, branch: target.upstreamBranch ?? target.branch,
                     headOwner: target.headOwner, baseBranch: target.baseBranch,
@@ -276,6 +281,7 @@ enum CommitPublishWorkflowError: LocalizedError, Equatable {
     case incompatiblePushRemote
     case pushDestinationChanged
     case publishedAmend
+    case reviewURLUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -293,6 +299,8 @@ enum CommitPublishWorkflowError: LocalizedError, Equatable {
             return "The push destination changed. Restore the captured remote URL before retrying."
         case .publishedAmend:
             return "This commit is already published. Commit locally or turn off Amend before publishing."
+        case .reviewURLUnavailable:
+            return "The review request URL is not available yet. Retry publishing to finish."
         }
     }
 }
@@ -426,13 +434,20 @@ final class CommitPublishWorkflow {
                     throw CommitPublishWorkflowError.invalidDestination(phase: .createReviewRequest)
                 }
 
-                if !target.reviewRequestExisted {
+                if !target.reviewRequestExisted, checkpoint.createdReviewURL == nil {
                     activity = .creatingReviewRequest
                     try Task.checkCancellation()
                     let requestExists = try await operations.currentReviewRequestExists(target)
                     try Task.checkCancellation()
-                    if !requestExists {
-                        _ = try await operations.createReviewRequest(target, checkpoint.subject, checkpoint.body)
+                    if requestExists {
+                        guard let url = try await operations.currentReviewRequestURL(target) else {
+                            throw CommitPublishWorkflowError.reviewURLUnavailable
+                        }
+                        checkpoint.createdReviewURL = url
+                        try onCheckpointChange(checkpoint)
+                    } else {
+                        checkpoint.createdReviewURL = try await operations.createReviewRequest(target, checkpoint.subject, checkpoint.body)
+                        try onCheckpointChange(checkpoint)
                     }
                 }
                 try await complete(runID)

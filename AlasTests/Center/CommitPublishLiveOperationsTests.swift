@@ -387,6 +387,7 @@ struct CommitPublishLiveOperationsTests {
             }, containsCommit: { _, _, _ in head = "new-head"
             return false })
         operations.currentReviewRequestExists = { _ in true }
+        operations.currentReviewRequestURL = { _ in URL(string: "https://github.com/team/repo/pull/42")! }
         let workflow = CommitPublishWorkflow(operations: operations) { _ in }
         await workflow.resume(.init(commitSHA: "committed", baseRef: "main", commitTitle: "Title",
             subject: "Subject", body: "", destination: .review(target), nextPhase: .push))
@@ -502,7 +503,7 @@ struct CommitPublishLiveOperationsTests {
         await workflow.start(subject: " \nSubject\t ", body: "\n Body \n", amend: false, destination: .review(target))
         #expect(workflow.lastError == nil)
         #expect(await provider.creationCount == 1)
-        #expect(checkpoints.count == 2)
+        #expect(checkpoints.count == 3)
         #expect(checkpoints.allSatisfy { $0.subject == "Subject" && $0.body == "Body" })
     }
 
