@@ -3,7 +3,7 @@ import Combine
 import SwiftUI
 
 extension NSAttributedString.Key {
-    /// Full slash command (e.g. `/review`) carried by a leading command chip.
+    /// Full slash command (e.g. `/review`) carried by a command chip.
     static let commandChipName = NSAttributedString.Key("alas.acp.commandChipName")
 }
 
@@ -31,8 +31,10 @@ enum ACPCommandPillStyle {
     }
 }
 
-/// A known slash command at the very start of a message.
-enum ACPLeadingCommand {
+/// Known slash commands in a message: the leading one the transcript renders
+/// as a pill, and every one the composer turns into a chip.
+enum ACPSlashCommand {
+    /// A known slash command at the very start of a message.
     static func match(
         in text: String,
         suggestions: [ACPPromptSuggestion]
@@ -55,8 +57,8 @@ enum ACPLeadingCommand {
     }
 
     /// Whether inserting a single whitespace character at `range` would
-    /// complete a leading known command still typed as plain text — the
-    /// hand-typed counterpart to picking one from the `/` menu. Intended to
+    /// complete a known command still typed as plain text — the hand-typed
+    /// counterpart to picking one from the `/` menu. Intended to
     /// be checked BEFORE the whitespace reaches the text view's own
     /// `insertText`, so the pill and the typed whitespace land in one edit
     /// instead of two: turning the command into a chip AFTER the whitespace
@@ -75,15 +77,21 @@ enum ACPLeadingCommand {
               CharacterSet.whitespacesAndNewlines.contains(scalar)
         else { return nil }
         let string = storage.string as NSString
-        guard string.length > 0, string.character(at: 0) == 0x2F, // "/"
-              storage.attribute(.attachment, at: 0, effectiveRange: nil) == nil
+        let end = range.location
+        guard end <= string.length,
+              end == string.length || isWhitespace(string.character(at: end))
         else { return nil }
-        let token = storage.string.prefix { !$0.isWhitespace }
-        let tokenLength = (String(token) as NSString).length
-        guard range.location == tokenLength,
-              let suggestion = suggestions.first(where: { $0.command == token })
+        var start = end
+        while start > 0, !isWhitespace(string.character(at: start - 1)) { start -= 1 }
+        let tokenRange = NSRange(location: start, length: end - start)
+        guard let command = knownCommand(in: string, at: tokenRange, suggestions: suggestions) else { return nil }
+        // Same open-span rule as the upstream-reference keystroke path: a
+        // backtick run still open at the caret means the user is typing code.
+        let prefix = string.substring(to: end) as NSString
+        guard !ACPUpstreamReferenceDetector.codeRanges(in: prefix, unclosedRunsExtendToEnd: true)
+            .contains(where: { NSLocationInRange(start, $0) })
         else { return nil }
-        return (NSRange(location: 0, length: tokenLength), suggestion.command)
+        return (tokenRange, command)
     }
 
     @MainActor
@@ -96,31 +104,86 @@ enum ACPLeadingCommand {
         return chip
     }
 
-    /// Range of a leading known `/command` that should become a chip: only
-    /// once whitespace follows it, so a command still being typed is left
-    /// alone. The chip serializes back to the same text, so drafts compare
-    /// equal before and after.
-    static func chipTarget(
-        in storage: NSAttributedString,
+    /// Ranges of known `/command` tokens that should become chips, in
+    /// order. A token counts when it starts the text or follows whitespace,
+    /// and only once whitespace follows it, so a command still being typed
+    /// is left alone. Tokens inside code spans or fenced blocks stay text.
+    /// Chips serialize back to the same text, so drafts compare equal
+    /// before and after.
+    static func chipTargets(
+        in string: String,
         suggestions: [ACPPromptSuggestion]
-    ) -> (range: NSRange, command: String)? {
-        let string = storage.string as NSString
-        guard string.length > 1, string.character(at: 0) == 0x2F, // "/", so not already a chip
-              let match = match(in: storage.string, suggestions: suggestions)
-        else { return nil }
-        let length = (match.suggestion.command as NSString).length
-        guard length < string.length,
-              let next = Unicode.Scalar(string.character(at: length)),
-              CharacterSet.whitespacesAndNewlines.contains(next)
-        else { return nil }
-        return (NSRange(location: 0, length: length), match.suggestion.command)
+    ) -> [(range: NSRange, command: String)] {
+        guard !suggestions.isEmpty else { return [] }
+        let string = string as NSString
+        var targets: [(range: NSRange, command: String)] = []
+        var index = 0
+        while index < string.length {
+            guard !isWhitespace(string.character(at: index)) else {
+                index += 1
+                continue
+            }
+            let start = index
+            while index < string.length, !isWhitespace(string.character(at: index)) { index += 1 }
+            let tokenRange = NSRange(location: start, length: index - start)
+            if index < string.length,
+               let command = knownCommand(in: string, at: tokenRange, suggestions: suggestions) {
+                targets.append((tokenRange, command))
+            }
+        }
+        guard !targets.isEmpty else { return [] }
+        let code = ACPUpstreamReferenceDetector.codeRanges(in: string, unclosedRunsExtendToEnd: false)
+        return targets.filter { target in !code.contains { NSLocationInRange(target.range.location, $0) } }
     }
 
     /// Non-undoable form for wholesale draft restores.
     @MainActor
     static func chipify(_ storage: NSMutableAttributedString, suggestions: [ACPPromptSuggestion], font: NSFont) {
-        guard let target = chipTarget(in: storage, suggestions: suggestions) else { return }
-        storage.replaceCharacters(in: target.range, with: chip(for: target.command, font: font))
+        for target in chipTargets(in: storage.string, suggestions: suggestions).reversed() {
+            storage.replaceCharacters(in: target.range, with: chip(for: target.command, font: font))
+        }
+    }
+
+    /// Chips commands in a fragment about to replace `range` of `storage`.
+    /// The text on either side of `range` decides whether the fragment's
+    /// edges are token boundaries and whether it lands inside code, so
+    /// `/review` pasted right after `abc` stays text.
+    @MainActor
+    static func chipify(
+        _ fragment: NSMutableAttributedString,
+        replacing range: NSRange,
+        in storage: NSAttributedString,
+        suggestions: [ACPPromptSuggestion],
+        font: NSFont
+    ) {
+        let string = storage.string as NSString
+        let prefix = string.substring(to: range.location)
+        let tail = NSMaxRange(range)
+        let after = tail < string.length ? string.substring(with: NSRange(location: tail, length: 1)) : ""
+        let offset = (prefix as NSString).length
+        let targets = chipTargets(in: prefix + fragment.string + after, suggestions: suggestions)
+        for target in targets.reversed()
+        where target.range.location >= offset && NSMaxRange(target.range) <= offset + fragment.length {
+            fragment.replaceCharacters(
+                in: NSRange(location: target.range.location - offset, length: target.range.length),
+                with: chip(for: target.command, font: font)
+            )
+        }
+    }
+
+    private static func knownCommand(
+        in string: NSString,
+        at tokenRange: NSRange,
+        suggestions: [ACPPromptSuggestion]
+    ) -> String? {
+        guard tokenRange.length > 1, string.character(at: tokenRange.location) == 0x2F else { return nil } // "/"
+        let token = string.substring(with: tokenRange)
+        return suggestions.first(where: { $0.command == token })?.command
+    }
+
+    private static func isWhitespace(_ character: unichar) -> Bool {
+        guard let scalar = Unicode.Scalar(character) else { return false }
+        return CharacterSet.whitespacesAndNewlines.contains(scalar)
     }
 }
 
@@ -353,7 +416,7 @@ struct ACPUserMessageText: View {
     /// attached before the user typed the command carries no wire text of
     /// its own but still gets a `` `🖼 …` `` marker spliced in ahead of it,
     /// and that marker would otherwise cover up the leading `/` before
-    /// `ACPLeadingCommand.match` ever saw it.
+    /// `ACPSlashCommand.match` ever saw it.
     let text: String
     let attachments: [ACPMessage.Attachment]
     let typography: ACPChatTypography
@@ -390,7 +453,7 @@ struct ACPUserMessageText: View {
 
     @ViewBuilder
     private var content: some View {
-        if let match = ACPLeadingCommand.match(in: text, suggestions: suggestions) {
+        if let match = ACPSlashCommand.match(in: text, suggestions: suggestions) {
             // Markers are spliced into `rest` only, with each image's
             // offset (captured against the FULL message) re-anchored by
             // however many characters the command consumed — an image
