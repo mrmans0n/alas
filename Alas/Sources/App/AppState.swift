@@ -297,6 +297,8 @@ final class AppState {
     /// Decides when scheduled runs start. Execution is delegated back here so
     /// a scheduled run is a manual run with a different trigger.
     let runScheduler: RunScheduler
+    /// Scheduled chat sessions whose first turn a firing is waiting on.
+    let scheduledAgentTurns = ScheduledAgentTurns()
     /// The models each ACP agent last advertised, for surfaces that configure
     /// a session before it exists (the schedule editor's model picker).
     let acpModelCatalog: ACPAgentModelCatalog
@@ -8854,6 +8856,7 @@ final class AppState {
         if let runner = manager.runners[sessionId] {
             runner.stop()
         }
+        scheduledAgentTurns.sessionClosed(sessionId)
         let pendingID = UUID()
         let pendingKey = owner.storageKey
         let task = Task { @MainActor in
@@ -12179,6 +12182,7 @@ final class AppState {
             },
             onTurnCompleted: { [weak self] completion in
                 Task { @MainActor [weak self] in
+                    self?.scheduledAgentTurns.deliver(completion)
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }
             },
@@ -12934,7 +12938,10 @@ final class AppState {
         // permission / file / update streams flowing until the
         // detach() task below schedules. The actual child-process
         // shutdown then happens asynchronously.
-        for sid in sessionIds { manager.runners[sid]?.stop() }
+        for sid in sessionIds {
+            manager.runners[sid]?.stop()
+            scheduledAgentTurns.sessionClosed(sid)
+        }
         // Cancel mirror pollers and heartbeats — mirror sessions have no
         // runner and are never reached by the detach loop above, so they
         // must be torn down explicitly to stop the 2.5s backstop polls and

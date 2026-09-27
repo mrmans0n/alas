@@ -184,6 +184,8 @@ enum RunScheduleOutcome: Codable, Equatable, Hashable, Sendable {
     case skipped(reason: String)
     /// Worktree creation, script launch, or agent launch did not happen.
     case launchFailed(String)
+    /// A chat agent started, but its scheduled turn ended in an error.
+    case agentFailed(String)
 
     init(_ outcome: RunOutcome) {
         switch outcome {
@@ -194,10 +196,21 @@ enum RunScheduleOutcome: Codable, Equatable, Hashable, Sendable {
         }
     }
 
+    /// How a scheduled chat agent's turn ended. Nil means no turn ended
+    /// before the scheduler stopped waiting.
+    init(_ result: ACPTurnCompletion.Result?) {
+        switch result {
+        case .completed: self = .succeeded
+        case .failed(let message): self = .agentFailed(message)
+        case .cancelled: self = .stopped
+        case nil: self = .unknown
+        }
+    }
+
     var isFailure: Bool {
         switch self {
         case .succeeded, .skipped: false
-        case .failed, .stopped, .unknown, .launchFailed: true
+        case .failed, .stopped, .unknown, .launchFailed, .agentFailed: true
         }
     }
 
@@ -249,6 +262,18 @@ struct RunScheduleFiring: Codable, Identifiable, Equatable, Hashable, Sendable {
         let scriptName: String
     }
 
+    /// What a scheduled chat agent said when its turn ended. The text is
+    /// copied rather than linked because the session, like the worktree, may
+    /// be gone by the time someone reads the history.
+    struct AgentReport: Codable, Equatable, Hashable, Sendable {
+        let worktreeID: String
+        let branch: String
+        let agentName: String
+        /// Tail of the turn's final agent message, bounded by
+        /// `ACPTurnCompletion.lastAgentTextLimit`.
+        let text: String
+    }
+
     let id: String
     /// When the occurrence was dispatched, not when it settled.
     let firedAt: Date
@@ -258,6 +283,8 @@ struct RunScheduleFiring: Codable, Identifiable, Equatable, Hashable, Sendable {
     let wasManual: Bool
     let outcome: RunScheduleOutcome
     let runs: [RunReference]
+    /// Optional so firings written before reports existed still decode.
+    let agentReports: [AgentReport]?
 
     init(
         id: String = UUID().uuidString,
@@ -265,7 +292,8 @@ struct RunScheduleFiring: Codable, Identifiable, Equatable, Hashable, Sendable {
         finishedAt: Date,
         wasManual: Bool,
         outcome: RunScheduleOutcome,
-        runs: [RunReference] = []
+        runs: [RunReference] = [],
+        agentReports: [AgentReport] = []
     ) {
         self.id = id
         self.firedAt = firedAt
@@ -273,6 +301,7 @@ struct RunScheduleFiring: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.wasManual = wasManual
         self.outcome = outcome
         self.runs = runs
+        self.agentReports = agentReports.isEmpty ? nil : agentReports
     }
 
     var duration: TimeInterval { finishedAt.timeIntervalSince(firedAt) }
@@ -283,10 +312,16 @@ struct RunScheduleFiring: Codable, Identifiable, Equatable, Hashable, Sendable {
 struct RunScheduleRunReport: Equatable, Sendable {
     var outcome: RunScheduleOutcome
     var runs: [RunScheduleFiring.RunReference]
+    var agentReports: [RunScheduleFiring.AgentReport]
 
-    init(outcome: RunScheduleOutcome, runs: [RunScheduleFiring.RunReference] = []) {
+    init(
+        outcome: RunScheduleOutcome,
+        runs: [RunScheduleFiring.RunReference] = [],
+        agentReports: [RunScheduleFiring.AgentReport] = []
+    ) {
         self.outcome = outcome
         self.runs = runs
+        self.agentReports = agentReports
     }
 }
 
