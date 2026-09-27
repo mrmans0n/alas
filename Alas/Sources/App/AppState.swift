@@ -1633,26 +1633,24 @@ final class AppState {
 
     /// Worktree names and Qwen titles borrow consent from the other local-text capabilities,
     /// so turning the last one off must also stop their in-flight requests.
-    /// Both recheck availability too; this frees the engine early.
+    /// Both recheck availability too; this frees the engine early. Titles are
+    /// cancelled through their tracked jobs, synchronously: a delayed
+    /// caller-wide engine cancel could hit a title started after consent returns.
     private func cancelBorrowedLocalTextRequestsIfUnavailable(wasEnabled: Bool) {
         guard wasEnabled, !nextPromptRuntimeEnabled, !sessionSummariesRuntimeEnabled else { return }
         qwenTitleRequests.cancelAll()
         let engine = localTextInference
-        Task {
-            await engine.cancel(caller: .worktreeName)
-            await engine.cancel(caller: .sessionTitle)
-        }
+        Task { await engine.cancel(caller: .worktreeName) }
     }
 
     /// A pending Qwen title would be discarded anyway once titles are off;
     /// cancelling frees the shared engine instead of running to its timeout.
-    func setACPLocalTitlesEnabled(_ enabled: Bool) async {
+    func setACPLocalTitlesEnabled(_ enabled: Bool) {
         let wasEnabled = config.harness.acpLocalTitlesEnabled
         config.harness.acpLocalTitlesEnabled = enabled
         saveConfig()
         guard wasEnabled, !enabled else { return }
         qwenTitleRequests.cancelAll()
-        await localTextInference.cancel(caller: .sessionTitle)
     }
 
     func makeQwenTitleFallback() -> ACPQwenTitleFallback {

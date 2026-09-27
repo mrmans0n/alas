@@ -387,16 +387,25 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
-    @Test func disablingFallbackTitlesCancelsAPendingQwenTitle() async throws {
+    @Test func disablingFallbackTitlesCancelsPendingQwenTitlesImmediately() async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }
         let engine = SettingsFeatureEngine()
         let state = makeState(fixture, SummarySettingsStore(), engine: engine)
+        let (never, _) = AsyncStream<Void>.makeStream()
+        let pendingTitle = Task<LocalTextGenerationResult?, Never> {
+            for await _ in never {}
+            return nil
+        }
+        state.qwenTitleRequests.track(pendingTitle)
 
-        await state.setACPLocalTitlesEnabled(false)
+        state.setACPLocalTitlesEnabled(false)
 
         #expect(!state.config.harness.acpLocalTitlesEnabled)
-        #expect(await engine.cancelledCallers == [.sessionTitle])
+        #expect(pendingTitle.isCancelled)
+        // A delayed caller-wide engine cancel could hit a title started after
+        // consent returns, so revocation only cancels the tracked jobs.
+        #expect(await engine.cancelledCallers.isEmpty)
     }
 
     @Test func titleRequestedWhileEnablingAnInstalledModelWaitsForReadiness() async throws {
