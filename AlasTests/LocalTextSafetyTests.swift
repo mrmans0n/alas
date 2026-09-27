@@ -15,6 +15,7 @@ struct LocalTextSafetyTests {
         ("jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl rejected", "jwt [redacted] rejected"),
         ("password: hunter22 was rejected", "password: [redacted]"),
         ("password: correct horse battery; retrying", "password: [redacted]; retrying"),
+        ("error: PASSWORD=correct horse battery", "error: PASSWORD=[redacted]"),
         ("API_KEY=abc123; retrying", "API_KEY=[redacted]; retrying"),
         ("password: correcthorsebattery", "password: [redacted]"),
         ("secret: abc", "secret: [redacted]"),

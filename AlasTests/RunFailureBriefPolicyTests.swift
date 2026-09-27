@@ -37,6 +37,7 @@ struct RunFailureBriefPolicyTests {
         #"{"summary": "s", "cause": "c", "checks": ["Verify by running swift test."]}"#,
         #"{"summary": "s", "cause": "The fix is to reinstall the SDK.", "checks": ["k"]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["You could run swift test to confirm."]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["You should be running swift test."]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["npm test -- --verbose"]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["cargo test"]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["make clean"]}"#,

@@ -50,8 +50,12 @@ enum LocalTextSafety {
             let value = mutable.substring(with: match.range(at: 3))
             guard isSecretValue(value, key: key, separator: separator) else { continue }
             var valueRange = match.range(at: 3)
-            if separator == ":", key.lowercased() != "token", !value.hasPrefix("\""), !value.hasPrefix("'"), !value.hasPrefix("\\") {
-                // `password: correct horse battery` has no closing delimiter besides `;`, `,`, or the line end.
+            let unquoted = !value.hasPrefix("\"") && !value.hasPrefix("'") && !value.hasPrefix("\\")
+            // Passphrases can contain spaces; api/access keys and tokens are always one opaque
+            // string, so widening them would swallow trailing diagnostic text like "… exported".
+            if ["password", "secret"].contains(key.lowercased()), unquoted {
+                // `password: correct horse battery` and `PASSWORD=correct horse battery` have no
+                // closing delimiter besides `;`, `,`, or the line end.
                 let rest = NSRange(location: valueRange.location, length: mutable.length - valueRange.location)
                 let stop = mutable.rangeOfCharacter(from: CharacterSet(charactersIn: ";,\n"), options: [], range: rest)
                 valueRange.length = (stop.location == NSNotFound ? mutable.length : stop.location) - valueRange.location
