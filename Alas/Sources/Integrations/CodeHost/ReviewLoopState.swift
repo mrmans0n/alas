@@ -387,6 +387,11 @@ final class ReviewLoopState {
         )
     }
 
+    func settledSnapshot(forRefreshGeneration generation: Int) -> ReviewLoopSnapshot? {
+        guard refreshGeneration == generation, !isRefreshing else { return nil }
+        return snapshot
+    }
+
     func createReviewRequest(
         remote: CodeHostRemote,
         branch: String,

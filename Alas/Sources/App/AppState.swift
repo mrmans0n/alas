@@ -1507,20 +1507,22 @@ final class AppState {
             guard let self else { return }
             let lookups = self.tabs.resolveCreatedReviewsOnRefresh(worktreeId: worktreeID, snapshot: snapshot)
             guard !lookups.isEmpty else { return }
+            guard let reviewLoop = self.rightPaneStore.activeState(worktreeId: worktreeID)?.reviewLoop else { return }
+            let generation = reviewLoop.refreshGeneration
             Task { @MainActor [weak self] in
-                guard let self,
-                      let reviewLoop = self.rightPaneStore.activeState(worktreeId: worktreeID)?.reviewLoop
-                else { return }
+                guard let self else { return }
                 for lookup in lookups {
                     guard let request = try? await reviewLoop.currentReviewRequest(
                         remote: lookup.remote, branch: lookup.branch,
                         headOwner: lookup.headOwner, baseBranch: lookup.baseBranch
-                    ), request.url == lookup.createdURL else { continue }
+                    ), request.url == lookup.createdURL,
+                        let currentSnapshot = reviewLoop.settledSnapshot(forRefreshGeneration: generation)
+                    else { continue }
                     let found = ReviewLoopSnapshot(
-                        local: snapshot.local, remote: lookup.remote, reviewRequest: request,
-                        providerAvailable: snapshot.providerAvailable,
-                        providerAuthenticated: snapshot.providerAuthenticated,
-                        providerCapabilities: snapshot.providerCapabilities, errorMessage: nil
+                        local: currentSnapshot.local, remote: lookup.remote, reviewRequest: request,
+                        providerAvailable: currentSnapshot.providerAvailable,
+                        providerAuthenticated: currentSnapshot.providerAuthenticated,
+                        providerCapabilities: currentSnapshot.providerCapabilities, errorMessage: nil
                     )
                     _ = self.tabs.transitionPendingCreatedReview(worktreeId: worktreeID, snapshot: found)
                 }

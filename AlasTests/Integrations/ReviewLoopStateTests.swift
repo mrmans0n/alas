@@ -140,6 +140,24 @@ struct ReviewLoopStateTests {
         }
     }
 
+    @Test func staleCreatedReviewLookupCannotUseNewerRefreshContext() async {
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-created-review-lookup-generation"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: FakeCodeHostProvider(kind: .github)])
+        )
+        let remotes = [Self.makeGitHubRemote()]
+        await state.refresh(local: Self.makeLocal(headSHA: "old"), remotes: remotes)
+        let oldGeneration = state.refreshGeneration
+
+        let next = state.beginLocalRefresh(local: Self.makeLocal(headSHA: "new"))
+        #expect(state.settledSnapshot(forRefreshGeneration: oldGeneration) == nil)
+        await state.refresh(next, remotes: remotes)
+
+        #expect(state.settledSnapshot(forRefreshGeneration: oldGeneration) == nil)
+        #expect(state.settledSnapshot(forRefreshGeneration: state.refreshGeneration)?.local.headSHA == "new")
+    }
+
     @Test func rightPaneStoreForwardsCompletedRemoteReviewSnapshot() {
         let store = RightPaneStore()
         let worktree = Worktree(
