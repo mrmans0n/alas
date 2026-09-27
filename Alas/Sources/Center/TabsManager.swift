@@ -1594,7 +1594,8 @@ final class TabsManager {
               var components = URLComponents(url: createdURL, resolvingAgainstBaseURL: false),
               let scheme = components.scheme, scheme == "https" || scheme == "http"
         else { return nil }
-        let path = createdURL.pathComponents.dropFirst().map(String.init)
+        var path = createdURL.pathComponents
+        if path.first == "/" { path.removeFirst() }
         let suffix = Array(path.dropFirst(slug.count))
         let expectedPrefix = Array(path.prefix(slug.count))
         let reviewPath: [String]
