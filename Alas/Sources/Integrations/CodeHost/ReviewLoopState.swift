@@ -392,6 +392,26 @@ final class ReviewLoopState {
         return snapshot
     }
 
+    @discardableResult
+    func adoptDiscoveredReviewRequest(
+        _ request: ReviewRequest, remote: CodeHostRemote, branch: String,
+        headOwner: String?, baseBranch: String, refreshGeneration generation: Int
+    ) -> ReviewLoopSnapshot? {
+        guard let current = settledSnapshot(forRefreshGeneration: generation),
+              (current.local.upstreamBranchName ?? current.local.branchName) == branch,
+              current.local.baseBranch == baseBranch,
+              headOwner == nil || current.local.headRemoteOwner == headOwner
+        else { return nil }
+        let found = ReviewLoopSnapshot(
+            local: current.local, remote: remote, reviewRequest: request,
+            providerAvailable: current.providerAvailable,
+            providerAuthenticated: current.providerAuthenticated,
+            providerCapabilities: current.providerCapabilities, errorMessage: nil
+        )
+        snapshot = found
+        return found
+    }
+
     func createReviewRequest(
         remote: CodeHostRemote,
         branch: String,

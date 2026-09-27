@@ -1524,6 +1524,11 @@ final class AppState {
                         providerAuthenticated: currentSnapshot.providerAuthenticated,
                         providerCapabilities: currentSnapshot.providerCapabilities, errorMessage: nil
                     )
+                    _ = reviewLoop.adoptDiscoveredReviewRequest(
+                        request, remote: lookup.remote, branch: lookup.branch,
+                        headOwner: lookup.headOwner, baseBranch: lookup.baseBranch,
+                        refreshGeneration: generation
+                    )
                     _ = self.tabs.transitionPendingCreatedReview(worktreeId: worktreeID, snapshot: found)
                 }
             }

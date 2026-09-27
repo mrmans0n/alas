@@ -158,6 +158,28 @@ struct ReviewLoopStateTests {
         #expect(state.settledSnapshot(forRefreshGeneration: state.refreshGeneration)?.local.headSHA == "new")
     }
 
+    @Test(arguments: ["feature/review-loop", "other-branch"])
+    func delayedCreatedReviewDiscoveryUpdatesOnlyItsActiveBranch(activeBranch: String) async {
+        let provider = FakeCodeHostProvider(kind: .github)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-delayed-created-review"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+        let remote = Self.makeRemote()
+        let request = Self.makeReviewRequest(remote: remote, checks: [])
+        await state.refresh(local: Self.makeLocal(branchName: activeBranch), remotes: [Self.makeGitHubRemote()])
+        #expect(state.snapshot?.reviewRequest == nil)
+
+        let adopted = state.adoptDiscoveredReviewRequest(
+            request, remote: remote, branch: "feature/review-loop", headOwner: nil,
+            baseBranch: "main", refreshGeneration: state.refreshGeneration
+        )
+
+        #expect((adopted?.reviewRequest?.number == 42) == (activeBranch == "feature/review-loop"))
+        #expect((state.snapshot?.reviewRequest?.number == 42) == (activeBranch == "feature/review-loop"))
+    }
+
     @Test func rightPaneStoreForwardsCompletedRemoteReviewSnapshot() {
         let store = RightPaneStore()
         let worktree = Worktree(
