@@ -577,7 +577,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
             remote: remote,
             number: number,
             title: "",
-            url: remote.webURL,
+            url: remote.reviewRequestURL(number: number),
             state: .open,
             isDraft: false,
             headRefName: "",

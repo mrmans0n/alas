@@ -328,7 +328,7 @@ struct CommitPublishWorkflowTests {
         await workflow.start(subject: "Subject", body: "Body", amend: false, destination: .review(harness.target))
 
         #expect(harness.calls == ["commit", "head", "remoteContainsCommit", "push", "lookupPR", "createPR"])
-        #expect(harness.checkpointPhases == [.push, .createReviewRequest])
+        #expect(harness.checkpointPhases == [.push, .createReviewRequest, .createReviewRequest])
         #expect(harness.checkpoint == nil)
         #expect(workflow.activity == .idle)
         #expect(workflow.lastError == nil)
