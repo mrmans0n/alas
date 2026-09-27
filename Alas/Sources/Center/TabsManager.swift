@@ -1487,6 +1487,37 @@ final class TabsManager {
     }
 
     @discardableResult
+    func transitionPendingCreatedReview(worktreeId: String, snapshot: ReviewLoopSnapshot) -> Tab? {
+        guard let request = snapshot.reviewRequest else { return nil }
+        for tab in tabs(forWorktree: worktreeId) {
+            let matches: Bool
+            switch tab {
+            case .draftReviewRequest(let state):
+                matches = state.createdURL == request.url
+                    && state.provider == request.provider
+                    && state.repositorySlug == request.remote.repositorySlug
+            case .commitEditor(let state):
+                if let target = state.pendingCreatedReviewTarget {
+                    matches = target.provider == request.provider
+                        && target.host.lowercased() == request.remote.host.lowercased()
+                        && target.repositorySlug == request.remote.repositorySlug
+                        && target.branch == snapshot.local.branchName
+                        && target.baseBranch == snapshot.local.baseBranch
+                        && state.currentSha == snapshot.local.headSHA
+                } else {
+                    matches = false
+                }
+            default:
+                matches = false
+            }
+            if matches {
+                return transitionToCreatedReview(worktreeId: worktreeId, replacing: tab.id, snapshot: snapshot)
+            }
+        }
+        return nil
+    }
+
+    @discardableResult
     func transitionToCreatedReview(worktreeId: String, replacing tabId: TabID, snapshot: ReviewLoopSnapshot) -> Tab? {
         guard snapshot.reviewRequest != nil,
               var file = byWorktree[worktreeId],
@@ -1558,13 +1589,20 @@ final class TabsManager {
     @discardableResult
     private func completeCommitPublish(worktreeId: String, tabId: TabID, checkpoint: CommitPublishCheckpoint) throws -> Tab? {
         guard var file = byWorktree[worktreeId] else { return nil }
+        let pendingCreatedReviewTarget: CommitPublishReviewTarget?
+        if case .review(let target) = checkpoint.destination, !target.reviewRequestExisted {
+            pendingCreatedReviewTarget = target
+        } else {
+            pendingCreatedReviewTarget = nil
+        }
         if let tab = replaceDraftWithCommitEditor(
             in: &file,
             worktreeId: worktreeId,
             draftTabId: tabId,
             baseRef: checkpoint.baseRef,
             newSha: checkpoint.commitSHA,
-            title: checkpoint.commitTitle
+            title: checkpoint.commitTitle,
+            pendingCreatedReviewTarget: pendingCreatedReviewTarget
         ) {
             try persistThrowing(file, worktreeId: worktreeId)
             byWorktree[worktreeId] = file
@@ -1583,7 +1621,8 @@ final class TabsManager {
         draftTabId: TabID,
         baseRef: String,
         newSha: String,
-        title: String
+        title: String,
+        pendingCreatedReviewTarget: CommitPublishReviewTarget? = nil
     ) -> Tab? {
         guard let idx = file.tabs.firstIndex(where: { $0.id == draftTabId }),
               case .draftCommit = file.tabs[idx]
@@ -1592,6 +1631,7 @@ final class TabsManager {
             guard case .commitEditor(var existing) = file.tabs[existingIdx],
                   existing.currentSha == newSha else { continue }
             existing.title = title
+            existing.pendingCreatedReviewTarget = pendingCreatedReviewTarget
             let tab = Tab.commitEditor(existing)
             file.tabs[existingIdx] = tab
             file.tabs.remove(at: idx)
@@ -1599,13 +1639,14 @@ final class TabsManager {
             file.stashedDraft = nil
             return tab
         }
-        let editor = CommitEditorTabState(
+        var editor = CommitEditorTabState(
             worktreeId: worktreeId,
             baseRef: baseRef,
             originalSha: newSha,
             currentSha: newSha,
             title: title
         )
+        editor.pendingCreatedReviewTarget = pendingCreatedReviewTarget
         let tab = Tab.commitEditor(editor)
         file.tabs[idx] = tab
         if file.activeTabId == draftTabId {

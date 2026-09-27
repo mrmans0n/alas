@@ -1496,6 +1496,9 @@ final class AppState {
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
         // refreshAll() returns.
         rightPaneStore.appState = self
+        rightPaneStore.reviewSnapshotDidChange = { [weak self] worktreeID, _, snapshot in
+            _ = self?.tabs.transitionPendingCreatedReview(worktreeId: worktreeID, snapshot: snapshot)
+        }
         rightPaneStore.attentionSnapshotDidChange = { [weak self] worktreeID, snapshot in
             self?.observeRightPaneAttention(worktreeID: worktreeID, snapshot: snapshot)
         }

@@ -4,16 +4,21 @@ import Foundation
 
 @MainActor
 struct TabsManagerTests {
-    @Test func createdReviewReplacesItsDraftWithoutStealingAnotherTab() throws {
+    @Test func createdReviewReplacesItsDraftAfterLaterRefreshWithoutStealingAnotherTab() throws {
         let manager = TabsManager(store: MemoryStore())
         let worktreeId = "created-review"
         let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
         let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, upstreamAheadCommitCount: 0, needsPush: false)
-        let snapshot = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: .placeholder(remote: remote, number: 42), providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
-        let draft = manager.openOrFocusDraftReviewRequest(worktreeId: worktreeId, snapshot: snapshot)
+        let missing = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+        let found = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: .placeholder(remote: remote, number: 42), providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+        let draft = manager.openOrFocusDraftReviewRequest(worktreeId: worktreeId, snapshot: missing)
+        _ = manager.updateDraftReviewRequest(worktreeId: worktreeId, tabId: draft.id) {
+            $0.createdURL = found.reviewRequest?.url
+        }
         let other = manager.openOrFocusReviewChanges(worktreeId: worktreeId)
 
-        let review = try #require(manager.transitionToCreatedReview(worktreeId: worktreeId, replacing: draft.id, snapshot: snapshot))
+        #expect(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: missing) == nil)
+        let review = try #require(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: found))
 
         #expect(manager.activeTabId(forWorktree: worktreeId) == other.id)
         #expect(manager.tabs(forWorktree: worktreeId).contains(review))
@@ -25,16 +30,29 @@ struct TabsManagerTests {
         #expect(state.number == 42)
     }
 
-    @Test func createdReviewReplacesCompletedCommitEditor() throws {
+    @Test func createdReviewReplacesCompletedCommitEditorAfterLaterRefresh() async throws {
         let manager = TabsManager(store: MemoryStore())
         let worktreeId = "published-review"
         let remote = CodeHostRemote(kind: .gitlab, host: "gitlab.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://gitlab.com/owner/repo")!)
         let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, upstreamAheadCommitCount: 0, needsPush: false)
-        let snapshot = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: .placeholder(remote: remote, number: 7), providerAvailable: true, providerAuthenticated: true, providerCapabilities: .gitlabCLI, errorMessage: nil)
+        let missing = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .gitlabCLI, errorMessage: nil)
+        let found = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: .placeholder(remote: remote, number: 7), providerAvailable: true, providerAuthenticated: true, providerCapabilities: .gitlabCLI, errorMessage: nil)
         let draft = manager.openOrFocusDraftCommit(worktreeId: worktreeId)
-        let editor = try #require(manager.replaceDraftWithCommitEditor(worktreeId: worktreeId, draftTabId: draft.id, baseRef: "main", newSha: "abc", title: "abc Subject"))
+        let target = CommitPublishReviewTarget(provider: .gitlab, host: "gitlab.com", owner: "owner", repository: "repo", repositorySlug: "owner/repo", remoteName: "origin", webURL: remote.webURL, branch: "feature", upstreamBranch: nil, headOwner: nil, baseBranch: "main", reviewRequestExisted: false, createAsDraft: false)
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "abc", comparisonBase: "main", editorTitle: "abc Subject") },
+            currentHeadSHA: { "abc" }, remoteBranchContainsCommit: { _, _ in false }, push: { _, _ in },
+            currentReviewRequestExists: { _ in false }, createReviewRequest: { _, _, _ in found.reviewRequest!.url },
+            syncGG: { _ in }, refreshAfterCompletion: {}
+        )
+        let task = try #require(manager.runCommitPublish(worktreeId: worktreeId, tabId: draft.id,
+            subject: "Subject", body: "", amend: false, operations: operations,
+            prepareDestination: { .review(target) }))
+        await task.value
+        let editor = try #require(manager.commitEditorTab(worktreeId: worktreeId, currentSha: "abc"))
 
-        let review = try #require(manager.transitionToCreatedReview(worktreeId: worktreeId, replacing: editor.id, snapshot: snapshot))
+        #expect(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: missing) == nil)
+        let review = try #require(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: found))
 
         #expect(manager.activeTabId(forWorktree: worktreeId) == review.id)
         #expect(manager.tabs(forWorktree: worktreeId) == [review])

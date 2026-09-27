@@ -648,16 +648,6 @@ struct DraftCommitTabView: View {
         let draftSnapshot = createReviewRequestAsDraft
         let reviewSnapshot = rps.reviewLoop.snapshot
         let ggMode = rps.ggContext.isActive
-        let createsReviewRequest: Bool
-        if let publishCheckpoint {
-            if case .review(let target) = publishCheckpoint.destination {
-                createsReviewRequest = !target.reviewRequestExisted
-            } else {
-                createsReviewRequest = false
-            }
-        } else {
-            createsReviewRequest = !ggMode && reviewSnapshot?.reviewRequest == nil
-        }
         let ggTarget: GGStackTargetIdentity?
         if publishCheckpoint == nil, ggMode {
             guard let target = rps.ggTargetForCommitPublish() else {
@@ -675,15 +665,9 @@ struct DraftCommitTabView: View {
             syncGG: { execution in try await rps.syncGGForCommitPublish(markExecutionStarted: execution.markStarted) },
             refreshAfterCompletion: {
                 _ = await rps.refresh(forceReviewLoopRemote: true)
-                guard createsReviewRequest,
-                      let snapshot = rps.reviewLoop.snapshot,
-                      snapshot.reviewRequest != nil,
-                      let editor = appState.tabs.commitEditorTab(
-                          worktreeId: worktreeId,
-                          currentSha: snapshot.local.headSHA
-                      )
-                else { return }
-                _ = appState.tabs.transitionToCreatedReview(worktreeId: worktreeId, replacing: editor.id, snapshot: snapshot)
+                if let snapshot = rps.reviewLoop.snapshot {
+                    _ = appState.tabs.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: snapshot)
+                }
             }
         )
         operations.validateGGTarget = { try await rps.validateGGTargetForCommitPublish($0) }
