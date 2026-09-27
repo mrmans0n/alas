@@ -1240,6 +1240,10 @@ final class RightPaneState: GGSplitCommitServicing {
             }
         case .createReviewRequest:
             guard let snapshot = reviewLoop.snapshot else { return }
+            guard appState.tabs.requiresLegacyDraftBranchVerification(worktreeId: worktree.id, snapshot: snapshot) else {
+                appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktree.id, snapshot: snapshot)
+                return
+            }
             Task { @MainActor in
                 let branches = try? await GitService().localBranches(at: worktree.path)
                 guard reviewLoop.snapshot?.local.branchName == snapshot.local.branchName,

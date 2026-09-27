@@ -1507,6 +1507,19 @@ final class TabsManager {
         return tab
     }
 
+    func requiresLegacyDraftBranchVerification(worktreeId: String, snapshot: ReviewLoopSnapshot) -> Bool {
+        tabs(forWorktree: worktreeId).contains { tab in
+            guard case .draftReviewRequest(let state) = tab else { return false }
+            return state.createdURL != nil
+                && state.upstreamBranchName == nil
+                && state.branchName != snapshot.local.branchName
+                && state.provider == snapshot.remote?.kind
+                && state.repositorySlug == snapshot.remote?.repositorySlug
+                && state.baseBranch == snapshot.local.baseBranch
+                && state.headSHA == snapshot.local.headSHA
+        }
+    }
+
     @discardableResult
     func updateDraftReviewRequest(
         worktreeId: String,
