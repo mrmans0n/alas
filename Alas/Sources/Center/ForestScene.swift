@@ -43,14 +43,25 @@ extension EnvironmentValues {
 }
 
 /// Removal sends the flock out of frame while the scene fades, blurs, and
-/// drifts toward the viewer; insertion is the same fade in reverse.
+/// drifts toward the viewer; insertion is the same fade in reverse. Reduce
+/// Motion leaves only the fade.
 struct TakeOffTransition: Transition {
     func body(content: Content, phase: TransitionPhase) -> some View {
+        content.modifier(TakeOffEffect(phase: phase))
+    }
+}
+
+private struct TakeOffEffect: ViewModifier {
+    let phase: TransitionPhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        let moving = !phase.isIdentity && !reduceMotion
         content
             .environment(\.forestTakingOff, phase == .didDisappear)
             .opacity(phase.isIdentity ? 1 : 0)
-            .blur(radius: phase.isIdentity ? 0 : 10)
-            .scaleEffect(phase == .didDisappear ? 1.04 : 1)
+            .blur(radius: moving ? 10 : 0)
+            .scaleEffect(moving && phase == .didDisappear ? 1.04 : 1)
     }
 }
 
