@@ -5435,11 +5435,15 @@ struct ACPSessionManagerAttachRestoreTests {
         )
         mgrBox.pointee = manager
 
+        let backfill = HydrationBackfillGate()
+        manager.beforeBackfill = { await backfill.wait() }
         _ = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: "local")
         // Sanity check: hydrateIfNeeded returned with only the tail applied.
         #expect(manager.sessions["local"]?.transcript.messages.count == ACPTranscript.tailWindow)
 
+        // Released, but not yet run: attach must still wait for it.
+        backfill.open()
         await manager.attach(to: "local", freshlyCreated: false)
 
         #expect(captured.count == total,

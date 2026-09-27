@@ -541,12 +541,14 @@ struct ACPSessionManagerHydrationTests {
 
         let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
         let s = try #require(mgr.placeholderSession(id: "s"))
+        let backfill = HydrationBackfillGate()
+        mgr.beforeBackfill = { await backfill.wait() }
 
         await mgr.hydrateIfNeeded(id: "s")
 
         // First paint: only the tail window is in the transcript and the entire
         // array is visible (head at 0). This is what unblocks the UI — older
-        // messages are still in flight on a separate task.
+        // messages are still in flight on a separate task, held by the gate.
         #expect(s.hydrationState == .ready)
         #expect(s.transcript.messages.count == ACPTranscript.tailWindow)
         #expect(s.transcript.visibleHead == 0)
@@ -563,6 +565,7 @@ struct ACPSessionManagerHydrationTests {
 
         // Drain the backfill task — now every persisted message is present,
         // ordered correctly, and visibleHead is anchored to the same tail.
+        backfill.open()
         await mgr.awaitBackfill(id: "s")
         #expect(s.transcript.messages.count == 100)
         #expect(s.transcript.visibleHead == 100 - ACPTranscript.tailWindow)
@@ -912,5 +915,24 @@ struct ACPSessionManagerHydrationTests {
 
         #expect(second.hydrationState == .ready)
         #expect(second.transcript.messages.count == 1)
+    }
+}
+
+/// Holds a session manager's older-message backfill until `open()`, so a test
+/// can observe the tail-only first paint regardless of main-actor job order.
+@MainActor
+final class HydrationBackfillGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters = []
     }
 }
