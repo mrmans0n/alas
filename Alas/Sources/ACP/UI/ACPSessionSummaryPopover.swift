@@ -75,8 +75,8 @@ struct ACPSessionSummaryPopover: View {
                     Image(systemName: "hourglass")
                         .accessibilityHidden(true)
                 } else {
-                    ProgressView()
-                        .controlSize(.small)
+                    Spinner(lineWidth: 1.5)
+                        .frame(width: 14, height: 14)
                         .accessibilityHidden(true)
                 }
                 Text("Summarizing session…")

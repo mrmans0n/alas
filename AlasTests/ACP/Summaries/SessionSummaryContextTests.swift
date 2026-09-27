@@ -191,6 +191,7 @@ import Testing
             .user(id: UUID(), messageId: nil, text: "no answer", attachments: [])
         ])
         #expect(SessionSummaryContext.snapshot(session: incomplete) == nil)
+        #expect(!SessionSummaryContext.hasCompleteTurn(session: incomplete))
 
         let oversized = makeSession(messages: [
             .user(id: UUID(), messageId: nil, text: "user", attachments: []),
@@ -202,6 +203,7 @@ import Testing
             tokenBudget: nil
         )
         #expect(SessionSummaryContext.snapshot(session: oversized) == nil)
+        #expect(SessionSummaryContext.hasCompleteTurn(session: oversized))
     }
 
     @Test func currentIdleFactsReadTheSeparateComposerWithoutBuildingContext() {
