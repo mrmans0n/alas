@@ -8,6 +8,7 @@
 ## Development rules
 - Keep code, comments, logs, and UI strings in English.
 - Prefer small, reviewable changes. Add tests where the Testing policy below says they earn their keep.
+- Use Conventional Commits for commit titles: `type(scope): summary`, or `type: summary` when a scope adds little. For example, `feat(remote): add branch picker` or `docs: clarify setup steps`.
 - Tests use the Swift Testing framework (`import Testing`), not XCTest.
 - After editing `project.yml`, regenerate the Xcode project with `xcodegen` and commit both files.
 - `Info.plist` keys are pinned in `project.yml` under `info: properties:` — edit there, not the plist.
