@@ -11,6 +11,7 @@ enum LocalTextCaller: Hashable, Sendable {
     case worktreeName
     case sessionTitle
     case mergeConflictExplanation
+    case runFailureBrief
 }
 
 struct LocalTextMessage: Equatable, Sendable {
