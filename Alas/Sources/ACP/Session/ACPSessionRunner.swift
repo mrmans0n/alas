@@ -316,7 +316,7 @@ final class ACPSessionRunner {
          onQueuedPromptDispatchRegistration: (@MainActor (UUID) -> (@Sendable () -> Void)?)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
-         localTitleGenerator: @escaping @Sendable (String) async -> String? = { await ACPLocalTitleGenerator.generate(from: $0) },
+         localTitleGenerator: @escaping @Sendable (String) async -> String? = { await ACPLocalTitleGenerator.generate(from: $0, fallback: nil) },
          onModelsObserved: ((_ agentId: String, _ models: [ChipSpec.Item]) -> Void)? = nil,
          onPersistedConfigOptionValues: (@MainActor ([String: ACPConfigValue]) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,

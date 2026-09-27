@@ -63,6 +63,33 @@ struct LocalTextInferenceEngineTests {
         #expect(try await user.value.text == "summary")
     }
 
+    @Test func cancelledRequestDoesNotPreemptActiveWork() async throws {
+        let probe = try LocalTextEngineProbe()
+        let engine = probe.engine()
+        let active = Task {
+            try await engine.generate(request, caller: .nextPrompt, priority: .automatic)
+        }
+        await probe.waitUntilEvaluationStarts(0)
+
+        let returned = Mutex(false)
+        let cancelled = Task {
+            defer { returned.withLock { $0 = true } }
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await engine.generate(request, caller: .sessionTitle, priority: .automatic)
+        }
+        // A regression preempts the active job instead of returning; stop
+        // waiting as soon as either happens.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while !returned.withLock({ $0 }), probe.cancelledEvaluationCount == 0, ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+
+        #expect(probe.cancelledEvaluationCount == 0)
+        probe.finishEvaluation(0, with: "next")
+        #expect(try await active.value.text == "next")
+        await #expect(throws: LocalTextInferenceFailure.cancelled) { try await cancelled.value }
+    }
+
     @Test func newerUserRequestReplacesOlderUserRequest() async throws {
         let probe = try LocalTextEngineProbe()
         let engine = probe.engine()

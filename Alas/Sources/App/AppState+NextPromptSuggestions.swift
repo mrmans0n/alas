@@ -11,10 +11,13 @@ final class LocalTextObservers {
     var pressure: DispatchSourceMemoryPressure?
     var modelStarted = false
     var nextPromptStarted = false
+    /// Preparations that may still turn a local-text capability on.
+    var pendingReadiness: Set<Task<Void, Never>> = []
 
     func cancel() {
         tasks.forEach { $0.cancel() }
         tasks.removeAll()
+        pendingReadiness.removeAll()
         notifications.removeAll()
         managers.removeAll()
         sessions.removeAll()
@@ -36,14 +39,16 @@ extension AppState {
 
         ensureLocalTextObserversStarted()
 
-        localTextObservers.tasks.append(Task { [weak self] in
+        let inspection = Task { [weak self] in
             guard let self else { return }
             await self.inspectLocalTextModel()
             guard self.localTextModelState == .ready else { return }
             self.nextPromptRuntimeEnabled = self.config.nextPromptSuggestionsEnabled
             self.sessionSummariesRuntimeEnabled = self.config.sessionSummariesEnabled
             if self.sessionSummariesRuntimeEnabled { self.localTextRuntimeStarted = true }
-        })
+        }
+        localTextObservers.pendingReadiness.insert(inspection)
+        localTextObservers.tasks.append(inspection)
     }
 
     func ensureLocalTextObserversStarted() {
@@ -102,6 +107,24 @@ extension AppState {
         }
     }
 
+    /// Qwen titles wait on this, so a prompt sent while an installed model is
+    /// still being inspected or enabled is not permanently left untitled.
+    func trackLocalTextReadiness(_ preparation: @escaping @MainActor () async -> Void) async {
+        let task = Task { await preparation() }
+        localTextObservers.pendingReadiness.insert(task)
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        localTextObservers.pendingReadiness.remove(task)
+    }
+
+    /// Overlapping preparations can each grant a capability, so wait until none
+    /// remain rather than for whichever started last.
+    func waitForLocalTextReadiness() async {
+        while let pending = localTextObservers.pendingReadiness.first {
+            await pending.value
+            localTextObservers.pendingReadiness.remove(pending)
+        }
+    }
+
     func inspectLocalTextModel() async {
         await localTextModelStore.inspect() // Relaunch never resumes a missing/interrupted install.
         updateLocalTextModelState(await localTextReadModelState())
@@ -143,7 +166,7 @@ extension AppState {
             return
         }
         ensureLocalTextObserversStarted()
-        await prepareNextPromptSuggestions(generation: generation)
+        await trackLocalTextReadiness { await self.prepareNextPromptSuggestions(generation: generation) }
     }
 
     func retryNextPromptSuggestions() async {
@@ -154,7 +177,8 @@ extension AppState {
         }
         guard config.nextPromptSuggestionsEnabled, localTextSupported, !nextPromptShuttingDown else { return }
         beginNextPromptSettingsChange()
-        await prepareNextPromptSuggestions(generation: nextPromptSettingsGeneration)
+        let generation = nextPromptSettingsGeneration
+        await trackLocalTextReadiness { await self.prepareNextPromptSuggestions(generation: generation) }
     }
 
     private func prepareNextPromptSuggestions(generation: UInt64) async {

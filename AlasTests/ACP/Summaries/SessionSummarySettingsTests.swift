@@ -387,6 +387,67 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
+    @Test func disablingFallbackTitlesCancelsPendingQwenTitlesImmediately() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let engine = SettingsFeatureEngine()
+        let state = makeState(fixture, SummarySettingsStore(), engine: engine)
+        let (never, _) = AsyncStream<Void>.makeStream()
+        let pendingTitle = Task<LocalTextGenerationResult?, Never> {
+            for await _ in never {}
+            return nil
+        }
+        state.qwenTitleRequests.track(pendingTitle)
+
+        state.setACPLocalTitlesEnabled(false)
+
+        #expect(!state.config.harness.acpLocalTitlesEnabled)
+        #expect(pendingTitle.isCancelled)
+        // A delayed caller-wide engine cancel could hit a title started after
+        // consent returns, so revocation only cancels the tracked jobs.
+        #expect(await engine.cancelledCallers.isEmpty)
+    }
+
+    @Test func titleRequestedWhileEnablingAnInstalledModelWaitsForReadiness() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let state = makeState(fixture, SummarySettingsStore(), engine: SettingsFeatureEngine())
+        let enable = Task { await state.enableSessionSummaries() }
+        try #require(await awaitCondition { state.config.sessionSummariesEnabled })
+
+        let title = await state.makeQwenTitleFallback().generate(from: "Fix the sign-in race")
+
+        await enable.value
+        #expect(title == "Fix sign-in race")
+        await state.shutdownLocalTextFeatures()
+    }
+
+    @Test func readinessWaitsForEveryOverlappingPreparation() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let state = makeState(fixture, SummarySettingsStore(), engine: SettingsFeatureEngine())
+        let slow = ManualGate()
+        let fast = ManualGate()
+        let slowPreparation = Task { await state.trackLocalTextReadiness { await slow.wait() } }
+        try #require(await awaitCondition { slow.isWaiting })
+        let fastPreparation = Task { await state.trackLocalTextReadiness { await fast.wait() } }
+        try #require(await awaitCondition { fast.isWaiting })
+        // The waiter reads the slow gate in the same main-actor job that
+        // resumes it, so returning after only the later preparation reads false.
+        let waiter = Task {
+            await state.waitForLocalTextReadiness()
+            return slow.isOpen
+        }
+
+        fast.open()
+        await fastPreparation.value
+        slow.open()
+        await slowPreparation.value
+
+        #expect(await waiter.value)
+        await state.shutdownLocalTextFeatures()
+    }
+
     private func makeState(
         _ fixture: LocalTextModelFixture,
         _ persistence: SummarySettingsStore,
@@ -410,6 +471,24 @@ struct SessionSummarySettingsTests {
     }
 }
 
+@MainActor
+private final class ManualGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var isOpen = false
+    var isWaiting: Bool { continuation != nil }
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func open() {
+        isOpen = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 private actor SettingsFeatureEngine: LocalTextGenerating {
     private var summaryContinuation: CheckedContinuation<LocalTextGenerationResult, Error>?
     private(set) var callers: [LocalTextCaller] = []
@@ -426,6 +505,7 @@ private actor SettingsFeatureEngine: LocalTextGenerating {
         if case .sessionSummary = caller {
             return try await withCheckedThrowingContinuation { summaryContinuation = $0 }
         }
+        if caller == .sessionTitle { return .init(text: "Fix sign-in race", selectedCandidateIndex: 0) }
         return .init(text: #"{"suggestion":"Show an example."}"#, selectedCandidateIndex: 0)
     }
 

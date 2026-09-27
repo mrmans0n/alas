@@ -138,6 +138,7 @@ final class ACPSessionManager: ObservableObject {
     let onLiveBufferRead: ((String) -> String?)?
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
     private let localTitlesEnabled: @MainActor () -> Bool
+    private let qwenTitleFallback: ACPQwenTitleFallback?
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
     private let onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)?
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
@@ -1384,6 +1385,7 @@ final class ACPSessionManager: ObservableObject {
          onLiveBufferRead: ((String) -> String?)? = nil,
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
+         qwenTitleFallback: ACPQwenTitleFallback? = nil,
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          onPlanAwaiting: ((ACPSession, ACPCursorPlanRequest) -> Void)? = nil,
          onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
@@ -1428,6 +1430,7 @@ final class ACPSessionManager: ObservableObject {
         self.onLiveBufferRead = onLiveBufferRead
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.localTitlesEnabled = localTitlesEnabled
+        self.qwenTitleFallback = qwenTitleFallback
         self.onInputAwaiting = onInputAwaiting
         self.onPlanAwaiting = onPlanAwaiting
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
@@ -5464,6 +5467,9 @@ extension ACPSessionManager {
                                               self.changeNotifier.post()
                                           },
                                           localTitlesEnabled: localTitlesEnabled,
+                                          localTitleGenerator: { [qwenTitleFallback] in
+                                              await ACPLocalTitleGenerator.generate(from: $0, fallback: qwenTitleFallback)
+                                          },
                                           onModelsObserved: { [weak self] agentId, models in
                                               guard let self,
                                                     self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
