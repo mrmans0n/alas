@@ -413,6 +413,34 @@ struct SessionSummarySettingsTests {
         await state.shutdownLocalTextFeatures()
     }
 
+    @Test func titleWaitsForEveryOverlappingReadinessPreparation() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let state = makeState(fixture, SummarySettingsStore(), engine: SettingsFeatureEngine())
+        let slow = ManualGate()
+        let fast = ManualGate()
+        let slowPreparation = Task { await state.trackLocalTextReadiness { await slow.wait() } }
+        while !slow.isWaiting { await Task.yield() }
+        let fastPreparation = Task { await state.trackLocalTextReadiness { await fast.wait() } }
+        while !fast.isWaiting { await Task.yield() }
+        // Only the slower preparation grants the capability the title needs.
+        let fallback = ACPQwenTitleFallback(
+            engine: SettingsFeatureEngine(),
+            isAvailable: { slow.isOpen },
+            waitForLocalTextReadiness: { await state.waitForLocalTextReadiness() }
+        )
+        let title = Task { await fallback.generate(from: "Fix the sign-in race") }
+
+        fast.open()
+        await fastPreparation.value
+        for _ in 0..<10 { await Task.yield() }
+        slow.open()
+        await slowPreparation.value
+
+        #expect(await title.value == "Fix sign-in race")
+        await state.shutdownLocalTextFeatures()
+    }
+
     private func makeState(
         _ fixture: LocalTextModelFixture,
         _ persistence: SummarySettingsStore,
@@ -433,6 +461,24 @@ struct SessionSummarySettingsTests {
             localTextInference: localEngine,
             localTextSupported: supported
         )
+    }
+}
+
+@MainActor
+private final class ManualGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var isOpen = false
+    var isWaiting: Bool { continuation != nil }
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func open() {
+        isOpen = true
+        continuation?.resume()
+        continuation = nil
     }
 }
 

@@ -11,12 +11,13 @@ final class LocalTextObservers {
     var pressure: DispatchSourceMemoryPressure?
     var modelStarted = false
     var nextPromptStarted = false
-    var readiness: Task<Void, Never>?
+    /// Preparations that may still turn a local-text capability on.
+    var pendingReadiness: Set<Task<Void, Never>> = []
 
     func cancel() {
         tasks.forEach { $0.cancel() }
         tasks.removeAll()
-        readiness = nil
+        pendingReadiness.removeAll()
         notifications.removeAll()
         managers.removeAll()
         sessions.removeAll()
@@ -46,7 +47,7 @@ extension AppState {
             self.sessionSummariesRuntimeEnabled = self.config.sessionSummariesEnabled
             if self.sessionSummariesRuntimeEnabled { self.localTextRuntimeStarted = true }
         }
-        localTextObservers.readiness = inspection
+        localTextObservers.pendingReadiness.insert(inspection)
         localTextObservers.tasks.append(inspection)
     }
 
@@ -110,8 +111,18 @@ extension AppState {
     /// still being inspected or enabled is not permanently left untitled.
     func trackLocalTextReadiness(_ preparation: @escaping @MainActor () async -> Void) async {
         let task = Task { await preparation() }
-        localTextObservers.readiness = task
+        localTextObservers.pendingReadiness.insert(task)
         await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        localTextObservers.pendingReadiness.remove(task)
+    }
+
+    /// Overlapping preparations can each grant a capability, so wait until none
+    /// remain rather than for whichever started last.
+    func waitForLocalTextReadiness() async {
+        while let pending = localTextObservers.pendingReadiness.first {
+            await pending.value
+            localTextObservers.pendingReadiness.remove(pending)
+        }
     }
 
     func inspectLocalTextModel() async {
