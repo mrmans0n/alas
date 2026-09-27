@@ -12,6 +12,8 @@ struct LocalTextSafetyTests {
         (#"{"Authorization":"Bearer abcDEF123456xyz","message":"failed"}"#, #"{"Authorization":[redacted],"message":"failed"}"#),
         (#"\{\"Authorization\":\"Bearer abcDEF123456xyz\"\}"#, #"\{\"Authorization\":[redacted]\}"#),
         (#"401 Authorization: Digest username="alice", realm="prod", response="6629fae4""#, "401 Authorization: Digest [redacted]"),
+        ("command failed: --password hunter22", "command failed: --password [redacted]"),
+        ("curl --token opaque1234", "curl --token [redacted]"),
         ("fatal: https://alice:s3cr3t@example.com/repo.git", "fatal: https://alice:[redacted]@example.com/repo.git"),
         ("jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl rejected", "jwt [redacted] rejected"),
         ("password: hunter22 was rejected", "password: [redacted]"),
