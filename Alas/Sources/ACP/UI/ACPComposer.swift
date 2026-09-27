@@ -159,7 +159,7 @@ struct ACPInputField: NSViewRepresentable {
                 tv.reconcileSlashPanel()
                 // A draft restored before the agent listed its commands
                 // gets its pill once the list arrives.
-                tv.pillLeadingCommandIfNeeded()
+                tv.pillCommandsIfNeeded()
             }
             tv.nextPromptOffer = nextPromptOffer
             if tv.nextPromptGhostText == nil, nextPromptOffer != nil { tv.invalidateNextPromptSuggestion() }
@@ -596,7 +596,7 @@ struct ACPInputField: NSViewRepresentable {
             invalidatePendingImageFileInsertions()
             restoringDraft = true
             storage.setAttributedString(Self.attributedString(from: draft, typography: typography))
-            ACPLeadingCommand.chipify(storage, suggestions: promptSuggestions, font: typography.appKitFont())
+            ACPSlashCommand.chipify(storage, suggestions: promptSuggestions, font: typography.appKitFont())
             if let store = upstreamReferences, let host = store.hostKind {
                 // A restored draft has no real selection yet, so the "still
                 // being typed" caret-skip guard uses the end of the
@@ -1250,10 +1250,10 @@ final class ACPNSTextView: PairedDelimiterTextView {
 
     /// Any edit invalidates a pending next-prompt ghost-text offer, then
     /// intercepts the single whitespace character that completes a
-    /// hand-typed leading command or upstream reference (`#12`, etc.),
+    /// hand-typed command or upstream reference (`#12`, etc.),
     /// turning it into a chip in the SAME edit as the keystroke instead of
     /// a follow-up one — see
-    /// `ACPLeadingCommand.chipTarget(completingWith:at:in:suggestions:)` for
+    /// `ACPSlashCommand.chipTarget(completingWith:at:in:suggestions:)` for
     /// why a follow-up edit is unsafe here. Everything else (fenced-block
     /// pairing, IME composition, plain typing) still goes through
     /// `PairedDelimiterTextView`'s own `insertText`.
@@ -1262,12 +1262,12 @@ final class ACPNSTextView: PairedDelimiterTextView {
         let range = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
         if let text = insertString as? String,
            let textStorage, let coordinator,
-           let target = ACPLeadingCommand.chipTarget(
+           let target = ACPSlashCommand.chipTarget(
                completingWith: text, at: range, in: textStorage,
                suggestions: coordinator.promptSuggestions
            ) {
             let chip = NSMutableAttributedString(
-                attributedString: ACPLeadingCommand.chip(for: target.command, font: chatTypography.appKitFont())
+                attributedString: ACPSlashCommand.chip(for: target.command, font: chatTypography.appKitFont())
             )
             chip.append(NSAttributedString(string: text, attributes: baseTypingAttributes))
             replaceUndoably(range: target.range, with: chip)
@@ -1282,17 +1282,18 @@ final class ACPNSTextView: PairedDelimiterTextView {
     }
 
     /// A draft restored, or (re)assigned wholesale, before the agent listed
-    /// its commands gets its pill once the list arrives — possibly after the
+    /// its commands gets its pills once the list arrives — possibly after the
     /// user already typed `/command ` as plain text with its own undo
     /// history. Safe to call from SwiftUI's `updateNSView` — never nested
     /// inside another edit, unlike the reentrancy the `insertText` override
     /// above guards against.
-    func pillLeadingCommandIfNeeded() {
-        guard let textStorage, let coordinator, !hasMarkedText(),
-              let target = ACPLeadingCommand.chipTarget(in: textStorage, suggestions: coordinator.promptSuggestions)
-        else { return }
-        let chip = ACPLeadingCommand.chip(for: target.command, font: chatTypography.appKitFont())
-        replaceUndoably(range: target.range, with: chip)
+    func pillCommandsIfNeeded() {
+        guard let textStorage, let coordinator, !hasMarkedText() else { return }
+        let targets = ACPSlashCommand.chipTargets(in: textStorage.string, suggestions: coordinator.promptSuggestions)
+        for target in targets.reversed() {
+            let chip = ACPSlashCommand.chip(for: target.command, font: chatTypography.appKitFont())
+            replaceUndoably(range: target.range, with: chip)
+        }
     }
 
     /// Replaces `range` with `replacement` as an ordinary undoable edit and
@@ -2327,19 +2328,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // behind instead of the paste the user expected. Treat this the same
         // as the all-images-capped case: handled, nothing to insert.
         guard !fragment.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
-        if replacementRange.location == 0, let coordinator {
-            let tail = NSMaxRange(replacementRange)
-            let combined = NSMutableAttributedString(attributedString: fragment)
-            combined.append(textStorage.attributedSubstring(
-                from: NSRange(location: tail, length: textStorage.length - tail)
-            ))
-            if let target = ACPLeadingCommand.chipTarget(in: combined, suggestions: coordinator.promptSuggestions),
-               NSMaxRange(target.range) <= fragment.length {
-                fragment.replaceCharacters(
-                    in: target.range,
-                    with: ACPLeadingCommand.chip(for: target.command, font: chatTypography.appKitFont())
-                )
-            }
+        if let coordinator {
+            ACPSlashCommand.chipify(
+                fragment, replacing: replacementRange, in: textStorage,
+                suggestions: coordinator.promptSuggestions, font: chatTypography.appKitFont()
+            )
         }
         chipUpstreamReferences(in: fragment, replacing: replacementRange)
         let attrs = baseTypingAttributes
@@ -2364,7 +2357,13 @@ final class ACPNSTextView: PairedDelimiterTextView {
         let attrs = baseTypingAttributes
         typingAttributes = attrs
         let fragment = NSMutableAttributedString(string: text, attributes: attrs)
-        let chipped = chipUpstreamReferences(in: fragment, replacing: boundedRange)
+        let chippedCommands = coordinator.map {
+            ACPSlashCommand.chipify(
+                fragment, replacing: boundedRange, in: textStorage,
+                suggestions: $0.promptSuggestions, font: chatTypography.appKitFont()
+            )
+        } ?? false
+        let chipped = chipUpstreamReferences(in: fragment, replacing: boundedRange) || chippedCommands
         performNativeTextInsertion {
             // Plain strings keep going through the String path so paired
             // delimiter handling is unchanged when nothing was chipped.
@@ -2516,30 +2515,27 @@ final class ACPNSTextView: PairedDelimiterTextView {
             return
         }
         let range = NSRange(location: slashStart, length: caret - slashStart)
-        // Captured before `closeSlashPanel()`, which resets `slashStart`.
-        let isLeadingCommand = slashStart == 0
         closeSlashPanel()
-        // A leading command is what the agent will actually run, so only
-        // that one becomes a pill; mid-message picks stay plain text. The
-        // picked token can be several characters longer than its one-glyph
-        // chip (e.g. accepting `/read-jira-ticket` while `/read-j` is still
-        // live) — the same shrinking edit `replaceUndoably` exists for, so
-        // the leading branch goes through it too instead of a direct
-        // `replaceCharacters` that would leave this keystroke's own typing
-        // undo record targeting a range that no longer exists.
-        if isLeadingCommand {
-            let chip = NSMutableAttributedString(
-                attributedString: ACPLeadingCommand.chip(for: suggestion.command, font: chatTypography.appKitFont())
-            )
-            chip.append(NSAttributedString(string: " ", attributes: baseTypingAttributes))
-            replaceUndoably(range: range, with: chip)
-        } else {
+        // A pick inside code stays plain text, like a typed command there.
+        if ACPSlashCommand.isInCode(range.location, in: ts.string as NSString) {
             ts.replaceCharacters(in: range, with: NSAttributedString(string: replacement, attributes: baseTypingAttributes))
             // `range.location`, not `slashStart` — `closeSlashPanel()` above
             // already reset `slashStart` to -1.
             setSelectedRange(NSRange(location: range.location + (replacement as NSString).length, length: 0))
             didChangeText()
+            return
         }
+        // The picked token can be several characters longer than its
+        // one-glyph chip (e.g. accepting `/read-jira-ticket` while `/read-j`
+        // is still live) — the same shrinking edit `replaceUndoably` exists
+        // for, so this goes through it instead of a direct
+        // `replaceCharacters` that would leave this keystroke's own typing
+        // undo record targeting a range that no longer exists.
+        let chip = NSMutableAttributedString(
+            attributedString: ACPSlashCommand.chip(for: suggestion.command, font: chatTypography.appKitFont())
+        )
+        chip.append(NSAttributedString(string: " ", attributes: baseTypingAttributes))
+        replaceUndoably(range: range, with: chip)
     }
 
     private func positionAndShow(_ panel: NSPanel, makeKey: Bool = true) {

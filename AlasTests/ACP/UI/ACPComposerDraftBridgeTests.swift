@@ -945,7 +945,7 @@ struct ACPComposerDraftBridgeTests {
         textView.textStorage?.setAttributedString(
             ACPInputField.Coordinator.attributedString(from: Self.chipDraft)
         )
-        textView.pillLeadingCommandIfNeeded()
+        textView.pillCommandsIfNeeded()
         return (textView, coordinator, window)
     }
 
@@ -1019,8 +1019,11 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.selectedRange() == NSRange(location: textView.string.utf16.count, length: 0))
     }
 
-    @Test("a pasted command away from the message start stays plain text; mentions stay chips")
-    func pastedCommandMidMessageStaysText() {
+    @Test("a pasted command mid-message becomes a pill only after a boundary; mentions stay chips", arguments: [
+        ("hi ", ["command", "mention"]),
+        ("hi", ["mention"]),
+    ])
+    func pastedCommandMidMessage(prefix: String, expectedKinds: [String]) {
         let (textView, coordinator, window) = makeChipTextView()
         defer { withExtendedLifetime((coordinator, window)) {} }
         let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
@@ -1033,13 +1036,13 @@ struct ACPComposerDraftBridgeTests {
         // NSMutableAttributedString's plain-String replace, corrupting "hi "
         // with a phantom `.commandChipName`. Replacing the whole attributed
         // string instead gives it no attributes at all.
-        textView.textStorage?.setAttributedString(NSAttributedString(string: "hi "))
-        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        textView.textStorage?.setAttributedString(NSAttributedString(string: prefix))
+        textView.setSelectedRange(NSRange(location: (prefix as NSString).length, length: 0))
         #expect(textView.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
 
-        #expect(chipKinds(in: textView) == ["mention"])
+        #expect(chipKinds(in: textView) == expectedKinds)
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == ACPComposerDraft(segments: [
-            .text("hi /review "),
+            .text(prefix + "/review "),
             .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
             .text(" tail"),
         ]))
@@ -1055,7 +1058,7 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
         #expect(board.string(forType: .string) == "/review")
 
-        // See the note in `pastedCommandMidMessageStaysText`: replace the
+        // See the note in `pastedCommandMidMessage`: replace the
         // whole attributed string, not just `.string`, so the new text
         // doesn't inherit the command chip's attributes it's overwriting.
         textView.textStorage?.setAttributedString(NSAttributedString(string: " the parser"))
@@ -1074,7 +1077,7 @@ struct ACPComposerDraftBridgeTests {
         defer { board.releaseGlobally() }
         textView.selectAll(nil)
         #expect(textView.writeSelection(to: board, types: textView.writablePasteboardTypes))
-        // See the note in `pastedCommandMidMessageStaysText`: replace the
+        // See the note in `pastedCommandMidMessage`: replace the
         // whole attributed string, not just `.string`, so the new text
         // doesn't inherit the just-copied chip's attributes it's overwriting.
         textView.textStorage?.setAttributedString(NSAttributedString(string: "keep"))
@@ -2257,7 +2260,7 @@ struct ACPComposerDraftBridgeTests {
         _ = window
         // The suggestion list is not known yet at typing time — exactly
         // when `available_commands_update` arrives after the user already
-        // typed the command, the scenario `pillLeadingCommandIfNeeded` (and
+        // typed the command, the scenario `pillCommandsIfNeeded` (and
         // the late-arrival call in `updateNSView`) exists for.
         coordinator.promptSuggestions = []
         textView.allowsUndo = true
@@ -2269,7 +2272,7 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.undoManager?.canUndo == true)
 
         coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
-        textView.pillLeadingCommandIfNeeded()
+        textView.pillCommandsIfNeeded()
 
         let storage = textView.attributedString()
         #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
@@ -2333,7 +2336,7 @@ struct ACPComposerDraftBridgeTests {
         // of what the user kept typing past the command — it must not get
         // yanked back to right after the newly formed chip.
         coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
-        textView.pillLeadingCommandIfNeeded()
+        textView.pillCommandsIfNeeded()
 
         let storage = textView.attributedString()
         #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
@@ -2344,15 +2347,10 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.selectedRange() == NSRange(location: fullLength - 4, length: 0))
     }
 
-    @Test("accepting a mid-message slash suggestion places the caret after it")
-    func midMessageSlashAcceptPlacesCaretCorrectly() throws {
+    @Test("accepting a mid-message slash suggestion pills it and places the caret after it")
+    func midMessageSlashAcceptPillsCommand() throws {
         let (textView, coordinator, window) = makeGhostHintTextView()
         _ = window
-        // Not a leading command (there's a word before the `/`), so this
-        // exercises `insertSlash`'s plain-text branch, which — like the
-        // leading branch above — reads `range.location` for the caret
-        // rather than `slashStart`, since `closeSlashPanel()` already
-        // reset `slashStart` to -1 by the time either branch runs.
         textView.string = "please /rev"
         textView.setSelectedRange(NSRange(location: 11, length: 0))
         textView.reconcileSlashPanel()
@@ -2360,8 +2358,10 @@ struct ACPComposerDraftBridgeTests {
 
         textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
 
-        #expect(textView.string == "please /review ")
-        #expect(textView.selectedRange() == NSRange(location: (textView.string as NSString).length, length: 0))
+        let storage = textView.attributedString()
+        #expect(storage.attribute(.commandChipName, at: 7, effectiveRange: nil) as? String == "/review")
+        #expect(ACPInputField.Coordinator.extract(storage).0 == "please /review ")
+        #expect(textView.selectedRange() == NSRange(location: storage.length, length: 0))
     }
 
     @Test("late chipification preserves a selection past the command")
@@ -2374,7 +2374,7 @@ struct ACPComposerDraftBridgeTests {
         textView.setSelectedRange(NSRange(location: 6, length: 4))
 
         coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
-        textView.pillLeadingCommandIfNeeded()
+        textView.pillCommandsIfNeeded()
 
         let storage = textView.attributedString()
         #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
@@ -2397,7 +2397,7 @@ struct ACPComposerDraftBridgeTests {
         textView.setSelectedRange(NSRange(location: 0, length: 15))
 
         coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
-        textView.pillLeadingCommandIfNeeded()
+        textView.pillCommandsIfNeeded()
 
         let storage = textView.attributedString()
         #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")
@@ -2419,7 +2419,7 @@ struct ACPComposerDraftBridgeTests {
         textView.setSelectedRange(NSRange(location: 0, length: 0))
 
         coordinator.promptSuggestions = [ACPPromptSuggestion(command: "/init", description: "Initialize")]
-        textView.pillLeadingCommandIfNeeded()
+        textView.pillCommandsIfNeeded()
 
         let storage = textView.attributedString()
         #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/init")

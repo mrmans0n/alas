@@ -14,46 +14,95 @@ struct ACPCommandPillTests {
 
     @Test("matches a known leading command and returns the rest")
     func matchesLeadingCommand() {
-        let match = ACPLeadingCommand.match(in: "/review the parser", suggestions: suggestions)
+        let match = ACPSlashCommand.match(in: "/review the parser", suggestions: suggestions)
         #expect(match?.suggestion.command == "/review")
         #expect(match?.rest == "the parser")
-        #expect(ACPLeadingCommand.match(in: "/review", suggestions: suggestions)?.rest == "")
+        #expect(ACPSlashCommand.match(in: "/review", suggestions: suggestions)?.rest == "")
     }
 
     @Test("ignores unknown, partial, and non-leading commands")
     func ignoresNonMatches() {
-        #expect(ACPLeadingCommand.match(in: "/reviewer x", suggestions: suggestions) == nil)
-        #expect(ACPLeadingCommand.match(in: "/tmp is full", suggestions: suggestions) == nil)
-        #expect(ACPLeadingCommand.match(in: "please /review", suggestions: suggestions) == nil)
+        #expect(ACPSlashCommand.match(in: "/reviewer x", suggestions: suggestions) == nil)
+        #expect(ACPSlashCommand.match(in: "/tmp is full", suggestions: suggestions) == nil)
+        #expect(ACPSlashCommand.match(in: "please /review", suggestions: suggestions) == nil)
     }
 
     @Test("chipify replaces the leading command and keeps draft and wire text unchanged")
     func chipifyKeepsTextRoundTrip() {
         let storage = NSMutableAttributedString(string: "/review the parser")
-        ACPLeadingCommand.chipify(storage, suggestions: suggestions, font: font)
+        ACPSlashCommand.chipify(storage, suggestions: suggestions, font: font)
         #expect(storage.length == 1 + " the parser".count)
         #expect(storage.attribute(.commandChipName, at: 0, effectiveRange: nil) as? String == "/review")
         #expect(ACPInputField.Coordinator.draft(from: storage).segments == [.text("/review the parser")])
         #expect(ACPInputField.Coordinator.extract(storage).0 == "/review the parser")
     }
 
+    @Test("chip targets are known commands on token boundaries, outside code", arguments: [
+        ("/review x", ["/review"]),
+        ("please /review x and /brainstorming\n", ["/review", "/brainstorming"]),
+        ("a\n/review\tb", ["/review"]),
+        ("abc/review x", []),
+        ("/review/x y", []),
+        ("please /review", []),
+        ("run `/review x` now", []),
+        ("```\n/review x\n```\n", []),
+        ("```\n/review x\n", []),
+    ])
+    func chipTargets(text: String, expected: [String]) {
+        #expect(ACPSlashCommand.chipTargets(in: text, suggestions: suggestions).map(\.command) == expected)
+    }
+
+    @Test("typing whitespace completes a command anywhere, but not inside open code", arguments: [
+        ("/review", "/review"),
+        ("please /review", "/review"),
+        ("please/review", nil),
+        ("please `/review", nil),
+        ("please `example /review", nil),
+        ("```\n/review", nil),
+    ] as [(String, String?)])
+    func keystrokeChipTarget(text: String, expected: String?) {
+        let storage = NSAttributedString(string: text)
+        let target = ACPSlashCommand.chipTarget(
+            completingWith: " ", at: NSRange(location: storage.length, length: 0),
+            in: storage, suggestions: suggestions
+        )
+        #expect(target?.command == expected)
+    }
+
+    @Test("a pasted command chips only when its destination is a boundary outside code", arguments: [
+        ("hi ", "", true),
+        ("hi", "", false),
+        ("run ` ", " now`", false),
+        ("```\n", "\n```\n", false),
+    ])
+    func pasteChipify(before: String, after: String, chips: Bool) {
+        let storage = NSAttributedString(string: before + after)
+        let fragment = NSMutableAttributedString(string: "/review x")
+        let range = NSRange(location: (before as NSString).length, length: 0)
+        #expect(ACPSlashCommand.chipify(
+            fragment, replacing: range, in: storage, suggestions: suggestions, font: font
+        ) == chips)
+        #expect(ACPInputField.Coordinator.extract(fragment).0 == "/review x")
+    }
+
     @Test("chipify waits for whitespace after the command and never double-chips")
     func chipifyRequiresTrailingWhitespace() {
         let typing = NSMutableAttributedString(string: "/review")
-        ACPLeadingCommand.chipify(typing, suggestions: suggestions, font: font)
+        ACPSlashCommand.chipify(typing, suggestions: suggestions, font: font)
         #expect(typing.string == "/review")
 
-        let storage = NSMutableAttributedString(string: "/review x")
-        ACPLeadingCommand.chipify(storage, suggestions: suggestions, font: font)
+        let storage = NSMutableAttributedString(string: "/review x /review y")
+        ACPSlashCommand.chipify(storage, suggestions: suggestions, font: font)
         let once = storage.length
-        ACPLeadingCommand.chipify(storage, suggestions: suggestions, font: font)
+        #expect(ACPInputField.Coordinator.extract(storage).0 == "/review x /review y")
+        ACPSlashCommand.chipify(storage, suggestions: suggestions, font: font)
         #expect(storage.length == once)
     }
 
     @Test("ghost hint shows after a chipped command followed by a space")
     func ghostHintWithChip() {
         let storage = NSMutableAttributedString(string: "/brainstorming ")
-        ACPLeadingCommand.chipify(storage, suggestions: suggestions, font: font)
+        ACPSlashCommand.chipify(storage, suggestions: suggestions, font: font)
         let end = NSRange(location: storage.length, length: 0)
         #expect(ACPNSTextView.argumentGhostHint(storage: storage, selection: end, suggestions: suggestions) == "[topic]")
 
@@ -65,7 +114,7 @@ struct ACPCommandPillTests {
     @Test("the debounced composer restyle leaves the command chip in place")
     func restyleKeepsChip() {
         let storage = NSTextStorage(string: "/review the parser")
-        ACPLeadingCommand.chipify(storage, suggestions: suggestions, font: font)
+        ACPSlashCommand.chipify(storage, suggestions: suggestions, font: font)
         let typography = ACPChatTypography.default
         let theme = Theme(id: "test", name: "Test", tokens: [:])
         let style = ACPInputField.codeBlockStyle(theme: theme, baseFont: typography.appKitFont(), typography: typography)
@@ -86,14 +135,14 @@ struct ACPCommandPillTests {
 
     @Test("a leading command keeps a newline-delimited body intact in rest")
     func matchPreservesNewlinesAfterCommand() {
-        let match = ACPLeadingCommand.match(in: "/review\n\n# Results", suggestions: suggestions)
+        let match = ACPSlashCommand.match(in: "/review\n\n# Results", suggestions: suggestions)
         #expect(match?.rest == "\n\n# Results")
     }
 
     @Test("only the single separating space is stripped, not repeated whitespace")
     func matchStripsExactlyOneSeparatingSpace() {
-        #expect(ACPLeadingCommand.match(in: "/review the parser", suggestions: suggestions)?.rest == "the parser")
-        #expect(ACPLeadingCommand.match(in: "/review\tthe parser", suggestions: suggestions)?.rest == "\tthe parser")
+        #expect(ACPSlashCommand.match(in: "/review the parser", suggestions: suggestions)?.rest == "the parser")
+        #expect(ACPSlashCommand.match(in: "/review\tthe parser", suggestions: suggestions)?.rest == "\tthe parser")
     }
 
     @Test("an image attached before the leading command still lets the pill render")
@@ -106,7 +155,7 @@ struct ACPCommandPillTests {
         // is 0 in the FULL message — attached before the command was typed
         // — must not corrupt the "/" prefix that `match` looks for.
         let text = "/review the parser"
-        let match = ACPLeadingCommand.match(in: text, suggestions: suggestions)
+        let match = ACPSlashCommand.match(in: text, suggestions: suggestions)
         #expect(match?.suggestion.command == "/review")
         let consumed = text.count - (match?.rest.count ?? 0)
         let rest = ACPUserMessageImageMarkers.displayText(
