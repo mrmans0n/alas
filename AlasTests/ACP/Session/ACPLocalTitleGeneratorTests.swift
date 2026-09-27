@@ -103,6 +103,31 @@ struct ACPLocalTitleRoutingTests {
     }
 
     @Test @MainActor
+    func revokingConsentCancelsAQwenTitleBeforeTheEngineRunsIt() async {
+        let availability = TitleAvailability()
+        let requests = ACPQwenTitleRequests()
+        let engine = SuspendingTitleEngine()
+        let fallback = ACPQwenTitleFallback(
+            engine: engine,
+            isAvailable: {
+                availability.checks += 1
+                return availability.isAvailable
+            },
+            requests: requests
+        )
+        let title = Task { await fallback.generate(from: "Fix the sign-in race") }
+        while availability.checks == 0 { await Task.yield() }
+
+        // Consent is revoked after the availability check, possibly before the
+        // job reaches the engine, where engine.cancel(caller:) would miss it.
+        availability.isAvailable = false
+        requests.cancelAll()
+
+        #expect(await title.value == nil)
+        #expect(await engine.observedCancellation)
+    }
+
+    @Test @MainActor
     func revokedConsentDiscardsALateQwenTitle() async {
         let availability = TitleAvailability()
         let engine = TitleEngine(outcome: .success("Fix sign-in race")) {
@@ -125,6 +150,25 @@ struct ACPLocalTitleRoutingTests {
 @MainActor
 private final class TitleAvailability {
     var isAvailable = true
+    var checks = 0
+}
+
+private actor SuspendingTitleEngine: LocalTextGenerating {
+    private(set) var observedCancellation = false
+
+    func generate(_ request: LocalTextGenerationRequest, caller: LocalTextCaller,
+                  priority: LocalTextJobPriority) async throws -> LocalTextGenerationResult {
+        do {
+            try await Task.sleep(for: .seconds(60))
+        } catch {
+            observedCancellation = true
+            throw LocalTextInferenceFailure.cancelled
+        }
+        return .init(text: "Too late", selectedCandidateIndex: 0)
+    }
+
+    func cancel(caller: LocalTextCaller) async {}
+    func cancelAndUnload() async {}
 }
 
 private actor TitleEngine: LocalTextGenerating {

@@ -139,10 +139,11 @@ struct ACPQwenTitleFallback: Sendable {
     /// Consent flags stay off until launch-time model inspection finishes, so a
     /// first prompt sent right after launch would otherwise never get a title.
     var waitForStartupInspection: @MainActor @Sendable () async -> Void = {}
+    var requests: ACPQwenTitleRequests?
 
     func generate(from candidate: String) async -> String? {
         await waitForStartupInspection()
-        guard await isAvailable(), let prompt = ACPLocalTitleGenerator.prompt(for: candidate) else { return nil }
+        guard let prompt = ACPLocalTitleGenerator.prompt(for: candidate) else { return nil }
         let request = LocalTextGenerationRequest(
             messageCandidates: [[
                 .init(role: .system, content: ACPLocalTitleGenerator.instructions),
@@ -154,9 +155,35 @@ struct ACPQwenTitleFallback: Sendable {
             prefillStepSize: 512,
             timeout: .seconds(15)
         )
+        guard let job = await start(request) else { return nil }
+        let result = await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
+        await requests?.finish(job)
         // Consent can be revoked while generation is pending.
-        guard let result = try? await engine.generate(request, caller: .sessionTitle, priority: .automatic),
-              !Task.isCancelled, await isAvailable() else { return nil }
+        guard let result, !Task.isCancelled, await isAvailable() else { return nil }
         return ACPLocalTitleGenerator.validTitle(result.text)
+    }
+
+    /// Checking consent and tracking the job in one main-actor turn means a
+    /// revocation can always cancel it, even before the engine has enqueued it.
+    @MainActor
+    private func start(_ request: LocalTextGenerationRequest) -> Task<LocalTextGenerationResult?, Never>? {
+        guard isAvailable() else { return nil }
+        let engine = engine
+        let job = Task { try? await engine.generate(request, caller: .sessionTitle, priority: .automatic) }
+        requests?.track(job)
+        return job
+    }
+}
+
+@MainActor
+final class ACPQwenTitleRequests {
+    private var jobs: Set<Task<LocalTextGenerationResult?, Never>> = []
+
+    func track(_ job: Task<LocalTextGenerationResult?, Never>) { jobs.insert(job) }
+    func finish(_ job: Task<LocalTextGenerationResult?, Never>) { jobs.remove(job) }
+
+    func cancelAll() {
+        jobs.forEach { $0.cancel() }
+        jobs.removeAll()
     }
 }

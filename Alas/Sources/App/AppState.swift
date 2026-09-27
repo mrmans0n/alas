@@ -198,6 +198,7 @@ final class AppState {
     }
     @ObservationIgnored lazy var sessionSummaryCoordinator = SessionSummaryCoordinator(engine: localTextInference)
     @ObservationIgnored let localTextObservers = LocalTextObservers()
+    @ObservationIgnored let qwenTitleRequests = ACPQwenTitleRequests()
     @ObservationIgnored var localTextInstallation: Task<Void, Never>?
     let localTextSupported: Bool
     var localTextModelState: LocalTextModelState = .notInstalled
@@ -1635,6 +1636,7 @@ final class AppState {
     /// Both recheck availability too; this frees the engine early.
     private func cancelBorrowedLocalTextRequestsIfUnavailable(wasEnabled: Bool) {
         guard wasEnabled, !nextPromptRuntimeEnabled, !sessionSummariesRuntimeEnabled else { return }
+        qwenTitleRequests.cancelAll()
         let engine = localTextInference
         Task {
             await engine.cancel(caller: .worktreeName)
@@ -1649,6 +1651,7 @@ final class AppState {
         config.harness.acpLocalTitlesEnabled = enabled
         saveConfig()
         guard wasEnabled, !enabled else { return }
+        qwenTitleRequests.cancelAll()
         await localTextInference.cancel(caller: .sessionTitle)
     }
 
@@ -1656,7 +1659,8 @@ final class AppState {
         ACPQwenTitleFallback(
             engine: localTextInference,
             isAvailable: { [weak self] in self?.qwenFallbackTitlesAvailable ?? false },
-            waitForStartupInspection: { [weak self] in await self?.localTextObservers.startupInspection?.value }
+            waitForStartupInspection: { [weak self] in await self?.localTextObservers.startupInspection?.value },
+            requests: qwenTitleRequests
         )
     }
 
