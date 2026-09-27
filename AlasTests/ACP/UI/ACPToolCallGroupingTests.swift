@@ -920,6 +920,28 @@ struct ACPToolCallGroupExpansionSeedsTests {
         #expect(seeds.isExpanded(group(["tc-a", "tc-b", "tc-c"], live: false)))
     }
 
+    @Test("an explicit collapse survives the window trimming its originally-collapsed members as a live group keeps growing")
+    func explicitCollapseSurvivesWindowTrimAsLiveGroupGrows() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        seeds.setExpanded(false, members: ["tc-a", "tc-b"])
+
+        // Every render syncs before checking expansion (mirroring
+        // `syncLineage`), so a member overlapping the collapsed set folds
+        // newer members in even as older ones scroll out of the window.
+        seeds.syncCollapsed(members: ["tc-b", "tc-c"])
+
+        // The window later trims "tc-a" and "tc-b" out entirely; only
+        // "tc-c" (synced above) and the newest member remain visible.
+        #expect(!seeds.isExpanded(group(["tc-c", "tc-d"], live: true)))
+    }
+
+    @Test("syncCollapsed on a never-collapsed group is a no-op")
+    func syncCollapsedNoOpWhenNeverCollapsed() {
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        seeds.syncCollapsed(members: ["tc-a", "tc-b"])
+        #expect(seeds.isExpanded(group(["tc-a", "tc-b"], live: true)))
+    }
+
     @Test("a group is not expanded until one of its members is recorded")
     func notExpandedInitially() {
         let seeds = ACPToolCallGroupExpansionSeeds()

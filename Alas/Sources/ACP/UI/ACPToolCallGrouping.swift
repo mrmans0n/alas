@@ -626,4 +626,18 @@ final class ACPToolCallGroupExpansionSeeds {
         }
         for member in members { lineageByMemberId[member] = canonical }
     }
+
+    /// Folds `members` into the collapsed override when any of them already
+    /// carry it. Mirrors `syncLineage`'s handling of expansion: called on
+    /// every render (not only at collapse time), so a live group that keeps
+    /// growing at the tail stays collapsed even after the render window
+    /// trims out the members the user originally collapsed — otherwise,
+    /// once none of a group's currently-visible members are in
+    /// `collapsedMemberIds`, `isExpanded(_:)` falls through to `isLive` and
+    /// the group silently re-expands. A no-op when none of `members` is
+    /// currently collapsed.
+    func syncCollapsed(members: [String]) {
+        guard members.contains(where: collapsedMemberIds.contains) else { return }
+        collapsedMemberIds.formUnion(members)
+    }
 }

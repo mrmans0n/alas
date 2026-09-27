@@ -759,6 +759,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // visible still clears the whole run — see
             // `ACPToolCallGroupExpansionSeeds.syncLineage`.
             expansionSeeds.syncLineage(members: memberStableIds)
+            // Same growth problem, for an explicit collapse of a still-live
+            // group: without this, a live group the user collapsed would
+            // silently re-expand once the window trims past the members
+            // that were actually passed to `setExpanded(false, ...)`.
+            expansionSeeds.syncCollapsed(members: memberStableIds)
             let expanded = expansionSeeds.isExpanded(group)
             return ACPTranscriptRowSpec(
                 id: group.id,
