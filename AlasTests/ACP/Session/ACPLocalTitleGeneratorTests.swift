@@ -156,20 +156,12 @@ struct ACPLocalTitleRoutingTests {
         let engine = GatedTitleEngine()
         let fallback = ACPQwenTitleFallback(
             engine: engine,
-            isAvailable: {
-                availability.checks += 1
-                if availability.checks == 2 {
-                    // The second title schedules its engine job right after this
-                    // check; a two-hop main-actor job runs only after that job.
-                    Task { @MainActor in Task { @MainActor in availability.secondJobScheduled = true } }
-                }
-                return availability.isAvailable
-            },
+            isAvailable: { availability.check() },
             requests: ACPQwenTitleRequests()
         )
         let first = Task { await fallback.generate(from: "Fix the sign-in race") }
         let second = Task { await fallback.generate(from: "Add dark mode support") }
-        try #require(await awaitCondition { availability.secondJobScheduled })
+        try #require(await awaitCondition { availability.scheduledJobs >= 2 })
 
         engine.releaseNext()
         try #require(await awaitCondition { engine.waitingCount == 1 })
@@ -186,13 +178,7 @@ struct ACPLocalTitleRoutingTests {
         let engine = GatedTitleEngine()
         let fallback = ACPQwenTitleFallback(
             engine: engine,
-            isAvailable: {
-                availability.checks += 1
-                if availability.checks == 2 {
-                    Task { @MainActor in Task { @MainActor in availability.secondJobScheduled = true } }
-                }
-                return availability.isAvailable
-            },
+            isAvailable: { availability.check() },
             requests: ACPQwenTitleRequests()
         )
         let active = Task { await fallback.generate(from: "Fix the sign-in race") }
@@ -201,7 +187,7 @@ struct ACPLocalTitleRoutingTests {
             defer { availability.queuedFinished = true }
             return await fallback.generate(from: "Add dark mode support")
         }
-        try #require(await awaitCondition { availability.secondJobScheduled })
+        try #require(await awaitCondition { availability.scheduledJobs >= 2 })
 
         queued.cancel()
 
@@ -210,6 +196,34 @@ struct ACPLocalTitleRoutingTests {
         engine.releaseNext()
         #expect(await active.value == "Fix sign-in race")
         #expect(await queued.value == nil)
+    }
+
+    @Test @MainActor
+    func aCancelledQueuedTitleDoesNotLetTheNextOneJumpTheQueue() async throws {
+        let availability = TitleAvailability()
+        let engine = GatedTitleEngine()
+        let fallback = ACPQwenTitleFallback(
+            engine: engine,
+            isAvailable: { availability.check() },
+            requests: ACPQwenTitleRequests()
+        )
+        let running = Task { await fallback.generate(from: "Fix the sign-in race") }
+        try #require(await awaitCondition { engine.waitingCount == 1 })
+        let cancelled = Task { await fallback.generate(from: "Add dark mode support") }
+        try #require(await awaitCondition { availability.scheduledJobs >= 2 })
+        cancelled.cancel()
+        #expect(await cancelled.value == nil)
+
+        let next = Task { await fallback.generate(from: "Speed up the test suite") }
+        try #require(await awaitCondition { availability.scheduledJobs >= 3 })
+
+        #expect(engine.maxActive == 1)
+        engine.releaseNext()
+        try #require(await awaitCondition { engine.waitingCount == 1 })
+        engine.releaseNext()
+        #expect(await running.value == "Fix sign-in race")
+        #expect(await next.value == "Fix sign-in race")
+        #expect(engine.maxActive == 1)
     }
 
     @Test @MainActor
@@ -248,8 +262,17 @@ func awaitCondition(within timeout: Duration = .seconds(10), _ condition: () -> 
 private final class TitleAvailability {
     var isAvailable = true
     var checks = 0
-    var secondJobScheduled = false
+    var scheduledJobs = 0
     var queuedFinished = false
+
+    /// A title schedules its engine job right after its availability check;
+    /// this two-hop main-actor job runs only after that job, so tests can
+    /// await `scheduledJobs` instead of yielding a guessed number of times.
+    func check() -> Bool {
+        checks += 1
+        Task { @MainActor in Task { @MainActor in self.scheduledJobs += 1 } }
+        return isAvailable
+    }
 }
 
 /// Holds every call until released and records how many ran at once.
