@@ -34,7 +34,9 @@ enum RunFailureBriefPolicy {
     private static let destructivePattern = #"(?i)\b(?:re-?run|git\s+(?:reset|push|clean|checkout|rebase)|rm\s+-|sudo)\b"#
     /// Reject by default: any base-form action verb counts unless it names a thing that
     /// failed ("Run script failed"); negated uses are skipped by `containsActiveAction`.
-    private static let actionVerbPattern = #"(?i)(?<!\b(?:failed|fails|failing|unable|trying|tried|attempting|attempted|able|refused)\sto\s)\b(?:re-?run|run|execute|(?:un|re)?install|delete|remove|reset|revert|push|commit|rm|kill)\b(?!(?:\s+(?:steps?|phases?|hooks?|scripts?|commands?|jobs?|stages?))?\s+(?:failed|fails|failing|was|were|is|errored|crashed|exited|timed\s+out|hung|stalled|returned)\b)"#
+    private static let actionVerbPattern = #"(?i)(?<!\b(?:failed|fails|failing|unable|trying|tried|attempting|attempted|able|refused)\sto\s)(?<!\b(?:may|might|would|will|cannot|can't|won't|didn't|doesn't|did|does)\s)\b(?:re-?run|run|execute|(?:un|re)?install|delete|remove|reset|revert|push|commit|rm|kill)\b(?!(?:\s+(?:steps?|phases?|hooks?|scripts?|commands?|jobs?|stages?))?\s+(?:failed|fails|failing|was|were|is|errored|crashed|exited|timed\s+out|hung|stalled|returned)\b)"#
+    /// Modal descriptions ("may run out of memory") are exempt above, so a modal addressed to the reader is caught here.
+    private static let addressedModalPattern = #"(?i)\byou\s+(?:should|could|can|must|may|might|will|would)\s+(?:(?:want|need|have)\s+to\s+)?(?:re-?run|run|execute|(?:un|re)?install|delete|remove|reset|revert|push|commit|kill)\b"#
     private static let actionGerundPattern = #"(?i)\b(?:try|consider|by|recommend|suggest|keep)\s+(?:re-?running|running|executing|(?:un|re)?installing|deleting|removing|resetting|reverting|pushing|committing|killing)\b"#
 
     static func request(for input: RunFailureBriefInput) -> LocalTextGenerationRequest {
@@ -126,7 +128,8 @@ enum RunFailureBriefPolicy {
               LocalTextSafety.redactingCredentials(text) == text,
               !LocalTextSafety.containsActiveAction(text, pattern: destructivePattern, includingQuotedCommands: true),
               !LocalTextSafety.containsActiveAction(text, pattern: actionVerbPattern, includingQuotedCommands: true),
-              text.range(of: actionGerundPattern, options: .regularExpression) == nil
+              text.range(of: actionGerundPattern, options: .regularExpression) == nil,
+              text.range(of: addressedModalPattern, options: .regularExpression) == nil
         else { return nil }
         return text
     }

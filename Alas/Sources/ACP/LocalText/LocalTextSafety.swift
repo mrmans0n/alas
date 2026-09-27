@@ -4,6 +4,7 @@ enum LocalTextSafety {
     private static let privateKeyHeaderPattern = #"(?i)-----BEGIN (?:[A-Z ]* )?PRIVATE KEY-----"#
     private static let tokenPattern = #"\b(?:ghp_|gho_|ghu_|ghs_)[A-Za-z0-9]{36}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+|\bsk[-_](?:test[-_])?[A-Za-z0-9_-]{20,}\b"#
     private static let bearerPattern = #"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}"#
+    private static let basicAuthorizationPattern = #"(?i)\b(authorization\s*[:=]\s*basic\s+)[A-Za-z0-9+/]+=*"#
     private static let assignmentRegex = try! NSRegularExpression(
         pattern: #"(?i)\b(?:api[_-]?key|access[_-]?key|password|secret|token)\b\s*[:=]\s*([^\s;,]+)"#
     )
@@ -17,7 +18,8 @@ enum LocalTextSafety {
     ]
 
     static func containsCredential(_ text: String) -> Bool {
-        if matches(text, privateKeyHeaderPattern) || matches(text, tokenPattern) || matches(text, bearerPattern) {
+        if matches(text, privateKeyHeaderPattern) || matches(text, tokenPattern) || matches(text, bearerPattern)
+            || matches(text, basicAuthorizationPattern) {
             return true
         }
         let ns = text as NSString
@@ -36,6 +38,7 @@ enum LocalTextSafety {
             .replacingOccurrences(of: privateKeyHeaderPattern + ".*", with: "[redacted private key]", options: .regularExpression)
             .replacingOccurrences(of: tokenPattern, with: "[redacted]", options: .regularExpression)
             .replacingOccurrences(of: bearerPattern, with: "$1[redacted]", options: .regularExpression)
+            .replacingOccurrences(of: basicAuthorizationPattern, with: "$1[redacted]", options: .regularExpression)
         let mutable = NSMutableString(string: masked)
         let matches = assignmentRedactionRegex.matches(in: masked, range: NSRange(location: 0, length: mutable.length))
         for match in matches.reversed() {

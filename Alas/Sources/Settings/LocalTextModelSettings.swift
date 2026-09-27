@@ -28,7 +28,7 @@ struct LocalTextModelSettings: View {
             sessionSummaryRow
             SettingsRow(
                 name: "Failure briefs",
-                desc: "Summarizes failed run scripts on-device with Apple Intelligence, or the local model when it is already installed."
+                desc: "Summarizes failed run scripts on-device with Apple Intelligence. Without it, the installed local model is used while suggestions or summaries are enabled."
             ) {
                 AlasToggle(on: Binding(
                     get: { state.config.runFailureBriefsEnabled },

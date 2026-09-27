@@ -36,6 +36,7 @@ struct RunFailureBriefPolicyTests {
         #"{"summary": "s", "cause": "c", "checks": ["You can check by running swift test."]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["Verify by running swift test."]}"#,
         #"{"summary": "s", "cause": "The fix is to reinstall the SDK.", "checks": ["k"]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["You could run swift test to confirm."]}"#,
         "The Net tests failed to compile.",
         "",
     ])
@@ -53,6 +54,8 @@ struct RunFailureBriefPolicyTests {
         "The tests could not run because the simulator is missing.",
         "The shell failed to execute the command.",
         "The test was unable to run.",
+        "The process may run out of memory.",
+        "The compiler cannot execute the plugin.",
     ])
     func parseKeepsDescriptiveTextThatOnlyResemblesActionsOrSecrets(cause: String) {
         let output = #"{"summary": "s", "cause": "\#(cause)", "checks": ["k"]}"#

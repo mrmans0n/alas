@@ -7,6 +7,7 @@ struct LocalTextSafetyTests {
         ("auth with sk-live_abcdefghijklmnopqrstuvwx failed", "auth with [redacted] failed"),
         ("clone failed with github_pat_11ABCDEFG0123456789_abcdefghijklmnop", "clone failed with [redacted]"),
         ("curl failed: Authorization: Bearer abcDEF123456xyz", "curl failed: Authorization: Bearer [redacted]"),
+        ("401 with Authorization: Basic dXNlcjpwYXNz", "401 with Authorization: Basic [redacted]"),
         ("jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl rejected", "jwt [redacted] rejected"),
         ("password: hunter22 was rejected", "password: [redacted]"),
         ("password: correct horse battery; retrying", "password: [redacted]; retrying"),
@@ -33,6 +34,7 @@ struct LocalTextSafetyTests {
     @Test(arguments: [
         "SyntaxError: Unexpected token: punc (})",
         "error: invalid token: expired",
+        "Basic authentication failed for the registry",
     ])
     func redactingCredentialsLeavesDiagnosticsWithoutSecretsIntact(line: String) {
         #expect(LocalTextSafety.redactingCredentials(line) == line)
