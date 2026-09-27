@@ -1,80 +1,26 @@
 import Foundation
 
 enum LocalTextSafety {
-    private static let privateKeyHeaderPattern = #"(?i)-----BEGIN (?:[A-Z ]* )?PRIVATE KEY-----"#
-    private static let tokenPattern = #"\b(?:ghp_|gho_|ghu_|ghs_)[A-Za-z0-9]{36}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+|\bsk[-_](?:test[-_])?[A-Za-z0-9_-]{20,}\b"#
-    private static let urlUserinfoPattern = #"(?i)\b([a-z][a-z0-9+.-]*://[^\s/@:]+:)(?!\[redacted\]@)[^\s/@]+@"#
-    private static let authorizationHeaderPattern = #"(?i)\b(authorization\s*[:=]\s*[a-z-]+\s+)(?!\[redacted\]).+"#
-    private static let authorizationJSONPattern = #"(?i)(\\?")(authorization)\1\s*:\s*(?!\[redacted\])(?:\\"(?:(?!\\").)*\\"|"[^"]*")"#
-    private static let flagCredentialPattern = #"(?i)(--?(?:password|secret|token|api[_-]?key|access[_-]?key)\s+)(?!\[redacted\])[^\s;,]+"#
-    private static let assignmentRegex = try! NSRegularExpression(
-        pattern: #"(?i)\b(?:api[_-]?key|access[_-]?key|password|secret|token)\b\s*[:=]\s*([^\s;,]+)"#
-    )
-    private static let assignmentRedactionRegex = try! NSRegularExpression(
-        pattern: #"(?i)(?:\b|(?<=[a-z]))(?:[A-Za-z0-9]+[_-])*(api[_-]?key|access[_-]?key|password|secret|token)\b[\\"']*\s*([:=])\s*(\\"(?:(?!\\").)*\\"|"[^"]*"|'[^']*'|[^\s;,]+)"#
-    )
-    private static let placeholderValues: Set<String> = [
-        "[redacted]", "redacted", "placeholder", "example", "changeme",
-        "<api_key>", "<access_key>", "<password>", "<secret>", "<token>",
-        "your_api_key", "your_access_key", "your_password", "your_secret", "your_token",
-    ]
-
     static func containsCredential(_ text: String) -> Bool {
-        if matches(text, privateKeyHeaderPattern) || matches(text, tokenPattern)
-            || matches(text, authorizationHeaderPattern) || matches(text, authorizationJSONPattern)
-            || matches(text, flagCredentialPattern) || matches(text, urlUserinfoPattern) {
+        if matches(text, #"(?i)-----BEGIN (?:[A-Z ]* )?PRIVATE KEY-----"#) { return true }
+        if matches(text, #"\b(?:ghp_|gho_|ghu_|ghs_)[A-Za-z0-9]{36}\b|\bsk[-_](?:test[-_])?[A-Za-z0-9_-]{20,}\b"#) {
             return true
         }
+        guard let regex = try? NSRegularExpression(
+            pattern: #"(?i)\b(?:api[_-]?key|access[_-]?key|password|secret|token)\b\s*[:=]\s*([^\s;,]+)"#
+        ) else { return false }
         let ns = text as NSString
-        for match in assignmentRegex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
             let raw = ns.substring(with: match.range(at: 1))
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\"'`."))
-            if placeholderValues.contains(raw.lowercased()) { continue }
+            let normalized = raw.lowercased()
+            if ["[redacted]", "redacted", "placeholder", "example", "changeme",
+                "<api_key>", "<access_key>", "<password>", "<secret>", "<token>",
+                "your_api_key", "your_access_key", "your_password", "your_secret", "your_token"
+            ].contains(normalized) { continue }
             return true
         }
         return false
-    }
-
-    /// Single-line masking; callers that see whole logs handle multi-line PEM blocks.
-    static func redactingCredentials(_ text: String) -> String {
-        let masked = text
-            .replacingOccurrences(of: privateKeyHeaderPattern + ".*", with: "[redacted private key]", options: .regularExpression)
-            .replacingOccurrences(of: tokenPattern, with: "[redacted]", options: .regularExpression)
-            .replacingOccurrences(of: authorizationHeaderPattern, with: "$1[redacted]", options: .regularExpression)
-            .replacingOccurrences(of: authorizationJSONPattern, with: "$1$2$1:[redacted]", options: .regularExpression)
-            .replacingOccurrences(of: flagCredentialPattern, with: "$1[redacted]", options: .regularExpression)
-            .replacingOccurrences(of: urlUserinfoPattern, with: "$1[redacted]@", options: .regularExpression)
-        let mutable = NSMutableString(string: masked)
-        let matches = assignmentRedactionRegex.matches(in: masked, range: NSRange(location: 0, length: mutable.length))
-        for match in matches.reversed() {
-            let key = mutable.substring(with: match.range(at: 1))
-            let separator = mutable.substring(with: match.range(at: 2))
-            let value = mutable.substring(with: match.range(at: 3))
-            guard isSecretValue(value, key: key, separator: separator) else { continue }
-            var valueRange = match.range(at: 3)
-            let unquoted = !value.hasPrefix("\"") && !value.hasPrefix("'") && !value.hasPrefix("\\")
-            // Passphrases can contain spaces; api/access keys and tokens are always one opaque
-            // string, so widening them would swallow trailing diagnostic text like "… exported".
-            if ["password", "secret"].contains(key.lowercased()), unquoted {
-                // `password: correct horse battery` and `PASSWORD=correct horse battery` have no
-                // closing delimiter besides `;`, `,`, or the line end.
-                let rest = NSRange(location: valueRange.location, length: mutable.length - valueRange.location)
-                let stop = mutable.rangeOfCharacter(from: CharacterSet(charactersIn: ";,\n"), options: [], range: rest)
-                valueRange.length = (stop.location == NSNotFound ? mutable.length : stop.location) - valueRange.location
-            }
-            mutable.replaceCharacters(in: valueRange, with: "[redacted]")
-        }
-        return mutable as String
-    }
-
-    /// Parsers print `token: <word>` ("Unexpected token: punc"), so only that key's
-    /// unquoted colon form needs a generated-looking value to count as a secret.
-    private static func isSecretValue(_ value: String, key: String, separator: String) -> Bool {
-        let bare = value.trimmingCharacters(in: CharacterSet(charactersIn: "\\\"'`."))
-        if placeholderValues.contains(bare.lowercased()) { return false }
-        let isQuoted = value.first.map { "\"'\\".contains($0) } ?? false
-        if separator == "=" || key.lowercased() != "token" || isQuoted { return true }
-        return bare.count >= 8 && bare.contains(where: \.isNumber)
     }
 
     static func containsActiveAction(

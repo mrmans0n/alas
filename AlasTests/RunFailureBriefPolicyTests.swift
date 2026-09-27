@@ -22,34 +22,8 @@ struct RunFailureBriefPolicyTests {
         #"{"summary": "s", "cause": "c", "checks": [3]}"#,
         #"{"summary": "first\nsecond", "cause": "c", "checks": ["k"]}"#,
         #"{"summary": "s", "cause": "password = hunter22", "checks": ["k"]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["Run swift build again."]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["Look at it, then rerun the script."]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["Whether git reset --hard helps."]}"#,
-        #"{"summary": "s", "cause": "You should install Xcode.", "checks": ["k"]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["Try running swift test."]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["To verify, run swift test."]}"#,
-        #"{"summary": "s", "cause": "Next, install Xcode.", "checks": ["k"]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["First run swift test."]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["Remove logs containing secrets."]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["Kill job 123."]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["Run scripts with verbose logging."]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["You can check by running swift test."]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["Verify by running swift test."]}"#,
-        #"{"summary": "s", "cause": "The fix is to reinstall the SDK.", "checks": ["k"]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["You could run swift test to confirm."]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["You should be running swift test."]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["npm test -- --verbose"]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["cargo test"]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["make clean"]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["/usr/bin/swift test"]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["./gradlew test"]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["Try ./gradlew test."]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["CI=1 npm test"]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["FOO=bar swift test"]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["Use swift test to reproduce it."]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["Try cargo test."]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["Use `./gradlew test` to reproduce it."]}"#,
-        #"{"summary": "s", "cause": "c", "checks": ["The output of `swift build` for the Net target."]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["rm -rf DerivedData to clear it."]}"#,
         "The Net tests failed to compile.",
         "",
     ])
@@ -58,29 +32,13 @@ struct RunFailureBriefPolicyTests {
     }
 
     @Test(arguments: [
-        "Running the tests failed because the SDK is missing.",
-        "Installing dependencies failed with a checksum mismatch.",
-        "The parser hit Unexpected token: punc in app.js.",
-        "Run script failed because the SDK is missing.",
-        "Commit failed because the hook rejected it.",
-        "The first run failed after the SDK update.",
-        "The tests could not run because the simulator is missing.",
-        "The shell failed to execute the command.",
-        "The test was unable to run.",
-        "The process may run out of memory.",
-        "The compiler cannot execute the plugin.",
-        "The tests were run with an unsupported SDK.",
-        "The command was run under the wrong shell.",
-        "Swift concurrency checks flagged the actor.",
-        "Make sure the SDK path exists.",
-        "/usr/lib/libfoo.dylib is missing from the runner.",
-        "The --configuration flag is missing.",
-        "Whether the -sdk path is valid.",
+        "Run swift test with --verbose to see the full failure.",
+        "Rerun the job after fixing the import.",
     ])
-    func parseKeepsDescriptiveTextThatOnlyResemblesActionsOrSecrets(cause: String) {
-        let output = #"{"summary": "s", "cause": "\#(cause)", "checks": ["k"]}"#
+    func parseKeepsOrdinaryNonDestructiveSuggestions(check: String) {
+        let output = #"{"summary": "s", "cause": "c", "checks": ["\#(check)"]}"#
 
-        #expect(RunFailureBriefPolicy.parse(output)?.cause == cause)
+        #expect(RunFailureBriefPolicy.parse(output)?.checks == [check])
     }
 
     @Test

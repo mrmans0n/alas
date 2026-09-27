@@ -32,8 +32,7 @@ enum FailureLogSelection {
         while let last = lines.last, last.allSatisfy(\.isWhitespace) { lines.removeLast() }
         guard !lines.isEmpty else { return nil }
 
-        let privateKeyLines = privateKeyLineIndices(lines)
-        let matches = lines.indices.filter { !privateKeyLines.contains($0) && isErrorLine(lines[$0]) }
+        let matches = lines.indices.filter { isErrorLine(lines[$0]) }
 
         let indices: [Int]
         let truncated: Bool
@@ -51,12 +50,7 @@ enum FailureLogSelection {
         }
 
         return FailureLogExcerpt(
-            lines: indices.map { index in
-                let text = privateKeyLines.contains(index)
-                    ? "[redacted private key]"
-                    : String(LocalTextSafety.redactingCredentials(lines[index]).prefix(maximumLineLength))
-                return .init(number: index + 1, text: text)
-            },
+            lines: indices.map { .init(number: $0 + 1, text: String(lines[$0].prefix(maximumLineLength))) },
             matchedErrors: !matches.isEmpty,
             truncated: truncated || inputTruncated
         )
@@ -66,33 +60,5 @@ enum FailureLogSelection {
         let range = NSRange(location: 0, length: (line as NSString).length)
         return caseInsensitiveMarkers.firstMatch(in: line, range: range) != nil
             || caseSensitiveMarkers.firstMatch(in: line, range: range) != nil
-    }
-
-    private static func privateKeyLineIndices(_ lines: [String]) -> Set<Int> {
-        var result = Set<Int>()
-        var inside = false
-        for (index, line) in lines.enumerated() {
-            if line.contains("PRIVATE KEY-----") {
-                result.insert(index)
-                let isBegin = line.contains("-----BEGIN")
-                if !isBegin && !inside {
-                    // The output tail can start mid-key, leaving an END with no BEGIN.
-                    var previous = index - 1
-                    while previous >= 0, isKeyBody(lines[previous]) {
-                        result.insert(previous)
-                        previous -= 1
-                    }
-                }
-                inside = isBegin && !line.contains("-----END")
-            } else if inside {
-                result.insert(index)
-            }
-        }
-        return result
-    }
-
-    private static func isKeyBody(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        return !trimmed.isEmpty && trimmed.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "+/=".contains($0)) }
     }
 }

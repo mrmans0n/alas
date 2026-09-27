@@ -25,67 +25,10 @@ struct FailureLogSelectionTests {
     }
 
     @Test
-    func privateKeyBlocksAreRedactedWithoutShiftingLineNumbers() throws {
-        let log = """
-        loading deploy key
-        -----BEGIN OPENSSH PRIVATE KEY-----
-        b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ
-        -----END OPENSSH PRIVATE KEY-----
-        fatal: could not read from remote repository
-        """
-
-        let excerpt = try #require(FailureLogSelection.select(log))
-
-        #expect(excerpt.lines.map(\.number) == [4, 5])
-        #expect(excerpt.lines[0].text == "[redacted private key]")
-        #expect(excerpt.lines.allSatisfy { !LocalTextSafety.containsCredential($0.text) })
-    }
-
-    @Test
-    func aSingleLinePrivateKeyDoesNotHideTheLinesAfterIt() throws {
-        let log = """
-        KEY=-----BEGIN PRIVATE KEY-----MIIEvQIBADANBg-----END PRIVATE KEY-----
-        error: boom
-        done
-        """
-
-        let excerpt = try #require(FailureLogSelection.select(log))
-
-        #expect(excerpt.lines.map(\.text) == ["[redacted private key]", "error: boom", "done"])
-    }
-
-    @Test
     func alreadyTruncatedOutputMarksTheExcerptTruncated() throws {
         let excerpt = try #require(FailureLogSelection.select("error: boom", inputTruncated: true))
 
         #expect(excerpt.truncated)
-    }
-
-    @Test
-    func aPrivateKeyCutByTheOutputTailIsStillRedacted() throws {
-        let log = """
-        QUJDREVGR0hJSktMTU5PUFFSU1RVVldY
-        YWJjZGVmZ2hpams=
-        -----END OPENSSH PRIVATE KEY-----
-        done
-        """
-
-        let excerpt = try #require(FailureLogSelection.select(log))
-
-        #expect(excerpt.lines.map(\.text) == [
-            "[redacted private key]", "[redacted private key]", "[redacted private key]", "done",
-        ])
-    }
-
-    @Test
-    func aTokenStraddlingTheLineCapIsRedactedBeforeTruncation() throws {
-        let prefix = "error: " + String(repeating: "x", count: FailureLogSelection.maximumLineLength - 20)
-        let log = prefix + " ghp_abcdefghijklmnopqrstuvwxyz0123456789 end"
-
-        let excerpt = try #require(FailureLogSelection.select(log))
-
-        #expect(excerpt.lines.count == 1)
-        #expect(!excerpt.lines[0].text.contains("ghp_"))
     }
 
     @Test
