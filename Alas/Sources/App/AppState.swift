@@ -262,6 +262,8 @@ final class AppState {
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     let attentionStore: AttentionStore
+    /// Debug: show the first-run screen even when projects exist.
+    var isPreviewingFirstRunScreen = false
     var isAttentionInboxOpen = false {
         didSet {
             if oldValue != isAttentionInboxOpen {
