@@ -4,6 +4,48 @@ import Foundation
 
 @MainActor
 struct TabsManagerTests {
+    @Test func createdReviewReplacesItsDraftWithoutStealingAnotherTab() throws {
+        let manager = TabsManager(store: MemoryStore())
+        let worktreeId = "created-review"
+        let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
+        let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, upstreamAheadCommitCount: 0, needsPush: false)
+        let snapshot = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: .placeholder(remote: remote, number: 42), providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+        let draft = manager.openOrFocusDraftReviewRequest(worktreeId: worktreeId, snapshot: snapshot)
+        let other = manager.openOrFocusReviewChanges(worktreeId: worktreeId)
+
+        let review = try #require(manager.transitionToCreatedReview(worktreeId: worktreeId, replacing: draft.id, snapshot: snapshot))
+
+        #expect(manager.activeTabId(forWorktree: worktreeId) == other.id)
+        #expect(manager.tabs(forWorktree: worktreeId).contains(review))
+        #expect(!manager.tabs(forWorktree: worktreeId).contains(draft))
+        guard case .reviewPR(let state) = review else {
+            Issue.record("Expected review tab")
+            return
+        }
+        #expect(state.number == 42)
+    }
+
+    @Test func createdReviewReplacesCompletedCommitEditor() throws {
+        let manager = TabsManager(store: MemoryStore())
+        let worktreeId = "published-review"
+        let remote = CodeHostRemote(kind: .gitlab, host: "gitlab.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://gitlab.com/owner/repo")!)
+        let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, upstreamAheadCommitCount: 0, needsPush: false)
+        let snapshot = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: .placeholder(remote: remote, number: 7), providerAvailable: true, providerAuthenticated: true, providerCapabilities: .gitlabCLI, errorMessage: nil)
+        let draft = manager.openOrFocusDraftCommit(worktreeId: worktreeId)
+        let editor = try #require(manager.replaceDraftWithCommitEditor(worktreeId: worktreeId, draftTabId: draft.id, baseRef: "main", newSha: "abc", title: "abc Subject"))
+
+        let review = try #require(manager.transitionToCreatedReview(worktreeId: worktreeId, replacing: editor.id, snapshot: snapshot))
+
+        #expect(manager.activeTabId(forWorktree: worktreeId) == review.id)
+        #expect(manager.tabs(forWorktree: worktreeId) == [review])
+        guard case .reviewPR(let state) = review else {
+            Issue.record("Expected review tab")
+            return
+        }
+        #expect(state.number == 7)
+        #expect(state.provider == .gitlab)
+    }
+
     @Test func tabsFileSkipsRemovedMissionCaseWithoutDroppingSupportedTabs() throws {
         let terminal = Tab.terminal(.init(id: "terminal-1", title: "Terminal", sessionId: "session-1"))
         let encodedTerminal = try #require(
