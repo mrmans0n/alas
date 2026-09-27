@@ -682,14 +682,14 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
         self.worktreeId = worktreeId
         self.provider = provider
         self.repositorySlug = snapshot.remote?.repositorySlug ?? ""
-        self.branchName = snapshot.local.branchName
+        self.branchName = snapshot.local.upstreamBranchName ?? snapshot.local.branchName
         self.baseBranch = snapshot.local.baseBranch
         self.id = [
             "draft-review-request",
             worktreeId,
             provider.rawValue,
             self.repositorySlug,
-            snapshot.local.branchName,
+            self.branchName,
             snapshot.local.baseBranch,
         ].joined(separator: ":")
         self.headOwner = snapshot.local.headRemoteOwner
@@ -710,7 +710,7 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
     func matchesTarget(_ snapshot: ReviewLoopSnapshot) -> Bool {
         snapshot.remote?.kind == provider
             && snapshot.remote?.repositorySlug == repositorySlug
-            && snapshot.local.branchName == branchName
+            && (snapshot.local.upstreamBranchName ?? snapshot.local.branchName) == branchName
             && snapshot.local.baseBranch == baseBranch
             && snapshot.local.headSHA == headSHA
     }

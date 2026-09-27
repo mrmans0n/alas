@@ -94,6 +94,31 @@ struct TabsManagerReviewRequestDraftTests {
         #expect(state.body == "## Summary\n- Adds a tab")
     }
 
+    @Test func localBranchRenameKeepsPendingCreatedReviewDraft() {
+        let worktreeId = "review-request-draft-renamed-local-branch"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let first = manager.openOrFocusDraftReviewRequest(
+            worktreeId: worktreeId, snapshot: Self.snapshot(branchName: "local-feature")
+        )
+        let createdURL = URL(string: "https://github.com/mrmans0n/alas/pull/42")!
+        _ = manager.updateDraftReviewRequest(worktreeId: worktreeId, tabId: first.id) {
+            $0.createdURL = createdURL
+        }
+
+        let second = manager.openOrFocusDraftReviewRequest(
+            worktreeId: worktreeId, snapshot: Self.snapshot(branchName: "renamed-feature")
+        )
+
+        #expect(second.id == first.id)
+        guard case .draftReviewRequest(let state) = second else {
+            Issue.record("Expected draft review request tab")
+            return
+        }
+        #expect(state.createdURL == createdURL)
+        #expect(manager.tabs(forWorktree: worktreeId).count == 1)
+    }
+
     @Test func createdReviewSurvivesHeadAdvanceAndRefocusUntilDiscovered() throws {
         let worktreeId = "review-request-draft-pending-created-url"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
