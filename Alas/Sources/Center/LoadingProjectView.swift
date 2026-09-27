@@ -1,19 +1,22 @@
 import SwiftUI
 
 struct LoadingProjectView: View {
-    @Environment(\.theme) private var theme
+    var body: some View {
+        ForestLoadingView(message: "Loading repository…")
+    }
+}
+
+/// The flock circles like a spinner above the message.
+struct ForestLoadingView: View {
+    let message: String
 
     var body: some View {
-        VStack(spacing: 16) {
-            Spacer()
-            Spinner()
-                .frame(width: 32, height: 32)
-            Text("Loading repository…")
-                .font(.system(size: 12))
-                .foregroundColor(theme.color("fg-dim"))
-            Spacer()
+        ForestScene(mode: .loading) {
+            Text(message)
+                .font(.system(size: 13, weight: .medium))
+                .shadow(color: .black.opacity(0.25), radius: 6)
+                .offset(y: 40)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(theme.color("bg-1"))
     }
 }

@@ -435,6 +435,7 @@ struct CenterPaneView: View {
                         newAgentInChatShortcut: state.binding(for: .launchAgentInChat)?.displayString,
                         newAgentInTerminalShortcut: state.binding(for: .launchAgentInTerminal)?.displayString
                     )
+                    .transition(.takeOff)
                 } else if let activeId = composition.activeId,
                           let tab = tabs.first(where: { $0.id == activeId }) {
                     let activeSharedOwner = sharedOwnerForTab(activeId)
@@ -769,6 +770,7 @@ struct CenterPaneView: View {
                     )
                 }
             }
+            .animation(.takeOff, value: tabs.isEmpty)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .bottomTrailing) {
                 VStack(alignment: .trailing, spacing: 8) {

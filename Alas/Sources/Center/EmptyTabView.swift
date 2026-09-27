@@ -1,8 +1,6 @@
 import SwiftUI
 
 struct EmptyTabView: View {
-    static let emptyIcon = "🥺"
-
     let onNewTerminal: () -> Void
     let onNewAgentInChat: () -> Void
     let onNewAgentInTerminal: () -> Void
@@ -12,18 +10,18 @@ struct EmptyTabView: View {
     @Environment(\.theme) var theme
 
     var body: some View {
+        ForestScene(mode: .idle) {
+            card
+        }
+    }
+
+    private var card: some View {
         VStack(spacing: 16) {
-            ZStack {
-                LinearGradient(colors: [theme.color("bg-3"), theme.color("bg-2")],
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
-                    .frame(width: 80, height: 80)
-                    .clipShape(RoundedRectangle(cornerRadius: 22))
-                    .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(theme.color("line"), lineWidth: 0.5))
-                Text(Self.emptyIcon)
-                    .font(.system(size: 34))
-                    .shadow(color: theme.color("accent").opacity(0.2), radius: 8, y: 3)
-                    .accessibilityLabel("No tabs icon")
-            }
+            Image(systemName: "bird.fill")
+                .font(.system(size: 30))
+                .foregroundStyle(theme.color("accent").gradient)
+                .shadow(color: theme.color("accent").opacity(0.3), radius: 8, y: 3)
+                .accessibilityHidden(true)
             VStack(spacing: 5) {
                 Text("No tabs open")
                     .font(.system(size: 15, weight: .semibold))
@@ -56,10 +54,12 @@ struct EmptyTabView: View {
                 )
             }
             .frame(maxWidth: 420)
-            .padding(.horizontal, 24)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(theme.color("bg-1"))
+        .padding(24)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.18), radius: 24, y: 10)
+        .padding(.horizontal, 24)
     }
 }
 

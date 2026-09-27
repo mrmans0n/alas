@@ -82,6 +82,14 @@ struct AdvancedPane: View {
                             state.isPreviewingFirstRunScreen = true
                         }
                     }
+                    SettingsRow(
+                        name: "Worktree loading and empty states",
+                        desc: "Cycles the center pane through loading, no tabs open, and an open tab."
+                    ) {
+                        AlasButton(title: "Show", icon: "tree", style: .normal) {
+                            state.isPreviewingForestScenes = true
+                        }
+                    }
                 }
                 SettingsGroup(title: "Cleanup") {
                     SettingsRow(

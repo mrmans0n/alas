@@ -339,70 +339,80 @@ struct RootView: View {
             checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope,
             isRefreshingProjectTopologies: state.isRefreshingProjectTopologies
         )
-        switch resolver.resolve() {
-        case .worktree(let wt):
-            CenterPaneView(
-                state: state,
-                worktree: wt,
-                sharedSessionOwner: state.selectedWorkspaceCheckout.map { SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation) },
-                allowsPaneFocus: !state.isKeyboardOverlayOpen,
-                effectiveRightPaneVisible: effectiveRightPaneVisible,
-                hasRightPaneRail: hasRightPaneRail,
-                rightPaneStartupSuppressed: rightPaneStartupSuppressed
-            )
-        case .deleting(let wt):
-            DeletingWorktreeView(worktree: wt)
-        case .deleteFailed(let wt, let message):
-            DeleteFailedWorktreeView(
-                worktree: wt,
-                message: message,
-                allowsRemovalActions: state.projects.first(where: { $0.id == wt.projectId })
-                    .map { !state.projectsManager.isMain(wt, in: $0) } ?? false,
-                onRetry: { state.deleteWorktree(wt) },
-                onArchive: { state.archiveWorktree(wt) },
-                onCopyError: {
-                    let pb = NSPasteboard.general
-                    pb.clearContents()
-                    pb.setString(message, forType: .string)
-                }
-            )
-        case .creating(let wt):
-            CreatingWorktreeView(worktree: wt)
-        case .loadingProject:
-            LoadingProjectView()
-        case .empty:
-            if let workspace = state.workspaceNavigationState.selectedWorkspace(
-                in: state.workspacesManager.workspaces
-            ) {
-                WorkspaceOverviewView(
-                    workspace: workspace,
-                    projects: state.projects,
-                    icon: { state.effectiveIcon(for: $0) },
-                    onNewCheckout: { creatingWorkspaceCheckout = workspace },
-                    onEdit: { editingWorkspace = workspace }
-                )
-            } else if let checkout = state.selectedWorkspaceCheckout,
-               let fallback = state.sharedSessionFallbackWorktreeForSelectedWorkspaceCheckout() {
-                CenterPaneView(
-                    state: state,
-                    worktree: fallback,
-                    sharedSessionOwner: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation),
-                    allowsPaneFocus: !state.isKeyboardOverlayOpen,
-                    effectiveRightPaneVisible: effectiveRightPaneVisible,
-                    hasRightPaneRail: hasRightPaneRail,
-                    rightPaneStartupSuppressed: rightPaneStartupSuppressed
-                )
+        let center = resolver.resolve()
+        Group {
+            if state.isPreviewingForestScenes {
+                ForestScenesPreview { state.isPreviewingForestScenes = false }
             } else {
-                EmptyTabView(
-                    onNewTerminal: {},
-                    onNewAgentInChat: {},
-                    onNewAgentInTerminal: {},
-                    newTerminalShortcut: nil,
-                    newAgentInChatShortcut: nil,
-                    newAgentInTerminalShortcut: nil
-                )
+                switch center {
+                case .worktree(let wt):
+                    CenterPaneView(
+                        state: state,
+                        worktree: wt,
+                        sharedSessionOwner: state.selectedWorkspaceCheckout.map { SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation) },
+                        allowsPaneFocus: !state.isKeyboardOverlayOpen,
+                        effectiveRightPaneVisible: effectiveRightPaneVisible,
+                        hasRightPaneRail: hasRightPaneRail,
+                        rightPaneStartupSuppressed: rightPaneStartupSuppressed
+                    )
+                case .deleting(let wt):
+                    DeletingWorktreeView(worktree: wt)
+                case .deleteFailed(let wt, let message):
+                    DeleteFailedWorktreeView(
+                        worktree: wt,
+                        message: message,
+                        allowsRemovalActions: state.projects.first(where: { $0.id == wt.projectId })
+                            .map { !state.projectsManager.isMain(wt, in: $0) } ?? false,
+                        onRetry: { state.deleteWorktree(wt) },
+                        onArchive: { state.archiveWorktree(wt) },
+                        onCopyError: {
+                            let pb = NSPasteboard.general
+                            pb.clearContents()
+                            pb.setString(message, forType: .string)
+                        }
+                    )
+                case .creating(let wt):
+                    CreatingWorktreeView(worktree: wt)
+                        .transition(.takeOff)
+                case .loadingProject:
+                    LoadingProjectView()
+                        .transition(.takeOff)
+                case .empty:
+                    if let workspace = state.workspaceNavigationState.selectedWorkspace(
+                        in: state.workspacesManager.workspaces
+                    ) {
+                        WorkspaceOverviewView(
+                            workspace: workspace,
+                            projects: state.projects,
+                            icon: { state.effectiveIcon(for: $0) },
+                            onNewCheckout: { creatingWorkspaceCheckout = workspace },
+                            onEdit: { editingWorkspace = workspace }
+                        )
+                    } else if let checkout = state.selectedWorkspaceCheckout,
+                       let fallback = state.sharedSessionFallbackWorktreeForSelectedWorkspaceCheckout() {
+                        CenterPaneView(
+                            state: state,
+                            worktree: fallback,
+                            sharedSessionOwner: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation),
+                            allowsPaneFocus: !state.isKeyboardOverlayOpen,
+                            effectiveRightPaneVisible: effectiveRightPaneVisible,
+                            hasRightPaneRail: hasRightPaneRail,
+                            rightPaneStartupSuppressed: rightPaneStartupSuppressed
+                        )
+                    } else {
+                        EmptyTabView(
+                            onNewTerminal: {},
+                            onNewAgentInChat: {},
+                            onNewAgentInTerminal: {},
+                            newTerminalShortcut: nil,
+                            newAgentInChatShortcut: nil,
+                            newAgentInTerminalShortcut: nil
+                        )
+                    }
+                }
             }
         }
+        .animation(.takeOff, value: center.isLoading)
     }
 
     private func selectedWorktree() -> Worktree? {

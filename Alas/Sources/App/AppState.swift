@@ -264,6 +264,8 @@ final class AppState {
     let attentionStore: AttentionStore
     /// Debug: show the first-run screen even when projects exist.
     var isPreviewingFirstRunScreen = false
+    /// Debug: cycle the center pane through the forest loading and empty states.
+    var isPreviewingForestScenes = false
     var isAttentionInboxOpen = false {
         didSet {
             if oldValue != isAttentionInboxOpen {
