@@ -61,7 +61,7 @@ struct ACPSessionSummaryControl: View {
             )
         }
         .onDisappear {
-            guard popoverOpen else { return }
+            guard popoverOpen || coordinator.phase == .loading else { return }
             popoverOpen = false
             coordinator.cancelPresentation()
         }
