@@ -35,8 +35,9 @@ struct TabsManagerTests {
         let worktreeId = "published-review"
         let remote = CodeHostRemote(kind: .gitlab, host: "gitlab.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://gitlab.com/owner/repo")!)
         let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, upstreamAheadCommitCount: 0, needsPush: false)
+        let advanced = ReviewLoopLocalState(branchName: "feature", headSHA: "def", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 1, hasUpstream: true, upstreamAheadCommitCount: 0, needsPush: true)
         let missing = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .gitlabCLI, errorMessage: nil)
-        let found = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: .placeholder(remote: remote, number: 7), providerAvailable: true, providerAuthenticated: true, providerCapabilities: .gitlabCLI, errorMessage: nil)
+        let found = ReviewLoopSnapshot(local: advanced, remote: remote, reviewRequest: .placeholder(remote: remote, number: 7), providerAvailable: true, providerAuthenticated: true, providerCapabilities: .gitlabCLI, errorMessage: nil)
         let draft = manager.openOrFocusDraftCommit(worktreeId: worktreeId)
         let target = CommitPublishReviewTarget(provider: .gitlab, host: "gitlab.com", owner: "owner", repository: "repo", repositorySlug: "owner/repo", remoteName: "origin", webURL: remote.webURL, branch: "feature", upstreamBranch: nil, headOwner: nil, baseBranch: "main", reviewRequestExisted: false, createAsDraft: false)
         let operations = CommitPublishOperations(

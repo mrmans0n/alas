@@ -1503,7 +1503,6 @@ final class TabsManager {
                         && target.repositorySlug == request.remote.repositorySlug
                         && target.branch == snapshot.local.branchName
                         && target.baseBranch == snapshot.local.baseBranch
-                        && state.currentSha == snapshot.local.headSHA
                 } else {
                     matches = false
                 }
