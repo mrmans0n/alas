@@ -210,9 +210,10 @@ extension LiveCheckpointGitRunner {
     /// each blocked read or write would hold one of only a few threads for as
     /// long as git runs, and concurrent batches could deadlock: readers
     /// holding every thread while the writers that feed git never get one.
+    /// A detached thread has no autorelease pool of its own, so one wraps the body.
     static func onDedicatedThread<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
         await withCheckedContinuation { continuation in
-            Thread.detachNewThread { continuation.resume(returning: body()) }
+            Thread.detachNewThread { continuation.resume(returning: autoreleasepool { body() }) }
         }
     }
 }
@@ -270,7 +271,9 @@ struct CheckpointGitStreamReader {
 
     /// Appends the next chunk, keeping the buffer zero-based.
     private mutating func fill() throws -> Bool {
-        guard let chunk = try handle?.read(upToCount: 1024 * 1024), !chunk.isEmpty else { return false }
+        // Drain Foundation's temporaries per chunk; one batch can stream gigabytes.
+        let chunk = try autoreleasepool { try handle?.read(upToCount: 1024 * 1024) }
+        guard let chunk, !chunk.isEmpty else { return false }
         buffer = offset < buffer.count ? buffer.subdata(in: offset..<buffer.count) + chunk : chunk
         offset = 0
         return true
