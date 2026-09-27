@@ -39,7 +39,7 @@ enum RunFailureBriefPolicy {
     private static let addressedModalPattern = #"(?i)\byou\s+(?:should|could|can|must|may|might|will|would)\s+(?:(?:want|need|have)\s+to\s+)?(?:re-?run|run|execute|(?:un|re)?install|delete|remove|reset|revert|push|commit|kill)\b"#
     /// Command-shaped text regardless of verb. Tool names are case-sensitive so prose like
     /// "Swift concurrency…" or "Make sure…" still reads as a description.
-    private static let commandShapePattern = #"(?:^|[`:]\s*)(?:npm|npx|yarn|pnpm|cargo|make|swift|xcodebuild|xcrun|git|go|pip3?|python3?|ruby|bundle|gradle|mvn|brew|docker|kubectl|bash|sh|zsh|node|deno|bun|rake|pod)\s+[a-z-]|(?:^|`|\b[Uu]se\s+)\.{0,2}/(?:[\w.-]+/)*[\w-]+\s+[a-z-]|\s--?[A-Za-z][\w-]*\b"#
+    private static let commandShapePattern = #"(?:^|[`:]\s*)(?:npm|npx|yarn|pnpm|cargo|make|swift|xcodebuild|xcrun|git|go|pip3?|python3?|ruby|bundle|gradle|mvn|brew|docker|kubectl|bash|sh|zsh|node|deno|bun|rake|pod)\s+[a-z-]|(?:^|`|\b[Uu]se\s+)\.{0,2}/(?:[\w.-]+/)*[\w-]+\s+[a-z-]|^[a-z][\w.-]*(?:\s+[\w.-]+)*?\s+--?[A-Za-z]"#
     private static let actionGerundPattern = #"(?i)\b(?:try|consider|by|recommend|suggest|keep)\s+(?:re-?running|running|executing|(?:un|re)?installing|deleting|removing|resetting|reverting|pushing|committing|killing)\b"#
 
     static func request(for input: RunFailureBriefInput) -> LocalTextGenerationRequest {
@@ -91,7 +91,8 @@ enum RunFailureBriefPolicy {
         else { return nil }
         let checks = rawChecks.compactMap(field)
         guard checks.count == rawChecks.count else { return nil }
-        return RunFailureBrief(summary: summary, cause: cause, checks: checks)
+        var seen = Set<String>()
+        return RunFailureBrief(summary: summary, cause: cause, checks: checks.filter { seen.insert($0).inserted })
     }
 
     /// Keeps the last lines that fit, since the final error is usually the cause.

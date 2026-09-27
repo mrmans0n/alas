@@ -68,11 +68,20 @@ struct RunFailureBriefPolicyTests {
         "Swift concurrency checks flagged the actor.",
         "Make sure the SDK path exists.",
         "/usr/lib/libfoo.dylib is missing from the runner.",
+        "The --configuration flag is missing.",
+        "Whether the -sdk path is valid.",
     ])
     func parseKeepsDescriptiveTextThatOnlyResemblesActionsOrSecrets(cause: String) {
         let output = #"{"summary": "s", "cause": "\#(cause)", "checks": ["k"]}"#
 
         #expect(RunFailureBriefPolicy.parse(output)?.cause == cause)
+    }
+
+    @Test
+    func parseDropsRepeatedChecks() {
+        let output = #"{"summary": "s", "cause": "c", "checks": ["Whether A exists.", "Whether B exists.", "Whether A exists."]}"#
+
+        #expect(RunFailureBriefPolicy.parse(output)?.checks == ["Whether A exists.", "Whether B exists."])
     }
 
     @Test
