@@ -6,30 +6,6 @@ import Foundation
 /// the caller (typically `AppConfig.changes.merge*Prompt`) so the user
 /// can customize them in Settings without having to redeploy.
 enum MergeAgent {
-    /// One-line summary of a single conflict block. Returns an empty string
-    /// on agent failure (the caller surfaces this as "no annotation").
-    /// Not user-customizable — the format is consumed by the annotation
-    /// strip and the prompt is tuned for that exact output shape.
-    static func explainConflict(
-        agent: AgentDefinition,
-        block: ConflictBlock,
-        language: String?,
-        target: AgentExecutionTarget = .local,
-        workingDirectory: String? = nil,
-        timeout: TimeInterval = 30
-    ) async throws -> String {
-        let prompt = explainPrompt(block: block, language: language)
-        let result = try await AgentRunner.runPrompt(
-            agent: agent,
-            input: "",
-            prompt: prompt,
-            target: target,
-            workingDirectory: workingDirectory,
-            timeout: timeout
-        )
-        return parseExplainOutput(result.body.isEmpty ? result.subject : result.body)
-    }
-
     /// Full-file resolution proposal. Returns the proposed file contents
     /// (without conflict markers). Caller is responsible for presenting
     /// a diff against the current `resultText` before applying.
@@ -118,26 +94,6 @@ enum MergeAgent {
 
     // MARK: - Prompts (pulled out for testability)
 
-    static func explainPrompt(block: ConflictBlock, language: String?) -> String {
-        var lines: [String] = []
-        lines.append("Summarize in one sentence what changed on each side of this Git merge conflict.")
-        lines.append("Output ONLY the sentence in the form: 'LOCAL <verb> X; REMOTE <verb> Y.'")
-        lines.append("No preamble, no markdown, no quotes, no code fences.")
-        if let language, !language.isEmpty {
-            lines.append("Language: \(language)")
-        }
-        lines.append("")
-        lines.append("LOCAL (\(block.localLabel)):")
-        lines.append(block.local)
-        if let base = block.base, !base.isEmpty {
-            lines.append("BASE:")
-            lines.append(base)
-        }
-        lines.append("REMOTE (\(block.remoteLabel)):")
-        lines.append(block.remote)
-        return lines.joined(separator: "\n")
-    }
-
     /// Builds the full prompt by substituting `{filePath}` /
     /// `{language}` placeholders in `template` and appending the
     /// three-side dump. Unknown `{x}` placeholders pass through
@@ -170,14 +126,6 @@ enum MergeAgent {
     }
 
     // MARK: - Output parsing (pulled out for testability)
-
-    static func parseExplainOutput(_ raw: String) -> String {
-        let firstLine = raw
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .first
-            .map(String.init) ?? ""
-        return firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
 
     static func parseResolveOutput(_ raw: String) -> String {
         // Many agents wrap output in ```lang ... ``` fences. Strip them only

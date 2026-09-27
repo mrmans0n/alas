@@ -19,6 +19,11 @@ struct MergeConflictToolbar: View {
     /// the user from kicking off a second agent run that would silently
     /// clobber the pending proposal.
     let hasPendingProposal: Bool
+    /// False when neither Apple Intelligence nor the local MLX model can run.
+    let explainAvailable: Bool
+    /// True when the current hunk has no explanation yet.
+    let canExplain: Bool
+    let isExplaining: Bool
     @Binding var showBase: Bool
     @Binding var wordDiffMode: MergeWordDiff.Mode
     /// True only when the merged file actually contains zdiff3 `|||||||`
@@ -27,6 +32,7 @@ struct MergeConflictToolbar: View {
     let baseAvailable: Bool
     let onPrevious: () -> Void
     let onNext: () -> Void
+    let onExplain: () -> Void
     let onAskAgentResolve: () -> Void
     let onMarkResolved: () -> Void
 
@@ -48,6 +54,24 @@ struct MergeConflictToolbar: View {
             .frame(width: 150)
             .help("Highlight character or word-level differences inside conflict hunks")
             Spacer()
+            if explainAvailable {
+                Button(action: onExplain) {
+                    HStack(spacing: 4) {
+                        if isExplaining {
+                            Spinner(lineWidth: 1.5, duration: 0.7)
+                                .frame(width: 12, height: 12)
+                        } else {
+                            Image(systemName: "text.bubble")
+                        }
+                        Text("Explain")
+                            .font(.system(size: 11))
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(!canExplain || isExplaining)
+                .help("Explain this conflict on-device. Advisory only: nothing in the file changes.")
+            }
             Button(action: onAskAgentResolve) {
                 HStack(spacing: 4) {
                     if agentBusy {
