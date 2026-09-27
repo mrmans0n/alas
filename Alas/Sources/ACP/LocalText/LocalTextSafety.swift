@@ -2,7 +2,7 @@ import Foundation
 
 enum LocalTextSafety {
     private static let privateKeyHeaderPattern = #"(?i)-----BEGIN (?:[A-Z ]* )?PRIVATE KEY-----"#
-    private static let tokenPattern = #"\b(?:ghp_|gho_|ghu_|ghs_)[A-Za-z0-9]{36}\b|\bsk[-_](?:test[-_])?[A-Za-z0-9_-]{20,}\b"#
+    private static let tokenPattern = #"\b(?:ghp_|gho_|ghu_|ghs_)[A-Za-z0-9]{36}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bsk[-_](?:test[-_])?[A-Za-z0-9_-]{20,}\b"#
     private static let assignmentRegex = try! NSRegularExpression(
         pattern: #"(?i)\b(?:api[_-]?key|access[_-]?key|password|secret|token)\b\s*[:=]\s*([^\s;,]+)"#
     )

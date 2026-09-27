@@ -29,6 +29,7 @@ struct RunFailureBriefPolicyTests {
         #"{"summary": "s", "cause": "c", "checks": ["Try running swift test."]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["To verify, run swift test."]}"#,
         #"{"summary": "s", "cause": "Next, install Xcode.", "checks": ["k"]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["First run swift test."]}"#,
         "The Net tests failed to compile.",
         "",
     ])
@@ -42,6 +43,7 @@ struct RunFailureBriefPolicyTests {
         "The parser hit Unexpected token: punc in app.js.",
         "Run script failed because the SDK is missing.",
         "Commit failed because the hook rejected it.",
+        "The first run failed after the SDK update.",
     ])
     func parseKeepsDescriptiveTextThatOnlyResemblesActionsOrSecrets(cause: String) {
         let output = #"{"summary": "s", "cause": "\#(cause)", "checks": ["k"]}"#

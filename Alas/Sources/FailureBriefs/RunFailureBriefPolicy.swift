@@ -32,7 +32,7 @@ enum RunFailureBriefPolicy {
     private static let excerptCharacterBudgets = [3_000, 1_200, 400]
     private static let scriptNameLimit = 200
     private static let destructivePattern = #"(?i)\b(?:re-?run|git\s+(?:reset|push|clean|checkout|rebase)|rm\s+-|sudo)\b"#
-    private static let actionInstructionPattern = #"(?i)(?:(?:^|[.;:!,]\s+|\b(?:please|then|you\s+(?:should|could|can|must|need\s+to|may\s+want\s+to))\s+)(?:try\s+(?:to\s+)?)?(?:re-?run|run|execute|(?:un)?install|delete|remove|reset|revert|push|commit|rm|kill)\b(?!\s+(?:failed|fails|failing|failure|was|were|is|errored|crashed|exited|timed|step|steps|phase|hooks?|scripts?|command|job|output|logs?|stage)\b)|\b(?:try|consider)\s+(?:re-?running|running|executing|(?:un)?installing|deleting|removing|resetting|reverting|pushing|committing|killing)\b)"#
+    private static let actionInstructionPattern = #"(?i)(?:(?:^|[.;:!,]\s+|\b(?:please|then|first(?:ly)?|second(?:ly)?|next|finally|also|now|just|you\s+(?:should|could|can|must|need\s+to|may\s+want\s+to))\s+)(?:try\s+(?:to\s+)?)?(?:re-?run|run|execute|(?:un)?install|delete|remove|reset|revert|push|commit|rm|kill)\b(?!\s+(?:failed|fails|failing|failure|was|were|is|errored|crashed|exited|timed|step|steps|phase|hooks?|scripts?|command|job|output|logs?|stage)\b)|\b(?:try|consider)\s+(?:re-?running|running|executing|(?:un)?installing|deleting|removing|resetting|reverting|pushing|committing|killing)\b)"#
 
     static func request(for input: RunFailureBriefInput) -> LocalTextGenerationRequest {
         LocalTextGenerationRequest(
