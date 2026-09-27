@@ -373,9 +373,7 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         guard let s = String(data: data, encoding: .utf8) else { return [] }
         var childrenOf: [pid_t: [pid_t]] = [:]
         for line in s.split(separator: "\n") {
-            let trimmed = line.drop(while: { $0 == " " })
-            let parts = trimmed.split(separator: " ", maxSplits: 1,
-                                      omittingEmptySubsequences: true)
+            let parts = line.split(separator: " ")
             guard parts.count >= 2,
                   let pid = pid_t(parts[0]),
                   let ppid = pid_t(parts[1]) else { continue }

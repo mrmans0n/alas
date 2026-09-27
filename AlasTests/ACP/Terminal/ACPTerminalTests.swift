@@ -88,9 +88,9 @@ struct ACPTerminalTests {
         // The backgrounded sleep's parent is the root shell while it runs.
         let rootPid = parentPid(of: sleepPid)
         #expect(rootPid != nil)
-        // Synchronization only; the assertions below are on observable
-        // outcomes. A tracker that never captures the orphan fails `reaped`.
-        _ = try await pollUntil(timeout: 30) { t.hasTrackedDescendant(sleepPid) }
+        // Wait for the tracker to capture the child before orphaning it.
+        let tracked = try await pollUntil(timeout: 30) { t.hasTrackedDescendant(sleepPid) }
+        #expect(tracked)
         try Data().write(to: flag)
         // Wait for sh to exit and be reaped, and for `terminationHandler` to
         // record it, so we're genuinely in the orphaned-pipe state when
