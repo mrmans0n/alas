@@ -239,7 +239,9 @@ struct ReviewSessionTarget: Codable, Equatable, Hashable, Identifiable, Sendable
         let path = standardizedPath(repositoryPath)
         let normalizedSlug = standardizedRepositorySlug(repositorySlug)
         return ReviewSessionTarget(
-            id: makeID(.draftReviewRequest, [worktreeID, path, provider.rawValue, normalizedSlug, base, head, headSHA ?? ""]),
+            id: makeID(.draftReviewRequest, [
+                worktreeID, path, provider.rawValue, normalizedSlug, base, draftSessionHead ?? head, headSHA ?? ""
+            ]),
             kind: .draftReviewRequest,
             worktreeID: worktreeID,
             repositoryPath: standardizedURL(repositoryPath),

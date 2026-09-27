@@ -90,6 +90,26 @@ struct ReviewRequestDraftTests {
             worktreeID: "wt", repositoryPath: repositoryPath,
             base: "origin/main", head: "local-feature"
         ))
+        let originalTarget = DraftReviewRequestTabView.reviewSessionTarget(
+            worktreeID: "wt", repositoryPath: repositoryPath, tabState: tabState
+        )
+        #expect(target.id == originalTarget.id)
+        var activeRecord = ReviewSessionRecord(
+            id: originalTarget.id, target: originalTarget,
+            createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+        )
+        var saves = 0
+        let opened = ReviewSessionLauncher.openOrFocus(
+            target: target,
+            findActive: { id in id == activeRecord.id ? activeRecord : nil },
+            save: { record in
+                activeRecord = record
+                saves += 1
+            },
+            open: { _ in }
+        )
+        #expect(opened)
+        #expect(saves == 0)
     }
 
     @Test func draftReviewRequestLauncherIsDisabledForStaleTargets() {
