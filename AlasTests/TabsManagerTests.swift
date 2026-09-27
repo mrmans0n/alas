@@ -23,7 +23,8 @@ struct TabsManagerTests {
         let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
         let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
         let missing = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
-        let found = ReviewLoopSnapshot(local: local, remote: remote, reviewRequest: .placeholder(remote: remote, number: 42), providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+        let advanced = ReviewLoopLocalState(branchName: "feature", headSHA: "def", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 1, hasUpstream: true, needsPush: true)
+        let found = ReviewLoopSnapshot(local: advanced, remote: remote, reviewRequest: .placeholder(remote: remote, number: 42), providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
         let draft = manager.openOrFocusDraftReviewRequest(worktreeId: worktreeId, snapshot: missing)
         _ = manager.updateDraftReviewRequest(worktreeId: worktreeId, tabId: draft.id) {
             $0.createdURL = found.reviewRequest?.url
@@ -35,6 +36,12 @@ struct TabsManagerTests {
         #expect(manager.tabs(forWorktree: worktreeId).map(\.id) == [draft.id, review.id])
         #expect(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: found) == nil)
         #expect(try comments.load(sessionID: sessionID).map(\.bodyMarkdown) == ["Keep this note"])
+        guard case .draftReviewRequest(let retained) = manager.tabs(forWorktree: worktreeId)[0] else {
+            Issue.record("Expected retained draft review tab")
+            return
+        }
+        #expect(retained.headSHA == "def")
+        #expect(retained.matchesTarget(found))
     }
 
     @Test func createdReviewReplacesCommentFreeDraftBesideAnotherCommentedDraft() throws {
