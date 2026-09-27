@@ -463,7 +463,7 @@ struct ACPToolCallGroupSummary: Equatable {
         switch kind {
         case .activity:
             guard !counts.isEmpty else { return isLive ? "Thinking" : "Thought" }
-            return counts.prefix(1).uppercased() + counts.dropFirst() + running + failure
+            return counts.prefix(1).uppercased() + String(counts.dropFirst()) + running + failure
         case .completedTurn(let duration):
             return completedLabel(duration: duration) + (counts.isEmpty ? "" : " · " + counts) + running + failure
         }
