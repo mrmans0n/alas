@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.16] - 2026-09-27
+
+### ✨ Features
+
+- Redesign the first-run welcome screen as an animated dusk sky (#1576).
+- Add a forest scene to empty and loading worktree states (#1577).
+- Generate on-device briefs for failed run scripts (#1573).
+
+### 🐛 Fixes
+
+- Improve light-theme contrast and remove dark-only color assumptions (#1578).
+- Hide Summarize for empty ACP sessions and present completed summaries correctly (#1579).
+
+### 🔧 Internal
+
+- Isolate the cross-process model lease test from large concurrent CI batches.
+
 ## [0.19.15] - 2026-09-27
 
 ### ✨ Features
