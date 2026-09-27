@@ -21,6 +21,8 @@ struct DiffInlineCommentCard: View {
     var onDelete: (DiffInlineComment) -> Void = { _ in }
     var canReply: Bool = true
     var canResolve: Bool = true
+    var canEdit: Bool = true
+    var canDelete: Bool = true
     var onStageReply: (String) -> Void = { _ in }
     var canAddToReview: Bool = false
     var onActiveChange: (Bool) -> Void = { _ in }
@@ -43,6 +45,8 @@ struct DiffInlineCommentCard: View {
         onDelete: @escaping (DiffInlineComment) -> Void = { _ in },
         canReply: Bool = true,
         canResolve: Bool = true,
+        canEdit: Bool = true,
+        canDelete: Bool = true,
         canAddToReview: Bool = false,
         editorState: Binding<DiffInlineCommentCardEditorState>? = nil,
         onActiveChange: @escaping (Bool) -> Void = { _ in }
@@ -56,6 +60,8 @@ struct DiffInlineCommentCard: View {
         self.onDelete = onDelete
         self.canReply = canReply
         self.canResolve = canResolve
+        self.canEdit = canEdit
+        self.canDelete = canDelete
         self.canAddToReview = canAddToReview
         self.editorState = editorState
         self.onActiveChange = onActiveChange
@@ -341,7 +347,7 @@ struct DiffInlineCommentCard: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.primary)
                     Spacer(minLength: 0)
-                    if comment.viewerCanUpdate {
+                    if canEdit && comment.viewerCanUpdate {
                         Button {
                             editorStateBinding.wrappedValue.editingCommentID = comment.id
                             editorStateBinding.wrappedValue.editDraft = comment.body
@@ -354,7 +360,7 @@ struct DiffInlineCommentCard: View {
                         .buttonStyle(.plain)
                         .help("Edit comment")
                     }
-                    if comment.viewerCanDelete {
+                    if canDelete && comment.viewerCanDelete {
                         Button {
                             onDelete(comment)
                         } label: {

@@ -571,6 +571,8 @@ struct ReviewTabView: View {
             annotations: annotations,
             canReply: capabilities.canReply,
             canResolve: capabilities.canResolve,
+            canEdit: capabilities.canEditComment,
+            canDelete: capabilities.canDeleteComment,
             onStageReply: { fileID, inlineThread, body in
                 guard canReviewActiveBranch, let pr = pendingReview else { return }
                 pr.stage(StagedComment(

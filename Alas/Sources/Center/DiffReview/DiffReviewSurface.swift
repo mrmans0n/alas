@@ -86,6 +86,8 @@ struct DiffReviewSurface: View {
     var annotations: [CheckAnnotation] = []
     var canReply: Bool = false
     var canResolve: Bool = false
+    var canEdit: Bool = true
+    var canDelete: Bool = true
     var onStageReply: (DiffReviewFileID, DiffInlineCommentThread, String) -> Void = { _, _, _ in }
     var canAddToReview: Bool = false
 
@@ -150,6 +152,8 @@ struct DiffReviewSurface: View {
         annotations: [CheckAnnotation] = [],
         canReply: Bool = false,
         canResolve: Bool = false,
+        canEdit: Bool = true,
+        canDelete: Bool = true,
         onStageReply: @escaping (DiffReviewFileID, DiffInlineCommentThread, String) -> Void = { _, _, _ in },
         canAddToReview: Bool = false,
         onDraftCommentReveal: @escaping (DiffReviewDraftCommentScrollCommand, Bool) -> Void = { _, _ in }
@@ -192,6 +196,8 @@ struct DiffReviewSurface: View {
         self.annotations = annotations
         self.canReply = canReply
         self.canResolve = canResolve
+        self.canEdit = canEdit
+        self.canDelete = canDelete
         self.onStageReply = onStageReply
         self.canAddToReview = canAddToReview
     }
@@ -503,6 +509,8 @@ struct DiffReviewSurface: View {
                     canCreateDraftComment: allowsDraftCommentCreation,
                     canReply: canReply,
                     canResolve: canResolve,
+                    canEdit: canEdit,
+                    canDelete: canDelete,
                     canAddToReview: canAddToReview,
                     canUnstageHunk: file.stagedMutationActions?.unstageHunk != nil,
                     hunkUnstageEnabled: file.stagedMutationActions?.unstageEnabledBase ?? false
