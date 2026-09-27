@@ -373,7 +373,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-groovy"
 version = "0.0.1"
-source = "git+https://github.com/murtaza64/tree-sitter-groovy?rev=792dbafc2fbce0d5aa5d7eb29f1a177f3673323d#792dbafc2fbce0d5aa5d7eb29f1a177f3673323d"
+source = "git+https://github.com/murtaza64/tree-sitter-groovy?rev=31dec6b0386c0ed71c6e1a5d5193eab589ffa2ca#31dec6b0386c0ed71c6e1a5d5193eab589ffa2ca"
 dependencies = [
  "cc",
  "tree-sitter",
