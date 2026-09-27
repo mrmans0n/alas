@@ -169,6 +169,49 @@ struct CommitPublishWorkflowTests {
         #expect(manager.commitEditorTab(worktreeId: "remount-publish", currentSha: "committed") != nil)
     }
 
+    @Test func closingDraftDuringPublishStillOpensCreatedReview() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let manager = TabsManager(tabsDirectory: directory)
+        let worktreeId = "closed-publish-created-review"
+        let draft = manager.openOrFocusDraftCommit(worktreeId: worktreeId)
+        let gate = AsyncGate()
+        let target = WorkflowHarness().target
+        let createdURL = URL(string: "https://github.com/owner/repository/pull/42")!
+        var notifiedReview: ReviewPRTabState?
+        manager.onCreatedReview = { _, review in notifiedReview = review }
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in
+                .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title")
+            }, currentHeadSHA: { "committed" }, remoteBranchContainsCommit: { _, _ in false },
+            push: { _, _ in await gate.waitForFirstCall() },
+            currentReviewRequestExists: { _ in false }, currentReviewRequestURL: { _ in nil },
+            createReviewRequest: { _, _, _ in createdURL },
+            syncGG: { _ in }, refreshAfterCompletion: {}
+        )
+        let task = try #require(manager.runCommitPublish(
+            worktreeId: worktreeId, tabId: draft.id,
+            subject: "Subject", body: "Body", amend: false, operations: operations,
+            prepareDestination: { .review(target) }
+        ))
+        await gate.waitUntilEntered()
+        manager.close(worktreeId: worktreeId, tabId: draft.id)
+
+        await gate.release()
+        await task.value
+
+        #expect(manager.stashedDraft(worktreeId: worktreeId) == nil)
+        #expect(notifiedReview?.url == createdURL)
+        guard let first = manager.tabs(forWorktree: worktreeId).first,
+              case .reviewPR(let reviewState) = first else {
+            Issue.record("Expected created review tab")
+            return
+        }
+        #expect(reviewState.url == createdURL)
+        #expect(reviewState.number == 42)
+    }
+
     @Test func tabsManagerStopsBeforeRemoteMutationWhenCheckpointCannotPersist() async throws {
         let manager = TabsManager(store: FailingTabsStore())
         let draft = manager.openOrFocusDraftCommit(worktreeId: "checkpoint-persist-failure")

@@ -1754,6 +1754,27 @@ final class TabsManager {
             return tab
         }
         guard file.stashedDraft != nil else { return nil }
+        if let target = pendingCreatedReviewTarget,
+           let url = checkpoint.createdReviewURL,
+           let number = Int(url.lastPathComponent), number > 0,
+           target.remote.reviewRequestURL(number: number) == url {
+            let state = ReviewPRTabState(
+                worktreeId: worktreeId, remote: target.remote,
+                number: number, url: url, title: checkpoint.commitTitle
+            )
+            let review = Tab.reviewPR(state)
+            if let idx = file.tabs.firstIndex(where: { $0.id == review.id }) {
+                file.tabs[idx] = review
+            } else {
+                file.tabs.append(review)
+            }
+            if file.activeTabId == nil { file.activeTabId = review.id }
+            file.stashedDraft = nil
+            try persistThrowing(file, worktreeId: worktreeId)
+            byWorktree[worktreeId] = file
+            onCreatedReview?(worktreeId, state)
+            return review
+        }
         file.stashedDraft = nil
         try persistThrowing(file, worktreeId: worktreeId)
         byWorktree[worktreeId] = file

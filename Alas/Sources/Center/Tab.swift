@@ -426,6 +426,20 @@ struct ReviewPRTabState: Codable, Equatable, Identifiable {
         ].joined(separator: ":")
     }
 
+    init(worktreeId: String, remote: CodeHostRemote, number: Int, url: URL, title: String) {
+        self.worktreeId = worktreeId
+        self.provider = remote.kind
+        self.repositorySlug = remote.repositorySlug
+        self.number = number
+        self.requestRemote = remote
+        self.url = url
+        self.title = title
+        self.id = [
+            "review-pr", worktreeId, provider.rawValue, remote.host,
+            repositorySlug, "\(number)"
+        ].joined(separator: ":")
+    }
+
     mutating func refreshSnapshotMetadata(from snapshot: ReviewLoopSnapshot) {
         guard let request = snapshot.reviewRequest else { return }
         requestRemote = request.remote
