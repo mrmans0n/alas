@@ -173,22 +173,21 @@ struct LiveCheckpointGitRunner: CheckpointGitRunning {
         try? stderr.fileHandleForWriting.close()
 
         let request = Data(lines.map { $0 + "\n" }.joined().utf8)
-        let writerTask = Task.detached(priority: .utility) {
+        async let written: Void = Self.onDedicatedThread {
             let handle = stdin.fileHandleForWriting
             try? handle.write(contentsOf: request)
             try? handle.close()
         }
-        let readerTask = Task.detached(priority: .utility) {
-            var reader = CheckpointGitStreamReader(handle: stdout.fileHandleForReading)
-            return try read(&reader)
-        }
-        let stderrTask = Task.detached(priority: .utility) {
+        async let errorOutput = Self.onDedicatedThread {
             stderr.fileHandleForReading.readDataToEndOfFile()
         }
 
         // Nothing else bounds a batch, so cancellation must stop git.
         let result = await withTaskCancellationHandler {
-            await readerTask.result
+            await Self.onDedicatedThread { () -> Swift.Result<Result, any Error> in
+                var reader = CheckpointGitStreamReader(handle: stdout.fileHandleForReading)
+                return Swift.Result { try read(&reader) }
+            }
         } onCancel: {
             terminateProcessWithEscalation(process)
         }
@@ -196,13 +195,26 @@ struct LiveCheckpointGitRunner: CheckpointGitRunning {
         // block forever on a full pipe.
         if case .failure = result { terminateProcessWithEscalation(process) }
         await termination.wait()
-        await writerTask.value
-        let errorData = await stderrTask.value
+        await written
+        let errorData = await errorOutput
         try Task.checkCancellation()
         guard process.terminationStatus == 0 || process.terminationReason == .uncaughtSignal else {
             throw ProcessError.nonZeroExit(process.terminationStatus, String(data: errorData, encoding: .utf8) ?? "")
         }
         return try result.get()
+    }
+}
+
+extension LiveCheckpointGitRunner {
+    /// Runs blocking pipe I/O on a thread of its own. On the cooperative pool
+    /// each blocked read or write would hold one of only a few threads for as
+    /// long as git runs, and concurrent batches could deadlock: readers
+    /// holding every thread while the writers that feed git never get one.
+    /// A detached thread has no autorelease pool of its own, so one wraps the body.
+    static func onDedicatedThread<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            Thread.detachNewThread { continuation.resume(returning: autoreleasepool { body() }) }
+        }
     }
 }
 
@@ -259,7 +271,9 @@ struct CheckpointGitStreamReader {
 
     /// Appends the next chunk, keeping the buffer zero-based.
     private mutating func fill() throws -> Bool {
-        guard let chunk = try handle?.read(upToCount: 1024 * 1024), !chunk.isEmpty else { return false }
+        // Drain Foundation's temporaries per chunk; one batch can stream gigabytes.
+        let chunk = try autoreleasepool { try handle?.read(upToCount: 1024 * 1024) }
+        guard let chunk, !chunk.isEmpty else { return false }
         buffer = offset < buffer.count ? buffer.subdata(in: offset..<buffer.count) + chunk : chunk
         offset = 0
         return true
