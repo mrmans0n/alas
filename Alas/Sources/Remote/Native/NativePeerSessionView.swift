@@ -99,11 +99,10 @@ struct NativePeerSessionView: View {
                     pendingRequests(transcript)
                         .modifier(PeerRowFrame(contentMaxWidth: contentMaxWidth))
                     Color.clear
-                        .frame(height: 1)
+                        .frame(height: Self.composerSpacerHeight)
                         .id(NativePeerTranscriptScrollPolicy.tailAnchorID)
                 }
                 .padding(.top, 20)
-                .padding(.bottom, Self.composerSpacerHeight)
             }
             .onAppear {
                 proxy.scrollTo(NativePeerTranscriptScrollPolicy.tailAnchorID, anchor: .bottom)
@@ -127,8 +126,9 @@ struct NativePeerSessionView: View {
         }
     }
 
-    /// Room under the last row so the floating composer never covers it.
-    private static let composerSpacerHeight: CGFloat = 180
+    /// `scrollTo` targets this view, so the spacer must be the target itself;
+    /// padding after a one-point target leaves the last row under the composer.
+    private static let composerSpacerHeight: CGFloat = 220
 
     @ViewBuilder
     private func row(_ message: RemoteWireMessage, contentMaxWidth: CGFloat) -> some View {
@@ -333,14 +333,16 @@ struct NativePeerSessionView: View {
                     Text(canDrive ? "Message the peer session" : "Read only until you take over")
                         .font(typography.swiftUIFont(size: typography.paragraphSize))
                         .foregroundStyle(theme.color("fg-faint"))
-                        .padding(.top, 8)
-                        .padding(.leading, 5)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: $client.draft)
                     .font(typography.swiftUIFont(size: typography.paragraphSize))
                     .foregroundStyle(theme.color("fg"))
                     .scrollContentBackground(.hidden)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 6)
                     .focused($composerFocused)
                     .disabled(!canDrive)
                     .accessibilityLabel("Message peer session")
