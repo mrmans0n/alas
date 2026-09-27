@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Keep native peer transcript tails above the floating composer and align typed text with its placeholder.
+
 ## [0.19.14] - 2026-09-27
 
 ### ✨ Features
