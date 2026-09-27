@@ -205,17 +205,19 @@ final class ACPTerminal: ObservableObject {
         let strongSelf = StrongBox(self)
         Task.detached(priority: .utility) {
             var initial = preKillDescendants
-            initial.formUnion(Self.collectDescendants(of: pid))
-            if rootAliveAtKill {
-                initial.formUnion(Self.collectGroupMembers(of: pid))
-            }
+            // The `ps` walks run off the cooperative pool.
+            initial.formUnion(await BlockingWork.run {
+                var found = Set(Self.collectDescendants(of: pid))
+                if rootAliveAtKill { found.formUnion(Self.collectGroupMembers(of: pid)) }
+                return found
+            })
             initial.formUnion(cached)
             let termRootAlive = !strongSelf.value.rootExitState.hasExited
             Self.signalTargets(rootPid: pid, rootAlive: termRootAlive,
                                descendants: initial, signal: SIGTERM)
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             var union = initial
-            union.formUnion(Self.collectDescendants(of: pid))
+            union.formUnion(await BlockingWork.run { Self.collectDescendants(of: pid) })
             let latestCached = await MainActor.run {
                 strongSelf.value.orphanedDescendants
             }
@@ -260,7 +262,7 @@ final class ACPTerminal: ObservableObject {
             while !Task.isCancelled {
                 let shouldStop = weakSelf.value?.rootExitState.hasExited ?? true
                 if shouldStop { return }
-                let live = Set(Self.collectDescendants(of: rootPid))
+                let live = await BlockingWork.run { Set(Self.collectDescendants(of: rootPid)) }
                 let cached = await MainActor.run {
                     weakSelf.value?.orphanedDescendants ?? []
                 }

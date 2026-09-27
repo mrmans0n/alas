@@ -38,7 +38,8 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         refreshDescendants()
         let tracker = Task.detached(priority: .utility) { [weak self] in
             while !Task.isCancelled {
-                self?.refreshDescendants()
+                // Each refresh spawns `ps`; keep that off the cooperative pool.
+                if let tree = self { await BlockingWork.run { tree.refreshDescendants() } }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }

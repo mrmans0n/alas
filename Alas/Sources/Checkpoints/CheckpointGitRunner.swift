@@ -173,18 +173,18 @@ struct LiveCheckpointGitRunner: CheckpointGitRunning {
         try? stderr.fileHandleForWriting.close()
 
         let request = Data(lines.map { $0 + "\n" }.joined().utf8)
-        async let written: Void = Self.onDedicatedThread {
+        async let written: Void = BlockingWork.run {
             let handle = stdin.fileHandleForWriting
             try? handle.write(contentsOf: request)
             try? handle.close()
         }
-        async let errorOutput = Self.onDedicatedThread {
+        async let errorOutput = BlockingWork.run {
             stderr.fileHandleForReading.readDataToEndOfFile()
         }
 
         // Nothing else bounds a batch, so cancellation must stop git.
         let result = await withTaskCancellationHandler {
-            await Self.onDedicatedThread { () -> Swift.Result<Result, any Error> in
+            await BlockingWork.run { () -> Swift.Result<Result, any Error> in
                 var reader = CheckpointGitStreamReader(handle: stdout.fileHandleForReading)
                 return Swift.Result { try read(&reader) }
             }
@@ -202,19 +202,6 @@ struct LiveCheckpointGitRunner: CheckpointGitRunning {
             throw ProcessError.nonZeroExit(process.terminationStatus, String(data: errorData, encoding: .utf8) ?? "")
         }
         return try result.get()
-    }
-}
-
-extension LiveCheckpointGitRunner {
-    /// Runs blocking pipe I/O on a thread of its own. On the cooperative pool
-    /// each blocked read or write would hold one of only a few threads for as
-    /// long as git runs, and concurrent batches could deadlock: readers
-    /// holding every thread while the writers that feed git never get one.
-    /// A detached thread has no autorelease pool of its own, so one wraps the body.
-    static func onDedicatedThread<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
-        await withCheckedContinuation { continuation in
-            Thread.detachNewThread { continuation.resume(returning: autoreleasepool { body() }) }
-        }
     }
 }
 

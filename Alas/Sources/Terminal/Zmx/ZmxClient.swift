@@ -18,9 +18,9 @@ struct ZmxSessionInfo: Equatable, Sendable {
 /// Not isolated to any actor: all state is set at init and immutable
 /// afterwards, so callers from any context can invoke its methods. Methods
 /// that wait on a subprocess (`killSession`, `listSessions`) block the
-/// calling thread for up to ~5s in the worst case — callers that must
-/// stay responsive (e.g. MainActor UI paths) should dispatch into
-/// `Task.detached` themselves. `wrap` is pure and safe to call inline.
+/// calling thread for up to ~5s in the worst case — async callers should
+/// run them through `BlockingWork`, which keeps them off both the MainActor
+/// and the cooperative pool. `wrap` is pure and safe to call inline.
 final class ZmxClient: Sendable {
     let env: ZmxEnv
     private let runner: SubprocessRunner
@@ -68,8 +68,8 @@ final class ZmxClient: Sendable {
 
     /// Best-effort `zmx kill <name>`. Never throws; logs and swallows
     /// failures so a hung daemon never blocks the close path. Blocks the
-    /// caller for up to ~5s (the SubprocessRunner timeout); MainActor
-    /// callers should dispatch via `Task.detached`.
+    /// caller for up to ~5s (the SubprocessRunner timeout); async callers
+    /// should dispatch via `BlockingWork`.
     func killSession(name: String) {
         _ = killSessionResult(name: name)
     }

@@ -232,7 +232,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                 processTree.rootDidExit()
                 let status = proc.terminationStatus
                 Task {
-                    processTree.terminateAndWait(graceNanoseconds: terminationGraceNanoseconds)
+                    await BlockingWork.run { processTree.terminateAndWait(graceNanoseconds: terminationGraceNanoseconds) }
                     // Bound the wait the same way `Process+Git.swift` does:
                     // a stuck handler (e.g. a wedged dispatch queue) must
                     // not hang the stream forever.
@@ -273,7 +273,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     wrapperIdentity: wrapperIdentity
                 )
                 interruption?.install {
-                    Task.detached { processTree.interruptAndWait(graceNanoseconds: terminationGraceNanoseconds) }
+                    BlockingWork.detach { processTree.interruptAndWait(graceNanoseconds: terminationGraceNanoseconds) }
                 }
                 let watchdog = timeout.map { timeout in
                     Task {
@@ -285,7 +285,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                                 "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
                                 stderr
                             )
-                            processTree.terminateAndWait(graceNanoseconds: terminationGraceNanoseconds)
+                            await BlockingWork.run { processTree.terminateAndWait(graceNanoseconds: terminationGraceNanoseconds) }
                         }
                     }
                 }

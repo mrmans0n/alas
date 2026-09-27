@@ -119,15 +119,18 @@ final class AlasMCPHTTPSupervisor {
         let handle = pipe.fileHandleForReading
         return await withTaskGroup(of: Int?.self) { group in
             group.addTask {
-                var buffer = Data()
-                while true {
-                    let chunk = handle.availableData   // blocking read
-                    if chunk.isEmpty { return nil }    // EOF
-                    buffer.append(chunk)
-                    if let newlineIndex = buffer.firstIndex(of: 0x0A) {
-                        let lineData = buffer[..<newlineIndex]
-                        let line = String(decoding: lineData, as: UTF8.self)
-                        return parsePort(from: line.trimmingCharacters(in: .whitespaces))
+                // Blocking reads, so they run off the cooperative pool.
+                await BlockingWork.run {
+                    var buffer = Data()
+                    while true {
+                        let chunk = handle.availableData   // blocking read
+                        if chunk.isEmpty { return nil }    // EOF
+                        buffer.append(chunk)
+                        if let newlineIndex = buffer.firstIndex(of: 0x0A) {
+                            let lineData = buffer[..<newlineIndex]
+                            let line = String(decoding: lineData, as: UTF8.self)
+                            return parsePort(from: line.trimmingCharacters(in: .whitespaces))
+                        }
                     }
                 }
             }
