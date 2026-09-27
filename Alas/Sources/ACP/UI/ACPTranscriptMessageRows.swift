@@ -10,6 +10,7 @@ struct UserMessageRow: View {
     let typography: ACPChatTypography
     let session: ACPSession
     @Environment(\.theme) private var theme
+    @Environment(\.acpUpstreamReferenceStore) private var upstreamReferences
     var body: some View {
         HStack {
             Spacer(minLength: 40)
@@ -46,6 +47,9 @@ struct UserMessageRow: View {
                         }
                     }
                 }
+                if let upstreamReferences {
+                    ACPUserReferenceSummary(text: text, store: upstreamReferences)
+                }
                 ACPUserMessageText(
                     text: text,
                     attachments: attachments,
@@ -57,6 +61,81 @@ struct UserMessageRow: View {
             .frame(maxWidth: contentMaxWidth * 0.75, alignment: .trailing)
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+private struct ACPUserReferenceSummary: View {
+    let text: String
+    @ObservedObject var store: ACPUpstreamReferenceStore
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Group {
+            if let host = store.hostKind {
+                let references = ACPUpstreamReferenceChip.summaryReferences(in: text, host: host, theme: theme)
+                if !references.isEmpty {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        ForEach(references, id: \.self) { reference in
+                            ACPUserReferenceSummaryItem(reference: reference, store: store)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct ACPUserReferenceSummaryItem: View {
+    let reference: CodeHostReference
+    @ObservedObject var store: ACPUpstreamReferenceStore
+    @State private var isHovering = false
+    @State private var showsCard = false
+    @Environment(\.openURL) private var openURL
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        let model = ACPUpstreamReferenceCardModel.make(
+            reference: reference, entry: store.entry(for: reference), now: Date()
+        )
+        Button {
+            if let url = store.url(for: reference) { openURL(url) }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: model.kind == .issue ? "smallcircle.filled.circle" : "arrow.triangle.pull")
+                    .foregroundStyle(Color(nsColor: ACPUpstreamReferenceChipStyle.tint(for: model.kind)))
+                Text(reference.spelling)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                if let title = model.title {
+                    Text(title)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                if let badge = model.badge {
+                    Text(badge.label)
+                        .foregroundStyle(Color(nsColor: badge.color))
+                }
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(theme.color("fg-muted"))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(theme.color("bg-2").opacity(0.8), in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .disabled(store.url(for: reference) == nil)
+        .onAppear { store.ensureLoaded(reference) }
+        .onHover { isHovering = $0 }
+        .task(id: isHovering) {
+            guard isHovering else {
+                showsCard = false
+                return
+            }
+            try? await Task.sleep(for: .seconds(ACPImageChipHoverController.hoverDelay))
+            if !Task.isCancelled { showsCard = true }
+        }
+        .popover(isPresented: $showsCard, arrowEdge: .bottom) {
+            ACPUpstreamReferenceHoverCard(reference: reference, store: store)
+        }
     }
 }
 

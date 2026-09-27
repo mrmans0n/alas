@@ -15,6 +15,21 @@ struct ACPUpstreamReferenceTranscriptTests {
         )
     }
 
+    @Test("summary references follow visible badges and keep first occurrence order")
+    func summaryReferences() {
+        let message = """
+        fix #12 and #12
+
+        `#13` [#14](https://example.com) then #15
+
+        ```text
+        #16
+        ```
+        """
+
+        #expect(ACPUpstreamReferenceChip.summaryReferences(in: message, host: .github, theme: theme).map(\.spelling) == ["#12", "#15"])
+    }
+
     @Test("rendered user text chips plain references but not inline code or links")
     func renderedExclusions() async {
         let store = await UpstreamReferenceFixtures.store()

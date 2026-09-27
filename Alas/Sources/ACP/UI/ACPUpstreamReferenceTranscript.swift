@@ -35,6 +35,40 @@ extension EnvironmentValues {
 }
 
 extension ACPUpstreamReferenceChip {
+    /// References represented by badges in a submitted user message, in
+    /// display order. Use the same block and inline renderers as the bubble
+    /// so code and linked text do not create misleading summary rows.
+    @MainActor
+    static func summaryReferences(in text: String, host: CodeHostKind, theme: Theme) -> [CodeHostReference] {
+        var seen: Set<CodeHostReference> = []
+        var references: [CodeHostReference] = []
+
+        for block in ACPMarkdownText.parse(text) {
+            let fragments: [String] = switch block {
+            case .heading(_, let text), .paragraph(let text), .quote(let text): [text]
+            case .taskList(let items): items.map(\.text)
+            case .table(let header, let rows): header + rows.flatMap { $0 }
+            case .code, .streamingCode, .mermaid: []
+            }
+            for fragment in fragments {
+                let rendered = ACPMarkdownInlineRenderer.makeAttributedString(
+                    source: fragment, theme: theme, typography: .default, role: .body
+                )
+                for match in ACPUpstreamReferenceDetector.references(in: rendered.string, host: host)
+                where isVisibleReference(in: rendered, range: match.range) && seen.insert(match.reference).inserted {
+                    references.append(match.reference)
+                }
+            }
+        }
+        return references
+    }
+
+    @MainActor
+    private static func isVisibleReference(in rendered: NSAttributedString, range: NSRange) -> Bool {
+        let attributes = rendered.attributes(at: range.location, effectiveRange: nil)
+        return attributes[.link] == nil && !ACPMarkdownInlineRenderer.isInlineCode(attributes)
+    }
+
     /// Chips references in rendered inline markdown. Backticks are gone by
     /// now, so inline code is recognised via the `NSInlinePresentationIntent`
     /// code-span bit the renderer leaves on the attributed string — not by
@@ -44,9 +78,7 @@ extension ACPUpstreamReferenceChip {
     @discardableResult
     static func chipifyRendered(_ rendered: NSMutableAttributedString, chipping: ACPUpstreamReferenceChipping) -> Int {
         chipify(rendered, host: chipping.host, store: chipping.store, excluding: { range in
-            let attributes = rendered.attributes(at: range.location, effectiveRange: nil)
-            if attributes[.link] != nil { return true }
-            return ACPMarkdownInlineRenderer.isInlineCode(attributes)
+            !isVisibleReference(in: rendered, range: range)
         })
     }
 }
