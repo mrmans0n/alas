@@ -1084,18 +1084,25 @@ struct AppStateRunScheduleTests {
         #expect(await waiter.value == nil)
     }
 
-    /// The report is the latest turn's own reply: an earlier turn's text is
-    /// never quoted for a turn that said nothing.
-    @Test func theReportIsTheLatestTurnsFinalAgentReply() {
+    /// The report is the scheduled prompt's own reply, even when the user
+    /// queued another prompt that has already started answering.
+    @Test func theReportIsTheScheduledTurnsFinalAgentReply() {
         func user(_ text: String) -> ACPMessage {
             .user(id: UUID(), messageId: nil, text: text, attachments: [])
         }
         func agent(_ text: String) -> ACPMessage {
             .agent(id: UUID(), messageId: nil, StreamingText(text))
         }
-        #expect(AppState.finalAgentReply(in: [user("Go"), agent("Working"), agent("  Done.\n")]) == "Done.")
-        #expect(AppState.finalAgentReply(in: [user("Go"), agent("Old reply"), user("Again")]) == nil)
-        #expect(AppState.finalAgentReply(in: [user("Go"), agent("Done."), agent("  ")]) == "Done.")
+        func reply(_ messages: [ACPMessage]) -> String? {
+            AppState.finalAgentReply(in: AppState.scheduledTurn(in: messages).messages)
+        }
+        #expect(reply([user("Go"), agent("Working"), agent("  Done.\n"), agent("  ")]) == "Done.")
+        #expect(!AppState.scheduledTurn(in: [user("Go"), agent("Done.")]).successorStarted)
+
+        let queued = [user("Go"), agent("Done."), user("Also this"), agent("Follow-up")]
+        #expect(reply(queued) == "Done.")
+        #expect(AppState.scheduledTurn(in: queued).successorStarted)
+        #expect(reply([user("Go"), user("Also this"), agent("Follow-up")]) == nil)
     }
 
     @Test(arguments: [
