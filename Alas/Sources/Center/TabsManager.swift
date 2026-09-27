@@ -12,6 +12,14 @@ struct TabsFile: Codable {
     var stashedDraft: DraftCommitTabState? = nil
 }
 
+struct PendingCreatedReviewLookup {
+    let remote: CodeHostRemote
+    let branch: String
+    let headOwner: String?
+    let baseBranch: String
+    let createdURL: URL
+}
+
 extension TabsFile {
     // Custom decoder skips unknown/removed Tab cases instead of failing the
     // entire file when users upgrade from an older build that had more cases.
@@ -1264,25 +1272,6 @@ final class TabsManager {
             persist(worktreeId)
             return tab
         }
-        if var file = byWorktree[worktreeId],
-           snapshot.local.upstreamBranchName != nil,
-           let idx = file.tabs.firstIndex(where: {
-               guard case .draftReviewRequest(let existing) = $0 else { return false }
-               return existing.provider == baseState.provider
-                   && existing.repositorySlug == baseState.repositorySlug
-                   && existing.baseBranch == baseState.baseBranch
-                   && existing.reviewBranchName == baseState.reviewBranchName
-           }),
-           case .draftReviewRequest(var existing) = file.tabs[idx] {
-            existing.refreshSnapshotMetadata(from: snapshot)
-            let tab = Tab.draftReviewRequest(existing)
-            file.tabs[idx] = tab
-            file.activeTabId = tab.id
-            byWorktree[worktreeId] = file
-            persist(worktreeId)
-            return tab
-        }
-
         let tab = Tab.reviewSession(baseState)
         append(tab, to: worktreeId)
         return tab
@@ -1484,6 +1473,24 @@ final class TabsManager {
             persist(worktreeId)
             return tab
         }
+        if var file = byWorktree[worktreeId],
+           snapshot.local.upstreamBranchName != nil,
+           let idx = file.tabs.firstIndex(where: {
+               guard case .draftReviewRequest(let existing) = $0 else { return false }
+               return existing.provider == baseState.provider
+                   && existing.repositorySlug == baseState.repositorySlug
+                   && existing.baseBranch == baseState.baseBranch
+                   && existing.reviewBranchName == baseState.reviewBranchName
+           }),
+           case .draftReviewRequest(var existing) = file.tabs[idx] {
+            existing.refreshSnapshotMetadata(from: snapshot)
+            let tab = Tab.draftReviewRequest(existing)
+            file.tabs[idx] = tab
+            file.activeTabId = tab.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return tab
+        }
         let tab = Tab.draftReviewRequest(baseState)
         append(tab, to: worktreeId)
         return tab
@@ -1535,6 +1542,33 @@ final class TabsManager {
             }
         }
         return nil
+    }
+
+    func pendingCreatedReviewLookups(worktreeId: String, snapshot: ReviewLoopSnapshot) -> [PendingCreatedReviewLookup] {
+        tabs(forWorktree: worktreeId).compactMap { tab in
+            switch tab {
+            case .draftReviewRequest(let state):
+                guard let createdURL = state.createdURL, state.didOpenCreatedReview != true,
+                      let remote = snapshot.remote,
+                      remote.kind == state.provider,
+                      remote.repositorySlug == state.repositorySlug
+                else { return nil }
+                return PendingCreatedReviewLookup(
+                    remote: remote, branch: state.reviewBranchName, headOwner: state.headOwner,
+                    baseBranch: state.baseBranch, createdURL: createdURL
+                )
+            case .commitEditor(let state):
+                guard let target = state.pendingCreatedReviewTarget,
+                      let createdURL = state.pendingCreatedReviewURL
+                else { return nil }
+                return PendingCreatedReviewLookup(
+                    remote: target.remote, branch: target.upstreamBranch ?? target.branch,
+                    headOwner: target.headOwner, baseBranch: target.baseBranch, createdURL: createdURL
+                )
+            default:
+                return nil
+            }
+        }
     }
 
     @discardableResult

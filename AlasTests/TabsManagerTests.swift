@@ -84,6 +84,12 @@ struct TabsManagerTests {
             $0.createdURL = found.reviewRequest?.url
         }
         let other = manager.openOrFocusReviewChanges(worktreeId: worktreeId)
+        let changedLocal = ReviewLoopLocalState(branchName: "renamed-feature", headSHA: "def", baseBranch: "release", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, upstreamBranchName: "new-upstream", needsPush: false)
+        let changed = ReviewLoopSnapshot(local: changedLocal, remote: remote, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+        let lookup = try #require(manager.pendingCreatedReviewLookups(worktreeId: worktreeId, snapshot: changed).first)
+        #expect(lookup.branch == "feature")
+        #expect(lookup.baseBranch == "main")
+        #expect(lookup.createdURL == found.reviewRequest?.url)
 
         #expect(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: missing) == nil)
         let review = try #require(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: found))
@@ -119,6 +125,10 @@ struct TabsManagerTests {
             prepareDestination: { .review(target) }))
         await task.value
         let editor = try #require(manager.commitEditorTab(worktreeId: worktreeId, currentSha: "abc"))
+        let lookup = try #require(manager.pendingCreatedReviewLookups(worktreeId: worktreeId, snapshot: found).first)
+        #expect(lookup.branch == "feature")
+        #expect(lookup.baseBranch == "main")
+        #expect(lookup.createdURL == found.reviewRequest?.url)
 
         #expect(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: missing) == nil)
         let unrelated = ReviewLoopSnapshot(local: advanced, remote: remote, reviewRequest: .placeholder(remote: remote, number: 8), providerAvailable: true, providerAuthenticated: true, providerCapabilities: .gitlabCLI, errorMessage: nil)

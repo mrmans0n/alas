@@ -707,8 +707,10 @@ struct DraftReviewRequestTabState: Codable, Equatable, Identifiable {
     }
 
     mutating func refreshSnapshotMetadata(from snapshot: ReviewLoopSnapshot) {
-        upstreamBranchName = snapshot.local.upstreamBranchName
-        headOwner = snapshot.local.headRemoteOwner
+        if createdURL == nil {
+            upstreamBranchName = snapshot.local.upstreamBranchName
+            headOwner = snapshot.local.headRemoteOwner
+        }
         headSHA = snapshot.local.headSHA
     }
 

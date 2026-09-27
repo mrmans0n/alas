@@ -111,6 +111,7 @@ struct ReviewTabView: View {
     @State private var wrapLines = false
     @State private var showWhitespace = false
     @State private var showCreationConfirmation = false
+    @State private var requestedReviewSnapshot: ReviewLoopSnapshot?
 
     var body: some View {
         GeometryReader { geometry in
@@ -173,6 +174,7 @@ struct ReviewTabView: View {
             .modifier(RepoHookApprovalPresentationHandler(approvalQueue: appState.repoHookApprovalQueue))
         }
         .task(id: loadKey) {
+            await loadRequestedReviewSnapshotIfNeeded()
             let completesStartupRecovery = ReviewTabStartupRecoveryReadiness.shouldComplete(
                 hasReviewRequest: reviewRequest != nil,
                 reviewRefreshSettled: reviewRefreshSettled
@@ -216,8 +218,32 @@ struct ReviewTabView: View {
     }
 
     private var matchedSnapshot: ReviewLoopSnapshot? {
-        guard let snap = activeSnapshot, tabState.matches(snap) else { return nil }
-        return snap
+        if let snap = activeSnapshot, tabState.matches(snap) { return snap }
+        if let requestedReviewSnapshot, tabState.matches(requestedReviewSnapshot) { return requestedReviewSnapshot }
+        return nil
+    }
+
+    @MainActor
+    private func loadRequestedReviewSnapshotIfNeeded() async {
+        guard matchedSnapshot == nil,
+              let activeSnapshot,
+              let remote = activeSnapshot.remote,
+              remote.kind == tabState.provider,
+              remote.repositorySlug == tabState.repositorySlug,
+              remote.host.lowercased() == tabState.url.host?.lowercased(),
+              let provider = CodeHostProviderRegistry.live().provider(for: remote.kind)
+        else { return }
+        guard let request = try? await provider.reviewRequest(
+            remote: remote, number: tabState.number, cwd: worktree.path
+        ) else { return }
+        let checks = (try? await provider.checks(remote: remote, request: request, cwd: worktree.path)) ?? []
+        let candidate = ReviewLoopSnapshot(
+            local: activeSnapshot.local, remote: remote, reviewRequest: request.withChecks(checks),
+            providerAvailable: activeSnapshot.providerAvailable,
+            providerAuthenticated: activeSnapshot.providerAuthenticated,
+            providerCapabilities: provider.capabilities, errorMessage: nil
+        )
+        if tabState.matches(candidate) { requestedReviewSnapshot = candidate }
     }
 
     private var reviewRequest: ReviewRequest? {

@@ -1497,7 +1497,28 @@ final class AppState {
         // refreshAll() returns.
         rightPaneStore.appState = self
         rightPaneStore.reviewSnapshotDidChange = { [weak self] worktreeID, _, snapshot in
-            _ = self?.tabs.transitionPendingCreatedReview(worktreeId: worktreeID, snapshot: snapshot)
+            guard let self else { return }
+            if self.tabs.transitionPendingCreatedReview(worktreeId: worktreeID, snapshot: snapshot) != nil { return }
+            let lookups = self.tabs.pendingCreatedReviewLookups(worktreeId: worktreeID, snapshot: snapshot)
+            guard !lookups.isEmpty else { return }
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let reviewLoop = self.rightPaneStore.activeState(worktreeId: worktreeID)?.reviewLoop
+                else { return }
+                for lookup in lookups {
+                    guard let request = try? await reviewLoop.currentReviewRequest(
+                        remote: lookup.remote, branch: lookup.branch,
+                        headOwner: lookup.headOwner, baseBranch: lookup.baseBranch
+                    ), request.url == lookup.createdURL else { continue }
+                    let found = ReviewLoopSnapshot(
+                        local: snapshot.local, remote: lookup.remote, reviewRequest: request,
+                        providerAvailable: snapshot.providerAvailable,
+                        providerAuthenticated: snapshot.providerAuthenticated,
+                        providerCapabilities: snapshot.providerCapabilities, errorMessage: nil
+                    )
+                    _ = self.tabs.transitionPendingCreatedReview(worktreeId: worktreeID, snapshot: found)
+                }
+            }
         }
         rightPaneStore.attentionSnapshotDidChange = { [weak self] worktreeID, snapshot in
             self?.observeRightPaneAttention(worktreeID: worktreeID, snapshot: snapshot)
