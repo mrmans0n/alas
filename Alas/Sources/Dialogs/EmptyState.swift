@@ -1,58 +1,84 @@
 import SwiftUI
 
 struct EmptyState: View {
-    let canCreateWorktree: Bool
     let onAddProject: () -> Void
-    let onNewWorktree: () -> Void
-    @Environment(\.theme) var theme
+    /// Set when shown from Settings > Debug; adds a button back to the workspace.
+    var onExitPreview: (() -> Void)? = nil
+    @State private var flock = WelcomeFlock()
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            theme.color("bg-1")
-                .allowsHitTesting(false)
+            WelcomeSky(flock: flock)
             WindowDragHandle()
-            VStack(spacing: 18) {
-                ZStack {
-                    LinearGradient(colors: [theme.color("bg-3"), theme.color("bg-2")],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing)
-                        .frame(width: 90, height: 90)
-                        .clipShape(RoundedRectangle(cornerRadius: 22))
-                        .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(theme.color("line"), lineWidth: 0.5))
-                    Image(systemName: "airplane")
-                        .font(.system(size: 38))
-                        .foregroundColor(theme.color("accent"))
-                }
-                VStack(spacing: 6) {
-                    Text("No projects yet")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(theme.color("fg"))
-                    Text("Add a git repository to get started, then create a worktree to begin work.")
-                        .font(.system(size: 13))
-                        .foregroundColor(theme.color("fg-dim"))
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 360)
-                }
-                HStack(spacing: 8) {
-                    AlasButton(title: "Add repository", icon: "folder", style: .primary, action: onAddProject)
-                    AlasButton(title: "New worktree", icon: "plus", style: .normal, action: onNewWorktree)
-                        .disabled(!canCreateWorktree)
-                        .opacity(canCreateWorktree ? 1 : 0.5)
-                }
-                HStack(spacing: 10) {
-                    HStack(spacing: 4) { Kbd(label: "⌘ P")
-                    Text("switch").font(.system(size: 11)) }
-                    HStack(spacing: 4) { Kbd(label: "⌥ ⌘ N")
-                    Text("new").font(.system(size: 11)) }
-                    HStack(spacing: 4) { Kbd(label: "⌘ ,")
-                    Text("settings").font(.system(size: 11)) }
-                }
-                .foregroundColor(theme.color("fg-faint"))
+            // The headline is drawn by WelcomeSky so birds fly over it; the sky
+            // lays it out, and the glass, from this button's size and offset.
+            Button(action: onAddProject) {
+                let shape = RoundedRectangle(cornerRadius: WelcomeFlock.buttonCornerRadius)
+                Label("Add a project to start", systemImage: "folder.badge.plus")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 18)
+                    .frame(height: 38)
+                    .onGeometryChange(for: CGSize.self) { $0.size } action: { flock.buttonSize = $0 }
+                    .overlay(shape.strokeBorder(.white.opacity(0.22), lineWidth: 0.75))
+                    .overlay(BorderBeam(shape: shape))
+                    .contentShape(shape)
             }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.defaultAction)
+            .offset(y: WelcomeFlock.buttonOffset)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if let onExitPreview {
+                AlasButton(title: "Exit preview", icon: "xmark", style: .normal, action: onExitPreview)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.trailing, 12)
+                    .padding(.top, 8)
+            }
 
             TrafficLights()
                 .padding(.leading, 12)
                 .padding(.top, 10)
         }
+        .onContinuousHover { phase in
+            if case .active(let point) = phase { flock.cursor = point } else { flock.cursor = nil }
+        }
+    }
+}
+
+/// Sunset-colored comet that circles a shape's border, with a soft glow.
+private struct BorderBeam<S: InsettableShape>: View {
+    let shape: S
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(paused: reduceMotion)) { context in
+            let cycleSeconds = 3.2
+            let phase = context.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: cycleSeconds) / cycleSeconds
+            let beam = gradient(phase: phase)
+            ZStack {
+                shape.strokeBorder(beam, lineWidth: 3).blur(radius: 4)
+                shape.strokeBorder(beam, lineWidth: 1.25)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func gradient(phase: Double) -> AngularGradient {
+        let start = Angle.degrees(phase * 360)
+        return AngularGradient(
+            stops: [
+                .init(color: .clear, location: 0.00),
+                .init(color: .clear, location: 0.60),
+                .init(color: Color(red: 0.55, green: 0.40, blue: 1.00).opacity(0.6), location: 0.75),
+                .init(color: Color(red: 1.00, green: 0.45, blue: 0.70), location: 0.88),
+                .init(color: Color(red: 1.00, green: 0.80, blue: 0.45), location: 0.97),
+                .init(color: .clear, location: 1.00)
+            ],
+            center: .center,
+            startAngle: start,
+            endAngle: start + .degrees(360)
+        )
     }
 }

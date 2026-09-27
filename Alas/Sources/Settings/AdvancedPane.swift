@@ -73,6 +73,16 @@ struct AdvancedPane: View {
                         .padding(.top, 8)
                     }
                 }
+                SettingsGroup(title: "Previews") {
+                    SettingsRow(
+                        name: "First-run screen",
+                        desc: "Shows the welcome screen in the main window, as if no projects were added."
+                    ) {
+                        AlasButton(title: "Show", icon: "bird", style: .normal) {
+                            state.isPreviewingFirstRunScreen = true
+                        }
+                    }
+                }
                 SettingsGroup(title: "Cleanup") {
                     SettingsRow(
                         name: "Clear all projects",

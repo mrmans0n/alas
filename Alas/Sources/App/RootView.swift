@@ -169,7 +169,12 @@ struct RootView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        if !RootWorkspaceVisibilityPolicy.showsWorkspace(
+        if state.isPreviewingFirstRunScreen {
+            EmptyState(
+                onAddProject: { showNewProject = true },
+                onExitPreview: { state.isPreviewingFirstRunScreen = false }
+            )
+        } else if !RootWorkspaceVisibilityPolicy.showsWorkspace(
             hasProjects: !state.projects.isEmpty,
             workspacesEnabled: state.config.workspacesEnabled,
             hasWorkspaceContent: !state.workspacesManager.workspaces.isEmpty || !state.workspacesManager.checkouts.isEmpty,
@@ -177,11 +182,7 @@ struct RootView: View {
             hasAttentionHistoryLoadError: state.attentionStore.loadError != nil,
             hasPeerGroups: state.nativePeerSessions?.snapshot.groups.isEmpty == false
         ) {
-            EmptyState(
-                canCreateWorktree: false,
-                onAddProject: { showNewProject = true },
-                onNewWorktree: { newWorktreePresentation = NewWorktreePresentation(projectId: nil) }
-            )
+            EmptyState(onAddProject: { showNewProject = true })
         } else {
             let rightPaneSelection = rightPaneSelectionState
             let rightPaneRailExists = rightPaneSelection.showsRightPane
