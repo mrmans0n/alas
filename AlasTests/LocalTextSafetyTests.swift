@@ -5,7 +5,8 @@ struct LocalTextSafetyTests {
     @Test(arguments: [
         ("export GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789", "export GITHUB_TOKEN=[redacted]"),
         ("auth with sk-live_abcdefghijklmnopqrstuvwx failed", "auth with [redacted] failed"),
-        ("password: hunter22 was rejected", "password: [redacted] was rejected"),
+        ("password: hunter22 was rejected", "password: [redacted]"),
+        ("password: correct horse battery; retrying", "password: [redacted]; retrying"),
         ("API_KEY=abc123; retrying", "API_KEY=[redacted]; retrying"),
         ("password: correcthorsebattery", "password: [redacted]"),
         ("secret: abc", "secret: [redacted]"),

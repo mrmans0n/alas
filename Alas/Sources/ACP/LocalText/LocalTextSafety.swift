@@ -39,7 +39,14 @@ enum LocalTextSafety {
             let separator = mutable.substring(with: match.range(at: 2))
             let value = mutable.substring(with: match.range(at: 3))
             guard isSecretValue(value, key: key, separator: separator) else { continue }
-            mutable.replaceCharacters(in: match.range(at: 3), with: "[redacted]")
+            var valueRange = match.range(at: 3)
+            if separator == ":", key.lowercased() != "token", !value.hasPrefix("\""), !value.hasPrefix("'"), !value.hasPrefix("\\") {
+                // `password: correct horse battery` has no closing delimiter besides `;`, `,`, or the line end.
+                let rest = NSRange(location: valueRange.location, length: mutable.length - valueRange.location)
+                let stop = mutable.rangeOfCharacter(from: CharacterSet(charactersIn: ";,\n"), options: [], range: rest)
+                valueRange.length = (stop.location == NSNotFound ? mutable.length : stop.location) - valueRange.location
+            }
+            mutable.replaceCharacters(in: valueRange, with: "[redacted]")
         }
         return mutable as String
     }

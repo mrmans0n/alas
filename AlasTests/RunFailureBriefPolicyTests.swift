@@ -40,6 +40,8 @@ struct RunFailureBriefPolicyTests {
         "Running the tests failed because the SDK is missing.",
         "Installing dependencies failed with a checksum mismatch.",
         "The parser hit Unexpected token: punc in app.js.",
+        "Run script failed because the SDK is missing.",
+        "Commit failed because the hook rejected it.",
     ])
     func parseKeepsDescriptiveTextThatOnlyResemblesActionsOrSecrets(cause: String) {
         let output = #"{"summary": "s", "cause": "\#(cause)", "checks": ["k"]}"#
