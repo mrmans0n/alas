@@ -1240,7 +1240,16 @@ final class RightPaneState: GGSplitCommitServicing {
             }
         case .createReviewRequest:
             guard let snapshot = reviewLoop.snapshot else { return }
-            appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktree.id, snapshot: snapshot)
+            Task { @MainActor in
+                let branches = try? await GitService().localBranches(at: worktree.path)
+                guard reviewLoop.snapshot?.local.branchName == snapshot.local.branchName,
+                      reviewLoop.snapshot?.local.headSHA == snapshot.local.headSHA
+                else { return }
+                appState.tabs.openOrFocusDraftReviewRequest(
+                    worktreeId: worktree.id, snapshot: snapshot,
+                    existingLocalBranches: branches.map(Set.init)
+                )
+            }
         case .rerunFailedChecks:
             guard let snapshot = reviewLoop.snapshot else { return }
             guard reviewLoop.beginAction(action) else { return }

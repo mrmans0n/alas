@@ -1461,7 +1461,11 @@ final class TabsManager {
     }
 
     @discardableResult
-    func openOrFocusDraftReviewRequest(worktreeId: String, snapshot: ReviewLoopSnapshot) -> Tab {
+    func openOrFocusDraftReviewRequest(
+        worktreeId: String,
+        snapshot: ReviewLoopSnapshot,
+        existingLocalBranches: Set<String>? = nil
+    ) -> Tab {
         let baseState = DraftReviewRequestTabState(worktreeId: worktreeId, snapshot: snapshot)
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: { $0.id == baseState.id }),
@@ -1482,6 +1486,8 @@ final class TabsManager {
                    && existing.upstreamBranchName == nil
                    && existing.headSHA == baseState.headSHA
                    && existing.headOwner == baseState.headOwner
+                   && existingLocalBranches?.contains(existing.branchName) == false
+                   && existingLocalBranches?.contains(baseState.branchName) == true
                return existing.provider == baseState.provider
                    && existing.repositorySlug == baseState.repositorySlug
                    && existing.baseBranch == baseState.baseBranch
