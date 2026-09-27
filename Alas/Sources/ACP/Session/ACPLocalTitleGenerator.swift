@@ -188,7 +188,14 @@ struct ACPQwenTitleFallback: Sendable {
     private func start(_ request: LocalTextGenerationRequest) -> Task<LocalTextGenerationResult?, Never>? {
         guard isAvailable() else { return nil }
         let engine = engine
-        let job = Task { try? await engine.generate(request, caller: .sessionTitle, priority: .automatic) }
+        let previous = requests?.latest
+        let job = Task { () -> LocalTextGenerationResult? in
+            // Automatic engine jobs preempt each other, so titles for concurrent
+            // sessions queue rather than cancel one another.
+            _ = await previous?.value
+            guard !Task.isCancelled else { return nil }
+            return try? await engine.generate(request, caller: .sessionTitle, priority: .automatic)
+        }
         requests?.track(job)
         return job
     }
@@ -197,13 +204,22 @@ struct ACPQwenTitleFallback: Sendable {
 @MainActor
 final class ACPQwenTitleRequests {
     private var jobs: Set<Task<LocalTextGenerationResult?, Never>> = []
+    private(set) var latest: Task<LocalTextGenerationResult?, Never>?
 
-    func track(_ job: Task<LocalTextGenerationResult?, Never>) { jobs.insert(job) }
-    func finish(_ job: Task<LocalTextGenerationResult?, Never>) { jobs.remove(job) }
+    func track(_ job: Task<LocalTextGenerationResult?, Never>) {
+        jobs.insert(job)
+        latest = job
+    }
+
+    func finish(_ job: Task<LocalTextGenerationResult?, Never>) {
+        jobs.remove(job)
+        if latest == job { latest = nil }
+    }
 
     func cancelAll() {
         jobs.forEach { $0.cancel() }
         jobs.removeAll()
+        latest = nil
     }
 }
 

@@ -124,7 +124,7 @@ struct ACPLocalTitleRoutingTests {
         requests.cancelAll()
 
         #expect(await title.value == nil)
-        #expect(await engine.observedCancellation)
+        #expect(await !engine.isRunning)
     }
 
     @Test @MainActor
@@ -148,6 +148,36 @@ struct ACPLocalTitleRoutingTests {
         readiness.open()
         #expect(await title.value == nil)
         #expect(await engine.calls == 0)
+    }
+
+    @Test @MainActor
+    func concurrentTitlesQueueInsteadOfPreemptingEachOther() async throws {
+        let availability = TitleAvailability()
+        let engine = GatedTitleEngine()
+        let fallback = ACPQwenTitleFallback(
+            engine: engine,
+            isAvailable: {
+                availability.checks += 1
+                if availability.checks == 2 {
+                    // The second title schedules its engine job right after this
+                    // check; a two-hop main-actor job runs only after that job.
+                    Task { @MainActor in Task { @MainActor in availability.secondJobScheduled = true } }
+                }
+                return availability.isAvailable
+            },
+            requests: ACPQwenTitleRequests()
+        )
+        let first = Task { await fallback.generate(from: "Fix the sign-in race") }
+        let second = Task { await fallback.generate(from: "Add dark mode support") }
+        try #require(await awaitCondition { availability.secondJobScheduled })
+
+        engine.releaseNext()
+        try #require(await awaitCondition { engine.waitingCount == 1 })
+        engine.releaseNext()
+
+        #expect(await first.value == "Fix sign-in race")
+        #expect(await second.value == "Fix sign-in race")
+        #expect(engine.maxActive == 1)
     }
 
     @Test @MainActor
@@ -186,6 +216,33 @@ func awaitCondition(within timeout: Duration = .seconds(10), _ condition: () -> 
 private final class TitleAvailability {
     var isAvailable = true
     var checks = 0
+    var secondJobScheduled = false
+}
+
+/// Holds every call until released and records how many ran at once.
+@MainActor
+private final class GatedTitleEngine: LocalTextGenerating {
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var active = 0
+    private(set) var maxActive = 0
+    var waitingCount: Int { waiting.count }
+
+    func generate(_ request: LocalTextGenerationRequest, caller: LocalTextCaller,
+                  priority: LocalTextJobPriority) async throws -> LocalTextGenerationResult {
+        active += 1
+        maxActive = max(maxActive, active)
+        await withCheckedContinuation { waiting.append($0) }
+        active -= 1
+        return .init(text: "Fix sign-in race", selectedCandidateIndex: 0)
+    }
+
+    func releaseNext() {
+        guard !waiting.isEmpty else { return }
+        waiting.removeFirst().resume()
+    }
+
+    func cancel(caller: LocalTextCaller) async {}
+    func cancelAndUnload() async {}
 }
 
 /// Readiness that stays pending, like an inspection or install in progress.
@@ -205,8 +262,8 @@ private final class PendingReadiness {
 
 /// Suspends until its caller is cancelled, like the real engine's generation.
 private actor SuspendingTitleEngine: LocalTextGenerating {
-    private(set) var observedCancellation = false
     private var suspended: CheckedContinuation<Void, Never>?
+    var isRunning: Bool { suspended != nil }
 
     func generate(_ request: LocalTextGenerationRequest, caller: LocalTextCaller,
                   priority: LocalTextJobPriority) async throws -> LocalTextGenerationResult {
@@ -217,7 +274,6 @@ private actor SuspendingTitleEngine: LocalTextGenerating {
         } onCancel: {
             Task { await self.resume() }
         }
-        observedCancellation = true
         throw LocalTextInferenceFailure.cancelled
     }
 
