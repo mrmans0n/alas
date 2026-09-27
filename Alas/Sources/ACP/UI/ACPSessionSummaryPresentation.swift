@@ -55,9 +55,10 @@ struct ACPSessionSummaryPresentation: Equatable {
         supported: Bool,
         model: LocalTextModelState,
         idle: Bool,
+        hasCompleteTurn: Bool,
         phase: SessionSummaryCoordinator.Phase
     ) {
-        isVisible = requested && supported && runtimeEnabled && model == .ready && idle
+        isVisible = requested && supported && runtimeEnabled && model == .ready && idle && hasCompleteTurn
         accessibilityValue = switch phase {
         case .idle: "Ready"
         case .loading: "Loading"

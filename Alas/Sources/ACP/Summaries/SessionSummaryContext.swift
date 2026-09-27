@@ -10,6 +10,12 @@ struct SessionSummaryContext: Equatable, Sendable {
     let turns: [SessionSummaryTurn]
     let omittedOlderTurns: Bool
 
+    /// Cheap gate for showing the summarize control: stops at the first complete turn.
+    @MainActor
+    static func hasCompleteTurn(session: ACPSession) -> Bool {
+        !completeTurns(in: session.transcript.messages, limit: 1).isEmpty
+    }
+
     @MainActor
     static func snapshot(session: ACPSession) -> SessionSummaryContext? {
         let revision = SessionSummarySourceRevision.current(session: session, composer: session.composer)
@@ -66,7 +72,7 @@ struct SessionSummaryContext: Equatable, Sendable {
     }
 
     @MainActor
-    private static func completeTurns(in messages: [ACPMessage]) -> [SessionSummaryTurn] {
+    private static func completeTurns(in messages: [ACPMessage], limit: Int = .max) -> [SessionSummaryTurn] {
         var turns: [SessionSummaryTurn] = []
         var user: String?
         var assistant: [String] = []
@@ -80,6 +86,7 @@ struct SessionSummaryContext: Equatable, Sendable {
             switch message {
             case .user(_, _, let text, let attachments, let delegatedSource):
                 appendCompleteTurn()
+                if turns.count >= limit { return turns }
                 assistant.removeAll(keepingCapacity: true)
                 if delegatedSource == nil, attachments.isEmpty,
                    !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

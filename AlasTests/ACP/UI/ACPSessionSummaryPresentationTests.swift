@@ -36,7 +36,7 @@ struct ACPSessionSummaryPresentationTests {
         #expect(presentation(phase: .idle).isVisible)
     }
 
-    @Test(arguments: ["requested", "supported", "runtime", "model", "idle"])
+    @Test(arguments: ["requested", "supported", "runtime", "model", "idle", "turn"])
     func hiddenWhenAnyPreconditionFails(_ failing: String) {
         #expect(!ACPSessionSummaryPresentation(
             requested: failing != "requested",
@@ -44,6 +44,7 @@ struct ACPSessionSummaryPresentationTests {
             supported: failing != "supported",
             model: failing == "model" ? .downloading(received: 50, expected: 100) : .ready,
             idle: failing != "idle",
+            hasCompleteTurn: failing != "turn",
             phase: .idle
         ).isVisible)
     }
@@ -106,6 +107,7 @@ struct ACPSessionSummaryPresentationTests {
             supported: true,
             model: .ready,
             idle: true,
+            hasCompleteTurn: true,
             phase: phase
         )
     }

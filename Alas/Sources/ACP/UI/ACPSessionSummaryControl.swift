@@ -41,6 +41,7 @@ struct ACPSessionSummaryControl: View {
             supported: supported,
             model: model,
             idle: idle,
+            hasCompleteTurn: idle && SessionSummaryContext.hasCompleteTurn(session: session),
             phase: coordinator.phase
         )
 
@@ -50,9 +51,7 @@ struct ACPSessionSummaryControl: View {
             }
         }
         .onChange(of: popoverOpen) { wasOpen, isOpen in
-            if isOpen {
-                Task { await coordinator.summary(for: session) }
-            } else if wasOpen {
+            if wasOpen, !isOpen {
                 coordinator.cancelPresentation()
             }
         }
@@ -62,7 +61,7 @@ struct ACPSessionSummaryControl: View {
             )
         }
         .onDisappear {
-            guard popoverOpen else { return }
+            guard popoverOpen || coordinator.phase == .loading else { return }
             popoverOpen = false
             coordinator.cancelPresentation()
         }
@@ -70,7 +69,21 @@ struct ACPSessionSummaryControl: View {
 
     private func control(presentation: ACPSessionSummaryPresentation) -> some View {
         Button {
-            popoverOpen.toggle()
+            if popoverOpen {
+                popoverOpen = false
+            } else if coordinator.phase == .loading {
+                coordinator.cancelPresentation()
+            } else {
+                // Generate first, then present the finished summary; a cancel or
+                // session activity in between leaves the phase idle, so nothing opens.
+                Task {
+                    await coordinator.summary(for: session)
+                    switch coordinator.phase {
+                    case .result, .failed: popoverOpen = true
+                    case .idle, .loading: break
+                    }
+                }
+            }
         } label: {
             HStack(spacing: 5) {
                 if coordinator.phase == .loading {
@@ -78,8 +91,8 @@ struct ACPSessionSummaryControl: View {
                         Image(systemName: "hourglass")
                             .font(.system(size: 10))
                     } else {
-                        ProgressView()
-                            .controlSize(.mini)
+                        Spinner(lineWidth: 1.5)
+                            .frame(width: 10, height: 10)
                     }
                 } else {
                     Image(systemName: "text.quote")
