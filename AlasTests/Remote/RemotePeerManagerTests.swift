@@ -370,12 +370,13 @@ struct RemotePeerManagerTests {
     }
 
     /// Polls `requests`' most recent outgoing body for the counter-code an
-    /// `addPeer` attempt minted on itself, up to ~200ms. `addPeer` generates
+    /// `addPeer` attempt minted on itself, with a deadline. `addPeer` generates
     /// this randomly and has no injection point, so tests that need to
     /// simulate a matching reciprocal confirmation capture the real value
     /// from the wire instead of fabricating one.
     private func awaitCapturedCounterCode(from requests: Requests) async -> String? {
-        for _ in 0..<200 {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while ContinuousClock.now < deadline {
             if let last = requests.seen.last,
                let body = try? self.body(of: last),
                let ad = body["peer"] as? [String: Any],
@@ -632,7 +633,7 @@ struct RemotePeerManagerTests {
             return (Data(#"{"token":"\#(token)","serverId":"srv-a","name":"Mac A"}"#.utf8),
                     HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }, timeout: 1)
-        let manager = makeManager(store: store, pairer: pairer, links: Links(), reciprocalConfirmationTimeout: 0.05)
+        let manager = makeManager(store: store, pairer: pairer, links: Links(), reciprocalConfirmationTimeout: 2)
         manager.connectAll()
 
         async let early: RemotePeerManager.AddError? = manager.addPeer(link: linkFromA)
@@ -706,23 +707,16 @@ struct RemotePeerManagerTests {
         #expect(peer.localDeviceId == "old-device")
     }
 
-    // The happy path resolves fast rather than by exhausting the wait
-    // window — proven by timing, since the return value alone (`nil`) is
-    // identical whether confirmation genuinely landed or the wait just
-    // timed out with nothing better to report. (Timing out now means
-    // failure, not success — see the test above.)
-    @Test func addPeerResolvesQuicklyOnceReciprocalConfirmationArrives() async {
+    // Success requires this attempt's reciprocal confirmation; a timeout
+    // returns .reciprocalPairingFailed.
+    @Test func addPeerCompletesWhenReciprocalConfirmationArrives() async {
         let requests = Requests()
         let manager = makeManager(pairer: pairer(["10.0.0.1:8765": (200, #"{"token":"tokA","serverId":"srv-a","name":"Mac A"}"#)], requests: requests),
-                                  links: Links())
+                                  links: Links(), reciprocalConfirmationTimeout: 2)
         manager.connectAll()
-        confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a")
-        let start = Date()
+        let confirmation = confirmReciprocalPairing(on: manager, requests: requests, peerServerId: "srv-a")
         #expect(await manager.addPeer(link: linkFromA) == nil)
-        // The manager's own timeout for this suite is 0.05s; resolving well
-        // under it shows the wait picked up the confirmation rather than
-        // idling out.
-        #expect(Date().timeIntervalSince(start) < 0.03)
+        await confirmation.value
         #expect(manager.peers.count == 1)
         #expect(manager.peers.first?.localDeviceId == "dev-a")
     }

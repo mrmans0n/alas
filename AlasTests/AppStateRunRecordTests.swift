@@ -267,12 +267,18 @@ struct AppStateRunRecordTests {
     /// step. Unlike `waitUntilRunning`, this tolerates a waiter with no
     /// artificial delay: `.running` can be so short-lived that a 10ms poll
     /// never observes it before the run has already settled to `.finished`.
-    private func waitUntilNotStarting(_ fixture: Fixture, worktree: Worktree? = nil) async throws {
+    private func waitUntilNotStarting(_ fixture: Fixture, worktree: Worktree? = nil, script: RunScript? = nil) async throws {
+        func status() -> RunStatus? {
+            fixture.state.runRecords.record(
+                worktreeID: (worktree ?? fixture.worktree).id,
+                scriptKey: (script ?? fixture.script).key
+            )?.status
+        }
         var budget = 100
-        while runRecord(fixture, worktree: worktree)?.status == .starting {
+        while status() == nil || status() == .starting {
             budget -= 1
             guard budget > 0 else {
-                Issue.record("run never left .starting; last status \(String(describing: runRecord(fixture, worktree: worktree)?.status))")
+                Issue.record("run never left .starting; last status \(String(describing: status()))")
                 return
             }
             try await Task.sleep(for: .milliseconds(10))
@@ -323,7 +329,7 @@ struct AppStateRunRecordTests {
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitUntilNotStarting(fixture)
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
         await fixture.state.flushRunHistoryPersistence()
 
@@ -402,7 +408,7 @@ struct AppStateRunRecordTests {
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitUntilNotStarting(fixture)
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         let record = try #require(runRecord(fixture))
@@ -430,7 +436,7 @@ struct AppStateRunRecordTests {
             isExecutable: false
         )
         fixture.state.runOrFocusScript(other, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitUntilNotStarting(fixture, script: other)
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         #expect(fixture.state.runRecords.record(
@@ -442,7 +448,7 @@ struct AppStateRunRecordTests {
         #expect(afterUnrelatedSuccess.items.first?.presentation == .live)
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitUntilNotStarting(fixture)
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         #expect(runRecord(fixture)?.status == .finished(.succeeded))
