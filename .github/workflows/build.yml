@@ -422,7 +422,7 @@ jobs:
       - name: Discover and assign Swift tests
         id: swift-inventory
         timeout-minutes: 3
-        run: python3 scripts/ci_swift_tests.py plan
+        run: python3 scripts/ci_swift_tests.py plan --shard-count 4
 
       - name: Package compiled Swift test products
         timeout-minutes: 5
@@ -485,7 +485,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     env:
       GIT_TERMINAL_PROMPT: "0"
       GIT_ASKPASS: "/usr/bin/true"

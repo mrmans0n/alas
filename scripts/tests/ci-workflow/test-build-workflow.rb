@@ -69,8 +69,11 @@ raise "build-test timeout must cover its sequential steps plus 30 minutes of pre
 workers = jobs.fetch("swift-tests")
 raise "workers must queue only after the builder finishes" unless workers["needs"] == "build-test"
 raise "shard failures must not cancel sibling diagnostics" unless workers.dig("strategy", "fail-fast") == false
-raise "two balanced test workers are required" unless workers.dig("strategy", "matrix", "shard") == [1, 2]
+raise "four balanced test workers are required" unless workers.dig("strategy", "matrix", "shard") == [1, 2, 3, 4]
 builder_steps = swift_job.fetch("steps")
+raise "test plan must assign four shards" unless builder_steps.any? do |step|
+  step["run"] == "python3 scripts/ci_swift_tests.py plan --shard-count 4"
+end
 publish = builder_steps.index { |step| step["name"] == "Upload compiled Swift test products" }
 raise "builder must publish compiled products" unless publish
 raise "builder must not execute test batches" if builder_steps.any? { |step| step.fetch("run", "").match?(/--lane|run-shard/) }

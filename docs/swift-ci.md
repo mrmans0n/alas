@@ -38,7 +38,7 @@ time launching test hosts than running tests. See
 `docs/testing/test-cost-baseline-2026-09.md`.
 
 The build runner publishes compiled products and the test plan, then finishes.
-Two dependent test runners balance all eight ordinary batches and the subprocess
+Four dependent test runners balance all eight ordinary batches and the subprocess
 invocations by measured duration. Subprocess invocations still contain at most
 three suites. The macOS shell harnesses run on the builder. Each invocation
 has a wall-clock deadline, including startup and teardown: 360 seconds ordinary,
@@ -141,10 +141,17 @@ the old prototype's runner-minute adoption criterion does not fit this deliberat
 tradeoff. Record actual queue, wait, setup, transfer, test, and upload durations
 before declaring the experiment successful.
 
-The current layout uses one build job followed by two balanced test jobs.
+The current layout uses one build job followed by four balanced test jobs.
 Workers depend on `build-test`, so no macOS slot is reserved while waiting for
 compilation. This trades a second queue wait for lower runner occupancy across
-concurrent PRs. Both ordinary and subprocess work run on those two workers.
+concurrent PRs. Both ordinary and subprocess work run on those four workers.
+The four-worker trial uses timings from passing run
+[36342387386](https://github.com/mrmans0n/alas/actions/runs/36342387386).
+Its 40 measured invocations total 1,887 seconds. An ideal four-way assignment
+would take at least 472 seconds of test work per worker, compared with 1,037
+seconds on the slower worker in that run. Runner queueing and changed batch
+contents can erase part of the gain; compare completed CI runs before treating
+the replay as a speedup.
 
 `scripts/ci-swift-test-timings.json` records invocation selectors and elapsed
 seconds from a passing run, linked in its `source` field. Planning assigns the
@@ -198,7 +205,7 @@ python3 scripts/ci_swift_tests.py plan --enumeration /path/to/enumeration.json -
 Use a fresh output directory per run. `SWIFT_TEST_DERIVED_DATA` can select an
 existing local build for focused verification. CI uses `.build/xcode/DerivedData`.
 Local sequential execution remains available through `run --lane … --batch …`.
-CI workers use `run-shard --shard 1` and `run-shard --shard 2` with the shared plan.
+CI workers use `run-shard --shard 1` through `run-shard --shard 4` with the shared plan.
 
 ## September 18 scheduling update
 

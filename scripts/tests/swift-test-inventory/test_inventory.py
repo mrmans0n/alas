@@ -66,6 +66,27 @@ class InventoryTests(unittest.TestCase):
         self.assertTrue(all(shard in (1, 2) for batch in plan["batches"] for shard in batch["shards"]))
         self.assertEqual(plan["timing_sources"]["exact"], 5)
 
+    def test_four_shards_cover_every_invocation_and_report_each_lane(self):
+        ids = [f"AlasTests/S{i}/test()" for i in range(4)]
+        plan = self.module.make_plan(enumeration(*ids), [], 4)
+        self.module.assign_shards(plan, [], shard_count=4)
+        self.assertEqual(sorted(shard for batch in plan["batches"] for shard in batch["shards"]),
+                         [1, 2, 3, 4])
+        self.assertEqual(len(plan["shard_seconds"]), 4)
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            for batch in plan["batches"]:
+                if not batch["invocations"]:
+                    continue
+                test = batch["tests"][0]
+                report = self.module.account([test], results((test.removeprefix("AlasTests/"), "Passed")))
+                report.update(plan_id=plan["id"], duration_seconds=1)
+                self.module.write_json(directory / f"{batch['id']}-1.report.json", report)
+            with patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
+                self.assertTrue(self.module.summarize(plan, directory))
+            summary = (directory / "summary.md").read_text()
+            self.assertIn("| 4 |", summary)
+
     def test_unknown_invocations_are_assigned_and_bad_timings_rejected(self):
         plan = self.module.make_plan(enumeration("AlasTests/A/a()"), [
             ("AlasTests/A", "subprocess", "isolation", "#23")], 1)
