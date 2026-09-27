@@ -761,8 +761,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// It deliberately does not include the members' own row keys. When
         /// expanded, each member is its own row and re-renders itself. When
         /// collapsed, the live narration buffer publishes directly to the
-        /// nested preview. Counts, failures, and the latest tool title are
-        /// part of `summary`; hidden tool output does not refresh the header.
+        /// nested preview. Verb counts, failures, and liveness are part of
+        /// `summary`; hidden tool output does not refresh the header.
         private static func toolCallGroupHeaderSpec(
             host: ACPTranscriptScroller,
             group: ACPTranscriptToolCallGroup,
@@ -775,7 +775,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 else { return nil }
                 return toolCall
             }
-            let summary = ACPToolCallGroupSummary(toolCalls: toolCalls, kind: group.kind)
+            let summary = ACPToolCallGroupSummary(toolCalls: toolCalls, kind: group.kind, isLive: group.isLive)
             let memberStableIds = group.members.map(\.stableId)
             // Folds any member not yet tagged (e.g. newly revealed by
             // backfill) into the run's existing lineage before reading it,

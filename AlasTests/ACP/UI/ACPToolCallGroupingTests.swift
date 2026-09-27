@@ -305,8 +305,7 @@ struct ACPToolCallGroupingTests {
             return
         }
         let summary = ACPToolCallGroupSummary(toolCalls: [toolCall], kind: group.kind)
-        #expect(summary.collapsedLabel == "Worked for 2m 5s · 1 tool call")
-        #expect(summary.expandedLabel == "Hide work · 1 tool call")
+        #expect(summary.label == "Worked for 2m 5s · read 1 file")
     }
 
     @Test("only an idle non-commentary tail completes the current turn")
@@ -529,8 +528,12 @@ struct ACPToolCallGroupingTests {
 
 @Suite("ACP tool-call group summary")
 struct ACPToolCallGroupSummaryTests {
-    private func tool(_ id: String, status: String = "completed") -> ACPMessage.ToolCall {
-        .init(toolCallId: id, title: id, kind: "read", status: status)
+    private func tool(_ id: String, kind: String = "read", status: String = "completed") -> ACPMessage.ToolCall {
+        .init(toolCallId: id, title: id, kind: kind, status: status)
+    }
+
+    private func calls(_ kinds: [String]) -> [ACPMessage.ToolCall] {
+        kinds.enumerated().map { tool("t\($0.offset)", kind: $0.element) }
     }
 
     @Test("counts members and failures")
@@ -540,6 +543,7 @@ struct ACPToolCallGroupSummaryTests {
         ])
         #expect(summary.count == 3)
         #expect(summary.failedCount == 1)
+        #expect(summary.label == "Read 3 files · 1 failed")
     }
 
     @Test("only the terminal 'failed' status counts as a failure")
@@ -553,24 +557,24 @@ struct ACPToolCallGroupSummaryTests {
         #expect(!ACPToolCallGroupSummary.isFailed(status: "completed"))
     }
 
-    @Test("collapsed label pluralizes and appends the failure count")
-    func collapsedLabel() {
-        #expect(ACPToolCallGroupSummary(toolCalls: []).collapsedLabel == "Activity")
-        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a"), tool("b")]).collapsedLabel == "b · 2 tool calls")
-        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a")]).collapsedLabel == "a · 1 tool call")
-        #expect(ACPToolCallGroupSummary(toolCalls: [
-            tool("a"), tool("b", status: "failed"), tool("c"),
-        ]).collapsedLabel == "c · 3 tool calls · 1 failed")
+    @Test("the label counts tool verbs in first-appearance order", arguments: [
+        (["read"], "Read 1 file"),
+        (["read", "read", "search"], "Read 2 files, searched 1 time"),
+        (["execute", "read", "execute", "execute"], "Ran 3 commands, read 1 file"),
+        (["edit", "fetch"], "Edited 1 file, used 1 tool"),
+        ([], "Thought"),
+    ])
+    func labelCountsVerbs(kinds: [String], expected: String) {
+        #expect(ACPToolCallGroupSummary(toolCalls: calls(kinds)).label == expected)
     }
 
-    @Test("expanded label offers to hide the bundle and keeps the failure count")
-    func expandedLabel() {
-        #expect(ACPToolCallGroupSummary(toolCalls: []).expandedLabel == "Hide activity")
-        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a"), tool("b"), tool("c")]).expandedLabel == "Hide activity · 3 tool calls")
-        #expect(ACPToolCallGroupSummary(toolCalls: [tool("a")]).expandedLabel == "Hide activity · 1 tool call")
-        #expect(ACPToolCallGroupSummary(toolCalls: [
-            tool("a"), tool("b", status: "failed"), tool("c"),
-        ]).expandedLabel == "Hide activity · 3 tool calls · 1 failed")
+    @Test("a live group says what it is doing and how far it got", arguments: [
+        (["read", "search", "read"], "Exploring · 3 so far"),
+        (["read", "execute"], "Running · 2 so far"),
+        ([], "Thinking"),
+    ])
+    func liveLabel(kinds: [String], expected: String) {
+        #expect(ACPToolCallGroupSummary(toolCalls: calls(kinds), isLive: true).label == expected)
     }
 }
 

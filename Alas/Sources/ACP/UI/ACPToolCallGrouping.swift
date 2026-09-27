@@ -392,21 +392,43 @@ enum ACPToolCallGrouping {
     }
 }
 
-/// Header facts for a collapsed activity or completed-work bundle.
+/// Header facts for an activity or completed-work bundle.
 struct ACPToolCallGroupSummary: Equatable {
+    enum Verb: Equatable {
+        case read, search, run, edit, other
+    }
+
+    struct VerbCount: Equatable {
+        let verb: Verb
+        var count: Int
+    }
+
     let count: Int
     let failedCount: Int
     let kind: ACPTranscriptToolCallGroup.Kind
-    let latestToolTitle: String?
+    let isLive: Bool
+    /// In first-appearance order.
+    let verbCounts: [VerbCount]
 
     init(
         toolCalls: [ACPMessage.ToolCall],
-        kind: ACPTranscriptToolCallGroup.Kind = .activity
+        kind: ACPTranscriptToolCallGroup.Kind = .activity,
+        isLive: Bool = false
     ) {
         count = toolCalls.count
         failedCount = toolCalls.filter { Self.isFailed(status: $0.status) }.count
         self.kind = kind
-        latestToolTitle = toolCalls.last?.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.isLive = isLive
+        var counts: [VerbCount] = []
+        for toolCall in toolCalls {
+            let verb = Self.verb(for: ACPToolCallPresentation.resolve(toolCall))
+            if let index = counts.firstIndex(where: { $0.verb == verb }) {
+                counts[index].count += 1
+            } else {
+                counts.append(VerbCount(verb: verb, count: 1))
+            }
+        }
+        verbCounts = counts
     }
 
     /// Only "failed" can reach a bundle: "error" is not a terminal status
@@ -416,23 +438,53 @@ struct ACPToolCallGroupSummary: Equatable {
         status == "failed"
     }
 
-    var collapsedLabel: String {
-        switch kind {
-        case .activity:
-            (latestToolTitle.flatMap { $0.isEmpty ? nil : $0 } ?? "Activity") + toolSuffix + failureSuffix
-        case .completedTurn(let duration):
-            completedLabel(duration: duration) + toolSuffix + failureSuffix
+    static func verb(for presentation: ACPToolCallPresentation) -> Verb {
+        switch presentation.label {
+        case "Read", "Viewed Image": .read
+        case "Searched", "Find", "Web Search", "Opened Page": .search
+        case "Ran": .run
+        case "Edit": .edit
+        default: .other
         }
     }
 
-    /// Keeps the failure count visible while open: it's the reason a reader
-    /// most likely expanded the bundle in the first place.
-    var expandedLabel: String {
+    /// Same text collapsed or expanded; the chevron carries the state.
+    var label: String {
+        let failure = failedCount > 0 ? " · \(failedCount) failed" : ""
+        if isLive, count > 0 {
+            return (isExploring ? "Exploring" : "Running") + " · \(count) so far" + failure
+        }
+        let counts = verbCounts.map(Self.phrase).joined(separator: ", ")
         switch kind {
         case .activity:
-            "Hide activity" + toolSuffix + failureSuffix
-        case .completedTurn:
-            "Hide work" + toolSuffix + failureSuffix
+            guard !counts.isEmpty else { return isLive ? "Thinking" : "Thought" }
+            return counts.prefix(1).uppercased() + counts.dropFirst() + failure
+        case .completedTurn(let duration):
+            return completedLabel(duration: duration) + (counts.isEmpty ? "" : " · " + counts) + failure
+        }
+    }
+
+    var iconSystemName: String {
+        if case .completedTurn = kind { return "clock" }
+        guard count > 0 else { return "brain" }
+        let exploring = verbCounts
+            .filter { $0.verb == .read || $0.verb == .search }
+            .reduce(0) { $0 + $1.count }
+        return exploring * 2 >= count ? "magnifyingglass" : "terminal"
+    }
+
+    private var isExploring: Bool {
+        verbCounts.allSatisfy { $0.verb == .read || $0.verb == .search }
+    }
+
+    private static func phrase(_ entry: VerbCount) -> String {
+        let n = entry.count
+        return switch entry.verb {
+        case .read: "read \(n) \(n == 1 ? "file" : "files")"
+        case .search: "searched \(n) \(n == 1 ? "time" : "times")"
+        case .run: "ran \(n) \(n == 1 ? "command" : "commands")"
+        case .edit: "edited \(n) \(n == 1 ? "file" : "files")"
+        case .other: "used \(n) \(n == 1 ? "tool" : "tools")"
         }
     }
 
@@ -448,14 +500,6 @@ struct ACPToolCallGroupSummary: Equatable {
         let hours = seconds / 3_600
         let minutes = (seconds % 3_600) / 60
         return minutes == 0 ? "Worked for \(hours)h" : "Worked for \(hours)h \(minutes)m"
-    }
-
-    private var toolSuffix: String {
-        count > 0 ? " · \(count) \(count == 1 ? "tool call" : "tool calls")" : ""
-    }
-
-    private var failureSuffix: String {
-        failedCount > 0 ? " · \(failedCount) failed" : ""
     }
 }
 

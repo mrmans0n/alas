@@ -60,9 +60,7 @@ struct ACPToolCallGroupHeaderRow: View {
         self.onToggle = onToggle
     }
 
-    private var label: String {
-        expanded ? summary.expandedLabel : summary.collapsedLabel
-    }
+    private var label: String { summary.label }
 
     private var snapshot: ACPToolCallGroupHeaderAnimation.Snapshot {
         .init(count: summary.count, window: window)

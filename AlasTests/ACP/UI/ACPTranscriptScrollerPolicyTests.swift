@@ -386,26 +386,6 @@ struct ACPTranscriptScrollerRowSpecsTests {
         #expect(expanded.filter { $0 != "tcg-tc-a" } == ungrouped)
     }
 
-    @Test("retitling the latest tool refreshes the collapsed activity description")
-    func latestToolTitleChangesHeaderToken() throws {
-        let host = makeHost(collapsesFinishedToolCalls: true)
-        host.transcript.messages = [tool("a"), tool("b")]
-        host.transcript.visibleHead = 0
-        host.transcript.visibleTail = nil
-        let before = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
-            .first { $0.id == "tcg-tc-a" }?.equalityToken)
-
-        // The displayed activity changes even when the counts stay the same.
-        host.transcript.messages = [
-            tool("a"),
-            .toolCall(.init(toolCallId: "b", title: "Read something else", kind: "read", status: "completed")),
-        ]
-        let after = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(host: host)
-            .first { $0.id == "tcg-tc-a" }?.equalityToken)
-
-        #expect(!before.isEqual(to: after))
-    }
-
     @Test("the fork divider follows an expanded bundle's last member, not its header")
     func forkDividerFollowsExpandedBundleLastMember() {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
