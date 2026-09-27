@@ -147,7 +147,8 @@ struct DraftReviewRequestTabView: View {
     static func reviewSessionTarget(
         worktreeID: String,
         repositoryPath: URL,
-        tabState: DraftReviewRequestTabState
+        tabState: DraftReviewRequestTabState,
+        currentBranch: String? = nil
     ) -> ReviewSessionTarget {
         ReviewSessionTarget.draftReviewRequest(
             worktreeID: worktreeID,
@@ -155,8 +156,9 @@ struct DraftReviewRequestTabView: View {
             provider: tabState.provider,
             repositorySlug: tabState.repositorySlug,
             base: tabState.baseBranch,
-            head: tabState.branchName,
-            headSHA: tabState.headSHA
+            head: currentBranch ?? tabState.branchName,
+            headSHA: tabState.headSHA,
+            draftSessionHead: tabState.branchName
         )
     }
 
@@ -330,7 +332,8 @@ struct DraftReviewRequestTabView: View {
                     target: Self.reviewSessionTarget(
                         worktreeID: worktreeId,
                         repositoryPath: worktreePath,
-                        tabState: tabState
+                        tabState: tabState,
+                        currentBranch: matchingSnapshot?.local.branchName
                     )
                 )
             }

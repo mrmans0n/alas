@@ -71,6 +71,27 @@ struct ReviewRequestDraftTests {
         #expect(second.id.rawValue.contains("def456"))
     }
 
+    @Test func renamedLocalBranchLaunchesReviewWithCurrentHeadAndSavedComments() {
+        let repositoryPath = URL(fileURLWithPath: "/repo")
+        let tabState = DraftReviewRequestTabState(
+            worktreeId: "wt",
+            snapshot: Self.snapshot(branchName: "local-feature", needsPush: false, aheadCommitCount: 2)
+        )
+        let target = DraftReviewRequestTabView.reviewSessionTarget(
+            worktreeID: "wt", repositoryPath: repositoryPath,
+            tabState: tabState, currentBranch: "renamed-feature"
+        )
+
+        #expect(target.payload == .draftReviewRequest(
+            provider: .github, repositorySlug: "mrmans0n/alas",
+            base: "origin/main", head: "renamed-feature", headSHA: "abc123"
+        ))
+        #expect(target.draftSessionID == .draftReviewRequest(
+            worktreeID: "wt", repositoryPath: repositoryPath,
+            base: "origin/main", head: "local-feature"
+        ))
+    }
+
     @Test func draftReviewRequestLauncherIsDisabledForStaleTargets() {
         #expect(DraftReviewRequestTabView.canLaunchReviewSession(targetMismatchMessage: nil))
         #expect(!DraftReviewRequestTabView.canLaunchReviewSession(
