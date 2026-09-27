@@ -8,6 +8,7 @@ struct LocalTextSafetyTests {
         ("clone failed with github_pat_11ABCDEFG0123456789_abcdefghijklmnop", "clone failed with [redacted]"),
         ("curl failed: Authorization: Bearer abcDEF123456xyz", "curl failed: Authorization: Bearer [redacted]"),
         ("401 with Authorization: Basic dXNlcjpwYXNz", "401 with Authorization: Basic [redacted]"),
+        ("fatal: https://alice:s3cr3t@example.com/repo.git", "fatal: https://alice:[redacted]@example.com/repo.git"),
         ("jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl rejected", "jwt [redacted] rejected"),
         ("password: hunter22 was rejected", "password: [redacted]"),
         ("password: correct horse battery; retrying", "password: [redacted]; retrying"),

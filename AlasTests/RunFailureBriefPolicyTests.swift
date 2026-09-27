@@ -37,6 +37,10 @@ struct RunFailureBriefPolicyTests {
         #"{"summary": "s", "cause": "c", "checks": ["Verify by running swift test."]}"#,
         #"{"summary": "s", "cause": "The fix is to reinstall the SDK.", "checks": ["k"]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["You could run swift test to confirm."]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["npm test -- --verbose"]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["cargo test"]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["make clean"]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["The output of `swift build` for the Net target."]}"#,
         "The Net tests failed to compile.",
         "",
     ])
@@ -58,6 +62,8 @@ struct RunFailureBriefPolicyTests {
         "The compiler cannot execute the plugin.",
         "The tests were run with an unsupported SDK.",
         "The command was run under the wrong shell.",
+        "Swift concurrency checks flagged the actor.",
+        "Make sure the SDK path exists.",
     ])
     func parseKeepsDescriptiveTextThatOnlyResemblesActionsOrSecrets(cause: String) {
         let output = #"{"summary": "s", "cause": "\#(cause)", "checks": ["k"]}"#
