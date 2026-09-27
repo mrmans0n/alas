@@ -13,10 +13,6 @@ struct ACPTranscriptToolCallGroup: Equatable {
     /// In transcript order; never empty.
     let members: [ACPTranscriptVisibleRow]
     let kind: Kind
-    /// The hidden narration row that is still receiving text, if this group
-    /// contains it. Its buffer is resolved by the scroller only for the
-    /// collapsed header; expanded groups already render the member itself.
-    let currentNarrationIndex: Int?
     /// The trailing run of a turn that is still running. Drives the
     /// "Exploring…/Running…" label and automatic expansion.
     let isLive: Bool
@@ -24,12 +20,10 @@ struct ACPTranscriptToolCallGroup: Equatable {
     init(
         members: [ACPTranscriptVisibleRow],
         kind: Kind = .activity,
-        currentNarrationIndex: Int? = nil,
         isLive: Bool = false
     ) {
         self.members = members
         self.kind = kind
-        self.currentNarrationIndex = currentNarrationIndex
         self.isLive = isLive
     }
 
@@ -52,7 +46,7 @@ struct ACPTranscriptToolCallGroup: Equatable {
 ///
 /// A COLLAPSED bundle is one row standing in for all its members
 /// (`toolCallGroup`). An EXPANDED bundle is a header row carrying the
-/// "Hide N tools" toggle (`toolCallGroupHeader`) followed by one row per
+/// disclosure toggle (`toolCallGroupHeader`) followed by one row per
 /// member (`toolCallGroupMember`) — deliberately NOT one tall row with the
 /// cards nested inside it.
 ///
@@ -100,9 +94,6 @@ enum ACPToolCallGrouping {
         /// Commentary rows before the newest agent update in the current turn.
         /// Carried in the cache key so late phase adoption can regroup them.
         var priorCurrentTurnCommentaryIndices: Set<Int> = []
-        /// Narration row currently receiving streamed text. If folding hides
-        /// this row, its group header surfaces a bounded live preview.
-        var currentNarrationIndex: Int? = nil
         /// Whether the latest turn is still running; only then can a group be live.
         var isTurnActive: Bool = false
     }
@@ -222,7 +213,6 @@ enum ACPToolCallGrouping {
         result.reserveCapacity(rows.count)
         var run: [ACPTranscriptVisibleRow] = []
         var runKind: ACPTranscriptToolCallGroup.Kind?
-        var runCurrentNarrationIndex: Int?
 
         func flushRun() {
             if !run.isEmpty {
@@ -237,7 +227,6 @@ enum ACPToolCallGrouping {
                     let group = ACPTranscriptToolCallGroup(
                         members: run,
                         kind: kind,
-                        currentNarrationIndex: runCurrentNarrationIndex,
                         isLive: kind == .activity && run[run.count - 1].index == liveTailIndex
                     )
                     if isExpanded(group) {
@@ -252,7 +241,6 @@ enum ACPToolCallGrouping {
             }
             run.removeAll(keepingCapacity: true)
             runKind = nil
-            runCurrentNarrationIndex = nil
         }
 
         for row in rows {
@@ -277,9 +265,6 @@ enum ACPToolCallGrouping {
                 }
                 runKind = kind
                 run.append(row)
-                if row.index == options.currentNarrationIndex {
-                    runCurrentNarrationIndex = row.index
-                }
                 if row.index == options.breakAfterIndex { flushRun() }
             } else {
                 flushRun()

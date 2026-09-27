@@ -28,7 +28,6 @@ struct ACPToolCallGroupingTests {
         expandAll: Bool = false,
         currentTurnAnswerIndex: Int? = nil,
         priorCurrentTurnCommentaryIndices: Set<Int> = [],
-        currentNarrationIndex: Int? = nil,
         isTurnActive: Bool = false,
         createdAts: [Int: Date] = [:]
     ) -> [ACPTranscriptRenderRow] {
@@ -43,7 +42,6 @@ struct ACPToolCallGroupingTests {
                 breakAfterIndex: breakAfterIndex,
                 currentTurnAnswerIndex: currentTurnAnswerIndex,
                 priorCurrentTurnCommentaryIndices: priorCurrentTurnCommentaryIndices,
-                currentNarrationIndex: currentNarrationIndex,
                 isTurnActive: isTurnActive
             ),
             messageCreatedAt: { createdAts[$0] },
@@ -249,22 +247,6 @@ struct ACPToolCallGroupingTests {
             return
         }
         #expect(group.members.map(\.stableId) == ["acp-agent:p1", "tc-a"])
-    }
-
-    @Test("a collapsed group identifies the live narration without splitting the run")
-    func collapsedGroupCarriesLiveNarration() throws {
-        let thought = ACPMessage.thought(id: UUID(), messageId: "t1", StreamingText("Inspecting the scroller"))
-        let folded = fold(
-            [tool("a"), thought, tool("b")],
-            currentNarrationIndex: 1
-        )
-
-        #expect(ids(folded) == ["tcg-tc-a"])
-        guard case .toolCallGroup(let group) = try #require(folded.first) else {
-            Issue.record("expected one collapsed activity group")
-            return
-        }
-        #expect(group.currentNarrationIndex == 1)
     }
 
     @Test("the live-status fold never hides earlier ordinary agent prose")

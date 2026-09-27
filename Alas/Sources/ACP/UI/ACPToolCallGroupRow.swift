@@ -1,9 +1,8 @@
 import SwiftUI
 
-/// The activity disclosure for a run of thinking and finished tool calls.
-/// Click to expand and see the original messages.
-/// Mirrors `ACPThoughtView`'s accent-bar-plus-faint-header idiom so bundles
-/// read as the same kind of de-emphasized detail as thinking.
+/// The disclosure row for a run of thinking and tool calls: icon, a
+/// verb-count label ("Read 2 files, ran 1 command"), and a chevron. While
+/// the run is live the label shimmers.
 ///
 /// This row is ONLY the header. When the bundle is expanded its members are
 /// tiled as their own sibling rows (`ACPToolCallGroupMemberRow`) rather than
@@ -16,186 +15,51 @@ import SwiftUI
 struct ACPToolCallGroupHeaderRow: View {
     let summary: ACPToolCallGroupSummary
     let expanded: Bool
-    /// Live narration hidden inside this group. The nested preview observes
-    /// its buffer directly so streamed chunks update without replacing the
-    /// whole AppKit-hosted row through the reconciler.
-    let liveNarration: ACPToolCallGroupLiveNarration?
-    /// The transcript slice this header was built from. Carried so the pulse
-    /// can tell a tool call finishing apart from the render window revealing
-    /// calls that finished long ago — see
-    /// `ACPToolCallGroupHeaderAnimation.absorbs(from:to:reduceMotion:)`.
-    ///
-    /// It is folded into the row's equality token, which is what keeps this
-    /// value current. Were it left out, a window move that did not also change
-    /// this bundle's count would skip the rebuild, and the mounted view would
-    /// carry a stale window into the NEXT comparison — suppressing a genuine
-    /// absorption instead of a spurious one.
-    let window: ACPToolCallGroupHeaderAnimation.Window
     let onToggle: (Bool) -> Void
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Lit to 1 the moment a finished call folds into this bundle, then eased
-    /// back to 0 — the "something just landed here" cue.
-    ///
-    /// View-local `@State` on purpose. It survives the in-place content
-    /// update that carries a new count (the hosting pool swaps `rootView`
-    /// without disturbing SwiftUI state), which is exactly when the pulse
-    /// must fire. And it resets when the mount band releases and remounts the
-    /// row, so scrolling a bundle back into view comes back quiet rather than
-    /// flashing at a reader who absorbed nothing.
-    @State private var absorbHighlight: Double = 0
-
     init(
         summary: ACPToolCallGroupSummary,
         expanded: Bool = false,
-        liveNarration: ACPToolCallGroupLiveNarration? = nil,
-        window: ACPToolCallGroupHeaderAnimation.Window = .init(visibleTail: nil),
         onToggle: @escaping (Bool) -> Void = { _ in }
     ) {
         self.summary = summary
         self.expanded = expanded
-        self.liveNarration = liveNarration
-        self.window = window
         self.onToggle = onToggle
     }
 
-    private var label: String { summary.label }
-
-    private var snapshot: ACPToolCallGroupHeaderAnimation.Snapshot {
-        .init(count: summary.count, window: window)
-    }
-
     var body: some View {
-        ACPToolCallGroupLane(highlight: absorbHighlight) {
-            Button {
-                onToggle(!expanded)
-            } label: {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 7) {
-                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 10))
-                            .foregroundStyle(
-                                theme.color("fg-faint")
-                                    .mix(with: theme.color("accent"), by: absorbHighlight)
-                            )
-                            .accessibilityHidden(true)
-                        Text(label)
-                            .font(.system(size: 11))
-                            .foregroundStyle(theme.color("fg-faint"))
-                            // Rolls the digits instead of snapping them. Scoped to
-                            // the count so toggling expanded — which rewrites the
-                            // same label from "Ran" to "Hide" — stays instant.
-                            .contentTransition(.numericText(value: Double(summary.count)))
-                            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: summary.count)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    if !expanded, let liveNarration {
-                        ACPToolCallGroupLiveNarrationPreview(narration: liveNarration)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+        Button {
+            onToggle(!expanded)
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: summary.iconSystemName)
+                    .font(.system(size: 11))
+                    .frame(width: 16)
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .accessibilityHidden(true)
+                Text(summary.label)
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    // Rolls the digits instead of snapping them.
+                    .contentTransition(.numericText(value: Double(summary.count)))
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: summary.count)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .acpNarrationShimmer(isActive: summary.isLive)
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .accessibilityHidden(true)
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
-            .accessibilityElement(children: .combine)
-            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .onChange(of: snapshot) { previous, current in
-            absorb(from: previous, to: current)
-        }
-    }
-
-    /// A snapshot change can only reach an already-mounted header: a fresh
-    /// mount has no previous value to compare against, so `onChange` stays
-    /// silent there and first paint is never a pulse.
-    private func absorb(
-        from previous: ACPToolCallGroupHeaderAnimation.Snapshot,
-        to current: ACPToolCallGroupHeaderAnimation.Snapshot
-    ) {
-        guard ACPToolCallGroupHeaderAnimation.absorbs(
-            from: previous,
-            to: current,
-            reduceMotion: reduceMotion
-        ) else { return }
-        // Both halves are driven by animations, and the decay is started from
-        // the ramp's COMPLETION rather than from a queued main-actor job. A
-        // `Task` only promises another turn on the main actor, not a rendering
-        // boundary, so the decay could land in the same SwiftUI transaction as
-        // the ramp: the two mutations would coalesce into an update that both
-        // starts and ends dark, and nothing would ever pulse. A completion
-        // handler cannot run until the animation it belongs to has finished,
-        // so the lit frame is always committed first.
-        withAnimation(.easeIn(duration: 0.09)) {
-            absorbHighlight = 1
-        } completion: {
-            withAnimation(.easeOut(duration: 0.5)) { absorbHighlight = 0 }
-        }
-    }
-}
-
-struct ACPToolCallGroupLiveNarration: Equatable {
-    enum Kind: Equatable {
-        case thinking
-        case working
-
-        var label: String {
-            switch self {
-            case .thinking: "Thinking…"
-            case .working: "Working…"
-            }
-        }
-    }
-
-    static let previewCharacterLimit = 480
-
-    let kind: Kind
-    let buffer: StreamingText
-
-    /// Bound work per chunk while retaining context across streamed line breaks.
-    static func previewText(in value: String) -> String {
-        let suffix = value.suffix(previewCharacterLimit)
-        guard let lastContent = suffix.lastIndex(where: { !$0.isWhitespace }) else { return "" }
-        let end = value.index(after: lastContent)
-        let start = value.index(end, offsetBy: -previewCharacterLimit, limitedBy: value.startIndex)
-            ?? value.startIndex
-        return String(value[start..<end])
-    }
-}
-/// Bounded live narration below a collapsed activity disclosure. Observing
-/// the shared buffer here keeps streamed updates inside the preview instead
-/// of replacing the AppKit-hosted row through the reconciler.
-private struct ACPToolCallGroupLiveNarrationPreview: View {
-    let kind: ACPToolCallGroupLiveNarration.Kind
-    @ObservedObject var buffer: StreamingText
-    @Environment(\.theme) private var theme
-
-    init(narration: ACPToolCallGroupLiveNarration) {
-        kind = narration.kind
-        buffer = narration.buffer
-    }
-
-    var body: some View {
-        let previewText = ACPToolCallGroupLiveNarration.previewText(in: buffer.value)
-        VStack(alignment: .leading, spacing: 4) {
-            Text(kind.label)
-                .font(.system(size: 11))
-                .foregroundStyle(theme.color("fg-faint"))
-                .acpNarrationShimmer(isActive: true)
-            Text(verbatim: previewText)
-                .font(.system(size: 12))
-                .foregroundStyle(theme.color("fg-dim"))
-                .lineLimit(3, reservesSpace: true)
-                .truncationMode(.head)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel(previewText: previewText))
-    }
-
-    private func accessibilityLabel(previewText: String) -> String {
-        previewText.isEmpty ? kind.label : "\(kind.label) \(previewText)"
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
     }
 }
 
@@ -215,30 +79,24 @@ struct ACPToolCallGroupMemberRow<Content: View>: View {
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(.leading, 7)
     }
 }
 
-/// The shared accent bar + indent that marks a row as part of a tool-call
-/// bundle. Factored out so the header and its members line up exactly.
+/// The shared bar + indent that marks a row as part of a tool-call bundle.
+/// Factored out so members (and subagent rows) line up exactly.
 struct ACPToolCallGroupLane<Content: View>: View {
-    /// 0 for the lane's resting gray, 1 for full accent. Only the bar's FILL
-    /// may depend on this. The transcript is tiled by an AppKit reconciler
-    /// that re-lays out the whole document whenever a row's measured height
-    /// changes, so a highlight that touched geometry would re-tile the
-    /// transcript on every frame of the pulse.
-    let highlight: Double
     @ViewBuilder let content: () -> Content
     @Environment(\.theme) private var theme
 
-    init(highlight: Double = 0, @ViewBuilder content: @escaping () -> Content) {
-        self.highlight = highlight
+    init(@ViewBuilder content: @escaping () -> Content) {
         self.content = content
     }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Rectangle()
-                .fill(theme.color("bg-4").mix(with: theme.color("accent"), by: highlight))
+                .fill(theme.color("bg-4"))
                 .frame(width: 1.5)
                 .padding(.vertical, 2)
             content()
