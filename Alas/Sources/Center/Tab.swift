@@ -433,14 +433,12 @@ struct ReviewPRTabState: Codable, Equatable, Identifiable {
         title = request.title
     }
 
-    func lookupRemote(activeRemote: CodeHostRemote?) -> CodeHostRemote? {
+    func lookupRemote(activeRemote: CodeHostRemote?, knownRemotes: [CodeHostRemote] = []) -> CodeHostRemote? {
         if let requestRemote { return requestRemote }
-        guard let activeRemote,
-              activeRemote.kind == provider,
-              activeRemote.repositorySlug == repositorySlug,
-              activeRemote.host.lowercased() == url.host?.lowercased()
-        else { return nil }
-        return activeRemote
+        return CodeHostRemote.recoveredReviewRequestRemote(
+            provider: provider, repositorySlug: repositorySlug, number: number,
+            url: url, knownRemotes: knownRemotes + [activeRemote].compactMap { $0 }
+        )
     }
 
     func matches(_ snapshot: ReviewLoopSnapshot) -> Bool {

@@ -224,12 +224,20 @@ struct ReviewTabView: View {
         guard let activeSnapshot,
               reviewRefreshSettled,
               !tabState.matches(activeSnapshot),
-              let reviewLoop = appState.rightPaneStore.activeState(worktreeId: tabState.worktreeId)?.reviewLoop,
-              let remote = tabState.lookupRemote(activeRemote: activeSnapshot.remote),
-              let provider = CodeHostProviderRegistry.live().provider(for: remote.kind)
+              let reviewLoop = appState.rightPaneStore.activeState(worktreeId: tabState.worktreeId)?.reviewLoop
         else { return }
         let expectedKey = loadKey
         let expectedGeneration = reviewLoop.refreshGeneration
+        let gitRemotes = (try? await GitService().remotes(worktreePath: worktree.path)) ?? []
+        guard ReviewTabRequestedFetchGate.accepts(
+            expectedKey: expectedKey, currentKey: loadKey,
+            expectedGeneration: expectedGeneration, currentGeneration: reviewLoop.refreshGeneration,
+            isCancelled: Task.isCancelled, refreshSettled: reviewRefreshSettled
+        ) else { return }
+        let knownRemotes = CodeHostRemoteDetector.detectAll(from: gitRemotes)
+        guard let remote = tabState.lookupRemote(activeRemote: activeSnapshot.remote, knownRemotes: knownRemotes),
+              let provider = CodeHostProviderRegistry.live().provider(for: remote.kind)
+        else { return }
         guard let request = try? await provider.reviewRequest(
             remote: remote, number: tabState.number, cwd: worktree.path
         ) else {

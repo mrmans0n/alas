@@ -119,7 +119,7 @@ struct TabsManagerReviewRequestDraftTests {
         #expect(manager.tabs(forWorktree: worktreeId).count == 1)
     }
 
-    @Test func persistedDraftWithoutUpstreamMetadataReopensWithItsEdits() throws {
+    @Test func persistedPendingDraftWithoutUpstreamMetadataSurvivesLocalRename() throws {
         let worktreeId = "review-request-draft-legacy-upstream"
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -136,7 +136,9 @@ struct TabsManagerReviewRequestDraftTests {
         let manager = TabsManager(store: store, tabsDirectory: directory)
         manager.loadAll(worktreeIds: [worktreeId])
 
-        let reopened = manager.openOrFocusDraftReviewRequest(worktreeId: worktreeId, snapshot: snapshot)
+        let reopened = manager.openOrFocusDraftReviewRequest(
+            worktreeId: worktreeId, snapshot: Self.snapshot(branchName: "renamed-feature")
+        )
 
         #expect(reopened.id == legacy.id)
         #expect(manager.tabs(forWorktree: worktreeId).count == 1)

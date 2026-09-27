@@ -180,6 +180,33 @@ struct TabsManagerTests {
         #expect(reviewState.lookupRemote(activeRemote: origin) == upstream)
     }
 
+    @Test func restoredLegacyInspectRecoversRequestRemoteAfterRepositorySwitch() throws {
+        let upstream = CodeHostRemote(
+            kind: .github, host: "github.com", owner: "upstream", repository: "repo",
+            remoteName: "upstream", webURL: URL(string: "https://github.com/upstream/repo")!
+        )
+        let origin = CodeHostRemote(
+            kind: .github, host: "github.com", owner: "fork", repository: "repo",
+            remoteName: "origin", webURL: URL(string: "https://github.com/fork/repo")!
+        )
+        let local = ReviewLoopLocalState(
+            branchName: "feature", headSHA: "abc", baseBranch: "main",
+            hasWorkingTreeChanges: false, hasStagedChanges: false,
+            aheadCommitCount: 0, hasUpstream: true, needsPush: false
+        )
+        let snapshot = ReviewLoopSnapshot(
+            local: local, remote: upstream, reviewRequest: .placeholder(remote: upstream, number: 42),
+            providerAvailable: true, providerAuthenticated: true,
+            providerCapabilities: .githubCLI, errorMessage: nil
+        )
+        let currentState = ReviewPRTabState(worktreeId: "wt", snapshot: snapshot)
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(currentState)) as? [String: Any])
+        json.removeValue(forKey: "requestRemote")
+        let restored = try JSONDecoder().decode(ReviewPRTabState.self, from: JSONSerialization.data(withJSONObject: json))
+
+        #expect(restored.lookupRemote(activeRemote: origin, knownRemotes: [origin, upstream]) == upstream)
+    }
+
     @Test(arguments: [CodeHostKind.github, .gitlab])
     func legacyPendingDraftRecoversCreationRemoteFromSavedURL(provider: CodeHostKind) throws {
         let manager = TabsManager(store: RestoreMemoryStore())

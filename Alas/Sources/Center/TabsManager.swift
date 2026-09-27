@@ -1478,10 +1478,14 @@ final class TabsManager {
            snapshot.local.upstreamBranchName != nil,
            let idx = file.tabs.firstIndex(where: {
                guard case .draftReviewRequest(let existing) = $0 else { return false }
+               let legacyPendingMatch = existing.createdURL != nil
+                   && existing.upstreamBranchName == nil
+                   && existing.headSHA == baseState.headSHA
+                   && existing.headOwner == baseState.headOwner
                return existing.provider == baseState.provider
                    && existing.repositorySlug == baseState.repositorySlug
                    && existing.baseBranch == baseState.baseBranch
-                   && existing.reviewBranchName == baseState.reviewBranchName
+                   && (existing.reviewBranchName == baseState.reviewBranchName || legacyPendingMatch)
            }),
            case .draftReviewRequest(var existing) = file.tabs[idx] {
             existing.refreshSnapshotMetadata(from: snapshot)
