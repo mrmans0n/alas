@@ -755,6 +755,30 @@ struct ReviewLoopStateTests {
         ])
     }
 
+    @Test func mergeRevalidatesUsingTrackedUpstreamBranch() async throws {
+        let remote = Self.makeRemote()
+        let provider = FakeCodeHostProvider(kind: .github, capabilities: .githubCLI)
+        provider.requestForBranch["review-feature"] = Self.makeReviewRequest(
+            remote: remote, headRefName: "review-feature", headSHA: "abc123",
+            headRepositoryOwner: "mrmans0n", reviewDecision: .approved,
+            includeActionableThread: false, checks: []
+        )
+        let state = ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp/alas-upstream-merge"), baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider]))
+        let local = ReviewLoopLocalState(
+            branchName: "local-feature", headSHA: "abc123", baseBranch: "main",
+            hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0,
+            hasUpstream: true, upstreamRemoteName: "origin", upstreamBranchName: "review-feature", needsPush: false
+        )
+        await state.refresh(local: local, remotes: [Self.makeGitHubRemote()])
+        let snapshot = try #require(state.snapshot)
+
+        let outcome = await state.merge(snapshot: snapshot)
+
+        #expect(outcome == .merged)
+        #expect(provider.lookupTargets.map(\.branch) == ["review-feature", "review-feature"])
+    }
+
     @Test func mergeReportsQueuedOutcomeForQueueRequest() async throws {
         let remote = Self.makeRemote()
         let provider = FakeCodeHostProvider(

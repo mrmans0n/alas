@@ -334,7 +334,7 @@ final class ReviewLoopState {
     ) async throws -> URL {
         try await createReviewRequest(
             snapshot: snapshot,
-            branch: snapshot.local.branchName,
+            branch: snapshot.local.upstreamBranchName ?? snapshot.local.branchName,
             headOwner: snapshot.local.headRemoteOwner,
             baseBranch: snapshot.local.baseBranch,
             title: title,
@@ -415,7 +415,7 @@ final class ReviewLoopState {
         do {
             try await provider.rerunFailedChecks(
                 remote: remote,
-                branch: snapshot.local.branchName,
+                branch: snapshot.local.upstreamBranchName ?? snapshot.local.branchName,
                 headSHA: snapshot.local.headSHA,
                 request: snapshot.reviewRequest,
                 cwd: worktreePath
@@ -443,7 +443,7 @@ final class ReviewLoopState {
             // state and re-run the full merge gate.
             guard let fresh = try await provider.currentReviewRequest(
                 remote: remote,
-                branch: snapshot.local.branchName,
+                branch: snapshot.local.upstreamBranchName ?? snapshot.local.branchName,
                 headOwner: snapshot.local.headRemoteOwner,
                 baseBranch: snapshot.local.baseBranch,
                 cwd: worktreePath
