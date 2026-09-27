@@ -109,7 +109,10 @@ struct ReviewRequestDraftTests {
             open: { _ in }
         )
         #expect(opened)
-        #expect(saves == 0)
+        #expect(saves == 1)
+        #expect(activeRecord.id == originalTarget.id)
+        #expect(activeRecord.target.payload == target.payload)
+        #expect(activeRecord.createdAt == Date(timeIntervalSince1970: 0))
     }
 
     @Test func draftReviewRequestLauncherIsDisabledForStaleTargets() {
