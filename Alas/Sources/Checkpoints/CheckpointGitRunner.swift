@@ -11,6 +11,10 @@ protocol CheckpointGitRunning: Sendable {
     /// Blob references from one `cat-file --batch`, hashed as each object
     /// streams so no whole object is buffered.
     func blobReferences(oids: [String], cwd: URL) async throws -> [String: CheckpointBlobReference]
+    /// Writes each file as a blob through one `hash-object -w --stdin-paths`
+    /// and returns the object IDs in input order. Git resolves the paths from
+    /// the worktree root, not from `cwd`.
+    func writeBlobs(relativePaths: [String], cwd: URL) async throws -> [String]
 }
 
 /// Git-dir paths one checkpoint operation reads, resolved by a single
@@ -108,6 +112,18 @@ struct LiveCheckpointGitRunner: CheckpointGitRunning {
         var environment = Process.gitEnv()
         if let index = overrides["GIT_INDEX_FILE"] { environment["GIT_INDEX_FILE"] = index }
         return environment
+    }
+
+    func writeBlobs(relativePaths: [String], cwd: URL) async throws -> [String] {
+        try await stream(["hash-object", "-w", "--stdin-paths"], lines: relativePaths, cwd: cwd) { reader in
+            try relativePaths.map { _ in
+                let oid = try reader.line()
+                guard [40, 64].contains(oid.count), oid.allSatisfy(\.isHexDigit) else {
+                    throw CheckpointSnapshotError.invalidGitOutput
+                }
+                return oid
+            }
+        }
     }
 
     /// Runs one git process that reads `lines` from stdin, parsing stdout as it
