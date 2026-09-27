@@ -35,6 +35,15 @@ struct RunReportTabView: View {
     private func report(_ entry: RunHistoryEntry) -> some View {
         VStack(spacing: 0) {
             reportHeader(entry)
+            if let brief = RunFailureBriefPresentation(state: state.runFailureBriefs.state(for: entry.id)) {
+                RunFailureBriefSection(
+                    presentation: brief,
+                    codeFont: CenterTypography.resolveCodeFont(
+                        family: state.config.code.fontFamily,
+                        size: CGFloat(state.config.code.fontSize)
+                    )
+                )
+            }
             reportOutput(entry.output)
         }
         .background(Color(nsColor: .windowBackgroundColor))

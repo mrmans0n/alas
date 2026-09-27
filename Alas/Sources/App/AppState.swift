@@ -244,6 +244,7 @@ final class AppState {
     @ObservationIgnored var repoIconStagingRoot: URL = Paths.projectIconsRoot
     private(set) var closedTabHistory = ClosedTabHistory()
     var runScriptFailureQueue = RunScriptFailureQueue()
+    let runFailureBriefs = RunFailureBriefCoordinator()
     let inAppNotifications = InAppNotificationStore()
     /// Observed command lifecycles, keyed by worktree then script. Deliberately
     /// separate from `tabs`: a run's outcome outlives its terminal shell, and a
@@ -1692,6 +1693,7 @@ final class AppState {
         Task {
             await engine.cancel(caller: .worktreeName)
             await engine.cancel(caller: .mergeConflictExplanation)
+            await engine.cancel(caller: .runFailureBrief)
         }
     }
 
@@ -1742,6 +1744,28 @@ final class AppState {
                 self?.borrowedLocalTextConsentAvailable ?? false
             }
         )
+    }
+
+    /// Nil when no on-device model can run, so the caller shows only the observed excerpt.
+    func makeRunFailureBriefGenerator() -> RunFailureBriefCoordinator.Generate? {
+        let router = LocalTextAppleFirstRouter(
+            engine: localTextInference,
+            isAppleIntelligenceAvailable: { LocalTextAppleIntelligence.isAvailable },
+            generateWithAppleIntelligence: { request in
+                await LocalTextAppleIntelligence.generate(request)
+            },
+            isMLXAvailable: { [weak self] in
+                self?.borrowedLocalTextConsentAvailable ?? false
+            }
+        )
+        guard router.isAppleIntelligenceAvailable() || router.isMLXAvailable() else { return nil }
+        return { input in
+            await router.generate(
+                RunFailureBriefPolicy.request(for: input),
+                caller: .runFailureBrief,
+                priority: .automatic
+            ) { RunFailureBriefPolicy.parse($0) }
+        }
     }
 
     /// All worktree IDs currently known to the projects manager (including

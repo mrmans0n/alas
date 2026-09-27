@@ -539,6 +539,7 @@ extension AppState {
                         worktree: worktree
                     )
                     runRecords.markRunning(runID: runID, sessionID: sessionID)
+                    runFailureBriefs.cancelInFlight(worktreeID: worktree.id, scriptKey: script.key)
                     if runScriptSessionForegroundPidIsMissing(sessionID: sessionID) {
                         cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: runScriptLocalMonitorGrace, includeRemote: false)
                         cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: runScriptMonitorGrace)
@@ -614,6 +615,36 @@ extension AppState {
             observeAttention(.inactive(sourceKey: event.sourceKey))
         }
         runScriptFailureQueue.dismiss(id: id, worktreeID: worktreeID)
+        runFailureBriefs.retain(runIDs: runScriptFailureQueue.runIDs)
+    }
+
+    func setRunFailureBriefsEnabled(_ enabled: Bool) {
+        config.runFailureBriefsEnabled = enabled
+        saveConfig()
+        if !enabled { runFailureBriefs.invalidateAll() }
+    }
+
+    private func startRunFailureBrief(for failure: RunScriptFailure) {
+        runFailureBriefs.retain(runIDs: runScriptFailureQueue.runIDs)
+        guard config.runFailureBriefsEnabled else { return }
+        let runID = failure.runID
+        runFailureBriefs.start(
+            failure,
+            loadOutput: { [weak self] in await self?.persistedRunOutput(runID: runID) },
+            resolveGenerator: { [weak self] in
+                guard let self else { return nil }
+                if !LocalTextAppleIntelligence.isAvailable {
+                    // MLX is the only route left, so wait for it; Apple never needs this.
+                    await self.waitForLocalTextReadiness()
+                }
+                return self.makeRunFailureBriefGenerator()
+            }
+        )
+    }
+
+    private func persistedRunOutput(runID: String) async -> RunHistoryOutput? {
+        await runHistoryPersistenceTasks[runID]?.value
+        return try? await runHistoryStore?.entry(id: runID)?.output
     }
 
     private func retireRunScriptAttention(scriptKey: String, worktree: Worktree, at date: Date) {
@@ -627,6 +658,7 @@ extension AppState {
             observeAttention(.inactive(sourceKey: .init(rawValue: "script:\(failure.runID):failure")), at: date)
             runScriptFailureQueue.dismiss(id: failure.id, worktreeID: worktree.id)
         }
+        runFailureBriefs.retain(runIDs: runScriptFailureQueue.runIDs)
     }
 
     func openRunReport(worktreeID: String, runID: String) {
@@ -937,6 +969,7 @@ extension AppState {
                     )
                     retireRunScriptAttention(scriptKey: script.key, worktree: worktree, at: observedAt)
                     runScriptFailureQueue.append(failure)
+                    startRunFailureBrief(for: failure)
                     if let context = attentionContext(for: worktree) {
                         for observation in AttentionProducer.script(
                             failure: failure, owner: context.owner, display: context.display
@@ -1087,6 +1120,7 @@ extension AppState {
             }
             runRecords.purge(worktreeID: worktreeID)
             runScriptFailureQueue.purge(worktreeID: worktreeID)
+            runFailureBriefs.retain(runIDs: runScriptFailureQueue.runIDs)
             transientRunReports = transientRunReports.filter { $0.value.worktreeID != worktreeID }
             durableRunReportIDsByWorktreeID[worktreeID] = []
             tabs.closeRunReports(worktreeId: worktreeID)

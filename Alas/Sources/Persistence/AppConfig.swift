@@ -46,6 +46,7 @@ struct AppConfig: Codable, Equatable {
     var workspacesEnabled: Bool = false
     var nextPromptSuggestionsEnabled: Bool = false
     var sessionSummariesEnabled: Bool = false
+    var runFailureBriefsEnabled: Bool = true
     /// Preview gate for the Needs Attention inbox and project affordances.
     /// Events continue collecting while its presentation is disabled.
     var needsAttentionEnabled: Bool = false
@@ -688,6 +689,7 @@ extension AppConfig {
              workspacesEnabled,
              nextPromptSuggestionsEnabled,
              sessionSummariesEnabled,
+             runFailureBriefsEnabled,
              needsAttentionEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
@@ -933,6 +935,7 @@ extension AppConfig {
         workspacesEnabled = (try? c.decode(Bool.self, forKey: .workspacesEnabled)) ?? false
         nextPromptSuggestionsEnabled = (try? c.decode(Bool.self, forKey: .nextPromptSuggestionsEnabled)) ?? false
         sessionSummariesEnabled = (try? c.decode(Bool.self, forKey: .sessionSummariesEnabled)) ?? false
+        runFailureBriefsEnabled = (try? c.decode(Bool.self, forKey: .runFailureBriefsEnabled)) ?? true
         // Needs Attention remains opt-in while its entry points are in preview.
         needsAttentionEnabled = (try? c.decode(Bool.self, forKey: .needsAttentionEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
