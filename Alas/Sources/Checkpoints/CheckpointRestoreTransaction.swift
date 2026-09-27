@@ -114,8 +114,12 @@ struct CheckpointRestoreTransaction: Sendable {
                 let desired = try desiredState(for: path, saved: saved, current: current, selectedPaths: selectedPaths)
                 let name = UUID().uuidString.lowercased()
                 stagingNames[path] = name
-                try await materialize(desired.worktree, at: replacementsRoot.appendingPathComponent(name), target: target)
+                try await materialize(desired.worktree, at: replacementsRoot.appendingPathComponent(name), target: target,
+                                      durability: .file)
             }
+            // One sync makes every replacement entry durable before the
+            // prepared journal below names them.
+            try fileSystem.synchronizeDirectory(replacementsRoot)
 
             let journal = CheckpointRestoreJournal(id: operationID, lineageID: target.lineageID,
                                                     checkpointID: manifest.id, recoveryCheckpointID: recoveryCheckpointID,
@@ -297,7 +301,8 @@ struct CheckpointRestoreTransaction: Sendable {
             }
             let destination = try ensureParent(path, root: target.path)
             let replacement = root.appendingPathComponent("rollback-\(UUID().uuidString.lowercased())")
-            try await materialize(before.worktree, at: replacement, target: target)
+            // The moves below sync the staging root, which holds `replacement`.
+            try await materialize(before.worktree, at: replacement, target: target, durability: .file)
             if actual.kind != .absent {
                 let displaced = root.appendingPathComponent("displaced-\(UUID().uuidString.lowercased())")
                 try moveLeaf(destination, to: displaced)
@@ -600,6 +605,8 @@ struct CheckpointRestoreTransaction: Sendable {
         // The staging root still holds `original-index`, the prepared `index`,
         // and the replacement/backup trees, so it needs a recursive removal;
         // a single rmdir fails with ENOTEMPTY and would skip finishJournal.
+        // The worktree sync that follows orders the removal before the
+        // journal unlink; the files inside need no syncs of their own.
         do {
             try removeDirectoryTreeIfPresent(URL(fileURLWithPath: journal.stagingRoot, isDirectory: true))
             try fileSystem.synchronizeDirectory(target.path)
@@ -618,16 +625,17 @@ struct CheckpointRestoreTransaction: Sendable {
         try await store.finishJournal(id: journal.id, lineageID: target.lineageID)
     }
 
+    /// Callers sync the worktree root afterwards, so no removal syncs here.
     private func removeDirectoryTreeIfPresent(_ url: URL) throws {
         guard try exists(url) else { return }
         for child in try fileSystem.list(url) {
             if try isPhysicalDirectory(child) {
                 try removeDirectoryTreeIfPresent(child)
             } else {
-                try fileSystem.removeIfPresent(child)
+                try fileSystem.removeIfPresent(child, synchronizingParent: false)
             }
         }
-        try fileSystem.removeIfPresent(url)
+        try fileSystem.removeIfPresent(url, synchronizingParent: false)
     }
 
     private func isPhysicalDirectory(_ url: URL) throws -> Bool {
@@ -684,8 +692,8 @@ struct CheckpointRestoreTransaction: Sendable {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
               isDirectory.boolValue else { return }
+        // The move into this path that always follows syncs the same parent.
         guard Darwin.rmdir(url.path) == 0 else { throw posix("rmdir empty restore directory") }
-        try fileSystem.synchronizeDirectory(url.deletingLastPathComponent())
     }
 
     private func stagingName(_ path: String, journal: CheckpointRestoreJournal) throws -> String {
@@ -742,8 +750,11 @@ struct CheckpointRestoreTransaction: Sendable {
     private func makePreparedIndex(at preparedIndex: URL, from indexPath: URL, target: CheckpointWorktreeTarget,
                                    manifest: WorktreeCheckpointManifest, current: WorktreeStateSnapshot,
                                    selectedPaths: [String]) async throws {
+        // Nothing reads the prepared index after a crash: recovery rolls back
+        // from `original-index`, apply digest-checks these bytes in process, and
+        // git's own rewrite under GIT_INDEX_FILE is not synced either.
         if FileManager.default.fileExists(atPath: indexPath.path) {
-            try fileSystem.writeDurable(try fileSystem.fileData(indexPath), to: preparedIndex, mode: 0o600)
+            try fileSystem.write(try fileSystem.fileData(indexPath), to: preparedIndex, mode: 0o600, durability: .none)
         } else {
             let result = try await git.run(["read-tree", "--empty"], cwd: target.path,
                                            environment: ["GIT_INDEX_FILE": preparedIndex.path])
@@ -805,7 +816,8 @@ struct CheckpointRestoreTransaction: Sendable {
         for blob in blobs {
             let url = stagingRoot.appendingPathComponent("index-\(UUID().uuidString.lowercased())")
             materialized.append(url)
-            try await store.materializeBlob(blob, lineageID: target.lineageID, to: url, mode: 0o600)
+            // Deleted once hashed; the git object follows git's own fsync policy.
+            try await store.materializeBlob(blob, lineageID: target.lineageID, to: url, mode: 0o600, durability: .none)
         }
         // The staging root is a direct child of the worktree root, which is
         // where `hash-object --stdin-paths` resolves relative paths from.
@@ -814,12 +826,14 @@ struct CheckpointRestoreTransaction: Sendable {
         return Dictionary(uniqueKeysWithValues: zip(blobs, oids))
     }
 
-    private func materialize(_ state: CheckpointFileState, at url: URL, target: CheckpointWorktreeTarget) async throws {
+    private func materialize(_ state: CheckpointFileState, at url: URL, target: CheckpointWorktreeTarget,
+                             durability: CheckpointWriteDurability) async throws {
         guard state.kind != .absent else { return }
         guard let blob = state.blob else { throw CheckpointRestoreError.invalidGitOutput }
         switch state.kind {
         case .regular:
-            try await store.materializeBlob(blob, lineageID: target.lineageID, to: url, mode: state.mode == "100755" ? 0o755 : 0o644)
+            try await store.materializeBlob(blob, lineageID: target.lineageID, to: url, mode: state.mode == "100755" ? 0o755 : 0o644,
+                                            durability: durability)
         case .symlink:
             let bytes = try await store.readBlob(blob, lineageID: target.lineageID)
             try fileSystem.createSymlink(target: bytes, at: url)

@@ -20,6 +20,16 @@ struct CheckpointLeafMetadata: Equatable, Sendable {
     let byteCount: Int64
 }
 
+/// How much of a write must reach stable storage before it returns.
+enum CheckpointWriteDurability: Sendable {
+    /// Sync the file and then its parent directory.
+    case fileAndDirectory
+    /// Sync the file only. The caller syncs the directory once for a batch.
+    case file
+    /// Sync nothing. Only for scratch files that nothing reads after a crash.
+    case none
+}
+
 protocol CheckpointFileSystem: Sendable {
     func readLeaf(root: URL, relativePath: String) throws -> CheckpointLeafRead
     func metadata(root: URL, relativePath: String) throws -> CheckpointLeafMetadata?
@@ -33,6 +43,24 @@ protocol CheckpointFileSystem: Sendable {
     func list(_ url: URL) throws -> [URL]
     func fileData(_ url: URL) throws -> Data
     func synchronizeDirectory(_ url: URL) throws
+    func write(_ data: Data, to url: URL, mode: mode_t, durability: CheckpointWriteDurability) throws
+    func moveExclusively(_ source: URL, to destination: URL, synchronizingParent: Bool) throws
+    func removeIfPresent(_ url: URL, synchronizingParent: Bool) throws
+}
+
+/// Test doubles that only implement the durable operations stay durable.
+extension CheckpointFileSystem {
+    func write(_ data: Data, to url: URL, mode: mode_t, durability: CheckpointWriteDurability) throws {
+        try writeDurable(data, to: url, mode: mode)
+    }
+
+    func moveExclusively(_ source: URL, to destination: URL, synchronizingParent: Bool) throws {
+        try moveExclusively(source, to: destination)
+    }
+
+    func removeIfPresent(_ url: URL, synchronizingParent: Bool) throws {
+        try removeIfPresent(url)
+    }
 }
 
 struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
@@ -110,6 +138,10 @@ struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
     }
 
     func writeDurable(_ data: Data, to url: URL, mode: mode_t) throws {
+        try write(data, to: url, mode: mode, durability: .fileAndDirectory)
+    }
+
+    func write(_ data: Data, to url: URL, mode: mode_t, durability: CheckpointWriteDurability) throws {
         try requireSafeParent(of: url)
         let temporary = url.deletingLastPathComponent().appendingPathComponent(".alas-checkpoint-\(UUID().uuidString)")
         let descriptor = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, mode)
@@ -119,11 +151,13 @@ struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
         do {
             try writeAll(data, descriptor: descriptor)
             guard Darwin.fchmod(descriptor, mode) == 0 else { throw posixError("fchmod") }
-            guard Darwin.fsync(descriptor) == 0 else { throw posixError("fsync") }
+            if durability != .none {
+                guard Darwin.fsync(descriptor) == 0 else { throw posixError("fsync") }
+            }
             guard Darwin.close(descriptor) == 0 else { throw posixError("close") }
             descriptorIsOpen = false
             guard Darwin.rename(temporary.path, url.path) == 0 else { throw posixError("rename") }
-            try synchronizeDirectory(url.deletingLastPathComponent())
+            if durability == .fileAndDirectory { try synchronizeDirectory(url.deletingLastPathComponent()) }
         } catch {
             if descriptorIsOpen { _ = Darwin.close(descriptor) }
             _ = Darwin.unlink(temporary.path)
@@ -155,6 +189,10 @@ struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
     }
 
     func moveExclusively(_ source: URL, to destination: URL) throws {
+        try moveExclusively(source, to: destination, synchronizingParent: true)
+    }
+
+    func moveExclusively(_ source: URL, to destination: URL, synchronizingParent: Bool) throws {
         try requireSafeParent(of: source)
         try requireSafeParent(of: destination)
         let sourceDirectory = try lstat(at: source.deletingLastPathComponent())
@@ -162,19 +200,23 @@ struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
         guard sourceDirectory.st_dev == destinationDirectory.st_dev else { throw CheckpointFileSystemError.unsafePath }
         guard Darwin.link(source.path, destination.path) == 0 else { throw posixError("link") }
         guard Darwin.unlink(source.path) == 0 else { throw posixError("unlink") }
-        try synchronizeDirectory(destination.deletingLastPathComponent())
+        if synchronizingParent { try synchronizeDirectory(destination.deletingLastPathComponent()) }
     }
 
     func removeIfPresent(_ url: URL) throws {
+        try removeIfPresent(url, synchronizingParent: true)
+    }
+
+    func removeIfPresent(_ url: URL, synchronizingParent: Bool) throws {
         try requireSafeParent(of: url)
         if Darwin.unlink(url.path) == 0 {
-            try synchronizeDirectory(url.deletingLastPathComponent())
+            if synchronizingParent { try synchronizeDirectory(url.deletingLastPathComponent()) }
             return
         }
         if errno == ENOENT { return }
         if errno == EISDIR || errno == EPERM {
             guard Darwin.rmdir(url.path) == 0 else { throw posixError("rmdir") }
-            try synchronizeDirectory(url.deletingLastPathComponent())
+            if synchronizingParent { try synchronizeDirectory(url.deletingLastPathComponent()) }
             return
         }
         throw posixError("unlink")
