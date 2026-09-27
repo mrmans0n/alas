@@ -1,26 +1,22 @@
 import SwiftUI
 
-/// One-line strip below the merge-conflict toolbar that surfaces the AI
-/// explanation for the current conflict. Collapsed by default to a single
-/// truncated line; tapping anywhere expands to the full wrapped text, and
-/// the `×` button hides the strip for this specific conflict (it reappears
-/// for any other conflict the user navigates to).
+/// Strip below the merge-conflict toolbar that shows the advisory local-model
+/// explanation for the current hunk. Collapsed it shows the hunk citation and
+/// the cause; tapping expands to each side's intent. The `×` hides the strip
+/// for this hunk only.
 ///
-/// Dismissal is keyed by `conflictKey` rather than `annotation` text so two
-/// distinct conflicts that happen to produce identical one-line summaries
-/// (common with repetitive import/order conflicts) don't share dismissal
-/// state.
+/// Dismissal is keyed by `conflictKey` rather than the text so two hunks with
+/// identical explanations don't share dismissal state.
 struct MergeConflictAnnotationStrip: View {
-    let annotation: String
-    /// Stable identity for the current conflict block — typically
-    /// `MergeConflictTabModel.annotationKey(for:)` combined with the
-    /// block's line range. Used as the dismissal key so dismissals
-    /// follow the conflict, not the rendered sentence.
+    let explanation: MergeConflictExplanation
+    /// Identifies the hunk the explanation describes, e.g. "Conflict 2 of 5, lines 40–52".
+    let citation: String
+    let localLabel: String
+    let remoteLabel: String
+    /// `MergeConflictTabModel.conflictKey(for:)` of the current hunk.
     let conflictKey: String
-    /// Set of dismissed conflict keys, owned by the parent view so the
-    /// dismissal survives this strip being unmounted between
-    /// navigations (e.g., visiting a conflict that has no cached
-    /// annotation yet would otherwise destroy local @State).
+    /// Owned by the parent so dismissal survives this strip unmounting while
+    /// the user visits a hunk with no explanation.
     @Binding var dismissedKeys: Set<String>
 
     @State private var isExpanded = false
@@ -32,32 +28,36 @@ struct MergeConflictAnnotationStrip: View {
             EmptyView()
         } else {
             HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "sparkles")
+                Image(systemName: "text.bubble")
                     .foregroundColor(theme.color("fg-subtle"))
                     .font(.system(size: 10))
                     .padding(.top, 2)
                 Button(action: { isExpanded.toggle() }) {
-                    Text(annotation)
-                        .font(.system(size: 11))
-                        .italic()
-                        .foregroundColor(theme.color("fg-dim"))
-                        .lineLimit(isExpanded ? nil : 1)
-                        .truncationMode(.tail)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .textSelection(.enabled)
+                    VStack(alignment: .leading, spacing: 3) {
+                        (Text(verbatim: "Advisory · \(citation): ").fontWeight(.medium) + Text(explanation.cause))
+                            .lineLimit(isExpanded ? nil : 1)
+                            .truncationMode(.tail)
+                        if isExpanded {
+                            Text(verbatim: "LOCAL (\(localLabel)): \(explanation.localIntent)")
+                            Text(verbatim: "REMOTE (\(remoteLabel)): \(explanation.remoteIntent)")
+                            Text("On-device explanation. It may be wrong and changes nothing in the file.")
+                                .foregroundColor(theme.color("fg-subtle"))
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .italic()
+                    .foregroundColor(theme.color("fg-dim"))
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .textSelection(.enabled)
                 }
                 .buttonStyle(.plain)
                 .help(isExpanded ? "Collapse" : "Click to expand")
                 Button(action: {
                     dismissedKeys.insert(conflictKey)
-                    // Also collapse so a future re-show (different conflict
-                    // whose strip is not dismissed) starts on the teaser.
-                    // The `.onChange(of: conflictKey)` below only fires
-                    // while the visible branch is mounted; resetting here
-                    // covers the dismiss-then-navigate path where the
-                    // strip is unmounted before the key change.
+                    // The `.onChange(of: conflictKey)` below only fires while
+                    // this branch is mounted, so reset here for dismiss-then-navigate.
                     isExpanded = false
                 }) {
                     Image(systemName: "xmark")
@@ -66,16 +66,13 @@ struct MergeConflictAnnotationStrip: View {
                         .padding(.top, 2)
                 }
                 .buttonStyle(.plain)
-                .help("Dismiss this annotation")
+                .help("Dismiss this explanation")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(theme.color("bg-2"))
             .overlay(Divider(), alignment: .bottom)
             .onChange(of: conflictKey) { _, _ in
-                // User navigated to another conflict. Collapse back to
-                // the teaser so they don't get a wall of text without
-                // asking for it.
                 isExpanded = false
             }
         }

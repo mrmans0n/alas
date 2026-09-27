@@ -243,7 +243,7 @@ private actor CannedAppleGenerator {
     }
 }
 
-private actor GenerationGate {
+actor GenerationGate {
     private var started = false
     private var startedWaiter: CheckedContinuation<Void, Never>?
     private var releaseWaiter: CheckedContinuation<Void, Never>?

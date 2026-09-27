@@ -354,70 +354,85 @@ struct MergeConflictTabModelTests {
         #expect(model.conflictCount == 0)
     }
 
-    @Test func annotationsStartEmptyAndCanBeSet() {
+    private static let twoConflictText = """
+    head
+    <<<<<<< HEAD
+    a-ours
+    =======
+    a-theirs
+    >>>>>>> feature
+    middle
+    <<<<<<< HEAD
+    b-ours
+    =======
+    b-theirs
+    >>>>>>> feature
+    tail
+
+    """
+
+    private static func twoConflictModel() -> MergeConflictTabModel {
         let model = MergeConflictTabModel(
             worktreePath: URL(fileURLWithPath: "/tmp/unused"),
             relativePath: "a.txt",
             gitService: GitService()
         )
-        #expect(model.annotations.isEmpty)
-        let block = ConflictBlock(
-            local: "ours\n", base: nil, remote: "theirs\n",
-            localLabel: "HEAD", remoteLabel: "feature",
-            lineRangeInMerged: 0 ... 4
-        )
-        model.setAnnotation("LOCAL renamed; REMOTE changed default.", for: block)
-        #expect(model.annotation(for: block) == "LOCAL renamed; REMOTE changed default.")
+        model.resultText = twoConflictText
+        model.reparse()
+        return model
     }
 
-    @Test func annotationKeyedByBlockContentSurvivesResolution() {
-        let model = MergeConflictTabModel(
-            worktreePath: URL(fileURLWithPath: "/tmp/unused"),
-            relativePath: "a.txt",
-            gitService: GitService()
+    private static func appleExplainer(
+        _ generate: @escaping @MainActor @Sendable (LocalTextGenerationRequest) async -> String?
+    ) -> MergeConflictExplainer {
+        MergeConflictExplainer(
+            engine: RecordingExplanationEngine(text: ""),
+            isAppleIntelligenceAvailable: { true },
+            generateWithAppleIntelligence: generate,
+            isMLXAvailable: { false }
         )
-        // Two conflicts with distinguishable sides.
-        model.resultText = """
-        head
-        <<<<<<< HEAD
-        a-ours
-        =======
-        a-theirs
-        >>>>>>> feature
-        middle
-        <<<<<<< HEAD
-        b-ours
-        =======
-        b-theirs
-        >>>>>>> feature
-        tail
+    }
 
-        """
-        model.reparse()
-        #expect(model.conflictCount == 2)
-
-        // Manually cache an annotation for the SECOND conflict (block "b").
-        let blocks = model.regions.compactMap { (r: ConflictRegion) -> ConflictBlock? in
-            if case .conflict(let b) = r { return b } else { return nil }
+    private static func conflictBlocks(_ model: MergeConflictTabModel) -> [ConflictBlock] {
+        model.regions.compactMap { region in
+            if case .conflict(let block) = region { return block } else { return nil }
         }
-        #expect(blocks.count == 2)
-        model.setAnnotation("about b", for: blocks[1])
-        #expect(model.annotation(for: blocks[1]) == "about b")
+    }
 
-        // Now resolve the FIRST conflict. After reparse the only remaining
-        // conflict is the "b" block, now at ordinal 0. Its annotation must
-        // still resolve to "about b" — not the empty string the OLD ordinal 1
-        // index would have produced under the old [Int: String] scheme.
-        // (Navigate to ordinal 0 via previousConflict from reparse's default.)
-        model.previousConflict() // ensure we're at ordinal 0
+    @Test func explanationFollowsItsBlockWhenAnEarlierConflictIsResolved() async {
+        let model = Self.twoConflictModel()
+        model.nextConflict()
+        let explainer = Self.appleExplainer { _ in
+            #"{"conflict": 2, "cause": "Both edit b.", "local": "Keep ours.", "remote": "Keep theirs."}"#
+        }
+
+        await model.explainCurrentConflict(using: explainer)
+        model.previousConflict()
         model.acceptLocal()
-        #expect(model.conflictCount == 1)
 
-        let remaining = model.regions.compactMap { (r: ConflictRegion) -> ConflictBlock? in
-            if case .conflict(let b) = r { return b } else { return nil }
-        }
+        let remaining = Self.conflictBlocks(model)
         #expect(remaining.count == 1)
-        #expect(model.annotation(for: remaining[0]) == "about b")
+        #expect(model.explanation(for: remaining[0])?.cause == "Both edit b.")
+    }
+
+    @Test func editingTheHunkDuringExplanationCancelsAndDiscardsIt() async {
+        let model = Self.twoConflictModel()
+        let gate = GenerationGate()
+        let explainer = Self.appleExplainer { _ in
+            await gate.wait()
+            return #"{"conflict": 1, "cause": "Both edit a.", "local": "Keep ours.", "remote": "Keep theirs."}"#
+        }
+        let explaining = Task { await model.explainCurrentConflict(using: explainer) }
+        await gate.waitUntilStarted()
+        #expect(model.explainingKey != nil)
+
+        model.resultText = Self.twoConflictText.replacingOccurrences(of: "a-ours", with: "a-edited")
+        model.reparse()
+        #expect(model.explainingKey == nil)
+        await gate.release()
+        await explaining.value
+
+        #expect(model.explanations.isEmpty)
     }
 
     @Test func applyAgentProposalReplacesResultTextAndReparses() {

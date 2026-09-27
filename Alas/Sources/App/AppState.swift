@@ -1646,7 +1646,7 @@ final class AppState {
 
     /// Apple Intelligence borrows consent from the existing local-title setting.
     var issueWorktreeNameAppleSuggestionsAvailable: Bool {
-        config.harness.acpLocalTitlesEnabled && IssueWorktreeNameAppleIntelligence.isAvailable
+        config.harness.acpLocalTitlesEnabled && LocalTextAppleIntelligence.isAvailable
     }
 
     /// Worktree name suggestions ride on a local-text capability the user has
@@ -1683,7 +1683,10 @@ final class AppState {
         guard wasEnabled, !nextPromptRuntimeEnabled, !sessionSummariesRuntimeEnabled else { return }
         qwenTitleRequests.cancelAll()
         let engine = localTextInference
-        Task { await engine.cancel(caller: .worktreeName) }
+        Task {
+            await engine.cancel(caller: .worktreeName)
+            await engine.cancel(caller: .mergeConflictExplanation)
+        }
     }
 
     /// A pending Qwen title would be discarded anyway once titles are off;
@@ -1712,10 +1715,25 @@ final class AppState {
                 self?.issueWorktreeNameAppleSuggestionsAvailable ?? false
             },
             generateWithAppleIntelligence: { request in
-                await IssueWorktreeNameAppleIntelligence.generate(request)
+                await LocalTextAppleIntelligence.generate(request)
             },
             isMLXAvailable: { [weak self] in
                 self?.issueWorktreeNameSuggestionsAvailable ?? false
+            }
+        )
+    }
+
+    /// Explanations are user-initiated, so Apple Intelligence needs no extra
+    /// opt-in. MLX still borrows consent and never triggers a model download.
+    func makeMergeConflictExplainer() -> MergeConflictExplainer {
+        MergeConflictExplainer(
+            engine: localTextInference,
+            isAppleIntelligenceAvailable: { LocalTextAppleIntelligence.isAvailable },
+            generateWithAppleIntelligence: { request in
+                await LocalTextAppleIntelligence.generate(request)
+            },
+            isMLXAvailable: { [weak self] in
+                self?.borrowedLocalTextConsentAvailable ?? false
             }
         )
     }

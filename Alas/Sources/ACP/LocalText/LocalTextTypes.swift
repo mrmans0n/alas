@@ -10,6 +10,7 @@ enum LocalTextCaller: Hashable, Sendable {
     case sessionSummary(UUID)
     case worktreeName
     case sessionTitle
+    case mergeConflictExplanation
 }
 
 struct LocalTextMessage: Equatable, Sendable {

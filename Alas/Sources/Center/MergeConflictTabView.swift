@@ -69,6 +69,12 @@ struct MergeConflictTabView: View {
                     agentBusy: model.agentBusy,
                     hasAgent: resolvedAgent != nil,
                     hasPendingProposal: model.agentProposal != nil,
+                    explainAvailable: explainer.isAvailable,
+                    canExplain: model.conflictedFile?.isBinary == false && currentBlock.map { block in
+                        model.explanation(for: block) == nil
+                            || dismissedAnnotationKeys.contains(MergeConflictTabModel.conflictKey(for: block))
+                    } == true,
+                    isExplaining: model.explainingKey != nil && model.explainingKey == currentBlockKey,
                     showBase: showBaseBinding,
                     wordDiffMode: Binding(
                         get: { model.wordDiffMode },
@@ -77,6 +83,13 @@ struct MergeConflictTabView: View {
                     baseAvailable: model.hasBase,
                     onPrevious: { model.previousConflict() },
                     onNext: { model.nextConflict() },
+                    onExplain: {
+                        if let key = currentBlockKey {
+                            dismissedAnnotationKeys.remove(key)
+                        }
+                        let explainer = explainer
+                        Task { await model.explainCurrentConflict(using: explainer) }
+                    },
                     onAskAgentResolve: {
                         guard let agent = resolvedAgent else { return }
                         let template = state.config.changes.mergeSingleResolvePrompt
@@ -108,12 +121,19 @@ struct MergeConflictTabView: View {
                         }
                     }
                 )
-                if let annotation = currentBlockAnnotation,
-                   !annotation.isEmpty,
-                   let key = currentBlockKey {
+                if let block = currentBlock,
+                   let ordinal = model.currentConflictIndex,
+                   let explanation = model.explanation(for: block) {
                     MergeConflictAnnotationStrip(
-                        annotation: annotation,
-                        conflictKey: key,
+                        explanation: explanation,
+                        citation: MergeConflictExplanationPolicy.citation(
+                            conflictNumber: ordinal + 1,
+                            conflictCount: model.conflictCount,
+                            lineRange: block.lineRangeInMerged
+                        ),
+                        localLabel: block.localLabel,
+                        remoteLabel: block.remoteLabel,
+                        conflictKey: MergeConflictTabModel.conflictKey(for: block),
                         dismissedKeys: $dismissedAnnotationKeys
                     )
                 }
@@ -140,18 +160,12 @@ struct MergeConflictTabView: View {
         // resultText/regions from the prior conflict.
         .task(id: agentAvailabilityTaskID) {
             await state.loadAgentAvailability(for: worktree)
-            triggerExplainIfNeeded()
         }
         .task {
             await model.load()
-            // Kick off the first annotation fetch directly after load. The
-            // `.onChange` hooks on `body3Columns` don't fire on initial
-            // insertion, so without this call a single-conflict file
-            // (where currentConflictIndex stays at 0 forever) would never
-            // get auto-explained.
-            triggerExplainIfNeeded()
             onStartupRecoveryReady()
         }
+        .onDisappear { model.cancelExplanation() }
     }
 
     @ViewBuilder
@@ -202,31 +216,6 @@ struct MergeConflictTabView: View {
                 while (model.currentConflictIndex ?? 0) > idx { model.previousConflict() }
             }
         )
-        .onChange(of: model.currentConflictIndex) { _, _ in
-            triggerExplainIfNeeded()
-        }
-        .onChange(of: model.loadCompletionGeneration) { _, _ in
-            triggerExplainIfNeeded()
-        }
-    }
-
-    /// Fires `explainCurrentConflict` for the current conflict if there's
-    /// an agent configured, a current conflict, and no cached annotation.
-    /// The model dedupes against in-flight requests for the same block, so
-    /// repeated calls from multiple `.onChange` hooks are safe.
-    private func triggerExplainIfNeeded() {
-        guard let agent = resolvedAgent,
-              let ord = model.currentConflictIndex,
-              let block = currentConflictBlock(at: ord),
-              model.annotation(for: block) == nil
-        else { return }
-        Task {
-            await model.explainCurrentConflict(
-                using: agent,
-                language: fileLanguage,
-                target: agentExecutionTarget
-            )
-        }
     }
 
     private var fileExtension: String {
@@ -239,8 +228,6 @@ struct MergeConflictTabView: View {
     /// "none" (AI disabled) or when no agents are configured.
     private var resolvedAgent: AgentDefinition? {
         let id = state.config.changes.aiToolId
-        // Explicit "none" means the user disabled AI: respect that and never
-        // auto-fire agent calls (auto-explain on conflict change, etc.).
         if id == "none" { return nil }
         let agents = state.agentAvailability(for: worktree).agents
         if !id.isEmpty, let agent = agents.first(where: { $0.id == id }) {
@@ -267,30 +254,16 @@ struct MergeConflictTabView: View {
         return ext.isEmpty ? nil : ext
     }
 
-    /// Annotation for the conflict the cursor is currently on, looked up by
-    /// block-content identity (not ordinal) so it survives resolutions that
-    /// renumber later conflicts.
-    private var currentBlockAnnotation: String? {
-        guard let ord = model.currentConflictIndex,
-              let block = currentConflictBlock(at: ord)
-        else { return nil }
-        return model.annotation(for: block)
+    private var explainer: MergeConflictExplainer {
+        state.makeMergeConflictExplainer()
     }
 
-    /// Identity for the current conflict block, used as the strip's
-    /// dismissal key. Matches the content-hash key the model uses for
-    /// caching annotations (`MergeConflictTabModel.annotationKey(for:)`)
-    /// so dismissals survive positional shifts — edits above the block,
-    /// resolving earlier conflicts — the same way the cached annotation
-    /// itself does. Two blocks with byte-identical LOCAL/BASE/REMOTE
-    /// in the same file share both the cached explanation and the
-    /// dismissal state, which is consistent: the annotation cache is
-    /// already aliased, so the dismissal aliases too.
+    private var currentBlock: ConflictBlock? {
+        model.currentConflictIndex.flatMap(currentConflictBlock(at:))
+    }
+
     private var currentBlockKey: String? {
-        guard let ord = model.currentConflictIndex,
-              let block = currentConflictBlock(at: ord)
-        else { return nil }
-        return MergeConflictTabModel.annotationKey(for: block)
+        currentBlock.map(MergeConflictTabModel.conflictKey(for:))
     }
 
     /// Returns the `ConflictBlock` for the Nth unresolved conflict, or nil.

@@ -23,11 +23,12 @@ final class MergeConflictTabModel {
     /// elsewhere while this tab stayed open). Drives the empty-state
     /// pane rendering — distinct from a generic load failure.
     private(set) var notInConflictedState: Bool = false
-    /// Per-conflict-block one-line annotation populated by the agent.
-    /// Keyed by a stable identity derived from the conflict's three sides
-    /// (NOT by ordinal — ordinals shift when prior conflicts are resolved).
-    /// Cleared on `load()`.
-    private(set) var annotations: [String: String] = [:]
+    /// Advisory local-model explanations keyed by `conflictKey(for:)`, so an
+    /// explanation follows its hunk when earlier conflicts are resolved and
+    /// disappears as soon as the hunk's content changes. Cleared on `load()`.
+    private(set) var explanations: [String: MergeConflictExplanation] = [:]
+    /// Key of the hunk whose explanation is being generated, if any.
+    private(set) var explainingKey: String?
     /// Conflict count at the moment `load()` last succeeded. Used by the
     /// minimap to show progress (resolved vs total). Cleared (set to 0)
     /// on `load()` failure.
@@ -41,19 +42,8 @@ final class MergeConflictTabModel {
     /// finishes (e.g. file no longer conflicted).
     private(set) var loadGeneration: Int = 0
 
-    /// Increments after `load()` has committed its new state to the model
-    /// (success OR failure). Used by view-side reload triggers that need
-    /// to read the post-load `regions` / `currentConflictIndex` to dispatch
-    /// further work (e.g. auto-explain). Distinct from `loadGeneration`
-    /// because firing on the start-of-load value would read stale state.
-    private(set) var loadCompletionGeneration: Int = 0
-
-    /// Block keys for which an `explainCurrentConflict` request is currently
-    /// in flight. Prevents duplicate agent dispatches when both an
-    /// `onChange(currentConflictIndex)` and an `onChange(loadGeneration)`
-    /// view-hook fire for the same conflict in the same render cycle.
     @ObservationIgnored
-    private var explainInFlight: Set<String> = []
+    private var explanationTask: Task<MergeConflictExplanation?, Never>?
 
     /// Set while a `MergeAgent` request is in flight. Drives toolbar disabled-state.
     private(set) var agentBusy: Bool = false
@@ -113,7 +103,7 @@ final class MergeConflictTabModel {
     /// into the model after we've cleared everything.
     func load() async {
         loadGeneration += 1
-        explainInFlight.removeAll()
+        cancelExplanation()
         do {
             let file = try await gitService.conflictedFile(
                 worktreePath: worktreePath,
@@ -124,7 +114,7 @@ final class MergeConflictTabModel {
             self.regions = ConflictMarkerParser.parse(file.merged)
             self.currentConflictIndex = firstConflictIndex()
             self.initialConflictCount = self.conflictCount
-            self.annotations = [:]
+            self.explanations = [:]
             self.agentProposal = nil
             self.agentBusy = false
             self.loadError = nil
@@ -135,7 +125,7 @@ final class MergeConflictTabModel {
             self.resultText = ""
             self.currentConflictIndex = nil
             self.initialConflictCount = 0
-            self.annotations = [:]
+            self.explanations = [:]
             self.agentProposal = nil
             self.agentBusy = false
             self.loadError = (error as? LocalizedError)?.errorDescription
@@ -147,15 +137,18 @@ final class MergeConflictTabModel {
             }
             logger.error("merge-conflict load failed: \(self.loadError ?? "", privacy: .public)")
         }
-        // Bump AFTER state is committed so view-side reload triggers read
-        // post-load `regions` / `currentConflictIndex` (not stale values).
-        loadCompletionGeneration += 1
     }
 
     /// Re-parses `resultText` and updates `regions` + `currentConflictIndex`.
     /// Call after any mutation of `resultText` (typed by user or via accept actions).
     func reparse() {
         regions = ConflictMarkerParser.parse(resultText)
+        if let explainingKey, !regions.contains(where: { region in
+            if case .conflict(let block) = region { return Self.conflictKey(for: block) == explainingKey }
+            return false
+        }) {
+            cancelExplanation()
+        }
         let total = conflictCount
         guard total > 0 else {
             currentConflictIndex = nil
@@ -963,71 +956,54 @@ final class MergeConflictTabModel {
         return text.hasSuffix("\n") ? parts.count - 1 : parts.count
     }
 
-    /// Deterministic stable identity for a `ConflictBlock`. Used as the key
-    /// for `annotations` so cached explanations follow the block when other
-    /// conflicts get resolved and the ordinal numbering shifts.
-    static func annotationKey(for block: ConflictBlock) -> String {
+    /// Deterministic identity for a hunk's content. Explanations and strip
+    /// dismissals follow the hunk when earlier conflicts are resolved.
+    static func conflictKey(for block: ConflictBlock) -> String {
         "\(block.local)\n<<<<<<<<\n\(block.base ?? "")\n========\n\(block.remote)"
     }
 
-    /// Records a one-line agent annotation for `block`. Called by
-    /// `MergeConflictTabView` after a successful `MergeAgent.explainConflict`
-    /// round-trip.
-    func setAnnotation(_ text: String, for block: ConflictBlock) {
-        annotations[Self.annotationKey(for: block)] = text
+    func explanation(for block: ConflictBlock) -> MergeConflictExplanation? {
+        explanations[Self.conflictKey(for: block)]
     }
 
-    /// Returns the cached annotation for `block`, or nil if not cached.
-    func annotation(for block: ConflictBlock) -> String? {
-        annotations[Self.annotationKey(for: block)]
-    }
+    // MARK: - Local explanation
 
-    // MARK: - Agent assist
-
-    /// Asks the agent to summarize the current conflict in one sentence and
-    /// caches the result in `annotations`, keyed by block content. No-op if
-    /// there's no current conflict, no agent, the annotation is already
-    /// cached, or a request for the same block is already in flight.
-    /// Errors are silent (no UI).
-    func explainCurrentConflict(using agent: AgentDefinition, language: String?) async {
-        await explainCurrentConflict(using: agent, language: language, target: .local)
-    }
-
-    func explainCurrentConflict(
-        using agent: AgentDefinition,
-        language: String?,
-        target: AgentExecutionTarget
-    ) async {
+    /// Explains the current hunk with the local model. Any reload, or an edit
+    /// that removes the hunk, cancels the request and drops its result.
+    /// Failures leave the model untouched.
+    func explainCurrentConflict(using explainer: MergeConflictExplainer) async {
         guard let ordinal = currentConflictIndex,
               let regionIdx = conflictRegionIndex(forConflictOrdinal: ordinal),
               case .conflict(let block) = regions[regionIdx]
         else { return }
-        let key = Self.annotationKey(for: block)
-        // De-dupe: cache hit or already-in-flight for the same block → bail.
-        guard annotations[key] == nil, !explainInFlight.contains(key) else { return }
-        explainInFlight.insert(key)
-        defer { explainInFlight.remove(key) }
-        do {
-            let sentence = try await MergeAgent.explainConflict(
-                agent: agent,
-                block: block,
-                language: language,
-                target: target,
-                workingDirectory: worktreePath.path
-            )
-            if !sentence.isEmpty {
-                setAnnotation(sentence, for: block)
-            }
-        } catch let runError as AgentRunError {
-            if case .binaryNotFound = runError,
-               case .ssh = target {
-                await agentBinaryUnavailable(target)
-            }
-            logger.error("explain failed: \(runError.localizedDescription, privacy: .public)")
-        } catch {
-            logger.error("explain failed: \(error.localizedDescription, privacy: .public)")
+        let key = Self.conflictKey(for: block)
+        guard explanations[key] == nil, explainingKey != key else { return }
+        cancelExplanation()
+        let input = MergeConflictExplanationInput(
+            path: relativePath,
+            conflictNumber: ordinal + 1,
+            conflictCount: conflictCount,
+            block: block
+        )
+        let task = Task { await explainer.explain(input) }
+        explanationTask = task
+        explainingKey = key
+        let explanation = await task.value
+        guard explanationTask == task else { return }
+        explanationTask = nil
+        explainingKey = nil
+        if let explanation {
+            explanations[key] = explanation
         }
     }
+
+    func cancelExplanation() {
+        explanationTask?.cancel()
+        explanationTask = nil
+        explainingKey = nil
+    }
+
+    // MARK: - Agent assist
 
     /// Asks the agent to propose a full-file resolution. On success, stashes
     /// the proposal in `agentProposal` for the view to render as a diff
