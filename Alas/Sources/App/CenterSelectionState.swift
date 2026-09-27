@@ -7,6 +7,13 @@ enum CenterSelectionState: Equatable {
     case creating(Worktree)
     case loadingProject
     case empty
+
+    var isLoading: Bool {
+        switch self {
+        case .creating, .loadingProject: true
+        default: false
+        }
+    }
 }
 
 struct CheckoutFocusedWorktreeScope: Equatable, Sendable {

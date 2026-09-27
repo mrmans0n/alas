@@ -22,14 +22,7 @@ struct WelcomeSky: View {
 }
 
 final class WelcomeFlock {
-    private typealias V = SIMD2<Double>
-
-    private struct Bird {
-        var p: V
-        var v: V
-        var phase: Double
-        var layer: Int
-    }
+    private typealias V = Boids.V
 
     private struct Star {
         var p: V
@@ -46,17 +39,16 @@ final class WelcomeFlock {
     static let buttonOffset: CGFloat = 70
     static let buttonCornerRadius: CGFloat = 7
 
-    private var birds: [Bird] = []
+    private var flock = Boids()
     private var stars: [Star] = []
     private var lastTime: Double?
     private var size = CGSize.zero
 
     private static let birdCount = 320
-    private static let layerScale: [Double] = [0.75, 1.0, 1.3]
 
     func step(to t: Double, in size: CGSize) {
         guard size.width > 0, size.height > 0 else { return }
-        if birds.isEmpty || self.size != size { seed(size) }
+        if flock.birds.isEmpty || self.size != size { seed(size) }
         let dt = min(max(t - (lastTime ?? t), 0), 1.0 / 30)
         lastTime = t
         guard dt > 0 else { return }
@@ -65,45 +57,7 @@ final class WelcomeFlock {
         // Lissajous attractor sweeps the flock across the sky.
         let goal = V(w * (0.5 + 0.34 * sin(t * 0.13) * cos(t * 0.051)),
                      h * (0.5 + 0.14 * sin(t * 0.19 + 1.3)))
-        let mouse = cursor.map { V($0.x, $0.y) }
-
-        // ponytail: O(n²) neighbor scan, fine at ~300 birds; add a grid if the count grows.
-        var next = birds
-        for i in birds.indices {
-            let b = birds[i]
-            var align = V.zero, center = V.zero, separate = V.zero
-            var neighbors = 0.0
-            for j in birds.indices where j != i {
-                let d = birds[j].p - b.p
-                let d2 = (d * d).sum()
-                guard d2 < 50 * 50 else { continue }
-                neighbors += 1
-                align += birds[j].v
-                center += d
-                if d2 < 14 * 14 { separate -= d / max(d2, 1) }
-            }
-            var a = V.zero
-            if neighbors > 0 {
-                a += (align / neighbors - b.v) * 1.1
-                a += center / neighbors * 0.9
-            }
-            a += separate * 1100
-            let toGoal = goal - b.p
-            a += toGoal / max(length(toGoal), 1) * 55
-            if let mouse {
-                let away = b.p - mouse
-                let dist = length(away)
-                if dist < 160 { a += away / max(dist, 1) * 1400 * (1 - dist / 160) }
-            }
-
-            var v = b.v + a * dt
-            let speed = length(v)
-            v = v / max(speed, 0.001) * min(max(speed, 70), 170)
-            next[i].v = v
-            next[i].p = b.p + v * dt
-            next[i].phase += dt * (9 + speed / 25)
-        }
-        birds = next
+        flock.step(dt: dt, goal: goal, flee: cursor.map { V($0.x, $0.y) })
     }
 
     func draw(in ctx: inout GraphicsContext, size: CGSize, time t: Double) {
@@ -162,24 +116,7 @@ final class WelcomeFlock {
         subheadline.shading = .color(.white.opacity(0.7))
         ctx.draw(subheadline, at: CGPoint(x: w / 2, y: anchor.minY - 58))
 
-        var wings = Array(repeating: Path(), count: Self.layerScale.count)
-        for b in birds {
-            let s = 3.2 * Self.layerScale[b.layer]
-            let heading = b.v / max(length(b.v), 0.001)
-            let side = V(-heading.y, heading.x)
-            let flap = V(0, -sin(b.phase) * s * 0.9)
-            let back = b.p - heading * s * 0.5
-            let left = back + side * s * 1.7 + flap
-            let right = back - side * s * 1.7 + flap
-            wings[b.layer].move(to: CGPoint(x: left.x, y: left.y))
-            wings[b.layer].addLine(to: CGPoint(x: b.p.x, y: b.p.y))
-            wings[b.layer].addLine(to: CGPoint(x: right.x, y: right.y))
-        }
-        for (layer, path) in wings.enumerated() {
-            let scale = Self.layerScale[layer]
-            ctx.stroke(path, with: .color(Color(red: 0.05, green: 0.03, blue: 0.10).opacity(0.55 + 0.3 * scale / 1.3)),
-                       style: StrokeStyle(lineWidth: 1.1 * scale, lineCap: .round, lineJoin: .round))
-        }
+        flock.drawWings(in: &ctx, color: Color(red: 0.05, green: 0.03, blue: 0.10))
     }
 
     /// Headline lit by the dusk: warm light from the sun below, cool sky on
@@ -224,35 +161,19 @@ final class WelcomeFlock {
 
     private func drawRidge(in ctx: inout GraphicsContext, size: CGSize, base: Double, amp: Double,
                            drift: Double, seed: Double, color: Color) {
-        let w = size.width, h = size.height
-        var path = Path()
-        path.move(to: CGPoint(x: 0, y: h))
-        for x in stride(from: 0.0, through: w, by: 6) {
-            let u = (x + drift) / w
-            let y = h * (base - amp * (sin(u * 7 + seed) * 0.6 + sin(u * 17 + seed * 2) * 0.3 + sin(u * 41) * 0.1))
-            path.addLine(to: CGPoint(x: x, y: y))
-        }
-        path.addLine(to: CGPoint(x: w, y: h))
-        path.closeSubpath()
-        ctx.fill(path, with: .color(color))
+        ctx.fill(Boids.ridge(size: size, base: base, amp: amp, drift: drift, seed: seed), with: .color(color))
     }
 
     private func seed(_ size: CGSize) {
         let w = size.width, h = size.height
-        let startBirds = self.size == .zero || birds.isEmpty
+        let startBirds = self.size == .zero || flock.birds.isEmpty
         self.size = size
         stars = (0..<160).map { _ in
             Star(p: V(.random(in: 0...w), .random(in: 0...(h * 0.6))),
                  size: .random(in: 0.6...1.8), twinkle: .random(in: 0.5...2.5))
         }
         guard startBirds else { return }
-        birds = (0..<Self.birdCount).map { _ in
-            let angle = Double.random(in: 0..<(2 * .pi))
-            return Bird(p: V(w * 0.5 + .random(in: -120...120), h * 0.35 + .random(in: -60...60)),
-                        v: V(cos(angle), sin(angle)) * 110,
-                        phase: .random(in: 0..<(2 * .pi)),
-                        layer: Int.random(in: 0..<Self.layerScale.count))
-        }
+        flock.seed(count: Self.birdCount, around: V(w * 0.5, h * 0.35), spread: V(120, 60))
     }
 
     private func buttonRect(_ button: CGSize, in size: CGSize) -> CGRect {
@@ -260,6 +181,4 @@ final class WelcomeFlock {
                y: (size.height - button.height) / 2 + Self.buttonOffset,
                width: button.width, height: button.height)
     }
-
-    private func length(_ v: V) -> Double { (v * v).sum().squareRoot() }
 }
