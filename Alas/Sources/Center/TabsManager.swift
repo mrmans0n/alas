@@ -80,6 +80,7 @@ final class TabsManager {
     @ObservationIgnored private var webPreviewBrowsers: [String: WebPreviewBrowser] = [:]
     private var commitPublishSessions: [TabID: CommitPublishSession] = [:]
     @ObservationIgnored var onCommitPublishCompletion: ((String, TabID) -> Void)?
+    @ObservationIgnored var onCreatedReview: ((String, ReviewPRTabState) -> Void)?
     /// Tracks which tab IDs have already had `openExternalDocument` fired so
     /// that cache-hit calls to `externalBuffer` don't double-count the ref.
     private var openedExternalDocs: Set<TabID> = []
@@ -1581,8 +1582,7 @@ final class TabsManager {
         case .draftReviewRequest, .commitEditor: break
         default: return nil
         }
-        var state = ReviewPRTabState(worktreeId: worktreeId, snapshot: snapshot)
-        state.createdAt = Date()
+        let state = ReviewPRTabState(worktreeId: worktreeId, snapshot: snapshot)
         let review = Tab.reviewPR(state)
         if case .draftReviewRequest(var draft) = file.tabs[index], hasDraftReviewComments(draft) {
             if draft.reviewBranchName == (snapshot.local.upstreamBranchName ?? snapshot.local.branchName),
@@ -1600,6 +1600,7 @@ final class TabsManager {
             do {
                 try persistThrowing(file, worktreeId: worktreeId)
                 byWorktree[worktreeId] = file
+                onCreatedReview?(worktreeId, state)
                 return review
             } catch {
                 return nil
@@ -1616,6 +1617,7 @@ final class TabsManager {
         do {
             try persistThrowing(file, worktreeId: worktreeId)
             byWorktree[worktreeId] = file
+            onCreatedReview?(worktreeId, state)
             return review
         } catch {
             return nil

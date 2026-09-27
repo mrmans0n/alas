@@ -368,6 +368,13 @@ final class AppState {
         manager.onCommitPublishCompletion = { [weak self] worktreeId, tabId in
             self?.closedTabHistory.purgeCommitPublishDraft(worktreeID: worktreeId, tabID: tabId)
         }
+        manager.onCreatedReview = { [weak self] worktreeId, review in
+            self?.inAppNotifications.post(
+                "\(review.provider.reviewRequestLabel) \(review.provider == .gitlab ? "!" : "#")\(review.number) created",
+                severity: .success,
+                worktreeID: worktreeId
+            )
+        }
         _tabs = manager
         return manager
     }
