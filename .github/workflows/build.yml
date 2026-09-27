@@ -345,10 +345,13 @@ jobs:
         with:
           # Compiler content-addressed storage only; Xcode rebuilds its graph
           # against this checkout and verifies the actual compilation inputs.
+          # Workflow-only edits must not invalidate the cache. The broad
+          # fallback recovers entries saved under the previous key format.
           path: .build/xcode/CompilationCache.noindex
-          key: swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-compilation-cache-toolchain', 'project.yml', '.github/workflows/build.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-${{ github.sha }}
+          key: swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-compilation-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-${{ github.sha }}
           restore-keys: |
-            swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-compilation-cache-toolchain', 'project.yml', '.github/workflows/build.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-
+            swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-compilation-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-
+            swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build for testing
         timeout-minutes: 30

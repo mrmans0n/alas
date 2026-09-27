@@ -101,9 +101,10 @@ raise "save and restore must use the same compilation cache" unless
 key = restore.fetch("with").fetch("key")
 prefixes = restore.fetch("with").fetch("restore-keys").lines.map(&:strip)
 raise "cache fallback must retain all compatibility inputs" unless
-  prefixes == [key.delete_suffix("${{ github.sha }}")] &&
+  prefixes == [key.delete_suffix("${{ github.sha }}"), "swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-"] &&
   ["runner.os", "runner.arch", ".xcode-compilation-cache-toolchain", "project.yml",
-   ".github/workflows/build.yml", "Package.resolved"].all? { |input| key.include?(input) }
+   "Package.resolved"].all? { |input| key.include?(input) } &&
+  !key.include?(".github/workflows/build.yml")
 raise "restore before building and save only a successful build" unless
   builder_steps.index(restore) < builder_steps.index(build) &&
   builder_steps.index(save) > builder_steps.index(build) &&

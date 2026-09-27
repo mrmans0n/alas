@@ -222,8 +222,10 @@ new assignments gives 633.93s and 633.22s, compared with 900.79s and 366.36s und
 the original assignments. This is a scheduling simulation, not a measured CI
 speedup. All 52 invocation selections, their timeout limits, and test coverage
 are unchanged in the replay. Validate the improvement on source-changing PRs.
-The workflow is part of the compiler-cache compatibility key, so the first run
-after a workflow edit may need to seed a new cache.
+The compiler-cache compatibility key excludes the workflow file. CI-only edits
+can restore earlier compilation results; Xcode still validates each cached
+compilation against its inputs. A broad architecture fallback bridges caches
+written before the key changed.
 
 The coverage summary compares predicted and observed lane times and reports how
 many invocation estimates came from exact matches, suite groups, or approximations.
