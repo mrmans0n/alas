@@ -6,6 +6,25 @@ import Testing
 
 @Suite(.serialized)
 struct LocalTextInferenceEngineTests {
+    @Test("MLX supports release builds on compatible Apple Silicon", arguments: [
+        ("Debug", "arm64", true, true),
+        ("Release", "arm64", true, true),
+        ("Release", "x86_64", true, false),
+        ("Release", "arm64", false, false),
+    ])
+    func supportPolicy(
+        buildConfiguration: String,
+        machineIdentifier: String,
+        supportsApple7GPU: Bool,
+        expected: Bool
+    ) {
+        #expect(LocalTextInferenceEngine.isSupported(
+            buildConfiguration: buildConfiguration,
+            machineIdentifier: machineIdentifier,
+            supportsApple7GPU: supportsApple7GPU
+        ) == expected)
+    }
+
     @Test func userRequestCancelsAndDrainsAutomaticWorkBeforeStarting() async throws {
         let probe = try LocalTextEngineProbe()
         let engine = probe.engine()

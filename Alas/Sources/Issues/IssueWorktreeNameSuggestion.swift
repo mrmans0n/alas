@@ -1,4 +1,5 @@
 import Foundation
+import FoundationModels
 
 /// Prompt, input bounds, and strict output validation for asking the local
 /// model for a short semantic worktree name. The model only produces the bare
@@ -73,28 +74,155 @@ enum IssueWorktreeNamePolicy {
     }
 }
 
-/// Asks the shared local text engine for a semantic name. Every failure path
-/// (unavailable runtime, timeout, cancellation, invalid output) yields nil so
-/// the caller keeps the deterministic slug.
+/// Uses Apple Intelligence first, then the shared local text engine. Both
+/// backends receive the same bounded request and pass through the same parser.
 struct IssueWorktreeNameSuggester {
+    typealias AppleGenerator = @MainActor @Sendable (LocalTextGenerationRequest) async -> String?
+
     let engine: any LocalTextGenerating
-    let isAvailable: @MainActor () -> Bool
+    let isAppleIntelligenceAvailable: @MainActor @Sendable () -> Bool
+    let generateWithAppleIntelligence: AppleGenerator
+    let isMLXAvailable: @MainActor @Sendable () -> Bool
+    let timeout: Duration
+
+    init(
+        engine: any LocalTextGenerating,
+        isAppleIntelligenceAvailable: @escaping @MainActor @Sendable () -> Bool = { false },
+        generateWithAppleIntelligence: @escaping AppleGenerator = { _ in nil },
+        isMLXAvailable: @escaping @MainActor @Sendable () -> Bool,
+        timeout: Duration = IssueWorktreeNamePolicy.timeout
+    ) {
+        self.engine = engine
+        self.isAppleIntelligenceAvailable = isAppleIntelligenceAvailable
+        self.generateWithAppleIntelligence = generateWithAppleIntelligence
+        self.isMLXAvailable = isMLXAvailable
+        self.timeout = timeout
+    }
 
     @MainActor
     func suggestName(for source: IssueSnapshot) async -> String? {
-        guard isAvailable() else { return nil }
         let request = LocalTextGenerationRequest(
             messageCandidates: IssueWorktreeNamePolicy.messageCandidates(title: source.title, body: source.body),
             inputTokenLimit: IssueWorktreeNamePolicy.inputTokenLimit,
             maxTokens: IssueWorktreeNamePolicy.maxTokens,
             temperature: 0,
             prefillStepSize: 512,
-            timeout: IssueWorktreeNamePolicy.timeout
+            timeout: timeout
         )
-        // Availability can be revoked while generation is pending; a late
-        // result must not land after the enabling capability is gone.
+
+        if isAppleIntelligenceAvailable() {
+            let output = await generateAppleIntelligenceWithTimeout(request)
+            guard !Task.isCancelled else { return nil }
+            if isAppleIntelligenceAvailable(),
+               let output,
+               let name = IssueWorktreeNamePolicy.parse(output, displayReference: source.displayReference) {
+                return name
+            }
+        }
+
+        guard !Task.isCancelled, isMLXAvailable() else { return nil }
         guard let result = try? await engine.generate(request, caller: .worktreeName, priority: .automatic),
-              !Task.isCancelled, isAvailable() else { return nil }
+              !Task.isCancelled, isMLXAvailable() else { return nil }
         return IssueWorktreeNamePolicy.parse(result.text, displayReference: source.displayReference)
+    }
+
+    @MainActor
+    private func generateAppleIntelligenceWithTimeout(_ request: LocalTextGenerationRequest) async -> String? {
+        let race = AppleGenerationRace()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                race.start(
+                    request: request,
+                    generator: generateWithAppleIntelligence,
+                    continuation: continuation
+                )
+            }
+        } onCancel: {
+            Task { @MainActor in race.finish(nil) }
+        }
+    }
+}
+
+@MainActor
+private final class AppleGenerationRace {
+    private var continuation: CheckedContinuation<String?, Never>?
+    private var generationTask: Task<Void, Never>?
+    private var timeoutTask: Task<Void, Never>?
+    private var finished = false
+
+    func start(
+        request: LocalTextGenerationRequest,
+        generator: @escaping IssueWorktreeNameSuggester.AppleGenerator,
+        continuation: CheckedContinuation<String?, Never>
+    ) {
+        guard !finished else {
+            continuation.resume(returning: nil)
+            return
+        }
+        self.continuation = continuation
+        generationTask = Task { [weak self] in
+            let output = await generator(request)
+            self?.finish(output)
+        }
+        timeoutTask = Task { [weak self] in
+            do {
+                try await ContinuousClock().sleep(for: request.timeout)
+                self?.finish(nil)
+            } catch {}
+        }
+    }
+
+    func finish(_ output: String?) {
+        guard !finished else { return }
+        finished = true
+        let continuation = self.continuation
+        self.continuation = nil
+        generationTask?.cancel()
+        timeoutTask?.cancel()
+        generationTask = nil
+        timeoutTask = nil
+        continuation?.resume(returning: output)
+    }
+}
+
+enum IssueWorktreeNameAppleIntelligence {
+    @MainActor
+    static var isAvailable: Bool {
+        guard #available(macOS 26.0, *) else { return false }
+        let model = SystemLanguageModel.default
+        return model.isAvailable && model.supportsLocale(Locale.current)
+    }
+
+    @MainActor
+    static func generate(_ request: LocalTextGenerationRequest) async -> String? {
+        guard #available(macOS 26.0, *) else { return nil }
+        let model = SystemLanguageModel.default
+        guard model.isAvailable, model.supportsLocale(Locale.current) else { return nil }
+
+        // Foundation Models doesn't expose token counting on this SDK. UTF-8
+        // bytes are a conservative upper bound, so choose the most detailed
+        // shared candidate that stays within the same input budget.
+        guard let messages = request.messageCandidates.first(where: { messages in
+            messages.reduce(0) { $0 + $1.content.utf8.count } <= request.inputTokenLimit
+        }),
+              let instructions = messages.first(where: { $0.role == .system })?.content,
+              let prompt = messages.first(where: { $0.role == .user })?.content
+        else { return nil }
+
+        let session = LanguageModelSession(model: model, tools: [], instructions: instructions)
+        do {
+            let response = try await session.respond(
+                to: prompt,
+                options: GenerationOptions(
+                    temperature: Double(request.temperature),
+                    maximumResponseTokens: request.maxTokens
+                )
+            )
+            guard !Task.isCancelled else { return nil }
+            return response.content
+        } catch {
+            guard !Task.isCancelled else { return nil }
+            return nil
+        }
     }
 }

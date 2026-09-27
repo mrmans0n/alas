@@ -170,6 +170,33 @@ struct CheckpointRestorePreviewTests {
         #expect(try repo.disk(".git/index.lock") == Data("locked".utf8))
     }
 
+    @Test func repositoryPathContainingNewlineStillPreviewsAndBlocksOnMarkers() async throws {
+        let repo = try await CheckpointTestRepository.makeFromTemplate(directorySuffix: "\nline")
+        defer { repo.remove() }
+        try repo.write("saved", to: "file.txt")
+        let service = WorktreeCheckpointService(store: .init(root: repo.root.appendingPathComponent(".git/checkpoints")))
+        let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
+        #expect(try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear).blocker == nil)
+        try repo.write("merging", to: ".git/MERGE_HEAD")
+        #expect(try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear).blocker == .gitOperation)
+    }
+
+    @Test(arguments: CheckpointGitPaths.operationMarkerNames)
+    func gitOperationMarkerBlocksOnlyItsOwnLinkedWorktree(marker: String) async throws {
+        let main = try await CheckpointTestRepository.makeFromTemplate()
+        defer { main.remove() }
+        let linked = try await main.addLinkedWorktree()
+        defer { linked.remove() }
+        let service = WorktreeCheckpointService(store: .init(root: main.root.appendingPathComponent(".git/checkpoints")))
+        let checkpoint = try await service.createManual(target: linked.target, label: "Clean")
+
+        try main.write("main worktree operation", to: ".git/\(marker)")
+        #expect(try await service.restorePreview(target: linked.target, id: checkpoint.id, coordination: .clear).blocker == nil)
+
+        try Data("linked worktree operation".utf8).write(to: main.linkedGitDirectory(linked).appendingPathComponent(marker))
+        #expect(try await service.restorePreview(target: linked.target, id: checkpoint.id, coordination: .clear).blocker == .gitOperation)
+    }
+
     @Test func missingPayloadKeepsHigherPriorityBlockersAndDeselection() async throws {
         let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }

@@ -99,12 +99,13 @@ struct CheckpointRestoreTransaction: Sendable {
                                                            expectedIndexChecksum: current.indexChecksum)
             try await store.writeJournal(initialJournal)
             journalWritten = true
-            let originalIndex = try await gitPath("index", target: target)
+            let gitPaths = try await CheckpointGitPaths.resolve(git: git, cwd: target.path)
+            let originalIndex = gitPaths.index
             let originalBytes = FileManager.default.fileExists(atPath: originalIndex.path) ? try fileSystem.fileData(originalIndex) : Data()
             guard digest(originalBytes) == current.indexChecksum else { throw CheckpointRestoreError.stalePreview }
             try fileSystem.writeDurable(originalBytes, to: stagingRoot.appendingPathComponent("original-index"), mode: 0o600)
-            try await makePreparedIndex(at: preparedIndex, target: target, manifest: manifest, current: current,
-                                        selectedPaths: selectedPaths)
+            try await makePreparedIndex(at: preparedIndex, from: originalIndex, target: target, manifest: manifest,
+                                        current: current, selectedPaths: selectedPaths)
             let preparedIndexChecksum = CheckpointBlobReference.make(for: try fileSystem.fileData(preparedIndex)).sha256
 
             var stagingNames: [String: String] = [:]
@@ -149,11 +150,12 @@ struct CheckpointRestoreTransaction: Sendable {
         }
         var beganWrites = false
         do {
-            try await validateJournal(journal, target: target)
-            try await acquireLock(journal: &journal, target: target)
+            let gitPaths = try await validateJournal(journal, target: target)
+            try await acquireLock(journal: &journal, target: target, gitPaths: gitPaths)
             let desired = try await store.load(id: journal.checkpointID, lineageID: target.lineageID)
             let recovery = try await store.load(id: journal.recoveryCheckpointID, lineageID: target.lineageID)
-            let current = try await snapshot(target, journal: journal, including: Set(desired.paths.map(\.relativePath)))
+            let current = try await snapshot(target, journal: journal, including: Set(desired.paths.map(\.relativePath)),
+                                             gitPaths: gitPaths)
             guard current.fingerprint == journal.expectedFingerprint,
                   current.indexChecksum == journal.expectedIndexChecksum,
                   current.headOID == desired.headOID else { throw CheckpointRestoreError.stalePreview }
@@ -190,16 +192,16 @@ struct CheckpointRestoreTransaction: Sendable {
                 try faultInjector.hit(.afterFileMove(path: path))
             }
             try faultInjector.hit(.beforeIndexInstall)
-            try await revalidateIndexAndHead(journal, target: target, head: desired.headOID,
+            try await revalidateIndexAndHead(journal, target: target, index: gitPaths.index, head: desired.headOID,
                                             allowedChecksums: [journal.expectedIndexChecksum])
             let bytes = try fileSystem.fileData(preparation.preparedIndex)
             guard digest(bytes) == journal.preparedIndexChecksum else { throw CheckpointRestoreError.invalidJournal }
-            try await installIndex(bytes, journal: &journal, target: target)
+            try await installIndex(bytes, journal: &journal, target: target, index: gitPaths.index)
             try faultInjector.hit(.afterIndexInstall)
             journal.phase = .verifying
             try await store.writeJournal(journal)
             try faultInjector.hit(.beforeVerification)
-            let after = try await snapshot(target, journal: journal, including: Set(journal.selectedPaths))
+            let after = try await snapshot(target, journal: journal, including: Set(journal.selectedPaths), gitPaths: gitPaths)
             guard after.headOID == desired.headOID else { throw CheckpointRestoreError.stalePreview }
             let saved = Dictionary(uniqueKeysWithValues: desired.paths.map { ($0.relativePath, $0) })
             for path in journal.selectedPaths {
@@ -235,7 +237,7 @@ struct CheckpointRestoreTransaction: Sendable {
               journal.id == operationID, !journal.phase.isTerminal else {
             throw CheckpointRestoreError.invalidJournal
         }
-        try await validateJournal(journal, target: target)
+        _ = try await validateJournal(journal, target: target)
         if coordination.otherGitMutationActive { throw CheckpointRestoreError.blocked(.otherGitMutation) }
         if coordination.activeTerminalCount > 0 || coordination.activeACPCount > 0 { throw CheckpointRestoreError.blocked(.activeSession) }
         if !coordination.dirtyPathsOverlapping(Set(journal.selectedPaths)).isEmpty {
@@ -253,20 +255,19 @@ struct CheckpointRestoreTransaction: Sendable {
     }
 
     private func rollback(_ journal: inout CheckpointRestoreJournal, target: CheckpointWorktreeTarget) async throws {
-        try await validateJournal(journal, target: target)
+        let gitPaths = try await validateJournal(journal, target: target)
         let recovery = try await store.load(id: journal.recoveryCheckpointID, lineageID: target.lineageID)
         let desired = try await store.load(id: journal.checkpointID, lineageID: target.lineageID)
         guard recovery.kind == .recovery, recovery.headOID == desired.headOID,
               Set(recovery.paths.map(\.relativePath)) == Set(journal.selectedPaths) else { throw CheckpointRestoreError.invalidJournal }
-        let index = try await gitPath("index", target: target)
-        let lock = try await gitPath("index.lock", target: target)
-        if try exists(lock) { try validateLock(journal) }
-        else { try await acquireLock(journal: &journal, target: target) }
+        let index = gitPaths.index
+        if try exists(gitPaths.indexLock) { try validateLock(journal) }
+        else { try await acquireLock(journal: &journal, target: target, gitPaths: gitPaths) }
         let indexBytes = try exists(index) ? try fileSystem.fileData(index) : Data()
         guard [journal.expectedIndexChecksum, journal.preparedIndexChecksum].contains(digest(indexBytes)) else {
             throw CheckpointRestoreError.stalePreview
         }
-        let current = try await selectedSnapshot(target, journal: journal)
+        let current = try await selectedSnapshot(target, journal: journal, gitPaths: gitPaths)
         guard current.headOID == recovery.headOID else { throw CheckpointRestoreError.blocked(.changedHEAD) }
         let root = URL(fileURLWithPath: journal.stagingRoot)
         let originalIndex = try fileSystem.fileData(root.appendingPathComponent("original-index"))
@@ -310,12 +311,12 @@ struct CheckpointRestoreTransaction: Sendable {
             }
             try await store.writeJournal(journal)
         }
-        try await revalidateIndexAndHead(journal, target: target, head: recovery.headOID,
+        try await revalidateIndexAndHead(journal, target: target, index: index, head: recovery.headOID,
                                         allowedChecksums: [digest(indexBytes)])
         // Preserve the exact original index bytes, including extensions and stat
         // entries. The recovery manifest independently verifies its selected states.
-        try await installIndex(originalIndex, journal: &journal, target: target)
-        let after = try await selectedSnapshot(target, journal: journal)
+        try await installIndex(originalIndex, journal: &journal, target: target, index: index)
+        let after = try await selectedSnapshot(target, journal: journal, gitPaths: gitPaths)
         for state in recovery.paths {
             guard after.paths[state.relativePath] == state else { throw CheckpointRestoreError.invalidGitOutput }
         }
@@ -324,7 +325,9 @@ struct CheckpointRestoreTransaction: Sendable {
         try await finish(&journal, target: target, phase: .recovered)
     }
 
-    private func validateJournal(_ journal: CheckpointRestoreJournal, target: CheckpointWorktreeTarget) async throws {
+    /// Returns the git paths it resolved, for the rest of the same operation.
+    private func validateJournal(_ journal: CheckpointRestoreJournal,
+                                 target: CheckpointWorktreeTarget) async throws -> CheckpointGitPaths {
         guard journal.lineageID == target.lineageID, !journal.phase.isTerminal,
               WorktreeService.existingLocalLineageID(forWorktreeAt: target.path) == target.lineageID,
               journal.stagingRoot == target.path.appendingPathComponent(".alas-checkpoint-restore-\(journal.id.uuidString.lowercased())").path,
@@ -353,12 +356,13 @@ struct CheckpointRestoreTransaction: Sendable {
                 _ = try stagingName(path, journal: journal)
             }
         }
+        let gitPaths = try await CheckpointGitPaths.resolve(git: git, cwd: target.path)
         if let lock = journal.ownedIndexLockPath {
-            guard lock == (try await gitPath("index.lock", target: target)).path else { throw CheckpointRestoreError.invalidJournal }
+            guard lock == gitPaths.indexLock.path else { throw CheckpointRestoreError.invalidJournal }
         }
         if let pending = journal.pendingIndexLock {
             let candidate = URL(fileURLWithPath: pending.path)
-            let index = try await gitPath("index", target: target)
+            let index = gitPaths.index
             let prefixes = [
                 ".alas-checkpoint-index-\(journal.id.uuidString.lowercased())-",
                 ".alas-checkpoint-index-lock-\(journal.id.uuidString.lowercased())-",
@@ -371,10 +375,10 @@ struct CheckpointRestoreTransaction: Sendable {
                 throw CheckpointRestoreError.invalidJournal
             }
         }
-        for marker in ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"] {
-            let path = try await gitPath(marker, target: target)
-            if FileManager.default.fileExists(atPath: path.path) { throw CheckpointRestoreError.blocked(.gitOperation) }
+        for marker in gitPaths.operationMarkers where FileManager.default.fileExists(atPath: marker.path) {
+            throw CheckpointRestoreError.blocked(.gitOperation)
         }
+        return gitPaths
     }
 
     private func containsReservedRestoreDirectory(_ path: String) -> Bool {
@@ -385,18 +389,19 @@ struct CheckpointRestoreTransaction: Sendable {
     }
 
     private func snapshot(_ target: CheckpointWorktreeTarget, journal: CheckpointRestoreJournal,
-                          including paths: Set<String>) async throws -> WorktreeStateSnapshot {
+                          including paths: Set<String>, gitPaths: CheckpointGitPaths) async throws -> WorktreeStateSnapshot {
         try await WorktreeStateSnapshotter(git: git, fileSystem: fileSystem)
-            .snapshot(target: target, includingPaths: paths, ignoringRestoreOperation: journal.id)
+            .snapshot(target: target, includingPaths: paths, ignoringRestoreOperation: journal.id, gitPaths: gitPaths)
     }
 
-    private func selectedSnapshot(_ target: CheckpointWorktreeTarget, journal: CheckpointRestoreJournal) async throws -> WorktreeStateSnapshot {
+    private func selectedSnapshot(_ target: CheckpointWorktreeTarget, journal: CheckpointRestoreJournal,
+                                  gitPaths: CheckpointGitPaths) async throws -> WorktreeStateSnapshot {
         try await WorktreeStateSnapshotter(git: git, fileSystem: fileSystem)
-            .snapshot(target: target, includingPaths: Set(journal.selectedPaths), onlyIncludedPaths: true)
+            .snapshot(target: target, includingPaths: Set(journal.selectedPaths), onlyIncludedPaths: true, gitPaths: gitPaths)
     }
 
     private func revalidateIndexAndHead(_ journal: CheckpointRestoreJournal, target: CheckpointWorktreeTarget,
-                                       head: String, allowedChecksums: Set<String>) async throws {
+                                       index: URL, head: String, allowedChecksums: Set<String>) async throws {
         try validateLock(journal)
         guard WorktreeService.existingLocalLineageID(forWorktreeAt: target.path) == target.lineageID else {
             throw CheckpointRestoreError.blocked(.lineageMismatch)
@@ -405,14 +410,14 @@ struct CheckpointRestoreTransaction: Sendable {
         guard currentHead == head else {
             throw CheckpointRestoreError.blocked(.changedHEAD)
         }
-        let index = try await gitPath("index", target: target)
         let bytes = try exists(index) ? try fileSystem.fileData(index) : Data()
         guard allowedChecksums.contains(digest(bytes)) else { throw CheckpointRestoreError.stalePreview }
     }
 
-    private func acquireLock(journal: inout CheckpointRestoreJournal, target: CheckpointWorktreeTarget) async throws {
-        let index = try await gitPath("index", target: target)
-        let lock = try await gitPath("index.lock", target: target)
+    private func acquireLock(journal: inout CheckpointRestoreJournal, target: CheckpointWorktreeTarget,
+                             gitPaths: CheckpointGitPaths) async throws {
+        let index = gitPaths.index
+        let lock = gitPaths.indexLock
         _ = try fileSystem.list(lock.deletingLastPathComponent())
         let candidate = try makeEmptyIndexLockCandidate(index: index, operationID: journal.id)
         do {
@@ -459,9 +464,9 @@ struct CheckpointRestoreTransaction: Sendable {
         }
     }
 
-    private func installIndex(_ bytes: Data, journal: inout CheckpointRestoreJournal, target: CheckpointWorktreeTarget) async throws {
+    private func installIndex(_ bytes: Data, journal: inout CheckpointRestoreJournal, target: CheckpointWorktreeTarget,
+                              index: URL) async throws {
         try validateLock(journal)
-        let index = try await gitPath("index", target: target)
         guard let path = journal.ownedIndexLockPath else { throw CheckpointRestoreError.invalidJournal }
         let lock = URL(fileURLWithPath: path)
         // A previous handoff may have completed before ownership promotion was
@@ -734,10 +739,9 @@ struct CheckpointRestoreTransaction: Sendable {
         .recoveryRequired(operationID: journal.id, paths: journal.selectedPaths, phase: journal.phase)
     }
 
-    private func makePreparedIndex(at preparedIndex: URL, target: CheckpointWorktreeTarget,
+    private func makePreparedIndex(at preparedIndex: URL, from indexPath: URL, target: CheckpointWorktreeTarget,
                                    manifest: WorktreeCheckpointManifest, current: WorktreeStateSnapshot,
                                    selectedPaths: [String]) async throws {
-        let indexPath = try await gitPath("index", target: target)
         if FileManager.default.fileExists(atPath: indexPath.path) {
             try fileSystem.writeDurable(try fileSystem.fileData(indexPath), to: preparedIndex, mode: 0o600)
         } else {
@@ -804,12 +808,6 @@ struct CheckpointRestoreTransaction: Sendable {
             hasher.update(data: chunk)
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
-    private func gitPath(_ name: String, target: CheckpointWorktreeTarget) async throws -> URL {
-        let result = try await git.run(["rev-parse", "--path-format=absolute", "--git-path", name], cwd: target.path, environment: [:])
-        guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
-        return URL(fileURLWithPath: result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private func headOID(_ target: CheckpointWorktreeTarget) async throws -> String {

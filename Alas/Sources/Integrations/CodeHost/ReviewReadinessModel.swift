@@ -59,6 +59,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
             switch kind {
             case .refresh: "arrow.clockwise"
             case .pushBranch: "arrow.up"
+            case .pushAndCreateReviewRequest: "arrow.up"
             case .forcePushBranch: "exclamationmark.arrow.triangle.2.circlepath"
             case .createReviewRequest: "plus"
             case .openReviewRequest: "arrow.up.right.square"
@@ -71,7 +72,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
 
         static func defaultEmphasis(for kind: ReviewReadinessActionKind) -> Emphasis {
             switch kind {
-            case .pushBranch, .forcePushBranch, .createReviewRequest, .inspectReviewEvidence, .merge:
+            case .pushBranch, .pushAndCreateReviewRequest, .forcePushBranch, .createReviewRequest, .inspectReviewEvidence, .merge:
                 .primary
             case .refresh, .openReviewRequest, .rerunFailedChecks, .openAgentHandoff:
                 .normal
@@ -328,7 +329,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
             && (request.worstCheckBucket == nil || request.worstCheckBucket == .pass)
     }
 
-    private static func canCreateReviewRequest(_ snapshot: ReviewLoopSnapshot) -> Bool {
+    static func canCreateReviewRequest(_ snapshot: ReviewLoopSnapshot) -> Bool {
         snapshot.providerCapabilities.canCreateReviewRequest
             && snapshot.local.aheadCommitCount > 0
             && !isLocalBranchSelectedBase(snapshot)
@@ -388,6 +389,7 @@ private extension ReviewRequest {
 enum ReviewReadinessActionKind: String, Codable, Equatable, Sendable {
     case refresh
     case pushBranch
+    case pushAndCreateReviewRequest
     case forcePushBranch
     case createReviewRequest
     case openReviewRequest

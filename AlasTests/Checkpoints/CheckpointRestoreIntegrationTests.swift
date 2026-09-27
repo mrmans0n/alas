@@ -38,6 +38,33 @@ struct CheckpointRestoreIntegrationTests {
         }
     }
 
+    @Test func linkedWorktreeRestoreWritesOnlyItsOwnIndex() async throws {
+        let main = try await CheckpointTestRepository.makeFromTemplate()
+        defer { main.remove() }
+        let root = URL(fileURLWithPath: "/private/tmp/checkpoint-linked-store-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try main.write("baseline\n", to: "file.txt")
+        try await main.commitAll("baseline")
+        let linked = try await main.addLinkedWorktree()
+        defer { linked.remove() }
+        try linked.write("saved index\n", to: "file.txt")
+        try await linked.stage("file.txt")
+        try linked.write("saved disk\n", to: "file.txt")
+        let service = WorktreeCheckpointService(store: .init(root: root))
+        let checkpoint = try await service.createManual(target: linked.target, label: "Saved")
+        try await linked.git(["restore", "--source=HEAD", "--staged", "--worktree", "file.txt"])
+
+        let preview = try await service.restorePreview(target: linked.target, id: checkpoint.id, coordination: .clear)
+        #expect(preview.blocker == nil)
+        _ = try await service.restore(target: linked.target, preview: preview, selectedGroupIDs: preview.selectedGroupIDs,
+                                      coordination: .clear)
+
+        #expect(try await linked.index("file.txt") == Data("saved index\n".utf8))
+        #expect(try linked.disk("file.txt") == Data("saved disk\n".utf8))
+        #expect(try await main.index("file.txt") == Data("baseline\n".utf8))
+        #expect(!FileManager.default.fileExists(atPath: main.linkedGitDirectory(linked).appendingPathComponent("index.lock").path))
+    }
+
     @Test func restoreReplacesTrackedFileToDirectoryTransition() async throws {
         let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
@@ -215,9 +242,9 @@ extension CheckpointTestRepository {
     /// Equivalent to `make()` — a real repository with the same config and seed
     /// commit, and a fresh lineage — but copied from a template instead of
     /// spawning seven `git` processes per test.
-    static func makeFromTemplate() async throws -> Self {
+    static func makeFromTemplate(directorySuffix: String = "") async throws -> Self {
         let template = try await CheckpointRepositoryTemplate.ready.value
-        let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-test-\(UUID().uuidString)")
+        let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-test-\(UUID().uuidString)\(directorySuffix)")
         do {
             try FileManager.default.copyItem(at: template, to: root)
             let lineage = try #require(WorktreeService.localLineageID(forWorktreeAt: root))

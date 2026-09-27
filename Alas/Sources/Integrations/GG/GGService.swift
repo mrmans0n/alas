@@ -165,9 +165,11 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             process.executableURL = URL(fileURLWithPath: "/bin/sh")
             // Job control assigns the gated child its own process group before
             // exec; the outer shell only reports its PID and waits for it.
+            // Keep the child's stderr, but suppress the outer shell's harmless
+            // setpgid race warning so it cannot become part of a command error.
             process.arguments = [
                 "-c",
-                #"set -m; /bin/sh -c 'IFS= read -r _ || exit; exec "$@"' alas-launch-gate "$@" & child=$!; set +m; printf '%s\n' "$child"; wait "$child"; exit $?"#,
+                #"exec 3>&2 2>/dev/null; set -m; /bin/sh -c 'IFS= read -r _ || exit; exec "$@"' alas-launch-gate "$@" 2>&3 3>&- & child=$!; set +m; exec 3>&-; printf '%s\n' "$child"; wait "$child"; exit $?"#,
                 "alas-launch-wrapper-\(processTreeID)",
                 executable,
             ] + args

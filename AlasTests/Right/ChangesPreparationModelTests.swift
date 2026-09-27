@@ -80,6 +80,44 @@ struct ChangesPreparationModelTests {
         )
     }
 
+    @Test(arguments: ["PR", "MR"])
+    func unpushedBranchOffersPushAndDraftReviewRequest(_ label: String) {
+        let model = ChangesPreparationModel(
+            changes: [], hasDraft: false, draftNonEmpty: false,
+            aheadCommitCount: 1,
+            readinessActions: [Action(kind: .pushBranch, title: "Push", isEnabled: true)],
+            pushAndCreateReviewRequestLabel: label
+        )
+
+        #expect(model.reviewRequestActions.map(\.kind) == [.pushBranch, .pushAndCreateReviewRequest])
+        #expect(model.reviewRequestActions.map(\.title) == ["Push", "Push & create \(label)"])
+    }
+
+    @Test func pushAndCreateReviewRequestNeedsAUsefulPushAction() {
+        let model = ChangesPreparationModel(
+            changes: [], hasDraft: false, draftNonEmpty: false,
+            aheadCommitCount: 0,
+            readinessActions: [Action(kind: .pushBranch, title: "Push", isEnabled: true)],
+            pushAndCreateReviewRequestLabel: "PR"
+        )
+
+        #expect(model.reviewRequestActions.isEmpty)
+    }
+
+    @Test func pushAndCreateReviewRequestRemainsVisibleWhileRunning() {
+        let model = ChangesPreparationModel(
+            changes: [], hasDraft: false, draftNonEmpty: false,
+            aheadCommitCount: 1,
+            readinessActions: [Action(kind: .pushBranch, title: "Push", isEnabled: false)],
+            pushAndCreateReviewRequestLabel: "PR",
+            pushAndCreateReviewRequestInFlight: true
+        )
+
+        #expect(model.reviewRequestActions.map(\.kind) == [.pushAndCreateReviewRequest])
+        #expect(model.reviewRequestActions.first?.isInFlight == true)
+        #expect(model.reviewRequestActions.first?.isEnabled == false)
+    }
+
     @Test func greenMergePairsMergeAndReviewDiff() {
         let model = makeModel(actions: [
             Action(kind: .merge, title: "Merge PR", isEnabled: true),

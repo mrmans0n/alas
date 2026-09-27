@@ -68,18 +68,131 @@ struct IssueWorktreeNameSuggestionTests {
     }
 
     @Test @MainActor
-    func availabilityRevokedDuringGenerationDiscardsAValidName() async {
+    func appleIntelligenceWinsWhenAvailable() async {
         let availability = Availability()
-        let engine = CannedEngine(outcome: .success(#"{"name": "offline-sync"}"#)) {
-            // The last enabling capability turns off while inference is pending.
-            await MainActor.run { availability.isAvailable = false }
+        let apple = CannedAppleGenerator(output: #"{"name": "apple-generated-name"}"#)
+        let engine = CannedEngine(outcome: .success(#"{"name": "mlx-generated-name"}"#))
+        let suggester = IssueWorktreeNameSuggester(
+            engine: engine,
+            isAppleIntelligenceAvailable: { availability.isAppleAvailable },
+            generateWithAppleIntelligence: { request in await apple.generate(request) },
+            isMLXAvailable: { availability.isMLXAvailable }
+        )
+
+        let name = await suggester.suggestName(for: Self.source)
+
+        #expect(name == "apple-generated-name")
+        #expect(await apple.calls == 1)
+        #expect(await engine.calls == 0)
+    }
+
+    @Test(arguments: [
+        // Apple unavailable, Apple generation failed, and Apple returned an invalid payload.
+        (false, #"{"name": "unused-apple-name"}"# as String?, 0),
+        (true, nil, 1),
+        (true, "not json", 1),
+    ])
+    @MainActor
+    func appleFailureFallsThroughToMLX(
+        appleAvailable: Bool,
+        appleOutput: String?,
+        expectedAppleCalls: Int
+    ) async {
+        let availability = Availability()
+        availability.isAppleAvailable = appleAvailable
+        let apple = CannedAppleGenerator(output: appleOutput)
+        let engine = CannedEngine(outcome: .success(#"{"name": "mlx-generated-name"}"#))
+        let suggester = IssueWorktreeNameSuggester(
+            engine: engine,
+            isAppleIntelligenceAvailable: { availability.isAppleAvailable },
+            generateWithAppleIntelligence: { request in await apple.generate(request) },
+            isMLXAvailable: { availability.isMLXAvailable }
+        )
+
+        let name = await suggester.suggestName(for: Self.source)
+
+        #expect(name == "mlx-generated-name")
+        #expect(await apple.calls == expectedAppleCalls)
+        #expect(await engine.calls == 1)
+    }
+
+    @Test @MainActor
+    func appleTimeoutReachesMLXWhileGenerationIsStillSuspended() async {
+        let gate = GenerationGate()
+        let engine = CannedEngine(outcome: .success(#"{"name": "mlx-generated-name"}"#))
+        let suggester = IssueWorktreeNameSuggester(
+            engine: engine,
+            isAppleIntelligenceAvailable: { true },
+            generateWithAppleIntelligence: { _ in
+                await gate.wait()
+                return nil
+            },
+            isMLXAvailable: { true },
+            timeout: .milliseconds(20)
+        )
+        let suggestion = Task { await suggester.suggestName(for: Self.source) }
+        await gate.waitUntilStarted()
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while await engine.calls == 0 && ContinuousClock.now < deadline {
+            await Task.yield()
         }
-        let suggester = IssueWorktreeNameSuggester(engine: engine) { availability.isAvailable }
+        let reachedMLXBeforeRelease = await engine.calls == 1
+        await gate.release()
+
+        #expect(reachedMLXBeforeRelease)
+        #expect(await suggestion.value == "mlx-generated-name")
+    }
+
+    @Test @MainActor
+    func unavailableBackendsLeaveTheDeterministicSeedUnchanged() async {
+        let availability = Availability()
+        availability.isAppleAvailable = false
+        availability.isMLXAvailable = false
+        let apple = CannedAppleGenerator(output: #"{"name": "unused-apple-name"}"#)
+        let engine = CannedEngine(outcome: .success(#"{"name": "unused-mlx-name"}"#))
+        let suggester = IssueWorktreeNameSuggester(
+            engine: engine,
+            isAppleIntelligenceAvailable: { availability.isAppleAvailable },
+            generateWithAppleIntelligence: { request in await apple.generate(request) },
+            isMLXAvailable: { availability.isMLXAvailable }
+        )
 
         let name = await suggester.suggestName(for: Self.source)
 
         #expect(name == nil)
-        #expect(await engine.calls == 1)
+        #expect(await apple.calls == 0)
+        #expect(await engine.calls == 0)
+    }
+
+    @Test(arguments: [SuggestionBackend.apple, .mlx])
+    @MainActor
+    func availabilityRevokedDuringGenerationDiscardsTheLateResult(backend: SuggestionBackend) async {
+        let availability = Availability()
+        availability.isAppleAvailable = backend == .apple
+        availability.isMLXAvailable = backend == .mlx
+        let apple = CannedAppleGenerator(output: #"{"name": "late-apple-name"}"#) {
+            if backend == .apple {
+                await MainActor.run { availability.isAppleAvailable = false }
+            }
+        }
+        let engine = CannedEngine(outcome: .success(#"{"name": "late-mlx-name"}"#)) {
+            if backend == .mlx {
+                await MainActor.run { availability.isMLXAvailable = false }
+            }
+        }
+        let suggester = IssueWorktreeNameSuggester(
+            engine: engine,
+            isAppleIntelligenceAvailable: { availability.isAppleAvailable },
+            generateWithAppleIntelligence: { request in await apple.generate(request) },
+            isMLXAvailable: { availability.isMLXAvailable }
+        )
+
+        let name = await suggester.suggestName(for: Self.source)
+
+        #expect(name == nil)
+        #expect(await apple.calls == (backend == .apple ? 1 : 0))
+        #expect(await engine.calls == (backend == .mlx ? 1 : 0))
     }
 
     private static let source = IssueSnapshot(
@@ -104,7 +217,55 @@ struct IssueWorktreeNameSuggestionTests {
 
 @MainActor
 private final class Availability {
-    var isAvailable = true
+    var isAppleAvailable = true
+    var isMLXAvailable = true
+}
+
+enum SuggestionBackend: Sendable {
+    case apple
+    case mlx
+}
+
+private actor CannedAppleGenerator {
+    let output: String?
+    let beforeReturning: @Sendable () async -> Void
+    private(set) var calls = 0
+
+    init(output: String?, beforeReturning: @escaping @Sendable () async -> Void = {}) {
+        self.output = output
+        self.beforeReturning = beforeReturning
+    }
+
+    func generate(_ request: LocalTextGenerationRequest) async -> String? {
+        calls += 1
+        await beforeReturning()
+        return output
+    }
+}
+
+private actor GenerationGate {
+    private var started = false
+    private var startedWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            releaseWaiter = continuation
+            started = true
+            startedWaiter?.resume()
+            startedWaiter = nil
+        }
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { startedWaiter = $0 }
+    }
+
+    func release() {
+        releaseWaiter?.resume()
+        releaseWaiter = nil
+    }
 }
 
 private actor CannedEngine: LocalTextGenerating {

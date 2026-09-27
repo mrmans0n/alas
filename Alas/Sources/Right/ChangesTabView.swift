@@ -83,7 +83,15 @@ struct ChangesTabView: View {
                 mutationDisabledReason: publishMutationDisabledReason,
                 amend: currentDraft?.amend == true,
                 amendProbe: amendProbe.result(for: amendProbeKey)
-            )
+            ),
+            pushAndCreateReviewRequestLabel: {
+                guard let snapshot = rps.reviewLoop.snapshot,
+                      snapshot.reviewRequest == nil,
+                      ReviewReadinessModel.canCreateReviewRequest(snapshot)
+                else { return nil }
+                return snapshot.remote?.kind.reviewRequestLabel
+            }(),
+            pushAndCreateReviewRequestInFlight: rps.reviewLoop.inFlightAction == .pushAndCreateReviewRequest
         )
     }
 

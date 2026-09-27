@@ -57,6 +57,72 @@ struct RightPaneStateReviewLoopPushTests {
         #expect(state.reviewLoop.inFlightAction == .pushBranch)
     }
 
+    @Test func failedPushLeavesReviewRequestDraftClosed() async {
+        let worktreeId = "wt-push-and-create-failure"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let appState = AppState(store: MemoryStore())
+        let worktree = Worktree(
+            id: worktreeId, projectId: "p1", name: "feature/review-loop",
+            branch: "feature/review-loop", path: URL(fileURLWithPath: "/tmp/repo"),
+            status: .clean, lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        let snapshot = Self.makeSnapshot()
+        var refreshCalled = false
+
+        await state.performReviewLoopPush(
+            .pushAndCreateReviewRequest, snapshot: snapshot, appState: appState,
+            push: { ProcessResult(exitCode: 1, stdout: "", stderr: "rejected") },
+            refresh: {
+                refreshCalled = true
+                return true
+            }
+        )
+
+        #expect(!refreshCalled)
+        #expect(appState.tabs.tabs(forWorktree: worktreeId).isEmpty)
+        #expect(state.sidebarError == "rejected")
+    }
+
+    @Test(arguments: [true, false])
+    func reviewRequestDraftWaitsForSuccessfulRefresh(_ refreshed: Bool) async {
+        let worktreeId = "wt-push-and-create-refresh-\(refreshed)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let appState = AppState(store: MemoryStore())
+        let worktree = Worktree(
+            id: worktreeId, projectId: "p1", name: "feature/review-loop",
+            branch: "feature/review-loop", path: URL(fileURLWithPath: "/tmp/repo"),
+            status: .clean, lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        let snapshot = Self.makeSnapshot()
+        let (refreshStarted, refreshStartedContinuation) = AsyncStream<Void>.makeStream()
+        var resumeRefresh: CheckedContinuation<Bool, Never>?
+
+        let operation = Task {
+            await state.performReviewLoopPush(
+                .pushAndCreateReviewRequest, snapshot: snapshot, appState: appState,
+                push: { ProcessResult(exitCode: 0, stdout: "", stderr: "") },
+                refresh: {
+                    refreshStartedContinuation.yield(())
+                    return await withCheckedContinuation { resumeRefresh = $0 }
+                }
+            )
+        }
+
+        for await _ in refreshStarted { break }
+        #expect(appState.tabs.tabs(forWorktree: worktreeId).isEmpty)
+        state.reviewLoop.setSnapshotForTests(Self.makeSnapshot(needsPush: false))
+        resumeRefresh?.resume(returning: refreshed)
+        await operation.value
+
+        let hasDraft = appState.tabs.tabs(forWorktree: worktreeId).contains {
+            if case .draftReviewRequest = $0 { return true }
+            return false
+        }
+        #expect(hasDraft == refreshed)
+    }
+
     @Test func inspectReviewEvidenceActionNoopsWithoutReviewRequest() {
         let worktreeId = "wt-review-evidence-no-request"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
@@ -328,7 +394,8 @@ struct RightPaneStateReviewLoopPushTests {
         upstreamRemoteName: String? = nil,
         upstreamBranchName: String? = nil,
         headRemoteName: String? = nil,
-        reviewRequest: ReviewRequest? = nil
+        reviewRequest: ReviewRequest? = nil,
+        needsPush: Bool = true
     ) -> ReviewLoopSnapshot {
         let remote = CodeHostRemote(
             kind: .github,
@@ -351,7 +418,7 @@ struct RightPaneStateReviewLoopPushTests {
                 upstreamBranchName: upstreamBranchName,
                 headRemoteName: headRemoteName,
                 upstreamAheadCommitCount: 0,
-                needsPush: true
+                needsPush: needsPush
             ),
             remote: remote,
             reviewRequest: reviewRequest,

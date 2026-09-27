@@ -48,8 +48,13 @@ struct LocalTextModelLeaseTests {
         process.standardOutput = output
         try process.run()
         defer {
-            if process.isRunning { process.terminate() }
-            process.waitUntilExit()
+            try? input.fileHandleForWriting.close()
+            if process.isRunning {
+                _ = kill(process.processIdentifier, SIGKILL)
+                let cleanupDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+                while process.isRunning, ContinuousClock.now < cleanupDeadline { _ = sched_yield() }
+            }
+            if !process.isRunning { process.waitUntilExit() }
         }
         func response() throws -> String {
             String(data: try output.fileHandleForReading.read(upToCount: 2) ?? Data(), encoding: .utf8) ?? ""
@@ -67,7 +72,10 @@ struct LocalTextModelLeaseTests {
         #expect(await fixture.store.state == .failed(.busy))
         await #expect(throws: LocalTextModelFailure.busy) { try await fixture.store.remove() }
         try input.fileHandleForWriting.write(contentsOf: Data([1]))
-        process.waitUntilExit()
+        try input.fileHandleForWriting.close()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while process.isRunning, ContinuousClock.now < deadline { await Task.yield() }
+        try #require(!process.isRunning)
         #expect(process.terminationStatus == 0)
         fixture.transport.mode.withLock { $0 = .valid }
         await fixture.store.install()

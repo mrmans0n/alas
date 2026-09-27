@@ -254,6 +254,13 @@ struct SessionSummarySettingsTests {
         state.sessionSummariesRuntimeEnabled = false
         #expect(state.canRemoveLocalTextModel)
         await state.removeLocalTextModel()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+        while state.localTextRemovalFailure == .inUse {
+            try #require(ContinuousClock.now < deadline)
+            await Task.yield()
+            await state.removeLocalTextModel()
+        }
+        #expect(state.localTextRemovalFailure == nil)
         #expect(state.localTextModelState == .notInstalled)
         await state.shutdownLocalTextFeatures()
     }

@@ -15,6 +15,44 @@ extension CheckpointGitRunning {
     }
 }
 
+/// Git-dir paths one checkpoint operation reads, resolved by a single
+/// `rev-parse`. Only the path strings are shared; callers still check each
+/// file on disk where the check happens today.
+struct CheckpointGitPaths: Equatable, Sendable {
+    static let operationMarkerNames = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"]
+
+    let index: URL
+    let indexLock: URL
+    /// In `operationMarkerNames` order.
+    let operationMarkers: [URL]
+
+    static func resolve(git: any CheckpointGitRunning, cwd: URL) async throws -> Self {
+        let names = ["index", "index.lock"] + operationMarkerNames
+        let lines = try await gitPaths(names, git: git, cwd: cwd).split(separator: "\n", omittingEmptySubsequences: false)
+        var paths = lines.map(String.init)
+        // Every path shares the git dir, so a newline in it (legal in a
+        // directory name) always yields extra lines. Resolve each path alone,
+        // which keeps embedded newlines intact.
+        if paths.count != names.count || paths.contains(where: \.isEmpty) {
+            paths = []
+            for name in names { paths.append(try await gitPaths([name], git: git, cwd: cwd)) }
+        }
+        let urls = paths.map { URL(fileURLWithPath: $0) }
+        return .init(index: urls[0], indexLock: urls[1], operationMarkers: Array(urls[2...]))
+    }
+
+    /// `rev-parse` output for `names`, without its final newline.
+    private static func gitPaths(_ names: [String], git: any CheckpointGitRunning, cwd: URL) async throws -> String {
+        let result = try await git.run(["rev-parse", "--path-format=absolute"] + names.flatMap { ["--git-path", $0] },
+                                       cwd: cwd, environment: [:])
+        guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        var output = result.stdout
+        if output.hasSuffix("\n") { output.removeLast() }
+        guard !output.isEmpty else { throw CheckpointSnapshotError.invalidGitOutput }
+        return output
+    }
+}
+
 struct LiveCheckpointGitRunner: CheckpointGitRunning {
     func run(_ args: [String], cwd: URL, environment: [String: String] = [:]) async throws -> ProcessResult {
         let invocation = try invocation(args, cwd: cwd)
