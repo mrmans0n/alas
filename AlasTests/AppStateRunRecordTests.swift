@@ -775,7 +775,7 @@ struct AppStateRunRecordTests {
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitUntilRunning(fixture)
         let runID = try #require(runRecord(fixture)?.id)
 
         fixture.state.archiveWorktree(fixture.worktree)
