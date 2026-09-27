@@ -30,6 +30,9 @@ struct RunFailureBriefPolicyTests {
         #"{"summary": "s", "cause": "c", "checks": ["To verify, run swift test."]}"#,
         #"{"summary": "s", "cause": "Next, install Xcode.", "checks": ["k"]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["First run swift test."]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["Remove logs containing secrets."]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["Kill job 123."]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["Run scripts with verbose logging."]}"#,
         "The Net tests failed to compile.",
         "",
     ])

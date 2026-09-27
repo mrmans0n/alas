@@ -7,7 +7,7 @@ enum LocalTextSafety {
         pattern: #"(?i)\b(?:api[_-]?key|access[_-]?key|password|secret|token)\b\s*[:=]\s*([^\s;,]+)"#
     )
     private static let assignmentRedactionRegex = try! NSRegularExpression(
-        pattern: #"(?i)\b(?:[A-Za-z0-9]+_)*(api[_-]?key|access[_-]?key|password|secret|token)\b\s*([:=])\s*(\\"(?:(?!\\").)*\\"|"[^"]*"|'[^']*'|[^\s;,]+)"#
+        pattern: #"(?i)\b(?:[A-Za-z0-9]+_)*(api[_-]?key|access[_-]?key|password|secret|token)\b["']?\s*([:=])\s*(\\"(?:(?!\\").)*\\"|"[^"]*"|'[^']*'|[^\s;,]+)"#
     )
     private static let placeholderValues: Set<String> = [
         "[redacted]", "redacted", "placeholder", "example", "changeme",
