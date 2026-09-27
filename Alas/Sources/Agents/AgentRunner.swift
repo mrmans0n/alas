@@ -162,13 +162,14 @@ enum AgentRunner {
         // before exiting — verbose warnings, a model that ignores the
         // prompt and emits a long explanation, etc. — the child blocks on
         // its own write and we'd deadlock waiting for an exit that can't
-        // happen. Detached read Tasks let the kernel drain the pipes in
-        // parallel; they finish when the child exits and the pipes EOF.
-        let outRead = Task.detached {
-            (try? outPipe.fileHandleForReading.readToEnd()) ?? Data()
+        // happen. Reads on their own threads drain the pipes in parallel,
+        // off the cooperative pool; they finish when the child exits and the
+        // pipes EOF.
+        let outRead = Task {
+            await BlockingWork.run { (try? outPipe.fileHandleForReading.readToEnd()) ?? Data() }
         }
-        let errRead = Task.detached {
-            (try? errPipe.fileHandleForReading.readToEnd()) ?? Data()
+        let errRead = Task {
+            await BlockingWork.run { (try? errPipe.fileHandleForReading.readToEnd()) ?? Data() }
         }
 
         // Watchdog. Armed BEFORE the stdin write so a CLI that stalls

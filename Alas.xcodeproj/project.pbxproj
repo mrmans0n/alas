@@ -1951,6 +1951,7 @@
 		EA9B2D81920F620209AB2C34 /* MasonSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97FBCF0F61C80FD8020B1ADD /* MasonSnapshotTests.swift */; };
 		EACD40C757361FC2C78F912A /* ACPCodeBlockHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 530767799372FE03C3695656 /* ACPCodeBlockHighlighter.swift */; };
 		EAEB68B3A06AEA14BC8E2985 /* ChangesPreparationModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2BD2F573498740A7DECCA3C /* ChangesPreparationModelTests.swift */; };
+		EB5B27D83E3565FF04CAD172 /* BlockingWork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0705A9EFA0376D4C80D4CEB8 /* BlockingWork.swift */; };
 		EB6136E15E4F1A4CBA230D12 /* GitServiceBehindStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82387CFDFFBF52E639095C65 /* GitServiceBehindStatusTests.swift */; };
 		EBAEA66982B51C22EAE4010E /* NavigationFeatureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59D2ECB3A0D8235CF173D16C /* NavigationFeatureTests.swift */; };
 		EBD3741FBBECDBF995F02889 /* RemoteIdentityKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E26E24BB9CA3F672E4F7E94 /* RemoteIdentityKey.swift */; };
@@ -2194,6 +2195,7 @@
 		069895A7C4E29B3275D8320E /* ACPSessionManagerRemoteRestoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionManagerRemoteRestoreTests.swift; sourceTree = "<group>"; };
 		06D1E5BACEAA01D0CD23C0EA /* RemotePeerConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePeerConnection.swift; sourceTree = "<group>"; };
 		0704EBDA62931ADE79B04F30 /* ReviewSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewSessionStore.swift; sourceTree = "<group>"; };
+		0705A9EFA0376D4C80D4CEB8 /* BlockingWork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockingWork.swift; sourceTree = "<group>"; };
 		072053BFCA62991BF2135789 /* WorktreeRowStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeRowStatusTests.swift; sourceTree = "<group>"; };
 		074A17527610230DCFBEA13C /* ACPMockClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMockClient.swift; sourceTree = "<group>"; };
 		07A17183B064CAB5EB5D5C11 /* ReviewRequestPromptEditorWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewRequestPromptEditorWindow.swift; sourceTree = "<group>"; };
@@ -7302,6 +7304,7 @@
 		E25B7A3465E9FC8D717EAE2A /* Helpers */ = {
 			isa = PBXGroup;
 			children = (
+				0705A9EFA0376D4C80D4CEB8 /* BlockingWork.swift */,
 				C954F77AD0867F7FD39A5ED7 /* LineBuffer.swift */,
 			);
 			path = Helpers;
@@ -8216,6 +8219,7 @@
 				C97F67F96D887D0A417F9FD3 /* BinaryPreviewTabView.swift in Sources */,
 				A9AD5B31C3A9FCBE76A15179 /* BlockedLanguageServerNudgeResolver.swift in Sources */,
 				73480309CF2CBA78879268DD /* BlockedNudgeBanner.swift in Sources */,
+				EB5B27D83E3565FF04CAD172 /* BlockingWork.swift in Sources */,
 				ACDDE4B18A94164BDFEED06B /* BranchOpsMenu.swift in Sources */,
 				9E302329243407946D47DC91 /* BranchPicker.swift in Sources */,
 				8AB55E8E05AAC87F71CD5DF0 /* BreadcrumbView.swift in Sources */,

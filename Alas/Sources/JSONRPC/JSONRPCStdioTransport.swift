@@ -248,7 +248,8 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
                 guard let self else { return }
                 let shouldStop = self.lock.withLock { self.rootHasExited }
                 if shouldStop { return }
-                self.refreshOrphanSet()
+                // Each refresh spawns `ps`; keep that off the cooperative pool.
+                await BlockingWork.run { self.refreshOrphanSet() }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }

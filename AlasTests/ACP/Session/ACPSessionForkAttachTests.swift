@@ -240,10 +240,13 @@ struct ACPSessionForkAttachTests {
         let writeLock = ForkSQLiteWriteLock(path: store.path)
         defer { writeLock.release() }
         let (locked, lockContinuation) = AsyncStream<Void>.makeStream()
-        let lockTask = Task.detached {
-            try writeLock.hold {
-                lockContinuation.yield()
-                lockContinuation.finish()
+        // Holding the lock blocks until release; keep it off the cooperative pool.
+        let lockTask = Task {
+            try await BlockingWork.run {
+                try writeLock.hold {
+                    lockContinuation.yield()
+                    lockContinuation.finish()
+                }
             }
         }
         var lockIterator = locked.makeAsyncIterator()

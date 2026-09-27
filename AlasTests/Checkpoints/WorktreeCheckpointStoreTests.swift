@@ -614,7 +614,8 @@ struct WorktreeCheckpointStoreTests {
         let firstTask = Task {
             try await firstStore.publish(first)
         }
-        gatedFileSystem.waitUntilCatalogWriteIsBlocked()
+        // Unbounded semaphore wait; keep it off the cooperative pool.
+        await BlockingWork.run { gatedFileSystem.waitUntilCatalogWriteIsBlocked() }
 
         let secondTask = Task {
             try await secondStore.publish(second)

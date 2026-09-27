@@ -152,7 +152,8 @@ final class TerminalService {
     /// so `waitForPendingKills` can drain on quit. Replaces the bare
     /// `Task.detached { … }` callers used pre-tracking.
     private func dispatchTrackedKill(_ body: @escaping @Sendable () -> Void) {
-        let task = Task.detached(operation: body)
+        // zmx calls block on the child's exit; keep them off the cooperative pool.
+        let task = Task.detached { await BlockingWork.run(body) }
         pendingKillTasks.insert(task)
         Task { @MainActor [weak self] in
             _ = await task.value
@@ -498,17 +499,19 @@ final class TerminalService {
             let client = zmxClient
             let remoteHost = Self.remoteHostForCleanup(worktreeId: worktreeId, projectPath: projectPath)
             dispatchTrackedKill {
-                let sessionNames = Self.sessionNamesForCleanup(
-                    worktreeId: worktreeId,
-                    projectPath: projectPath,
-                    leafId: id,
-                    zmxClient: client
-                )
+                let sessionNames = await BlockingWork.run {
+                    Self.sessionNamesForCleanup(
+                        worktreeId: worktreeId,
+                        projectPath: projectPath,
+                        leafId: id,
+                        zmxClient: client
+                    )
+                }
                 for sessionName in sessionNames {
                     if let remoteHost {
                         await Self.killRemoteSession(host: remoteHost, name: sessionName)
                     } else {
-                        client.killSession(name: sessionName)
+                        await BlockingWork.run { client.killSession(name: sessionName) }
                     }
                 }
             }
@@ -562,33 +565,35 @@ final class TerminalService {
     /// leaf record was also lost) leak; the user can clear those with
     /// `zmx kill` directly.
     ///
-    /// `ZmxClient.killSession` blocks up to ~5s, so we run the sweep on
-    /// `Task.detached` to keep the MainActor (UI) responsive.
+    /// `ZmxClient.killSession` blocks up to ~5s, so the local sweep runs
+    /// through `BlockingWork`, off the MainActor and the cooperative pool.
     func terminateAll(additionalSessions: [TerminalSessionIdentity] = []) {
         let (localNames, remoteNamesByHost) = liveAndAdditionalSessionNames(
             additionalSessions: additionalSessions
         )
         let client = zmxClient
         dispatchTrackedKill {
-            for name in localNames {
-                client.killSession(name: name)
-            }
-            let localAdditionalSessions = additionalSessions.filter {
-                guard case .worktree = $0.owner else { return false }
-                return Self.remoteHostForCleanup(session: $0) == nil
-            }
-            let localLegacySessionInfos = localAdditionalSessions.isEmpty ? [] : client.listSessionInfos()
-            for session in localAdditionalSessions {
-                let scoped = session.zmxSessionName
-                let legacyNames = Self.sessionNamesForCleanup(
-                    worktreeId: session.worktreeId,
-                    projectPath: session.projectPath,
-                    leafId: session.leafId,
-                    legacySessionInfos: localLegacySessionInfos
-                ).filter { $0 != scoped }
-                guard !legacyNames.isEmpty else { continue }
-                for name in legacyNames {
+            await BlockingWork.run {
+                for name in localNames {
                     client.killSession(name: name)
+                }
+                let localAdditionalSessions = additionalSessions.filter {
+                    guard case .worktree = $0.owner else { return false }
+                    return Self.remoteHostForCleanup(session: $0) == nil
+                }
+                let localLegacySessionInfos = localAdditionalSessions.isEmpty ? [] : client.listSessionInfos()
+                for session in localAdditionalSessions {
+                    let scoped = session.zmxSessionName
+                    let legacyNames = Self.sessionNamesForCleanup(
+                        worktreeId: session.worktreeId,
+                        projectPath: session.projectPath,
+                        leafId: session.leafId,
+                        legacySessionInfos: localLegacySessionInfos
+                    ).filter { $0 != scoped }
+                    guard !legacyNames.isEmpty else { continue }
+                    for name in legacyNames {
+                        client.killSession(name: name)
+                    }
                 }
             }
             for (host, names) in remoteNamesByHost {
@@ -630,8 +635,10 @@ final class TerminalService {
         let (localNames, remoteNamesByHost) = Self.partitionedSessionNames(for: sessions)
         let client = zmxClient
         dispatchTrackedKill {
-            for name in localNames {
-                client.killSession(name: name)
+            await BlockingWork.run {
+                for name in localNames {
+                    client.killSession(name: name)
+                }
             }
             for (host, names) in remoteNamesByHost {
                 for name in names {
@@ -644,11 +651,11 @@ final class TerminalService {
     func terminateSessionsAndWait(_ sessions: [TerminalSessionIdentity], timeout: TimeInterval) async throws {
         let (localNames, remoteNamesByHost) = Self.partitionedSessionNames(for: sessions)
         let client = zmxClient
-        let localExistingNames = await Task.detached {
+        let localExistingNames = await BlockingWork.run {
             Set(client.listSessionInfos().map(\.name))
-        }.value
+        }
         for name in localNames where localExistingNames.contains(name) {
-            let killed = await Task.detached { client.killSessionResult(name: name) }.value
+            let killed = await BlockingWork.run { client.killSessionResult(name: name) }
             guard killed else { throw SessionTerminationError.failed(name) }
         }
         for (host, names) in remoteNamesByHost {
@@ -876,7 +883,7 @@ final class TerminalService {
             TrackedSessionRef(leafId: $0.id, worktreeId: $0.worktreeId, zmxSessionName: $0.zmxSessionName)
         }
         let client = zmxClient
-        let infos = await Task.detached { client.listSessionInfos() }.value
+        let infos = await BlockingWork.run { client.listSessionInfos() }
         return OpenSessionsClassifier.classify(infos: infos, tracked: tracked, sessionPrefix: prefix)
     }
 
