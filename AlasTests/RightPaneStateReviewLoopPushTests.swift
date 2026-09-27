@@ -34,6 +34,35 @@ struct RightPaneStateReviewLoopPushTests {
         })
     }
 
+    @Test func failedLegacyBranchVerificationKeepsCreatedDraftForRetry() async {
+        let worktreeId = "wt-review-request-legacy-verification-failure"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let appState = AppState(store: MemoryStore())
+        let worktree = Worktree(
+            id: worktreeId, projectId: "p1", name: "branch-b", branch: "branch-b",
+            path: URL(fileURLWithPath: "/tmp/repo"), status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        let original = Self.makeSnapshot(branchName: "branch-a", upstreamBranchName: "remote-feature")
+        let current = Self.makeSnapshot(branchName: "branch-b", upstreamBranchName: "remote-feature")
+        let draft = appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktreeId, snapshot: original)
+        _ = appState.tabs.updateDraftReviewRequest(worktreeId: worktreeId, tabId: draft.id) {
+            $0.upstreamBranchName = nil
+            $0.createdURL = URL(string: "https://github.com/mrmans0n/alas/pull/42")!
+        }
+        state.reviewLoop.setSnapshotForTests(current)
+        #expect(appState.tabs.requiresLegacyDraftBranchVerification(worktreeId: worktreeId, snapshot: current))
+
+        await state.openLegacyReviewRequestDraft(snapshot: current, appState: appState) { _ in
+            throw NSError(domain: "Test", code: 1)
+        }
+
+        #expect(appState.tabs.tabs(forWorktree: worktreeId).count == 1)
+        #expect(appState.tabs.tabs(forWorktree: worktreeId).first?.id == draft.id)
+        #expect(state.sidebarError?.contains("Could not verify local branches") == true)
+    }
+
     @Test func createReviewRequestActionNoopsWhileReviewActionIsInFlight() {
         let worktreeId = "wt-review-request-draft-action-in-flight"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
@@ -389,6 +418,7 @@ struct RightPaneStateReviewLoopPushTests {
     }
 
     private static func makeSnapshot(
+        branchName: String = "feature/review-loop",
         remoteName: String = "origin",
         hasUpstream: Bool = true,
         upstreamRemoteName: String? = nil,
@@ -407,7 +437,7 @@ struct RightPaneStateReviewLoopPushTests {
         )
         return ReviewLoopSnapshot(
             local: ReviewLoopLocalState(
-                branchName: "feature/review-loop",
+                branchName: branchName,
                 headSHA: "abc123",
                 baseBranch: "main",
                 hasWorkingTreeChanges: false,

@@ -1245,14 +1245,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 return
             }
             Task { @MainActor in
-                let branches = try? await GitService().localBranches(at: worktree.path)
-                guard reviewLoop.snapshot?.local.branchName == snapshot.local.branchName,
-                      reviewLoop.snapshot?.local.headSHA == snapshot.local.headSHA
-                else { return }
-                appState.tabs.openOrFocusDraftReviewRequest(
-                    worktreeId: worktree.id, snapshot: snapshot,
-                    existingLocalBranches: branches.map(Set.init)
-                )
+                await openLegacyReviewRequestDraft(snapshot: snapshot, appState: appState)
             }
         case .rerunFailedChecks:
             guard let snapshot = reviewLoop.snapshot else { return }
@@ -1302,6 +1295,25 @@ final class RightPaneState: GGSplitCommitServicing {
             }
         } catch {
             sidebarError = error.localizedDescription
+        }
+    }
+
+    func openLegacyReviewRequestDraft(
+        snapshot: ReviewLoopSnapshot,
+        appState: AppState,
+        localBranches: (URL) async throws -> [String] = { try await GitService().localBranches(at: $0) }
+    ) async {
+        do {
+            let branches = try await localBranches(worktree.path)
+            guard reviewLoop.snapshot?.local.branchName == snapshot.local.branchName,
+                  reviewLoop.snapshot?.local.headSHA == snapshot.local.headSHA
+            else { return }
+            appState.tabs.openOrFocusDraftReviewRequest(
+                worktreeId: worktree.id, snapshot: snapshot,
+                existingLocalBranches: Set(branches)
+            )
+        } catch {
+            sidebarError = "Could not verify local branches: \(error.localizedDescription)"
         }
     }
 
