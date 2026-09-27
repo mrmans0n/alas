@@ -9,13 +9,17 @@ struct AppearancePane: View {
         ("light",      "Light",      Color(hex: "#f0eee9"), Color(hex: "#5b8a91")),
     ]
 
-    private let accents: [(String, Color)] = [
-        ("teal",   Color(hex: "#5fb7c4")),
-        ("mint",   Color(hex: "#7fc6a8")),
-        ("amber",  Color(hex: "#d3a25c")),
-        ("coral",  Color(hex: "#d77b88")),
-        ("iris",   Color(hex: "#9789c7")),
-    ]
+    private let accentIds = ["teal", "mint", "amber", "coral", "iris"]
+
+    /// Swatches preview the color as it will actually be applied — darkened
+    /// on the light theme, same as `Theme.accentOverride` — not the raw
+    /// pastel hex, which can look nothing like the picked accent there.
+    private var accents: [(String, Color)] {
+        accentIds.compactMap { id in
+            guard let hex = Theme.accentHexById[id] else { return nil }
+            return (id, Theme.resolvedAccentColor(hex: hex, darkMode: theme.darkMode))
+        }
+    }
 
     var body: some View {
         ScrollView {

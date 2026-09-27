@@ -12,16 +12,17 @@ struct Theme: Codable, Equatable, Hashable {
     /// SwiftUI Color via the Color(hex:) extension so we can also derive a
     /// muted variant if needed in future.
     var accentOverrideHex: String? = nil {
-        didSet { accentOverride = accentOverrideHex.map(resolveAccentOverride) }
+        didSet { accentOverride = accentOverrideHex.map { Theme.resolvedAccentColor(hex: $0, darkMode: darkMode) } }
     }
 
-    /// `accentOverrideHex` resolved once per assignment. The named accents
-    /// are pastels tuned for dark surfaces; on the light theme they wash out
-    /// (and `accent-soft` vanishes), so they are darkened until text in them
-    /// clears 4.5:1 on the light section-header band.
+    /// `accentOverrideHex` resolved once per assignment.
     private(set) var accentOverride: Color? = nil
 
-    private func resolveAccentOverride(_ hex: String) -> Color {
+    /// The named accents are pastels tuned for dark surfaces; on the light
+    /// theme they wash out (and `accent-soft` vanishes), so they are
+    /// darkened until text in them clears 4.5:1 on the light section-header
+    /// band. Also used by `AppearancePane` to preview swatches as-applied.
+    static func resolvedAccentColor(hex: String, darkMode: Bool) -> Color {
         darkMode ? Color(hex: hex) : Color.blend(Color(hex: hex), .black, t: 0.45)
     }
 
