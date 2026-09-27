@@ -1545,12 +1545,18 @@ final class TabsManager {
         return nil
     }
 
+    func resolveCreatedReviewsOnRefresh(worktreeId: String, snapshot: ReviewLoopSnapshot) -> [PendingCreatedReviewLookup] {
+        _ = transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: snapshot)
+        return pendingCreatedReviewLookups(worktreeId: worktreeId, snapshot: snapshot)
+    }
+
     func pendingCreatedReviewLookups(worktreeId: String, snapshot: ReviewLoopSnapshot) -> [PendingCreatedReviewLookup] {
         tabs(forWorktree: worktreeId).compactMap { tab in
             switch tab {
             case .draftReviewRequest(let state):
                 guard let createdURL = state.createdURL, state.didOpenCreatedReview != true,
-                      let remote = state.creationRemote ?? snapshot.remote,
+                      let remote = state.creationRemote
+                          ?? Self.recoveredCreationRemote(state: state, createdURL: createdURL, activeRemote: snapshot.remote),
                       remote.kind == state.provider,
                       remote.repositorySlug == state.repositorySlug
                 else { return nil }
@@ -1570,6 +1576,46 @@ final class TabsManager {
                 return nil
             }
         }
+    }
+
+    private static func recoveredCreationRemote(
+        state: DraftReviewRequestTabState, createdURL: URL, activeRemote: CodeHostRemote?
+    ) -> CodeHostRemote? {
+        if let activeRemote,
+           activeRemote.kind == state.provider,
+           activeRemote.repositorySlug == state.repositorySlug,
+           activeRemote.host.lowercased() == createdURL.host?.lowercased() {
+            return activeRemote
+        }
+        let slug = state.repositorySlug.split(separator: "/").map(String.init)
+        guard slug.count >= 2,
+              state.provider == .gitlab || slug.count == 2,
+              let host = createdURL.host,
+              var components = URLComponents(url: createdURL, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme, scheme == "https" || scheme == "http"
+        else { return nil }
+        let path = createdURL.pathComponents.dropFirst().map(String.init)
+        let suffix = Array(path.dropFirst(slug.count))
+        let expectedPrefix = Array(path.prefix(slug.count))
+        let reviewPath: [String]
+        switch state.provider {
+        case .github: reviewPath = ["pull"]
+        case .gitlab: reviewPath = ["-", "merge_requests"]
+        }
+        guard expectedPrefix == slug,
+              suffix.count == reviewPath.count + 1,
+              Array(suffix.dropLast()) == reviewPath,
+              let number = Int(suffix.last ?? ""), number > 0
+        else { return nil }
+        components.path = "/" + state.repositorySlug
+        components.query = nil
+        components.fragment = nil
+        guard let webURL = components.url else { return nil }
+        return CodeHostRemote(
+            kind: state.provider, host: host,
+            owner: slug.dropLast().joined(separator: "/"), repository: slug.last!,
+            remoteName: activeRemote?.remoteName ?? "origin", webURL: webURL
+        )
     }
 
     @discardableResult

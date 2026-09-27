@@ -180,6 +180,61 @@ struct TabsManagerTests {
         #expect(reviewState.lookupRemote(activeRemote: origin) == upstream)
     }
 
+    @Test(arguments: [CodeHostKind.github, .gitlab])
+    func legacyPendingDraftRecoversCreationRemoteFromSavedURL(provider: CodeHostKind) throws {
+        let manager = TabsManager(store: RestoreMemoryStore())
+        let worktreeId = "legacy-created-review-\(provider.rawValue)"
+        let host = provider == .github ? "github.com" : "gitlab.example.com"
+        let owner = provider == .github ? "upstream" : "group/subgroup"
+        let upstream = CodeHostRemote(
+            kind: provider, host: host, owner: owner, repository: "repo",
+            remoteName: "upstream", webURL: URL(string: "https://\(host)/\(owner)/repo")!
+        )
+        let fork = CodeHostRemote(
+            kind: provider, host: host, owner: "fork", repository: "repo",
+            remoteName: "origin", webURL: URL(string: "https://\(host)/fork/repo")!
+        )
+        let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
+        let source = ReviewLoopSnapshot(local: local, remote: upstream, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: provider == .github ? .githubCLI : .gitlabCLI, errorMessage: nil)
+        let changed = ReviewLoopSnapshot(local: local, remote: fork, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: provider == .github ? .githubCLI : .gitlabCLI, errorMessage: nil)
+        let draft = manager.openOrFocusDraftReviewRequest(worktreeId: worktreeId, snapshot: source)
+        _ = manager.updateDraftReviewRequest(worktreeId: worktreeId, tabId: draft.id) {
+            $0.creationRemote = nil
+            $0.createdURL = upstream.reviewRequestURL(number: 42)
+        }
+
+        let lookup = try #require(manager.pendingCreatedReviewLookups(worktreeId: worktreeId, snapshot: changed).first)
+        #expect(lookup.remote.repositorySlug == upstream.repositorySlug)
+        #expect(lookup.remote.webURL == upstream.webURL)
+    }
+
+    @Test func directMatchStillLeavesOtherCreatedReviewsForLookup() throws {
+        let manager = TabsManager(store: RestoreMemoryStore())
+        let worktreeId = "multiple-created-reviews"
+        let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
+        let localA = ReviewLoopLocalState(branchName: "feature-a", headSHA: "aaa", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
+        let localB = ReviewLoopLocalState(branchName: "feature-b", headSHA: "bbb", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, needsPush: false)
+        let sourceA = ReviewLoopSnapshot(local: localA, remote: remote, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+        let sourceB = ReviewLoopSnapshot(local: localB, remote: remote, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+        let draftA = manager.openOrFocusDraftReviewRequest(worktreeId: worktreeId, snapshot: sourceA)
+        let draftB = manager.openOrFocusDraftReviewRequest(worktreeId: worktreeId, snapshot: sourceB)
+        _ = manager.updateDraftReviewRequest(worktreeId: worktreeId, tabId: draftA.id) {
+            $0.createdURL = remote.reviewRequestURL(number: 41)
+        }
+        _ = manager.updateDraftReviewRequest(worktreeId: worktreeId, tabId: draftB.id) {
+            $0.createdURL = remote.reviewRequestURL(number: 42)
+        }
+        let foundA = ReviewLoopSnapshot(local: localA, remote: remote, reviewRequest: .placeholder(remote: remote, number: 41), providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+
+        let lookups = manager.resolveCreatedReviewsOnRefresh(worktreeId: worktreeId, snapshot: foundA)
+
+        #expect(lookups.map(\.createdURL) == [remote.reviewRequestURL(number: 42)])
+        #expect(manager.tabs(forWorktree: worktreeId).contains { tab in
+            if case .reviewPR(let review) = tab { return review.number == 41 }
+            return false
+        })
+    }
+
     @Test func createdReviewReplacesCompletedCommitEditorAfterLaterRefresh() async throws {
         let manager = TabsManager(store: RestoreMemoryStore())
         let worktreeId = "published-review"

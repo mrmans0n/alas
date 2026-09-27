@@ -1505,8 +1505,7 @@ final class AppState {
         rightPaneStore.appState = self
         rightPaneStore.reviewSnapshotDidChange = { [weak self] worktreeID, _, snapshot in
             guard let self else { return }
-            if self.tabs.transitionPendingCreatedReview(worktreeId: worktreeID, snapshot: snapshot) != nil { return }
-            let lookups = self.tabs.pendingCreatedReviewLookups(worktreeId: worktreeID, snapshot: snapshot)
+            let lookups = self.tabs.resolveCreatedReviewsOnRefresh(worktreeId: worktreeID, snapshot: snapshot)
             guard !lookups.isEmpty else { return }
             Task { @MainActor [weak self] in
                 guard let self,
