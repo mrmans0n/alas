@@ -170,13 +170,19 @@ struct LiveCheckpointGitRunner: CheckpointGitRunning {
             stderr.fileHandleForReading.readDataToEndOfFile()
         }
 
-        let result = await readerTask.result
+        // Nothing else bounds a batch, so cancellation must stop git.
+        let result = await withTaskCancellationHandler {
+            await readerTask.result
+        } onCancel: {
+            terminateProcessWithEscalation(process)
+        }
         // A reader that stopped early no longer drains stdout, so git could
         // block forever on a full pipe.
-        if case .failure = result, process.isRunning { process.terminate() }
+        if case .failure = result { terminateProcessWithEscalation(process) }
         await termination.wait()
         await writerTask.value
         let errorData = await stderrTask.value
+        try Task.checkCancellation()
         guard process.terminationStatus == 0 || process.terminationReason == .uncaughtSignal else {
             throw ProcessError.nonZeroExit(process.terminationStatus, String(data: errorData, encoding: .utf8) ?? "")
         }

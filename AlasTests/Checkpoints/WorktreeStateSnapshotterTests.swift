@@ -279,6 +279,20 @@ struct WorktreeStateSnapshotterTests {
         }
     }
 
+    @Test func cancelledBatchedBlobReadStopsWithCancellation() async throws {
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
+        defer { repo.remove() }
+        try repo.write("staged\n", to: "file.swift")
+        try await repo.stage("file.swift")
+        let oid = String(decoding: try await repo.git(["rev-parse", ":file.swift"]), as: UTF8.self).trimmingCharacters(in: .newlines)
+        let read = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await LiveCheckpointGitRunner().blobSizes(oids: [oid], cwd: repo.root)
+        }
+
+        await #expect(throws: CancellationError.self) { try await read.value }
+    }
+
     @Test(arguments: [true, false])
     func missingTrackedObjectFailsCapture(retainingPayloads: Bool) async throws {
         let repo = try await CheckpointTestRepository.makeFromTemplate()
