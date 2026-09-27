@@ -90,7 +90,7 @@ tree-sitter-hcl = { git = "https://github.com/tree-sitter-grammars/tree-sitter-h
 # disagree on 22 of 33 named nodes, so the query is not portable between them.
 # Pinned to the revision nvim-treesitter itself pins, so the vendored
 # queries/groovy/highlights.scm and this grammar stay a matched pair.
-tree-sitter-groovy = { git = "https://github.com/murtaza64/tree-sitter-groovy", rev = "792dbafc2fbce0d5aa5d7eb29f1a177f3673323d" }
+tree-sitter-groovy = { git = "https://github.com/murtaza64/tree-sitter-groovy", rev = "31dec6b0386c0ed71c6e1a5d5193eab589ffa2ca" }
 
 [dev-dependencies]
 # Only used by tests that compile a `Query` against a `tree_sitter::Language`
