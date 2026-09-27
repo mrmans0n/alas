@@ -270,6 +270,12 @@ struct LocalTextModelStoreTests {
                 #expect(try Data(contentsOf: lease.directory.appendingPathComponent("weights")) == fixture.originalWeights)
                 lease.close()
             case .cancel:
+                // URLSession calls `stopLoading` from its own loading thread; nothing
+                // orders it before the delegate completion that `install()` awaits.
+                let stopDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+                while !ModelURLProtocol.control.withLock({ $0.stopped }), ContinuousClock.now < stopDeadline {
+                    try await Task.sleep(for: .milliseconds(10))
+                }
                 #expect(ModelURLProtocol.control.withLock { $0.stopped })
                 #expect(await store.state == .notInstalled)
             case .oversized: #expect(await store.state == .failed(.integrity))
