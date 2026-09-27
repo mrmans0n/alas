@@ -274,6 +274,16 @@ final class ACPTerminal: ObservableObject {
         }
     }
 
+    /// Whether the descendant tracker has recorded `pid`, so a later
+    /// `kill()` can reach it after the root exits.
+    func hasTrackedDescendant(_ pid: pid_t) -> Bool {
+        orphanedDescendants.contains { $0.pid == pid }
+    }
+
+    /// Whether `terminationHandler` has recorded the root's exit, after
+    /// which `kill()` signals only tracked descendants.
+    var rootHasExited: Bool { rootExitState.hasExited }
+
     private func mergeOrphanSet(cached: Set<DescendantKey>,
                                 retained: Set<DescendantKey>,
                                 live: Set<DescendantKey>)
