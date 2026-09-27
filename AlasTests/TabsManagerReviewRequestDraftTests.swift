@@ -227,11 +227,11 @@ struct TabsManagerReviewRequestDraftTests {
         #expect(decoded.createdURL == URL(string: "https://github.com/mrmans0n/alas/pull/42")!)
     }
 
-    @Test func draftReviewRequestTargetRequiresSameBranchBaseProviderRepoAndHead() {
+    @Test func draftReviewRequestTargetFollowsUpstreamAcrossLocalRename() {
         let state = DraftReviewRequestTabState(worktreeId: "wt-1", snapshot: Self.snapshot())
 
         #expect(state.matchesTarget(Self.snapshot()))
-        #expect(!state.matchesTarget(Self.snapshot(branchName: "feature/other")))
+        #expect(state.matchesTarget(Self.snapshot(branchName: "feature/other")))
         #expect(!state.matchesTarget(Self.snapshot(baseBranch: "origin/release")))
         #expect(!state.matchesTarget(Self.snapshot(provider: .gitlab)))
         #expect(!state.matchesTarget(Self.snapshot(owner: "other")))
