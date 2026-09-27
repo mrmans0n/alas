@@ -26,7 +26,7 @@ struct RunFailureBriefPresentation: Equatable {
             rows.append(.line(number: line.number, text: line.text))
         }
         self.rows = rows
-        truncationNote = excerpt.truncated ? "Showing the last \(excerpt.lines.count) matching lines" : nil
+        truncationNote = excerpt.truncated ? "Earlier lines omitted" : nil
         suggestion = switch state {
         case .generating: .generating
         case let .ready(_, brief): .ready(brief)

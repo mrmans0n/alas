@@ -9,6 +9,7 @@ struct FailureLogExcerpt: Equatable, Sendable {
     let lines: [Line]
     /// False when no error marker matched and `lines` is the output's tail.
     let matchedErrors: Bool
+    /// True when earlier lines that qualified for the excerpt were dropped.
     let truncated: Bool
 }
 
@@ -38,7 +39,7 @@ enum FailureLogSelection {
         let truncated: Bool
         if matches.isEmpty {
             indices = Array(lines.indices.suffix(fallbackLines))
-            truncated = false
+            truncated = lines.count > fallbackLines
         } else {
             var selected = IndexSet()
             for match in matches {

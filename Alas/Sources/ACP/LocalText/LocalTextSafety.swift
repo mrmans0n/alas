@@ -7,7 +7,7 @@ enum LocalTextSafety {
         pattern: #"(?i)\b(?:api[_-]?key|access[_-]?key|password|secret|token)\b\s*[:=]\s*([^\s;,]+)"#
     )
     private static let assignmentRedactionRegex = try! NSRegularExpression(
-        pattern: #"(?i)\b(?:[A-Za-z0-9]+_)*(api[_-]?key|access[_-]?key|password|secret|token)\b\s*([:=])\s*("[^"]*"|'[^']*'|[^\s;,]+)"#
+        pattern: #"(?i)\b(?:[A-Za-z0-9]+_)*(api[_-]?key|access[_-]?key|password|secret|token)\b\s*([:=])\s*(\\"(?:(?!\\").)*\\"|"[^"]*"|'[^']*'|[^\s;,]+)"#
     )
     private static let placeholderValues: Set<String> = [
         "[redacted]", "redacted", "placeholder", "example", "changeme",
@@ -47,7 +47,7 @@ enum LocalTextSafety {
     /// Parsers print `token: <word>` ("Unexpected token: punc"), so only that key
     /// needs a generated-looking value before its colon form counts as a secret.
     private static func isSecretValue(_ value: String, key: String, separator: String) -> Bool {
-        let bare = value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`."))
+        let bare = value.trimmingCharacters(in: CharacterSet(charactersIn: "\\\"'`."))
         if placeholderValues.contains(bare.lowercased()) { return false }
         if separator == "=" || key.lowercased() != "token" { return true }
         return bare.count >= 8 && bare.contains(where: \.isNumber)

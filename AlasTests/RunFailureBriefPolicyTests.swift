@@ -27,6 +27,8 @@ struct RunFailureBriefPolicyTests {
         #"{"summary": "s", "cause": "c", "checks": ["Whether git reset --hard helps."]}"#,
         #"{"summary": "s", "cause": "You should install Xcode.", "checks": ["k"]}"#,
         #"{"summary": "s", "cause": "c", "checks": ["Try running swift test."]}"#,
+        #"{"summary": "s", "cause": "c", "checks": ["To verify, run swift test."]}"#,
+        #"{"summary": "s", "cause": "Next, install Xcode.", "checks": ["k"]}"#,
         "The Net tests failed to compile.",
         "",
     ])

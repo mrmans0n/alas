@@ -76,6 +76,7 @@ struct FailureLogSelectionTests {
 
         #expect(!excerpt.matchedErrors)
         #expect(excerpt.lines.map(\.number) == Array(16...30))
+        #expect(excerpt.truncated)
     }
 
     @Test

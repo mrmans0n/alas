@@ -13,6 +13,7 @@ struct LocalTextSafetyTests {
         ("AWS_SECRET_ACCESS_KEY=abc123 exported", "AWS_SECRET_ACCESS_KEY=[redacted] exported"),
         ("GITHUB_TOKEN=github_pat_abc", "GITHUB_TOKEN=[redacted]"),
         ("error: password=\"correct horse battery\" rejected", "error: password=[redacted] rejected"),
+        (#"msg="login failed" password=\"correct horse battery\" user=a"#, #"msg="login failed" password=[redacted] user=a"#),
         ("error: build failed", "error: build failed"),
     ])
     func redactingCredentialsMasksSecretsAndKeepsSurroundingText(input: String, expected: String) {
