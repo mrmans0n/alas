@@ -84,14 +84,27 @@ enum ACPSlashCommand {
         var start = end
         while start > 0, !isWhitespace(string.character(at: start - 1)) { start -= 1 }
         let tokenRange = NSRange(location: start, length: end - start)
-        guard let command = knownCommand(in: string, at: tokenRange, suggestions: suggestions) else { return nil }
-        // Same open-span rule as the upstream-reference keystroke path: a
-        // backtick run still open at the caret means the user is typing code.
-        let prefix = string.substring(to: end) as NSString
-        guard !ACPUpstreamReferenceDetector.codeRanges(in: prefix, unclosedRunsExtendToEnd: true)
-            .contains(where: { NSLocationInRange(start, $0) })
+        guard let command = knownCommand(in: string, at: tokenRange, suggestions: suggestions),
+              !isInCode(start, in: string)
         else { return nil }
         return (tokenRange, command)
+    }
+
+    /// Whether `location` is inside code while the user is still typing
+    /// there: a fenced block (closed or still open) or an inline code span,
+    /// counting a backtick run still open at `location` as code — the same
+    /// open-span rule as the upstream-reference keystroke path.
+    static func isInCode(_ location: Int, in string: NSString) -> Bool {
+        let prefix = string.substring(to: location) as NSString
+        return (codeRanges(in: string) + ACPUpstreamReferenceDetector.codeRanges(in: prefix, unclosedRunsExtendToEnd: true))
+            .contains { NSLocationInRange(location, $0) }
+    }
+
+    /// Fenced blocks as the composer's editor sees them (an unclosed fence
+    /// runs to the end of the text) plus closed inline code spans.
+    private static func codeRanges(in string: NSString) -> [NSRange] {
+        MarkdownFenceEditing.blocks(in: string as String).map(\.outerRange)
+            + ACPUpstreamReferenceDetector.codeRanges(in: string, unclosedRunsExtendToEnd: false)
     }
 
     @MainActor
@@ -132,7 +145,7 @@ enum ACPSlashCommand {
             }
         }
         guard !targets.isEmpty else { return [] }
-        let code = ACPUpstreamReferenceDetector.codeRanges(in: string, unclosedRunsExtendToEnd: false)
+        let code = codeRanges(in: string)
         return targets.filter { target in !code.contains { NSLocationInRange(target.range.location, $0) } }
     }
 
@@ -144,31 +157,33 @@ enum ACPSlashCommand {
         }
     }
 
-    /// Chips commands in a fragment about to replace `range` of `storage`.
-    /// The text on either side of `range` decides whether the fragment's
-    /// edges are token boundaries and whether it lands inside code, so
-    /// `/review` pasted right after `abc` stays text.
+    /// Chips commands in a fragment about to replace `range` of `storage`,
+    /// returning whether any chip formed. The text on either side of
+    /// `range` decides whether the fragment's edges are token boundaries
+    /// and whether it lands inside code, so `/review` pasted right after
+    /// `abc`, or between a code span's backticks, stays text.
     @MainActor
+    @discardableResult
     static func chipify(
         _ fragment: NSMutableAttributedString,
         replacing range: NSRange,
         in storage: NSAttributedString,
         suggestions: [ACPPromptSuggestion],
         font: NSFont
-    ) {
+    ) -> Bool {
         let string = storage.string as NSString
         let prefix = string.substring(to: range.location)
-        let tail = NSMaxRange(range)
-        let after = tail < string.length ? string.substring(with: NSRange(location: tail, length: 1)) : ""
+        let suffix = string.substring(from: NSMaxRange(range))
         let offset = (prefix as NSString).length
-        let targets = chipTargets(in: prefix + fragment.string + after, suggestions: suggestions)
-        for target in targets.reversed()
-        where target.range.location >= offset && NSMaxRange(target.range) <= offset + fragment.length {
+        let targets = chipTargets(in: prefix + fragment.string + suffix, suggestions: suggestions)
+            .filter { $0.range.location >= offset && NSMaxRange($0.range) <= offset + fragment.length }
+        for target in targets.reversed() {
             fragment.replaceCharacters(
                 in: NSRange(location: target.range.location - offset, length: target.range.length),
                 with: chip(for: target.command, font: font)
             )
         }
+        return !targets.isEmpty
     }
 
     private static func knownCommand(

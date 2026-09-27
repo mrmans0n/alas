@@ -46,6 +46,7 @@ struct ACPCommandPillTests {
         ("please /review", []),
         ("run `/review x` now", []),
         ("```\n/review x\n```\n", []),
+        ("```\n/review x\n", []),
     ])
     func chipTargets(text: String, expected: [String]) {
         #expect(ACPSlashCommand.chipTargets(in: text, suggestions: suggestions).map(\.command) == expected)
@@ -56,6 +57,7 @@ struct ACPCommandPillTests {
         ("please /review", "/review"),
         ("please/review", nil),
         ("please `/review", nil),
+        ("```\n/review", nil),
     ] as [(String, String?)])
     func keystrokeChipTarget(text: String, expected: String?) {
         let storage = NSAttributedString(string: text)
@@ -64,6 +66,22 @@ struct ACPCommandPillTests {
             in: storage, suggestions: suggestions
         )
         #expect(target?.command == expected)
+    }
+
+    @Test("a pasted command chips only when its destination is a boundary outside code", arguments: [
+        ("hi ", "", true),
+        ("hi", "", false),
+        ("run ` ", " now`", false),
+        ("```\n", "\n```\n", false),
+    ])
+    func pasteChipify(before: String, after: String, chips: Bool) {
+        let storage = NSAttributedString(string: before + after)
+        let fragment = NSMutableAttributedString(string: "/review x")
+        let range = NSRange(location: (before as NSString).length, length: 0)
+        #expect(ACPSlashCommand.chipify(
+            fragment, replacing: range, in: storage, suggestions: suggestions, font: font
+        ) == chips)
+        #expect(ACPInputField.Coordinator.extract(fragment).0 == "/review x")
     }
 
     @Test("chipify waits for whitespace after the command and never double-chips")

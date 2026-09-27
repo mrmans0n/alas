@@ -2357,7 +2357,13 @@ final class ACPNSTextView: PairedDelimiterTextView {
         let attrs = baseTypingAttributes
         typingAttributes = attrs
         let fragment = NSMutableAttributedString(string: text, attributes: attrs)
-        let chipped = chipUpstreamReferences(in: fragment, replacing: boundedRange)
+        let chippedCommands = coordinator.map {
+            ACPSlashCommand.chipify(
+                fragment, replacing: boundedRange, in: textStorage,
+                suggestions: $0.promptSuggestions, font: chatTypography.appKitFont()
+            )
+        } ?? false
+        let chipped = chipUpstreamReferences(in: fragment, replacing: boundedRange) || chippedCommands
         performNativeTextInsertion {
             // Plain strings keep going through the String path so paired
             // delimiter handling is unchanged when nothing was chipped.
@@ -2510,6 +2516,15 @@ final class ACPNSTextView: PairedDelimiterTextView {
         }
         let range = NSRange(location: slashStart, length: caret - slashStart)
         closeSlashPanel()
+        // A pick inside code stays plain text, like a typed command there.
+        if ACPSlashCommand.isInCode(range.location, in: ts.string as NSString) {
+            ts.replaceCharacters(in: range, with: NSAttributedString(string: replacement, attributes: baseTypingAttributes))
+            // `range.location`, not `slashStart` — `closeSlashPanel()` above
+            // already reset `slashStart` to -1.
+            setSelectedRange(NSRange(location: range.location + (replacement as NSString).length, length: 0))
+            didChangeText()
+            return
+        }
         // The picked token can be several characters longer than its
         // one-glyph chip (e.g. accepting `/read-jira-ticket` while `/read-j`
         // is still live) — the same shrinking edit `replaceUndoably` exists
