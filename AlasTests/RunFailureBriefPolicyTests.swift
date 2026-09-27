@@ -51,6 +51,8 @@ struct RunFailureBriefPolicyTests {
         "Commit failed because the hook rejected it.",
         "The first run failed after the SDK update.",
         "The tests could not run because the simulator is missing.",
+        "The shell failed to execute the command.",
+        "The test was unable to run.",
     ])
     func parseKeepsDescriptiveTextThatOnlyResemblesActionsOrSecrets(cause: String) {
         let output = #"{"summary": "s", "cause": "\#(cause)", "checks": ["k"]}"#

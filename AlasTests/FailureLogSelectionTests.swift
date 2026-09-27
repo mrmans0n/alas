@@ -42,6 +42,26 @@ struct FailureLogSelectionTests {
     }
 
     @Test
+    func aSingleLinePrivateKeyDoesNotHideTheLinesAfterIt() throws {
+        let log = """
+        KEY=-----BEGIN PRIVATE KEY-----MIIEvQIBADANBg-----END PRIVATE KEY-----
+        error: boom
+        done
+        """
+
+        let excerpt = try #require(FailureLogSelection.select(log))
+
+        #expect(excerpt.lines.map(\.text) == ["[redacted private key]", "error: boom", "done"])
+    }
+
+    @Test
+    func alreadyTruncatedOutputMarksTheExcerptTruncated() throws {
+        let excerpt = try #require(FailureLogSelection.select("error: boom", inputTruncated: true))
+
+        #expect(excerpt.truncated)
+    }
+
+    @Test
     func aPrivateKeyCutByTheOutputTailIsStillRedacted() throws {
         let log = """
         QUJDREVGR0hJSktMTU5PUFFSU1RVVldY

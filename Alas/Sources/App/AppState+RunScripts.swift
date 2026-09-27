@@ -635,12 +635,9 @@ extension AppState {
         )
     }
 
-    private func persistedRunOutput(runID: String) async -> String? {
+    private func persistedRunOutput(runID: String) async -> RunHistoryOutput? {
         await runHistoryPersistenceTasks[runID]?.value
-        guard let entry = try? await runHistoryStore?.entry(id: runID),
-              case let .available(text, _) = entry.output
-        else { return nil }
-        return text
+        return try? await runHistoryStore?.entry(id: runID)?.output
     }
 
     private func retireRunScriptAttention(scriptKey: String, worktree: Worktree, at date: Date) {

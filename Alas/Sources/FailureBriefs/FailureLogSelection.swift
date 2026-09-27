@@ -27,7 +27,7 @@ enum FailureLogSelection {
     )
 
     /// Input is run output that is already ANSI-stripped and tail-bounded.
-    static func select(_ output: String) -> FailureLogExcerpt? {
+    static func select(_ output: String, inputTruncated: Bool = false) -> FailureLogExcerpt? {
         var lines = output.components(separatedBy: "\n")
         while let last = lines.last, last.allSatisfy(\.isWhitespace) { lines.removeLast() }
         guard !lines.isEmpty else { return nil }
@@ -58,7 +58,7 @@ enum FailureLogSelection {
                 return .init(number: index + 1, text: text)
             },
             matchedErrors: !matches.isEmpty,
-            truncated: truncated
+            truncated: truncated || inputTruncated
         )
     }
 
@@ -83,7 +83,7 @@ enum FailureLogSelection {
                         previous -= 1
                     }
                 }
-                inside = isBegin
+                inside = isBegin && !line.contains("-----END")
             } else if inside {
                 result.insert(index)
             }

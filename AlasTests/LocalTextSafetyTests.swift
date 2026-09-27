@@ -6,6 +6,8 @@ struct LocalTextSafetyTests {
         ("export GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789", "export GITHUB_TOKEN=[redacted]"),
         ("auth with sk-live_abcdefghijklmnopqrstuvwx failed", "auth with [redacted] failed"),
         ("clone failed with github_pat_11ABCDEFG0123456789_abcdefghijklmnop", "clone failed with [redacted]"),
+        ("curl failed: Authorization: Bearer abcDEF123456xyz", "curl failed: Authorization: Bearer [redacted]"),
+        ("jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl rejected", "jwt [redacted] rejected"),
         ("password: hunter22 was rejected", "password: [redacted]"),
         ("password: correct horse battery; retrying", "password: [redacted]; retrying"),
         ("API_KEY=abc123; retrying", "API_KEY=[redacted]; retrying"),

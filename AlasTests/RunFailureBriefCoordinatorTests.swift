@@ -11,7 +11,7 @@ struct RunFailureBriefCoordinatorTests {
     func aNewerRunOfTheSameScriptInvalidatesAnInFlightBriefAndDropsItsLateResult() async throws {
         let coordinator = RunFailureBriefCoordinator()
         let generator = ControlledBriefGenerator()
-        coordinator.start(Self.failure("old"), loadOutput: { Self.log }, generate: generator.generate)
+        coordinator.start(Self.failure("old"), loadOutput: { .available(text: Self.log, truncated: false) }, generate: generator.generate)
         await generator.nextCall()
 
         coordinator.cancelInFlight(worktreeID: "wt", scriptKey: "test")
@@ -30,7 +30,7 @@ struct RunFailureBriefCoordinatorTests {
     func aDismissedFailureDropsItsBriefEvenWhenTheResultArrivesLater() async {
         let coordinator = RunFailureBriefCoordinator()
         let generator = ControlledBriefGenerator()
-        coordinator.start(Self.failure("run"), loadOutput: { Self.log }, generate: generator.generate)
+        coordinator.start(Self.failure("run"), loadOutput: { .available(text: Self.log, truncated: false) }, generate: generator.generate)
         await generator.nextCall()
 
         coordinator.retain(runIDs: [])
@@ -44,7 +44,7 @@ struct RunFailureBriefCoordinatorTests {
     func aCompletedBriefSurvivesALaterRunButNotItsFailureLeavingTheQueue() async throws {
         let coordinator = RunFailureBriefCoordinator()
         let generator = ControlledBriefGenerator()
-        coordinator.start(Self.failure("run"), loadOutput: { Self.log }, generate: generator.generate)
+        coordinator.start(Self.failure("run"), loadOutput: { .available(text: Self.log, truncated: false) }, generate: generator.generate)
         await generator.nextCall()
         generator.resolve(0, with: Self.brief)
         await coordinator.awaitSettled(runID: "run")
@@ -61,9 +61,9 @@ struct RunFailureBriefCoordinatorTests {
     func briefsForDifferentScriptsGenerateOneAtATime() async throws {
         let coordinator = RunFailureBriefCoordinator()
         let generator = ControlledBriefGenerator()
-        coordinator.start(Self.failure("a", scriptKey: "build"), loadOutput: { Self.log }, generate: generator.generate)
+        coordinator.start(Self.failure("a", scriptKey: "build"), loadOutput: { .available(text: Self.log, truncated: false) }, generate: generator.generate)
         await generator.nextCall()
-        coordinator.start(Self.failure("b", scriptKey: "test"), loadOutput: { Self.log }, generate: generator.generate)
+        coordinator.start(Self.failure("b", scriptKey: "test"), loadOutput: { .available(text: Self.log, truncated: false) }, generate: generator.generate)
 
         let deadline = ContinuousClock.now + .seconds(5)
         while coordinator.state(for: "b") == nil, ContinuousClock.now < deadline { await Task.yield() }
@@ -84,7 +84,7 @@ struct RunFailureBriefCoordinatorTests {
     func withoutAModelTheObservedExcerptIsStillAvailable() async throws {
         let coordinator = RunFailureBriefCoordinator()
 
-        coordinator.start(Self.failure("run"), loadOutput: { Self.log }, generate: nil)
+        coordinator.start(Self.failure("run"), loadOutput: { .available(text: Self.log, truncated: false) }, generate: nil)
         await coordinator.awaitSettled(runID: "run")
 
         let excerpt = try #require(FailureLogSelection.select(Self.log))

@@ -36,7 +36,7 @@ final class RunFailureBriefCoordinator {
 
     func start(
         _ failure: RunScriptFailure,
-        loadOutput: @escaping @MainActor @Sendable () async -> String?,
+        loadOutput: @escaping @MainActor @Sendable () async -> RunHistoryOutput?,
         generate: Generate?
     ) {
         cancelInFlight(worktreeID: failure.worktreeID, scriptKey: failure.scriptKey)
@@ -46,10 +46,14 @@ final class RunFailureBriefCoordinator {
         let task = Task { [weak self] in
             let output = await loadOutput()
             guard !Task.isCancelled else { return }
-            let excerpt: FailureLogExcerpt? = if let output {
-                await Task.detached(priority: .utility) { FailureLogSelection.select(output) }.value
-            } else {
-                nil
+            let excerpt: FailureLogExcerpt?
+            switch output {
+            case let .available(text, truncated)?:
+                excerpt = await Task.detached(priority: .utility) {
+                    FailureLogSelection.select(text, inputTruncated: truncated)
+                }.value
+            case .unavailable?, nil:
+                excerpt = nil
             }
             guard let self, !Task.isCancelled else { return }
             guard let excerpt, let generate else {

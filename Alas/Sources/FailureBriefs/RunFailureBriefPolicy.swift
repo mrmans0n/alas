@@ -34,7 +34,7 @@ enum RunFailureBriefPolicy {
     private static let destructivePattern = #"(?i)\b(?:re-?run|git\s+(?:reset|push|clean|checkout|rebase)|rm\s+-|sudo)\b"#
     /// Reject by default: any base-form action verb counts unless it names a thing that
     /// failed ("Run script failed"); negated uses are skipped by `containsActiveAction`.
-    private static let actionVerbPattern = #"(?i)\b(?:re-?run|run|execute|(?:un|re)?install|delete|remove|reset|revert|push|commit|rm|kill)\b(?!(?:\s+(?:steps?|phases?|hooks?|scripts?|commands?|jobs?|stages?))?\s+(?:failed|fails|failing|was|were|is|errored|crashed|exited|timed\s+out|hung|stalled|returned)\b)"#
+    private static let actionVerbPattern = #"(?i)(?<!\b(?:failed|fails|failing|unable|trying|tried|attempting|attempted|able|refused)\sto\s)\b(?:re-?run|run|execute|(?:un|re)?install|delete|remove|reset|revert|push|commit|rm|kill)\b(?!(?:\s+(?:steps?|phases?|hooks?|scripts?|commands?|jobs?|stages?))?\s+(?:failed|fails|failing|was|were|is|errored|crashed|exited|timed\s+out|hung|stalled|returned)\b)"#
     private static let actionGerundPattern = #"(?i)\b(?:try|consider|by|recommend|suggest|keep)\s+(?:re-?running|running|executing|(?:un|re)?installing|deleting|removing|resetting|reverting|pushing|committing|killing)\b"#
 
     static func request(for input: RunFailureBriefInput) -> LocalTextGenerationRequest {
