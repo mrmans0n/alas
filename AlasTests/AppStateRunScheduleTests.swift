@@ -1084,6 +1084,20 @@ struct AppStateRunScheduleTests {
         #expect(await waiter.value == nil)
     }
 
+    /// The report is the latest turn's own reply: an earlier turn's text is
+    /// never quoted for a turn that said nothing.
+    @Test func theReportIsTheLatestTurnsFinalAgentReply() {
+        func user(_ text: String) -> ACPMessage {
+            .user(id: UUID(), messageId: nil, text: text, attachments: [])
+        }
+        func agent(_ text: String) -> ACPMessage {
+            .agent(id: UUID(), messageId: nil, StreamingText(text))
+        }
+        #expect(AppState.finalAgentReply(in: [user("Go"), agent("Working"), agent("  Done.\n")]) == "Done.")
+        #expect(AppState.finalAgentReply(in: [user("Go"), agent("Old reply"), user("Again")]) == nil)
+        #expect(AppState.finalAgentReply(in: [user("Go"), agent("Done."), agent("  ")]) == "Done.")
+    }
+
     @Test(arguments: [
         (ACPTurnCompletion.Result?.some(.completed), RunScheduleOutcome.succeeded),
         (.some(.failed("boom")), .agentFailed("boom")),

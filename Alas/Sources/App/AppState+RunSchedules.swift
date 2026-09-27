@@ -604,13 +604,44 @@ extension AppState {
                 project: project, worktree: worktree
             )
         }
-        guard let text = completion?.lastAgentText else { return RunScheduleRunReport(outcome: outcome) }
+        guard completion != nil, let text = await scheduledTurnReply(in: session) else {
+            return RunScheduleRunReport(outcome: outcome)
+        }
         return RunScheduleRunReport(outcome: outcome, agentReports: [RunScheduleFiring.AgentReport(
             worktreeID: worktree.id,
             branch: worktree.branch,
             agentName: agentName,
             text: text
         )])
+    }
+
+    /// The agent's final reply to the scheduled prompt.
+    ///
+    /// Not `ACPTurnCompletion.lastAgentText`: that is read as the prompt
+    /// returns, while the reply's last chunk can still sit in the runner's
+    /// coalescing buffer. The runner marks the transcript idle only once that
+    /// output is applied, so the reply is read after that — or after a short
+    /// bound, rather than holding the firing on a session that never settles.
+    private func scheduledTurnReply(in session: ACPSession) async -> String? {
+        // The buffer flushes within ~16 ms, so a short poll settles quickly.
+        let deadline = ContinuousClock.now + .seconds(5)
+        while session.transcript.streamingState != .idle, ContinuousClock.now < deadline {
+            guard (try? await Task.sleep(for: .milliseconds(20))) != nil else { break }
+        }
+        return Self.finalAgentReply(in: session.transcript.messages)
+    }
+
+    /// The last agent message after the last user message, trimmed to the
+    /// report's bound. Nil when that turn said nothing.
+    static func finalAgentReply(in messages: [ACPMessage]) -> String? {
+        let turnStart = messages.lastIndex {
+            if case .user = $0 { true } else { false }
+        }.map { $0 + 1 } ?? 0
+        return messages[turnStart...].reversed().lazy.compactMap { message -> String? in
+            guard case .agent(_, _, let text) = message else { return nil }
+            let tail = ACPDelegatedOutcomeText.tail(text.value, limit: ACPTurnCompletion.lastAgentTextLimit)
+            return tail.isEmpty ? nil : tail
+        }.first
     }
 
     /// How long a firing waits for its chat agent's turn before it stops
