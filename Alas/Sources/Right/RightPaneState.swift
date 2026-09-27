@@ -1291,7 +1291,11 @@ final class RightPaneState: GGSplitCommitServicing {
                     sidebarError = reviewLoop.lastError ?? "Pushed branch, but could not prepare the review request draft. Refresh and try again."
                     return
                 }
-                appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktree.id, snapshot: current)
+                if appState.tabs.requiresLegacyDraftBranchVerification(worktreeId: worktree.id, snapshot: current) {
+                    await openLegacyReviewRequestDraft(snapshot: current, appState: appState)
+                } else {
+                    appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktree.id, snapshot: current)
+                }
             }
         } catch {
             sidebarError = error.localizedDescription
