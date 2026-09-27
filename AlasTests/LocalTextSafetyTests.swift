@@ -9,6 +9,9 @@ struct LocalTextSafetyTests {
         ("API_KEY=abc123; retrying", "API_KEY=[redacted]; retrying"),
         ("password: correcthorsebattery", "password: [redacted]"),
         ("secret: abc", "secret: [redacted]"),
+        ("DATABASE_PASSWORD=correcthorsebattery", "DATABASE_PASSWORD=[redacted]"),
+        ("AWS_SECRET_ACCESS_KEY=abc123 exported", "AWS_SECRET_ACCESS_KEY=[redacted] exported"),
+        ("GITHUB_TOKEN=github_pat_abc", "GITHUB_TOKEN=[redacted]"),
         ("error: password=\"correct horse battery\" rejected", "error: password=[redacted] rejected"),
         ("error: build failed", "error: build failed"),
     ])
