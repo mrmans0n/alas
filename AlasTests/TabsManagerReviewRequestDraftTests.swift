@@ -94,8 +94,8 @@ struct TabsManagerReviewRequestDraftTests {
         #expect(state.body == "## Summary\n- Adds a tab")
     }
 
-    @Test func sameDraftTargetClearsCreatedURLWhenHeadChanges() {
-        let worktreeId = "review-request-draft-clear-created-url"
+    @Test func createdReviewSurvivesHeadAdvanceAndRefocusUntilDiscovered() throws {
+        let worktreeId = "review-request-draft-pending-created-url"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
         let manager = TabsManager()
         let first = manager.openOrFocusDraftReviewRequest(
@@ -117,7 +117,16 @@ struct TabsManagerReviewRequestDraftTests {
             return
         }
         #expect(state.headSHA == "def456")
-        #expect(state.createdURL == nil)
+        #expect(state.createdURL == URL(string: "https://github.com/mrmans0n/alas/pull/42"))
+        let refreshed = Self.snapshot(headSHA: "def456")
+        let found = ReviewLoopSnapshot(
+            local: refreshed.local, remote: refreshed.remote,
+            reviewRequest: .placeholder(remote: try #require(refreshed.remote), number: 42),
+            providerAvailable: true, providerAuthenticated: true,
+            providerCapabilities: .githubCLI, errorMessage: nil
+        )
+        let review = try #require(manager.transitionPendingCreatedReview(worktreeId: worktreeId, snapshot: found))
+        #expect(manager.activeTabId(forWorktree: worktreeId) == review.id)
     }
 
     @Test func updatesDraftReviewRequestFields() {
