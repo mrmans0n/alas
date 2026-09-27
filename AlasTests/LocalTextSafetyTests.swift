@@ -10,6 +10,7 @@ struct LocalTextSafetyTests {
         ("401 with Authorization: Basic dXNlcjpwYXNz", "401 with Authorization: Basic [redacted]"),
         ("403 with Authorization: token opaqueValue", "403 with Authorization: token [redacted]"),
         (#"{"Authorization":"Bearer abcDEF123456xyz","message":"failed"}"#, #"{"Authorization":[redacted],"message":"failed"}"#),
+        (#"\{\"Authorization\":\"Bearer abcDEF123456xyz\"\}"#, #"\{\"Authorization\":[redacted]\}"#),
         (#"401 Authorization: Digest username="alice", realm="prod", response="6629fae4""#, "401 Authorization: Digest [redacted]"),
         ("fatal: https://alice:s3cr3t@example.com/repo.git", "fatal: https://alice:[redacted]@example.com/repo.git"),
         ("jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl rejected", "jwt [redacted] rejected"),
