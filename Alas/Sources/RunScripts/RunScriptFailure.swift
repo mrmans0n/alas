@@ -22,6 +22,10 @@ struct RunScriptFailureQueue: Equatable {
         byWorktree[failure.worktreeID] = Array(byWorktree[failure.worktreeID]!.prefix(3))
     }
 
+    var runIDs: Set<String> {
+        Set(byWorktree.values.joined().map(\.runID))
+    }
+
     func failures(for worktreeID: String) -> [RunScriptFailure] {
         byWorktree[worktreeID, default: []]
     }

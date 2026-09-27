@@ -26,6 +26,15 @@ struct LocalTextModelSettings: View {
         VStack(alignment: .leading, spacing: 8) {
             nextPromptRow
             sessionSummaryRow
+            SettingsRow(
+                name: "Failure briefs",
+                desc: "Summarizes failed run scripts on-device with Apple Intelligence, or the local model when it is already installed."
+            ) {
+                AlasToggle(on: Binding(
+                    get: { state.config.runFailureBriefsEnabled },
+                    set: { state.setRunFailureBriefsEnabled($0) }
+                ))
+            }
             if !state.localTextSupported {
                 Text("Requires Apple silicon with a supported Metal GPU. On-device text features are unavailable on this Mac.")
             } else {

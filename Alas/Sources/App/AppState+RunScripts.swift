@@ -486,6 +486,7 @@ extension AppState {
             startedAt: Date(),
             portConflict: conflict
         ))
+        runFailureBriefs.cancelInFlight(worktreeID: worktree.id, scriptKey: script.key)
 
         let launchID = UUID()
         pendingScriptLaunches[launchKey] = PendingRunScriptLaunch(
@@ -614,6 +615,32 @@ extension AppState {
             observeAttention(.inactive(sourceKey: event.sourceKey))
         }
         runScriptFailureQueue.dismiss(id: id, worktreeID: worktreeID)
+        runFailureBriefs.retain(runIDs: runScriptFailureQueue.runIDs)
+    }
+
+    func setRunFailureBriefsEnabled(_ enabled: Bool) {
+        config.runFailureBriefsEnabled = enabled
+        saveConfig()
+        if !enabled { runFailureBriefs.invalidateAll() }
+    }
+
+    private func startRunFailureBrief(for failure: RunScriptFailure) {
+        runFailureBriefs.retain(runIDs: runScriptFailureQueue.runIDs)
+        guard config.runFailureBriefsEnabled else { return }
+        let runID = failure.runID
+        runFailureBriefs.start(
+            failure,
+            loadOutput: { [weak self] in await self?.persistedRunOutput(runID: runID) },
+            generate: makeRunFailureBriefGenerator()
+        )
+    }
+
+    private func persistedRunOutput(runID: String) async -> String? {
+        await runHistoryPersistenceTasks[runID]?.value
+        guard let entry = try? await runHistoryStore?.entry(id: runID),
+              case let .available(text, _) = entry.output
+        else { return nil }
+        return text
     }
 
     private func retireRunScriptAttention(scriptKey: String, worktree: Worktree, at date: Date) {
@@ -627,6 +654,7 @@ extension AppState {
             observeAttention(.inactive(sourceKey: .init(rawValue: "script:\(failure.runID):failure")), at: date)
             runScriptFailureQueue.dismiss(id: failure.id, worktreeID: worktree.id)
         }
+        runFailureBriefs.retain(runIDs: runScriptFailureQueue.runIDs)
     }
 
     func openRunReport(worktreeID: String, runID: String) {
@@ -937,6 +965,7 @@ extension AppState {
                     )
                     retireRunScriptAttention(scriptKey: script.key, worktree: worktree, at: observedAt)
                     runScriptFailureQueue.append(failure)
+                    startRunFailureBrief(for: failure)
                     if let context = attentionContext(for: worktree) {
                         for observation in AttentionProducer.script(
                             failure: failure, owner: context.owner, display: context.display
@@ -1087,6 +1116,7 @@ extension AppState {
             }
             runRecords.purge(worktreeID: worktreeID)
             runScriptFailureQueue.purge(worktreeID: worktreeID)
+            runFailureBriefs.retain(runIDs: runScriptFailureQueue.runIDs)
             transientRunReports = transientRunReports.filter { $0.value.worktreeID != worktreeID }
             durableRunReportIDsByWorktreeID[worktreeID] = []
             tabs.closeRunReports(worktreeId: worktreeID)
