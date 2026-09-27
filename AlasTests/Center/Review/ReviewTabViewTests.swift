@@ -179,6 +179,19 @@ struct ReviewTabViewTests {
         ))
     }
 
+    @Test func olderOffBranchFetchCannotReplaceNewerReviewSnapshot() {
+        #expect(ReviewTabRequestedFetchGate.accepts(
+            expectedKey: "review", currentKey: "review",
+            expectedGeneration: 2, currentGeneration: 2,
+            isCancelled: false, refreshSettled: true
+        ))
+        #expect(!ReviewTabRequestedFetchGate.accepts(
+            expectedKey: "review", currentKey: "review",
+            expectedGeneration: 1, currentGeneration: 2,
+            isCancelled: true, refreshSettled: true
+        ))
+    }
+
     @Test func outdatedDrawerCapsExpandedListHeightToProtectReviewContent() {
         #expect(OutdatedThreadsDrawerPresentation.expandedListMaxHeight(availableHeight: 1_200) == 280)
         #expect(OutdatedThreadsDrawerPresentation.expandedListMaxHeight(availableHeight: 600) == 210)

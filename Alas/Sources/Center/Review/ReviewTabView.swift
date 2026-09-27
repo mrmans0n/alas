@@ -82,6 +82,18 @@ enum ReviewTabLoadKey {
     }
 }
 
+enum ReviewTabRequestedFetchGate {
+    static func accepts(
+        expectedKey: String, currentKey: String,
+        expectedGeneration: Int, currentGeneration: Int,
+        isCancelled: Bool, refreshSettled: Bool
+    ) -> Bool {
+        !isCancelled && refreshSettled
+            && expectedKey == currentKey
+            && expectedGeneration == currentGeneration
+    }
+}
+
 struct ReviewTabView: View {
     let worktree: Worktree
     let tabState: ReviewPRTabState
@@ -212,16 +224,33 @@ struct ReviewTabView: View {
         guard let activeSnapshot,
               reviewRefreshSettled,
               !tabState.matches(activeSnapshot),
+              let reviewLoop = appState.rightPaneStore.activeState(worktreeId: tabState.worktreeId)?.reviewLoop,
               let remote = tabState.lookupRemote(activeRemote: activeSnapshot.remote),
               let provider = CodeHostProviderRegistry.live().provider(for: remote.kind)
         else { return }
+        let expectedKey = loadKey
+        let expectedGeneration = reviewLoop.refreshGeneration
         guard let request = try? await provider.reviewRequest(
             remote: remote, number: tabState.number, cwd: worktree.path
         ) else {
-            requestedReviewSnapshot = nil
+            if ReviewTabRequestedFetchGate.accepts(
+                expectedKey: expectedKey, currentKey: loadKey,
+                expectedGeneration: expectedGeneration, currentGeneration: reviewLoop.refreshGeneration,
+                isCancelled: Task.isCancelled, refreshSettled: reviewRefreshSettled
+            ) { requestedReviewSnapshot = nil }
             return
         }
+        guard ReviewTabRequestedFetchGate.accepts(
+            expectedKey: expectedKey, currentKey: loadKey,
+            expectedGeneration: expectedGeneration, currentGeneration: reviewLoop.refreshGeneration,
+            isCancelled: Task.isCancelled, refreshSettled: reviewRefreshSettled
+        ) else { return }
         let checks = (try? await provider.checks(remote: remote, request: request, cwd: worktree.path)) ?? []
+        guard ReviewTabRequestedFetchGate.accepts(
+            expectedKey: expectedKey, currentKey: loadKey,
+            expectedGeneration: expectedGeneration, currentGeneration: reviewLoop.refreshGeneration,
+            isCancelled: Task.isCancelled, refreshSettled: reviewRefreshSettled
+        ) else { return }
         let candidate = ReviewLoopSnapshot(
             local: activeSnapshot.local, remote: remote, reviewRequest: request.withChecks(checks),
             providerAvailable: activeSnapshot.providerAvailable,
