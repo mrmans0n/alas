@@ -29,6 +29,7 @@ struct InAppNotificationStack: View {
 
 struct InAppNotificationBanner: View {
     let message: String
+    var detail: String? = nil
     let severity: InAppNotificationSeverity
     var actionTitle: String? = nil
     var action: () -> Void = {}
@@ -48,12 +49,21 @@ struct InAppNotificationBanner: View {
     }
 
     private var messageText: some View {
-        Text(message)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(theme.color("fg"))
-            .lineLimit(3)
-            .help(message)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 2) {
+            Text(message)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(theme.color("fg"))
+                .lineLimit(3)
+                .help(message)
+            if let detail {
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("fg-dim"))
+                    .lineLimit(2)
+                    .help(detail)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     var body: some View {

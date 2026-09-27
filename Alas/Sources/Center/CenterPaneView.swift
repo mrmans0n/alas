@@ -777,7 +777,10 @@ struct CenterPaneView: View {
                     if !runScriptFailures.isEmpty {
                         ForEach(runScriptFailures, id: \.id) { failure in
                             RunScriptFailureBanner(
-                                presentation: RunScriptFailureBannerPresentation(failure: failure),
+                                presentation: RunScriptFailureBannerPresentation(
+                                    failure: failure,
+                                    brief: state.runFailureBriefs.state(for: failure.runID)
+                                ),
                                 onOpen: { state.openRunReport(worktreeID: worktree.id, runID: failure.runID) },
                                 onDismiss: { state.dismissRunScriptFailure(id: failure.id, worktreeID: worktree.id) }
                             )

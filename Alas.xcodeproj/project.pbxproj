@@ -1298,6 +1298,7 @@
 		9D1939E70B46881CCDDC389C /* RightPaneStateReviewLoopPushTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B84EFAC9F0FCF459416920B6 /* RightPaneStateReviewLoopPushTests.swift */; };
 		9D2E53FB0A57BC38C146EA5E /* WorktreeLaunchSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 941BC60920D6A87164610273 /* WorktreeLaunchSurface.swift */; };
 		9D439D5F19ACEB5A39B7CB68 /* CodexACPInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3985F2F58DB6E3BBF3520EFD /* CodexACPInstaller.swift */; };
+		9D44907038BDD7DBB5E6EE2F /* RunFailureBriefSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C8503D3623405785A7362C3 /* RunFailureBriefSection.swift */; };
 		9D4F9F5CE9FF51C33E32703C /* ACPMessageWire.swift in Sources */ = {isa = PBXBuildFile; fileRef = D21F30DB5A812E396262A926 /* ACPMessageWire.swift */; };
 		9D59EE10D5549CAB6CEABC56 /* ACPSubagentRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9BFA61E5D7EA88AB77669B8 /* ACPSubagentRun.swift */; };
 		9D6FE5A4589D73A7480CE2B2 /* IndentationHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35C3F234BEF9CE053CD4DB1E /* IndentationHelper.swift */; };
@@ -2901,6 +2902,7 @@
 		5BE3B261CC2B780A40B2EF4E /* ACPAdapterTargetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAdapterTargetTests.swift; sourceTree = "<group>"; };
 		5BF6876F1100644921459D2A /* AlasFieldCaretSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasFieldCaretSyncTests.swift; sourceTree = "<group>"; };
 		5C05EF64FD7701A941C81837 /* RevisionFollowControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RevisionFollowControl.swift; sourceTree = "<group>"; };
+		5C8503D3623405785A7362C3 /* RunFailureBriefSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunFailureBriefSection.swift; sourceTree = "<group>"; };
 		5C8BF1EC24E449A302A1E25C /* CopyFeedbackState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyFeedbackState.swift; sourceTree = "<group>"; };
 		5C96772DABFBCF15691FFB37 /* DiffDisplayPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffDisplayPreferences.swift; sourceTree = "<group>"; };
 		5CA0545B8C80DFDDA9716789 /* FileBookmarksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBookmarksTests.swift; sourceTree = "<group>"; };
@@ -5061,6 +5063,7 @@
 				993AF74DD1990728AD0C6876 /* FailureLogSelection.swift */,
 				571F6F6D18DA8F46CEA2C9F0 /* RunFailureBriefCoordinator.swift */,
 				6D52F5B1F93EE7E17A59053E /* RunFailureBriefPolicy.swift */,
+				5C8503D3623405785A7362C3 /* RunFailureBriefSection.swift */,
 			);
 			path = FailureBriefs;
 			sourceTree = "<group>";
@@ -8854,6 +8857,7 @@
 				D0E7182835E93329C89FCD06 /* RunEndpoint.swift in Sources */,
 				1B8092C290AE34F16E420A6B /* RunFailureBriefCoordinator.swift in Sources */,
 				FA37D62ECC1E2C63072AF025 /* RunFailureBriefPolicy.swift in Sources */,
+				9D44907038BDD7DBB5E6EE2F /* RunFailureBriefSection.swift in Sources */,
 				7300E697F381F0ED1D2EFD66 /* RunHistoryPersistenceRetry.swift in Sources */,
 				E6C0F9F4C0CF4C781A8D29EB /* RunHistoryStore.swift in Sources */,
 				02821E3FE8E67B2D162A4BC8 /* RunRecord.swift in Sources */,
