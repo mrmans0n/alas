@@ -5435,12 +5435,22 @@ struct ACPSessionManagerAttachRestoreTests {
         )
         mgrBox.pointee = manager
 
+        let backfill = HydrationBackfillGate()
+        manager.beforeBackfill = { await backfill.wait() }
         _ = try #require(manager.placeholderSession(id: "local"))
         await manager.hydrateIfNeeded(id: "local")
         // Sanity check: hydrateIfNeeded returned with only the tail applied.
         #expect(manager.sessions["local"]?.transcript.messages.count == ACPTranscript.tailWindow)
 
-        await manager.attach(to: "local", freshlyCreated: false)
+        // Keep the backfill held until attach is parked on it. Attach runs
+        // synchronously from claiming the writer lease to `awaitBackfill`, so
+        // once the lease is visible here the setup evaluator can only have
+        // run if attach skipped that wait.
+        let attach = Task { await manager.attach(to: "local", freshlyCreated: false) }
+        try await waitUntil { manager._ownedLeases.contains("local") }
+        #expect(captured.count == -1, "setup must not run while the backfill is held")
+        backfill.open()
+        await attach.value
 
         #expect(captured.count == total,
                 "setup evaluator must observe the fully-materialised transcript")

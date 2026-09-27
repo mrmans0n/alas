@@ -1261,6 +1261,10 @@ final class ACPSessionManager: ObservableObject {
     /// teardown) can wait for it; production UI does not.
     private var inFlightBackfills: [ACPSession.ID: Task<Void, Never>] = [:]
     private var pendingBackfillOlderMessages: [ACPSession.ID: [ACPHydratedMessage]] = [:]
+    /// Awaited by each older-message backfill before it touches the
+    /// transcript. Tests use it to observe the tail-only first paint, which
+    /// otherwise depends on main-actor job ordering. Nil in production.
+    var beforeBackfill: (@MainActor () async -> Void)?
 
     /// Per-session UI refcount. When this drops to zero AND the session is
     /// not `attached`, the cached `ACPSession` is evicted from `sessions`.
@@ -2013,6 +2017,7 @@ final class ACPSessionManager: ObservableObject {
             // Yield once so the tail paint reaches the screen before we
             // start allocating older messages on the main actor.
             await Task.yield()
+            if let beforeBackfill = self?.beforeBackfill { await beforeBackfill() }
             guard !Task.isCancelled else { return }
 
             var older: [ACPMessage] = []
