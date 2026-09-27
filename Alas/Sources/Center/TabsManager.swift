@@ -1585,7 +1585,10 @@ final class TabsManager {
         state.createdAt = Date()
         let review = Tab.reviewPR(state)
         if case .draftReviewRequest(var draft) = file.tabs[index], hasDraftReviewComments(draft) {
-            draft.refreshSnapshotMetadata(from: snapshot)
+            if draft.reviewBranchName == (snapshot.local.upstreamBranchName ?? snapshot.local.branchName),
+               draft.baseBranch == snapshot.local.baseBranch {
+                draft.refreshSnapshotMetadata(from: snapshot)
+            }
             draft.didOpenCreatedReview = true
             file.tabs[index] = .draftReviewRequest(draft)
             if let existingIndex = file.tabs.firstIndex(where: { $0.id == review.id }) {
