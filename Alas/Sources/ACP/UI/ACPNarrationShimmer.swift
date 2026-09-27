@@ -2,10 +2,8 @@ import SwiftUI
 
 /// Which narration row ("Thinking…" / "Working…") the agent is writing into
 /// right now. Deciding this reads `StreamingText.phase`, which is
-/// `@MainActor`-isolated, so unlike the otherwise-similar
-/// `ACPToolCallGroupHeaderAnimation` this cannot be a plain nonisolated
-/// enum — every call site (transcript row building, `ACPSubagentRowView`)
-/// already runs on the main actor.
+/// `@MainActor`-isolated, so every call site (transcript row building,
+/// `ACPSubagentRowView`) already runs on the main actor.
 @MainActor
 enum ACPNarrationLiveness {
     /// Index of the live narration row, or nil when nothing is being narrated.
@@ -57,8 +55,8 @@ extension View {
     /// "still being written" cue for narration rows: horizontally along the
     /// header label, vertically down the row's lane bar. Purely an overlay
     /// masked to the content, so it never changes the row's measured height
-    /// (see `ACPToolCallGroupLane` for why that matters to the scroller).
-    /// Holds still under Reduce Motion.
+    /// (the scroller re-tiles the transcript whenever a row's measured
+    /// height changes). Holds still under Reduce Motion.
     func acpNarrationShimmer(isActive: Bool, axis: Axis = .horizontal) -> some View {
         modifier(ACPNarrationShimmer(isActive: isActive, axis: axis))
     }

@@ -270,6 +270,12 @@ struct LocalTextModelStoreTests {
                 #expect(try Data(contentsOf: lease.directory.appendingPathComponent("weights")) == fixture.originalWeights)
                 lease.close()
             case .cancel:
+                // URLSession calls `stopLoading` from its own loading thread; nothing
+                // orders it before the delegate completion that `install()` awaits.
+                let stopDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+                while !ModelURLProtocol.control.withLock({ $0.stopped }), ContinuousClock.now < stopDeadline {
+                    try await Task.sleep(for: .milliseconds(10))
+                }
                 #expect(ModelURLProtocol.control.withLock { $0.stopped })
                 #expect(await store.state == .notInstalled)
             case .oversized: #expect(await store.state == .failed(.integrity))
@@ -359,6 +365,9 @@ private final class ModelURLProtocol: URLProtocol {
     enum Mode { case valid, partial, oversized, interrupted, redirect, cancel }
     struct Control {
         let mode: Mode
+        /// Distinguishes loop iterations, so a late stop from an earlier
+        /// iteration's request cannot mark this one stopped.
+        let id = UUID()
         var requests = 0
         var started = false
         var stopped = false
@@ -366,12 +375,15 @@ private final class ModelURLProtocol: URLProtocol {
     static let control = Mutex(Control(mode: .valid))
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    private var controlID: UUID?
+
     override func startLoading() {
-        let mode = Self.control.withLock { value in
+        let (mode, id) = Self.control.withLock { value in
             value.requests += 1
             value.started = true
-            return value.mode
+            return (value.mode, value.id)
         }
+        controlID = id
         let url = request.url!
         if mode == .redirect {
             let response = HTTPURLResponse(url: url, statusCode: 302, httpVersion: nil, headerFields: nil)!
@@ -386,5 +398,9 @@ private final class ModelURLProtocol: URLProtocol {
         if mode == .interrupted { client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost)) }
         else { client?.urlProtocolDidFinishLoading(self) }
     }
-    override func stopLoading() { Self.control.withLock { $0.stopped = true } }
+    override func stopLoading() {
+        Self.control.withLock { value in
+            if value.id == controlID { value.stopped = true }
+        }
+    }
 }

@@ -82,6 +82,18 @@ struct ACPToolCallPresentation: Equatable, Sendable {
         }
     }
 
+    /// What a one-line row names after the verb: the title without a
+    /// leading copy of the verb, or the first location when the title adds
+    /// nothing.
+    static func target(for toolCall: ACPMessage.ToolCall, label: String) -> String? {
+        let title = toolCall.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = label.lowercased() + " "
+        let stripped = title.lowercased().hasPrefix(prefix) ? String(title.dropFirst(prefix.count)) : title
+        let target = stripped.trimmingCharacters(in: .whitespaces)
+        if !target.isEmpty, target.lowercased() != label.lowercased() { return target }
+        return toolCall.locations.first { !$0.isEmpty }
+    }
+
     private static func rawOutputLooksLikeImageResult(_ rawOutput: String?) -> Bool {
         guard let rawOutput else { return false }
         let lower = rawOutput.lowercased()

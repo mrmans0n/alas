@@ -6,9 +6,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.15] - 2026-09-27
+
+### ✨ Features
+
+- Redesign the ACP activity fold so tool progress stays compact without hiding useful context (#1572).
+- Render slash commands as pills anywhere in the ACP composer (#1567).
+- Explain merge conflicts with the installed local text model (#1562).
+- Report how scheduled chat agents finish (#1565).
+- Transition newly created pull requests and merge requests directly to Inspect (#1548).
+
 ### 🐛 Fixes
 
-- Keep native peer transcript tails above the floating composer and align typed text with its placeholder.
+- Compile ACP activity summary labels with Swift 6.3.
+- Keep native peer transcript tails above the floating composer and align typed text with its placeholder (#1564).
+- Make Summarize Session work when auto-run is enabled (#1569).
+- Move blocking process, pipe, and checkpoint Git batch I/O off Swift's cooperative pool (#1561, #1568).
+- Resolve timing races in peer, run, browser, and stack flows (#1553).
+
+### 🏗️ Internal
+
+- Replace fixed waits in terminal, ACP hydration, local-text download, and protocol-stop tests with event-driven synchronization (#1559, #1563, #1570).
+- Update the tree-sitter-groovy grammar digest (#1566, #1571).
 
 ## [0.19.14] - 2026-09-27
 
