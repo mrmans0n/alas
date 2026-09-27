@@ -431,15 +431,15 @@ final class CommitPublishWorkflow {
                     throw CommitPublishWorkflowError.invalidDestination(phase: .createReviewRequest)
                 }
 
-                if !target.reviewRequestExisted {
+                if !target.reviewRequestExisted, checkpoint.createdReviewURL == nil {
                     activity = .creatingReviewRequest
                     try Task.checkCancellation()
                     let requestExists = try await operations.currentReviewRequestExists(target)
                     try Task.checkCancellation()
-                    if requestExists, checkpoint.createdReviewURL == nil {
+                    if requestExists {
                         checkpoint.createdReviewURL = try await operations.currentReviewRequestURL(target)
                         try onCheckpointChange(checkpoint)
-                    } else if !requestExists {
+                    } else {
                         checkpoint.createdReviewURL = try await operations.createReviewRequest(target, checkpoint.subject, checkpoint.body)
                         try onCheckpointChange(checkpoint)
                     }

@@ -39,6 +39,34 @@ struct CommitPublishWorkflowTests {
         #expect(workflow.lastError == nil)
     }
 
+    @Test func retryWithCreatedURLSkipsStaleLookupAndCreation() async throws {
+        let url = URL(string: "https://github.com/owner/repository/pull/42")!
+        var checkpoint = WorkflowHarness().checkpoint(nextPhase: .createReviewRequest)
+        checkpoint.createdReviewURL = url
+        var lookupCount = 0
+        var createCount = 0
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
+            currentHeadSHA: { "commit-sha" }, remoteBranchContainsCommit: { _, _ in true }, push: { _, _ in },
+            currentReviewRequestExists: { _ in
+                lookupCount += 1
+                return false
+            },
+            createReviewRequest: { _, _, _ in
+                createCount += 1
+                return url
+            },
+            syncGG: { _ in }, refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) { _ in }
+
+        await workflow.resume(checkpoint)
+
+        #expect(lookupCount == 0)
+        #expect(createCount == 0)
+        #expect(workflow.lastError == nil)
+    }
+
     @Test func ownerReleasesCompletedRunBeforeRefreshWithoutClearingNewerFailure() async throws {
         let refreshGate = AsyncGate()
         var failSync = false
