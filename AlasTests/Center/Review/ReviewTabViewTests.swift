@@ -1,7 +1,38 @@
+import Foundation
 import Testing
 @testable import Alas
 
 struct ReviewTabViewTests {
+    @Test func offBranchRequestCannotStageOrSubmitReviewComments() {
+        let remote = CodeHostRemote(
+            kind: .github, host: "github.com", owner: "mrmans0n", repository: "alas",
+            remoteName: "origin", webURL: URL(string: "https://github.com/mrmans0n/alas")!
+        )
+        let local = ReviewLoopLocalState(
+            branchName: "feature-b", headSHA: "abc", baseBranch: "main",
+            hasWorkingTreeChanges: false, hasStagedChanges: false,
+            aheadCommitCount: 0, hasUpstream: true, needsPush: false
+        )
+        func snapshot(number: Int) -> ReviewLoopSnapshot {
+            ReviewLoopSnapshot(
+                local: local, remote: remote, reviewRequest: .placeholder(remote: remote, number: number),
+                providerAvailable: true, providerAuthenticated: true,
+                providerCapabilities: .githubCLI, errorMessage: nil
+            )
+        }
+        let tabState = ReviewPRTabState(worktreeId: "wt", snapshot: snapshot(number: 42))
+
+        #expect(!ReviewTabBranchContext.canReview(
+            tabState: tabState, activeSnapshot: snapshot(number: 43), refreshSettled: true
+        ))
+        #expect(!ReviewTabBranchContext.canReview(
+            tabState: tabState, activeSnapshot: snapshot(number: 42), refreshSettled: false
+        ))
+        #expect(ReviewTabBranchContext.canReview(
+            tabState: tabState, activeSnapshot: snapshot(number: 42), refreshSettled: true
+        ))
+    }
+
     @Test func loadingPresentationKeepsLoadedSessionVisibleDuringRefresh() {
         #expect(ReviewTabLoadingPresentation.showsBlockingLoader(isLoading: true, hasSession: false))
         #expect(!ReviewTabLoadingPresentation.showsBlockingLoader(isLoading: true, hasSession: true))
