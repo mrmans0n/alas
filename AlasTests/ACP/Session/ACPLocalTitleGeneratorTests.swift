@@ -128,6 +128,31 @@ struct ACPLocalTitleRoutingTests {
     }
 
     @Test @MainActor
+    func cancellingATitleStopsWaitingForReadiness() async {
+        let readiness = PendingReadiness()
+        let engine = TitleEngine(outcome: .success("Fix sign-in race"))
+        let fallback = ACPQwenTitleFallback(
+            engine: engine,
+            isAvailable: { true },
+            waitForLocalTextReadiness: { await readiness.wait() }
+        )
+        let title = Task {
+            defer { readiness.titleFinished = true }
+            return await fallback.generate(from: "Fix the sign-in race")
+        }
+        while !readiness.isWaiting { await Task.yield() }
+
+        title.cancel()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while !readiness.titleFinished, ContinuousClock.now < deadline { await Task.yield() }
+
+        #expect(readiness.titleFinished)
+        readiness.open()
+        #expect(await title.value == nil)
+        #expect(await engine.calls == 0)
+    }
+
+    @Test @MainActor
     func revokedConsentDiscardsALateQwenTitle() async {
         let availability = TitleAvailability()
         let engine = TitleEngine(outcome: .success("Fix sign-in race")) {
@@ -151,6 +176,21 @@ struct ACPLocalTitleRoutingTests {
 private final class TitleAvailability {
     var isAvailable = true
     var checks = 0
+}
+
+/// Readiness that stays pending, like an inspection or install in progress.
+@MainActor
+private final class PendingReadiness {
+    private var continuation: CheckedContinuation<Void, Never>?
+    var titleFinished = false
+    var isWaiting: Bool { continuation != nil }
+
+    func wait() async { await withCheckedContinuation { continuation = $0 } }
+
+    func open() {
+        continuation?.resume()
+        continuation = nil
+    }
 }
 
 /// Suspends until its caller is cancelled, like the real engine's generation.

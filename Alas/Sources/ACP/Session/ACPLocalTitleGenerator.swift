@@ -1,5 +1,6 @@
 import Foundation
 import FoundationModels
+import os
 
 /// Produces a short title from the first prose in a user prompt. Generation is
 /// strictly on-device; unsupported or unavailable models leave the caller's
@@ -142,8 +143,8 @@ struct ACPQwenTitleFallback: Sendable {
     var requests: ACPQwenTitleRequests?
 
     func generate(from candidate: String) async -> String? {
-        await waitForLocalTextReadiness()
-        guard let prompt = ACPLocalTitleGenerator.prompt(for: candidate) else { return nil }
+        await waitForReadinessUnlessCancelled()
+        guard !Task.isCancelled, let prompt = ACPLocalTitleGenerator.prompt(for: candidate) else { return nil }
         let request = LocalTextGenerationRequest(
             messageCandidates: [[
                 .init(role: .system, content: ACPLocalTitleGenerator.instructions),
@@ -161,6 +162,24 @@ struct ACPQwenTitleFallback: Sendable {
         // Consent can be revoked while generation is pending.
         guard let result, !Task.isCancelled, await isAvailable() else { return nil }
         return ACPLocalTitleGenerator.validTitle(result.text)
+    }
+
+    /// Readiness can span a model download; a cancelled title must not keep
+    /// its stopped session runner alive until then.
+    private func waitForReadinessUnlessCancelled() async {
+        let waiter = ReadinessWaiter()
+        let wait = waitForLocalTextReadiness
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                waiter.install(continuation)
+                Task { @MainActor in
+                    await wait()
+                    waiter.resume()
+                }
+            }
+        } onCancel: {
+            waiter.resume()
+        }
     }
 
     /// Checking consent and tracking the job in one main-actor turn means a
@@ -185,5 +204,34 @@ final class ACPQwenTitleRequests {
     func cancelAll() {
         jobs.forEach { $0.cancel() }
         jobs.removeAll()
+    }
+}
+
+/// Resumes its continuation exactly once, whichever of readiness or
+/// cancellation arrives first.
+private final class ReadinessWaiter: Sendable {
+    private struct State {
+        var continuation: CheckedContinuation<Void, Never>?
+        var resumed = false
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    func install(_ continuation: CheckedContinuation<Void, Never>) {
+        let resumeNow = state.withLock { state in
+            if state.resumed { return true }
+            state.continuation = continuation
+            return false
+        }
+        if resumeNow { continuation.resume() }
+    }
+
+    func resume() {
+        let continuation = state.withLock { state in
+            state.resumed = true
+            defer { state.continuation = nil }
+            return state.continuation
+        }
+        continuation?.resume()
     }
 }
