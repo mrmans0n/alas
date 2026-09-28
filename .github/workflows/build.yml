@@ -371,7 +371,7 @@ jobs:
             -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath .build/xcode/DerivedData \
             -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
-            -skipMacroValidation \
+            -skipMacroValidation -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
