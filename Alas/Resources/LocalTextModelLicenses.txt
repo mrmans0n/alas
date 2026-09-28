@@ -499,9 +499,9 @@ LICENSE
 
 ========================================================================
 
-swift-collections 1.7.0
+swift-collections 1.7.1
 https://github.com/apple/swift-collections.git
-Revision: a66de878e87ef5a3d5d390e0f6d9002aa5541a43
+Revision: 98ef3c98609a1e31b7e157b5b619579001a789d6
 LICENSE.txt
 
 swift-numerics 1.1.1
