@@ -2,8 +2,8 @@ import SwiftUI
 import AppKit
 
 struct WindowConfigurator: NSViewRepresentable {
-    /// When true, the system titlebar drag is turned off while the pointer is
-    /// over the titlebar band, so the main workspace window's top tab strip is
+    /// When true, the system titlebar drag is blocked for gestures that start
+    /// in the titlebar band, so the main workspace window's top tab strip is
     /// never hijacked. Explicit `WindowDragHandle` regions move the window
     /// there instead. Secondary titleless windows keep the system behavior.
     var disablesTitlebarDrag: Bool = false
@@ -19,33 +19,52 @@ struct WindowConfigurator: NSViewRepresentable {
     }
 }
 
+/// Configures the hosting window and, when `disablesTitlebarDrag` is set,
+/// blocks the system titlebar drag tracker from claiming clicks that land in
+/// the titlebar band (where the main workspace window's top tab strip sits).
+///
+/// `window.isMovable` is the only lever AppKit exposes for this, and it's a
+/// window-wide flag, not one scoped to a screen region. The window stays
+/// movable at all times — which is what lets macOS relocate and restore it
+/// through display and sleep/wake changes — except for the exact span of a
+/// mouse-down-to-mouse-up gesture that starts in the titlebar band. The
+/// system's own drag-on-background behavior only ever triggers from a
+/// mouse-down, so a local event monitor re-derives the answer fresh from the
+/// real event at that moment, rather than from cached pointer-hover state
+/// that a fast drag crossing into the band without a `mouseMoved` could leave
+/// stale, and rather than a reapply step that could race a live display
+/// change landing between "force movable" and "restore the guard".
 final class WindowConfigurationView: NSView {
     var disablesTitlebarDrag: Bool {
         didSet {
-            configureWindowIfNeeded()
+            guard !disablesTitlebarDrag else { return }
+            window?.isMovable = true
         }
     }
 
+    private var mouseDownMonitor: Any?
+    private var mouseUpMonitor: Any?
     private var screensDidSleepObserver: NSObjectProtocol?
-    private var screensDidWakeObserver: NSObjectProtocol?
     private var screenParametersObserver: NSObjectProtocol?
-    /// Window-space pointer position from the last mouse-tracking event.
-    /// Used to reapply the movability policy on wake without depending on
-    /// `NSWindow.mouseLocationOutsideOfEventStream`, which reflects the
-    /// actual hardware pointer and cannot be driven from a synthetic event.
-    private var lastPointerInWindow: NSPoint?
 
     init(disablesTitlebarDrag: Bool) {
         self.disablesTitlebarDrag = disablesTitlebarDrag
         super.init(frame: .zero)
-        addTrackingArea(NSTrackingArea(
-            rect: .zero,
-            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self
-        ))
-        // Displays that sleep (lock, idle) are often disconnected. Make sure
-        // the window is movable before that, even if the pointer was left
-        // resting on the titlebar band.
+        mouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            self?.refreshMovability(for: event)
+            return event
+        }
+        mouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+            self?.restoreMovability(for: event)
+            return event
+        }
+        // Displays that sleep (lock, idle) or a live disconnect/reconnect/
+        // resolution change could otherwise catch the window non-movable if
+        // its last mouse-down landed in the titlebar band and the matching
+        // mouse-up was somehow missed. Force movable back on as a safety net;
+        // there's nothing to "reapply" afterward, since the mouse-down
+        // monitor re-derives the correct value from scratch on the very next
+        // click.
         screensDidSleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.screensDidSleepNotification,
             object: nil,
@@ -55,42 +74,13 @@ final class WindowConfigurationView: NSView {
                 self?.window?.isMovable = true
             }
         }
-        // A live display disconnect/reconnect or resolution change fires this
-        // instead of (or in addition to) a sleep/wake pair, with no guarantee
-        // of a mouse move first if the pointer was left over the titlebar
-        // band, and AppKit has already adjusted window frames for the change
-        // by the time this notification arrives. Force movable immediately so
-        // this and any subsequent screen change (e.g. the display returning)
-        // can relocate/restore the window, then reapply the pointer-based
-        // policy on the next run loop turn so a titlebar-band pointer left
-        // stationary through the transition doesn't leave the window
-        // draggable indefinitely.
         screenParametersObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                self.window?.isMovable = true
-                RunLoop.main.perform { [weak self] in
-                    MainActor.assumeIsolated {
-                        self?.configureWindowIfNeeded()
-                    }
-                }
-            }
-        }
-        // On wake, reapply the pointer-based policy immediately: a stationary
-        // pointer left over the tab strip produces no mouse-move/enter event,
-        // so without this the first click after wake could still be claimed
-        // as a system window drag.
-        screensDidWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.screensDidWakeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.configureWindowIfNeeded()
+                self?.window?.isMovable = true
             }
         }
     }
@@ -101,12 +91,14 @@ final class WindowConfigurationView: NSView {
     }
 
     isolated deinit {
-        let notificationCenter = NSWorkspace.shared.notificationCenter
-        if let screensDidSleepObserver {
-            notificationCenter.removeObserver(screensDidSleepObserver)
+        if let mouseDownMonitor {
+            NSEvent.removeMonitor(mouseDownMonitor)
         }
-        if let screensDidWakeObserver {
-            notificationCenter.removeObserver(screensDidWakeObserver)
+        if let mouseUpMonitor {
+            NSEvent.removeMonitor(mouseUpMonitor)
+        }
+        if let screensDidSleepObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(screensDidSleepObserver)
         }
         if let screenParametersObserver {
             NotificationCenter.default.removeObserver(screenParametersObserver)
@@ -115,42 +107,25 @@ final class WindowConfigurationView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        lastPointerInWindow = window?.mouseLocationOutsideOfEventStream
         configureWindowIfNeeded()
-    }
-
-    override func mouseMoved(with event: NSEvent) {
-        lastPointerInWindow = event.locationInWindow
-        updateMovability(pointerInWindow: lastPointerInWindow)
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        lastPointerInWindow = event.locationInWindow
-        updateMovability(pointerInWindow: lastPointerInWindow)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        lastPointerInWindow = nil
-        updateMovability(pointerInWindow: nil)
     }
 
     func configureWindowIfNeeded() {
         guard let window else { return }
         TitlelessWindow.configure(window)
-        updateMovability(pointerInWindow: lastPointerInWindow)
     }
 
-    private func updateMovability(pointerInWindow: NSPoint?) {
-        guard let window else { return }
-        let movable = !disablesTitlebarDrag || pointerInWindow.map {
-            TitlelessWindow.allowsSystemMove(
-                pointerInWindow: $0,
-                windowSize: window.frame.size,
-                contentLayoutRect: window.contentLayoutRect
-            )
-        } ?? true
-        if window.isMovable != movable {
-            window.isMovable = movable
-        }
+    private func refreshMovability(for event: NSEvent) {
+        guard disablesTitlebarDrag, let window, event.window === window else { return }
+        window.isMovable = TitlelessWindow.allowsSystemMove(
+            pointerInWindow: event.locationInWindow,
+            windowSize: window.frame.size,
+            contentLayoutRect: window.contentLayoutRect
+        )
+    }
+
+    private func restoreMovability(for event: NSEvent) {
+        guard let window, event.window === window else { return }
+        window.isMovable = true
     }
 }

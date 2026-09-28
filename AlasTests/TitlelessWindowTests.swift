@@ -81,10 +81,13 @@ struct TitlelessWindowTests {
         ))
     }
 
-    /// Only the titlebar band may be non-movable: macOS will not move a
-    /// non-movable window off a removed display or back when it returns.
+    /// The system titlebar drag tracker only ever triggers from a
+    /// mouse-down, so that's the only moment `isMovable` must be correct.
+    /// This is verified fresh from the real event, not from cached hover
+    /// state, so it also covers a fast drag that crosses into the band
+    /// without a preceding `mouseMoved`.
     @Test(arguments: [(distanceBelowTop: 5.0, movable: false), (distanceBelowTop: 200.0, movable: true)])
-    func mainWindowIsNonmovableOnlyUnderTitlebar(distanceBelowTop: CGFloat, movable: Bool) throws {
+    func mouseDownInTitlebarBandBlocksSystemDrag(distanceBelowTop: CGFloat, movable: Bool) throws {
         let window = NSWindow(
             contentRect: NSRect(x: 100, y: 100, width: 800, height: 600),
             styleMask: [.titled, .resizable],
@@ -94,8 +97,8 @@ struct TitlelessWindowTests {
         let configurationView = WindowConfigurationView(disablesTitlebarDrag: true)
         window.contentView = configurationView
 
-        configurationView.mouseMoved(with: try #require(Self.mouseEvent(
-            type: .mouseMoved,
+        NSApp.sendEvent(try #require(Self.mouseEvent(
+            type: .leftMouseDown,
             location: NSPoint(x: 400, y: window.frame.height - distanceBelowTop),
             windowNumber: window.windowNumber
         )))
@@ -103,13 +106,10 @@ struct TitlelessWindowTests {
         #expect(window.isMovable == movable)
     }
 
-    /// A live display disconnect/reconnect fires `didChangeScreenParameters`
-    /// with no guaranteed mouse move first, and AppKit has already adjusted
-    /// window frames for the change by the time it arrives. The window must
-    /// become movable so macOS can relocate/restore it through this and any
-    /// subsequent change, and the pointer-based policy must come back after,
-    /// not leave the window draggable indefinitely.
-    @Test func screenParametersChangeForcesThenReappliesPointerPolicy() throws {
+    /// The window must default back to movable once the gesture ends, so
+    /// background system events (sleep, display changes) between gestures
+    /// always see a movable window.
+    @Test func mouseUpRestoresMovabilityAfterTitlebarDrag() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 100, y: 100, width: 800, height: 600),
             styleMask: [.titled, .resizable],
@@ -118,46 +118,78 @@ struct TitlelessWindowTests {
         )
         let configurationView = WindowConfigurationView(disablesTitlebarDrag: true)
         window.contentView = configurationView
-        configurationView.mouseMoved(with: try #require(Self.mouseEvent(
-            type: .mouseMoved,
+
+        NSApp.sendEvent(try #require(Self.mouseEvent(
+            type: .leftMouseDown,
             location: NSPoint(x: 400, y: window.frame.height - 5),
             windowNumber: window.windowNumber
         )))
         #expect(window.isMovable == false)
 
-        NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        NSApp.sendEvent(try #require(Self.mouseEvent(
+            type: .leftMouseUp,
+            location: NSPoint(x: 400, y: window.frame.height - 5),
+            windowNumber: window.windowNumber
+        )))
+
+        #expect(window.isMovable == true)
+    }
+
+    /// Turning the guard off (e.g. a secondary window) must not leave the
+    /// window stuck non-movable from an earlier titlebar gesture.
+    @Test func disablingTitlebarGuardRestoresMovability() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 100, y: 100, width: 800, height: 600),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        let configurationView = WindowConfigurationView(disablesTitlebarDrag: true)
+        window.contentView = configurationView
+        NSApp.sendEvent(try #require(Self.mouseEvent(
+            type: .leftMouseDown,
+            location: NSPoint(x: 400, y: window.frame.height - 5),
+            windowNumber: window.windowNumber
+        )))
+        #expect(window.isMovable == false)
+
+        configurationView.disablesTitlebarDrag = false
+
+        #expect(window.isMovable == true)
+    }
+
+    /// A live display disconnect/reconnect or a sleeping display can leave
+    /// the window non-movable if a titlebar-band mouse-down's matching
+    /// mouse-up was somehow missed. Both must force the window back to
+    /// movable as a safety net.
+    @Test(arguments: [NSWorkspace.screensDidSleepNotification, NSApplication.didChangeScreenParametersNotification])
+    func systemEventsForceWindowMovable(_ notificationName: Notification.Name) throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 100, y: 100, width: 800, height: 600),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        let configurationView = WindowConfigurationView(disablesTitlebarDrag: true)
+        window.contentView = configurationView
+        NSApp.sendEvent(try #require(Self.mouseEvent(
+            type: .leftMouseDown,
+            location: NSPoint(x: 400, y: window.frame.height - 5),
+            windowNumber: window.windowNumber
+        )))
+        #expect(window.isMovable == false)
+
+        let center = notificationName == NSWorkspace.screensDidSleepNotification
+            ? NSWorkspace.shared.notificationCenter
+            : NotificationCenter.default
+        center.post(name: notificationName, object: nil)
 
         let deadline = Date().addingTimeInterval(1)
-        while window.isMovable, Date() < deadline {
+        while !window.isMovable, Date() < deadline {
             pumpMainRunLoop(seconds: 0.01)
         }
 
-        #expect(window.isMovable == false)
-    }
-
-    /// On wake, a stationary pointer left over the tab strip produces no
-    /// mouse-move event. The pointer-based policy must be reapplied
-    /// immediately, not on the next mouse movement.
-    @Test func screensWakeReappliesPointerPolicy() throws {
-        let window = NSWindow(
-            contentRect: NSRect(x: 100, y: 100, width: 800, height: 600),
-            styleMask: [.titled, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        let configurationView = WindowConfigurationView(disablesTitlebarDrag: true)
-        window.contentView = configurationView
-        configurationView.mouseMoved(with: try #require(Self.mouseEvent(
-            type: .mouseMoved,
-            location: NSPoint(x: 400, y: window.frame.height - 5),
-            windowNumber: window.windowNumber
-        )))
-        window.isMovable = true // simulate the sleep-time rescue left it movable
-
-        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
-        pumpMainRunLoop(seconds: 0.05)
-
-        #expect(window.isMovable == false)
+        #expect(window.isMovable == true)
     }
 
     private static func mouseEvent(
