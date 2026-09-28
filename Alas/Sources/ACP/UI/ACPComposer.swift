@@ -605,10 +605,35 @@ struct ACPInputField: NSViewRepresentable {
                 // intended "#123") stays plain text rather than chipping
                 // into something the user didn't finish typing. Shares the
                 // exact same match-finding as `chipUpstreamReferencesIfNeeded()`.
+                //
+                // The caret-skip guard only protects a reference the store
+                // has NOT looked up yet: once the entry is
+                // `.loading`/`.loaded`/`.failed` — or `remoteResolved` and
+                // the store has no entry at all because a previous composer
+                // already swept it — the number was final before the draft
+                // persisted, so chipping a trailing token cannot cut a
+                // longer one short. This is what makes a composer remount
+                // (the placement swap when a first-run-connecting session
+                // finishes connecting) keep its persisted trailing
+                // reference instead of resetting it to plain text until the
+                // next keystroke/hover/send.
                 let end = (storage.string as NSString).length
-                let matches = ACPUpstreamReferenceDetector.chippableMatches(
-                    in: storage.string, host: host, caret: NSRange(location: end, length: 0)
+                let caret = NSRange(location: end, length: 0)
+                var matches = ACPUpstreamReferenceDetector.chippableMatches(
+                    in: storage.string, host: host, caret: caret
                 )
+                // The sentinel drops the token ENDING at the restored
+                // text's end from `matches` entirely. If its entry is
+                // already resolved (a previous composer swept this exact
+                // reference before the remount), it was final then — add
+                // it back so it chips too.
+                if let trailing = ACPUpstreamReferenceDetector.references(
+                    in: storage.string, host: host, unclosedRunsExtendToEnd: true
+                ).last(where: { NSMaxRange($0.range) == end }),
+                   matches.last(where: { NSMaxRange($0.range) == end }) == nil,
+                   store.entry(for: trailing.reference) != .idle {
+                    matches.append(trailing)
+                }
                 for match in matches.reversed() {
                     let attributes = storage.attributes(at: match.range.location, effectiveRange: nil)
                     storage.replaceCharacters(

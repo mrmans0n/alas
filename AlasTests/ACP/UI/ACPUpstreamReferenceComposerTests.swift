@@ -280,4 +280,44 @@ struct ACPUpstreamReferenceComposerTests {
         #expect(chipSpellings(textView).isEmpty)
         #expect(textView.string == "```\nlog: failed in #123")
     }
+
+    /// Regression: a composer remount (the placement swap when a
+    /// first-run-connecting session finishes connecting) destroys the
+    /// Coordinator and rebuilds it with `initialDraft` — the persisted
+    /// draft with the reference spelled out as plain text. `restore`
+    /// chips the reference ONLY via the trailing-reference sentinel,
+    /// which leaves a reference at the END of the text un-chipped ("might
+    /// still be mid-keystroke"). But at REMOUNT time the draft is final:
+    /// it came from `persistComposerDraft`, not from an in-flight
+    /// keystroke. The chip therefore never comes back until the user
+    /// types a space after it, hovers, or sends — the visual "badge
+    /// resets when the session connects".
+    ///
+    /// The fix: when the store's entry for a reference is already
+    /// resolved (`.loaded` or `.failed` — the lookup was final BEFORE the
+    /// remount), the reference is provably not mid-digit, so restore must
+    /// chip it even at the end of the text.
+    @Test("remounting a finished draft re-chips its trailing reference when the lookup already resolved")
+    func remountChipsTrailingReferenceWhenLookupResolved() async {
+        let store = await UpstreamReferenceFixtures.store()
+        let resolvedReference = CodeHostReference(sigil: .hash, number: 12)
+        // Force-resolve the entry through the store's real lookup path so
+        // `resolvedKind` is populated, exactly as it was before remount.
+        store.ensureLoaded(resolvedReference)
+        await store.waitForPendingLoads()
+        #expect(store.entry(for: resolvedReference) != .idle)
+        #expect(store.entry(for: resolvedReference) != .loading)
+
+        let draft = ACPComposerDraft(segments: [.text("see #12")])
+        let (textView, coordinator, window) = makeTextView(store: store)
+        defer { withExtendedLifetime((coordinator, window)) {} }
+
+        coordinator.restoreDraftForTesting(draft, into: textView)
+
+        // The reference at the end of the restored draft is provably final
+        // (its lookup already resolved before the remount), so it must be
+        // chipped instead of left as plain text by the sentinel.
+        #expect(chipSpellings(textView) == ["#12"])
+        #expect(wireText(textView) == "see #12")
+    }
 }
