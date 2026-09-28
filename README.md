@@ -270,7 +270,7 @@ and test targets from [project.yml](project.yml).
 |---|---|---|
 | Ghostty | `1547dd667ab6` | Embedded terminal, built from the submodule as `GhosttyKit.xcframework` |
 | zmx | `8bab1f0173b0` | Persistent terminal sessions |
-| fff | `1bb76f6da687` | File search through a Rust C ABI |
+| fff | `95fd777c2529` | File search through a Rust C ABI |
 | SwiftTreeSitter | 0.25.0 | Swift syntax-highlighting API |
 | tree-sitter | 0.25.10 | Runtime resolved through SwiftPM |
 | swift-markdown / swift-cmark | 0.8.0 | Markdown parsing |
