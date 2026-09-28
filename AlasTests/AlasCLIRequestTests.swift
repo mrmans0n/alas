@@ -156,9 +156,10 @@ struct AlasCLIRequestTests {
             prompt: "Task", agentID: nil, worktree: .current
         ))
 
-        let existing = #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","agent":"codex","worktree":"feature"}}"#
+        let existing = #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","agent":"codex","model":"gpt-5.2","reasoning":"high","worktree":"feature"}}"#
         #expect(try AlasCLIRequest.decode(from: Data(existing.utf8)).command == .sessionNew(
-            prompt: "Task", agentID: "codex", worktree: .existing(worktreeID: "feature")
+            prompt: "Task", agentID: "codex", worktree: .existing(worktreeID: "feature"),
+            model: "gpt-5.2", reasoning: "high"
         ))
 
         let fresh = #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","new_worktree":{"branch":"child","base":"origin/main"}}}"#
@@ -196,6 +197,8 @@ struct AlasCLIRequestTests {
             #"{"v":1,"kind":"cli","command":"agent_list","session_id":"s1","params":{"worktree":"  "}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"   "}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","agent":"  "}}"#,
+            #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","model":" "}}"#,
+            #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","reasoning":""}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","worktree":"  "}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","worktree":"feature","new_worktree":{"branch":"child"}}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","new_worktree":{"branch":"  "}}}"#,

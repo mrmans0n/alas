@@ -234,6 +234,8 @@ fn all_tool_definitions() -> Vec<Value> {
                 "properties": {
                     "prompt": { "type": "string", "description": "Initial text-only task for the child session." },
                     "agent": { "type": "string", "description": "Optional agent id from agent_list with available=true. Defaults to this session's agent." },
+                    "model": { "type": "string", "description": "Optional model id for the child, taken from that agent's agent_list model_catalog. Alas sets it and waits for the agent to acknowledge it before sending the prompt. An id the agent does not offer fails the child instead of falling back to its default model. Omit to keep the agent's default." },
+                    "reasoning": { "type": "string", "description": "Optional reasoning level (for example low, medium, high) for agents that expose a reasoning config option. Applied before the prompt. Agents without one reject it instead of ignoring it." },
                     "worktree": { "type": "string", "description": "Existing project worktree name or branch. Mutually exclusive with new_worktree." },
                     "new_worktree": {
                         "type": "object",
@@ -692,6 +694,8 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
         "session_new" => {
             let worktree = optional_non_blank_string(args, "worktree")?;
             let agent = optional_non_blank_string(args, "agent")?;
+            let model = optional_non_blank_string(args, "model")?;
+            let reasoning = optional_non_blank_string(args, "reasoning")?;
             let new_worktree = match args.get("new_worktree") {
                 None => None,
                 Some(Value::Object(new_worktree)) => {
@@ -718,6 +722,8 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 prompt: required_string(args, "prompt")?,
                 agent,
                 worktree,
+                model,
+                reasoning,
             })
         }
         "session_send" => Ok(Command::SessionSend {
@@ -2622,6 +2628,8 @@ mod tests {
                 &json!({
                     "prompt": "Task",
                     "agent": "codex",
+                    "model": "gpt-5.2",
+                    "reasoning": "high",
                     "new_worktree": { "branch": "child", "base": "origin/main" }
                 }),
                 "/wt"
@@ -2633,9 +2641,18 @@ mod tests {
                 worktree: alas_client::SessionWorktreeTarget::New {
                     branch: "child".into(),
                     base: Some("origin/main".into())
-                }
+                },
+                model: Some("gpt-5.2".into()),
+                reasoning: Some("high".into()),
             }
         );
+        for invalid in [
+            json!({ "prompt": "Task", "model": " " }),
+            json!({ "prompt": "Task", "model": 5 }),
+            json!({ "prompt": "Task", "reasoning": ["high"] }),
+        ] {
+            assert!(command_for_tool("session_new", &invalid, "/wt").is_err());
+        }
         assert_eq!(
             command_for_tool(
                 "session_send",

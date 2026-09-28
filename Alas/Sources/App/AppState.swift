@@ -1811,7 +1811,12 @@ final class AppState {
                 )
             }
             let restoredPendingPrompt = record.pendingInitialPrompt != nil
-            if let prompt = record.pendingInitialPrompt {
+            // With a model selection, the prompt waits until the selection is
+            // reapplied on the attached session, below.
+            let promptAwaitingSelection = record.modelSelection == nil ? nil : record.pendingInitialPrompt
+            if promptAwaitingSelection != nil {
+                // Queued once the selection is acknowledged.
+            } else if let prompt = record.pendingInitialPrompt {
                 let accepted = await manager.enqueueDelegatedPrompt(
                     text: prompt,
                     source: ACPDelegatedPromptSource(
@@ -1843,6 +1848,11 @@ final class AppState {
                     message: recoveredDelegatedSessionFailureMessage(manager.liveSession(for: record.childSessionId))
                 )
                 continue
+            }
+            if let prompt = promptAwaitingSelection, let selection = record.modelSelection {
+                guard await acpOrchestration.queueInitialPromptAfterModelSelection(
+                    selection, record: record, prompt: prompt, manager: manager
+                ) else { continue }
             }
             if restoredPendingPrompt {
                 try? await acpOrchestrationPersistence.clearPendingInitialPrompt(
@@ -6820,6 +6830,10 @@ final class AppState {
                         availability: availability,
                         catalog: { (catalog.models(for: $0), catalog.launchReport(for: $0)) }
                     )
+                },
+                modelCatalog: { [weak self] agentID in
+                    guard let catalog = self?.acpModelCatalog else { return ([], .notObserved) }
+                    return (catalog.models(for: agentID), catalog.launchReport(for: agentID))
                 },
                 sessionLocation: { [weak self] sessionId in
                     guard let self,
@@ -13518,6 +13532,11 @@ final class AppState {
     }
 
     private func deliverPendingDelegatedMessages(to sessionId: String, manager: ACPSessionManager) async {
+        if ACPSessionOrchestrationPolicy.defersInboxDelivery(
+            target: try? await acpOrchestrationPersistence.delegation(childSessionId: sessionId)
+        ) {
+            return
+        }
         let session = manager.liveSession(for: sessionId)
         session?.nextPromptWorkCount += 1
         defer { session?.nextPromptWorkCount -= 1 }

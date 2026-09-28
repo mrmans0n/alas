@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### ✨ Features
 
 - Add read-only delegation discovery (`agent_list` MCP tool, `alas agent list`) listing available ACP agents and their remembered model catalogs.
+- Let `session_new` and `alas session new` pick the delegated child's model (`model`) and, for agents with a reasoning setting, its reasoning level (`reasoning`). Alas applies both before the child's first prompt and fails the child instead of falling back to a default.
 
 ## [0.19.17] - 2026-09-28
 

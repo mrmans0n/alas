@@ -12,10 +12,27 @@ enum ACPDelegatedSessionWorktreeTarget: Equatable, Sendable {
     case new(branch: String, base: String?)
 }
 
+/// A parent's explicit model/reasoning choice for a delegated child. Both
+/// ids are the child agent's own, never translated between providers. It is
+/// applied, and acknowledged by the agent, before the child's first prompt;
+/// a choice the agent cannot honor fails the child instead of falling back.
+struct ACPDelegatedModelSelection: Equatable, Sendable {
+    let model: String?
+    let reasoning: String?
+
+    /// Nil when neither value is set, so "omitted" has one representation.
+    init?(model: String?, reasoning: String?) {
+        guard model != nil || reasoning != nil else { return nil }
+        self.model = model
+        self.reasoning = reasoning
+    }
+}
+
 struct ACPDelegatedSessionNewRequest: Equatable, Sendable {
     let prompt: String
     let agentId: String?
     let worktree: ACPDelegatedSessionWorktreeTarget
+    var modelSelection: ACPDelegatedModelSelection? = nil
 }
 
 struct ACPDelegatedSessionMessageRequest: Equatable, Sendable {
@@ -119,6 +136,9 @@ struct ACPDelegationRecord: Equatable, Sendable {
     /// seconds are too coarse to distinguish a report from the tail of one
     /// turn from the start of the next.
     var lastParentReportAt: Int64? = nil
+    /// Persisted so a delayed start (new worktree) and startup recovery apply
+    /// the same selection before the pending initial prompt.
+    var modelSelection: ACPDelegatedModelSelection? = nil
 }
 
 /// How the inbox delivers a delegated message to its target session.

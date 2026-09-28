@@ -502,6 +502,131 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(manager.liveSession(for: "child")?.agentId == "codex")
     }
 
+    private func makeModelSelectionFixture(
+        client: ACPMockClient,
+        catalog: (models: [ACPAgentModelCatalog.Model], report: ACPAgentModelCatalog.LaunchReport) = ([], .notObserved)
+    ) throws -> (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("acp-model-selection-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let persistence = ACPOrchestrationPersistence(path: root.appendingPathComponent("delegations.sqlite").path)
+        let manager = ACPSessionManager(
+            worktreeId: "worktree",
+            worktreePath: root.path,
+            store: try ACPSessionStore(path: root.appendingPathComponent("sessions.sqlite").path),
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        _ = manager.createSession(id: "parent", agentId: "claude", autoRunDefault: false)
+        let worktree = Worktree(
+            id: "worktree", projectId: "project", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        let claude = ACPOrchestrationAgent(id: "claude", isEnabled: true, isACPCapable: true)
+        let coordinator = ACPSessionOrchestrationCoordinator(environment: .init(
+            persistence: persistence, instanceId: "instance", now: { 100 }, makeID: { "child" },
+            worktree: { $0 == worktree.id ? worktree : nil }, existingWorktree: { _, _ in nil },
+            configuredAgents: { [claude] }, availableAgents: { _, _ in [claude] },
+            modelCatalog: { _ in catalog },
+            sessionLocation: { sessionId in
+                sessionId == "parent"
+                    ? .init(origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"), manager: manager)
+                    : nil
+            },
+            manager: { _ in manager }, newWorktreeDestination: { _, _ in nil },
+            createWorktree: { _, _, _ in .failure(.init(message: "unused")) }, rememberParent: { _, _ in },
+            autoRunDefault: { false }, notifyChanged: {}
+        ))
+        return (coordinator, persistence, manager)
+    }
+
+    @Test("a requested model is acknowledged before the first prompt; a refused one fails the child without prompting", arguments: [true, false])
+    func modelSelectionPrecedesFirstPrompt(agentAcceptsModel: Bool) async throws {
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1, agentCapabilities: nil, authMethods: []))
+        }
+        var remoteSessions = 0
+        client.script(method: "session/new") { _ in
+            remoteSessions += 1
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-\(remoteSessions)",
+                availableModels: [.init(id: "default", name: "Default"), .init(id: "opus", name: "Opus")],
+                availableModes: [], currentModel: "default", currentMode: nil, promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/set_model") { _ in
+            guard agentAcceptsModel else {
+                throw JSONRPCError(code: -32602, message: "Unknown model", data: nil)
+            }
+            return Data("{}".utf8)
+        }
+        client.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        let fixture = try makeModelSelectionFixture(client: client)
+        defer { fixture.manager.shutdownBackgroundTasks() }
+
+        let response = await fixture.coordinator.create(
+            origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
+            request: .init(prompt: "Review the parser.", agentId: nil, worktree: .current,
+                           modelSelection: ACPDelegatedModelSelection(model: "opus", reasoning: nil))
+        )
+        guard case .text = response else {
+            Issue.record("Expected delegated session creation response")
+            return
+        }
+        #expect(try await fixture.persistence.delegation(childSessionId: "child")?.modelSelection?.model == "opus")
+
+        // The child is the first session to connect, so it owns `remote-1`.
+        func childRequests() -> [String] {
+            client.sent.compactMap { request -> String? in
+                switch request.params {
+                case let params as ACPSessionSetModelParams where params.sessionId == "remote-1":
+                    return "set_model:\(params.modelId)"
+                case let params as ACPSessionPromptParams where params.sessionId == "remote-1":
+                    return "prompt"
+                default:
+                    return nil
+                }
+            }
+        }
+        if agentAcceptsModel {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+            while !childRequests().contains("prompt") {
+                try #require(ContinuousClock.now < deadline)
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(childRequests() == ["set_model:opus", "prompt"])
+            #expect(fixture.manager.liveSession(for: "child")?.currentModel == "opus")
+        } else {
+            let record = try await eventuallyLoadDelegation(
+                persistence: fixture.persistence, childSessionId: "child", matching: { $0.phase == .failed }
+            )
+            #expect(record.phase == .failed)
+            #expect(record.failureMessage?.contains("did not apply model opus") == true)
+            #expect(record.pendingInitialPrompt == "Review the parser.")
+            #expect(childRequests() == ["set_model:opus"])
+            #expect(fixture.manager.liveSession(for: "child")?.queue.isEmpty == true)
+        }
+    }
+
+    @Test("a model missing from this launch's catalog is rejected before any child exists")
+    func unknownModelIsRejectedBeforeCreation() async throws {
+        let fixture = try makeModelSelectionFixture(
+            client: ACPMockClient(),
+            catalog: ([.init(id: "opus", name: "Opus")], .advertisedModels)
+        )
+        defer { fixture.manager.shutdownBackgroundTasks() }
+
+        let response = await fixture.coordinator.create(
+            origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
+            request: .init(prompt: "Review the parser.", agentId: nil, worktree: .current,
+                           modelSelection: ACPDelegatedModelSelection(model: "gpt-5.2", reasoning: nil))
+        )
+
+        #expect(response == .error("Model gpt-5.2 is not offered by agent claude. Available: opus."))
+        #expect(try await fixture.persistence.delegation(childSessionId: "child") == nil)
+        #expect(fixture.manager.liveSession(for: "child") == nil)
+    }
+
     private struct OutcomeFixture {
         let coordinator: ACPSessionOrchestrationCoordinator
         let persistence: ACPOrchestrationPersistence

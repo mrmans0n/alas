@@ -24,7 +24,7 @@ usage: alas workspace focus <checkout-uuid> --member <member-uuid>
 usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|wait|cancel> ...
 usage: alas agent list [--worktree <name-or-branch>]
 usage: alas session list
-usage: alas session new --prompt <text> [--agent <id>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
+usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
 usage: alas session send <session-id> <prompt>
 usage: alas review [target] [--worktree <name-or-path>]
 usage: alas review -- <target> [--worktree <name-or-path>]  (escapes a target named like a review subcommand)
@@ -395,9 +395,11 @@ fn parse_session(args: &[&str]) -> Result<Command, String> {
 }
 
 fn parse_session_new(args: &[&str]) -> Result<Command, String> {
-    const USAGE: &str = "usage: alas session new --prompt <text> [--agent <id>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]";
+    const USAGE: &str = "usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]";
     let mut prompt = None;
     let mut agent = None;
+    let mut model = None;
+    let mut reasoning = None;
     let mut existing_worktree = None;
     let mut new_worktree = None;
     let mut base = None;
@@ -406,6 +408,8 @@ fn parse_session_new(args: &[&str]) -> Result<Command, String> {
         let value = match args[i] {
             "--prompt" => &mut prompt,
             "--agent" => &mut agent,
+            "--model" => &mut model,
+            "--reasoning" => &mut reasoning,
             "--worktree" => &mut existing_worktree,
             "--new-worktree" => &mut new_worktree,
             "--base" => &mut base,
@@ -439,6 +443,8 @@ fn parse_session_new(args: &[&str]) -> Result<Command, String> {
         prompt,
         agent,
         worktree,
+        model,
+        reasoning,
     })
 }
 
@@ -1628,7 +1634,11 @@ mod tests {
             Command::AgentList { worktree: None }
         );
         assert_eq!(
-            parse(&s(&["agent", "list", "--worktree", "feature"]), Path::new("/b")).unwrap(),
+            parse(
+                &s(&["agent", "list", "--worktree", "feature"]),
+                Path::new("/b")
+            )
+            .unwrap(),
             Command::AgentList {
                 worktree: Some("feature".into())
             }
@@ -1654,6 +1664,10 @@ mod tests {
                     "Task",
                     "--agent",
                     "codex",
+                    "--model",
+                    "gpt-5.2",
+                    "--reasoning",
+                    "high",
                     "--worktree",
                     "feature",
                 ]),
@@ -1665,7 +1679,9 @@ mod tests {
                 agent: Some("codex".into()),
                 worktree: alas_client::SessionWorktreeTarget::Existing {
                     worktree: "feature".into()
-                }
+                },
+                model: Some("gpt-5.2".into()),
+                reasoning: Some("high".into()),
             }
         );
         assert_eq!(
@@ -1689,7 +1705,9 @@ mod tests {
                 worktree: alas_client::SessionWorktreeTarget::New {
                     branch: "child".into(),
                     base: Some("origin/main".into())
-                }
+                },
+                model: None,
+                reasoning: None,
             }
         );
         assert_eq!(
@@ -1723,6 +1741,19 @@ mod tests {
                 "Task",
                 "--base",
                 "origin/main",
+            ]
+            .as_slice(),
+            ["session", "new", "--prompt", "Task", "--model"].as_slice(),
+            ["session", "new", "--prompt", "Task", "--model", " "].as_slice(),
+            [
+                "session",
+                "new",
+                "--prompt",
+                "Task",
+                "--reasoning",
+                "a",
+                "--reasoning",
+                "b",
             ]
             .as_slice(),
             ["session", "send", "child"].as_slice(),

@@ -34,7 +34,8 @@ struct ACPOrchestrationStoreTests {
     @Test("creates schema and preserves delegation records across reopen")
     func persistsDelegationAcrossReopen() throws {
         let path = temporaryPath()
-        let record = newRecord()
+        var record = newRecord()
+        record.modelSelection = ACPDelegatedModelSelection(model: "gpt-5.2", reasoning: "high")
 
         do {
             let store = try ACPOrchestrationStore(path: path)
@@ -288,8 +289,8 @@ struct ACPOrchestrationStoreTests {
         #expect(try store.pendingMessages(targetSessionId: "parent") == [])
     }
 
-    @Test("migrates a v1 database to v2 and decodes old messages as prompts")
-    func migratesV1ToV2() throws {
+    @Test("migrates a v1 database to the current schema, decoding old messages as prompts and old delegations without a model selection")
+    func migratesV1ToCurrent() throws {
         let path = temporaryPath()
         do {
             let db = try SQLiteDatabase(path: path, busyTimeoutMilliseconds: 5_000)
@@ -316,10 +317,19 @@ struct ACPOrchestrationStoreTests {
             INSERT INTO delegated_messages (id, source_session_id, target_session_id, prompt, created_at)
             VALUES ('m1', 'child', 'parent', 'hello', 5)
             """)
+            try db.exec("""
+            INSERT INTO delegations (
+                child_session_id, parent_session_id, project_id, parent_worktree_id, agent_id,
+                worktree_request, pending_initial_prompt, phase, created_at, updated_at
+            ) VALUES ('child', 'parent', 'project', 'w', 'codex', ?, 'Task', 'starting', 1, 1)
+            """, bindings: [try JSONEncoder().encode(ACPDelegatedWorktreeRequest.current(worktreeId: "w"))])
         }
 
         let store = try ACPOrchestrationStore(path: path)
-        #expect(try store.currentSchemaVersion() == 2)
+        #expect(try store.currentSchemaVersion() == ACPOrchestrationStore.targetSchemaVersion)
+        let legacy = try #require(try store.delegation(childSessionId: "child"))
+        #expect(legacy.modelSelection == nil)
+        #expect(legacy.pendingInitialPrompt == "Task")
         let pending = try store.pendingMessages(targetSessionId: "parent")
         #expect(pending.count == 1)
         #expect(pending.first?.kind == .prompt)
@@ -367,8 +377,8 @@ struct ACPOrchestrationStoreTests {
         let first = try ACPOrchestrationStore(path: path)
         let second = try ACPOrchestrationStore(path: path)
 
-        #expect(try first.currentSchemaVersion() == 2)
-        #expect(try second.currentSchemaVersion() == 2)
+        #expect(try first.currentSchemaVersion() == ACPOrchestrationStore.targetSchemaVersion)
+        #expect(try second.currentSchemaVersion() == ACPOrchestrationStore.targetSchemaVersion)
     }
 
     @Test("round-trips message kind")

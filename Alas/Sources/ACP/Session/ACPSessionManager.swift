@@ -6967,6 +6967,104 @@ extension ACPSessionManager {
         return true
     }
 
+    /// Applies a delegated child's requested model, then reasoning, on its
+    /// live connection, returning only after the agent acknowledges each
+    /// change. Unlike the composer pickers (`setModel(for:)`,
+    /// `setConfigOption(for:)`), nothing is optimistic or rolled back
+    /// silently: an id the agent did not advertise, or a refused change,
+    /// throws so the caller can fail the child before its first prompt.
+    /// Reasoning is resolved after the model because the agent may offer
+    /// different levels per model.
+    func applyDelegatedModelSelection(
+        _ selection: ACPDelegatedModelSelection,
+        to id: ACPSession.ID
+    ) async throws {
+        guard let session = sessions[id], runners[id] != nil, session.agentState == .ready else {
+            throw ACPDelegatedModelSelectionError.sessionUnavailable
+        }
+        if let model = selection.model,
+           let step = try ACPSessionOrchestrationPolicy.liveModelStep(
+               model: model, agentId: session.agentId, chip: session.chipState.models
+           ) {
+            try await applyDelegatedSelectionStep(step, setting: "model", to: session)
+        }
+        if let reasoning = selection.reasoning,
+           let step = try ACPSessionOrchestrationPolicy.liveReasoningStep(
+               reasoning: reasoning, agentId: session.agentId, chip: session.chipState.thinking
+           ) {
+            try await applyDelegatedSelectionStep(step, setting: "reasoning", to: session)
+        }
+        persist(session)
+    }
+
+    private func applyDelegatedSelectionStep(
+        _ step: ACPDelegatedSelectionStep,
+        setting: String,
+        to session: ACPSession
+    ) async throws {
+        guard sessions[session.id] === session, let runner = runners[session.id] else {
+            throw ACPDelegatedModelSelectionError.sessionUnavailable
+        }
+        let remoteId = session.remoteSessionId ?? session.id
+        switch step {
+        case .setModel(let model):
+            do {
+                try await runner.connection.setModel(sessionId: remoteId, modelId: model)
+            } catch {
+                throw ACPDelegatedModelSelectionError.rejected(
+                    agentId: session.agentId, setting: setting, value: model,
+                    reason: error.localizedDescription
+                )
+            }
+            guard sessions[session.id] === session else {
+                throw ACPDelegatedModelSelectionError.sessionUnavailable
+            }
+            session.currentModel = model
+        case .setConfigOption(let configId, let value):
+            let updated: [ACPConfigOption]
+            do {
+                updated = try await runner.connection.setConfigOption(
+                    sessionId: remoteId, configId: configId, value: .string(value)
+                )
+            } catch {
+                throw ACPDelegatedModelSelectionError.rejected(
+                    agentId: session.agentId, setting: setting, value: value,
+                    reason: error.localizedDescription
+                )
+            }
+            guard sessions[session.id] === session else {
+                throw ACPDelegatedModelSelectionError.sessionUnavailable
+            }
+            if updated.isEmpty {
+                // Older agents acknowledge without echoing; the ack stands.
+                session.availableConfigOptions = session.availableConfigOptions.map { option in
+                    guard option.id == configId else { return option }
+                    return ACPConfigOption(
+                        id: option.id, name: option.name, type: option.type,
+                        category: option.category, currentValue: .string(value), options: option.options
+                    )
+                }
+            } else {
+                guard let echoed = updated.first(where: { $0.id == configId }),
+                      echoed.currentStringValue == value
+                else {
+                    throw ACPDelegatedModelSelectionError.rejected(
+                        agentId: session.agentId, setting: setting, value: value,
+                        reason: "the agent reported a different value"
+                    )
+                }
+                // Taken as-is rather than through `mergingSuccessfulSetResponse`:
+                // a delegated child has no concurrent composer edits to merge,
+                // and the echo was just checked to carry the requested value.
+                session.availableConfigOptions = updated
+            }
+            if case .configOption(let modelConfigId) = session.chipState.models?.source,
+               modelConfigId == configId {
+                session.currentModel = value
+            }
+        }
+    }
+
     /// Append a delegated system notice to a session's transcript without
     /// running a turn. Requires a live runner so the row is persisted under
     /// the lease; callers treat `false` like a rejected delegated prompt and
