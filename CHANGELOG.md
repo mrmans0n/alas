@@ -11,6 +11,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Show the active agent logo in the native peer transcript header.
 - Show short ACP thoughts inline in their collapsed disclosure, stripping surrounding `**` markers.
 
+### 🐛 Fixes
+
+- Keep the main window where it was when displays are disconnected, reconnected, or wake from sleep.
+
 ## [0.19.16] - 2026-09-28
 
 ### ✨ Features
