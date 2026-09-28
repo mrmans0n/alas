@@ -41,6 +41,9 @@ final class PluginManager {
     @ObservationIgnored private let actions: (ProjectConfig) -> PluginHostActions
     @ObservationIgnored private var snapshotTask: Task<Void, Never>?
     @ObservationIgnored private var lastSnapshots: [HostKey: PluginWorkspaceSnapshot] = [:]
+    /// Bumped by every `reload()`, so a superseded reload or `start` stops instead of
+    /// installing hosts built from the previous plugin list.
+    @ObservationIgnored private var generation = 0
 
     init(
         directory: URL = PluginManager.defaultDirectory,
@@ -67,13 +70,19 @@ final class PluginManager {
     /// Stops everything, rescans the folder, and starts approved plugins for
     /// every project. Projects added later need another reload (Debug-only for now).
     func reload() async {
+        generation += 1
+        let mine = generation
         snapshotTask?.cancel()
         for host in hostsByKey.values { await host.deactivate() }
+        guard mine == generation else { return }
         hostsByKey = [:]
         lastSnapshots = [:]
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         (plugins, invalid) = Self.discover(in: directory)
-        for plugin in plugins where isApproved(plugin) { await start(plugin) }
+        for plugin in plugins where isApproved(plugin) {
+            await start(plugin)
+            guard mine == generation else { return }
+        }
         startSnapshotLoop()
     }
 
@@ -85,13 +94,16 @@ final class PluginManager {
     func restart(_ key: HostKey) async {
         guard let host = hostsByKey[key] else { return }
         await host.deactivate()
+        guard hostsByKey[key] === host else { return }  // a reload replaced it meanwhile
         lastSnapshots[key] = nil
         await host.activate()
     }
 
     private func start(_ plugin: Plugin) async {
         guard let approval = approvals.approval(id: plugin.id, hash: plugin.hash) else { return }
+        let mine = generation
         for project in projects() {
+            guard mine == generation else { return }
             let key = HostKey(pluginID: plugin.id, projectID: project.id)
             guard hostsByKey[key] == nil else { continue }
             let host = PluginHost(
@@ -106,6 +118,7 @@ final class PluginManager {
     // ponytail: polls every 500 ms and diffs, because agent state mixes ObservableObject
     // and @Observable sources; switch to change notifications if the rebuild shows up in profiles.
     private func startSnapshotLoop() {
+        snapshotTask?.cancel()
         snapshotTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.pushChangedSnapshots()

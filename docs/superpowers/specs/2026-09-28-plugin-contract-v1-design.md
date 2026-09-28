@@ -160,8 +160,9 @@ plus `failed(reason)` reachable from any running state.
 - **Active.** Events and responses are delivered. If the plugin holds
   `workspace.read`, a 500 ms snapshot poll sends `workspace/changed` soon after
   activation and again whenever the snapshot changes.
-- **Deactivate.** Happens when the project closes, the plugin is disabled, the
-  approval is revoked, or the app quits. The host sends `alas/deactivate` with a
+- **Deactivate.** In phase 2 this happens on reload and restart from
+  Debug → Plugins…. Project close, disabling, approval revocation, and app quit
+  are wired in phase 3, when the manager moves onto `AppState`. The host sends `alas/deactivate` with a
   normal fuel budget, then drops the instance whatever the outcome, along with
   every queued message and pending request.
 - **Failed.** Caused by a trap, fuel exhaustion, a malformed envelope, a guest
@@ -228,7 +229,7 @@ Tests follow the AGENTS.md testing policy.
 
 ## Sample plugin and docs
 
-- `Examples/plugins/hello-workspace/` is a Rust crate targeting
+- `plugins/samples/hello-workspace/` is a Rust crate targeting
   `wasm32-unknown-unknown`, using only `serde` and `serde_json`, with hand-written
   ABI glue. On activate it requests `workspace/snapshot` and logs a summary, and
   it logs again on each `workspace/changed`. It declares only `workspace.read`

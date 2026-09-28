@@ -1793,11 +1793,11 @@ git commit -m "feat(plugins): discover, approve, and run plugins from Debug > Pl
 ### Task 7: Rust sample, API reference, and exit check
 
 **Files:**
-- Create: `Examples/plugins/hello-workspace/Cargo.toml`
-- Create: `Examples/plugins/hello-workspace/src/lib.rs`
-- Create: `Examples/plugins/hello-workspace/plugin.json`
-- Create: `Examples/plugins/hello-workspace/build.sh`
-- Create: `Examples/plugins/hello-workspace/.gitignore`
+- Create: `plugins/samples/hello-workspace/Cargo.toml`
+- Create: `plugins/samples/hello-workspace/src/lib.rs`
+- Create: `plugins/samples/hello-workspace/plugin.json`
+- Create: `plugins/samples/hello-workspace/build.sh`
+- Create: `plugins/samples/hello-workspace/.gitignore`
 - Create: `docs/plugins/api-v1.md`
 
 **Interfaces:**
@@ -1810,7 +1810,7 @@ Expected: `installed` or `up to date`.
 
 - [ ] **Step 2: Write the crate**
 
-`Examples/plugins/hello-workspace/Cargo.toml`:
+`plugins/samples/hello-workspace/Cargo.toml`:
 
 ```toml
 [package]
@@ -1835,13 +1835,13 @@ strip = true
 panic = "abort"
 ```
 
-`Examples/plugins/hello-workspace/.gitignore`:
+`plugins/samples/hello-workspace/.gitignore`:
 
 ```
 target/
 ```
 
-`Examples/plugins/hello-workspace/plugin.json`:
+`plugins/samples/hello-workspace/plugin.json`:
 
 ```json
 {
@@ -1854,7 +1854,7 @@ target/
 }
 ```
 
-`Examples/plugins/hello-workspace/src/lib.rs`:
+`plugins/samples/hello-workspace/src/lib.rs`:
 
 ```rust
 //! Minimal Alas plugin (API v1). Logs a summary of the project's worktrees and
@@ -1926,7 +1926,7 @@ pub unsafe extern "C" fn alas_handle(ptr: *mut u8, len: usize) {
 }
 ```
 
-`Examples/plugins/hello-workspace/build.sh`:
+`plugins/samples/hello-workspace/build.sh`:
 
 ```bash
 #!/usr/bin/env bash
@@ -1941,11 +1941,11 @@ cp target/wasm32-unknown-unknown/release/hello_workspace.wasm "$dest/plugin.wasm
 echo "Installed to $dest"
 ```
 
-Then run `chmod +x Examples/plugins/hello-workspace/build.sh`.
+Then run `chmod +x plugins/samples/hello-workspace/build.sh`.
 
 - [ ] **Step 3: Build the sample**
 
-Run: `Examples/plugins/hello-workspace/build.sh`
+Run: `plugins/samples/hello-workspace/build.sh`
 Expected: `Installed to …/Alas/Plugins/hello-workspace`. `Cargo.lock` is created; commit it.
 
 - [ ] **Step 4: Write the API reference**
@@ -2087,7 +2087,7 @@ stops the plugin. A stopped plugin can be restarted from Debug → Plugins….
 
 ## Example
 
-See `Examples/plugins/hello-workspace` for a Rust plugin that uses
+See `plugins/samples/hello-workspace` for a Rust plugin that uses
 `wasm32-unknown-unknown` and `serde_json`.
 ````
 
@@ -2111,6 +2111,6 @@ Tell the user which items passed. Never pkill the Alas binary; quit the Debug in
 - [ ] **Step 6: Commit**
 
 ```bash
-git add Examples/plugins/hello-workspace docs/plugins/api-v1.md
+git add plugins/samples/hello-workspace docs/plugins/api-v1.md
 git commit -m "docs(plugins): add API v1 reference and Rust sample plugin"
 ```

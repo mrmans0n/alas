@@ -19,7 +19,8 @@ struct PluginHostTests {
     func makeHost(
         _ script: [[PluginFixtureStep]],
         grants: Set<PluginCapability> = [],
-        recorder: Recorder = Recorder()
+        recorder: Recorder = Recorder(),
+        limits: PluginLimits = PluginHostTests.limits
     ) throws -> PluginHost {
         let manifest = try PluginManifest.parse(Data(
             #"{"id":"io.test.plugin","name":"Test","version":"1","api":1,"entry":"p.wasm"}"#.utf8))
@@ -34,7 +35,7 @@ struct PluginHostTests {
                     recorder.switched.append(id)
                     return id == "wt"
                 }),
-            limits: Self.limits)
+            limits: limits)
     }
 
     func lastReply(_ host: PluginHost) -> String? {
@@ -123,5 +124,60 @@ struct PluginHostTests {
         await host.deactivate()
         #expect(host.state == .stopped)
         #expect(recorder.switched.isEmpty)
+    }
+
+    @Test func aPluginThatKeepsRequestingIsStoppedAtTheRoundTripLimit() async throws {
+        let snapshotRequest = #"{"jsonrpc":"2.0","id":1,"method":"workspace/snapshot"}"#
+        let chatter = Array(repeating: [PluginFixtureStep.send(snapshotRequest)], count: 8)
+        var limits = Self.limits
+        limits.maxRoundTripsPerDelivery = 4
+        let host = try makeHost(
+            [[.send(activateOK), .send(snapshotRequest)]] + chatter, grants: [.workspaceRead], limits: limits)
+        await host.activate()
+        guard case .failed(let reason) = host.state else {
+            Issue.record("expected failed, got \(host.state)")
+            return
+        }
+        #expect(reason.contains("round trips"))
+    }
+
+    @Test func deactivatingWhileTheModuleIsLoadingKeepsTheHostStopped() async throws {
+        let host = try makeHost([[.send(activateOK)]])
+        let activation = Task { await host.activate() }
+        await Task.yield()
+        await host.deactivate()
+        await activation.value
+        #expect(host.state == .stopped)
+    }
+
+    @Test func deactivatingDuringACallDropsWhatItSent() async throws {
+        let recorder = Recorder()
+        let host = try makeHost(
+            [[.send(activateOK)], [.send(switchToWT)]],
+            grants: [.workspaceRead, .worktreeSwitch], recorder: recorder)
+        await host.activate()
+        let change = Task { await host.workspaceChanged(PluginWorkspaceSnapshot(worktrees: [])) }
+        // The message is traced just before the host suspends inside the plugin call.
+        var spins = 0
+        while !host.trace.contains(where: { $0.text.contains("workspace/changed") }), spins < 10_000 {
+            await Task.yield()
+            spins += 1
+        }
+        try #require(host.trace.contains { $0.text.contains("workspace/changed") })
+        await host.deactivate()
+        await change.value
+        #expect(host.state == .stopped)
+        #expect(recorder.switched.isEmpty)
+    }
+
+    @Test func oversizedLogMessagesAreTruncated() async throws {
+        let long = String(repeating: "x", count: 3000)
+        let host = try makeHost([[
+            .send(activateOK),
+            .send(#"{"jsonrpc":"2.0","method":"log","params":{"level":"info","message":"\#(long)"}}"#),
+        ]])
+        await host.activate()
+        #expect(host.log.count == 1)
+        #expect(host.log.first?.message.count == PluginHost.logMessageLimit)
     }
 }

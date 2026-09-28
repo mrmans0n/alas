@@ -58,9 +58,9 @@ arrives in a later `alas_handle` call.
    The plugin must reply `{"jsonrpc":"2.0","id":0,"result":{}}` **during the
    same call**. A missing or error reply stops the plugin.
 2. While active, the plugin receives notifications and responses.
-3. Alas sends the notification `alas/deactivate` when the project closes, the
-   plugin is disabled or reloaded, or the app quits. Anything sent in reply is
-   ignored.
+3. Alas sends the notification `alas/deactivate` when the plugin is reloaded
+   or restarted from Debug → Plugins…. Anything sent in reply is ignored.
+   Deactivation on project close, disabling, and app quit is not wired up yet.
 
 A plugin runs once per project. Its instances share nothing.
 
@@ -132,6 +132,6 @@ stops the plugin. A stopped plugin can be restarted from Debug → Plugins….
 
 ## Example
 
-See `Examples/plugins/hello-workspace` for a Rust plugin that uses
+See `plugins/samples/hello-workspace` for a Rust plugin that uses
 `wasm32-unknown-unknown` and `serde_json`. Its `build.sh` builds it and installs
 it into the plugins folder. You need `rustup target add wasm32-unknown-unknown`.

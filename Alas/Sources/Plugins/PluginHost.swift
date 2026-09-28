@@ -45,6 +45,7 @@ final class PluginHost {
     ]
     private static let traceLimit = 100
     private static let logLimit = 200
+    static let logMessageLimit = 2000
 
     let manifest: PluginManifest
     let project: PluginProjectRef
@@ -82,8 +83,11 @@ final class PluginHost {
         state = .activating
         trace = []
         do {
-            runtime = try await PluginRuntime.load(wasm: wasm, limits: limits)
+            let loaded = try await PluginRuntime.load(wasm: wasm, limits: limits)
+            guard state == .activating else { return }  // deactivated while the module loaded
+            runtime = loaded
         } catch {
+            guard state == .activating else { return }
             fail(String(describing: error))
             return
         }
@@ -105,6 +109,10 @@ final class PluginHost {
     /// Sends `alas/deactivate`, then drops the instance whatever the plugin does.
     /// Anything the plugin sends back is ignored.
     func deactivate() async {
+        if state == .activating, runtime == nil {  // still loading the module
+            state = .stopped
+            return
+        }
         guard isRunning, let runtime else {
             self.runtime = nil
             return
@@ -130,7 +138,13 @@ final class PluginHost {
     /// states, which drops everything still queued.
     private func deliver(_ first: Data) async {
         var queue = [first]
+        var roundTrips = 0
         while !queue.isEmpty, isRunning, let runtime {
+            roundTrips += 1
+            guard roundTrips <= limits.maxRoundTripsPerDelivery else {
+                fail("plugin exceeded \(limits.maxRoundTripsPerDelivery) round trips in one delivery")
+                return
+            }
             let message = queue.removeFirst()
             record(.toPlugin, message)
             let sent: [Data]
@@ -223,7 +237,7 @@ final class PluginHost {
     }
 
     private func appendLog(_ level: String, _ message: String) {
-        log.append(PluginLogEntry(level: level, message: message))
+        log.append(PluginLogEntry(level: level, message: String(message.prefix(Self.logMessageLimit))))
         if log.count > Self.logLimit { log.removeFirst(log.count - Self.logLimit) }
     }
 

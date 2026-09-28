@@ -9,11 +9,15 @@ struct PluginLimits: Sendable, Equatable {
     var maxMemoryBytes = 64 << 20
     var maxMessageBytes = 1 << 20
     var maxSendsPerCall = 64
+    var maxTableElements = 100_000
+    /// Calls into the plugin per delivery, counting the replies to its own requests.
+    var maxRoundTripsPerDelivery = 64
 }
 
 enum PluginRuntimeError: Error, Equatable, CustomStringConvertible {
     case instantiation(String)
     case missingExport(String)
+    case badExportSignature(String)
     case badGuestRange(ptr: UInt32, len: UInt32)
     case messageTooLarge(Int)
     case tooManySends(Int)
@@ -23,6 +27,7 @@ enum PluginRuntimeError: Error, Equatable, CustomStringConvertible {
         switch self {
         case .instantiation(let reason): "could not load plugin: \(reason)"
         case .missingExport(let name): "plugin does not export \(name)"
+        case .badExportSignature(let name): "plugin export \(name) has the wrong signature"
         case let .badGuestRange(ptr, len): "plugin passed an invalid memory range (ptr \(ptr), len \(len))"
         case .messageTooLarge(let size): "message of \(size) bytes exceeds the size limit"
         case .tooManySends(let limit): "plugin sent more than \(limit) messages in one call"
@@ -31,10 +36,15 @@ enum PluginRuntimeError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-private final class MemoryCap: ResourceLimiter {
+private final class ResourceCap: ResourceLimiter {
     let maxBytes: Int
-    init(maxBytes: Int) { self.maxBytes = maxBytes }
+    let maxTableElements: Int
+    init(maxBytes: Int, maxTableElements: Int) {
+        self.maxBytes = maxBytes
+        self.maxTableElements = maxTableElements
+    }
     func limitMemoryGrowth(to desired: Int) throws -> Bool { desired <= maxBytes }
+    func limitTableGrowth(to desired: Int) throws -> Bool { desired <= maxTableElements }
 }
 
 /// One plugin instance. Every WasmKit call runs on `queue`, which is what makes
@@ -51,7 +61,7 @@ final class PluginRuntime: @unchecked Sendable {
     private init(limits: PluginLimits) {
         self.limits = limits
         store = Store(engine: Engine(configuration: EngineConfiguration(fuelMetering: true)))
-        store.resourceLimiter = MemoryCap(maxBytes: limits.maxMemoryBytes)
+        store.resourceLimiter = ResourceCap(maxBytes: limits.maxMemoryBytes, maxTableElements: limits.maxTableElements)
     }
 
     static func load(wasm: [UInt8], limits: PluginLimits) async throws -> PluginRuntime {
@@ -86,8 +96,16 @@ final class PluginRuntime: @unchecked Sendable {
             throw PluginRuntimeError.instantiation(Self.firstLine(error))
         }
         if instance.exports[memory: "memory"] == nil { throw PluginRuntimeError.missingExport("memory") }
-        for name in ["alas_alloc", "alas_handle"] where instance.exports[function: name] == nil {
-            throw PluginRuntimeError.missingExport(name)
+        // WasmKit crashes the process when a result is not the expected type, so
+        // the signatures are pinned here instead of failing at delivery time.
+        try requireExport("alas_alloc", parameters: [.i32], results: [.i32])
+        try requireExport("alas_handle", parameters: [.i32, .i32], results: [])
+    }
+
+    private func requireExport(_ name: String, parameters: [ValueType], results: [ValueType]) throws {
+        guard let function = instance.exports[function: name] else { throw PluginRuntimeError.missingExport(name) }
+        guard function.type.parameters == parameters, function.type.results == results else {
+            throw PluginRuntimeError.badExportSignature(name)
         }
     }
 

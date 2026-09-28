@@ -15,7 +15,6 @@ enum PluginFixtureStep: Sendable {
 enum PluginWATFixture {
     static func wasm(
         _ script: [[PluginFixtureStep]],
-        extraImports: String = "",
         allocReturns: Int? = nil
     ) throws -> [UInt8] {
         var data = ""
@@ -53,7 +52,6 @@ enum PluginWATFixture {
         return try PluginWAT.compile("""
         (module
           (import "alas" "send" (func $send (param i32 i32)))
-          \(extraImports)
           (memory (export "memory") 1)
           (global $heap (mut i32) (i32.const 32768))
           (global $calls (mut i32) (i32.const 0))

@@ -33,9 +33,27 @@ struct PluginRuntimeTests {
         #expect(error == .badGuestRange(ptr: 70_000, len: 2))
     }
 
-    @Test func importsOtherThanAlasSendFailToLoad() async throws {
-        let wasm = try PluginWATFixture.wasm(
-            [], extraImports: #"(import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))"#)
+    private static func module(extra: String = "", alloc: String = #"(func (export "alas_alloc") (param i32) (result i32) i32.const 0)"#) -> String {
+        """
+        (module
+          (import "alas" "send" (func (param i32 i32)))
+          \(extra)
+          (memory (export "memory") 1)
+          \(alloc)
+          (func (export "alas_handle") (param i32 i32)))
+        """
+    }
+
+    /// Each of these would otherwise reach Alas at delivery time (a Swift crash
+    /// on a mistyped export) or bypass the memory cap (tables), or ask for host access.
+    @Test(arguments: [
+        module(extra: #"(import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))"#),
+        module(extra: "(table 10000000 funcref)"),
+        module(alloc: #"(func (export "alas_alloc") (param i32))"#),
+        module(alloc: #"(func (export "alas_alloc") (param i32) (result i64) i64.const 0)"#),
+    ])
+    func unloadableModulesFailToLoad(wat: String) async throws {
+        let wasm = try PluginWAT.compile(wat)
         await #expect(throws: PluginRuntimeError.self) { _ = try await PluginRuntime.load(wasm: wasm, limits: Self.limits) }
     }
 }
