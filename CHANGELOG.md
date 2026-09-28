@@ -6,14 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.17] - 2026-09-28
+
 ### ✨ Features
 
-- Show the active agent logo in the native peer transcript header.
-- Show short ACP thoughts inline in their collapsed disclosure, stripping surrounding `**` markers.
+- Add a worktree filter row to the sidebar (#1584).
+- Make the behind-upstream badge clickable to pull the latest changes (#1597).
+- Prewarm issue branch names and show progress while creating worktrees (#1582).
+- Show the active agent logo in the native peer transcript header (#1585).
+- Show short ACP thoughts inline in their collapsed disclosure, stripping surrounding `**` markers (#1587).
 
 ### 🐛 Fixes
 
-- Keep the main window where it was when displays are disconnected, reconnected, or wake from sleep.
+- Keep the main window movable outside the titlebar band and preserve its position when displays change (#1586).
+
+### 🏗️ Internal
+
+- Avoid quadratic alias rebinding in the attention inbox (#1583).
+- Rebalance Swift tests into four measured CI shards (#1580).
+- Update the tree-sitter-groovy grammar digest (#1581).
 
 ## [0.19.16] - 2026-09-28
 
