@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Show the active agent logo in the native peer transcript header.
+
 ## [0.19.16] - 2026-09-28
 
 ### ✨ Features

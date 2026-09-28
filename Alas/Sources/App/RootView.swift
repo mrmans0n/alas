@@ -310,6 +310,7 @@ struct RootView: View {
         if let client = state.nativePeerSessions, client.selectedSessionId != nil {
             NativePeerSessionView(
                 client: client,
+                agentLookup: { state.agent(id: $0) },
                 typography: ACPChatTypography(
                     fontFamily: state.config.agents.chatFontFamily,
                     fontSize: state.config.agents.chatFontSize
