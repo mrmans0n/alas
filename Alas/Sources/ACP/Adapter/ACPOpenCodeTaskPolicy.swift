@@ -219,9 +219,12 @@ enum ACPOpenCodeTaskPolicy {
             extra[configKey] = content
             let result: ProcessResult
             do {
+                // A bare command (the catalog default) is resolved against
+                // the launch PATH, exactly like the adapter launch itself.
+                let absolute = command.hasPrefix("/")
                 result = try await Process.run(
-                    command,
-                    args: ["agent", "list"],
+                    absolute ? command : "/usr/bin/env",
+                    args: (absolute ? [] : [command]) + ["agent", "list"],
                     cwd: URL(fileURLWithPath: cwd),
                     env: ACPProcessEnvironment.sanitizedForACP(extra: extra),
                     timeout: 60
