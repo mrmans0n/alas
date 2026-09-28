@@ -124,13 +124,15 @@ struct RemoteQueueProjectionTests {
         #expect(RemoteQueueProjection.visibleCount(projected) == 2)
     }
 
-    @Test func plainTextFlattensTextAndMentions() {
+    @Test func plainTextFlattensTextMentionsAndReferences() {
         let draft = ACPComposerDraft(segments: [
             .text("look at "),
+            .upstreamReference(CodeHostReference(sigil: .hash, number: 12)),
+            .text(" "),
             .mention(displayName: "App.swift", uri: "file:///App.swift"),
-            .text("please"),
+            .text("please")
         ])
-        #expect(RemoteQueueProjection.plainText(from: draft) == "look at @App.swift please")
+        #expect(RemoteQueueProjection.plainText(from: draft) == "look at #12 @App.swift please")
     }
 
     @Test func plainTextDropsImageSegments() {

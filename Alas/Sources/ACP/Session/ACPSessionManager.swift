@@ -496,7 +496,7 @@ final class ACPSessionManager: ObservableObject {
         guard let idx = session.queue.firstIndex(where: { $0.id == itemId }) else { return nil }
         let hasUnrepresentableSegment = session.queue[idx].restorableDraft.segments.contains { segment in
             switch segment {
-            case .text: return false
+            case .text, .upstreamReference: return false
             case .mention, .image: return true
             }
         }

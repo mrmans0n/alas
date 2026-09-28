@@ -10,13 +10,13 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
             switch segment {
             case .text(let value):
                 value.isEmpty
-            case .mention, .image:
+            case .mention, .image, .upstreamReference:
                 false
             }
         }
     }
 
-    /// True when the draft has any non-whitespace text or any mention.
+    /// True when the draft has non-whitespace text or any chip.
     /// Distinct from `isEmpty` (which is strictly structural) — use this
     /// when deciding whether the user has typed something meaningful.
     var hasContent: Bool {
@@ -24,27 +24,25 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
             switch segment {
             case .text(let value):
                 return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .mention, .image:
+            case .mention, .image, .upstreamReference:
                 return true
             }
         }
     }
 
-    /// Human-readable text for the clipboard: each chip becomes the text it
-    /// stands for (`@filename` for a mention; a command chip is already a
-    /// `/command` text segment), and image chips, which have no text form,
-    /// drop out instead of leaking the U+FFFC attachment placeholder. A
-    /// mention normally has its own separating space folded into the
-    /// following `.text` segment, but some rebuild paths (queued-content
-    /// restoration) can hand back a mention directly abutting text with no
-    /// leading whitespace — insert one here rather than concatenate
-    /// `@File.swiftright here`.
+    /// Human-readable text for the clipboard: mention and upstream
+    /// reference chips spell out their text, command chips already use
+    /// `/command`, and images drop out instead of leaking U+FFFC.
+    /// A mention may abut following text in restored drafts, so insert a
+    /// separating space rather than concatenate `@File.swiftright here`.
     var plainText: String {
         var result = ""
         for (index, segment) in segments.enumerated() {
             switch segment {
             case .text(let value):
                 result += value
+            case .upstreamReference(let reference):
+                result += reference.spelling
             case .mention(let displayName, _):
                 result += "@" + displayName
                 if !nextSegmentStartsWithWhitespace(after: index) {
@@ -67,7 +65,7 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
             switch segments[next] {
             case .text(let value):
                 return value.first?.isWhitespace ?? false
-            case .mention:
+            case .mention, .upstreamReference:
                 return false
             case .image:
                 next += 1
@@ -77,13 +75,10 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
     }
 
     /// Character offset, into the flattened message text, of each `.image`
-    /// segment in order. Mirrors how `ACPInputField.Coordinator.extract`
-    /// concatenates a submitted draft into a single string: a `.text`
-    /// segment contributes its literal characters, `.mention` contributes
-    /// `"@displayName "`, and `.image` contributes nothing — so its offset is
-    /// however much text precedes it. Used to attach `textOffset` onto the
-    /// recorded `ACPMessage.Attachment` for each image, so the transcript
-    /// bubble can mark exactly where the image sat in the sentence.
+    /// segment in order. `.text` contributes literal characters, `.mention`
+    /// contributes `"@displayName "`, `.upstreamReference` contributes its
+    /// spelling, and `.image` contributes nothing. Used to attach `textOffset`
+    /// to each recorded image attachment so the transcript marks its position.
     func imageTextOffsets() -> [Int] {
         var offset = 0
         var offsets: [Int] = []
@@ -93,6 +88,8 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
                 offset += value.count
             case .mention(let displayName, _):
                 offset += ("@" + displayName + " ").count
+            case .upstreamReference(let reference):
+                offset += reference.spelling.count
             case .image:
                 offsets.append(offset)
             }
@@ -104,6 +101,9 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
         case text(String)
         case mention(displayName: String, uri: String)
         case image(uri: String, mimeType: String)
+        /// A reference already represented by a composer chip. Plain
+        /// references remain `.text` so restoration can retain the caret guard.
+        case upstreamReference(CodeHostReference)
 
         private enum CodingKeys: String, CodingKey {
             case type
@@ -111,12 +111,14 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
             case displayName
             case uri
             case mimeType
+            case spelling
         }
 
         private enum SegmentType: String, Codable, Sendable {
             case text
             case mention
             case image
+            case upstreamReference
         }
 
         init(from decoder: Decoder) throws {
@@ -134,6 +136,16 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
                 self = .image(
                     uri: try container.decode(String.self, forKey: .uri),
                     mimeType: try container.decode(String.self, forKey: .mimeType))
+            case .upstreamReference:
+                let spelling = try container.decode(String.self, forKey: .spelling)
+                guard let reference = CodeHostReference(spelling: spelling) else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .spelling,
+                        in: container,
+                        debugDescription: "Invalid upstream reference spelling."
+                    )
+                }
+                self = .upstreamReference(reference)
             }
         }
 
@@ -151,6 +163,9 @@ struct ACPComposerDraft: Codable, Equatable, Sendable {
                 try container.encode(SegmentType.image, forKey: .type)
                 try container.encode(uri, forKey: .uri)
                 try container.encode(mimeType, forKey: .mimeType)
+            case .upstreamReference(let reference):
+                try container.encode(SegmentType.upstreamReference, forKey: .type)
+                try container.encode(reference.spelling, forKey: .spelling)
             }
         }
     }
@@ -177,6 +192,8 @@ extension ACPComposerDraft {
             switch segment {
             case .text(let value):
                 text += value
+            case .upstreamReference(let reference):
+                text += reference.spelling
             case .mention(let displayName, let uri):
                 text += "@\(displayName) "
                 attachments.append(.init(uri: uri, name: displayName))

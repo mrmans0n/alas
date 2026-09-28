@@ -26,6 +26,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Rebalance Swift tests into four measured CI shards (#1580).
 - Update the tree-sitter-groovy grammar digest (#1581).
 
+### 🐛 Fixes
+
+- Keep rejected restored references as text and sync queued drafts after normalization.
+
 ## [0.19.16] - 2026-09-28
 
 ### ✨ Features
