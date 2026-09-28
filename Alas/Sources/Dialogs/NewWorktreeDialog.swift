@@ -223,14 +223,13 @@ struct NewWorktreeDialog: View {
                 currentStackName: stackName
             )
         }
-        .sheet(item: $issueSheetPresentation) { presentation in
+        // Every dismissal path (Escape included) drops an unclaimed prewarm;
+        // after Attach it was already handed over, so this is a no-op.
+        .sheet(item: $issueSheetPresentation, onDismiss: { namePrewarm.cancel() }) { presentation in
             AttachIssueDialog(
                 environment: attachIssueEnvironment(),
                 initialDraft: presentation.draft,
-                onCancel: {
-                    namePrewarm.cancel()
-                    issueSheetPresentation = nil
-                },
+                onCancel: { issueSheetPresentation = nil },
                 onAttach: attachIssue
             )
             .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
