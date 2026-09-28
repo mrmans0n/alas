@@ -149,3 +149,39 @@ gpt-5.5
 …
 $ alas session new --agent codex --model gpt-5.5 --reasoning high --prompt "Review the parser changes"
 ```
+
+## Disabling native subagents
+
+Some agents can start their own subagents. **Settings → Agents → (agent) →
+Disable native subagents** removes that tool so the agent delegates through
+Alas child sessions instead. The option is off by default and is available
+only where Alas has verified a control:
+
+| Agent | Effect |
+|---|---|
+| Claude | Removes the Agent/Task tool from the model's tool list. Other Claude tools that coordinate work, such as SendMessage and Workflow, are not affected. |
+| Codex | Turns off Codex multi-agent tools (`spawn_agent` and related) through `CODEX_CONFIG`. Any `CODEX_CONFIG` you already set is merged, not replaced; one Alas cannot merge safely (invalid JSON, a non-object `agents`/`features`, or a dotted key that overlaps these settings) fails the launch with an error. Local sessions only: a remote Codex session with the option on fails to start. |
+| Pi | Unavailable. Pi has no built-in subagent tool; extensions may add one, and Alas does not disable extensions. |
+| Cursor, Gemini, Copilot, OpenCode, OMP | Unavailable until a control is verified. |
+| Custom agents | Unavailable. |
+
+When it applies:
+
+- A session keeps the setting it was created with, including forks and
+  imported agent sessions. Reconnects and restores reapply it. Changing the
+  setting affects only sessions created afterwards, and subagents that are
+  already running are not stopped.
+- Alas checks the adapter before sending any session request. If it does not
+  identify itself as `@agentclientprotocol/claude-agent-acp` 0.81.2 or later
+  (Claude) or `@agentclientprotocol/codex-acp` 1.13.1 or later (Codex), the
+  session fails to start instead of running unenforced.
+- The session's first prompt tells the agent its native subagent tool is off
+  and points it at `session_new` (or `alas session new`). If Alas tools are
+  turned off (**Expose Alas tools to agents**), the agent is told it cannot
+  delegate at all.
+
+This is not a sandbox: shell commands and extensions can still start other
+agents or processes.
+
+Delegated children are leaves in every case. Their MCP discovery does not list
+`session_new`, and Alas still rejects a direct `session_new` call from a child.

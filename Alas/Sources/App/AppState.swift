@@ -12522,6 +12522,9 @@ final class AppState {
                 basePATH: ACPProcessEnvironment.augmented()["PATH"]
             )
         }
+        mgr.nativeSubagentsPreferenceProvider = { [weak self] agentId in
+            self?.config.agents.nativeSubagentsDisabled(for: agentId) ?? false
+        }
         mgr.externalMCPStatusProvider = { [weak self] worktreePath in
             guard let self else { return (.unknown, nil, [], [], []) }
             let worktreeURL = URL(fileURLWithPath: worktreePath)
@@ -12823,6 +12826,9 @@ final class AppState {
                 parentSessionId: nil,
                 basePATH: ACPProcessEnvironment.augmented()["PATH"]
             )
+        }
+        manager.nativeSubagentsPreferenceProvider = { [weak self] agentId in
+            self?.config.agents.nativeSubagentsDisabled(for: agentId) ?? false
         }
         manager.externalMCPStatusProvider = { [weak self] worktreePath -> (
             adapterState: PiMCPAdapterInspector.State,

@@ -1711,6 +1711,113 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.terminalHost.sessionEnv["PATH"] == "/managed/bin:/usr/bin")
     }
 
+    @Test("the native subagent policy captured at creation governs fresh and restored Claude attaches")
+    func nativeSubagentsPolicyAppliesOnFreshAndRestoredAttach() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        var clients: [ACPMockClient] = []
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                let client = ACPMockClient()
+                self.scriptNativeDelegationInitialize(client, agentID: "claude", adapterVersion: "0.81.2")
+                self.scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+                self.scriptSessionResult(client, method: "session/load", sessionId: "remote-new")
+                clients.append(client)
+                return ACPConnection(client: client)
+            }
+        )
+        var preference = true
+        manager.nativeSubagentsPreferenceProvider = { _ in preference }
+        let session = manager.createSession(agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+        #expect(session.pendingMCPPreamble?.contains("native subagent tool is turned off") == true)
+
+        // Turning the setting off later does not weaken the running session.
+        preference = false
+        await manager.detach(sessionId: session.id)
+        let reopened = try #require(manager.placeholderSession(id: session.id))
+        await manager.hydrateIfNeeded(id: reopened.id)
+        await manager.attach(to: reopened.id, freshlyCreated: false)
+
+        let requests = clients.flatMap(\.sent).filter { $0.method.hasPrefix("session/") && $0.method != "session/prompt" }
+        #expect(requests.map(\.method) == ["session/new", "session/load"])
+        let newMeta = (requests.first?.params as? ACPSessionNewParams)?.meta
+        let loadMeta = (requests.last?.params as? ACPSessionLoadParams)?.meta
+        #expect(newMeta?.claudeCode?.options.disallowedTools == ["Agent", "Task"])
+        #expect(loadMeta == newMeta)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("an imported session with native subagents disabled is loaded with the controls and still gets delegation guidance")
+    func nativeSubagentsPolicyImportedSessionGetsGuidance() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        var clients: [ACPMockClient] = []
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                let client = ACPMockClient()
+                self.scriptNativeDelegationInitialize(client, agentID: "claude", adapterVersion: "0.81.2")
+                self.scriptSessionResult(client, method: "session/load", sessionId: "remote-imported")
+                clients.append(client)
+                return ACPConnection(client: client)
+            }
+        )
+        manager.nativeSubagentsPreferenceProvider = { _ in true }
+        let row = try #require(await manager.materializeDiscoveredSession(.init(
+            worktreeId: "wt", agentId: "claude", remoteSessionId: "remote-imported",
+            cwd: "/tmp/wt", title: "Imported", updatedAt: nil,
+            additionalDirectories: [], localSessionId: nil
+        )))
+        let session = try #require(manager.placeholderSession(id: row.id))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        let load = try #require(clients.flatMap(\.sent).first { $0.method == "session/load" })
+        #expect((load.params as? ACPSessionLoadParams)?.meta?.claudeCode?.options.disallowedTools == ["Agent", "Task"])
+        #expect(session.pendingMCPPreamble?.contains("native subagent tool is turned off") == true)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("a Codex session with native subagents disabled launches with merged CODEX_CONFIG and rejects an unverified adapter")
+    func nativeSubagentsPolicyCodexLaunch() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        var capturedSpec: ACPLaunchSpec?
+        var adapterVersion = "1.13.1"
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { spec, _, _ in
+                capturedSpec = spec
+                let client = ACPMockClient()
+                self.scriptNativeDelegationInitialize(client, agentID: "codex", adapterVersion: adapterVersion)
+                self.scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+                return ACPConnection(client: client)
+            }
+        )
+        manager.nativeSubagentsPreferenceProvider = { _ in true }
+
+        let verified = manager.createSession(agentId: "codex")
+        await manager.attach(to: verified.id, freshlyCreated: true)
+        #expect(verified.agentState == .ready)
+        let config = try #require(capturedSpec?.extraEnv["CODEX_CONFIG"])
+        #expect(config.contains(#""multi_agent":false"#))
+
+        adapterVersion = "1.12.0"
+        let outdated = manager.createSession(agentId: "codex")
+        await manager.attach(to: outdated.id, freshlyCreated: true)
+        #expect(outdated.lastError?.contains("verified from 1.13.1") == true)
+        await manager.detach(sessionId: verified.id)
+    }
+
     @Test("remote attach skips alas CLI env")
     func remoteAttachSkipsCLIEnv() async throws {
         let root = "/srv/task3-remote-cli-env-\(UUID().uuidString)"
@@ -5564,6 +5671,22 @@ struct ACPSessionManagerAttachRestoreTests {
                 protocolVersion: 1,
                 agentCapabilities: nil,
                 authMethods: authMethods
+            ))
+        }
+    }
+
+    private func scriptNativeDelegationInitialize(
+        _ client: ACPMockClient,
+        agentID: String,
+        adapterVersion: String
+    ) {
+        let name = ACPManagedAdapterDescriptor.descriptor(for: agentID)?.packageName ?? agentID
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(loadSession: true),
+                authMethods: [],
+                agentInfo: .init(name: name, version: adapterVersion)
             ))
         }
     }

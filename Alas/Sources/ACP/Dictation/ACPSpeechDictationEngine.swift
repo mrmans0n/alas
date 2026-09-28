@@ -461,13 +461,16 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
             return nil
         }
 
+        // TCC invokes these callbacks on a background queue. `@Sendable`
+        // keeps them from inheriting the Session's MainActor isolation,
+        // whose runtime check would otherwise trap.
         private static func requestMicrophoneAccess() async -> Bool {
             switch AVCaptureDevice.authorizationStatus(for: .audio) {
             case .authorized:
                 return true
             case .notDetermined:
                 return await withCheckedContinuation { continuation in
-                    AVCaptureDevice.requestAccess(for: .audio) { granted in
+                    AVCaptureDevice.requestAccess(for: .audio) { @Sendable granted in
                         continuation.resume(returning: granted)
                     }
                 }
@@ -483,7 +486,7 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
                 return true
             }
             return await withCheckedContinuation { continuation in
-                SFSpeechRecognizer.requestAuthorization { status in
+                SFSpeechRecognizer.requestAuthorization { @Sendable status in
                     continuation.resume(returning: status == .authorized)
                 }
             }

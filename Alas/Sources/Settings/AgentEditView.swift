@@ -7,6 +7,7 @@ struct AgentEditView: View {
     let onDismiss: () -> Void
 
     @State private var draft: AgentDefinition
+    @State private var nativeSubagentsDisabled: Bool
     @State private var deleteConfirmShown = false
 
     @Environment(\.theme) var theme
@@ -15,6 +16,10 @@ struct AgentEditView: View {
         self.state = state
         self.target = target
         self.onDismiss = onDismiss
+        let targetID: String? = if case .existing(let id) = target { id } else { nil }
+        _nativeSubagentsDisabled = State(initialValue: targetID.map {
+            state.config.agents.nativeSubagentsDisabled(for: $0)
+        } ?? false)
         switch target {
         case .new:
             _draft = State(initialValue: AgentDefinition(
@@ -126,6 +131,17 @@ struct AgentEditView: View {
             SettingsRow(name: "Enabled") {
                 AlasToggle(on: $draft.isEnabled)
             }
+            SettingsRow(
+                name: "Disable native subagents",
+                desc: nativeDelegationSupport.settingsRowDescription(
+                    isOn: nativeSubagentsDisabled,
+                    alasToolsExposed: state.config.harness.exposeAlasMCP
+                )
+            ) {
+                AlasToggle(on: $nativeSubagentsDisabled)
+                    .disabled(!nativeDelegationSupport.canEnforce)
+                    .opacity(nativeDelegationSupport.canEnforce ? 1 : 0.4)
+            }
 
             HStack(spacing: 8) {
                 if !draft.isBuiltin && !isNew {
@@ -159,6 +175,11 @@ struct AgentEditView: View {
         }
     }
 
+    /// Custom agents resolve to `.unsupported` (their ids are UUIDs).
+    private var nativeDelegationSupport: ACPNativeDelegationSupport {
+        draft.isBuiltin ? .resolve(agentID: draft.id) : .unsupported
+    }
+
     private var isNew: Bool {
         if case .new = target { return true } else { return false }
     }
@@ -183,6 +204,9 @@ struct AgentEditView: View {
             entry.binaryOverride = (trimmed?.isEmpty == false) ? trimmed : nil
             let trimmedExtra = draft.extraTerminalArgs?.filter { !$0.isEmpty }
             entry.extraTerminalArgs = (trimmedExtra?.isEmpty == false) ? trimmedExtra : nil
+            if nativeDelegationSupport.canEnforce {
+                entry.nativeSubagentsDisabled = nativeSubagentsDisabled ? true : nil
+            }
             state.config.agents.builtinState[draft.id] = entry
         } else if isNew {
             state.config.agents.custom.append(draft.normalizedForSettingsSave())

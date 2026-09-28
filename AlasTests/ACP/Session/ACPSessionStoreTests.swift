@@ -39,6 +39,32 @@ struct ACPSessionStoreSchemaTests {
         #expect(try store.loadSession(id: "configured")?.configOptionValues == values)
     }
 
+    @Test("native subagent policy is captured once and survives later upserts")
+    func nativeSubagentsPolicyIsWriteOnce() throws {
+        let store = try tmpStore()
+        func row(_ policy: Bool?) -> ACPSessionRow {
+            .init(
+                id: "policy", agentId: "claude", title: "Policy",
+                currentModel: nil, currentMode: nil,
+                nativeSubagentsDisabled: policy,
+                autoRun: false, createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false
+            )
+        }
+        try store.upsertSession(row(true))
+        // Rows rebuilt without the field, or with a different value, never
+        // change the policy the session started with.
+        try store.upsertSession(row(nil))
+        try store.upsertSession(row(false))
+        #expect(try store.loadSession(id: "policy")?.nativeSubagentsDisabled == true)
+
+        try store.upsertSession(.init(
+            id: "legacy", agentId: "codex", title: "Legacy",
+            currentModel: nil, currentMode: nil,
+            autoRun: false, createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false
+        ))
+        #expect(try store.loadSession(id: "legacy")?.nativeSubagentsDisabled == nil)
+    }
+
     @Test("re-opening doesn't double-apply migrations")
     func idempotent() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("acp-store-\(UUID()).sqlite")

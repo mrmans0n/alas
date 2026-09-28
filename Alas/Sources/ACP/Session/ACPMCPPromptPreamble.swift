@@ -64,9 +64,15 @@ enum ACPMCPPromptPreamble {
         userServerNames: [String],
         mode: ACPMCPPreambleMode = .mcp,
         ggStack: GGPreambleStackContext? = nil,
-        issue: IssuePreambleContext? = nil
+        issue: IssuePreambleContext? = nil,
+        nativeSubagentsDisabled: Bool = false
     ) -> String? {
-        guard builtInInjected || !userServerNames.isEmpty || ggStack != nil || issue != nil else { return nil }
+        guard builtInInjected || !userServerNames.isEmpty || ggStack != nil || issue != nil
+                || nativeSubagentsDisabled
+        else { return nil }
+        let delegation = nativeSubagentsDisabled
+            ? nativeDelegationLine(builtInInjected: builtInInjected, isDelegated: isDelegated, mode: mode)
+            : nil
         switch mode {
         case .mcp:
             return mcpText(
@@ -74,7 +80,8 @@ enum ACPMCPPromptPreamble {
                 isDelegated: isDelegated,
                 userServerNames: userServerNames,
                 ggStack: ggStack,
-                issue: issue)
+                issue: issue,
+                delegation: delegation)
         case .cli(let serverAvailability):
             return cliText(
                 builtInInjected: builtInInjected,
@@ -82,8 +89,33 @@ enum ACPMCPPromptPreamble {
                 userServerNames: userServerNames,
                 serverAvailability: serverAvailability,
                 ggStack: ggStack,
-                issue: issue)
+                issue: issue,
+                delegation: delegation)
         }
+    }
+
+    /// Steers delegation when the session's native subagent tool is off.
+    /// Root sessions are pointed at Alas child sessions only when Alas tools
+    /// are actually attached; delegated children stay leaves.
+    private static func nativeDelegationLine(
+        builtInInjected: Bool,
+        isDelegated: Bool,
+        mode: ACPMCPPreambleMode
+    ) -> String {
+        let off = "Your native subagent tool is turned off for this session."
+        if isDelegated {
+            return off + " Do the work in this session."
+        }
+        guard builtInInjected else {
+            return off + " Alas delegation tools are not available in this session "
+                + "either, so do the work in this session."
+        }
+        let route = switch mode {
+        case .mcp: "the alas session_new tool"
+        case .cli: "`alas session new --prompt <text>`"
+        }
+        return off + " To delegate a task, use \(route): it starts a child "
+            + "agent session in Alas that reports back to you here."
     }
 
     private static func mcpText(
@@ -91,7 +123,8 @@ enum ACPMCPPromptPreamble {
         isDelegated: Bool,
         userServerNames: [String],
         ggStack: GGPreambleStackContext?,
-        issue: IssuePreambleContext?
+        issue: IssuePreambleContext?,
+        delegation: String?
     ) -> String {
         var lines: [String] = []
         lines.append("<alas-workspace-context>")
@@ -148,6 +181,9 @@ enum ACPMCPPromptPreamble {
         if let ggStack {
             lines.append(ggStackLine(ggStack, cliMode: false))
         }
+        if let delegation {
+            lines.append(delegation)
+        }
         if let issue {
             lines.append(issueLine(issue))
         }
@@ -161,7 +197,8 @@ enum ACPMCPPromptPreamble {
         userServerNames: [String],
         serverAvailability: ACPMCPExternalStatus.AdapterServerAvailability,
         ggStack: GGPreambleStackContext?,
-        issue: IssuePreambleContext?
+        issue: IssuePreambleContext?,
+        delegation: String?
     ) -> String {
         var lines: [String] = []
         lines.append("<alas-workspace-context>")
@@ -224,6 +261,9 @@ enum ACPMCPPromptPreamble {
         }
         if let ggStack {
             lines.append(ggStackLine(ggStack, cliMode: true))
+        }
+        if let delegation {
+            lines.append(delegation)
         }
         if let issue {
             lines.append(issueLine(issue))

@@ -213,19 +213,24 @@ struct ACPInitializeResult: Codable, Equatable {
     let protocolVersion: Int
     let agentCapabilities: ACPAgentCapabilities?
     let authMethods: [ACPAuthMethod]
+    /// The adapter's self-reported `agentInfo` (ACP `Implementation`).
+    /// Optional on the wire; a malformed value is dropped, not fatal.
+    let agentInfo: ACPImplementationInfo?
 
     init(
         protocolVersion: Int,
         agentCapabilities: ACPAgentCapabilities?,
-        authMethods: [ACPAuthMethod]
+        authMethods: [ACPAuthMethod],
+        agentInfo: ACPImplementationInfo? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.agentCapabilities = agentCapabilities
         self.authMethods = authMethods
+        self.agentInfo = agentInfo
     }
 
     enum CodingKeys: String, CodingKey {
-        case protocolVersion, agentCapabilities, authMethods
+        case protocolVersion, agentCapabilities, authMethods, agentInfo
     }
 
     init(from decoder: Decoder) throws {
@@ -233,6 +238,7 @@ struct ACPInitializeResult: Codable, Equatable {
         protocolVersion = try c.decode(Int.self, forKey: .protocolVersion)
         agentCapabilities = try c.decodeIfPresent(ACPAgentCapabilities.self, forKey: .agentCapabilities)
         authMethods = try c.decodeIfPresent([ACPAuthMethod].self, forKey: .authMethods) ?? []
+        agentInfo = (try? c.decodeIfPresent(ACPImplementationInfo.self, forKey: .agentInfo)) ?? nil
     }
 
     struct ACPAgentCapabilities: Codable, Equatable {
@@ -648,11 +654,39 @@ struct AnyCodable: Codable, Equatable, Hashable, @unchecked Sendable {
     }
 }
 
+/// ACP `Implementation`: the name/version an agent reports in `initialize`.
+struct ACPImplementationInfo: Codable, Equatable, Sendable {
+    let name: String
+    let version: String
+}
+
 // MARK: - session/new
+
+/// Client-supplied `_meta` on session/new, session/load, session/resume, and
+/// session/fork. Only the keys Alas sends are modelled.
+struct ACPSessionMeta: Codable, Equatable, Sendable {
+    /// Read by `claude-agent-acp`, which merges `options` into the Claude
+    /// Agent SDK options for the session's query process.
+    struct ClaudeCode: Codable, Equatable, Sendable {
+        struct Options: Codable, Equatable, Sendable {
+            let disallowedTools: [String]
+        }
+
+        let options: Options
+    }
+
+    let claudeCode: ClaudeCode?
+}
 
 struct ACPSessionNewParams: Codable, Equatable {
     let cwd: String
     let mcpServers: [ACPMCPServer]
+    var meta: ACPSessionMeta? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case cwd, mcpServers
+        case meta = "_meta"
+    }
 }
 
 struct ACPModelInfo: Codable, Equatable, Identifiable, Hashable {
@@ -845,6 +879,12 @@ struct ACPSessionLoadParams: Codable, Equatable {
     let cwd: String
     let sessionId: String
     let mcpServers: [ACPMCPServer]
+    var meta: ACPSessionMeta? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case cwd, sessionId, mcpServers
+        case meta = "_meta"
+    }
 }
 
 // MARK: - session/list + session/resume + session/fork

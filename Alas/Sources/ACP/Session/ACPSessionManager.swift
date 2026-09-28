@@ -191,6 +191,12 @@ final class ACPSessionManager: ObservableObject {
     /// `alasCLIEnvProvider`, so AppState can wire it without threading it
     /// through every manager construction call site.
     var externalMCPStatusProvider: ExternalMCPStatusProvider?
+    /// Whether new sessions of an agent start with native subagents
+    /// disabled (Settings → Agents, already clamped to agents with a
+    /// verified control). Read once, when Alas creates the session row;
+    /// the captured value then governs every attach of that session. Set
+    /// post-init, mirroring `alasCLIEnvProvider`.
+    var nativeSubagentsPreferenceProvider: (@MainActor (_ agentId: String) -> Bool)?
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:] {
         willSet {
             for (id, session) in sessions where newValue[id] !== session {
@@ -1552,7 +1558,9 @@ final class ACPSessionManager: ObservableObject {
         let row = ACPSessionRow(
             id: id, agentId: agentId, title: "New session",
             titleSource: .placeholder,
-            currentModel: nil, currentMode: nil, autoRun: autoRunDefault,
+            currentModel: nil, currentMode: nil,
+            nativeSubagentsDisabled: nativeSubagentsPreference(agentId: agentId),
+            autoRun: autoRunDefault,
             createdAt: now, updatedAt: now, lastOpenedAt: now, archived: false)
         persistedRows[id] = row
         recent.removeAll { $0.id == id }
@@ -1629,6 +1637,7 @@ final class ACPSessionManager: ObservableObject {
                 titleSource: .generated,
                 currentModel: nil,
                 currentMode: nil,
+                nativeSubagentsDisabled: nativeSubagentsPreference(agentId: targetAgentID),
                 autoRun: autoRunDefault,
                 createdAt: now,
                 updatedAt: now,
@@ -2785,6 +2794,19 @@ final class ACPSessionManager: ObservableObject {
         replaceRecentRow(row)
     }
 
+    private func nativeSubagentsPreference(agentId: String) -> Bool {
+        nativeSubagentsPreferenceProvider?(agentId) ?? false
+    }
+
+    /// The native-delegation policy this session was created with. The
+    /// stored value is write-once and authoritative; the cached row covers a
+    /// session whose creation write is still queued. Rows from before the
+    /// policy existed (nil in both) allow native subagents.
+    private func capturedNativeSubagentsPolicy(sessionId: ACPSession.ID) async -> Bool {
+        let stored = try? await persistence.loadSession(id: sessionId)
+        return (stored?.nativeSubagentsDisabled ?? persistedRows[sessionId]?.nativeSubagentsDisabled) == true
+    }
+
     private func replaceRecentRow(_ row: ACPSessionRow) {
         recent.removeAll { $0.id == row.id }
         guard !row.archived else { return }
@@ -2858,6 +2880,7 @@ final class ACPSessionManager: ObservableObject {
             origin: origin,
             currentModel: nil,
             currentMode: nil,
+            nativeSubagentsDisabled: nativeSubagentsPreference(agentId: discovered.agentId),
             autoRun: autoRunDefault,
             createdAt: remoteUpdatedAt,
             updatedAt: remoteUpdatedAt,
@@ -4912,6 +4935,8 @@ extension ACPSessionManager {
         // `do` block, so its `extraEnv` is captured here for later use).
         var cliParentSessionId: String?
         let agentEnvironment: [String: String]
+        let nativeSubagentsDisabled = await capturedNativeSubagentsPolicy(sessionId: sessionId)
+        guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
         do {
             let resolvedSpec = await resolvedLaunchSpec(for: spec, host: host)
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
@@ -4925,6 +4950,15 @@ extension ACPSessionManager {
                     cliParentSessionId = launchSpec.extraEnv["ALAS_PARENT_SESSION_ID"]
                 }
             }
+            // Process-level native-delegation controls (Codex) must be in
+            // the spawn environment; a policy that cannot be applied fails
+            // the launch here rather than running unenforced.
+            launchSpec = try ACPNativeDelegationControls.applyingLaunchControls(
+                to: launchSpec,
+                nativeSubagentsDisabled: nativeSubagentsDisabled,
+                inheritedEnvironment: ProcessInfo.processInfo.environment,
+                isRemote: host != nil
+            )
             agentEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: launchSpec.extraEnv)
             if let injectedConnectionFactory {
                 connection = try injectedConnectionFactory(launchSpec, host, worktreePath)
@@ -4986,6 +5020,12 @@ extension ACPSessionManager {
             await releaseWriterLease(sessionId: sessionId, attempt: attempt)
             return
         }
+        // Session-level native-delegation controls (Claude) ride on every
+        // session/new, session/load, session/resume, and session/fork.
+        connection.sessionMeta = ACPNativeDelegationControls.sessionMeta(
+            agentID: session.agentId,
+            nativeSubagentsDisabled: nativeSubagentsDisabled
+        )
         // `cliEnvActive` / `cliParentSessionId` are consumed below, once we
         // know whether this attach created a fresh remote session (the
         // preamble is only sent once, on first prompt).
@@ -5163,6 +5203,13 @@ extension ACPSessionManager {
                     }
                 }
             }
+            // Enforcement is verified per adapter version: an older or
+            // unidentified adapter fails before any session request.
+            try ACPNativeDelegationControls.verifyAdapter(
+                agentID: session.agentId,
+                nativeSubagentsDisabled: nativeSubagentsDisabled,
+                agentInfo: initialized.agentInfo
+            )
             // Deliberately not reset here (unlike promptCapabilities/authMethods,
             // which are re-derived from every `initialize` response): a broker-
             // adopted reattach to an already-running agent serves `initialize`
@@ -5996,7 +6043,14 @@ extension ACPSessionManager {
                         helloSeen: helloSeen, graceElapsed: true)
                 }
             }
-            if createdFreshRemoteSession {
+            // Sessions that start from loaded context (native fork, imported
+            // agent session) skip the fresh-session preamble. When native
+            // subagents are off, they still need the one-time delegation
+            // guidance, so queue it once if nothing was ever queued or sent.
+            let needsDelegationGuidance = nativeSubagentsDisabled
+                && !session.mcpPreambleSent
+                && session.pendingMCPPreamble == nil
+            if createdFreshRemoteSession || needsDelegationGuidance {
                 let preambleMode: ACPMCPPreambleMode
                 let userServerNames: [String]
                 if case .external = spec.mcpInjection {
@@ -6034,7 +6088,8 @@ extension ACPSessionManager {
                     userServerNames: userServerNames,
                     mode: preambleMode,
                     ggStack: ggStackContext,
-                    issue: issuePreambleProvider?(worktreeId)
+                    issue: issuePreambleProvider?(worktreeId),
+                    nativeSubagentsDisabled: nativeSubagentsDisabled
                 )
                 if isWriter(for: sessionId) {
                     session.pendingMCPPreamble = preamble

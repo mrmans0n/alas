@@ -62,7 +62,7 @@ struct ACPSessionHydratorTests {
         #expect(result.recent.contains(where: { $0.id == "s" }))
     }
 
-    @Test("hydrate preserves remote ACP session id in touched row")
+    @Test("hydrate preserves remote ACP session id and native subagent policy in touched row")
     func hydratePreservesRemoteSessionIdInTouchedRow() async throws {
         let path = tmpStorePath()
         let store = try ACPSessionStore(path: path)
@@ -73,6 +73,7 @@ struct ACPSessionHydratorTests {
             remoteSessionId: "remote-1",
             currentModel: nil,
             currentMode: nil,
+            nativeSubagentsDisabled: true,
             autoRun: false,
             createdAt: 0,
             updatedAt: 0,
@@ -84,6 +85,7 @@ struct ACPSessionHydratorTests {
         let result = try await hydrator.hydrate(sessionId: "s")
 
         #expect(result.row.remoteSessionId == "remote-1")
+        #expect(result.row.nativeSubagentsDisabled == true)
     }
 
     @Test("missing session throws")
