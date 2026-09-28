@@ -2797,14 +2797,13 @@ final class ACPSessionManager: ObservableObject {
         nativeSubagentsPreferenceProvider?(agentId) ?? false
     }
 
-    /// The native-delegation policy this session was created with. Rows
-    /// from before the policy existed (nil) allow native subagents.
+    /// The native-delegation policy this session was created with. The
+    /// stored value is write-once and authoritative; the cached row covers a
+    /// session whose creation write is still queued. Rows from before the
+    /// policy existed (nil in both) allow native subagents.
     private func capturedNativeSubagentsPolicy(sessionId: ACPSession.ID) async -> Bool {
-        if let row = persistedRows[sessionId] {
-            return row.nativeSubagentsDisabled == true
-        }
-        let row = try? await persistence.loadSession(id: sessionId)
-        return row?.nativeSubagentsDisabled == true
+        let stored = try? await persistence.loadSession(id: sessionId)
+        return (stored?.nativeSubagentsDisabled ?? persistedRows[sessionId]?.nativeSubagentsDisabled) == true
     }
 
     private func replaceRecentRow(_ row: ACPSessionRow) {
