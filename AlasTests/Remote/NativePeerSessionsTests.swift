@@ -345,6 +345,33 @@ struct NativePeerSessionsTests {
         #expect(listFilesCount() == initial + 1)
     }
 
+    @Test func worktreeSummaryChangeDuringRootLoadQueuesARetryOnReply() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s") // the root listFiles request is now in flight
+
+        let listFilesCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .listFiles(sessionId: "s", path: nil) }.count
+        }
+        let afterSelect = listFilesCount()
+
+        // A summary change arrives before the root listing's reply: blocked
+        // by the in-flight load, so nothing new is sent yet.
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
+        #expect(listFilesCount() == afterSelect)
+
+        // The (now-stale) reply for the first request arrives — this must
+        // queue an immediate retry instead of leaving the tree stale.
+        links.receive(.fileTree(sessionId: "s", path: nil, nodes: [], truncated: false), from: "B")
+        #expect(listFilesCount() == afterSelect + 1)
+    }
+
     @Test func switchingSessionsStartsAFreshWorkspace() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
