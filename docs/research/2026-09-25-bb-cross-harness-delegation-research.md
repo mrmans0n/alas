@@ -324,12 +324,15 @@ HOME=$T/home XDG_CONFIG_HOME=$T/xdg/config XDG_DATA_HOME=$T/xdg/data XDG_STATE_H
   OPENCODE_CONFIG_CONTENT='{"provider":{"probe":{...loopback...}},"permission":{"task":"deny"}}' opencode acp
 
 # Pi: models.json in $T/agent defines provider "probe" (api openai-completions, baseUrl loopback)
-cat > $T/pi-wrap.sh <<'SH'
+# Resolve the installed extension with the real HOME, before HOME is overridden below
+EXT="$HOME/.pi/agent/npm/node_modules/pi-subagents/index.ts"
+cat > $T/pi-wrap.sh <<SH
 #!/bin/bash
-exec pi "$@" --no-extensions --no-skills --no-context-files \
-  -e ~/.pi/agent/npm/node_modules/pi-subagents/index.ts \
+exec pi "\$@" --no-extensions --no-skills --no-context-files \\
+  -e "$EXT" \\
   --exclude-tools subagent,subagent_supervisor,bg_wait
 SH
+chmod +x $T/pi-wrap.sh
 HOME=$T/home PI_CODING_AGENT_DIR=$T/agent PI_OFFLINE=1 PI_TELEMETRY=0 \
   PI_ACP_PI_COMMAND=$T/pi-wrap.sh pi-acp
 # Captured tools: read,bash,edit,write
