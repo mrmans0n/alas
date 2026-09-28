@@ -687,7 +687,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 rows: rows, messages: transcript.messages,
                 options: groupingOptions(host: host),
                 messageCreatedAt: { transcript.createdAt(forMessageAt: $0) },
-                isExpanded: { group in expansionSeeds?.isExpanded(group) ?? false }
+                isExpanded: { group in expansionSeeds?.isExpanded(group) ?? false },
+                memberLimit: { group in expansionSeeds?.memberLimit(group) }
             )
         }
 
@@ -765,12 +766,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // that were actually passed to `setExpanded(false, ...)`.
             expansionSeeds.syncCollapsed(members: memberStableIds)
             let expanded = expansionSeeds.isExpanded(group)
+            // Same limit `renderRows` applied, so the count matches the
+            // member rows actually tiled below this header.
+            let hiddenMemberCount = expanded
+                ? max(0, memberStableIds.count - (expansionSeeds.memberLimit(group) ?? memberStableIds.count))
+                : 0
             return ACPTranscriptRowSpec(
                 id: group.id,
                 equalityToken: token(
                     ToolCallGroupTokenInputs(
                         summary: summary,
                         expanded: expanded,
+                        hiddenMemberCount: hiddenMemberCount,
                         memberStableIds: memberStableIds
                     ),
                     host: host
@@ -780,6 +787,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                         ACPToolCallGroupHeaderRow(
                             summary: summary,
                             expanded: expanded,
+                            hiddenMemberCount: hiddenMemberCount,
                             onToggle: { expansionSeeds.setExpanded($0, members: memberStableIds) }
                         )
                     }
@@ -790,6 +798,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         private struct ToolCallGroupTokenInputs: Equatable {
             let summary: ACPToolCallGroupSummary
             let expanded: Bool
+            let hiddenMemberCount: Int
             // Thinking can extend a group without changing its tool count.
             // Refresh the toggle closure so expansion includes those members.
             let memberStableIds: [String]

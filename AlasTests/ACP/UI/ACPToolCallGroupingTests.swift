@@ -472,6 +472,31 @@ struct ACPToolCallGroupingTests {
         }
     }
 
+    @Test("an auto-expanded live run tiles only its latest members until expanded explicitly")
+    func liveRunCapsMembersUntilExplicitlyExpanded() {
+        let messages = (0..<8).map { tool("\($0)") }
+        let rows = ACPTranscriptVisibleRow.rows(
+            messages: messages, visibleHead: 0, visibleTail: messages.count,
+            stableId: { $0.stableId }
+        )
+        let seeds = ACPToolCallGroupExpansionSeeds()
+        func memberIds() -> [String] {
+            ACPToolCallGrouping.fold(
+                rows: rows, messages: messages,
+                options: .init(enabled: true, isTurnActive: true),
+                isExpanded: seeds.isExpanded,
+                memberLimit: seeds.memberLimit
+            ).compactMap { row in
+                guard case .toolCallGroupMember(let member, _) = row else { return nil }
+                return member.stableId
+            }
+        }
+
+        #expect(memberIds() == ["tc-3", "tc-4", "tc-5", "tc-6", "tc-7"])
+        seeds.setExpanded(true, members: rows.map(\.stableId))
+        #expect(memberIds() == rows.map(\.stableId))
+    }
+
     @Test("an expanded member's row id is the same one it has when collapsing is off entirely")
     func expandedMemberRowIdMatchesUngroupedRowId() {
         // This is the property the scroller relies on: expanding, collapsing
