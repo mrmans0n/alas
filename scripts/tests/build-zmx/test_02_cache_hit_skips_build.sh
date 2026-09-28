@@ -38,7 +38,7 @@ chmod +x "${tmp}/counting-zig.sh"
 env_vars=(
     "SRCROOT=${srcroot}"
     "ALAS_ZMX_TARGET_ARCH=arm64"
-    "ALAS_ZIG_BIN=${tmp}/counting-zig.sh"
+    "ALAS_ZMX_ZIG_BIN=${tmp}/counting-zig.sh"
     "ALAS_ZMX_CACHE_DIR=${tmp}/cache"
 )
 env "${env_vars[@]}" bash "${repo_root}/scripts/build-zmx.sh"

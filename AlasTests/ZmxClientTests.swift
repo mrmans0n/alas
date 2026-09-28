@@ -220,7 +220,7 @@ struct ZmxClientTests {
             exitCode: 0,
             stdout: """
               name=alas-old-leaf\tpid=25367\tclients=1\tcreated=1779957881\tstart_dir=/Users/nacho/.alas/.worktrees/alas/nacho-new-worktree-acp\tcmd=/bin/zsh -l
-              name=alas-other\tpid=25368\tclients=0\tcreated=1779957882\tstart_dir=/Volumes/Workspace/alas\tcmd=/bin/zsh -l -i
+              name=alas-other\tpid=25368\tclients=0\tcreated=1779957882\tcwd=/Volumes/Workspace/alas\tcmd=/bin/zsh -l -i
 
             """,
             stderr: ""
