@@ -480,19 +480,28 @@ struct ACPToolCallGroupingTests {
             stableId: { $0.stableId }
         )
         let seeds = ACPToolCallGroupExpansionSeeds()
-        func memberIds() -> [String] {
+        func folded() -> [ACPTranscriptRenderRow] {
             ACPToolCallGrouping.fold(
                 rows: rows, messages: messages,
                 options: .init(enabled: true, isTurnActive: true),
                 isExpanded: seeds.isExpanded,
                 memberLimit: seeds.memberLimit
-            ).compactMap { row in
+            )
+        }
+        func memberIds() -> [String] {
+            folded().compactMap { row in
                 guard case .toolCallGroupMember(let member, _) = row else { return nil }
                 return member.stableId
             }
         }
 
         #expect(memberIds() == ["tc-3", "tc-4", "tc-5", "tc-6", "tc-7"])
+        // A member the cap left out is represented by the header, so a scroll
+        // anchor recorded on it still resolves; tiled members keep their own id.
+        let lookup = ACPTranscriptVisibleRowLookup(rows: folded())
+        #expect(lookup.rowId(forStableId: "tc-0") == "tcg-tc-0")
+        #expect(lookup.transcriptIndex(for: "tc-2") == 2)
+        #expect(lookup.rowId(forStableId: "tc-3") == "tc-3")
         seeds.setExpanded(true, members: rows.map(\.stableId))
         #expect(memberIds() == rows.map(\.stableId))
     }

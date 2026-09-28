@@ -73,9 +73,16 @@ struct ACPTranscriptVisibleRowLookup {
                 // member follows as its own row and owns that index. So it
                 // gets an anchor index (anchors and remaps still resolve
                 // it) but deliberately NO span — see `localIndexSpan`.
-                // Members are not registered here; each registers itself as
-                // its own row above.
+                // Tiled members register themselves as their own rows, and
+                // those rows follow this one so they overwrite the entries
+                // below. What remains are members the live cap left out:
+                // the header stands in for them, so an anchor recorded on
+                // one still resolves instead of going stale.
                 indexById[group.id] = group.members[0].index
+                for member in group.members {
+                    indexById[member.stableId] = member.index
+                    rowIdByStableId[member.stableId] = group.id
+                }
             }
         }
         self.indexById = indexById
