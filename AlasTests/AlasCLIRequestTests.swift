@@ -146,6 +146,9 @@ struct AlasCLIRequestTests {
         let list = #"{"v":1,"kind":"cli","command":"session_list","session_id":"s1","future_transport_field":true,"params":{"future_param":true}}"#
         #expect(try AlasCLIRequest.decode(from: Data(list.utf8)).command == .sessionList)
 
+        let agents = #"{"v":1,"kind":"cli","command":"agent_list","session_id":"s1","params":{}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(agents.utf8)).command == .agentList)
+
         let current = #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task"}}"#
         #expect(try AlasCLIRequest.decode(from: Data(current.utf8)).command == .sessionNew(
             prompt: "Task", agentID: nil, worktree: .current
@@ -187,6 +190,7 @@ struct AlasCLIRequestTests {
     @Test func rejectsInvalidSessionOrchestrationRequests() throws {
         for invalid in [
             #"{"v":1,"kind":"cli","command":"session_list","session_id":"s1"}"#,
+            #"{"v":1,"kind":"cli","command":"agent_list","session_id":"s1"}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"   "}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","agent":"  "}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","worktree":"  "}}"#,

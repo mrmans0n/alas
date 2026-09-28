@@ -6798,6 +6798,20 @@ final class AppState {
                         ACPOrchestrationAgent(id: $0.id, isEnabled: true, isACPCapable: acpIDs.contains($0.id))
                     }
                 },
+                delegationAgents: { [weak self] _, worktree in
+                    guard let self else { return [] }
+                    let availability = await self.loadAgentAvailabilityForDelegation(worktree)
+                    let catalog = self.acpModelCatalog
+                    return ACPSessionOrchestrationPolicy.delegationAgents(
+                        configured: AgentConfiguredCatalog.all(
+                            builtinState: self.config.agents.builtinState,
+                            customs: self.config.agents.custom
+                        ),
+                        acpAgentIDs: Set(ACPLaunchCatalog.specs.map(\.agentID)),
+                        availability: availability,
+                        catalog: { (catalog.models(for: $0), catalog.launchReport(for: $0)) }
+                    )
+                },
                 sessionLocation: { [weak self] sessionId in
                     guard let self,
                           let (owner, manager) = self.acpManagers.first(where: { _, manager in
@@ -6978,6 +6992,9 @@ final class AppState {
                     title: title,
                     level: level
                 )
+            },
+            listDelegationAgents: { origin in
+                await orchestration.discoverAgents(origin: origin)
             },
             listDelegatedSessions: { origin in
                 await orchestration.list(origin: origin)

@@ -135,7 +135,7 @@ fn initialize_result(parent_session_id: Option<&str>) -> Value {
             "Tools that drive the user's Alas workspace UI. This session was delegated by a parent session: it cannot create descendants; return results or questions through session_send."
         }
         None => {
-            "Tools that drive the user's Alas workspace UI: open files for the user to look at, manage linked worktrees, and open reviews. Root ACP sessions may delegate direct child sessions."
+            "Tools that drive the user's Alas workspace UI: open files for the user to look at, manage linked worktrees, and open reviews. Root ACP sessions may delegate direct child sessions: call agent_list first to pick an available agent id (and see its remembered models), then session_new."
         }
     };
     json!({
@@ -212,6 +212,11 @@ fn all_tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "agent_list",
+            "description": "Read-only: list the ACP agents this session could delegate to with session_new. Returns versioned JSON with each agent's id, display name, availability, model-selection support, and remembered model catalog state. Only agents with available=true are valid session_new targets. Never starts a session or model request.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
             "name": "session_list",
             "description": "List this ACP session and its direct parent or children only. Returns structured state summaries without transcript content.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -223,7 +228,7 @@ fn all_tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "prompt": { "type": "string", "description": "Initial text-only task for the child session." },
-                    "agent": { "type": "string", "description": "Optional enabled ACP-capable agent id. Defaults to this session's agent." },
+                    "agent": { "type": "string", "description": "Optional agent id from agent_list with available=true. Defaults to this session's agent." },
                     "worktree": { "type": "string", "description": "Existing project worktree name or branch. Mutually exclusive with new_worktree." },
                     "new_worktree": {
                         "type": "object",
@@ -675,6 +680,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 level,
             })
         }
+        "agent_list" => Ok(Command::AgentList),
         "session_list" => Ok(Command::SessionList),
         "session_new" => {
             let worktree = optional_non_blank_string(args, "worktree")?;
@@ -1229,6 +1235,7 @@ fn success_message(command: &Command) -> String {
         Command::ReviewResolve { reopen: true, .. } => "Comment reopened.".into(),
         Command::ReviewCommentAdd { path, .. } => format!("Filed review comment on {path}."),
         Command::ReviewFinish { .. } => "Review finished.".into(),
+        Command::AgentList => "No delegation agents found.".into(),
         Command::SessionList => "No delegated sessions found.".into(),
         Command::SessionNew { .. } => "Delegated session creation accepted.".into(),
         Command::SessionSend { .. } => "Delegated prompt queued.".into(),
@@ -2094,6 +2101,7 @@ mod tests {
             [
                 "open",
                 "notify",
+                "agent_list",
                 "session_list",
                 "session_new",
                 "session_send",
@@ -2586,6 +2594,10 @@ mod tests {
 
     #[test]
     fn session_tools_validate_and_map_arguments() {
+        assert_eq!(
+            command_for_tool("agent_list", &json!({}), "/wt").unwrap(),
+            alas_client::Command::AgentList
+        );
         assert_eq!(
             command_for_tool("session_list", &json!({}), "/wt").unwrap(),
             alas_client::Command::SessionList

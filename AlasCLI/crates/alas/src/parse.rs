@@ -22,6 +22,7 @@ usage: alas workspace show <checkout-uuid>
 usage: alas workspace switch <checkout-uuid>
 usage: alas workspace focus <checkout-uuid> --member <member-uuid>
 usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|wait|cancel> ...
+usage: alas agent list
 usage: alas session list
 usage: alas session new --prompt <text> [--agent <id>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
 usage: alas session send <session-id> <prompt>
@@ -46,6 +47,7 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
         Some("wt") => parse_wt(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("workspace") => parse_workspace(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("preview") => parse_preview(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
+        Some("agent") => parse_agent(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("session") => parse_session(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("review") => {
             let rest: Vec<&str> = it.map(String::as_str).collect();
@@ -360,6 +362,13 @@ fn validated_uuid(value: &str) -> Result<String, String> {
         Ok(value.to_string())
     } else {
         Err("workspace commands require UUID targets".into())
+    }
+}
+
+fn parse_agent(args: &[&str]) -> Result<Command, String> {
+    match args {
+        ["list"] => Ok(Command::AgentList),
+        _ => Err("usage: alas agent list".into()),
     }
 }
 
@@ -1610,6 +1619,12 @@ mod tests {
 
     #[test]
     fn session_commands_parse_and_validate() {
+        assert_eq!(
+            parse(&s(&["agent", "list"]), Path::new("/b")).unwrap(),
+            Command::AgentList
+        );
+        assert!(parse(&s(&["agent"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["agent", "list", "--all"]), Path::new("/b")).is_err());
         assert_eq!(
             parse(&s(&["session", "list"]), Path::new("/b")).unwrap(),
             Command::SessionList

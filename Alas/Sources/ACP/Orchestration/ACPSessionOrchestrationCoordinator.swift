@@ -40,6 +40,9 @@ final class ACPSessionOrchestrationCoordinator {
         let existingWorktree: (String, String) -> Worktree?
         let configuredAgents: () -> [ACPOrchestrationAgent]
         let availableAgents: (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPOrchestrationAgent]
+        /// Read-only discovery rows for the caller's worktree, computed on
+        /// every request from current Settings and install state.
+        let delegationAgents: (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPDelegationAgentSummary]
         let sessionLocation: (String) -> SessionLocation?
         let manager: (Worktree) -> ACPSessionManager?
         let newWorktreeDestination: (String, String) -> URL?
@@ -61,6 +64,7 @@ final class ACPSessionOrchestrationCoordinator {
             existingWorktree: @escaping (String, String) -> Worktree?,
             configuredAgents: @escaping () -> [ACPOrchestrationAgent],
             availableAgents: @escaping (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPOrchestrationAgent],
+            delegationAgents: @escaping (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPDelegationAgentSummary] = { _, _ in [] },
             sessionLocation: @escaping (String) -> SessionLocation?,
             manager: @escaping (Worktree) -> ACPSessionManager?,
             newWorktreeDestination: @escaping (String, String) -> URL?,
@@ -81,6 +85,7 @@ final class ACPSessionOrchestrationCoordinator {
             self.existingWorktree = existingWorktree
             self.configuredAgents = configuredAgents
             self.availableAgents = availableAgents
+            self.delegationAgents = delegationAgents
             self.sessionLocation = sessionLocation
             self.manager = manager
             self.newWorktreeDestination = newWorktreeDestination
@@ -148,6 +153,31 @@ final class ACPSessionOrchestrationCoordinator {
         } catch {
             return .error("Could not load delegated sessions.")
         }
+    }
+
+    /// Read-only: never starts a session, a model request, or a focus change.
+    func discoverAgents(origin: ACPOrchestrationSessionOrigin) async -> AlasCLIResponse {
+        guard let worktree = environment.worktree(origin.worktreeId) else {
+            return .error("The current worktree is no longer available.")
+        }
+        let parent: ACPDelegationRecord?
+        do {
+            parent = try await environment.persistence.parent(childSessionId: origin.sessionId)
+        } catch {
+            return .error("Could not verify session delegation.")
+        }
+        let canDelegate: Bool
+        switch ACPSessionOrchestrationPolicy.authorizeCreate(parent: parent) {
+        case .success: canDelegate = true
+        case .failure: canDelegate = false
+        }
+        return json(ACPDelegationAgentListResponse(
+            version: ACPDelegationAgentListResponse.currentVersion,
+            callerAgentId: environment.sessionLocation(origin.sessionId)?.manager
+                .liveSession(for: origin.sessionId)?.agentId,
+            canDelegate: canDelegate,
+            agents: await environment.delegationAgents(origin, worktree)
+        ))
     }
 
     func create(

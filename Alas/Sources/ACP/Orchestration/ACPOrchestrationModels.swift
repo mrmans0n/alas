@@ -185,6 +185,85 @@ struct ACPOrchestrationNewResponse: Codable, Equatable, Sendable {
     }
 }
 
+/// Wire schema for `agent_list` (MCP) and `alas agent list` (CLI). Bump
+/// `currentVersion` on any breaking change to these fields.
+struct ACPDelegationAgentListResponse: Codable, Equatable, Sendable {
+    static let currentVersion = 1
+
+    let version: Int
+    /// The agent `session_new` uses when `agent` is omitted, when known.
+    let callerAgentId: String?
+    /// False for a delegated child, which cannot create sessions of its own.
+    let canDelegate: Bool
+    let agents: [ACPDelegationAgentSummary]
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case callerAgentId = "caller_agent_id"
+        case canDelegate = "can_delegate"
+        case agents
+    }
+}
+
+struct ACPDelegationAgentSummary: Codable, Equatable, Sendable {
+    let id: String
+    let displayName: String
+    /// True only when `availability` is `.available`: the one state
+    /// `session_new` accepts for this caller's worktree.
+    let available: Bool
+    let availability: ACPDelegationAgentAvailability
+    let modelSelection: ACPDelegationModelSelection
+    let modelCatalog: ACPDelegationModelCatalog
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case displayName = "display_name"
+        case available
+        case availability
+        case modelSelection = "model_selection"
+        case modelCatalog = "model_catalog"
+    }
+}
+
+enum ACPDelegationAgentAvailability: String, Codable, Equatable, Sendable {
+    case available
+    /// Turned off in Settings.
+    case disabled
+    /// Enabled, but its CLI was not detected where the caller's worktree runs.
+    case notInstalled = "not_installed"
+    /// A remote host's install probe has not produced an answer.
+    case unknown
+}
+
+enum ACPDelegationModelSelection: String, Codable, Equatable, Sendable {
+    /// The agent has advertised a model list.
+    case supported
+    /// A live session of this agent advertised no models during this app run.
+    case unsupported
+    /// No live session of this agent has reported models yet.
+    case unknown
+}
+
+struct ACPDelegationModelCatalog: Codable, Equatable, Sendable {
+    let state: ACPDelegationModelCatalogState
+    /// Non-empty only for `.known` and `.stale`. Ids are the agent's own
+    /// model ids; the agent stays the authority when a session starts.
+    let models: [ACPAgentModelCatalog.Model]
+}
+
+enum ACPDelegationModelCatalogState: String, Codable, Equatable, Sendable {
+    /// Advertised by a live session of this agent during this app run.
+    case known
+    /// Remembered from an earlier app run, or not re-confirmed since.
+    case stale
+    /// Nothing remembered and no live session has reported yet.
+    case notLoaded = "not_loaded"
+    /// A live session reported no model list and none is remembered.
+    case unsupported
+    /// The agent is not a valid delegation target for this caller.
+    case unavailable
+}
+
 struct ACPOrchestrationSendResponse: Codable, Equatable, Sendable {
     let messageId: String
     let state: String

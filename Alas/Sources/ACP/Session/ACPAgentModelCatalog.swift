@@ -20,7 +20,17 @@ final class ACPAgentModelCatalog {
         let name: String
     }
 
+    /// What a live session of an agent reported during this app run. The
+    /// persisted list survives relaunches, so on its own it cannot tell a
+    /// list the agent confirmed today from one it named weeks ago.
+    enum LaunchReport: Equatable, Sendable {
+        case notObserved
+        case advertisedModels
+        case advertisedNone
+    }
+
     private(set) var modelsByAgent: [String: [Model]] = [:]
+    @ObservationIgnored private var launchReports: [String: LaunchReport] = [:]
 
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let fileURL: URL
@@ -39,12 +49,23 @@ final class ACPAgentModelCatalog {
         modelsByAgent[agentID] ?? []
     }
 
+    func launchReport(for agentID: String) -> LaunchReport {
+        launchReports[agentID] ?? .notObserved
+    }
+
     /// Replaces what is remembered for `agentID` with the list it just
     /// advertised. An empty list is ignored: an agent that reports no models
     /// on one connection (a failed provider lookup, say) should not erase a
     /// list it reported before.
     func record(agentID: String, models: [Model]) {
-        guard !models.isEmpty, modelsByAgent[agentID] != models else { return }
+        guard !models.isEmpty else {
+            if launchReports[agentID] != .advertisedModels {
+                launchReports[agentID] = .advertisedNone
+            }
+            return
+        }
+        launchReports[agentID] = .advertisedModels
+        guard modelsByAgent[agentID] != models else { return }
         modelsByAgent[agentID] = models
         do {
             try store.write(File(modelsByAgent: modelsByAgent), to: fileURL)

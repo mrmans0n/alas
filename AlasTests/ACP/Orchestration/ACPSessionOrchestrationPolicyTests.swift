@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -165,6 +166,87 @@ struct ACPSessionOrchestrationPolicyTests {
                 available: agents
             )
         }
+    }
+
+    private static func agent(_ id: String, enabled: Bool = true) throws -> AgentDefinition {
+        var agent = try #require(AgentBuiltins.entry(id: id))
+        agent.isEnabled = enabled
+        return agent
+    }
+
+    @Test("delegation discovery offers only enabled, installed ACP agents as candidates")
+    func delegationAgentAvailability() throws {
+        let custom = AgentDefinition(
+            id: "custom-uuid", displayName: "Mine", binary: "mine", binaryOverride: nil,
+            promptModeArgs: [], bypassPermissionsFlag: nil, extraTerminalArgs: nil,
+            isBuiltin: false, isEnabled: true, builtinLogoAssetName: nil
+        )
+        let claude = try Self.agent("claude")
+        let configured = try [claude, Self.agent("codex"), Self.agent("gemini", enabled: false), custom]
+        let remembered = [ACPAgentModelCatalog.Model(id: "opus", name: "Opus")]
+        func discover(_ availability: AgentAvailabilityState) -> [ACPDelegationAgentSummary] {
+            ACPSessionOrchestrationPolicy.delegationAgents(
+                configured: configured,
+                acpAgentIDs: ["claude", "codex", "gemini"],
+                availability: availability,
+                catalog: { _ in (remembered, .advertisedModels) }
+            )
+        }
+
+        let local = discover(.available([claude, custom]))
+        #expect(local.map(\.id) == ["claude", "codex", "gemini"])
+        #expect(local.map(\.availability) == [.available, .notInstalled, .disabled])
+        #expect(local.map(\.available) == [true, false, false])
+        #expect(local.map(\.modelCatalog) == [
+            ACPDelegationModelCatalog(state: .known, models: remembered),
+            ACPDelegationModelCatalog(state: .unavailable, models: []),
+            ACPDelegationModelCatalog(state: .unavailable, models: []),
+        ])
+        for pending in [AgentAvailabilityState.loading, .failed("ssh timed out")] {
+            #expect(discover(pending).map(\.availability) == [.unknown, .unknown, .disabled])
+        }
+    }
+
+    @Test("delegation discovery reports catalog state without inventing models", arguments: [
+        (true, ACPAgentModelCatalog.LaunchReport.advertisedModels, ACPDelegationModelCatalogState.known, ACPDelegationModelSelection.supported),
+        (true, .notObserved, .stale, .supported),
+        (true, .advertisedNone, .stale, .supported),
+        (false, .advertisedNone, .unsupported, .unsupported),
+        (false, .notObserved, .notLoaded, .unknown),
+    ])
+    func delegationModelCatalogState(
+        remembered: Bool,
+        report: ACPAgentModelCatalog.LaunchReport,
+        state: ACPDelegationModelCatalogState,
+        selection: ACPDelegationModelSelection
+    ) throws {
+        let models = remembered ? [ACPAgentModelCatalog.Model(id: "flash", name: "Flash")] : []
+        let agent = try Self.agent("gemini")
+        let summary = try #require(ACPSessionOrchestrationPolicy.delegationAgents(
+            configured: [agent],
+            acpAgentIDs: ["gemini"],
+            availability: .available([agent]),
+            catalog: { _ in (models, report) }
+        ).first)
+        #expect(summary.modelCatalog == ACPDelegationModelCatalog(state: state, models: models))
+        #expect(summary.modelSelection == selection)
+    }
+
+    @Test("delegation discovery encodes the documented v1 wire schema")
+    func delegationDiscoveryWireSchema() throws {
+        let response = ACPDelegationAgentListResponse(
+            version: ACPDelegationAgentListResponse.currentVersion,
+            callerAgentId: "claude",
+            canDelegate: true,
+            agents: [ACPDelegationAgentSummary(
+                id: "gemini", displayName: "Gemini", available: false, availability: .notInstalled,
+                modelSelection: .unknown, modelCatalog: ACPDelegationModelCatalog(state: .notLoaded, models: [])
+            )]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let json = String(decoding: try encoder.encode(response), as: UTF8.self)
+        #expect(json == #"{"agents":[{"availability":"not_installed","available":false,"display_name":"Gemini","id":"gemini","model_catalog":{"models":[],"state":"not_loaded"},"model_selection":"unknown"}],"caller_agent_id":"claude","can_delegate":true,"version":1}"#)
     }
 
     @Test("prompt validation rejects blank text")
