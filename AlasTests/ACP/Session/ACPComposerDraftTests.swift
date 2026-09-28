@@ -4,11 +4,13 @@ import Testing
 
 @Suite("ACPComposerDraft")
 struct ACPComposerDraftTests {
-    @Test("codable round trip preserves ordered text and mention segments")
+    @Test("codable round trip preserves ordered text, mentions, and upstream references")
     func codableRoundTrip() throws {
         let draft = ACPComposerDraft(segments: [
             .text("Please inspect "),
             .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .text(" and "),
+            .upstreamReference(CodeHostReference(sigil: .hash, number: 12)),
             .text("\nThen explain the bug.")
         ])
 
@@ -18,15 +20,15 @@ struct ACPComposerDraftTests {
         #expect(decoded == draft)
     }
 
-    @Test("plain text spells mentions as @filename and drops image chips")
+    @Test("plain text spells mentions and references and drops image chips")
     func plainTextSpellsChips() {
         let draft = ACPComposerDraft(segments: [
             .text("/review "),
-            .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+            .upstreamReference(CodeHostReference(sigil: .bang, number: 8)),
             .image(uri: "file:///tmp/shot.png", mimeType: "image/png"),
-            .text(" tail"),
+            .text(" tail")
         ])
-        #expect(draft.plainText == "/review @File.swift tail")
+        #expect(draft.plainText == "/review !8 tail")
         #expect(!draft.plainText.contains("\u{FFFC}"))
     }
 
@@ -70,6 +72,9 @@ struct ACPComposerDraftTests {
         #expect(ACPComposerDraft(segments: [.text("")]).isEmpty)
         #expect(!ACPComposerDraft(segments: [.text(" ")]).isEmpty)
         #expect(!ACPComposerDraft(segments: [.mention(displayName: "a.swift", uri: "file:///a.swift")]).isEmpty)
+        #expect(!ACPComposerDraft(segments: [
+            .upstreamReference(CodeHostReference(sigil: .hash, number: 12))
+        ]).isEmpty)
     }
 
     @Test("codable round trip preserves an image segment")
@@ -123,10 +128,11 @@ struct ACPComposerDraftTests {
     func imageTextOffsetsMidSentence() {
         let draft = ACPComposerDraft(segments: [
             .text("before "),
+            .upstreamReference(CodeHostReference(sigil: .hash, number: 12)),
             .image(uri: "file:///tmp/shot.png", mimeType: "image/png"),
             .text(" after")
         ])
-        #expect(draft.imageTextOffsets() == [7])
+        #expect(draft.imageTextOffsets() == [10])
     }
 
     @Test("imageTextOffsets reports zero for a leading image")

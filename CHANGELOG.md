@@ -10,6 +10,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Show the active agent logo in the native peer transcript header.
 
+### 🐛 Fixes
+
+- Preserve chipped composer references across remounts without mistaking an unfinished reference for a completed one.
+
 ## [0.19.16] - 2026-09-28
 
 ### ✨ Features

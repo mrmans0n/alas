@@ -595,45 +595,18 @@ struct ACPInputField: NSViewRepresentable {
             }
             invalidatePendingImageFileInsertions()
             restoringDraft = true
-            storage.setAttributedString(Self.attributedString(from: draft, typography: typography))
+            storage.setAttributedString(Self.attributedString(
+                from: draft, typography: typography, upstreamReferences: upstreamReferences
+            ))
             ACPSlashCommand.chipify(storage, suggestions: promptSuggestions, font: typography.appKitFont())
             if let store = upstreamReferences, let host = store.hostKind {
-                // A restored draft has no real selection yet, so the "still
-                // being typed" caret-skip guard uses the end of the
-                // restored text instead — the last reference in a draft
-                // that was persisted mid-keystroke (e.g. "#12" of an
-                // intended "#123") stays plain text rather than chipping
-                // into something the user didn't finish typing. Shares the
-                // exact same match-finding as `chipUpstreamReferencesIfNeeded()`.
-                //
-                // The caret-skip guard only protects a reference the store
-                // has NOT looked up yet: once the entry is
-                // `.loading`/`.loaded`/`.failed` — or `remoteResolved` and
-                // the store has no entry at all because a previous composer
-                // already swept it — the number was final before the draft
-                // persisted, so chipping a trailing token cannot cut a
-                // longer one short. This is what makes a composer remount
-                // (the placement swap when a first-run-connecting session
-                // finishes connecting) keep its persisted trailing
-                // reference instead of resetting it to plain text until the
-                // next keystroke/hover/send.
+                // The end-of-text sentinel protects a plain trailing token;
+                // previously chipped occurrences arrive as explicit segments.
                 let end = (storage.string as NSString).length
                 let caret = NSRange(location: end, length: 0)
-                var matches = ACPUpstreamReferenceDetector.chippableMatches(
+                let matches = ACPUpstreamReferenceDetector.chippableMatches(
                     in: storage.string, host: host, caret: caret
                 )
-                // The sentinel drops the token ENDING at the restored
-                // text's end from `matches` entirely. If its entry is
-                // already resolved (a previous composer swept this exact
-                // reference before the remount), it was final then — add
-                // it back so it chips too.
-                if let trailing = ACPUpstreamReferenceDetector.references(
-                    in: storage.string, host: host, unclosedRunsExtendToEnd: true
-                ).last(where: { NSMaxRange($0.range) == end }),
-                   matches.last(where: { NSMaxRange($0.range) == end }) == nil,
-                   store.entry(for: trailing.reference) != .idle {
-                    matches.append(trailing)
-                }
                 for match in matches.reversed() {
                     let attributes = storage.attributes(at: match.range.location, effectiveRange: nil)
                     storage.replaceCharacters(
@@ -678,7 +651,9 @@ struct ACPInputField: NSViewRepresentable {
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] _ in
                     MainActor.assumeIsolated {
-                        (self?.textView as? ACPNSTextView)?.chipUpstreamReferencesIfNeeded()
+                        let textView = self?.textView as? ACPNSTextView
+                        textView?.chipPersistedUpstreamReferencesIfNeeded()
+                        textView?.chipUpstreamReferencesIfNeeded()
                     }
                 }
                 .store(in: &upstreamObservations)
@@ -767,8 +742,9 @@ struct ACPInputField: NSViewRepresentable {
             }
 
             var segments: [ACPComposerDraft.Segment] = []
-            // A command chip serializes to its `/command` text, merged with
-            // neighbouring text so the draft matches its plain-text form.
+            // A command chip serializes to `/command` and merges with
+            // neighboring text. References stay explicit to distinguish
+            // already-chipped tokens from matching unfinished plain text.
             func appendText(_ text: String) {
                 guard !text.isEmpty else { return }
                 if case .text(let previous) = segments.last {
@@ -781,7 +757,11 @@ struct ACPInputField: NSViewRepresentable {
                 if let command = keys[.commandChipName] as? String {
                     appendText(command)
                 } else if let spelling = keys[.upstreamReference] as? String {
-                    appendText(spelling)
+                    if let reference = CodeHostReference(spelling: spelling) {
+                        segments.append(.upstreamReference(reference))
+                    } else {
+                        appendText(spelling)
+                    }
                 } else if let uri = keys[.imageAttachmentURI] as? String {
                     let mime = (keys[.imageAttachmentMime] as? String) ?? "image/png"
                     segments.append(.image(uri: uri, mimeType: mime))
@@ -803,7 +783,8 @@ struct ACPInputField: NSViewRepresentable {
 
         static func attributedString(
             from draft: ACPComposerDraft,
-            typography: ACPChatTypography = .default
+            typography: ACPChatTypography = .default,
+            upstreamReferences: ACPUpstreamReferenceStore? = nil
         ) -> NSAttributedString {
             let result = NSMutableAttributedString(string: "")
             let baseAttributes: [NSAttributedString.Key: Any] = [
@@ -821,6 +802,23 @@ struct ACPInputField: NSViewRepresentable {
                         .attachmentURI: uri,
                     ], range: NSRange(location: 0, length: chip.length))
                     result.append(chip)
+                case .upstreamReference(let reference):
+                    if let store = upstreamReferences, let host = store.hostKind {
+                        store.ensureLoaded(reference)
+                        result.append(ACPUpstreamReferenceChip.chip(
+                            for: reference, host: host, store: store, attributes: baseAttributes
+                        ))
+                    } else {
+                        let marker = NSMutableAttributedString(
+                            string: reference.spelling, attributes: baseAttributes
+                        )
+                        marker.addAttribute(
+                            .upstreamReference,
+                            value: reference.spelling,
+                            range: NSRange(location: 0, length: marker.length)
+                        )
+                        result.append(marker)
+                    }
                 case .image(let uri, let mimeType):
                     // Drop the chip if the staged file is gone — a deleted
                     // attachment shouldn't restore as a broken placeholder or
@@ -2339,7 +2337,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // `paste(_:)` retry with the general pasteboard's plain-text form.
         guard !draft.isEmpty else { return true }
         let fragment = NSMutableAttributedString(
-            attributedString: ACPInputField.Coordinator.attributedString(from: draft, typography: chatTypography)
+            attributedString: ACPInputField.Coordinator.attributedString(
+                from: draft, typography: chatTypography, upstreamReferences: coordinator?.upstreamReferences
+            )
         )
         // `draft` was structurally non-empty (it has an `.image` segment),
         // but `attributedString(from:)` silently drops an `.image` whose

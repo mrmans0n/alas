@@ -86,4 +86,31 @@ extension ACPNSTextView {
             context.store.ensureLoaded(match.reference)
         }
     }
+
+    /// Recreates chips from draft segments that arrived before the remote
+    /// was available. This marker belongs to a previously chipped occurrence,
+    /// so it bypasses the caret guard used for ordinary text.
+    func chipPersistedUpstreamReferencesIfNeeded() {
+        guard let textStorage, let context = upstreamReferenceContext, !hasMarkedText() else { return }
+        let full = NSRange(location: 0, length: textStorage.length)
+        var matches: [(NSRange, CodeHostReference)] = []
+        textStorage.enumerateAttribute(.upstreamReference, in: full) { value, range, _ in
+            guard let spelling = value as? String,
+                  let reference = CodeHostReference(spelling: spelling),
+                  range.length == (spelling as NSString).length,
+                  textStorage.attributedSubstring(from: range).string == spelling
+            else { return }
+            matches.append((range, reference))
+        }
+        for (range, reference) in matches.reversed() {
+            let attributes = textStorage.attributes(at: range.location, effectiveRange: nil)
+            replaceUndoably(
+                range: range,
+                with: ACPUpstreamReferenceChip.chip(
+                    for: reference, host: context.host, store: context.store, attributes: attributes
+                )
+            )
+            context.store.ensureLoaded(reference)
+        }
+    }
 }

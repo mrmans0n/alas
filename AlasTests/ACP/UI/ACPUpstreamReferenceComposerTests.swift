@@ -217,9 +217,15 @@ struct ACPUpstreamReferenceComposerTests {
         #expect("see #12 ".hasPrefix(textView.string))
     }
 
-    @Test("restoring a draft ending in a reference leaves it as text, not a chip cut off mid-digit")
-    func restoreSkipsReferenceAtEndOfText() async {
+    @Test("a shared lookup does not turn a partial trailing reference into a chip")
+    func restoreSkipsCachedReferenceAtEndOfText() async {
         let store = await UpstreamReferenceFixtures.store()
+        let reference = CodeHostReference(sigil: .hash, number: 12)
+        // This entry may have been loaded by a transcript or another composer.
+        store.ensureLoaded(reference)
+        await store.waitForPendingLoads()
+        #expect(store.entry(for: reference) != .idle)
+
         let (textView, coordinator, window) = makeTextView(store: store)
         defer { withExtendedLifetime((coordinator, window)) {} }
 
@@ -228,8 +234,7 @@ struct ACPUpstreamReferenceComposerTests {
         #expect(chipSpellings(textView).isEmpty)
         #expect(textView.string == "see #12")
 
-        // The user finishes the number; the whitespace then chips the full
-        // `#123`, not a premature `#12`.
+        // The user finishes the number; whitespace chips the full `#123`.
         textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
         type("3 ", into: textView)
         #expect(chipSpellings(textView) == ["#123"])
@@ -281,43 +286,29 @@ struct ACPUpstreamReferenceComposerTests {
         #expect(textView.string == "```\nlog: failed in #123")
     }
 
-    /// Regression: a composer remount (the placement swap when a
-    /// first-run-connecting session finishes connecting) destroys the
-    /// Coordinator and rebuilds it with `initialDraft` — the persisted
-    /// draft with the reference spelled out as plain text. `restore`
-    /// chips the reference ONLY via the trailing-reference sentinel,
-    /// which leaves a reference at the END of the text un-chipped ("might
-    /// still be mid-keystroke"). But at REMOUNT time the draft is final:
-    /// it came from `persistComposerDraft`, not from an in-flight
-    /// keystroke. The chip therefore never comes back until the user
-    /// types a space after it, hovers, or sends — the visual "badge
-    /// resets when the session connects".
-    ///
-    /// The fix: when the store's entry for a reference is already
-    /// resolved (`.loaded` or `.failed` — the lookup was final BEFORE the
-    /// remount), the reference is provably not mid-digit, so restore must
-    /// chip it even at the end of the text.
-    @Test("remounting a finished draft re-chips its trailing reference when the lookup already resolved")
-    func remountChipsTrailingReferenceWhenLookupResolved() async {
+    @Test("a re-mounted composer restores a reference that was already chipped")
+    func remountRestoresPreviouslyChippedReference() async throws {
         let store = await UpstreamReferenceFixtures.store()
-        let resolvedReference = CodeHostReference(sigil: .hash, number: 12)
-        // Force-resolve the entry through the store's real lookup path so
-        // `resolvedKind` is populated, exactly as it was before remount.
-        store.ensureLoaded(resolvedReference)
+        let reference = CodeHostReference(sigil: .hash, number: 12)
+        store.ensureLoaded(reference)
         await store.waitForPendingLoads()
-        #expect(store.entry(for: resolvedReference) != .idle)
-        #expect(store.entry(for: resolvedReference) != .loading)
+        #expect(store.entry(for: reference) != .idle)
 
-        let draft = ACPComposerDraft(segments: [.text("see #12")])
-        let (textView, coordinator, window) = makeTextView(store: store)
-        defer { withExtendedLifetime((coordinator, window)) {} }
+        let (originalTextView, originalCoordinator, originalWindow) = makeTextView(store: store)
+        defer { withExtendedLifetime((originalCoordinator, originalWindow)) {} }
+        #expect(originalTextView.insertPlainText("see #12"))
+        #expect(chipSpellings(originalTextView) == ["#12"])
 
-        coordinator.restoreDraftForTesting(draft, into: textView)
+        // Persistence must retain which exact draft occurrence was a chip.
+        let capturedDraft = ACPInputField.Coordinator.draft(from: originalTextView.attributedString())
+        let encodedDraft = try JSONEncoder().encode(capturedDraft)
+        let restoredDraft = try JSONDecoder().decode(ACPComposerDraft.self, from: encodedDraft)
 
-        // The reference at the end of the restored draft is provably final
-        // (its lookup already resolved before the remount), so it must be
-        // chipped instead of left as plain text by the sentinel.
-        #expect(chipSpellings(textView) == ["#12"])
-        #expect(wireText(textView) == "see #12")
+        let (remountedTextView, remountedCoordinator, remountedWindow) = makeTextView(store: store)
+        defer { withExtendedLifetime((remountedCoordinator, remountedWindow)) {} }
+        remountedCoordinator.restoreDraftForTesting(restoredDraft, into: remountedTextView)
+
+        #expect(chipSpellings(remountedTextView) == ["#12"])
+        #expect(wireText(remountedTextView) == "see #12")
     }
 }
