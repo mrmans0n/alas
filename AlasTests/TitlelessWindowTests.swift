@@ -103,6 +103,56 @@ struct TitlelessWindowTests {
         #expect(window.isMovable == movable)
     }
 
+    /// A live display disconnect/reconnect fires `didChangeScreenParameters`
+    /// with no guaranteed mouse move first. The window must become movable
+    /// immediately so macOS can relocate/restore it through the transition.
+    @Test func screenParametersChangeForcesMovableEvenUnderTitlebar() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 100, y: 100, width: 800, height: 600),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        let configurationView = WindowConfigurationView(disablesTitlebarDrag: true)
+        window.contentView = configurationView
+        configurationView.mouseMoved(with: try #require(Self.mouseEvent(
+            type: .mouseMoved,
+            location: NSPoint(x: 400, y: window.frame.height - 5),
+            windowNumber: window.windowNumber
+        )))
+        #expect(window.isMovable == false)
+
+        NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        pumpMainRunLoop(seconds: 0.05)
+
+        #expect(window.isMovable == true)
+    }
+
+    /// On wake, a stationary pointer left over the tab strip produces no
+    /// mouse-move event. The pointer-based policy must be reapplied
+    /// immediately, not on the next mouse movement.
+    @Test func screensWakeReappliesPointerPolicy() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 100, y: 100, width: 800, height: 600),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        let configurationView = WindowConfigurationView(disablesTitlebarDrag: true)
+        window.contentView = configurationView
+        configurationView.mouseMoved(with: try #require(Self.mouseEvent(
+            type: .mouseMoved,
+            location: NSPoint(x: 400, y: window.frame.height - 5),
+            windowNumber: window.windowNumber
+        )))
+        window.isMovable = true // simulate the sleep-time rescue left it movable
+
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        pumpMainRunLoop(seconds: 0.05)
+
+        #expect(window.isMovable == false)
+    }
+
     private static func mouseEvent(
         type: NSEvent.EventType,
         location: NSPoint,
@@ -120,4 +170,8 @@ struct TitlelessWindowTests {
             pressure: 1
         )
     }
+}
+
+private func pumpMainRunLoop(seconds: TimeInterval) {
+    RunLoop.main.run(until: Date(timeIntervalSinceNow: seconds))
 }
