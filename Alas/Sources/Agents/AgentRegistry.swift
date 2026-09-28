@@ -5,6 +5,19 @@ struct BuiltinAgentState: Codable, Equatable {
     var isEnabled: Bool
     var binaryOverride: String?
     var extraTerminalArgs: [String]?
+    /// "Disable native subagents" for new ACP sessions of this agent.
+    /// Absent (nil) means off. Only honoured where
+    /// `ACPNativeDelegationSupport` has a verified control.
+    var nativeSubagentsDisabled: Bool?
+}
+
+extension AppConfig.Agents {
+    /// Whether new ACP sessions of `agentID` start with native subagents
+    /// disabled: the user's choice, clamped to agents with a verified control.
+    func nativeSubagentsDisabled(for agentID: String) -> Bool {
+        builtinState[agentID]?.nativeSubagentsDisabled == true
+            && ACPNativeDelegationSupport.resolve(agentID: agentID).canEnforce
+    }
 }
 
 /// Runtime view over the agent catalog. Built-ins come first (in catalog

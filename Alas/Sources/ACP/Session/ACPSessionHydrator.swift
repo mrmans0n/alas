@@ -171,6 +171,7 @@ struct HydrationResult: Sendable {
                 authStatus: row.authStatus,
                 currentModel: row.currentModel, currentMode: row.currentMode,
                 configOptionValues: row.configOptionValues,
+                nativeSubagentsDisabled: row.nativeSubagentsDisabled,
                 autoRun: row.autoRun,
                 createdAt: row.createdAt, updatedAt: row.updatedAt,
                 lastOpenedAt: lastOpenedAt,

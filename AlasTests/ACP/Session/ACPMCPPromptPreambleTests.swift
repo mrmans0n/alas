@@ -305,4 +305,35 @@ struct ACPMCPPromptPreambleTests {
             builtInInjected: true, isDelegated: true, userServerNames: []))
         #expect(!text.contains("cannot answer"))
     }
+
+    @Test(
+        "disabled native subagents steer roots to Alas delegation and keep children leaves",
+        arguments: [
+            (ACPMCPPreambleMode.mcp, "session_new tool"),
+            (.cli(serverAvailability: .noServers), "alas session new"),
+        ]
+    )
+    func nativeSubagentsDisabled(mode: ACPMCPPreambleMode, route: String) throws {
+        let root = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: false, userServerNames: [],
+            mode: mode, nativeSubagentsDisabled: true))
+        #expect(root.contains("native subagent tool is turned off"))
+        #expect(root.contains(route))
+
+        let child = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: true, isDelegated: true, userServerNames: [],
+            mode: mode, nativeSubagentsDisabled: true))
+        #expect(child.contains("native subagent tool is turned off"))
+        #expect(!child.contains("session_new"))
+        #expect(!child.contains("session new"))
+    }
+
+    @Test("disabled native subagents without Alas tools say delegation is unavailable")
+    func nativeSubagentsDisabledWithoutAlasTools() throws {
+        let text = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: false, isDelegated: false, userServerNames: [],
+            nativeSubagentsDisabled: true))
+        #expect(text.contains("Alas delegation tools are not available"))
+        #expect(!text.contains("session_new"))
+    }
 }

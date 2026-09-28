@@ -208,6 +208,54 @@ struct ACPConnectionTests {
         ])
     }
 
+    @Test("session meta rides on session/new, load, resume, and fork")
+    func sessionMetaOnEveryStartupRequest() async throws {
+        let mock = ACPMockClient()
+        for method in ["session/new", "session/load", "session/resume", "session/fork"] {
+            mock.script(method: method) { _ in
+                try JSONEncoder().encode(ACPSessionNewResult(
+                    sessionId: "remote",
+                    availableModels: [],
+                    availableModes: [],
+                    currentModel: nil,
+                    currentMode: nil,
+                    promptSuggestions: []
+                ))
+            }
+        }
+        let meta = try #require(ACPNativeDelegationControls.sessionMeta(
+            agentID: "claude",
+            nativeSubagentsDisabled: true
+        ))
+        let conn = ACPConnection(client: mock, sessionMeta: meta)
+
+        _ = try await conn.newSession(cwd: "/tmp", mcpServers: [])
+        _ = try await conn.loadSession(cwd: "/tmp", sessionId: "remote", mcpServers: [])
+        _ = try await conn.resumeSession(cwd: "/tmp", sessionId: "remote", mcpServers: [])
+        _ = try await conn.forkSession(cwd: "/tmp", sessionId: "remote", mcpServers: [])
+
+        #expect(mock.sent.map(\.method) == ["session/new", "session/load", "session/resume", "session/fork"])
+        let newParams = try #require(mock.sent.first?.params as? ACPSessionNewParams)
+        #expect(newParams.meta == meta)
+        for request in mock.sent.dropFirst() {
+            #expect((request.params as? ACPSessionLoadParams)?.meta == meta, "\(request.method)")
+        }
+        // The wire key is `_meta`, and it is omitted when no policy applies.
+        let wire = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(newParams)) as? [String: Any]
+        )
+        let options = (wire["_meta"] as? [String: Any])
+            .flatMap { $0["claudeCode"] as? [String: Any] }
+            .flatMap { $0["options"] as? [String: Any] }
+        #expect(options?["disallowedTools"] as? [String] == ["Agent", "Task"])
+        let plain = try #require(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(ACPSessionNewParams(cwd: "/tmp", mcpServers: []))
+            ) as? [String: Any]
+        )
+        #expect(plain["_meta"] == nil)
+    }
+
     @Test("loadSession sends session/load with cwd and remote session id")
     func loadSessionRPC() async throws {
         let mock = ACPMockClient()
