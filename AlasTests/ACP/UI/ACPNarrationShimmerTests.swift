@@ -111,6 +111,31 @@ struct ACPNarrationShimmerTests {
         #expect(live == quiet)
     }
 
+    @Test("short thought labels unwrap only one outer bold span", arguments: [
+        ("  **Checking peer header**  ", "Checking peer header"),
+        ("Checking peer header", "Checking peer header"),
+        ("**partial", "**partial"),
+        ("**foo** and **bar**", "**foo** and **bar**")
+    ] as [(String, String)])
+    func inlineThoughtLabelUnwrapsSingleSpan(input: String, expected: String) {
+        #expect(ACPThoughtView.inlineLabel(for: input) == expected)
+    }
+
+    @Test("empty and multiline thoughts have no inline label", arguments: [
+        "", " \n  ", "First step\nSecond step", "** **", "****"
+    ])
+    func emptyThoughtsHaveNoInlineLabel(_ input: String) {
+        #expect(ACPThoughtView.inlineLabel(for: input) == nil)
+    }
+
+    @Test("inline thought labels stop at 80 characters", arguments: [
+        (String(repeating: "a", count: 80), String(repeating: "a", count: 80)),
+        (String(repeating: "a", count: 81), nil)
+    ] as [(String, String?)])
+    func inlineThoughtLabelLengthIsBounded(input: String, expected: String?) {
+        #expect(ACPThoughtView.inlineLabel(for: input) == expected)
+    }
+
     @Test("the shimmer modifier does not change a label's height")
     func shimmerModifierPreservesHeight() throws {
         let theme = try ThemeStore().current
