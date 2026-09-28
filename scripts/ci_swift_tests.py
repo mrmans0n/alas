@@ -277,7 +277,7 @@ def xcode_arguments():
             "-destination", "platform=macOS,arch=arm64", "-derivedDataPath",
             os.environ.get("SWIFT_TEST_DERIVED_DATA", str(ROOT / ".build/xcode/DerivedData")),
             "-clonedSourcePackagesDirPath", str(ROOT / ".build/xcode/SourcePackages"),
-            "-skipMacroValidation"]
+            "-skipMacroValidation", "-skipPackagePluginValidation"]
 
 
 def bounded(command, log, timeout):

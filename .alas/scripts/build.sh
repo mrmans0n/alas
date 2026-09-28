@@ -18,6 +18,7 @@ xcodebuild \
     -configuration Debug \
     -destination 'platform=macOS' \
     -derivedDataPath "$derived_data" \
+    -skipPackagePluginValidation \
     build
 
 open -n "$app_path"

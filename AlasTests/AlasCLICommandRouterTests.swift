@@ -1363,8 +1363,13 @@ struct AlasCLICommandRouterTests {
             version: 1, sessionId: nil, cwd: worktree.path.path, command: .sessionList
         ))
 
+        let discovery = await router.handle(.init(
+            version: 1, sessionId: "terminal-1", cwd: worktree.path.path, command: .agentList(worktree: nil)
+        ))
+
         #expect(terminal == .error("session commands require an originating ACP session"))
         #expect(directory == .error("session commands require an originating ACP session"))
+        #expect(discovery == .error("session commands require an originating ACP session"))
     }
 
     @Test func workspaceCommandsRouteWithoutImplicitRepositoryFocus() async throws {

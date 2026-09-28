@@ -62,12 +62,15 @@ respond when it needs you.
   creates worktrees, and starts reviews from the terminal. It's also
   auto-injected into every ACP session as an MCP server. Agents use it to open
   files at the right line, send you notifications, spin up delegated sessions,
-  and work through your review comments. For Claude and Codex, **Settings →
-  Agents → Disable native subagents** removes the agent's own subagent tool
-  (Claude's Agent/Task tool; Codex's multi-agent tools, local sessions only) so
-  it delegates through Alas child sessions instead. It applies to sessions
-  created after you change it, does not stop subagents already running, and is
-  not a sandbox. Other agents show why the option is unavailable.
+  and work through your review comments. Before delegating, agents can list
+  which agents and models are available
+  ([delegation discovery](docs/agent-delegation.md)). For Claude and Codex,
+  **Settings → Agents → Disable native subagents** removes the agent's own
+  subagent tool (Claude's Agent/Task tool; Codex's multi-agent tools, local
+  sessions only) so it delegates through Alas child sessions instead. It
+  applies to sessions created after you change it, does not stop subagents
+  already running, and is not a sandbox
+  ([details](docs/agent-delegation.md#disabling-native-subagents)).
 
 - **A review loop agents can close.** Review a branch, commit, or range
   from the ⇧⌘R palette, and drop inline comments anywhere, changed
@@ -227,8 +230,9 @@ without the hook; a session-open action can also be cancelled.
 
 ## Develop
 
-Use Xcode 26 or later with the full Xcode installation selected as your active
-developer directory. CI builds on macOS 26; the app deployment target is macOS 15.
+Use Xcode 26.3 or later, which includes Swift 6.3 required by the MLX dependency,
+with the full Xcode installation selected as your active developer directory.
+CI builds on macOS 26; the app deployment target is macOS 15.
 Install XcodeGen, Homebrew's patched Zig 0.15, Zig 0.16, and rustup before building:
 
 ```bash
@@ -249,8 +253,8 @@ git clone --recurse-submodules https://github.com/mrmans0n/alas.git
 cd alas
 ./scripts/build-ghostty.sh
 xcodegen
-xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build
-xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' test
+xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' -skipPackagePluginValidation build
+xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' -skipPackagePluginValidation test
 ```
 
 For an existing checkout, run `git submodule update --init --recursive` first.

@@ -44,12 +44,12 @@ SOFTWARE.
 
 ========================================================================
 
-mlx-swift 0.31.4
+mlx-swift 0.31.6
 https://github.com/ml-explore/mlx-swift
-Revision: dc43e62d7055353c7f99fa071a4e71d29dfddc44
+Revision: 0bb916c67f4b9e5c682cbe02a42c701c93ab5021
 LICENSE
 
-MLX C API, vendored by mlx-swift 0.31.4
+MLX C API, vendored by mlx-swift 0.31.6
 Source/Cmlx/mlx-c/LICENSE
 
 MIT License
@@ -498,6 +498,11 @@ LICENSE
    limitations under the License.
 
 ========================================================================
+
+swift-argument-parser 1.8.2
+https://github.com/apple/swift-argument-parser
+Revision: 6a52f3251125d74daf04fcbd5e6f08a75d074382
+LICENSE.txt
 
 swift-collections 1.7.1
 https://github.com/apple/swift-collections.git
@@ -1305,7 +1310,7 @@ SOFTWARE.
 
 ========================================================================
 
-MLX core, vendored by mlx-swift 0.31.4
+MLX core, vendored by mlx-swift 0.31.6
 Source/Cmlx/mlx/LICENSE
 
 MIT License
@@ -1332,7 +1337,7 @@ SOFTWARE.
 
 ========================================================================
 
-MLX core third-party notices, vendored by mlx-swift 0.31.4
+MLX core third-party notices, vendored by mlx-swift 0.31.6
 Source/Cmlx/mlx/ACKNOWLEDGMENTS.md
 
 # Third-Party Software
@@ -1574,7 +1579,7 @@ limitations under the License.
 
 ========================================================================
 
-fmt, vendored by mlx-swift 0.31.4
+fmt, vendored by mlx-swift 0.31.6
 Source/Cmlx/fmt/LICENSE
 
 Copyright (c) 2012 - present, Victor Zverovich and {fmt} contributors
@@ -1607,7 +1612,7 @@ without including the above copyright and permission notices.
 
 ========================================================================
 
-nlohmann/json, vendored by mlx-swift 0.31.4
+nlohmann/json, vendored by mlx-swift 0.31.6
 Source/Cmlx/json/LICENSE.MIT
 
 MIT License
@@ -1634,7 +1639,7 @@ SOFTWARE.
 
 ========================================================================
 
-metal-cpp, vendored by mlx-swift 0.31.4
+metal-cpp, vendored by mlx-swift 0.31.6
 Source/Cmlx/metal-cpp/LICENSE.txt
 
 

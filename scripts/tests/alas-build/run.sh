@@ -39,7 +39,7 @@ assert_successful_build_launches_worktree_app() {
 
     expected="${tmp}/expected.log"
     printf 'xcodegen\t%s\t\n' "${repo_root}" > "${expected}"
-    printf 'xcodebuild\t%s\t-project Alas.xcodeproj -scheme Alas -configuration Debug -destination platform=macOS -derivedDataPath %s/.build/xcode/DerivedData build\n' \
+    printf 'xcodebuild\t%s\t-project Alas.xcodeproj -scheme Alas -configuration Debug -destination platform=macOS -derivedDataPath %s/.build/xcode/DerivedData -skipPackagePluginValidation build\n' \
         "${repo_root}" "${repo_root}" >> "${expected}"
     printf 'open\t%s\t-n %s/.build/xcode/DerivedData/Build/Products/Debug/Alas.app\n' \
         "${repo_root}" "${repo_root}" >> "${expected}"

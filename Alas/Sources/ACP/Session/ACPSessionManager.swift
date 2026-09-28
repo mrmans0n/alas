@@ -6141,9 +6141,9 @@ extension ACPSessionManager {
             session.providerCapabilities = initialized.providerCapabilities
             session.availableProviders = providers
             session.contextRestoreWarning = restoreWarning
-            if let models = session.chipState.models?.options {
-                onModelsObserved?(session.agentId, models)
-            }
+            // An empty list tells the catalog this agent advertised no
+            // models on a live connection; it never erases a remembered list.
+            onModelsObserved?(session.agentId, session.chipState.models?.options ?? [])
             guard await persistSessionRemoteId(session, attempt: attempt) else {
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                     await connection.shutdown()

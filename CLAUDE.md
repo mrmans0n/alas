@@ -77,13 +77,14 @@ code they cover should be able to justify it.
 
   ```bash
   xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' \
-    -only-testing AlasTests/<SuiteName> test
+    -skipPackagePluginValidation -only-testing AlasTests/<SuiteName> test
   ```
 
 - If no focused test covers the change, run the build locally:
 
   ```bash
-  xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' -quiet build
+  xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' \
+    -skipPackagePluginValidation -quiet build
   ```
 
 - Do not run the entire test plan locally by default. CI owns repository-wide configured validation. Run broader local tests only when CI does not cover the affected behavior, the change is too cross-cutting for a reliable targeted selection, or the user requests it.

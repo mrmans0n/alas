@@ -137,7 +137,7 @@ struct ACPMCPPromptPreambleTests {
         // BOTH when tools change.
         #expect(ACPMCPPromptPreamble.builtInToolNames == [
             "open", "notify",
-            "session_list", "session_new", "session_send",
+            "agent_list", "session_list", "session_new", "session_send",
             "worktree_list", "worktree_switch", "worktree_new", "worktree_delete",
             "review", "review_comments", "review_reply", "review_resolve",
             "review_comment_add", "review_finish",

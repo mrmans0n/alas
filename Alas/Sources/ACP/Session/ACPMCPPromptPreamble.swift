@@ -48,7 +48,7 @@ enum ACPMCPPromptPreamble {
     /// Update both sides together.
     static let builtInToolNames: [String] = [
         "open", "notify",
-        "session_list", "session_new", "session_send",
+        "agent_list", "session_list", "session_new", "session_send",
         "worktree_list", "worktree_switch", "worktree_new", "worktree_delete",
         "review", "review_comments", "review_reply", "review_resolve",
         "review_comment_add", "review_finish",
@@ -141,7 +141,8 @@ enum ACPMCPPromptPreamble {
         if builtInInjected {
             let sessionTools = isDelegated
                 ? "session_list/session_send"
-                : "session_list/session_new/session_send (delegate direct child agent sessions)"
+                : "agent_list/session_list/session_new/session_send (delegate direct child agent sessions; "
+                    + "call agent_list first and pass an available agent id to session_new)"
             var line = "The MCP server \"alas\" (built-in) drives the Alas UI: "
                 + "open (reveal files to the user), notify (macOS notification), "
                 + "worktree_list/worktree_switch/worktree_new/worktree_delete, "
@@ -210,7 +211,7 @@ enum ACPMCPPromptPreamble {
         if builtInInjected {
             let sessionCLI = isDelegated
                 ? "alas session send <session-id> <prompt>"
-                : "alas session list | alas session new --prompt <text> | alas session send <session-id> <prompt>"
+                : "alas agent list | alas session list | alas session new --prompt <text> [--agent <id>] | alas session send <session-id> <prompt>"
             var line = "Use the `alas` CLI via your shell tool to drive the Alas UI: "
                 + "`alas open <path>` reveals a file to the user, "
                 + "`alas notify <body>` posts a macOS notification, "

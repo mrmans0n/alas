@@ -44,6 +44,7 @@ struct AlasCLIRequest: Equatable {
         case workspace(WorkspaceCommand)
         case preview(WebPreviewCommand)
         case review(ReviewCommand)
+        case agentList(worktree: String?)
         case sessionList
         case sessionNew(prompt: String, agentID: String?, worktree: SessionWorktreeSelector)
         case sessionSend(sessionID: String, prompt: String)
@@ -161,6 +162,10 @@ struct AlasCLIRequest: Equatable {
         var body: String
         var title: String?
         var level: String?
+    }
+
+    private struct AgentListParams: Decodable {
+        var worktree: String?
     }
 
     private struct SessionListParams: Decodable {}
@@ -393,6 +398,9 @@ struct AlasCLIRequest: Equatable {
                 verdict: verdict,
                 summary: params?.summary ?? ""
             ))
+        case "agent_list":
+            let params = try Self.decodeParams(AgentListParams.self, from: data)
+            command = .agentList(worktree: try params.worktree.map(requiredNonEmpty))
         case "session_list":
             _ = try Self.decodeParams(SessionListParams.self, from: data)
             command = .sessionList
