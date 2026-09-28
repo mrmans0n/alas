@@ -43,6 +43,7 @@ struct NewWorktreeDialog: View {
     @State private var issueSheetPresentation: AttachIssuePresentation?
     @State private var issueDrivenProjectChangeID: String?
     @State private var nameSuggestionTask: Task<Void, Never>?
+    @State private var namePrewarm = IssueWorktreeNamePrewarm()
 
     @Environment(\.theme) var theme
 
@@ -112,6 +113,7 @@ struct NewWorktreeDialog: View {
                         onSubmit: submitCreate,
                         disablesAutomaticTextSubstitutions: true
                     )
+                    .aiBeam(isActive: nameSuggestionTask != nil && issueState.isSuggestingName)
                 }
                 if let preview = branchPreviewText {
                     Text(preview)
@@ -181,7 +183,10 @@ struct NewWorktreeDialog: View {
             applyLaunchDefaults(for: projectId)
             loadBranchesForSelectedProject()
         }
-        .onDisappear { cancelNameSuggestion() }
+        .onDisappear {
+            cancelNameSuggestion()
+            namePrewarm.cancel()
+        }
         .onChange(of: projectId) { _, newProjectId in
             let shouldApplyLaunchDefaults = Self.appliesLaunchDefaultsAfterProjectChange(
                 projectID: newProjectId,
@@ -222,7 +227,10 @@ struct NewWorktreeDialog: View {
             AttachIssueDialog(
                 environment: attachIssueEnvironment(),
                 initialDraft: presentation.draft,
-                onCancel: { issueSheetPresentation = nil },
+                onCancel: {
+                    namePrewarm.cancel()
+                    issueSheetPresentation = nil
+                },
                 onAttach: attachIssue
             )
             .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
@@ -250,10 +258,10 @@ struct NewWorktreeDialog: View {
             get: { activeName },
             set: { newValue in
                 if createsGGStack {
-                    if newValue != stackName { issueState.recordUserNameEdit() }
+                    if newValue != stackName { recordUserNameEdit() }
                     stackName = newValue
                 } else {
-                    if newValue != branch { issueState.recordUserNameEdit() }
+                    if newValue != branch { recordUserNameEdit() }
                     branch = newValue
                 }
             }
@@ -477,8 +485,20 @@ struct NewWorktreeDialog: View {
                 try await loader.suggestions(projectID: projectID, limit: limit)
             },
             selectedProjectID: projectId,
-            projects: { state.projects }
+            projects: { state.projects },
+            issueResolved: prewarmName
         )
+    }
+
+    /// Only a first attachment seeds the name, so re-editing an attached
+    /// issue has nothing to prewarm.
+    private func prewarmName(for source: IssueSnapshot) {
+        guard state.issueWorktreeNameSuggestionAvailable,
+              Self.appliesParentFieldsAfterIssueAttach(existingDraft: issueState.draft) else { return }
+        let suggester = state.makeIssueWorktreeNameSuggester()
+        namePrewarm.start(for: source) { source in
+            await suggester.suggestName(for: source)
+        }
     }
 
     private func attachIssue(_ draft: AttachedIssueDraft) {
@@ -486,6 +506,7 @@ struct NewWorktreeDialog: View {
         cancelNameSuggestion()
         let effects = issueState.attach(draft, currentLaunch: currentLaunchPreference)
         guard shouldApplyParentFields else {
+            namePrewarm.cancel()
             issueSheetPresentation = nil
             createErrorMessage = nil
             return
@@ -526,23 +547,53 @@ struct NewWorktreeDialog: View {
 
     /// The deterministic seed is already in the field; this only upgrades its
     /// title component if the local model answers before the user edits it.
+    /// A name prewarmed while the attach sheet was open replaces the seed in
+    /// this same update, so the seed never shows.
     private func startNameSuggestion() {
         guard state.issueWorktreeNameSuggestionAvailable,
-              let request = issueState.beginNameSuggestion() else { return }
-        let suggester = state.makeIssueWorktreeNameSuggester()
+              let request = issueState.beginNameSuggestion() else {
+            namePrewarm.cancel()
+            return
+        }
+        let inference: Task<String?, Never>
+        switch namePrewarm.take(for: request.source) {
+        case .ready(let semanticName):
+            applyNameSuggestion(request.id, semanticName: semanticName)
+            return
+        case .pending(let task):
+            inference = task
+        case nil:
+            let suggester = state.makeIssueWorktreeNameSuggester()
+            inference = Task { await suggester.suggestName(for: request.source) }
+        }
         nameSuggestionTask = Task { @MainActor in
-            let semanticName = await suggester.suggestName(for: request.source)
+            let semanticName = await withTaskCancellationHandler {
+                await inference.value
+            } onCancel: {
+                inference.cancel()
+            }
             guard !Task.isCancelled else { return }
             nameSuggestionTask = nil
-            guard let names = issueState.completeNameSuggestion(
-                request.id,
-                semanticName: semanticName,
-                branch: branch,
-                stackName: stackName
-            ) else { return }
-            branch = names.branch
-            stackName = names.stackName
+            applyNameSuggestion(request.id, semanticName: semanticName)
         }
+    }
+
+    private func applyNameSuggestion(_ id: UInt64, semanticName: String?) {
+        guard let names = issueState.completeNameSuggestion(
+            id,
+            semanticName: semanticName,
+            branch: branch,
+            stackName: stackName
+        ) else { return }
+        branch = names.branch
+        stackName = names.stackName
+    }
+
+    /// A typed name always wins, so the pending suggestion is dropped rather
+    /// than left holding the local model.
+    private func recordUserNameEdit() {
+        issueState.recordUserNameEdit()
+        cancelNameSuggestion()
     }
 
     private func cancelNameSuggestion() {

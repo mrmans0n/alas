@@ -109,3 +109,77 @@ struct IssueWorktreeNameSuggester {
         }
     }
 }
+
+/// Starts the semantic-name request as soon as the attach sheet resolves an
+/// issue, so the answer is usually ready by the time the user confirms the
+/// attachment instead of replacing the seed a few seconds after it appears.
+/// Keyed by the inputs the model sees: editing the title or context in the
+/// sheet invalidates the prewarmed answer.
+@MainActor
+final class IssueWorktreeNamePrewarm {
+    enum Handover: Equatable {
+        case ready(String?)
+        case pending(Task<String?, Never>)
+    }
+
+    private struct Key: Equatable {
+        let title: String
+        let body: String
+        let displayReference: String?
+
+        init(_ source: IssueSnapshot) {
+            title = source.title
+            body = source.body
+            displayReference = source.displayReference
+        }
+    }
+
+    private var key: Key?
+    private var task: Task<String?, Never>?
+    private var result: String??
+
+    /// Returns the request for `source`, reusing one already running for the
+    /// same inputs. Any request for other inputs is cancelled.
+    @discardableResult
+    func start(
+        for source: IssueSnapshot,
+        suggest: @escaping @MainActor (IssueSnapshot) async -> String?
+    ) -> Task<String?, Never> {
+        let key = Key(source)
+        if key == self.key, let task { return task }
+        cancel()
+        self.key = key
+        let task = Task { [weak self] in
+            let name = await suggest(source)
+            if let self, self.key == key, !Task.isCancelled {
+                self.result = .some(name)
+            }
+            return name
+        }
+        self.task = task
+        return task
+    }
+
+    /// Hands over the request for `source`, or nil (cancelling it) when it was
+    /// prewarmed for different inputs. Either way the prewarm is consumed.
+    func take(for source: IssueSnapshot) -> Handover? {
+        defer {
+            key = nil
+            task = nil
+            result = nil
+        }
+        guard key == Key(source), let task else {
+            task?.cancel()
+            return nil
+        }
+        if let result { return .ready(result) }
+        return .pending(task)
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+        key = nil
+        result = nil
+    }
+}

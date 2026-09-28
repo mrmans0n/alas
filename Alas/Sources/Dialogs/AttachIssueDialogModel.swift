@@ -16,19 +16,24 @@ final class AttachIssueDialogModel {
         let selectedProjectID: String
         let projects: () -> [ProjectConfig]
         let clipboardText: () -> String?
+        /// Called with each resolved issue so the parent can start naming the
+        /// worktree while the user reviews the confirmation step.
+        let issueResolved: (IssueSnapshot) -> Void
 
         init(
             resolve: @escaping (String) async throws -> ResolvedIssue,
             loadSuggestions: @escaping @Sendable (String, Int) async throws -> [CodeHostIssueSuggestion],
             selectedProjectID: String,
             projects: @escaping () -> [ProjectConfig],
-            clipboardText: @escaping () -> String? = { Clipboard.read() }
+            clipboardText: @escaping () -> String? = { Clipboard.read() },
+            issueResolved: @escaping (IssueSnapshot) -> Void = { _ in }
         ) {
             self.resolve = resolve
             self.loadSuggestions = loadSuggestions
             self.selectedProjectID = selectedProjectID
             self.projects = projects
             self.clipboardText = clipboardText
+            self.issueResolved = issueResolved
         }
     }
 
@@ -192,6 +197,7 @@ final class AttachIssueDialogModel {
         canContinueManually = false
         errorMessage = nil
         phase = .confirmation
+        environment.issueResolved(resolution.source)
     }
 
     private func refreshGeneratedPromptIfNeeded() {
