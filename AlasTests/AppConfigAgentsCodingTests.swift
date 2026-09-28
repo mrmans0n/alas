@@ -56,7 +56,12 @@ struct AppConfigAgentsCodingTests {
         var cfg = AppConfig.defaults
         cfg.agents.builtinState = [
             "codex": BuiltinAgentState(isEnabled: false, binaryOverride: nil),
-            "claude": BuiltinAgentState(isEnabled: true, binaryOverride: "/opt/local/bin/claude", extraTerminalArgs: ["--model", "sonnet"]),
+            "claude": BuiltinAgentState(
+                isEnabled: true,
+                binaryOverride: "/opt/local/bin/claude",
+                extraTerminalArgs: ["--model", "sonnet"],
+                nativeSubagentsDisabled: true
+            ),
         ]
         cfg.agents.custom = [
             AgentDefinition(
@@ -82,6 +87,8 @@ struct AppConfigAgentsCodingTests {
         #expect(decoded.agents.worktreeAutoLaunch.agentId == "claude")
         #expect(decoded.agents.worktreeAutoLaunch.useBypassPermissions == true)
         #expect(decoded.agents.builtinState["claude"]?.extraTerminalArgs == ["--model", "sonnet"])
+        #expect(decoded.agents.nativeSubagentsDisabled(for: "claude"))
+        #expect(!decoded.agents.nativeSubagentsDisabled(for: "codex"))
         #expect(decoded.agents.custom.first?.extraTerminalArgs == ["--verbose"])
     }
 
@@ -93,6 +100,7 @@ struct AppConfigAgentsCodingTests {
         #expect(state.isEnabled == true)
         #expect(state.binaryOverride == "/usr/local/bin/claude")
         #expect(state.extraTerminalArgs == nil)
+        #expect(state.nativeSubagentsDisabled == nil)
     }
 
     @Test func decodesPartialAgentsBlockWithMissingInnerFields() throws {

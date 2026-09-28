@@ -116,7 +116,9 @@ fn handle_line_with_parent(
     let reply = match method {
         "initialize" => Ok(initialize_result(parent_session_id)),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tool_definitions_for_mode(workspace_only) })),
+        "tools/list" => Ok(json!({
+            "tools": tool_definitions_for_session(workspace_only, parent_session_id.is_some())
+        })),
         "tools/call" => {
             let params = msg.get("params").cloned().unwrap_or(Value::Null);
             call_tool(&params, worktree_dir, workspace_only, &mut dispatch)
@@ -172,6 +174,20 @@ fn tool_definitions_for_mode(workspace_only: bool) -> Vec<Value> {
             .collect();
     }
     all_tool_definitions()
+}
+
+/// Delegated children are leaves: `session_new` is left out of their
+/// discovery. Direct or forged `tools/call session_new` still reaches Alas,
+/// whose orchestration policy rejects it.
+fn tool_definitions_for_session(workspace_only: bool, is_delegated: bool) -> Vec<Value> {
+    let tools = tool_definitions_for_mode(workspace_only);
+    if !is_delegated {
+        return tools;
+    }
+    tools
+        .into_iter()
+        .filter(|tool| tool.get("name").and_then(Value::as_str) != Some("session_new"))
+        .collect()
 }
 
 fn all_tool_definitions() -> Vec<Value> {
@@ -2309,6 +2325,60 @@ mod tests {
                 script_key: None,
             })
         );
+    }
+
+    #[test]
+    fn delegated_child_discovery_omits_session_new_but_calls_still_reach_alas() {
+        let tool_names = |parent: Option<&str>| -> Vec<String> {
+            let list = handle_line_with_parent(
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+                "/wt",
+                parent,
+                false,
+                |_| unreachable!(),
+            )
+            .unwrap();
+            list["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let root = tool_names(None);
+        let child = tool_names(Some("parent-session"));
+        assert!(root.iter().any(|name| name == "session_new"));
+        assert!(!child.iter().any(|name| name == "session_new"));
+        assert_eq!(
+            child,
+            root.iter()
+                .filter(|name| *name != "session_new")
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+
+        // Authorization stays server-side: a forged call is forwarded to
+        // Alas, which rejects it.
+        let mut forwarded = false;
+        let reply = handle_line_with_parent(
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session_new","arguments":{"prompt":"x"}}}"#,
+            "/wt",
+            Some("parent-session"),
+            false,
+            |command| {
+                assert!(matches!(command, Command::SessionNew { .. }));
+                forwarded = true;
+                Ok(Response {
+                    ok: false,
+                    lines: None,
+                    error: Some("delegated sessions cannot create descendants".into()),
+                    exit_code: None,
+                })
+            },
+        )
+        .unwrap();
+        assert!(forwarded);
+        assert_eq!(reply["result"]["isError"], json!(true));
     }
 
     #[test]

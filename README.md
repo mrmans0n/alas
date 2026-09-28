@@ -62,7 +62,12 @@ respond when it needs you.
   creates worktrees, and starts reviews from the terminal. It's also
   auto-injected into every ACP session as an MCP server. Agents use it to open
   files at the right line, send you notifications, spin up delegated sessions,
-  and work through your review comments.
+  and work through your review comments. For Claude and Codex, **Settings →
+  Agents → Disable native subagents** removes the agent's own subagent tool
+  (Claude's Agent/Task tool; Codex's multi-agent tools, local sessions only) so
+  it delegates through Alas child sessions instead. It applies to sessions
+  created after you change it, does not stop subagents already running, and is
+  not a sandbox. Other agents show why the option is unavailable.
 
 - **A review loop agents can close.** Review a branch, commit, or range
   from the ⇧⌘R palette, and drop inline comments anywhere, changed

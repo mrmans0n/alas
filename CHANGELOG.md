@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Add a per-agent "Disable native subagents" setting for Claude and Codex ACP sessions that removes their native subagent tools so they delegate through Alas child sessions; delegated children no longer see `session_new` in MCP discovery (#1589).
+
 ## [0.19.17] - 2026-09-28
 
 ### ✨ Features

@@ -55,6 +55,8 @@ struct ACPInitializeOutcome: Equatable {
     let supportsSubagents: Bool
     /// Whether the agent advertised the `_auth/status_update` extension marker.
     let advertisesAuthStatus: Bool
+    /// The adapter's self-reported name/version, when it sent `agentInfo`.
+    let agentInfo: ACPImplementationInfo?
 
     init(
         promptCapabilities: ACPInitializeResult.ACPPromptCapabilities,
@@ -64,7 +66,8 @@ struct ACPInitializeOutcome: Equatable {
         mcpCapabilities: ACPMCPServerCapabilities,
         providerCapabilities: EmptyObject?,
         supportsSubagents: Bool = false,
-        advertisesAuthStatus: Bool = false
+        advertisesAuthStatus: Bool = false,
+        agentInfo: ACPImplementationInfo? = nil
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -74,6 +77,7 @@ struct ACPInitializeOutcome: Equatable {
         self.providerCapabilities = providerCapabilities
         self.supportsSubagents = supportsSubagents
         self.advertisesAuthStatus = advertisesAuthStatus
+        self.agentInfo = agentInfo
     }
 }
 
@@ -91,7 +95,17 @@ final class ACPConnection: @unchecked Sendable {
     private let durableResponseLock = NSLock()
     private var pendingDurableSessionResponses: [ACPDurableConsumptionAcknowledgement] = []
 
-    init(client: ACPClient) { self.client = client }
+    /// `_meta` attached to every session/new, session/load, session/resume,
+    /// and session/fork this connection sends. Set once, right after the
+    /// connection is created and before any session request, from the
+    /// policy the Alas session was created with — so a reconnect or restore
+    /// re-sends exactly what the fresh session got.
+    var sessionMeta: ACPSessionMeta?
+
+    init(client: ACPClient, sessionMeta: ACPSessionMeta? = nil) {
+        self.client = client
+        self.sessionMeta = sessionMeta
+    }
 
     /// Returns the initialize outcome advertised by the agent, defaulting
     /// missing prompt capability fields to false and missing auth methods to empty.
@@ -117,7 +131,8 @@ final class ACPConnection: @unchecked Sendable {
             providerCapabilities: capabilities?.providerCapabilities,
             supportsSubagents: capabilities?.sessionCapabilities.supportsSubagents == true
                 || capabilities?.meta.openCodeChildSessionUpdates == true,
-            advertisesAuthStatus: capabilities?.advertisesAuthStatus ?? false
+            advertisesAuthStatus: capabilities?.advertisesAuthStatus ?? false,
+            agentInfo: result.agentInfo
         )
     }
 
@@ -127,7 +142,7 @@ final class ACPConnection: @unchecked Sendable {
         brokerOperationKey: String? = nil
     ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(method: "session/new",
-                             params: ACPSessionNewParams(cwd: cwd, mcpServers: mcpServers),
+                             params: ACPSessionNewParams(cwd: cwd, mcpServers: mcpServers, meta: sessionMeta),
                              brokerOperationKey: brokerOperationKey)
         let resp = try await client.send(req)
         let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
@@ -156,7 +171,7 @@ final class ACPConnection: @unchecked Sendable {
         brokerOperationKey: String? = nil
     ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(method: "session/load",
-                             params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers),
+                             params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: sessionMeta),
                              brokerOperationKey: brokerOperationKey)
         let resp = try await client.send(req)
         let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
@@ -172,7 +187,7 @@ final class ACPConnection: @unchecked Sendable {
     ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(
             method: "session/resume",
-            params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers),
+            params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: sessionMeta),
             brokerOperationKey: brokerOperationKey
         )
         let resp = try await client.send(req)
@@ -199,7 +214,7 @@ final class ACPConnection: @unchecked Sendable {
     ) async throws -> ACPSessionNewResult {
         let req = ACPRequest(
             method: "session/fork",
-            params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers),
+            params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: sessionMeta),
             brokerOperationKey: brokerOperationKey
         )
         let resp = try await client.send(req)
