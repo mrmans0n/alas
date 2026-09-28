@@ -111,20 +111,28 @@ struct ACPNarrationShimmerTests {
         #expect(live == quiet)
     }
 
-    @Test("short thought labels unwrap one outer bold span", arguments: [
+    @Test("short thought labels unwrap only one outer bold span", arguments: [
         ("  **Checking peer header**  ", "Checking peer header"),
         ("Checking peer header", "Checking peer header"),
         ("**partial", "**partial"),
-        ("**foo** and **bar**", "**foo** and **bar**"),
-        ("** **", nil),
-        ("****", nil),
-        ("", nil),
-        (" \n  ", nil),
-        ("First step\nSecond step", nil),
+        ("**foo** and **bar**", "**foo** and **bar**")
+    ] as [(String, String)])
+    func inlineThoughtLabelUnwrapsSingleSpan(input: String, expected: String) {
+        #expect(ACPThoughtView.inlineLabel(for: input) == expected)
+    }
+
+    @Test("empty and multiline thoughts have no inline label", arguments: [
+        "", " \n  ", "First step\nSecond step", "** **", "****"
+    ])
+    func emptyThoughtsHaveNoInlineLabel(_ input: String) {
+        #expect(ACPThoughtView.inlineLabel(for: input) == nil)
+    }
+
+    @Test("inline thought labels stop at 80 characters", arguments: [
         (String(repeating: "a", count: 80), String(repeating: "a", count: 80)),
         (String(repeating: "a", count: 81), nil)
     ] as [(String, String?)])
-    func inlineThoughtLabel(input: String, expected: String?) {
+    func inlineThoughtLabelLengthIsBounded(input: String, expected: String?) {
         #expect(ACPThoughtView.inlineLabel(for: input) == expected)
     }
 
