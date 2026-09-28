@@ -870,7 +870,10 @@ struct ACPSessionOrchestrationCoordinatorTests {
         childSessionId: String,
         matching predicate: (ACPDelegationRecord) -> Bool
     ) async throws -> ACPDelegationRecord {
-        for _ in 0..<50 {
+        // A deadline, not a fixed number of short polls: a child start that
+        // attaches a session can take well over half a second on loaded CI.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while ContinuousClock.now < deadline {
             if let record = try await persistence.delegation(childSessionId: childSessionId),
                predicate(record) {
                 return record
