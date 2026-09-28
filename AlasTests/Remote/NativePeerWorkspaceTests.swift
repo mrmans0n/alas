@@ -113,4 +113,26 @@ struct NativePeerWorkspaceTests {
         let retried = workspace.beginChildrenLoad(path: "src")
         #expect(retried)
     }
+
+    @Test func childDirectoryLoadShowsLoadingAndFailsVisiblyWhenPeerGoesOffline() {
+        var workspace = NativePeerWorkspace()
+        _ = workspace.beginRootLoad()
+        _ = workspace.apply(.fileTree(sessionId: "B:s", path: nil, nodes: [dir("src")], truncated: false))
+
+        _ = workspace.beginChildrenLoad(path: "src")
+        guard case .loaded(let loadingTree) = workspace.fileTree,
+              let loadingNode = RightPaneState.fileTreeNode(at: "src", in: loadingTree) else {
+            Issue.record("expected the src node to still be present while loading")
+            return
+        }
+        #expect(loadingNode.childrenState == .loading)
+
+        workspace.markUnavailable()
+        guard case .loaded(let failedTree) = workspace.fileTree,
+              let failedNode = RightPaneState.fileTreeNode(at: "src", in: failedTree) else {
+            Issue.record("expected the src node to still be present after going offline")
+            return
+        }
+        #expect(failedNode.childrenState == .failed)
+    }
 }

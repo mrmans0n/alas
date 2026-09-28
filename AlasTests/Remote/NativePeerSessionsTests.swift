@@ -333,9 +333,19 @@ struct NativePeerSessionsTests {
         client.start()
         links.receive(.sessionList(sessions: [row("s"), row("t")]), from: "B")
         client.select("B:s")
-        client.select("B:t")
+        // "s" finishes loading and opens a document before the switch, so a
+        // missing reset would leave both visibly carried over into "t".
+        links.receive(.changeList(sessionId: "s", comparisonRef: "origin/main", metricsAvailable: true,
+                                  files: [], staged: [], unstaged: [], commits: [], truncated: false), from: "B")
+        client.open(.file(path: "a.swift"))
+        #expect(client.workspace.changes != .loading)
+        #expect(client.workspace.document != nil)
 
-        // The earlier session's reply arrives late.
+        client.select("B:t")
+        #expect(client.workspace.changes == .loading)
+        #expect(client.workspace.document == nil)
+
+        // The earlier session's reply arrives late and must not land on "t".
         links.receive(.changeList(sessionId: "s", comparisonRef: nil, metricsAvailable: true,
                                   files: [], staged: [], unstaged: [], commits: [], truncated: false), from: "B")
         #expect(client.workspace.changes == .loading)

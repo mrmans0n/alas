@@ -69,10 +69,17 @@ struct NativePeerWorkspace: Equatable {
     }
 
     /// False when `path` is already loading or loaded, so a re-rendered row
-    /// does not send the same request twice.
+    /// does not send the same request twice. Marks the directory `.loading`
+    /// in the tree so the row shows a spinner while the reply is pending.
     mutating func beginChildrenLoad(path: String) -> Bool {
         guard !loadedPaths.contains(path) else { return false }
-        return loadingPaths.insert(path).inserted
+        guard loadingPaths.insert(path).inserted else { return false }
+        if case .loaded(let tree) = fileTree {
+            fileTree = .loaded(RightPaneState.mergingChildren(
+                in: tree, for: path, with: [], state: .loading).nodes)
+            fileTreeRevision &+= 1
+        }
+        return true
     }
 
     func shouldLoadChildren(path: String, childrenState: DirectoryChildrenState) -> Bool {
@@ -96,10 +103,21 @@ struct NativePeerWorkspace: Equatable {
     }
 
     /// The peer went away: fail whatever is still waiting on it so nothing
-    /// spins forever. Loaded content stays readable.
+    /// spins forever. Loaded content stays readable. `loadingPaths` is
+    /// cleared (not moved to `failedPaths`) so a directory that was mid-load
+    /// can be retried immediately once the peer returns, rather than staying
+    /// gated the way an explicit `fileTreeFailed` reply gates it.
     mutating func markUnavailable() {
         if changes == .loading { changes = .failed(Self.offlineMessage) }
-        if fileTree == .loading { fileTree = .failed(Self.offlineMessage) }
+        if fileTree == .loading {
+            fileTree = .failed(Self.offlineMessage)
+        } else if case .loaded(var tree) = fileTree {
+            for path in loadingPaths {
+                tree = RightPaneState.mergingChildren(in: tree, for: path, with: [], state: .failed).nodes
+            }
+            fileTree = .loaded(tree)
+            fileTreeRevision &+= 1
+        }
         if documentContent == .loading { documentContent = .failed(Self.offlineMessage) }
         loadingPaths = []
     }
