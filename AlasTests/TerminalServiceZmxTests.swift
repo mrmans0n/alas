@@ -281,16 +281,9 @@ struct TerminalServiceZmxTests {
     }
 
     @Test func resolveSessionNameForAttachUsesPreloadedLegacyInfo() {
-        let infos = [
-            ZmxSessionInfo(
-                name: "alas-legacy-leaf",
-                startDir: "/tmp/repo/subdir",
-                pid: 1,
-                clients: 0,
-                created: 1,
-                cmd: "/bin/zsh -l"
-            ),
-        ]
+        let infos = ZmxClient.parseSessionInfos(
+            "name=alas-legacy-leaf\tpid=1\tclients=0\tcreated=1\tcwd=/tmp/repo/subdir\tcmd=/bin/zsh -l"
+        )
 
         let name = TerminalService.resolveSessionNameForAttach(
             worktreeId: "/tmp/wt",
@@ -309,16 +302,9 @@ struct TerminalServiceZmxTests {
             projectPath: "/tmp/repo",
             leafId: "legacy-leaf",
             allowLegacy: true,
-            legacySessionInfos: [
-                ZmxSessionInfo(
-                    name: "alas-legacy-leaf",
-                    startDir: "/tmp/repo-other",
-                    pid: 1,
-                    clients: 0,
-                    created: 1,
-                    cmd: "/bin/zsh -l"
-                ),
-            ]
+            legacySessionInfos: ZmxClient.parseSessionInfos(
+                "name=alas-legacy-leaf\tpid=1\tclients=0\tcreated=1\tcwd=/tmp/repo-other\tcmd=/bin/zsh -l"
+            )
         )
 
         #expect(name == ZmxSessionName.derive(worktreeId: "/tmp/wt", leafId: "legacy-leaf"))

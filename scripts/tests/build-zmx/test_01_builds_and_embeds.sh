@@ -12,7 +12,8 @@ mkdir -p "${srcroot}/ThirdParty/zmx"
 
 SRCROOT="${srcroot}" \
 ALAS_ZMX_TARGET_ARCH="arm64" \
-ALAS_ZIG_BIN="${this_dir}/fixtures/stub-zig.sh" \
+ALAS_ZIG_BIN="${tmp}/ghostty-zig-is-unavailable" \
+ALAS_ZMX_ZIG_BIN="${this_dir}/fixtures/stub-zig.sh" \
 ALAS_ZMX_CACHE_DIR="${tmp}/cache" \
     bash "${repo_root}/scripts/build-zmx.sh"
 

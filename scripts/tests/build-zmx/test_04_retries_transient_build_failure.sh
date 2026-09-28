@@ -41,7 +41,7 @@ chmod +x "${tmp}/flaky-zig.sh"
 
 SRCROOT="${srcroot}" \
 ALAS_ZMX_TARGET_ARCH="arm64" \
-ALAS_ZIG_BIN="${tmp}/flaky-zig.sh" \
+ALAS_ZMX_ZIG_BIN="${tmp}/flaky-zig.sh" \
 ALAS_ZMX_CACHE_DIR="${tmp}/cache" \
 ALAS_ZMX_RETRY_DELAYS="0 0" \
     bash "${repo_root}/scripts/build-zmx.sh" >"${tmp}/out" 2>"${tmp}/err"

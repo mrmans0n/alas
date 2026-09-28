@@ -13,7 +13,7 @@ mkdir -p "${srcroot}/ThirdParty/zmx"
 SRCROOT="${srcroot}" \
 CURRENT_ARCH="undefined_arch" \
 ARCHS="arm64" \
-ALAS_ZIG_BIN="${this_dir}/fixtures/stub-zig.sh" \
+ALAS_ZMX_ZIG_BIN="${this_dir}/fixtures/stub-zig.sh" \
 ALAS_ZMX_CACHE_DIR="${tmp}/cache" \
     bash "${repo_root}/scripts/build-zmx.sh"
 

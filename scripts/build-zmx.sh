@@ -125,19 +125,17 @@ if [ "${target_arch}" = "universal" ]; then
     exit 0
 fi
 
-# Resolve zig. Prefer ALAS_ZIG_BIN override (used by tests and custom
-# toolchains); fall back to Homebrew's zig@0.15 (same toolchain build-ghostty.sh
-# uses, since vanilla Zig 0.15.2 has Xcode 26 linking issues that brew patches).
+# zmx requires Zig 0.16; Ghostty retains its separate Zig 0.15 toolchain.
 resolve_zig_bin() {
-    if [ -n "${ALAS_ZIG_BIN:-}" ]; then
-        printf '%s\n' "${ALAS_ZIG_BIN}"
+    if [ -n "${ALAS_ZMX_ZIG_BIN:-}" ]; then
+        printf '%s\n' "${ALAS_ZMX_ZIG_BIN}"
     else
-        printf '%s/bin/zig\n' "$(brew --prefix zig@0.15 2>/dev/null)"
+        printf '%s/bin/zig\n' "$(brew --prefix zig@0.16 2>/dev/null)"
     fi
 }
 
 zig_bin="$(resolve_zig_bin)"
-[ -x "${zig_bin}" ] || skip_if_optional "zig not found (looked at ${zig_bin}). Install with: brew install zig@0.15, or set ALAS_ZIG_BIN"
+[ -x "${zig_bin}" ] || skip_if_optional "zig not found (looked at ${zig_bin}). Install with: brew install zig@0.16, or set ALAS_ZMX_ZIG_BIN"
 
 mkdir -p "${zmx_build_root}" "${zmx_install_prefix}/bin" "${cache_root}"
 

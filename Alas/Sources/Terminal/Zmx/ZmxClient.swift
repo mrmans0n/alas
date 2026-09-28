@@ -3,6 +3,7 @@ import os
 
 struct ZmxSessionInfo: Equatable, Sendable {
     let name: String
+    /// Initial directory from zmx 0.6, or tracked current directory from zmx 0.8.
     let startDir: String?
     var pid: Int?
     var clients: Int?
@@ -113,8 +114,8 @@ final class ZmxClient: Sendable {
     }
 
     /// Parse full `zmx ls` key-value rows. Used for legacy session migration,
-    /// where `start_dir` lets us avoid attaching an old unscoped session from
-    /// a different worktree.
+    /// where the reported directory lets us avoid attaching an old unscoped
+    /// session from a different worktree.
     func listSessionInfos() -> [ZmxSessionInfo] {
         guard env.isAvailable, let binary = env.binaryURL else { return [] }
         let result = runner.run(binary, ["ls"], zmxEnv(), 5.0)
@@ -169,7 +170,7 @@ final class ZmxClient: Sendable {
             let value = String(parts[1])
             switch parts[0] {
             case "name": name = value
-            case "start_dir": startDir = value
+            case "start_dir", "cwd": startDir = value
             case "pid": pid = Int(value)
             case "clients": clients = Int(value)
             case "created": created = Int(value)

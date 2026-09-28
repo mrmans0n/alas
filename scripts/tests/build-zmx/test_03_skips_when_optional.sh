@@ -14,7 +14,7 @@ missing_zig="${tmp}/does-not-exist/zig"
 
 if SRCROOT="${srcroot}" \
     ALAS_ZMX_TARGET_ARCH="arm64" \
-    ALAS_ZIG_BIN="${missing_zig}" \
+    ALAS_ZMX_ZIG_BIN="${missing_zig}" \
     ALAS_ZMX_CACHE_DIR="${tmp}/cache" \
     bash "${repo_root}/scripts/build-zmx.sh" >"${tmp}/required.out" 2>"${tmp}/required.err"; then
     echo "expected missing zig to fail without ALAS_ZMX_OPTIONAL=1" >&2
@@ -28,7 +28,7 @@ grep -q "error: zig not found" "${tmp}/required.err" || {
 
 SRCROOT="${srcroot}" \
     ALAS_ZMX_TARGET_ARCH="arm64" \
-    ALAS_ZIG_BIN="${missing_zig}" \
+    ALAS_ZMX_ZIG_BIN="${missing_zig}" \
     ALAS_ZMX_CACHE_DIR="${tmp}/cache" \
     ALAS_ZMX_OPTIONAL="1" \
     bash "${repo_root}/scripts/build-zmx.sh" >"${tmp}/optional.out" 2>"${tmp}/optional.err"
@@ -49,7 +49,7 @@ stub_zig="${this_dir}/fixtures/stub-zig.sh"
 
 if SRCROOT="${srcroot}" \
     ALAS_ZMX_TARGET_ARCH="arm64" \
-    ALAS_ZIG_BIN="${stub_zig}" \
+    ALAS_ZMX_ZIG_BIN="${stub_zig}" \
     ALAS_ZMX_CACHE_DIR="${tmp}/cache" \
     bash "${repo_root}/scripts/build-zmx.sh" >"${tmp}/required2.out" 2>"${tmp}/required2.err"; then
     echo "expected missing submodule to fail without ALAS_ZMX_OPTIONAL=1" >&2
@@ -63,7 +63,7 @@ grep -q "error: submodule missing" "${tmp}/required2.err" || {
 
 SRCROOT="${srcroot}" \
     ALAS_ZMX_TARGET_ARCH="arm64" \
-    ALAS_ZIG_BIN="${stub_zig}" \
+    ALAS_ZMX_ZIG_BIN="${stub_zig}" \
     ALAS_ZMX_CACHE_DIR="${tmp}/cache" \
     ALAS_ZMX_OPTIONAL="1" \
     bash "${repo_root}/scripts/build-zmx.sh" >"${tmp}/optional2.out" 2>"${tmp}/optional2.err"
@@ -83,7 +83,7 @@ chmod +x "${stale_install}/zmx"
 
 SRCROOT="${srcroot}" \
     ALAS_ZMX_TARGET_ARCH="arm64" \
-    ALAS_ZIG_BIN="${missing_zig}" \
+    ALAS_ZMX_ZIG_BIN="${missing_zig}" \
     ALAS_ZMX_CACHE_DIR="${tmp}/cache" \
     ALAS_ZMX_OPTIONAL="1" \
     bash "${repo_root}/scripts/build-zmx.sh" >"${tmp}/stale.out" 2>"${tmp}/stale.err"
