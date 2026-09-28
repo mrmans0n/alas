@@ -15,6 +15,8 @@ import SwiftUI
 struct ACPToolCallGroupHeaderRow: View {
     let summary: ACPToolCallGroupSummary
     let expanded: Bool
+    /// Earlier members left out of an automatically expanded live run.
+    let hiddenMemberCount: Int
     let onToggle: (Bool) -> Void
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -22,14 +24,31 @@ struct ACPToolCallGroupHeaderRow: View {
     init(
         summary: ACPToolCallGroupSummary,
         expanded: Bool = false,
+        hiddenMemberCount: Int = 0,
         onToggle: @escaping (Bool) -> Void = { _ in }
     ) {
         self.summary = summary
         self.expanded = expanded
+        self.hiddenMemberCount = hiddenMemberCount
         self.onToggle = onToggle
     }
 
     var body: some View {
+        HStack(spacing: 8) {
+            toggle
+            if hiddenMemberCount > 0 {
+                // Expanding explicitly lifts the live cap (see
+                // `ACPToolCallGroupExpansionSeeds.memberLimit`).
+                Button("Show \(hiddenMemberCount) earlier") { onToggle(true) }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("fg-muted"))
+                    .fixedSize()
+            }
+        }
+    }
+
+    private var toggle: some View {
         Button {
             onToggle(!expanded)
         } label: {

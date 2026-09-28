@@ -10,6 +10,11 @@ struct ACPTranscriptToolCallGroup: Equatable {
 
     static let idPrefix = "tcg-"
 
+    /// How many trailing members an automatically expanded live group
+    /// shows. The rest stay one click away, so a long turn doesn't grow the
+    /// open run past the viewport.
+    static let liveMemberLimit = 5
+
     /// In transcript order; never empty.
     let members: [ACPTranscriptVisibleRow]
     let kind: Kind
@@ -199,7 +204,8 @@ enum ACPToolCallGrouping {
         messages: [ACPMessage],
         options: Options,
         messageCreatedAt: (Int) -> Date? = { _ in nil },
-        isExpanded: (ACPTranscriptToolCallGroup) -> Bool = { _ in false }
+        isExpanded: (ACPTranscriptToolCallGroup) -> Bool = { _ in false },
+        memberLimit: (ACPTranscriptToolCallGroup) -> Int? = { _ in nil }
     ) -> [ACPTranscriptRenderRow] {
         guard options.enabled else { return rows.map(ACPTranscriptRenderRow.message) }
 
@@ -244,7 +250,7 @@ enum ACPToolCallGrouping {
                     )
                     if isExpanded(group) {
                         result.append(.toolCallGroupHeader(group))
-                        for member in group.members {
+                        for member in group.members.suffix(memberLimit(group) ?? group.members.count) {
                             result.append(.toolCallGroupMember(member, groupId: group.id))
                         }
                     } else {
@@ -595,6 +601,14 @@ final class ACPToolCallGroupExpansionSeeds {
         if isExpanded(members: members) { return true }
         if members.contains(where: collapsedMemberIds.contains) { return false }
         return group.isLive
+    }
+
+    /// Trailing members to tile for an expanded `group`, or nil for all.
+    /// Only an automatically expanded live group is capped; expanding it
+    /// explicitly (the header's "Show earlier") shows the whole run.
+    func memberLimit(_ group: ACPTranscriptToolCallGroup) -> Int? {
+        guard group.isLive, !isExpanded(members: group.members.map(\.stableId)) else { return nil }
+        return ACPTranscriptToolCallGroup.liveMemberLimit
     }
 
     /// Folds `members` into whichever lineage is already present among
