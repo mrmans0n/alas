@@ -509,6 +509,11 @@ private struct SidebarFilterSlotScrollView<Content: View>: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             content()
+                // Lay the tree out at its ideal height, as the bare ScrollView
+                // did, and only then pad it. A min-height frame alone proposes
+                // that height to the content, and flexible views inside it
+                // (row selection/hover shapes) grow to absorb the slack.
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(minHeight: viewportHeight + SidebarFilterRowMetrics.parkedOffset, alignment: .top)
         }
         .scrollPosition($position)
