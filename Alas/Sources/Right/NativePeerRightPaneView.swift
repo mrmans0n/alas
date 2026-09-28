@@ -97,26 +97,31 @@ struct NativePeerRightPaneView: View {
         case .failed(let message):
             NativePeerRailMessage(text: message)
         case .loaded(let nodes):
-            FilesTabView(
-                nodes: nodes,
-                fileTreeGeneration: 0,
-                fileTreeRefreshRevision: client.workspace.fileTreeRevision,
-                // Only used to build copied full paths; the path is the peer's.
-                worktreePath: URL(fileURLWithPath: client.selectedRow?.worktree?.path ?? "/"),
-                openPaths: $openPaths,
-                onSelectFile: { client.open(.file(path: $0.path)) },
-                onFileHistory: { _ in },
-                onCreateFile: { _ in },
-                onCreateFolder: { _ in },
-                shouldAutoLoadChildren: { client.workspace.shouldLoadChildren(path: $0, childrenState: $1) },
-                onLoadChildren: { client.loadFileTreeChildren(path: $0) },
-                showIgnored: false,
-                revealPath: nil,
-                revealTick: 0,
-                onClearReveal: {},
-                bookmarkOpenPaths: $bookmarkOpenPaths,
-                readOnly: true
-            )
+            VStack(spacing: 0) {
+                if client.workspace.fileTreeTruncated {
+                    NativePeerRailMessage(text: "The peer shortened one or more directory listings.")
+                }
+                FilesTabView(
+                    nodes: nodes,
+                    fileTreeGeneration: 0,
+                    fileTreeRefreshRevision: client.workspace.fileTreeRevision,
+                    // Only used to build copied full paths; the path is the peer's.
+                    worktreePath: URL(fileURLWithPath: client.selectedRow?.worktree?.path ?? "/"),
+                    openPaths: $openPaths,
+                    onSelectFile: { client.open(.file(path: $0.path)) },
+                    onFileHistory: { _ in },
+                    onCreateFile: { _ in },
+                    onCreateFolder: { _ in },
+                    shouldAutoLoadChildren: { client.workspace.shouldLoadChildren(path: $0, childrenState: $1) },
+                    onLoadChildren: { client.loadFileTreeChildren(path: $0) },
+                    showIgnored: false,
+                    revealPath: nil,
+                    revealTick: 0,
+                    onClearReveal: {},
+                    bookmarkOpenPaths: $bookmarkOpenPaths,
+                    readOnly: true
+                )
+            }
         }
     }
 

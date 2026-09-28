@@ -323,6 +323,28 @@ struct NativePeerSessionsTests {
         #expect(listChangesCount(links, "s") == initial + 1)
     }
 
+    @Test func worktreeSummaryChangeAlsoRefreshesTheFileTree() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        // Let the root listing finish loading, so a later summary change is
+        // re-requesting an already-loaded tree rather than one still in flight.
+        links.receive(.fileTree(sessionId: "s", path: nil, nodes: [], truncated: false), from: "B")
+        let listFilesCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .listFiles(sessionId: "s", path: nil) }.count
+        }
+        let initial = listFilesCount()
+
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
+        #expect(listFilesCount() == initial + 1)
+    }
+
     @Test func switchingSessionsStartsAFreshWorkspace() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

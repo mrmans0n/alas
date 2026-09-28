@@ -135,4 +135,27 @@ struct NativePeerWorkspaceTests {
         }
         #expect(failedNode.childrenState == .failed)
     }
+
+    @Test func rootFileTreeTruncationIsPreservedAndClearedOnAFullListing() {
+        var workspace = NativePeerWorkspace()
+        #expect(!workspace.fileTreeTruncated)
+
+        _ = workspace.apply(.fileTree(sessionId: "B:s", path: nil, nodes: [dir("src")], truncated: true))
+        #expect(workspace.fileTreeTruncated)
+
+        _ = workspace.apply(.fileTree(sessionId: "B:s", path: nil, nodes: [dir("src")], truncated: false))
+        #expect(!workspace.fileTreeTruncated)
+    }
+
+    @Test func childFileTreeTruncationIsTrackedPerDirectory() {
+        var workspace = NativePeerWorkspace()
+        _ = workspace.apply(.fileTree(sessionId: "B:s", path: nil, nodes: [dir("src")], truncated: false))
+        #expect(!workspace.fileTreeTruncated)
+
+        _ = workspace.apply(.fileTree(sessionId: "B:s", path: "src", nodes: [file("src/main.swift")], truncated: true))
+        #expect(workspace.fileTreeTruncated)
+
+        _ = workspace.apply(.fileTree(sessionId: "B:s", path: "src", nodes: [file("src/main.swift")], truncated: false))
+        #expect(!workspace.fileTreeTruncated)
+    }
 }

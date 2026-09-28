@@ -92,6 +92,9 @@ final class NativePeerSessions {
             reloadWorkspace()
         } else if selectedRow?.worktree != workspaceSummary {
             requestChanges()
+            // The summary only signals that the peer's worktree changed, not
+            // which files — a rename or delete only shows up by re-listing.
+            loadFileTree()
         }
     }
 

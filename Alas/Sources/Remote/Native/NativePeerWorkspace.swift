@@ -52,6 +52,13 @@ struct NativePeerWorkspace: Equatable {
     private var loadingPaths: Set<String> = []
     private var loadedPaths: Set<String> = []
     private var failedPaths: Set<String> = []
+    /// Directories (root keyed by `""`) whose last listing was cut off by the
+    /// peer's `RemoteWorktreeFileAccess.maxFileTreeNodes` cap.
+    private var truncatedPaths: Set<String> = []
+
+    /// True while any loaded listing — root or a directory — was truncated by
+    /// the peer, so the UI can note that the tree may be incomplete.
+    var fileTreeTruncated: Bool { !truncatedPaths.isEmpty }
 
     /// Keeps showing the last list while a refresh is in flight.
     mutating func beginChangesLoad() {
@@ -143,8 +150,9 @@ struct NativePeerWorkspace: Equatable {
             // A failed refresh keeps the list the user is already reading.
             if case .loaded = changes { return true }
             changes = .failed(Self.describe(reason, message: message))
-        case .fileTree(_, let path, let nodes, _):
+        case .fileTree(_, let path, let nodes, let truncated):
             let mapped = nodes.map(Self.fileTreeNode)
+            let truncationKey = path ?? ""
             if let path, !path.isEmpty {
                 loadingPaths.remove(path)
                 guard case .loaded(let tree) = fileTree else { return true }
@@ -156,6 +164,15 @@ struct NativePeerWorkspace: Equatable {
                 fileTree = .loaded(mapped)
                 loadedPaths = []
                 failedPaths = []
+                // A full root reload replaces every directory's children
+                // wholesale, so any previously-noted child truncation no
+                // longer describes what's on screen.
+                truncatedPaths = []
+            }
+            if truncated {
+                truncatedPaths.insert(truncationKey)
+            } else {
+                truncatedPaths.remove(truncationKey)
             }
             fileTreeRevision &+= 1
         case .fileTreeFailed(_, let path, let reason, let message):
