@@ -400,8 +400,8 @@ struct ACPUpstreamReferenceComposerTests {
         #expect(wireText(target) == "```\nlog: see #12")
     }
 
-    @Test("restoring an appended reference inside an open code fence keeps it text")
-    func restoredQueuedReferenceInsideCodeFenceStaysText() async {
+    @Test("later queue edits sync after a restored reference is normalized")
+    func laterQueueEditsSyncAfterReferenceNormalization() async {
         let store = await UpstreamReferenceFixtures.store()
         let reference = CodeHostReference(sigil: .hash, number: 12)
         let existing = ACPComposerDraft(segments: [.text("```\nlet x = 1")])
@@ -410,10 +410,26 @@ struct ACPUpstreamReferenceComposerTests {
         let (textView, coordinator, window) = makeTextView(store: store)
         defer { withExtendedLifetime((coordinator, window)) {} }
 
-        coordinator.restoreDraftForTesting(combined, into: textView)
+        coordinator.syncPersistedDraft(combined, into: textView)
 
-        #expect(textView.string == combined.plainText)
+        let normalized = ACPInputField.Coordinator.draft(from: textView.attributedString())
+        #expect(normalized == ACPComposerDraft(segments: [.text(combined.plainText)]))
         #expect(chipSpellings(textView).isEmpty)
-        #expect(wireText(textView) == combined.plainText)
+
+        textView.setSelectedRange(NSRange(location: textView.attributedString().length, length: 0))
+        textView.insertText(" edited", replacementRange: textView.selectedRange())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        let edited = ACPInputField.Coordinator.draft(from: textView.attributedString())
+        #expect(edited.plainText == "\(combined.plainText) edited")
+
+        coordinator.syncPersistedDraft(combined, into: textView)
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == edited)
+
+        let next = edited.appending(ACPComposerDraft(segments: [.text("follow-up")]))
+        coordinator.syncPersistedDraft(next, into: textView)
+
+        #expect(textView.string == next.plainText)
+        #expect(wireText(textView) == next.plainText)
+        #expect(chipSpellings(textView).isEmpty)
     }
 }

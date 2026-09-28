@@ -286,7 +286,10 @@ struct ACPInputField: NSViewRepresentable {
         /// Set by the composer chrome to surface staging failures (Task 14).
         var onImageError: ((ACPImageStaging.StagingError) -> Void)?
         private var restoringDraft = false
+        /// Serialized storage baseline; normalization may change its segments.
         private var lastSyncedDraft: ACPComposerDraft
+        /// Owner-supplied input last applied, before storage normalization.
+        private var lastAppliedComposerDraft: ACPComposerDraft
 
         func undoManager(for view: NSTextView) -> UndoManager? { editorUndoManager }
         private var nextSubmitID = 0
@@ -339,6 +342,7 @@ struct ACPInputField: NSViewRepresentable {
             self.sendOnEnter = sendOnEnter
             self.typography = typography
             self.lastSyncedDraft = initialDraft
+            self.lastAppliedComposerDraft = initialDraft
             self.onDraftChange = onDraftChange
             self.onDraftClear = onDraftClear
             self.onStopDictation = onStopDictation
@@ -577,10 +581,13 @@ struct ACPInputField: NSViewRepresentable {
         func syncPersistedDraft(_ draft: ACPComposerDraft, into textView: NSTextView) {
             let currentDraft = Self.draft(from: textView.attributedString())
             if currentDraft == draft {
-                lastSyncedDraft = draft
+                lastSyncedDraft = currentDraft
+                lastAppliedComposerDraft = draft
                 return
             }
-            guard currentDraft == lastSyncedDraft else { return }
+            guard draft != lastAppliedComposerDraft,
+                  currentDraft == lastSyncedDraft
+            else { return }
             restore(draft, into: textView)
         }
 
@@ -633,7 +640,8 @@ struct ACPInputField: NSViewRepresentable {
             ACPMarkdownLiveStyler.restyle(storage, typography: typography, excluding: blockRanges)
             textView.needsDisplay = true
             restoringDraft = false
-            lastSyncedDraft = draft
+            lastSyncedDraft = Self.draft(from: storage)
+            lastAppliedComposerDraft = draft
         }
 
         /// Swaps the reference-chip store. Chips existing text once the

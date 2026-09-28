@@ -12,7 +12,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 🐛 Fixes
 
-- Restore chipped composer references only when valid in the full draft context; keep unfinished tokens as text.
+- Normalize restored composer references in full draft context and preserve later queued draft updates.
 
 ## [0.19.16] - 2026-09-28
 
