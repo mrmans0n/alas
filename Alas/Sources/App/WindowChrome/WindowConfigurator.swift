@@ -58,15 +58,26 @@ final class WindowConfigurationView: NSView {
         // A live display disconnect/reconnect or resolution change fires this
         // instead of (or in addition to) a sleep/wake pair, with no guarantee
         // of a mouse move first if the pointer was left over the titlebar
-        // band. Force movable immediately so macOS can relocate/restore the
-        // window through the transition.
+        // band, and AppKit has already adjusted window frames for the change
+        // by the time this notification arrives. Force movable immediately so
+        // this and any subsequent screen change (e.g. the display returning)
+        // can relocate/restore the window, then reapply the pointer-based
+        // policy on the next run loop turn so a titlebar-band pointer left
+        // stationary through the transition doesn't leave the window
+        // draggable indefinitely.
         screenParametersObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.window?.isMovable = true
+                guard let self else { return }
+                self.window?.isMovable = true
+                RunLoop.main.perform { [weak self] in
+                    MainActor.assumeIsolated {
+                        self?.configureWindowIfNeeded()
+                    }
+                }
             }
         }
         // On wake, reapply the pointer-based policy immediately: a stationary

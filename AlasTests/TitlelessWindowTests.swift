@@ -104,9 +104,12 @@ struct TitlelessWindowTests {
     }
 
     /// A live display disconnect/reconnect fires `didChangeScreenParameters`
-    /// with no guaranteed mouse move first. The window must become movable
-    /// immediately so macOS can relocate/restore it through the transition.
-    @Test func screenParametersChangeForcesMovableEvenUnderTitlebar() throws {
+    /// with no guaranteed mouse move first, and AppKit has already adjusted
+    /// window frames for the change by the time it arrives. The window must
+    /// become movable so macOS can relocate/restore it through this and any
+    /// subsequent change, and the pointer-based policy must come back after,
+    /// not leave the window draggable indefinitely.
+    @Test func screenParametersChangeForcesThenReappliesPointerPolicy() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 100, y: 100, width: 800, height: 600),
             styleMask: [.titled, .resizable],
@@ -123,9 +126,13 @@ struct TitlelessWindowTests {
         #expect(window.isMovable == false)
 
         NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
-        pumpMainRunLoop(seconds: 0.05)
 
-        #expect(window.isMovable == true)
+        let deadline = Date().addingTimeInterval(1)
+        while window.isMovable, Date() < deadline {
+            pumpMainRunLoop(seconds: 0.01)
+        }
+
+        #expect(window.isMovable == false)
     }
 
     /// On wake, a stationary pointer left over the tab strip produces no
