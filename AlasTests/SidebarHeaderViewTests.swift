@@ -13,8 +13,6 @@ struct SidebarHeaderViewTests {
 
     private func hostHeader() -> NSHostingController<AnyView> {
         let view = SidebarHeaderView(
-            worktreeSortMode: .lastUpdateDesc,
-            onSetWorktreeSortMode: { _ in },
             onSettings: {},
             onAddProject: {},
             onSearch: {},
@@ -27,35 +25,32 @@ struct SidebarHeaderViewTests {
         return controller
     }
 
-    @Test func headerRendersWithoutCrashing() {
-        let controller = hostHeader()
-        #expect(controller.view.fittingSize.height > 0)
-    }
-
-    @Test func sortMenuKeepsHeaderHeightAndAccessibilityLabel() throws {
+    @Test func headerKeepsItsFixedHeight() {
         let controller = hostHeader()
         let fitted = controller.sizeThatFits(in: NSSize(width: 300, height: 100))
-        let sortControls = accessibilityElements(in: controller.view, matching: "Sort worktrees")
-
         // E1 pins the header to a fixed 38px band rather than padding around
         // the control height.
         #expect(abs(fitted.height - 38) < 0.5)
+    }
+
+    @Test func sortMenuExposesAChromelessAccessibilityButton() throws {
+        let view = WorktreeSortMenu(selection: .lastUpdateDesc, onSelect: { _ in })
+            .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: AnyView(view))
+        controller.view.frame = NSRect(x: 0, y: 0, width: 40, height: 30)
+        controller.view.layoutSubtreeIfNeeded()
+        let sortControls = accessibilityElements(in: controller.view, matching: "Sort worktrees")
+
         #expect(sortControls.count == 1)
         #expect(sortControls.first?.accessibilityRole() == .button)
         // `accessibilityActionNames()` is the deprecated informal-protocol query.
         // The NSAccessibility protocols express "exposes the press action" as
         // conformance to NSAccessibilityButton, which NSButton declares.
-        let sortControl = try #require(sortControls.first)
-        #expect(sortControl is NSAccessibilityButton)
-    }
-
-    @Test func sortAccessibilityButtonHasNoVisibleChromeOrFocus() {
-        let controller = hostHeader()
-        let sortButton = accessibilityElements(in: controller.view, matching: "Sort worktrees").first as? NSButton
-
-        #expect(sortButton?.title == "")
-        #expect(sortButton?.isBordered == false)
-        #expect(sortButton?.acceptsFirstResponder == false)
+        let sortButton = try #require(sortControls.first as? NSButton)
+        #expect(sortButton is NSAccessibilityButton)
+        #expect(sortButton.title == "")
+        #expect(sortButton.isBordered == false)
+        #expect(sortButton.acceptsFirstResponder == false)
     }
 
     @Test func sidebarHeaderButtonsAreSquare() {

@@ -26,28 +26,12 @@ enum WorktreeSortPresentation {
 struct WorktreeSortMenu: View {
     let selection: AppConfig.WorktreeSortMode
     let onSelect: (AppConfig.WorktreeSortMode) -> Void
-    let headerHovered: Bool
 
     @Environment(\.theme) private var theme
     @State private var hovering = false
-    @State private var menuTracking = false
     /// `Menu` does not expose press state to its label, so it is tracked by a
     /// simultaneous gesture — the same approach the tab bar's menus use.
     @GestureState private var isPressed = false
-
-    nonisolated static func isVisible(
-        headerHovered: Bool,
-        menuTracking: Bool
-    ) -> Bool {
-        headerHovered || menuTracking
-    }
-
-    private var visible: Bool {
-        Self.isVisible(
-            headerHovered: headerHovered,
-            menuTracking: menuTracking
-        )
-    }
 
     var body: some View {
         Menu {
@@ -76,24 +60,13 @@ struct WorktreeSortMenu: View {
         }
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
-        .opacity(visible ? 1 : 0)
-        .allowsHitTesting(visible)
         .onHover { hovering = $0 }
         .simultaneousGesture(
             DragGesture(minimumDistance: 0).updating($isPressed) { _, state, _ in state = true }
         )
-        .simultaneousGesture(TapGesture().onEnded { menuTracking = true })
-        .onReceive(NotificationCenter.default.publisher(for: NSMenu.didEndTrackingNotification)) { _ in
-            menuTracking = false
-        }
-        .animation(.easeOut(duration: 0.12), value: visible)
         .accessibilityHidden(true)
         .background(
-            WorktreeSortAccessibilityButton(
-                selection: selection,
-                onSelect: onSelect,
-                onTrackingChanged: { menuTracking = $0 }
-            )
+            WorktreeSortAccessibilityButton(selection: selection, onSelect: onSelect)
         )
         .help("Sort worktrees")
     }
@@ -102,7 +75,6 @@ struct WorktreeSortMenu: View {
 private struct WorktreeSortAccessibilityButton: NSViewRepresentable {
     let selection: AppConfig.WorktreeSortMode
     let onSelect: (AppConfig.WorktreeSortMode) -> Void
-    let onTrackingChanged: (Bool) -> Void
 
     func makeNSView(context: Context) -> NSView {
         let button = PointerTransparentMenuButton(frame: .zero)
@@ -116,30 +88,23 @@ private struct WorktreeSortAccessibilityButton: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.onSelect = onSelect
-        context.coordinator.onTrackingChanged = onTrackingChanged
         context.coordinator.updateSelection(selection)
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onSelect: onSelect, onTrackingChanged: onTrackingChanged)
+        Coordinator(onSelect: onSelect)
     }
 
-    final class Coordinator: NSObject, NSMenuDelegate {
+    final class Coordinator: NSObject {
         var onSelect: (AppConfig.WorktreeSortMode) -> Void
-        var onTrackingChanged: (Bool) -> Void
         private weak var menu: NSMenu?
 
-        init(
-            onSelect: @escaping (AppConfig.WorktreeSortMode) -> Void,
-            onTrackingChanged: @escaping (Bool) -> Void
-        ) {
+        init(onSelect: @escaping (AppConfig.WorktreeSortMode) -> Void) {
             self.onSelect = onSelect
-            self.onTrackingChanged = onTrackingChanged
         }
 
         func makeMenu() -> NSMenu {
             let menu = NSMenu()
-            menu.delegate = self
             for mode in WorktreeSortPresentation.modes {
                 let item = NSMenuItem(
                     title: WorktreeSortPresentation.title(for: mode),
@@ -165,14 +130,6 @@ private struct WorktreeSortAccessibilityButton: NSViewRepresentable {
                   let mode = AppConfig.WorktreeSortMode(rawValue: rawValue)
             else { return }
             onSelect(mode)
-        }
-
-        func menuWillOpen(_ menu: NSMenu) {
-            onTrackingChanged(true)
-        }
-
-        func menuDidClose(_ menu: NSMenu) {
-            onTrackingChanged(false)
         }
     }
 }

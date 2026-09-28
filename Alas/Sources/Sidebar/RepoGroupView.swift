@@ -56,10 +56,17 @@ struct RepoGroupView: View {
     let onDropWorktree: (_ draggedId: String, _ destinationId: String) -> Void
     let onDropProject: (_ draggedId: String, _ destinationId: String) -> Void
     var commitQuery: (Worktree) -> WorktreeRowView.CommitQuery? = { _ in nil }
+    /// Set while the sidebar filter is active and `worktrees` holds only the
+    /// matches. Rows then follow the matches rather than `collapsed`, which is
+    /// left untouched so clearing the filter restores the tree exactly.
+    var isFiltering = false
+    var highlightedWorktreeId: String? = nil
     @Environment(\.theme) var theme
     @ObservedObject private var hostStatus = RemoteHostStatusStore.shared
     @State private var hovering = false
     @State private var plusHovering = false
+
+    private var isCollapsed: Bool { isFiltering ? worktrees.isEmpty : collapsed }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -69,7 +76,7 @@ struct RepoGroupView: View {
             // fire the collapse action.
             HStack(spacing: 7) {
                 HStack(spacing: 7) {
-                    Icon(name: collapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
+                    Icon(name: isCollapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
                         .frame(width: 12, height: 14)
                         .contentShape(Rectangle())
                     ProjectIconView(icon: icon(project), fallbackName: project.name, size: .repoHeader)
@@ -101,10 +108,12 @@ struct RepoGroupView: View {
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
-                .onTapGesture { collapsed.toggle() }
+                .onTapGesture { if !isFiltering { collapsed.toggle() } }
                 headerAccessory
             }
             .padding(5)
+            // A project with no filter matches stays in place, dimmed.
+            .opacity(isFiltering && worktrees.isEmpty ? 0.45 : 1)
             .background(hovering ? theme.color("bg-3").opacity(0.55) : .clear, in: RoundedRectangle(cornerRadius: 8))
             .overlay {
                 RoundedRectangle(cornerRadius: 8)
@@ -144,7 +153,7 @@ struct RepoGroupView: View {
                 onDropProject(draggedId, project.id)
                 return true
             }
-            if !collapsed {
+            if !isCollapsed {
                 VStack(spacing: 1) {
                     ForEach(worktrees) { wt in
                         WorktreeRowView(
@@ -173,7 +182,8 @@ struct RepoGroupView: View {
                             onRetryDelete: { onRetryDelete(wt) },
                             onSetGGWorktreeMode: { mode in onSetGGWorktreeMode(wt, mode) },
                             workspaceCheckout: workspaceCheckout(wt),
-                            commitQuery: commitQuery(wt)
+                            commitQuery: commitQuery(wt),
+                            isHighlighted: wt.id == highlightedWorktreeId
                         )
                         .draggable(wt.id)
                         .dropDestination(for: String.self) { ids, _ in
@@ -197,7 +207,7 @@ struct RepoGroupView: View {
         // the project title always yields space to the count and new-worktree
         // control at narrow sidebar widths.
         HStack(spacing: 6) {
-            if collapsed, let summary = projectSummary() {
+            if isCollapsed, let summary = projectSummary() {
                 HarnessPill(
                     summary: summary,
                     variant: .dotOnly,

@@ -25,6 +25,14 @@ struct SidebarView: View {
     @State private var spaceTitleVisible = false
     @State private var hideTitleTask: Task<Void, Never>?
     @State private var showingNewWorkspace = false
+    /// Transient: never persisted and never applied outside this sidebar.
+    @State private var worktreeFilter = ""
+    @State private var highlightedWorktreeId: String?
+    @FocusState private var worktreeFilterFocused: Bool
+    @State private var filterRowRevealed = false
+    /// Read only by the filter row, so per-frame scroll updates re-render it
+    /// alone rather than the whole tree.
+    @State private var sidebarScrollOffset: CGFloat = 0
 
     var body: some View {
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
@@ -42,8 +50,14 @@ struct SidebarView: View {
                     showingNewWorkspace: $showingNewWorkspace
                 )
                 SpacePagerContent(spaces: state.spacesManager.spaces, selection: state.spacesManager.activeSpaceId) { spaceID in
-                    ScrollView(.vertical, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 8) {
+                    SidebarFilterSlotScrollView(onScroll: { old, new in
+                        guard spaceID == state.spacesManager.activeSpaceId else { return }
+                        updateFilterRowReveal(from: old, to: new)
+                    }) {
+                        VStack(alignment: .leading, spacing: SidebarFilterRowMetrics.slotSpacing) {
+                            // The filter row's slot; the row itself is drawn
+                            // by the overlay below so it can also pin.
+                            Color.clear.frame(height: SidebarFilterRowMetrics.slotHeight)
                             WorkspaceSidebarTree(
                                 state: state,
                                 spaceID: spaceID,
@@ -52,7 +66,10 @@ struct SidebarView: View {
                                 RepoGroupView(
                                     project: project,
                                     icon: { state.effectiveIcon(for: $0) },
-                                    worktrees: state.projectsManager.visibleWorktrees(projectId: project.id),
+                                    worktrees: WorktreeSidebarFilter.apply(
+                                        worktreeFilter,
+                                        to: state.projectsManager.visibleWorktrees(projectId: project.id)
+                                    ),
                                     collapsed: Binding(
                                         get: { collapsedProjects.contains(project.id) },
                                         set: { collapsed in
@@ -220,7 +237,9 @@ struct SidebarView: View {
                                             preferLocal: override != nil,
                                             revision: state.revisionChangeGeneration(worktreeID: wt.id)
                                         )
-                                    }
+                                    },
+                                    isFiltering: WorktreeSidebarFilter.isActive(worktreeFilter),
+                                    highlightedWorktreeId: highlightedWorktreeId
                                 )
                             }
                             if state.config.remote.federationEnabled,
@@ -254,6 +273,19 @@ struct SidebarView: View {
                         .padding(.bottom, 20)
                     }
                 }
+                .overlay(alignment: .top) {
+                    SidebarWorktreeFilterRow(
+                        state: state,
+                        revealed: $filterRowRevealed,
+                        scrollOffset: $sidebarScrollOffset,
+                        text: $worktreeFilter,
+                        focused: $worktreeFilterFocused,
+                        onMoveHighlight: moveFilterHighlight(by:),
+                        onSubmit: openHighlightedWorktree,
+                        onClear: clearWorktreeFilter
+                    )
+                }
+                .clipped()
                 if state.spacesManager.shouldShowSpaceAffordance {
                     SpacePagerIndicator(
                         spaces: state.spacesManager.spaces,
@@ -288,6 +320,9 @@ struct SidebarView: View {
         .task(id: state.config.changes.stackedDiffsEnabled && GGAvailability.shared.isInstalled) {
             state.refreshGGSidebar()
         }
+        .onChange(of: worktreeFilter) { _, query in
+            highlightedWorktreeId = WorktreeSidebarFilter.isActive(query) ? filteredWorktreeIds().first : nil
+        }
         .onDisappear {
             hideTitleTask?.cancel()
             hideTitleTask = nil
@@ -295,6 +330,58 @@ struct SidebarView: View {
         .sheet(isPresented: $showingNewWorkspace) {
             NewWorkspaceDialog(state: state, presented: $showingNewWorkspace)
         }
+    }
+
+    private func updateFilterRowReveal(from old: ScrollGeometry, to new: ScrollGeometry) {
+        sidebarScrollOffset = new.contentOffset.y + new.contentInsets.top
+        // A resize can clamp the offset; only offset changes at a stable size
+        // are the user scrolling (content grows as projects expand, too).
+        guard old.containerSize == new.containerSize, old.contentSize == new.contentSize else { return }
+        let insets = new.contentInsets.top + new.contentInsets.bottom
+        let revealed = WorktreeSidebarFilter.isRowRevealed(
+            filterRowRevealed,
+            scrolledFrom: old.contentOffset.y + old.contentInsets.top,
+            to: new.contentOffset.y + new.contentInsets.top,
+            maxOffset: max(0, new.contentSize.height + insets - new.containerSize.height)
+        )
+        guard revealed != filterRowRevealed else { return }
+        // Only the overlay row moves, so this animates without any re-layout.
+        withAnimation(.snappy(duration: 0.2)) { filterRowRevealed = revealed }
+    }
+
+    /// Matched worktree ids of the active space, in sidebar display order.
+    private func filteredWorktreeIds() -> [String] {
+        let space = state.spacesManager.activeSpace
+        let members = space?.members ?? space?.projectIds.map(SpaceMemberReference.project) ?? []
+        return members.flatMap { member -> [String] in
+            guard case .project(let projectId) = member else { return [] }
+            return WorktreeSidebarFilter.apply(
+                worktreeFilter,
+                to: state.projectsManager.visibleWorktrees(projectId: projectId)
+            ).map(\.id)
+        }
+    }
+
+    private func moveFilterHighlight(by offset: Int) {
+        guard WorktreeSidebarFilter.isActive(worktreeFilter) else { return }
+        highlightedWorktreeId = WorktreeSidebarFilter.moveHighlight(
+            from: highlightedWorktreeId, by: offset, in: filteredWorktreeIds()
+        )
+    }
+
+    /// Keeps the filter applied so the user can keep hopping between matches;
+    /// Escape restores the full tree.
+    private func openHighlightedWorktree() {
+        guard WorktreeSidebarFilter.isActive(worktreeFilter) else { return }
+        let ids = filteredWorktreeIds()
+        guard let id = highlightedWorktreeId.flatMap({ ids.contains($0) ? $0 : nil }) ?? ids.first else { return }
+        state.selectWorktreeFromSidebar(id: id)
+        worktreeFilterFocused = false
+    }
+
+    private func clearWorktreeFilter() {
+        worktreeFilter = ""
+        worktreeFilterFocused = false
     }
 
     private var spacePagingGesture: some Gesture {
@@ -361,8 +448,6 @@ private struct SidebarAttentionHeader: View {
             peerRows: peerRows
         )
         SidebarHeaderView(
-            worktreeSortMode: state.config.worktrees.defaultOrdering,
-            onSetWorktreeSortMode: { state.setDefaultWorktreeOrdering($0) },
             onSettings: onSettings,
             onAddProject: onAddProject,
             onSearch: { NotificationCenter.default.post(name: .alasOpenSearch, object: nil) },
@@ -382,6 +467,142 @@ private struct SidebarAttentionHeader: View {
                 state.nativePeerSessions?.select(row.id)
                 state.isAttentionInboxOpen = false
             }
+        )
+    }
+}
+
+enum SidebarFilterRowMetrics {
+    static let slotHeight: CGFloat = 24
+    static let slotSpacing: CGFloat = 8
+    /// The scroll content's top padding: where the slot sits at rest.
+    static let restY: CGFloat = 6
+    /// Scrolled just past the slot, so the tree sits where it would with no
+    /// slot at all.
+    static let parkedOffset = slotHeight + slotSpacing
+}
+
+/// Parks the content just past the filter-row slot once it is tall enough,
+/// so the row starts hidden and scrolling up reveals it. The content is kept
+/// at least a viewport plus the slot tall so a short sidebar can park too.
+private struct SidebarFilterSlotScrollView<Content: View>: View {
+    let onScroll: (ScrollGeometry, ScrollGeometry) -> Void
+    @ViewBuilder let content: () -> Content
+    @State private var position = ScrollPosition()
+    @State private var viewportHeight: CGFloat = 0
+    @State private var parked = false
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            content()
+                .frame(minHeight: viewportHeight + SidebarFilterRowMetrics.parkedOffset, alignment: .top)
+        }
+        .scrollPosition($position)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { viewportHeight = $0 }
+        .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { old, new in
+            if !parked, viewportHeight > 0,
+               new.contentSize.height >= new.containerSize.height + SidebarFilterRowMetrics.parkedOffset {
+                parked = true
+                position.scrollTo(y: SidebarFilterRowMetrics.parkedOffset)
+            }
+            onScroll(old, new)
+        }
+    }
+}
+
+/// Rides its slot at the top of the scroll content, and pins over the list
+/// while revealed. Owns the reveal and offset reads so neither re-renders the
+/// sidebar tree.
+private struct SidebarWorktreeFilterRow: View {
+    @Bindable var state: AppState
+    @Binding var revealed: Bool
+    @Binding var scrollOffset: CGFloat
+    @Binding var text: String
+    var focused: FocusState<Bool>.Binding
+    let onMoveHighlight: (Int) -> Void
+    let onSubmit: () -> Void
+    let onClear: () -> Void
+
+    var body: some View {
+        // An active filter keeps its row pinned so the narrowed tree never
+        // loses the field that explains it.
+        let pinned = revealed || !text.isEmpty || focused.wrappedValue
+        let y = WorktreeSidebarFilter.rowY(
+            scrollOffset: scrollOffset, pinned: pinned, restY: SidebarFilterRowMetrics.restY
+        )
+        let opacity = WorktreeSidebarFilter.rowOpacity(y: y, height: SidebarFilterRowMetrics.slotHeight)
+        let inset = SidebarFilterRowMetrics.restY
+        HStack(spacing: 4) {
+            SidebarWorktreeFilterField(
+                text: $text,
+                focused: focused,
+                // Points at the worktree switcher, which finds worktrees too,
+                // under whatever key the user has bound it to.
+                placeholder: state.binding(for: .switchRepository)
+                    .map { "Filter worktrees · \($0.displayString)" } ?? "Filter worktrees"
+            )
+                .onKeyPress(.downArrow) { onMoveHighlight(1); return .handled }
+                .onKeyPress(.upArrow) { onMoveHighlight(-1); return .handled }
+                .onSubmit(onSubmit)
+                .onExitCommand(perform: onClear)
+            WorktreeSortMenu(
+                selection: state.config.worktrees.defaultOrdering,
+                onSelect: { state.setDefaultWorktreeOrdering($0) }
+            )
+        }
+        .frame(height: SidebarFilterRowMetrics.slotHeight)
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .padding(.vertical, inset)
+        // Hides the content that scrolls beneath the row while it is pinned.
+        .background {
+            let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
+            SidebarMaterialBackground(
+                choice: state.config.sidebarMaterial,
+                backgroundOpacity: override.backgroundOpacity
+            )
+        }
+        .offset(y: y - inset)
+        .opacity(opacity)
+        .allowsHitTesting(opacity > 0.5)
+    }
+}
+
+private struct SidebarWorktreeFilterField: View {
+    @Binding var text: String
+    var focused: FocusState<Bool>.Binding
+    let placeholder: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg-dim"))
+                .accessibilityHidden(true)
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 11.5))
+                .foregroundStyle(theme.color("fg"))
+                .autocorrectionDisabled(true)
+                .focused(focused)
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.color("fg-faint"))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear worktree filter")
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 24)
+        .background(theme.color("bg-1"), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(theme.color(focused.wrappedValue ? "accent" : "line"), lineWidth: 0.5)
         )
     }
 }
