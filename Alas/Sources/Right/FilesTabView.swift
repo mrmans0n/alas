@@ -36,6 +36,8 @@ struct FilesTabView: View {
     var onCommitBookmarksPaneHeight: () -> Void = {}
     var bookmarksCollapsed: Bool = false
     var onToggleBookmarksCollapsed: () -> Void = {}
+    /// Peer worktrees: read-only menus and no root menu (it only creates).
+    var readOnly: Bool = false
 
     @Environment(\.theme) private var theme
     @State private var dragStartHeight: CGFloat?
@@ -100,7 +102,7 @@ struct FilesTabView: View {
                     }
                     .padding(.vertical, 4)
                 }
-                .contextMenu { rootContextMenu }
+                .contextMenu { if !readOnly { rootContextMenu } }
                 .onChange(of: revealTick) { _, _ in
                     guard let path = revealPath else { return }
                     proxy.scrollTo("file:\(path)", anchor: .top)
@@ -125,7 +127,8 @@ struct FilesTabView: View {
             shouldAutoLoadChildren: shouldAutoLoadChildren,
             onLoadChildren: onLoadChildren,
             onToggleBookmark: onToggleBookmark,
-            onRemoveBookmark: onRemoveBookmark
+            onRemoveBookmark: onRemoveBookmark,
+            readOnly: readOnly
         )
     }
 

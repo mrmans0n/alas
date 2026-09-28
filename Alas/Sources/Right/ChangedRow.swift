@@ -23,6 +23,9 @@ struct ChangedRow: View {
     var viewAtHEADEnabled: Bool = true
     var ignoreMenu:       AnyView? = nil
     var dragPayload: (() -> DragOutPayload?)? = nil
+    /// Peer rows: open and copy only. No diff copy, stage or discard, which
+    /// have no peer endpoints.
+    var readOnly: Bool = false
     @Environment(\.theme) var theme
 
     nonisolated static func rowLeadingPadding(depth: Int) -> CGFloat {
@@ -61,34 +64,43 @@ struct ChangedRow: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            FileContextMenuActions(
-                configuration: .workingTreeFile(target: fileContextTarget),
-                onOpenInAlas: onOpenFile,
-                openInAlasEnabled: openFileEnabled,
-                onViewAtHEAD: onViewAtHEAD,
-                viewAtHEADEnabled: viewAtHEADEnabled,
-                onCompareWithHEAD: onCompareWithHEAD,
-                onFileHistory: onFileHistory,
-                onCopyRelativePath: onCopyRelative,
-                onCopyFullPath: onCopyFull
-            )
-            Divider()
-            Button("Copy Diff") { onCopyDiff?() }
-            Divider()
-            if onStageEntries != nil || onUnstageEntries != nil {
-                if let onStageEntries {
-                    Button("Stage") { onStageEntries() }
-                }
-                if let onUnstageEntries {
-                    Button("Unstage") { onUnstageEntries() }
-                }
-            } else if onStage != nil {
-                Button(file.stage == .staged ? "Unstage" : "Stage") { onStage?() }
-            }
-            Button("Discard Changes…", role: .destructive) { onDiscard?() }
-            if let ignoreMenu {
+            if readOnly {
+                FileContextMenuActions(
+                    configuration: .readOnlyFile(kind: .file),
+                    onOpenInAlas: onOpenFile,
+                    onCopyRelativePath: onCopyRelative,
+                    onCopyFullPath: onCopyFull
+                )
+            } else {
+                FileContextMenuActions(
+                    configuration: .workingTreeFile(target: fileContextTarget),
+                    onOpenInAlas: onOpenFile,
+                    openInAlasEnabled: openFileEnabled,
+                    onViewAtHEAD: onViewAtHEAD,
+                    viewAtHEADEnabled: viewAtHEADEnabled,
+                    onCompareWithHEAD: onCompareWithHEAD,
+                    onFileHistory: onFileHistory,
+                    onCopyRelativePath: onCopyRelative,
+                    onCopyFullPath: onCopyFull
+                )
                 Divider()
-                ignoreMenu
+                Button("Copy Diff") { onCopyDiff?() }
+                Divider()
+                if onStageEntries != nil || onUnstageEntries != nil {
+                    if let onStageEntries {
+                        Button("Stage") { onStageEntries() }
+                    }
+                    if let onUnstageEntries {
+                        Button("Unstage") { onUnstageEntries() }
+                    }
+                } else if onStage != nil {
+                    Button(file.stage == .staged ? "Unstage" : "Stage") { onStage?() }
+                }
+                Button("Discard Changes…", role: .destructive) { onDiscard?() }
+                if let ignoreMenu {
+                    Divider()
+                    ignoreMenu
+                }
             }
         }
         .dragOut { dragPayload?() }

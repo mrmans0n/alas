@@ -21,6 +21,8 @@ struct FileTreeContext {
     let onLoadChildren: (String) -> Void
     let onToggleBookmark: (FileTreeNode) -> Void
     let onRemoveBookmark: (String) -> Void
+    /// Peer worktrees: offer only open and copy actions, never this Mac's files.
+    var readOnly: Bool = false
 }
 
 /// Renders a file tree as indented rows. Used twice by `FilesTabView`: once for
@@ -263,16 +265,18 @@ struct FileTreeListView: View {
 
     @ViewBuilder private func contextMenu(for node: FileTreeNode, expansionPath: String? = nil) -> some View {
         let expansionPath = expansionPath ?? node.path
-        let target = FileContextMenuTarget.resolve(
-            kind: node.kind,
-            worktreePath: context.worktreePath,
-            relativePath: node.path
-        )
-        FileContextMenuActions(
-            configuration: .filesTab(
-                target: target,
+        let configuration: FileContextMenuConfiguration = context.readOnly
+            ? .readOnlyFile(kind: node.kind)
+            : .filesTab(
+                target: FileContextMenuTarget.resolve(
+                    kind: node.kind,
+                    worktreePath: context.worktreePath,
+                    relativePath: node.path
+                ),
                 isBookmarked: FileBookmarks.contains(node, in: context.bookmarks)
-            ),
+            )
+        FileContextMenuActions(
+            configuration: configuration,
             onNewFile: node.kind == .dir ? {
                 openPaths.insert(expansionPath)
                 context.onCreateFile(node.path)
