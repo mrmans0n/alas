@@ -12,7 +12,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 🐛 Fixes
 
-- Preserve chipped composer references across remounts without mistaking an unfinished reference for a completed one.
+- Restore chipped composer references only when valid in the full draft context; keep unfinished tokens as text.
 
 ## [0.19.16] - 2026-09-28
 

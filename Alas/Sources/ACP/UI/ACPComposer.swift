@@ -595,13 +595,15 @@ struct ACPInputField: NSViewRepresentable {
             }
             invalidatePendingImageFileInsertions()
             restoringDraft = true
-            storage.setAttributedString(Self.attributedString(
-                from: draft, typography: typography, upstreamReferences: upstreamReferences
-            ))
+            storage.setAttributedString(Self.attributedString(from: draft, typography: typography))
             ACPSlashCommand.chipify(storage, suggestions: promptSuggestions, font: typography.appKitFont())
             if let store = upstreamReferences, let host = store.hostKind {
+                // Revalidate explicit chips against the assembled text first:
+                // queue edits can place a formerly chipped reference inside a
+                // newly opened code span or fence.
+                (textView as? ACPNSTextView)?.chipPersistedUpstreamReferencesIfNeeded(recordUndo: false)
                 // The end-of-text sentinel protects a plain trailing token;
-                // previously chipped occurrences arrive as explicit segments.
+                // explicit reference markers were handled above.
                 let end = (storage.string as NSString).length
                 let caret = NSRange(location: end, length: 0)
                 let matches = ACPUpstreamReferenceDetector.chippableMatches(
@@ -803,8 +805,7 @@ struct ACPInputField: NSViewRepresentable {
 
         static func attributedString(
             from draft: ACPComposerDraft,
-            typography: ACPChatTypography = .default,
-            upstreamReferences: ACPUpstreamReferenceStore? = nil
+            typography: ACPChatTypography = .default
         ) -> NSAttributedString {
             let result = NSMutableAttributedString(string: "")
             let baseAttributes: [NSAttributedString.Key: Any] = [
@@ -823,28 +824,15 @@ struct ACPInputField: NSViewRepresentable {
                     ], range: NSRange(location: 0, length: chip.length))
                     result.append(chip)
                 case .upstreamReference(let reference):
-                    if let store = upstreamReferences, let host = store.hostKind {
-                        if ACPUpstreamReferenceDetector.supports(reference, on: host) {
-                            store.ensureLoaded(reference)
-                            result.append(ACPUpstreamReferenceChip.chip(
-                                for: reference, host: host, store: store, attributes: baseAttributes
-                            ))
-                        } else {
-                            result.append(NSAttributedString(
-                                string: reference.spelling, attributes: baseAttributes
-                            ))
-                        }
-                    } else {
-                        let marker = NSMutableAttributedString(
-                            string: reference.spelling, attributes: baseAttributes
-                        )
-                        marker.addAttribute(
-                            .upstreamReference,
-                            value: reference.spelling,
-                            range: NSRange(location: 0, length: marker.length)
-                        )
-                        result.append(marker)
-                    }
+                    let marker = NSMutableAttributedString(
+                        string: reference.spelling, attributes: baseAttributes
+                    )
+                    marker.addAttribute(
+                        .upstreamReference,
+                        value: reference.spelling,
+                        range: NSRange(location: 0, length: marker.length)
+                    )
+                    result.append(marker)
                 case .image(let uri, let mimeType):
                     // Drop the chip if the staged file is gone — a deleted
                     // attachment shouldn't restore as a broken placeholder or

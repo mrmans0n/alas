@@ -399,4 +399,21 @@ struct ACPUpstreamReferenceComposerTests {
         #expect(chipSpellings(target).isEmpty)
         #expect(wireText(target) == "```\nlog: see #12")
     }
+
+    @Test("restoring an appended reference inside an open code fence keeps it text")
+    func restoredQueuedReferenceInsideCodeFenceStaysText() async {
+        let store = await UpstreamReferenceFixtures.store()
+        let reference = CodeHostReference(sigil: .hash, number: 12)
+        let existing = ACPComposerDraft(segments: [.text("```\nlet x = 1")])
+        let queued = ACPComposerDraft(segments: [.upstreamReference(reference)])
+        let combined = existing.appending(queued)
+        let (textView, coordinator, window) = makeTextView(store: store)
+        defer { withExtendedLifetime((coordinator, window)) {} }
+
+        coordinator.restoreDraftForTesting(combined, into: textView)
+
+        #expect(textView.string == combined.plainText)
+        #expect(chipSpellings(textView).isEmpty)
+        #expect(wireText(textView) == combined.plainText)
+    }
 }
