@@ -151,5 +151,8 @@ extension ACPNSTextView {
             }
             context.store.ensureLoaded(reference)
         }
+        if recordUndo, !demotedRanges.isEmpty {
+            coordinator?.referenceMarkersWereDemoted(in: self)
+        }
     }
 }

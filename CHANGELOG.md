@@ -12,7 +12,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 🐛 Fixes
 
-- Normalize restored composer references in full draft context and preserve later queued draft updates.
+- Keep rejected restored references as text and sync queued drafts after normalization.
 
 ## [0.19.16] - 2026-09-28
 

@@ -590,6 +590,14 @@ struct ACPInputField: NSViewRepresentable {
             else { return }
             restore(draft, into: textView)
         }
+        /// Late host validation can demote reference markers to plain text.
+        /// Publish the visible serialization and advance its baseline while
+        /// retaining the original owner input to reject stale updates.
+        func referenceMarkersWereDemoted(in textView: NSTextView) {
+            let draft = Self.draft(from: textView.attributedString())
+            lastSyncedDraft = draft
+            onDraftChange(draft)
+        }
 
         private func restore(_ draft: ACPComposerDraft, into textView: NSTextView) {
             guard let storage = textView.textStorage else { return }

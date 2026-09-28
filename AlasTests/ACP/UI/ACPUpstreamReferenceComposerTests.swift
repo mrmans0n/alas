@@ -9,7 +9,8 @@ import Testing
 struct ACPUpstreamReferenceComposerTests {
     private func makeTextView(
         store: ACPUpstreamReferenceStore?,
-        onSubmit: @escaping ACPComposerSubmitHandler = { _, _, _, _, _ in true }
+        onSubmit: @escaping ACPComposerSubmitHandler = { _, _, _, _, _ in true },
+        onDraftChange: @escaping (ACPComposerDraft) -> Void = { _ in }
     ) -> (ACPNSTextView, ACPInputField.Coordinator, NSWindow) {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
         let window = NSWindow(contentRect: textView.frame, styleMask: [], backing: .buffered, defer: false)
@@ -19,7 +20,7 @@ struct ACPUpstreamReferenceComposerTests {
             initialDraft: .empty,
             focusRequest: 0,
             sendOnEnter: true,
-            onDraftChange: { _ in },
+            onDraftChange: onDraftChange,
             onDraftClear: {},
             onSubmit: onSubmit,
             upstreamReferences: store
@@ -345,17 +346,27 @@ struct ACPUpstreamReferenceComposerTests {
         #expect(chipSpellings(restored).isEmpty)
         #expect(wireText(restored) == "!12")
 
-        let (late, lateCoordinator, lateWindow) = makeTextView(store: nil)
-        defer { withExtendedLifetime((lateCoordinator, lateWindow)) {} }
-        lateCoordinator.restoreDraftForTesting(
-            ACPComposerDraft(segments: [.upstreamReference(reference)]),
-            into: late
+        var lateDraft: ACPComposerDraft?
+        let (late, lateCoordinator, lateWindow) = makeTextView(
+            store: nil,
+            onDraftChange: { lateDraft = $0 }
         )
+        defer { withExtendedLifetime((lateCoordinator, lateWindow)) {} }
+        let original = ACPComposerDraft(segments: [.upstreamReference(reference)])
+        lateCoordinator.syncPersistedDraft(original, into: late)
         lateCoordinator.attachUpstreamReferences(github)
         late.chipPersistedUpstreamReferencesIfNeeded()
         #expect(late.string == "!12")
         #expect(chipSpellings(late).isEmpty)
         #expect(wireText(late) == "!12")
+        #expect(lateDraft == ACPComposerDraft(segments: [.text("!12")]))
+
+        let queuedUpdate = ACPComposerDraft(segments: [.text("!12")])
+            .appending(ACPComposerDraft(segments: [.text("follow-up")]))
+        lateCoordinator.syncPersistedDraft(queuedUpdate, into: late)
+        #expect(late.string == queuedUpdate.plainText)
+        #expect(wireText(late) == queuedUpdate.plainText)
+        #expect(chipSpellings(late).isEmpty)
 
         let gitlab = await UpstreamReferenceFixtures.store(host: .gitlab)
         let (source, sourceCoordinator, sourceWindow) = makeTextView(store: gitlab)
