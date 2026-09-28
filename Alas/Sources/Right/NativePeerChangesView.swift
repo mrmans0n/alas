@@ -5,6 +5,8 @@ import SwiftUI
 /// the center; nothing here writes to the peer.
 struct NativePeerChangesView: View {
     let changes: NativePeerWorkspace.Load<NativePeerWorkspace.Changes>
+    /// The peer worktree's root, only used to build the "Copy Full Path" text.
+    let worktreePath: URL
     let onOpen: (NativePeerWorkspace.Document) -> Void
 
     @Environment(\.theme) private var theme
@@ -65,6 +67,7 @@ struct NativePeerChangesView: View {
                         onSelect: { onOpen(document(file)) },
                         onOpenFile: { onOpen(.file(path: file.path)) },
                         onCopyRelative: { Clipboard.copy(file.path) },
+                        onCopyFull: { Clipboard.copy(worktreePath.appendingPathComponent(file.path).path) },
                         readOnly: true
                     )
                 }

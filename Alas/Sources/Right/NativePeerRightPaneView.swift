@@ -85,7 +85,11 @@ struct NativePeerRightPaneView: View {
         if activeTab == .files {
             filesTab
         } else {
-            NativePeerChangesView(changes: client.workspace.changes, onOpen: { client.open($0) })
+            NativePeerChangesView(
+                changes: client.workspace.changes,
+                worktreePath: URL(fileURLWithPath: client.selectedRow?.worktree?.path ?? "/"),
+                onOpen: { client.open($0) }
+            )
         }
     }
 

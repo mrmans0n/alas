@@ -20,11 +20,18 @@ final class NativePeerSessions {
     /// Peers re-send it with every session list, so a change here is the
     /// cue that the agent touched the worktree.
     @ObservationIgnored private var workspaceSummary: RemoteWorktreeSummary?
-    /// Set when a summary change asks for the root file tree while a root
-    /// load is already in flight — `beginRootLoad()` skips the send, so
-    /// without this the reply that eventually lands would look current even
-    /// though a later edit already invalidated it. Cleared once the retry
-    /// it queues has been sent.
+    /// Whether a root `listFiles` request is currently awaiting a reply.
+    /// `workspace.beginRootLoad()` only distinguishes "never loaded" from
+    /// "loaded"; once loaded it permits sending on every call, so this is
+    /// the only thing that stops a second refresh from racing the first
+    /// past the peer's in-flight request dedup, which would silently drop it.
+    @ObservationIgnored private var fileTreeRequestInFlight = false
+    /// Set when a summary change asks for the root file tree while one is
+    /// already in flight — either blocked by `beginRootLoad()` returning
+    /// false (never loaded yet) or by `fileTreeRequestInFlight` (already
+    /// loaded, refreshing). Without this the reply that eventually lands
+    /// would look current even though a later edit already invalidated it.
+    /// Cleared once the retry it queues has been sent.
     @ObservationIgnored private var fileTreeRequestOutdated = false
 
     init(federation: FederatedSessionsProvider,
@@ -75,6 +82,7 @@ final class NativePeerSessions {
         workspace = NativePeerWorkspace()
         workspaceSummary = nil
         fileTreeRequestOutdated = false
+        fileTreeRequestInFlight = false
     }
 
     func refresh() {
@@ -137,6 +145,7 @@ final class NativePeerSessions {
         workspace = NativePeerWorkspace()
         workspaceSummary = nil
         fileTreeRequestOutdated = false
+        fileTreeRequestInFlight = false
     }
 
     func sendPrompt() {
@@ -177,7 +186,10 @@ final class NativePeerSessions {
     @discardableResult
     func loadFileTree() -> Bool {
         guard selectedSessionId != nil, workspace.beginRootLoad() else { return false }
+        guard !fileTreeRequestInFlight else { return false }
+        fileTreeRequestInFlight = true
         if !routeWhileOnline({ .listFiles(sessionId: $0, path: nil) }) {
+            fileTreeRequestInFlight = false
             workspace.markUnavailable()
             return false
         }
@@ -303,6 +315,7 @@ final class NativePeerSessions {
         case .fileTree(_, let path, _, _), .fileTreeFailed(_, let path, _, _): path == nil
         default: false
         }
+        if isRootFileTreeReply { fileTreeRequestInFlight = false }
         let handled = workspace.apply(message)
         if isRootFileTreeReply, fileTreeRequestOutdated {
             fileTreeRequestOutdated = false

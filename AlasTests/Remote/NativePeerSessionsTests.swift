@@ -372,6 +372,39 @@ struct NativePeerSessionsTests {
         #expect(listFilesCount() == afterSelect + 1)
     }
 
+    @Test func secondRootRefreshWhileFirstRefreshInFlightQueuesARetry() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        // Let the initial root load finish, so the tree is `.loaded` — the
+        // case `beginRootLoad()` always permits sending on its own.
+        links.receive(.fileTree(sessionId: "s", path: nil, nodes: [], truncated: false), from: "B")
+
+        let listFilesCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .listFiles(sessionId: "s", path: nil) }.count
+        }
+        let afterInitialLoad = listFilesCount()
+
+        // First refresh: the tree is loaded but nothing is in flight, so this sends.
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
+        #expect(listFilesCount() == afterInitialLoad + 1)
+
+        // Second refresh while the first is still outstanding: must not send
+        // a second request the peer's dedup would silently drop.
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 3)]), from: "B")
+        #expect(listFilesCount() == afterInitialLoad + 1)
+
+        // The first refresh's reply lands — the queued retry must fire now.
+        links.receive(.fileTree(sessionId: "s", path: nil, nodes: [], truncated: false), from: "B")
+        #expect(listFilesCount() == afterInitialLoad + 2)
+    }
+
     @Test func switchingSessionsStartsAFreshWorkspace() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
