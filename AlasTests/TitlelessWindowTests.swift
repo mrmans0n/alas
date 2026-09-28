@@ -39,7 +39,7 @@ struct TitlelessWindowTests {
             backing: .buffered,
             defer: false
         )
-        let configurationView = WindowConfigurationView(disablesSystemDrag: false)
+        let configurationView = WindowConfigurationView(disablesTitlebarDrag: false)
 
         #expect(window.standardWindowButton(.closeButton)?.isHidden == false)
 
@@ -79,6 +79,28 @@ struct TitlelessWindowTests {
             x: initialOrigin.x + 35,
             y: initialOrigin.y + 45
         ))
+    }
+
+    /// Only the titlebar band may be non-movable: macOS will not move a
+    /// non-movable window off a removed display or back when it returns.
+    @Test(arguments: [(distanceBelowTop: 5.0, movable: false), (distanceBelowTop: 200.0, movable: true)])
+    func mainWindowIsNonmovableOnlyUnderTitlebar(distanceBelowTop: CGFloat, movable: Bool) throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 100, y: 100, width: 800, height: 600),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        let configurationView = WindowConfigurationView(disablesTitlebarDrag: true)
+        window.contentView = configurationView
+
+        configurationView.mouseMoved(with: try #require(Self.mouseEvent(
+            type: .mouseMoved,
+            location: NSPoint(x: 400, y: window.frame.height - distanceBelowTop),
+            windowNumber: window.windowNumber
+        )))
+
+        #expect(window.isMovable == movable)
     }
 
     private static func mouseEvent(
