@@ -502,6 +502,8 @@ struct ACPToolCallGroupingTests {
         #expect(lookup.rowId(forStableId: "tc-0") == "tcg-tc-0")
         #expect(lookup.transcriptIndex(for: "tc-2") == 2)
         #expect(lookup.rowId(forStableId: "tc-3") == "tc-3")
+        #expect(lookup.localIndexSpan(forRowId: "tcg-tc-0") == 0...2)
+        #expect(lookup.localIndexSpan(forRowId: "tc-3") == 3...3)
         seeds.setExpanded(true, members: rows.map(\.stableId))
         #expect(memberIds() == rows.map(\.stableId))
     }
