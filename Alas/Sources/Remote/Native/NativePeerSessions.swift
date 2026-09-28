@@ -112,6 +112,10 @@ final class NativePeerSessions {
             pendingPrompt = nil
             pendingPromptExpectedIndex = nil
             _ = federation.route(.subscribe(sessionId: selectedSessionId), from: downstream)
+            // Preserved across the reset below: losing it would silently
+            // drop the center pane back to the transcript on every
+            // reconnect, discarding whatever the user had open.
+            let openDocument = workspace.document
             workspace = NativePeerWorkspace()
             // Whatever was in flight before the peer went away will never
             // get a reply now — without this, reloadWorkspace() below would
@@ -121,6 +125,7 @@ final class NativePeerSessions {
             fileTreeRequestInFlight = false
             fileTreeRequestOutdated = false
             reloadWorkspace()
+            if let openDocument { open(openDocument) }
         } else if selectedRow?.worktree != workspaceSummary {
             // A request already in flight for either skips its send; queue a
             // retry so the eventual (now-stale) reply doesn't stand in as

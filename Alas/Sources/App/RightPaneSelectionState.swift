@@ -27,10 +27,18 @@ struct RightPaneSelectionStateResolver {
     var allowedWorktreeIDs: Set<String>? = nil
     var checkoutFocusedWorktreeScope: CheckoutFocusedWorktreeScope? = nil
     var peerSessionId: String? = nil
+    /// Meaningful only when `peerSessionId` is set. A peer session with no
+    /// assigned worktree can't serve changes or files — the peer answers
+    /// `worktreeUnavailable` for both — so the rail hides rather than
+    /// filling with error messages, or worse, falling through to show
+    /// whatever local worktree happened to be selected before.
+    var peerSessionHasWorktree: Bool = true
 
     @MainActor
     func resolve() -> RightPaneSelectionState {
-        if let peerSessionId { return .peer(sessionId: peerSessionId) }
+        if let peerSessionId {
+            return peerSessionHasWorktree ? .peer(sessionId: peerSessionId) : .empty
+        }
         guard let id = selectedWorktreeId else { return .empty }
         guard allowedWorktreeIDs?.contains(id) ?? true else { return .empty }
         guard checkoutFocusedWorktreeScope?.worktreeID == id || checkoutFocusedWorktreeScope == nil else { return .empty }

@@ -588,6 +588,37 @@ struct NativePeerSessionsTests {
         #expect(client.draft == "continue later")
     }
 
+    @Test func openDocumentSurvivesAReconnectAndReplaysItsRequest() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        var peers = [RemoteHelloPeer(serverId: "B", name: "Mac B", state: "online")]
+        let client = NativePeerSessions(federation: federation, peers: { peers })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        client.open(.file(path: "a.swift"))
+        #expect(client.workspace.document == .file(path: "a.swift"))
+
+        links.offline("B")
+        peers = [.init(serverId: "B", name: "Mac B", state: "offline")]
+        client.refresh()
+        // Content is unreadable while offline, but the user's place is kept.
+        #expect(client.workspace.document == .file(path: "a.swift"))
+        #expect(client.workspace.documentContent == .failed(NativePeerWorkspace.offlineMessage))
+
+        peers = [.init(serverId: "B", name: "Mac B", state: "online")]
+        links.online("B", name: "Mac B")
+        let readFileCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .readFile(sessionId: "s", path: "a.swift") }.count
+        }
+        let before = readFileCount()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        // Reconnecting must not silently fall back to the transcript.
+        #expect(client.workspace.document == .file(path: "a.swift"))
+        #expect(readFileCount() == before + 1)
+    }
+
     @Test func planRejectionRequiresAndTrimsReason() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

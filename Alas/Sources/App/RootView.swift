@@ -298,7 +298,8 @@ struct RootView: View {
             projectsManager: state.projectsManager,
             allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
             checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope,
-            peerSessionId: state.nativePeerSessions?.selectedSessionId
+            peerSessionId: state.nativePeerSessions?.selectedSessionId,
+            peerSessionHasWorktree: state.nativePeerSessions?.selectedRow?.worktree != nil
         ).resolve()
     }
 
