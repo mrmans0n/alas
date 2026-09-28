@@ -171,6 +171,7 @@ struct WorktreeRowView: View {
     let isSelected: Bool
     let isMain: Bool
     let upstreamStatus: WorktreeUpstreamStatus?
+    var onPullUpstream: (() -> Void)? = nil
     let operationState: WorktreeOperationState?
     let harnessSummary: HarnessService.WorktreeHarnessSummary?
     let ggMenuModel: GGWorktreeMenuModel
@@ -471,11 +472,21 @@ struct WorktreeRowView: View {
                 .accessibilityLabel("\(commits.count) commit\(commits.count == 1 ? "" : "s") beyond \(commits.baseRef)")
             }
             ForEach(Self.upstreamStatusItems(upstreamStatus, isMain: isMain), id: \.text) { item in
-                Text(item.text)
+                let label = Text(item.text)
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(theme.color(item.text.hasPrefix("↓") ? "caution" : "accent"))
-                    .help(item.accessibilityLabel)
-                    .accessibilityLabel(item.accessibilityLabel)
+                if item.text.hasPrefix("↓"), let onPullUpstream, let upstreamStatus {
+                    let count = upstreamStatus.behind
+                    Button(action: onPullUpstream) { label }
+                        .buttonStyle(.plain)
+                        .pointingHandCursor()
+                        .help("Pull \(count) commit\(count == 1 ? "" : "s") from \(upstreamStatus.upstreamRef) (rebase)")
+                        .accessibilityLabel(item.accessibilityLabel)
+                } else {
+                    label
+                        .help(item.accessibilityLabel)
+                        .accessibilityLabel(item.accessibilityLabel)
+                }
             }
             if let additionTicks = Self.diffBarAdditionCount(added: diffStats.added, deleted: diffStats.deleted) {
                 HStack(spacing: 5) {

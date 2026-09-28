@@ -2822,6 +2822,25 @@ final class AppState {
         scheduleWorktreeSelectionFollowUp(id: id, acknowledgeSidebar: true)
     }
 
+    /// Backs the sidebar's `↓N` badge: selects the worktree so the right pane
+    /// can surface conflicts or errors, then pulls through the same guarded
+    /// path as the Commits header chip.
+    func pullWorktreeFromSidebar(id: String) {
+        guard let worktree = worktree(withId: id) else { return }
+        selectWorktreeFromSidebar(id: id)
+        let pane = rightPaneStore.state(
+            for: worktree,
+            baseBranch: config.worktrees.baseBranch,
+            comparisonMode: config.changes.comparisonMode
+        )
+        Task { @MainActor in
+            // A freshly created pane has not probed its upstream yet, and
+            // `pull()` no-ops until it knows the branch is behind.
+            if !pane.showBehindUpstreamChip { await pane.refreshSyncStatus() }
+            pane.pull()
+        }
+    }
+
     private func scheduleWorktreeSelectionFollowUp(
         id: String?, includeRemoteStatus: Bool = true, acknowledgeSidebar: Bool = false
     ) {
