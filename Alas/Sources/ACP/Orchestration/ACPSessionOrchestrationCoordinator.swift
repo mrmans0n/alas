@@ -806,10 +806,12 @@ final class ACPSessionOrchestrationCoordinator {
             try await manager.applyDelegatedModelSelection(selection, to: record.childSessionId)
         } catch {
             // Recovery may have withheld an already-queued copy of the prompt
-            // in memory; persist the queue without it so a later reopen
-            // cannot run it on the default model.
+            // in memory; persist the queue without it, and wait for that write,
+            // before the failed phase takes the child out of recovery, so a
+            // later reopen cannot run it on the default model.
             if let session = manager.liveSession(for: record.childSessionId) {
                 manager.persistQueue(for: session)
+                await manager.flushAllPersistence()
             }
             await markChildFailed(childSessionId: record.childSessionId, message: error.localizedDescription)
             return false
