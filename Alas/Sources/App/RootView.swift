@@ -284,6 +284,10 @@ struct RootView: View {
             RightPaneTransitionalView(state: state, worktree: wt, kind: .creating, collapsed: collapsed)
         case .createFailed(let wt):
             RightPaneTransitionalView(state: state, worktree: wt, kind: .createFailed, collapsed: collapsed)
+        case .peer:
+            if let client = state.nativePeerSessions {
+                NativePeerRightPaneView(state: state, client: client, collapsed: collapsed)
+            }
         }
     }
 
@@ -293,7 +297,8 @@ struct RootView: View {
             projects: state.navigationProjects,
             projectsManager: state.projectsManager,
             allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
-            checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope
+            checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope,
+            peerSessionId: state.nativePeerSessions?.selectedSessionId
         ).resolve()
     }
 

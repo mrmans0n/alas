@@ -614,6 +614,7 @@
 		467BA12331DB76C41313BF70 /* WorktreesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F68A9692F85197ED9E16262 /* WorktreesPane.swift */; };
 		4683946F3ADACBE0DC350B88 /* ACPTranscriptScrollerScrollBackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2EED77914E0B1E46C66A2B0 /* ACPTranscriptScrollerScrollBackTests.swift */; };
 		46A9AFFA9A459522F71E073E /* DiffTabRenderContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2F14E32DEBE042825BCA44A /* DiffTabRenderContext.swift */; };
+		46ADDF922E44FCC085170F56 /* NativePeerRightPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF62C1AE2F26ACA30F3E8CF1 /* NativePeerRightPaneView.swift */; };
 		46D0693DB76BC258780CE113 /* GGSplitCommitModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8257A2ECCB938BA608A972A /* GGSplitCommitModelTests.swift */; };
 		46E3CCB2AC426BD5F8CB55DC /* ACPImageBlocksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE0DA8D81AE8E0BFE54D279 /* ACPImageBlocksTests.swift */; };
 		46F842DA7B337BEE62EC7EE8 /* ACPAgentModelCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B08A919DDB6B1849D150F303 /* ACPAgentModelCatalogTests.swift */; };
@@ -940,6 +941,7 @@
 		713173965C4311772F6048E1 /* DiffReviewImageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FE4396C610C7714AFDD6B41 /* DiffReviewImageState.swift */; };
 		7146CECD7FE56140D7A7AF50 /* MergeConflictTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BAC89A6B9D5DC926AC18E13 /* MergeConflictTabView.swift */; };
 		71888A932427A837DF2BA3BA /* WorkspaceEditRemoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4A82DBB6E9490719AE31735 /* WorkspaceEditRemoteTests.swift */; };
+		71A0A3DC6BA07DFC84E0F8FF /* NativePeerChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFF14A872437EAF5999E6E97 /* NativePeerChangesView.swift */; };
 		71D65CB923752CEDA6E86FCA /* BulkConflictResolveReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7554DEF788B5448132F2B93F /* BulkConflictResolveReport.swift */; };
 		720BE594FABAE15B8BC46F76 /* SectionHeaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56D60E58F278AC97579937E /* SectionHeaderTests.swift */; };
 		7220AFECD19F8DF241B2D221 /* ProjectsManagerFileBookmarksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAEA85D97F821CFD2C4B1DF2 /* ProjectsManagerFileBookmarksTests.swift */; };
@@ -3694,6 +3696,7 @@
 		BFA871B5464E4F9D3350851B /* ReviewDraftModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewDraftModels.swift; sourceTree = "<group>"; };
 		BFD267BE3F08611B376F3CC7 /* EditorConflictBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorConflictBanner.swift; sourceTree = "<group>"; };
 		BFE0C069E5446132D39C4DE5 /* QueuedPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueuedPrompt.swift; sourceTree = "<group>"; };
+		BFF14A872437EAF5999E6E97 /* NativePeerChangesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePeerChangesView.swift; sourceTree = "<group>"; };
 		C02B44D8CC0AE48BFA9CD88E /* RemoteProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteProtocolTests.swift; sourceTree = "<group>"; };
 		C0458AFA9BCBC4484B084085 /* AppConfigWorktreeOrderingDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigWorktreeOrderingDecodeTests.swift; sourceTree = "<group>"; };
 		C0856147C5DC7F10944420ED /* RunScriptCompletionMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScriptCompletionMonitorTests.swift; sourceTree = "<group>"; };
@@ -4250,6 +4253,7 @@
 		FED0AAD3FE0E143D409A3E8B /* AppStateRemoteWorktreePathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateRemoteWorktreePathTests.swift; sourceTree = "<group>"; };
 		FEF671D3D8D5F1D59AFBD8BF /* BreadcrumbView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreadcrumbView.swift; sourceTree = "<group>"; };
 		FF1494739C8FBECE52DAAAE3 /* ACPComposerFocusPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPComposerFocusPolicy.swift; sourceTree = "<group>"; };
+		FF62C1AE2F26ACA30F3E8CF1 /* NativePeerRightPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePeerRightPaneView.swift; sourceTree = "<group>"; };
 		FF68BCA1222E7C06DA4AC595 /* BaseResolutionMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaseResolutionMapping.swift; sourceTree = "<group>"; };
 		FF71AF50DF50AA4158A96177 /* DiffContextExpansion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffContextExpansion.swift; sourceTree = "<group>"; };
 		FF741B889D6DC8B1F4EB350F /* ProcessGitDataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessGitDataTests.swift; sourceTree = "<group>"; };
@@ -5520,6 +5524,8 @@
 				5D444099DDEF20DC1870B62B /* FileTreeListView.swift */,
 				F721FB733081A583D4053DDA /* FileTypeIconView.swift */,
 				542B9A0D90AC20BBCA6073F8 /* MergeOperationState.swift */,
+				BFF14A872437EAF5999E6E97 /* NativePeerChangesView.swift */,
+				FF62C1AE2F26ACA30F3E8CF1 /* NativePeerRightPaneView.swift */,
 				4941BFBEEEAF9DE9E1752548 /* OperationCard.swift */,
 				1440CBF73B5E39F6CD4C1001 /* PaneBandStyle.swift */,
 				9B15F58AFF7BC19419935C05 /* PendingDiscard.swift */,
@@ -8657,7 +8663,9 @@
 				0BCDD4F3A4AE0B3944460D87 /* MermaidTextAttachment.swift in Sources */,
 				8599D9118656CCA27C393C55 /* MinimapView.swift in Sources */,
 				82124EF86A6964D12F3892D2 /* MonospaceFontCatalog.swift in Sources */,
+				71A0A3DC6BA07DFC84E0F8FF /* NativePeerChangesView.swift in Sources */,
 				7CACAEC0AA8ECDBD4B489C5A /* NativePeerRequestBridge.swift in Sources */,
+				46ADDF922E44FCC085170F56 /* NativePeerRightPaneView.swift in Sources */,
 				C5B8A1CF2C3F457B29DB0ED5 /* NativePeerSessionView.swift in Sources */,
 				90D08EC25B1B3E67EC635174 /* NativePeerSessions.swift in Sources */,
 				D50A2890F958DBE99F383D7A /* NativePeerSidebarSnapshot.swift in Sources */,

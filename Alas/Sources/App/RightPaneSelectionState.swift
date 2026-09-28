@@ -5,12 +5,15 @@ enum RightPaneSelectionState: Equatable {
     case active(Worktree)
     case creating(Worktree)
     case createFailed(Worktree)
+    /// A peer session is selected. `selectedWorktreeId` still holds the last
+    /// local worktree, which must not be shown in its place.
+    case peer(sessionId: String)
 
     var showsRightPane: Bool {
         switch self {
         case .empty:
             false
-        case .active, .creating, .createFailed:
+        case .active, .creating, .createFailed, .peer:
             true
         }
     }
@@ -23,9 +26,11 @@ struct RightPaneSelectionStateResolver {
     /// See `CenterSelectionStateResolver.allowedWorktreeIDs`.
     var allowedWorktreeIDs: Set<String>? = nil
     var checkoutFocusedWorktreeScope: CheckoutFocusedWorktreeScope? = nil
+    var peerSessionId: String? = nil
 
     @MainActor
     func resolve() -> RightPaneSelectionState {
+        if let peerSessionId { return .peer(sessionId: peerSessionId) }
         guard let id = selectedWorktreeId else { return .empty }
         guard allowedWorktreeIDs?.contains(id) ?? true else { return .empty }
         guard checkoutFocusedWorktreeScope?.worktreeID == id || checkoutFocusedWorktreeScope == nil else { return .empty }
