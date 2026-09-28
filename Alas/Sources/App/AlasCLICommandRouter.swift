@@ -38,7 +38,7 @@ struct AlasCLICommandRouter {
     var notifyOwnedSession: (String, SessionOwnerID, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _ in
         .error("Notifications from the terminal are not available yet.")
     }
-    var listDelegationAgents: (ACPOrchestrationSessionOrigin) async -> AlasCLIResponse = { _ in
+    var listDelegationAgents: (ACPOrchestrationSessionOrigin, String?) async -> AlasCLIResponse = { _, _ in
         .error("Session orchestration is not available yet.")
     }
     var listDelegatedSessions: (ACPOrchestrationSessionOrigin) async -> AlasCLIResponse = { _ in
@@ -114,8 +114,8 @@ struct AlasCLICommandRouter {
             }
 
             switch request.command {
-            case .agentList:
-                return await service.agentList(origin: acpOrigin)
+            case .agentList(let worktree):
+                return await service.agentList(origin: acpOrigin, worktree: worktree)
             case .sessionList:
                 return await service.sessionList(origin: acpOrigin)
             case .sessionNew(let prompt, let agentID, let worktree):

@@ -38,7 +38,7 @@ struct AlasActionService {
     var notifySession: (String?, SessionOwnerID?, Worktree, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _, _ in
         .error("Notifications from the terminal are not available yet.")
     }
-    var listDelegationAgents: (ACPOrchestrationSessionOrigin) async -> AlasCLIResponse = { _ in
+    var listDelegationAgents: (ACPOrchestrationSessionOrigin, String?) async -> AlasCLIResponse = { _, _ in
         .error("Session orchestration is not available yet.")
     }
     var listDelegatedSessions: (ACPOrchestrationSessionOrigin) async -> AlasCLIResponse = { _ in
@@ -153,8 +153,8 @@ struct AlasActionService {
         notifySession(sessionId, owner, origin, body, title, level)
     }
 
-    func agentList(origin: ACPOrchestrationSessionOrigin) async -> AlasCLIResponse {
-        await listDelegationAgents(origin)
+    func agentList(origin: ACPOrchestrationSessionOrigin, worktree: String?) async -> AlasCLIResponse {
+        await listDelegationAgents(origin, worktree)
     }
 
     func sessionList(origin: ACPOrchestrationSessionOrigin) async -> AlasCLIResponse {

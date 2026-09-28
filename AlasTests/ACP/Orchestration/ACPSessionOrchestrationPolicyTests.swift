@@ -238,6 +238,7 @@ struct ACPSessionOrchestrationPolicyTests {
             version: ACPDelegationAgentListResponse.currentVersion,
             callerAgentId: "claude",
             canDelegate: true,
+            worktreeId: "wt-1",
             agents: [ACPDelegationAgentSummary(
                 id: "gemini", displayName: "Gemini", available: false, availability: .notInstalled,
                 modelSelection: .unknown, modelCatalog: ACPDelegationModelCatalog(state: .notLoaded, models: [])
@@ -246,7 +247,7 @@ struct ACPSessionOrchestrationPolicyTests {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let json = String(decoding: try encoder.encode(response), as: UTF8.self)
-        #expect(json == #"{"agents":[{"availability":"not_installed","available":false,"display_name":"Gemini","id":"gemini","model_catalog":{"models":[],"state":"not_loaded"},"model_selection":"unknown"}],"caller_agent_id":"claude","can_delegate":true,"version":1}"#)
+        #expect(json == #"{"agents":[{"availability":"not_installed","available":false,"display_name":"Gemini","id":"gemini","model_catalog":{"models":[],"state":"not_loaded"},"model_selection":"unknown"}],"caller_agent_id":"claude","can_delegate":true,"version":1,"worktree_id":"wt-1"}"#)
     }
 
     @Test("prompt validation rejects blank text")

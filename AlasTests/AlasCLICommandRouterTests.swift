@@ -1364,7 +1364,7 @@ struct AlasCLICommandRouterTests {
         ))
 
         let discovery = await router.handle(.init(
-            version: 1, sessionId: "terminal-1", cwd: worktree.path.path, command: .agentList
+            version: 1, sessionId: "terminal-1", cwd: worktree.path.path, command: .agentList(worktree: nil)
         ))
 
         #expect(terminal == .error("session commands require an originating ACP session"))

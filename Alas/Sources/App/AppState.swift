@@ -7002,8 +7002,8 @@ final class AppState {
                     level: level
                 )
             },
-            listDelegationAgents: { origin in
-                await orchestration.discoverAgents(origin: origin)
+            listDelegationAgents: { origin, worktree in
+                await orchestration.discoverAgents(origin: origin, worktree: worktree)
             },
             listDelegatedSessions: { origin in
                 await orchestration.list(origin: origin)

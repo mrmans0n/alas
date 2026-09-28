@@ -156,9 +156,21 @@ final class ACPSessionOrchestrationCoordinator {
     }
 
     /// Read-only: never starts a session, a model request, or a focus change.
-    func discoverAgents(origin: ACPOrchestrationSessionOrigin) async -> AlasCLIResponse {
-        guard let worktree = environment.worktree(origin.worktreeId) else {
-            return .error("The current worktree is no longer available.")
+    /// `worktreeSelector` mirrors `session_new`'s existing-worktree target:
+    /// install state can differ per worktree, so a caller planning to spawn
+    /// elsewhere in the project asks about that worktree.
+    func discoverAgents(origin: ACPOrchestrationSessionOrigin, worktree worktreeSelector: String?) async -> AlasCLIResponse {
+        let worktree: Worktree
+        if let worktreeSelector {
+            guard let resolved = environment.existingWorktree(origin.projectId, worktreeSelector) else {
+                return .error("The requested worktree is not available in this project.")
+            }
+            worktree = resolved
+        } else {
+            guard let current = environment.worktree(origin.worktreeId) else {
+                return .error("The current worktree is no longer available.")
+            }
+            worktree = current
         }
         let parent: ACPDelegationRecord?
         do {
@@ -176,6 +188,7 @@ final class ACPSessionOrchestrationCoordinator {
             callerAgentId: environment.sessionLocation(origin.sessionId)?.manager
                 .liveSession(for: origin.sessionId)?.agentId,
             canDelegate: canDelegate,
+            worktreeId: worktree.id,
             agents: await environment.delegationAgents(origin, worktree)
         ))
     }

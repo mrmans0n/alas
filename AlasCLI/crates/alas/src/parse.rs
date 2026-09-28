@@ -22,7 +22,7 @@ usage: alas workspace show <checkout-uuid>
 usage: alas workspace switch <checkout-uuid>
 usage: alas workspace focus <checkout-uuid> --member <member-uuid>
 usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|wait|cancel> ...
-usage: alas agent list
+usage: alas agent list [--worktree <name-or-branch>]
 usage: alas session list
 usage: alas session new --prompt <text> [--agent <id>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
 usage: alas session send <session-id> <prompt>
@@ -366,9 +366,13 @@ fn validated_uuid(value: &str) -> Result<String, String> {
 }
 
 fn parse_agent(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas agent list [--worktree <name-or-branch>]";
     match args {
-        ["list"] => Ok(Command::AgentList),
-        _ => Err("usage: alas agent list".into()),
+        ["list"] => Ok(Command::AgentList { worktree: None }),
+        ["list", "--worktree", worktree] if !worktree.trim().is_empty() => Ok(Command::AgentList {
+            worktree: Some(worktree.to_string()),
+        }),
+        _ => Err(USAGE.into()),
     }
 }
 
@@ -1621,10 +1625,22 @@ mod tests {
     fn session_commands_parse_and_validate() {
         assert_eq!(
             parse(&s(&["agent", "list"]), Path::new("/b")).unwrap(),
-            Command::AgentList
+            Command::AgentList { worktree: None }
         );
-        assert!(parse(&s(&["agent"]), Path::new("/b")).is_err());
-        assert!(parse(&s(&["agent", "list", "--all"]), Path::new("/b")).is_err());
+        assert_eq!(
+            parse(&s(&["agent", "list", "--worktree", "feature"]), Path::new("/b")).unwrap(),
+            Command::AgentList {
+                worktree: Some("feature".into())
+            }
+        );
+        for invalid in [
+            ["agent"].as_slice(),
+            ["agent", "list", "--all"].as_slice(),
+            ["agent", "list", "--worktree"].as_slice(),
+            ["agent", "list", "--worktree", " "].as_slice(),
+        ] {
+            assert!(parse(&s(invalid), Path::new("/b")).is_err());
+        }
         assert_eq!(
             parse(&s(&["session", "list"]), Path::new("/b")).unwrap(),
             Command::SessionList

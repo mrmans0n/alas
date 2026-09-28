@@ -195,12 +195,15 @@ struct ACPDelegationAgentListResponse: Codable, Equatable, Sendable {
     let callerAgentId: String?
     /// False for a delegated child, which cannot create sessions of its own.
     let canDelegate: Bool
+    /// The worktree whose install state `available` reflects.
+    let worktreeId: String
     let agents: [ACPDelegationAgentSummary]
 
     enum CodingKeys: String, CodingKey {
         case version
         case callerAgentId = "caller_agent_id"
         case canDelegate = "can_delegate"
+        case worktreeId = "worktree_id"
         case agents
     }
 }

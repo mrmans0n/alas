@@ -6,13 +6,18 @@ choosing a child agent, call the read-only discovery command:
 
 | Surface | Command |
 |---|---|
-| MCP | `agent_list` (no arguments) |
-| CLI | `alas agent list` |
+| MCP | `agent_list`, optional `worktree` |
+| CLI | `alas agent list [--worktree <name-or-branch>]` |
 
 Both return the same JSON for the same calling session. The command needs an
 originating ACP session (`ALAS_SESSION_ID`, injected into every ACP session);
 from a plain terminal it fails with
 `session commands require an originating ACP session`.
+
+Availability depends on where the child would run. Without `worktree`, it is
+reported for the caller's worktree. When you plan `session_new --worktree X`,
+pass the same `worktree` here. A `new_worktree` child checks only that the
+agent is enabled and ACP-capable before the worktree exists.
 
 Discovery is read-only. It does not start a session, send a model request,
 or move focus. It reads current Settings, the agent install state for the
@@ -26,6 +31,7 @@ project, it may re-run the same install probe that `session_new` uses.
   "version": 1,
   "caller_agent_id": "claude",
   "can_delegate": true,
+  "worktree_id": "3f2a…",
   "agents": [
     {
       "id": "claude",
@@ -58,13 +64,14 @@ project, it may re-run the same install probe that `session_new` uses.
 | `version` | Schema version. Breaking changes bump it. |
 | `caller_agent_id` | The agent `session_new` uses when `agent` is omitted. Null if the calling session is no longer live. |
 | `can_delegate` | `false` for a delegated child. Children cannot create sessions, whatever `available` says. |
+| `worktree_id` | The worktree whose install state `available` reflects. |
 | `agents[].id` | Stable agent id. Pass it as `session_new`'s `agent` (`--agent` in the CLI). |
 | `agents[].display_name` | Human-readable name. |
 | `agents[].available` | `true` only when `availability` is `available`. Only these agents are valid `session_new` targets. |
 | `agents[].availability` | `available`, `disabled` (turned off in Settings), `not_installed` (its CLI was not detected where the caller's worktree runs; for a local project Alas re-checks the binary on every call, and an agent installed after Alas's last scan is listed once Settings rescans), or `unknown` (a remote host's install probe has not answered). |
 | `agents[].model_selection` | `supported` (the agent has advertised models), `unsupported` (a live session advertised none during this app run), or `unknown` (no live session has reported yet). |
 | `agents[].model_catalog.state` | See below. |
-| `agents[].model_catalog.models` | `{id, name}` pairs exactly as the agent advertised them. Present only for `known` and `stale`. |
+| `agents[].model_catalog.models` | `{id, name}` pairs the agent advertised, as Alas's model picker lists them (Cursor thinking variants collapse to one entry per base model). Present only for `known` and `stale`. |
 
 Model catalog states:
 

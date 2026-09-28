@@ -147,7 +147,9 @@ struct AlasCLIRequestTests {
         #expect(try AlasCLIRequest.decode(from: Data(list.utf8)).command == .sessionList)
 
         let agents = #"{"v":1,"kind":"cli","command":"agent_list","session_id":"s1","params":{}}"#
-        #expect(try AlasCLIRequest.decode(from: Data(agents.utf8)).command == .agentList)
+        #expect(try AlasCLIRequest.decode(from: Data(agents.utf8)).command == .agentList(worktree: nil))
+        let scopedAgents = #"{"v":1,"kind":"cli","command":"agent_list","session_id":"s1","params":{"worktree":"feature"}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(scopedAgents.utf8)).command == .agentList(worktree: "feature"))
 
         let current = #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task"}}"#
         #expect(try AlasCLIRequest.decode(from: Data(current.utf8)).command == .sessionNew(
@@ -191,6 +193,7 @@ struct AlasCLIRequestTests {
         for invalid in [
             #"{"v":1,"kind":"cli","command":"session_list","session_id":"s1"}"#,
             #"{"v":1,"kind":"cli","command":"agent_list","session_id":"s1"}"#,
+            #"{"v":1,"kind":"cli","command":"agent_list","session_id":"s1","params":{"worktree":"  "}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"   "}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","agent":"  "}}"#,
             #"{"v":1,"kind":"cli","command":"session_new","session_id":"s1","params":{"prompt":"Task","worktree":"  "}}"#,

@@ -181,7 +181,11 @@ pub enum Command {
     },
     /// Read-only discovery of the ACP agents (and remembered model catalogs)
     /// the calling session could delegate to.
-    AgentList,
+    AgentList {
+        /// Existing project worktree whose install state to report; the
+        /// caller's own worktree when absent.
+        worktree: Option<String>,
+    },
     SessionList,
     SessionNew {
         prompt: String,
@@ -488,9 +492,12 @@ pub fn build_request(
             r.params = Some(serde_json::Value::Object(params));
             r
         }
-        Command::AgentList => {
+        Command::AgentList { worktree } => {
             let mut r = Request::new("agent_list");
-            r.params = Some(serde_json::json!({}));
+            r.params = Some(match worktree {
+                Some(worktree) => serde_json::json!({ "worktree": worktree }),
+                None => serde_json::json!({}),
+            });
             r
         }
         Command::SessionList => {
@@ -1203,10 +1210,16 @@ mod tests {
         assert_eq!(send.command, "session_send");
         assert_eq!(send.session_id.as_deref(), Some("acp-1"));
 
-        let agents = build_request(&Command::AgentList, Some("acp-1".into()), None);
+        let agents = build_request(&Command::AgentList { worktree: None }, Some("acp-1".into()), None);
         assert_eq!(agents.command, "agent_list");
         assert_eq!(agents.session_id.as_deref(), Some("acp-1"));
         assert_eq!(agents.params, Some(serde_json::json!({})));
+        let scoped = build_request(
+            &Command::AgentList { worktree: Some("feature".into()) },
+            Some("acp-1".into()),
+            None,
+        );
+        assert_eq!(scoped.params, Some(serde_json::json!({ "worktree": "feature" })));
         assert_eq!(
             send.params,
             Some(serde_json::json!({ "session_id": "child", "prompt": "Follow up" }))

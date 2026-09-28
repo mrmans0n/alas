@@ -214,7 +214,12 @@ fn all_tool_definitions() -> Vec<Value> {
         json!({
             "name": "agent_list",
             "description": "Read-only: list the ACP agents this session could delegate to with session_new. Returns versioned JSON with each agent's id, display name, availability, model-selection support, and remembered model catalog state. Only agents with available=true are valid session_new targets. Never starts a session or model request.",
-            "inputSchema": { "type": "object", "properties": {} }
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "worktree": { "type": "string", "description": "Optional existing project worktree name or branch you plan to pass to session_new. Defaults to this session's worktree." }
+                }
+            }
         }),
         json!({
             "name": "session_list",
@@ -680,7 +685,9 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 level,
             })
         }
-        "agent_list" => Ok(Command::AgentList),
+        "agent_list" => Ok(Command::AgentList {
+            worktree: optional_non_blank_string(args, "worktree")?,
+        }),
         "session_list" => Ok(Command::SessionList),
         "session_new" => {
             let worktree = optional_non_blank_string(args, "worktree")?;
@@ -1235,7 +1242,7 @@ fn success_message(command: &Command) -> String {
         Command::ReviewResolve { reopen: true, .. } => "Comment reopened.".into(),
         Command::ReviewCommentAdd { path, .. } => format!("Filed review comment on {path}."),
         Command::ReviewFinish { .. } => "Review finished.".into(),
-        Command::AgentList => "No delegation agents found.".into(),
+        Command::AgentList { .. } => "No delegation agents found.".into(),
         Command::SessionList => "No delegated sessions found.".into(),
         Command::SessionNew { .. } => "Delegated session creation accepted.".into(),
         Command::SessionSend { .. } => "Delegated prompt queued.".into(),
@@ -2596,8 +2603,15 @@ mod tests {
     fn session_tools_validate_and_map_arguments() {
         assert_eq!(
             command_for_tool("agent_list", &json!({}), "/wt").unwrap(),
-            alas_client::Command::AgentList
+            alas_client::Command::AgentList { worktree: None }
         );
+        assert_eq!(
+            command_for_tool("agent_list", &json!({ "worktree": "feature" }), "/wt").unwrap(),
+            alas_client::Command::AgentList {
+                worktree: Some("feature".into())
+            }
+        );
+        assert!(command_for_tool("agent_list", &json!({ "worktree": 3 }), "/wt").is_err());
         assert_eq!(
             command_for_tool("session_list", &json!({}), "/wt").unwrap(),
             alas_client::Command::SessionList
