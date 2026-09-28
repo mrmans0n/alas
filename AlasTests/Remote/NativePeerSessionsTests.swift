@@ -33,6 +33,18 @@ struct NativePeerSessionsTests {
         .init(id: id, title: id, agentId: "claude", status: status, canDrive: true)
     }
 
+    private func row(_ id: String, changedFiles: Int) -> RemoteSessionSummary {
+        .init(id: id, title: id, agentId: "claude", status: "idle", canDrive: true,
+              worktree: .init(projectName: "alas", worktreeName: "wt", branch: "feat", path: "/peer/wt",
+                              metricsAvailable: true, comparisonRef: "origin/main", commitCount: 1,
+                              changedFileCount: changedFiles, addedLines: changedFiles, deletedLines: 0,
+                              conflictCount: 0))
+    }
+
+    private func listChangesCount(_ links: FakeLinks, _ id: String) -> Int {
+        links.sent(to: "B").filter { $0 == .listChanges(sessionId: id) }.count
+    }
+
     private func elicitationField(
         _ key: String,
         type: String,
@@ -266,6 +278,69 @@ struct NativePeerSessionsTests {
         #expect(client.selectedSessionId == nil)
     }
 
+    @Test func selectingAPeerSessionLoadsItsWorktreeAndRoutesReplies() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        #expect(links.sent(to: "B").contains(.listChanges(sessionId: "s")))
+        #expect(links.sent(to: "B").contains(.listFiles(sessionId: "s", path: nil)))
+
+        links.receive(.changeList(sessionId: "s", comparisonRef: "origin/main", metricsAvailable: true,
+                                  files: [], staged: [], unstaged: [], commits: [], truncated: false), from: "B")
+        #expect(client.workspace.changes == .loaded(.init(
+            comparisonRef: "origin/main", branchFiles: [], staged: [], unstaged: [], commits: [],
+            truncated: false, commitsTruncated: false)))
+
+        client.open(.diff(path: "a.swift", stage: nil))
+        #expect(links.sent(to: "B").contains(.fileDiff(sessionId: "s", path: "a.swift", stage: nil)))
+        // Clicking the selected session again returns to the transcript.
+        client.select("B:s")
+        #expect(client.workspace.document == nil)
+    }
+
+    @Test func worktreeSummaryChangeRefreshesChanges() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        let initial = listChangesCount(links, "s")
+
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        #expect(listChangesCount(links, "s") == initial)
+
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
+        #expect(listChangesCount(links, "s") == initial + 1)
+    }
+
+    @Test func switchingSessionsStartsAFreshWorkspace() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s"), row("t")]), from: "B")
+        client.select("B:s")
+        client.select("B:t")
+
+        // The earlier session's reply arrives late.
+        links.receive(.changeList(sessionId: "s", comparisonRef: nil, metricsAvailable: true,
+                                  files: [], staged: [], unstaged: [], commits: [], truncated: false), from: "B")
+        #expect(client.workspace.changes == .loading)
+    }
+
     @Test func transcriptRevisionGapResubscribesUntilANewSnapshotArrives() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
@@ -316,6 +391,7 @@ struct NativePeerSessionsTests {
         links.offline("B")
         peers = [.init(serverId: "B", name: "Mac B", state: "offline")]
         client.refresh()
+        #expect(client.workspace.changes == .failed(NativePeerWorkspace.offlineMessage))
         #expect(client.snapshot.attentionCount == 0)
         #expect(client.snapshot.groups.first?.sessions.isEmpty == true)
         #expect(client.selectedSessionId == "B:s")
@@ -368,9 +444,11 @@ struct NativePeerSessionsTests {
         peers = [.init(serverId: "B", name: "Mac B", state: "online")]
         links.online("B", name: "Mac B")
         let subscriptionsBefore = links.sent(to: "B").filter { $0 == .subscribe(sessionId: "s") }.count
+        let changesBefore = listChangesCount(links, "s")
         links.receive(.sessionList(sessions: [row("s")]), from: "B")
         let subscriptionsAfter = links.sent(to: "B").filter { $0 == .subscribe(sessionId: "s") }.count
         #expect(subscriptionsAfter == subscriptionsBefore + 1)
+        #expect(listChangesCount(links, "s") > changesBefore)
         links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
                                           messages: [], firstIndex: 0, totalCount: 0, epoch: 1, revision: 0), from: "B")
         #expect(client.transcript?.canDrive == true)

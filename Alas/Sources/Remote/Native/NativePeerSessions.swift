@@ -15,6 +15,11 @@ final class NativePeerSessions {
     private(set) var transcript: NativePeerTranscript?
     var draft = ""
     private(set) var deliveryError: String?
+    private(set) var workspace = NativePeerWorkspace()
+    /// The selected row's worktree summary when changes were last requested.
+    /// Peers re-send it with every session list, so a change here is the
+    /// cue that the agent touched the worktree.
+    @ObservationIgnored private var workspaceSummary: RemoteWorktreeSummary?
 
     init(federation: FederatedSessionsProvider,
          peers: @escaping @MainActor () -> [RemoteHelloPeer]) {
@@ -61,6 +66,8 @@ final class NativePeerSessions {
         pendingPrompt = nil
         pendingPromptExpectedIndex = nil
         deliveryError = nil
+        workspace = NativePeerWorkspace()
+        workspaceSummary = nil
     }
 
     func refresh() {
@@ -73,6 +80,7 @@ final class NativePeerSessions {
         }
         if !group.state.carriesSessions || selectedRow == nil {
             transcript?.markUnavailable()
+            workspace.markUnavailable()
         } else if transcript?.isClosed == true, let selectedSessionId, let downstream {
             // The provider discarded subscriptions when this peer went away.
             // Its new transcript may also have a lower epoch after a restart.
@@ -80,6 +88,10 @@ final class NativePeerSessions {
             pendingPrompt = nil
             pendingPromptExpectedIndex = nil
             _ = federation.route(.subscribe(sessionId: selectedSessionId), from: downstream)
+            workspace = NativePeerWorkspace()
+            reloadWorkspace()
+        } else if selectedRow?.worktree != workspaceSummary {
+            requestChanges()
         }
     }
 
@@ -89,6 +101,7 @@ final class NativePeerSessions {
                   group.state.carriesSessions && group.sessions.contains { $0.id == sessionId }
               }) else { return }
         if selectedSessionId == sessionId {
+            workspace.closeDocument()
             refresh()
             return
         }
@@ -96,6 +109,7 @@ final class NativePeerSessions {
         selectedSessionId = sessionId
         transcript = NativePeerTranscript(sessionId: sessionId)
         _ = federation.route(.subscribe(sessionId: sessionId), from: downstream)
+        reloadWorkspace()
     }
 
     func clearSelection() {
@@ -108,6 +122,8 @@ final class NativePeerSessions {
         pendingPrompt = nil
         pendingPromptExpectedIndex = nil
         deliveryError = nil
+        workspace = NativePeerWorkspace()
+        workspaceSummary = nil
     }
 
     func sendPrompt() {
@@ -130,6 +146,46 @@ final class NativePeerSessions {
 
     func stopSelected() { routeWhileOnline { .stop(sessionId: $0) } }
     func takeOver() { routeWhileOnline { .takeOver(sessionId: $0) } }
+
+    /// Re-asks the peer for the selected session's changes and file tree.
+    /// Replies land through `receive`.
+    func reloadWorkspace() {
+        requestChanges()
+        loadFileTree()
+    }
+
+    func requestChanges() {
+        guard selectedSessionId != nil else { return }
+        workspaceSummary = selectedRow?.worktree
+        workspace.beginChangesLoad()
+        if !routeWhileOnline({ .listChanges(sessionId: $0) }) { workspace.markUnavailable() }
+    }
+
+    func loadFileTree() {
+        guard selectedSessionId != nil, workspace.beginRootLoad() else { return }
+        if !routeWhileOnline({ .listFiles(sessionId: $0, path: nil) }) { workspace.markUnavailable() }
+    }
+
+    func loadFileTreeChildren(path: String) {
+        guard selectedSessionId != nil, workspace.beginChildrenLoad(path: path) else { return }
+        if !routeWhileOnline({ .listFiles(sessionId: $0, path: path) }) { workspace.markUnavailable() }
+    }
+
+    func open(_ document: NativePeerWorkspace.Document) {
+        guard selectedSessionId != nil else { return }
+        workspace.beginDocument(document)
+        let sent = switch document {
+        case .diff(let path, let stage):
+            routeWhileOnline { .fileDiff(sessionId: $0, path: path, stage: stage?.rawValue) }
+        case .file(let path):
+            routeWhileOnline { .readFile(sessionId: $0, path: path) }
+        }
+        if !sent { workspace.markUnavailable() }
+    }
+
+    func closeDocument() {
+        workspace.closeDocument()
+    }
 
     func fetchOlder() {
         guard let before = transcript?.olderPageBeforeIndex else { return }
@@ -210,10 +266,11 @@ final class NativePeerSessions {
         routeWhileOnline(makeMessage)
     }
 
-    private func routeWhileOnline(_ makeMessage: (String) -> RemoteClientMessage) {
+    @discardableResult
+    private func routeWhileOnline(_ makeMessage: (String) -> RemoteClientMessage) -> Bool {
         guard let selectedSessionId, let downstream,
-              selectedPeer?.state.carriesSessions == true else { return }
-        _ = federation.route(makeMessage(selectedSessionId), from: downstream)
+              selectedPeer?.state.carriesSessions == true else { return false }
+        return federation.route(makeMessage(selectedSessionId), from: downstream)
     }
 
     private func receive(_ message: RemoteServerMessage) {
@@ -224,6 +281,7 @@ final class NativePeerSessions {
             deliveryError = "Prompt was not delivered. Your draft was kept."
             return
         }
+        if workspace.apply(message) { return }
         let needsResubscribe = transcript?.apply(message) == true
         if needsResubscribe, let downstream,
            !federation.route(.subscribe(sessionId: selectedSessionId), from: downstream) {
