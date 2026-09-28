@@ -263,29 +263,28 @@ final class AttentionStore {
     @discardableResult
     private func rebindOwnerIndependentEvents(from legacyOwner: AttentionWorktreeIdentity, to lineageOwner: AttentionWorktreeIdentity) -> Bool {
         var changed = false
-        for (sourceKey, observation) in document.observations {
-            guard observation.isActive,
+        for index in document.events.indices {
+            let event = document.events[index]
+            guard event.owner == legacyOwner,
+                  let observation = document.observations[event.sourceKey],
+                  observation.isActive,
                   observation.eventID != nil,
-                  migratedSourceKey(sourceKey, from: legacyOwner, to: lineageOwner) == nil
+                  migratedSourceKey(event.sourceKey, from: legacyOwner, to: lineageOwner) == nil
             else { continue }
-            for index in document.events.indices {
-                let event = document.events[index]
-                guard event.owner == legacyOwner, event.sourceKey == sourceKey else { continue }
-                document.events[index] = AttentionEvent(
-                    id: event.id,
-                    sourceKey: event.sourceKey,
-                    fingerprint: event.fingerprint,
-                    owner: lineageOwner,
-                    kind: event.kind,
-                    title: event.title,
-                    body: event.body,
-                    jumpTarget: event.jumpTarget,
-                    display: event.display,
-                    occurredAt: event.occurredAt,
-                    requiresAction: event.requiresAction
-                )
-                changed = true
-            }
+            document.events[index] = AttentionEvent(
+                id: event.id,
+                sourceKey: event.sourceKey,
+                fingerprint: event.fingerprint,
+                owner: lineageOwner,
+                kind: event.kind,
+                title: event.title,
+                body: event.body,
+                jumpTarget: event.jumpTarget,
+                display: event.display,
+                occurredAt: event.occurredAt,
+                requiresAction: event.requiresAction
+            )
+            changed = true
         }
         return changed
     }
