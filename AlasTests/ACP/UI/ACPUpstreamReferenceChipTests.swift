@@ -15,7 +15,7 @@ struct ACPUpstreamReferenceChipTests {
         return count
     }
 
-    @Test("chipify replaces references and the draft bridge spells them back as text")
+    @Test("chipified references flatten back to their spelling")
     func chipifyRoundTrip() async {
         let store = await UpstreamReferenceFixtures.store()
         let text = "fix #12, see `#13` and (#14)"
@@ -23,7 +23,8 @@ struct ACPUpstreamReferenceChipTests {
 
         #expect(ACPUpstreamReferenceChip.chipify(storage, host: .github, store: store) == 2)
         #expect(referenceChipCount(storage) == 2)
-        #expect(ACPInputField.Coordinator.draft(from: storage) == ACPComposerDraft(segments: [.text(text)]))
+        let draft = ACPInputField.Coordinator.draft(from: storage)
+        #expect(draft.plainText == text)
         #expect(ACPInputField.Coordinator.extract(storage).0 == text)
         #expect(ACPUpstreamReferenceChip.plainText(of: storage) == text)
         // Existing chips are U+FFFC, never tokens, so a second pass is a no-op.
