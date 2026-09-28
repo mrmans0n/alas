@@ -31,6 +31,12 @@ struct NewWorktreeIssueState: Equatable {
     private var nameSuggestionGeneration: UInt64 = 0
     private var pendingNameSuggestion: PendingNameSuggestion?
 
+    /// True while a suggestion could still replace the name, which is when the
+    /// name field shows that one is being computed.
+    var isSuggestingName: Bool {
+        pendingNameSuggestion.map { !$0.userEditedName } ?? false
+    }
+
     mutating func attach(
         _ draft: AttachedIssueDraft,
         currentLaunch: NewWorktreeLaunchPreference

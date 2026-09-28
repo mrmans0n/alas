@@ -195,24 +195,48 @@ struct IssueWorktreeNameSuggestionTests {
         #expect(await engine.calls == (backend == .mlx ? 1 : 0))
     }
 
-    private static let source = IssueSnapshot(
-        identity: .init(providerID: .github, stableID: "github.com/acme/repo#42"),
-        canonicalURL: URL(string: "https://github.com/acme/repo/issues/42")!,
-        providerLabel: "GitHub",
-        displayReference: "#42",
-        repositoryLocator: nil,
-        title: "Fix sync",
-        body: "Offline edits conflict after reconnecting.",
-        state: .open,
-        labels: [],
-        assignees: [],
-        providerUpdatedAt: nil,
-        capturedAt: .distantPast,
-        refreshError: nil,
-        contentOrigin: .provider,
-        isEditable: false,
-        isRefreshable: true
-    )
+    /// The attach sheet lets the user edit the title before confirming; the
+    /// prewarmed name only stands for the inputs it was computed from.
+    @Test(arguments: [
+        ("Fix sync", IssueWorktreeNamePrewarm.Handover.ready("offline-conflicts")),
+        ("Fix sync on reconnect", nil),
+    ])
+    @MainActor
+    func prewarmHandsOverOnlyANameForTheSameTicketInputs(
+        attachedTitle: String, expected: IssueWorktreeNamePrewarm.Handover?
+    ) async {
+        let prewarm = IssueWorktreeNamePrewarm()
+        let first = prewarm.start(for: Self.source) { _ in "offline-conflicts" }
+        let second = prewarm.start(for: Self.source) { _ in "second-request" }
+        _ = await first.value
+
+        #expect(first == second)
+        #expect(prewarm.take(for: Self.snapshot(title: attachedTitle)) == expected)
+        #expect(prewarm.take(for: Self.source) == nil)
+    }
+
+    private static let source = snapshot(title: "Fix sync")
+
+    private static func snapshot(title: String) -> IssueSnapshot {
+        IssueSnapshot(
+            identity: .init(providerID: .github, stableID: "github.com/acme/repo#42"),
+            canonicalURL: URL(string: "https://github.com/acme/repo/issues/42")!,
+            providerLabel: "GitHub",
+            displayReference: "#42",
+            repositoryLocator: nil,
+            title: title,
+            body: "Offline edits conflict after reconnecting.",
+            state: .open,
+            labels: [],
+            assignees: [],
+            providerUpdatedAt: nil,
+            capturedAt: .distantPast,
+            refreshError: nil,
+            contentOrigin: .provider,
+            isEditable: false,
+            isRefreshable: true
+        )
+    }
 }
 
 @MainActor

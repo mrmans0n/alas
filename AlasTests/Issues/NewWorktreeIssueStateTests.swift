@@ -93,8 +93,10 @@ struct NewWorktreeIssueStateTests {
         let started = state.beginNameSuggestion()
         let request = try #require(started)
 
+        #expect(state.isSuggestingName)
         // The user types, then undoes back to the exact seed.
         state.recordUserNameEdit()
+        #expect(!state.isSuggestingName)
         let names = state.completeNameSuggestion(
             request.id,
             semanticName: "offline-conflicts",

@@ -59,6 +59,66 @@ extension View {
             )
             .clipShape(RoundedRectangle(cornerRadius: 6))
     }
+
+    /// Marks a field whose contents a local model is still computing: the
+    /// border takes the accent tint and a short beam of light travels around
+    /// it. Reduce Motion keeps only the tint.
+    func aiBeam(isActive: Bool, cornerRadius: CGFloat = 6) -> some View {
+        overlay {
+            if isActive {
+                AIBeamBorder(cornerRadius: cornerRadius)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.3), value: isActive)
+    }
+}
+
+private struct AIBeamBorder: View {
+    let cornerRadius: CGFloat
+    /// Seconds per lap, and the share of the perimeter the beam covers.
+    private static let period: TimeInterval = 2.4
+    private static let length: CGFloat = 0.16
+    @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius)
+        let accent = theme.color("accent")
+        ZStack {
+            shape.strokeBorder(accent.opacity(0.35), lineWidth: 1)
+            if !reduceMotion {
+                // Trimming the outline, rather than rotating an angular
+                // gradient, keeps the beam's speed even along a wide field.
+                TimelineView(.animation) { timeline in
+                    let start = CGFloat(
+                        timeline.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: Self.period) / Self.period
+                    )
+                    ZStack {
+                        beam(shape, from: start, color: accent)
+                            .blur(radius: 2)
+                        beam(shape, from: start, color: accent)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The trimmed stretch of outline, split in two when it wraps past the
+    /// path's origin.
+    private func beam(_ shape: RoundedRectangle, from start: CGFloat, color: Color) -> some View {
+        let outline = shape.inset(by: 0.75)
+        let end = start + Self.length
+        let style = StrokeStyle(lineWidth: 1.5, lineCap: .round)
+        return ZStack {
+            outline.trim(from: start, to: min(end, 1)).stroke(color, style: style)
+            if end > 1 {
+                outline.trim(from: 0, to: end - 1).stroke(color, style: style)
+            }
+        }
+    }
 }
 
 private struct AlasNSTextField: NSViewRepresentable {
