@@ -250,34 +250,32 @@ struct ACPSessionOrchestrationPolicyTests {
         #expect(json == #"{"agents":[{"availability":"not_installed","available":false,"display_name":"Gemini","id":"gemini","model_catalog":{"models":[],"state":"not_loaded"},"model_selection":"unknown"}],"caller_agent_id":"claude","can_delegate":true,"version":1,"worktree_id":"wt-1"}"#)
     }
 
-    @Test("spawn-time model check rejects only what this launch confirmed", arguments: [
-        // Known model, advertised this launch.
-        ("codex", "gpt-5.2", nil, ACPAgentModelCatalog.LaunchReport.advertisedModels, ["gpt-5.2"], nil),
-        // Unknown id against a list confirmed this launch.
-        ("codex", "gpt-9", nil, .advertisedModels, ["gpt-5.2"],
+    @Test("spawn-time model check rejects only what this launch confirmed on the child's host", arguments: [
+        // Known model, advertised on that host this launch.
+        ("codex", "gpt-5.2", nil, ["gpt-5.2"], nil),
+        // Unknown id against a list confirmed there.
+        ("codex", "gpt-9", nil, ["gpt-5.2"],
          ACPDelegatedModelSelectionError.unknownModel(agentId: "codex", model: "gpt-9", available: ["gpt-5.2"])),
-        // A live session advertised no models.
-        ("codex", "gpt-5.2", nil, .advertisedNone, [], .modelSelectionUnsupported(agentId: "codex")),
-        // A stale list is a hint; the live session decides.
-        ("codex", "gpt-9", nil, .notObserved, ["gpt-5.2"], nil),
+        // A live session there advertised no models.
+        ("codex", "gpt-5.2", nil, [], .modelSelectionUnsupported(agentId: "codex")),
+        // Nothing confirmed there (stale or another host's list): the live session decides.
+        ("codex", "gpt-9", nil, nil, nil),
         // pi's thinking is a mode, not a config option.
-        ("pi", nil, "high", .notObserved, [], .reasoningUnsupported(agentId: "pi")),
-        ("codex", nil, "high", .notObserved, [], nil),
-    ] as [(String, String?, String?, ACPAgentModelCatalog.LaunchReport, [String], ACPDelegatedModelSelectionError?)])
+        ("pi", nil, "high", nil, .reasoningUnsupported(agentId: "pi")),
+        ("codex", nil, "high", nil, nil),
+    ] as [(String, String?, String?, [String]?, ACPDelegatedModelSelectionError?)])
     func preflightModelSelection(
         agentId: String,
         model: String?,
         reasoning: String?,
-        report: ACPAgentModelCatalog.LaunchReport,
-        catalog: [String],
+        launchModels: [String]?,
         expected: ACPDelegatedModelSelectionError?
     ) throws {
         let selection = try #require(ACPDelegatedModelSelection(model: model, reasoning: reasoning))
         #expect(ACPSessionOrchestrationPolicy.preflightModelSelection(
             selection,
             agentId: agentId,
-            catalogModels: catalog.map { .init(id: $0, name: $0) },
-            report: report
+            launchModels: launchModels?.map { .init(id: $0, name: $0) }
         ) == expected)
     }
 

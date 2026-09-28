@@ -170,7 +170,8 @@ final class ACPSessionManager: ObservableObject {
     /// Invoked once a session has loaded and the agent has named its models,
     /// with the normalized model chip items. Feeds `ACPAgentModelCatalog` so
     /// a session configured before it exists can pick one.
-    private let onModelsObserved: (@MainActor (_ agentId: String, _ models: [ChipSpec.Item]) -> Void)?
+    /// `host` is the SSH host the session runs on, nil for this Mac.
+    private let onModelsObserved: (@MainActor (_ agentId: String, _ host: String?, _ models: [ChipSpec.Item]) -> Void)?
     /// Builds the gg-mcp server entry for a worktree path, or nil when gg
     /// integration is disabled/unavailable. Fetched per attach, mirroring
     /// `builtInMCPProvider`.
@@ -1414,7 +1415,7 @@ final class ACPSessionManager: ObservableObject {
          isBuiltInMCPRegistered: (@MainActor (String) -> Bool)? = nil,
          clearMCPRegistration: (@MainActor (String) -> Void)? = nil,
          onSessionEnded: (@MainActor (ACPSession.ID) -> Void)? = nil,
-         onModelsObserved: (@MainActor (_ agentId: String, _ models: [ChipSpec.Item]) -> Void)? = nil,
+         onModelsObserved: (@MainActor (_ agentId: String, _ host: String?, _ models: [ChipSpec.Item]) -> Void)? = nil,
          ggMCPProvider: GGMCPProvider? = nil,
          ggPreambleProvider: GGPreambleProvider? = nil,
          issuePreambleProvider: IssuePreambleProvider? = nil)
@@ -5479,7 +5480,7 @@ extension ACPSessionManager {
                                               guard let self,
                                                     self.connectionOwnerIDs[sessionId] == runnerConnectionOwnerID
                                               else { return }
-                                              self.onModelsObserved?(agentId, models)
+                                              self.onModelsObserved?(agentId, self.effectiveRemoteHost(), models)
                                           },
                                           onPersistedConfigOptionValues: { [weak self] values in
                                               guard let self,
@@ -6088,7 +6089,7 @@ extension ACPSessionManager {
             session.contextRestoreWarning = restoreWarning
             // An empty list tells the catalog this agent advertised no
             // models on a live connection; it never erases a remembered list.
-            onModelsObserved?(session.agentId, session.chipState.models?.options ?? [])
+            onModelsObserved?(session.agentId, effectiveRemoteHost(), session.chipState.models?.options ?? [])
             guard await persistSessionRemoteId(session, attempt: attempt) else {
                 guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                     await connection.shutdown()
@@ -6997,6 +6998,18 @@ extension ACPSessionManager {
         persist(session)
     }
 
+    /// Takes a delegated prompt out of a hydrated session's queue before
+    /// attach can dispatch it. Startup recovery uses this for a child that
+    /// crashed after queueing its initial prompt but before it was marked
+    /// ready: the prompt must wait until the model selection is re-verified.
+    /// The caller re-queues it, or persists the queue without it on failure.
+    func withholdQueuedDelegatedPrompt(messageId: String, in id: ACPSession.ID) {
+        guard let session = sessions[id], runners[id] == nil,
+              let item = session.queue.first(where: { $0.delegatedSource?.messageId == messageId })
+        else { return }
+        _ = session.removeFromQueue(id: item.id)
+    }
+
     private func applyDelegatedSelectionStep(
         _ step: ACPDelegatedSelectionStep,
         setting: String,
@@ -7016,7 +7029,9 @@ extension ACPSessionManager {
                     reason: error.localizedDescription
                 )
             }
-            guard sessions[session.id] === session else {
+            // A reconnect or lease turnover while awaiting means the
+            // replacement connection never received this selection.
+            guard sessions[session.id] === session, runners[session.id] === runner else {
                 throw ACPDelegatedModelSelectionError.sessionUnavailable
             }
             session.currentModel = model
@@ -7032,7 +7047,7 @@ extension ACPSessionManager {
                     reason: error.localizedDescription
                 )
             }
-            guard sessions[session.id] === session else {
+            guard sessions[session.id] === session, runners[session.id] === runner else {
                 throw ACPDelegatedModelSelectionError.sessionUnavailable
             }
             if updated.isEmpty {

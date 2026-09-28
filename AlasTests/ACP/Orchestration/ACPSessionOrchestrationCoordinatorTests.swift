@@ -504,7 +504,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
     private func makeModelSelectionFixture(
         client: ACPMockClient,
-        catalog: (models: [ACPAgentModelCatalog.Model], report: ACPAgentModelCatalog.LaunchReport) = ([], .notObserved)
+        launchModels: [ACPAgentModelCatalog.Model]? = nil
     ) throws -> (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("acp-model-selection-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -526,7 +526,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             persistence: persistence, instanceId: "instance", now: { 100 }, makeID: { "child" },
             worktree: { $0 == worktree.id ? worktree : nil }, existingWorktree: { _, _ in nil },
             configuredAgents: { [claude] }, availableAgents: { _, _ in [claude] },
-            modelCatalog: { _ in catalog },
+            launchModels: { _, _ in launchModels },
             sessionLocation: { sessionId in
                 sessionId == "parent"
                     ? .init(origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"), manager: manager)
@@ -612,7 +612,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
     func unknownModelIsRejectedBeforeCreation() async throws {
         let fixture = try makeModelSelectionFixture(
             client: ACPMockClient(),
-            catalog: ([.init(id: "opus", name: "Opus")], .advertisedModels)
+            launchModels: [.init(id: "opus", name: "Opus")]
         )
         defer { fixture.manager.shutdownBackgroundTasks() }
 

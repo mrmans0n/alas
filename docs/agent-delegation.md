@@ -103,11 +103,14 @@ the child starts on the agent's default model and reasoning.
 
 Alas checks a selection twice:
 
-1. **At `session_new`.** The request fails, and no child is created, when the
-   agent's catalog is `known` and does not list the model, when the catalog is
-   `unsupported`, or when `reasoning` is requested for an agent whose thinking
-   control is not a config option (pi, whose thinking is a mode). A `stale` or
-   `not_loaded` catalog does not reject anything here; the live check decides.
+1. **At `session_new`.** The request fails, and no child is created, when a
+   live session of the agent on the same host (this Mac, or the project's SSH
+   host) advertised a model list during this app run and the model is not on
+   it, when such a session advertised no models, or when `reasoning` is
+   requested for an agent whose thinking control is not a config option (pi,
+   whose thinking is a mode). Anything not confirmed on that host, such as a
+   `stale` or `not_loaded` catalog, does not reject here; the live check
+   decides.
 2. **Before the first prompt.** Alas starts the child's session, checks the
    selection against the models and options the agent advertised for that
    session, and sends `session/set_model` or `session/set_config_option`. The

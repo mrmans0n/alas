@@ -43,9 +43,10 @@ final class ACPSessionOrchestrationCoordinator {
         /// Read-only discovery rows for the caller's worktree, computed on
         /// every request from current Settings and install state.
         let delegationAgents: (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPDelegationAgentSummary]
-        /// The models an agent advertised and whether this launch confirmed
-        /// them; the spawn-time model check reads it.
-        let modelCatalog: (String) -> (models: [ACPAgentModelCatalog.Model], report: ACPAgentModelCatalog.LaunchReport)
+        /// The models an agent advertised during this launch on the host the
+        /// worktree runs on, nil when none reported there; the spawn-time
+        /// model check reads it.
+        let launchModels: (String, Worktree) -> [ACPAgentModelCatalog.Model]?
         let sessionLocation: (String) -> SessionLocation?
         let manager: (Worktree) -> ACPSessionManager?
         let newWorktreeDestination: (String, String) -> URL?
@@ -68,7 +69,7 @@ final class ACPSessionOrchestrationCoordinator {
             configuredAgents: @escaping () -> [ACPOrchestrationAgent],
             availableAgents: @escaping (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPOrchestrationAgent],
             delegationAgents: @escaping (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPDelegationAgentSummary] = { _, _ in [] },
-            modelCatalog: @escaping (String) -> (models: [ACPAgentModelCatalog.Model], report: ACPAgentModelCatalog.LaunchReport) = { _ in ([], .notObserved) },
+            launchModels: @escaping (String, Worktree) -> [ACPAgentModelCatalog.Model]? = { _, _ in nil },
             sessionLocation: @escaping (String) -> SessionLocation?,
             manager: @escaping (Worktree) -> ACPSessionManager?,
             newWorktreeDestination: @escaping (String, String) -> URL?,
@@ -90,7 +91,7 @@ final class ACPSessionOrchestrationCoordinator {
             self.configuredAgents = configuredAgents
             self.availableAgents = availableAgents
             self.delegationAgents = delegationAgents
-            self.modelCatalog = modelCatalog
+            self.launchModels = launchModels
             self.sessionLocation = sessionLocation
             self.manager = manager
             self.newWorktreeDestination = newWorktreeDestination
@@ -246,7 +247,7 @@ final class ACPSessionOrchestrationCoordinator {
             } catch {
                 return .error("Could not validate delegated session request.")
             }
-            if let rejection = modelSelectionRejection(request.modelSelection, agentID: agentID) {
+            if let rejection = modelSelectionRejection(request.modelSelection, agentID: agentID, worktree: worktree) {
                 return rejection
             }
             return await createChild(
@@ -277,7 +278,7 @@ final class ACPSessionOrchestrationCoordinator {
             } catch {
                 return .error("Could not validate delegated session request.")
             }
-            if let rejection = modelSelectionRejection(request.modelSelection, agentID: agentID) {
+            if let rejection = modelSelectionRejection(request.modelSelection, agentID: agentID, worktree: worktree) {
                 return rejection
             }
             return await createChild(
@@ -313,7 +314,11 @@ final class ACPSessionOrchestrationCoordinator {
             } catch {
                 return .error("Could not validate delegated session request.")
             }
-            if let rejection = modelSelectionRejection(request.modelSelection, agentID: agentID) {
+            // The new worktree belongs to the same project, so it runs on the
+            // caller's host.
+            if let rejection = modelSelectionRejection(
+                request.modelSelection, agentID: agentID, worktree: environment.worktree(origin.worktreeId)
+            ) {
                 return rejection
             }
             let optimisticID = "pending-\(childID)"
@@ -360,12 +365,14 @@ final class ACPSessionOrchestrationCoordinator {
 
     private func modelSelectionRejection(
         _ selection: ACPDelegatedModelSelection?,
-        agentID: String
+        agentID: String,
+        worktree: Worktree?
     ) -> AlasCLIResponse? {
         guard let selection else { return nil }
-        let catalog = environment.modelCatalog(agentID)
         guard let error = ACPSessionOrchestrationPolicy.preflightModelSelection(
-            selection, agentId: agentID, catalogModels: catalog.models, report: catalog.report
+            selection,
+            agentId: agentID,
+            launchModels: worktree.flatMap { environment.launchModels(agentID, $0) }
         ) else { return nil }
         return .error(error.localizedDescription)
     }
@@ -758,7 +765,7 @@ final class ACPSessionOrchestrationCoordinator {
         )
     }
 
-    private func initialPromptSource(for record: ACPDelegationRecord) -> ACPDelegatedPromptSource {
+    func initialPromptSource(for record: ACPDelegationRecord) -> ACPDelegatedPromptSource {
         ACPDelegatedPromptSource(sessionId: record.parentSessionId, messageId: "initial-\(record.childSessionId)")
     }
 
@@ -776,6 +783,12 @@ final class ACPSessionOrchestrationCoordinator {
         do {
             try await manager.applyDelegatedModelSelection(selection, to: record.childSessionId)
         } catch {
+            // Recovery may have withheld an already-queued copy of the prompt
+            // in memory; persist the queue without it so a later reopen
+            // cannot run it on the default model.
+            if let session = manager.liveSession(for: record.childSessionId) {
+                manager.persistQueue(for: session)
+            }
             await markChildFailed(childSessionId: record.childSessionId, message: error.localizedDescription)
             return false
         }

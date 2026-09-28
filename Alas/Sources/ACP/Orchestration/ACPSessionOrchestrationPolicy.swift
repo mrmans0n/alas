@@ -224,25 +224,22 @@ enum ACPSessionOrchestrationPolicy {
     }
 
     /// Spawn-time check, before any child record exists. Rejects only what
-    /// this run has confirmed: a model id missing from a list the agent
-    /// advertised during this launch, an agent that advertised no models, or
-    /// reasoning for an agent whose thinking control is not a config option.
-    /// A stale or missing catalog defers to the live session, which always
-    /// validates again.
+    /// this launch confirmed on the child's execution host (`launchModels`):
+    /// a model id missing from the list the agent advertised there, an agent
+    /// that advertised no models there, or reasoning for an agent whose
+    /// thinking control is not a config option. Anything unconfirmed (nil)
+    /// defers to the live session, which always validates again.
     static func preflightModelSelection(
         _ selection: ACPDelegatedModelSelection,
         agentId: String,
-        catalogModels: [ACPAgentModelCatalog.Model],
-        report: ACPAgentModelCatalog.LaunchReport
+        launchModels: [ACPAgentModelCatalog.Model]?
     ) -> ACPDelegatedModelSelectionError? {
-        if let model = selection.model {
-            switch report {
-            case .advertisedNone where catalogModels.isEmpty:
+        if let model = selection.model, let launchModels {
+            if launchModels.isEmpty {
                 return .modelSelectionUnsupported(agentId: agentId)
-            case .advertisedModels where !catalogModels.contains(where: { $0.id == model }):
-                return .unknownModel(agentId: agentId, model: model, available: catalogModels.map(\.id))
-            default:
-                break
+            }
+            if !launchModels.contains(where: { $0.id == model }) {
+                return .unknownModel(agentId: agentId, model: model, available: launchModels.map(\.id))
             }
         }
         if selection.reasoning != nil {

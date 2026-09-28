@@ -1815,7 +1815,13 @@ final class AppState {
             // reapplied on the attached session, below.
             let promptAwaitingSelection = record.modelSelection == nil ? nil : record.pendingInitialPrompt
             if promptAwaitingSelection != nil {
-                // Queued once the selection is acknowledged.
+                // A crash after the prompt was queued but before the child was
+                // marked ready leaves it in the hydrated queue, where attach
+                // would dispatch it before the selection is re-verified.
+                manager.withholdQueuedDelegatedPrompt(
+                    messageId: acpOrchestration.initialPromptSource(for: record).messageId,
+                    in: record.childSessionId
+                )
             } else if let prompt = record.pendingInitialPrompt {
                 let accepted = await manager.enqueueDelegatedPrompt(
                     text: prompt,
@@ -6831,9 +6837,13 @@ final class AppState {
                         catalog: { (catalog.models(for: $0), catalog.launchReport(for: $0)) }
                     )
                 },
-                modelCatalog: { [weak self] agentID in
-                    guard let catalog = self?.acpModelCatalog else { return ([], .notObserved) }
-                    return (catalog.models(for: agentID), catalog.launchReport(for: agentID))
+                launchModels: { [weak self] agentID, worktree in
+                    guard let self else { return nil }
+                    let host: String? = switch self.agentExecutionTarget(for: worktree) {
+                    case .local: nil
+                    case .ssh(let host): host
+                    }
+                    return self.acpModelCatalog.launchModels(for: agentID, host: host)
                 },
                 sessionLocation: { [weak self] sessionId in
                     guard let self,
@@ -12422,10 +12432,11 @@ final class AppState {
             onSessionEnded: { [weak self] sessionId in
                 self?.mcpHTTPSupervisor.end(sessionId: sessionId)
             },
-            onModelsObserved: { [weak self] agentId, models in
+            onModelsObserved: { [weak self] agentId, host, models in
                 self?.acpModelCatalog.record(
                     agentID: agentId,
-                    models: models.map { ACPAgentModelCatalog.Model(id: $0.id, name: $0.name) }
+                    models: models.map { ACPAgentModelCatalog.Model(id: $0.id, name: $0.name) },
+                    host: host
                 )
             },
             ggMCPProvider: { [weak self] worktreePath in
@@ -12787,10 +12798,11 @@ final class AppState {
                 guard let self else { return nil }
                 return self.workspaceFrozenMCPAttachments(for: self.currentWorkspaceCheckoutSnapshot(checkout))
             },
-            onModelsObserved: { [weak self] agentId, models in
+            onModelsObserved: { [weak self] agentId, host, models in
                 self?.acpModelCatalog.record(
                     agentID: agentId,
-                    models: models.map { ACPAgentModelCatalog.Model(id: $0.id, name: $0.name) }
+                    models: models.map { ACPAgentModelCatalog.Model(id: $0.id, name: $0.name) },
+                    host: host
                 )
             }
         )
