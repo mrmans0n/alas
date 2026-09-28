@@ -222,9 +222,9 @@ Question per adapter Alas launches (`ACPLaunchCatalog.swift`): does it have nati
 | Adapter | Native subagents | Disable switch | Hidden or denied? | Emits RFD 1992 updates | Confidence |
 |---|---|---|---|---|---|
 | `claude-agent-acp` | Yes (`Agent`/`Task`) | (i) `session/new` `_meta.claudeCode.options.disallowedTools: ["Agent","Task"]`, merged into SDK `disallowedTools`; (ii) `.claude/settings.json` `permissions.deny: ["Agent"]` (adapter loads user/project/local settings); (iii) `_meta.claudeCode.options.tools` custom list. No CLI flag or env var. | **Hidden**: a bare tool name in deny/`disallowedTools` removes the tool from context; scoped rules like `Agent(Explore)` only block calls | Yes, gated on client `subagents: {}` (Alas sends it) | High |
-| `codex-acp` | Yes (`spawn_agent`, `send_input`, `wait_agent`, …; on by default) | `agents.enabled = false` (or `features.multi_agent = false`) in `config.toml`. Adapter forwards overrides only via env `CODEX_CONFIG` JSON, e.g. `{"agents":{"enabled":false}}`, spread into `thread/start` | Docs say "disable multi-agent tools"; tool omission not confirmed in `codex-rs` source | Yes, gated on `subagents: {}`; otherwise flattened to `tool_call` | High for switch and updates; low for hidden-vs-denied; medium for `CODEX_CONFIG` merge semantics |
+| `codex-acp` | Yes (`spawn_agent`, `send_input`, `wait_agent`, …; on by default) | `agents.enabled = false` (or `features.multi_agent = false`) in `config.toml`. Adapter forwards overrides only via env `CODEX_CONFIG` JSON, e.g. `{"agents":{"enabled":false}}`, spread into `thread/start` | Docs say "disable multi-agent tools". **The #1588 live probe confirmed omission** of the `multi_agent_v1`/`collaboration` container (Codex 0.157.1) | Yes, gated on `subagents: {}`; otherwise flattened to `tool_call` | High for switch and updates; low for hidden-vs-denied; medium for `CODEX_CONFIG` merge semantics |
 | `gemini --acp` | Yes (`invoke_agent` wrapper over `codebase_investigator`, `generalist`, …) | `settings.json` `experimental.enableAgents: false` (master), per-agent `agents.overrides.<name>.enabled`, or `tools.exclude: ["invoke_agent"]` | **Hidden**: excluded tools are dropped from function declarations | **No**: ACP code emits only message/thought/tool_call updates | High |
-| `opencode acp` | Yes (`task` tool over `general`/`explore`/`scout` and custom subagent-mode agents) | `permission: {"task": "deny"}` (or per-agent); `tools: {"task": false}` is deprecated sugar for the same. Injectable without touching the project via env `OPENCODE_CONFIG_CONTENT='{"permission":{"task":"deny"}}'`, which loads after `opencode.json` | **Denied, not hidden**: the tool registry does not filter by permission; execution throws a denied error. Only the subagent list inside the `task` description is emptied | Not the RFD spelling: emits `opencode/session/child_update`, opted in via `_meta["opencode/child-session-updates"]`; Alas already re-prefixes it into a synthetic `subagent_spawned` (`ACPOpenCodeChildUpdate.swift`) | High on switch and deny semantics, medium on updates |
+| `opencode acp` | Yes (`task` tool over `general`/`explore`/`scout` and custom subagent-mode agents) | `permission: {"task": "deny"}` (or per-agent); `tools: {"task": false}` is deprecated sugar for the same. Injectable without touching the project via env `OPENCODE_CONFIG_CONTENT='{"permission":{"task":"deny"}}'`, which loads after `opencode.json` | ~~Denied, not hidden~~ **Superseded by the #1588 live probe: hidden.** On 1.18.33 an effective blanket deny omitted `task` from the captured model request, and a forced call was rejected as an unavailable tool. An agent-specific `permission.task` allow restores it. (Original static reading: the tool registry does not filter by permission; execution throws a denied error.) | Not the RFD spelling: emits `opencode/session/child_update`, opted in via `_meta["opencode/child-session-updates"]`; Alas already re-prefixes it into a synthetic `subagent_spawned` (`ACPOpenCodeChildUpdate.swift`) | High on switch and deny semantics, medium on updates |
 | `agent acp` (Cursor) | Yes (`Task` tool over Explore/Bash/Browser and `.cursor/agents/*.md`) | **No first-class toggle.** Permissions config accepts only Shell/Read/Write/WebFetch/Mcp. Options are a `subagentStart` or `preToolUse` hook in `~/.cursor/hooks.json` returning deny, or a rule "never invoke subagents" (reported unreliable) | Runtime-deny only; nothing documented hides `Task` | No RFD updates; emits a custom `cursor/task` notification alongside `tool_call` | High on a/b, medium on c/d (closed source) |
 | `copilot --acp` | Yes (`task`, `list_agents`, `read_agent`, `write_agent`; built-in explore/task/code-review/general-purpose; `.github/agents/*.md`) | `--excluded-tools=task,list_agents,read_agent,write_agent` (or `--available-tools` allowlist). Changelog 1.0.64 confirms the flags apply in ACP mode. `--deny-tool` is the wrong lever | **Hidden**: docs say excluded tools "will not be available to the model" | Unknown, leaning no. Changelog 1.0.81 mentions ACP clients receiving subagent IDs, but the ACP reference documents no RFD update names and the source is closed | High on a–c, low on d |
 | `pi-acp` | **No** in core; subagents are an example extension or community packages | `--no-extensions`, `--exclude-tools`, `--tools`, or settings `defaultTools`/`extensions`. Caveat: `pi-acp` hardcodes `pi --mode rpc --no-themes` with no arg passthrough; only `PI_ACP_PI_COMMAND` swaps the binary, so a wrapper script is needed | Hidden (tool registration) | No | High |
@@ -233,7 +233,7 @@ Question per adapter Alas launches (`ACPLaunchCatalog.swift`): does it have nati
 **Consequences for Phase 3 (the toggle):**
 
 - Grouped by how Alas could flip the switch without touching user files:
-  - **Env var, one line in `ACPLaunchSpec.extraEnv`:** Codex (`CODEX_CONFIG`), OpenCode (`OPENCODE_CONFIG_CONTENT`; deny-only, tool stays visible).
+  - **Env var, one line in `ACPLaunchSpec.extraEnv`:** Codex (`CODEX_CONFIG`), OpenCode (`OPENCODE_CONFIG_CONTENT`; the #1588 live probe showed an effective deny hides `task`, but agent-specific allows restore it).
   - **Launch arguments:** Copilot (`--excluded-tools`, hidden), OMP (`--tools` allowlist, hidden; needs the full built-in list enumerated).
   - **ACP `session/new` `_meta`:** Claude (`claudeCode.options.disallowedTools`, hidden). Alas sends no `_meta` today; small addition.
   - **User settings file on disk:** Gemini (`tools.exclude`). Invasive for Alas to write; document as a manual step.
@@ -243,3 +243,110 @@ Question per adapter Alas launches (`ACPLaunchCatalog.swift`): does it have nati
 - Model the switch as a per-harness capability on the launch spec (`nativeSubagentSwitch: .sessionMeta | .env | .arguments | .userSettings | .none`, plus whether it hides or only denies) rather than a global boolean, so the settings UI can say honestly what will happen on each harness.
 
 **Sources:** claude-agent-acp `src/acp-agent.ts`, `src/native-subagents.ts`, `src/acp-subagents.ts`, README "Subagent sessions"; Claude Code permissions and CLI reference docs; codex-acp README "Runtime options", `src/index.ts`, `src/CodexAcpClient.ts`, `docs/subagent-sessions.md`; Codex config reference and subagents guide on learn.chatgpt.com; gemini-cli `docs/core/subagents.md`, `packages/core/src/tools/tool-registry.ts`, `packages/core/src/agents/registry.ts`, `packages/cli/src/acp/`; RFD 1992 (agent-client-protocol PR 1992); OpenCode docs (agents, permissions, config) and `packages/opencode/src/{tool/registry.ts,session/tools.ts,permission/index.ts,config/config.ts}` on `dev`; Cursor docs (subagents, CLI permissions reference, hooks, CLI ACP) and forum threads 153085/153654/157433; Copilot CLI command reference, custom-agents guide, SDK custom-agents page, ACP server reference, and `github/copilot-cli` changelog (1.0.64, 1.0.81); `badlogic/pi-mono` CLI docs and subagent example, `svkozak/pi-acp` `src/pi-rpc/process.ts`; omp.sh docs (tools, CLI, subagents) and `can1357/oh-my-pi` `packages/coding-agent/src/modes/acp/`.
+## Issue #1588: live adapter probe
+
+Live check of the Appendix C claims against the adapters installed on the probe host, for [#1588](https://github.com/mrmans0n/alas/issues/1588) under umbrella [#1596](https://github.com/mrmans0n/alas/issues/1596). The Claude, Codex, OMP, OpenCode, and Cursor results come from an earlier probe whose notes were lost with their branch; they are reproduced here from the comments it left on #1588–#1593. The Pi probe and the version inventory were run on 2026-09-28. No run used a paid provider, installed a package, changed global settings, or wrote to the user's agent directories. Every run used temporary `HOME`/`XDG_*`/agent-config directories and a disposable loopback HTTP server posing as the model provider.
+
+### Evidence types
+
+- **Captured request:** the tool list inside an actual outbound model request, recorded by the loopback server. This is what the model would see.
+- **Runtime rejection:** a fake provider deliberately emitted a call to the suppressed tool, and the adapter's response was recorded.
+- **Model self-report:** a harmless prompt ("reply `NO_NATIVE_TOOL` if you have no subagent tool") answered by the model. This was the first pass for Claude, Codex, and OMP. It is superseded wherever a captured request exists and is never treated as proof on its own.
+- **Static:** reading the installed adapter's shipped source or `--help`.
+
+### Installed versions (2026-09-28)
+
+| Agent in Alas | ACP adapter | Runtime Alas launches by default | Runtime used in the probe |
+|---|---|---|---|
+| Claude | `@agentclientprotocol/claude-agent-acp` 0.81.2 | Bundled `@anthropic-ai/claude-agent-sdk` 0.3.280 native binary, Claude Code 2.1.280. The adapter uses `CLAUDE_CODE_EXECUTABLE` when set; Alas does not set it | Claude Code 2.1.283 (the `claude` on `PATH`) |
+| Codex | `@agentclientprotocol/codex-acp` 1.13.1 | Bundled `@openai/codex` 0.156.1 unless `CODEX_PATH` is set; Alas does not set it | `codex-cli` 0.157.1 via `CODEX_PATH` |
+| OMP | `omp acp` (built in) | `@oh-my-pi/pi-coding-agent` **18.2.11** is on `PATH` today | 18.3.1 at probe time. The installed build has since changed to 18.2.11, so the OMP rows below are not re-verified on today's build |
+| OpenCode | `opencode acp` (built in) | `opencode` 1.18.33 | 1.18.33 |
+| Pi | `pi-acp` 0.0.34 | `@earendil-works/pi-coding-agent` 0.85.1 (`pi`) | Same |
+| Cursor | `agent acp` | Disabled in Alas; no `agent`/`cursor-agent` binary on `PATH` today | Earlier authenticated run; version not recorded |
+| Copilot | `copilot --acp` | Not installed | — |
+| Gemini | `gemini --acp` | Not installed (also disabled in Alas) | — |
+
+Both version gaps matter. Claude and Codex were probed on newer runtimes than the adapters bundle and than Alas launches by default. The implementation issues must re-check the default-bundled runtime, or pin the runtime they rely on.
+
+### Matrix
+
+| Adapter / runtime | Control used | Scope | Config precedence | Resume behavior | Evidence |
+|---|---|---|---|---|---|
+| Claude ACP 0.81.2 / Claude 2.1.283 | `session/new` `_meta.claudeCode.options.disallowedTools: ["Agent","Task"]` | **Model-visible omission** of `Agent`. `ListAgents`, `SendMessage`, `TaskStop`, and `Workflow` **stay in the request**. A bare `Task` tool was absent even in the no-deny control | Omission held against isolated user settings that enabled native agents. Managed-policy precedence not tested | Omitted fresh and after a new-process `session/load`, **when the control is reapplied on load** | Captured request, fresh and resumed; no-deny control showed `Agent` present |
+| Codex ACP 1.13.1 / Codex 0.157.1 (`CODEX_PATH`) | `CODEX_CONFIG` = `{"agents":{"enabled":false},"features":{"multi_agent":false,"multi_agent_v2":{"enabled":false}}}` | **Model-visible omission** of the `multi_agent_v1` / `collaboration` tool container, including nested `spawn_agent` | Held against a controlled user config that enabled v2 multi-agent. Merging with an existing `CODEX_CONFIG` and managed policy not tested | Omitted fresh and after a new-process `session/load`. Resume needed an explicit `MODEL_PROVIDER` to stop the adapter falling back to its default provider | Captured request, fresh and resumed |
+| OMP 18.3.1 (not re-verified on 18.2.11) | Temporary `--config` overlay with `task.maxRecursionDepth: 0` | **Model-visible omission** of `task`. The depth-0 tool list was `read,bash,edit,eval,glob,grep,wait,todo,web_search,write`; depth 2 added `task`. `eval` remains, but its `agent()` helper hits a **runtime denial**: `Cannot spawn another agent at task depth 0; maximum depth is 0.` | Overlay tested in isolation only | Same-process `session/load`/`session/resume` worked. Cross-process `session/load` failed with `ACP session not found`, because of an **`--session-dir` lookup mismatch** (next section). A resumed prompt did not reach the provider, so resumed inventory is unproven | Captured request (fresh), runtime rejection (`agent()`); resume unproven |
+| OpenCode 1.18.33 | `OPENCODE_CONFIG_CONTENT` = `{"permission":{"task":"deny"}}` | **Model-visible omission**: nine tools without `task`, a correction to Appendix C's "denied, not hidden". A fake provider that forced an out-of-schema `task` call got `Model tried to call unavailable tool 'task'` and no child request (**unavailable-tool rejection**, not a separate permission gate). Adding `agent.build.permission.task=allow` **restored `task`** (ten tools) despite the global deny | Agent-specific allow overrides the global deny. Managed-config precedence not tested | Same- and cross-process `session/load` recomputed permissions from the launch's config. The same saved session exposed `task` again when relaunched with the allow rule | Captured request, runtime rejection |
+| Pi (`pi-acp` 0.0.34 / `pi` 0.85.1) | None through `pi-acp`. `pi --exclude-tools` works, but only if a `PI_ACP_PI_COMMAND` wrapper appends it | Core Pi has **no subagent tool** (baseline request: `read,bash,edit,write`). Subagents come from extensions: `pi-subagents` 0.68.0 adds `subagent`, `bg_wait`, and `subagent_supervisor`. `--exclude-tools subagent` left `bg_wait` and `subagent_supervisor`; excluding all three restored the baseline list | The extension set comes from user or project `settings.json` `packages`, which Alas does not own | Not tested | Captured request (`pi -p` and a `pi-acp` ACP session through a wrapper); static (`pi-acp` spawn arguments) |
+| Cursor (`agent acp`) | Temporary plugin with a `sessionStart`/`subagentStart` hook | None established. An authenticated harmless prompt ran, but the `sessionStart` marker **never appeared**, so plugin loading and `subagentStart` stay unestablished | — | — | Negative observation only |
+| Copilot | — | Not installed on the probe host | — | — | None |
+| Gemini | — | Not installed on the probe host | — | — | None |
+
+### Caveats
+
+- **Claude's "no native delegation" is narrower than it sounds.** `disallowedTools: ["Agent","Task"]` removes `Agent`. `ListAgents`, `SendMessage`, `TaskStop`, and `Workflow` stay model-visible. #1589 has to decide whether its setting covers only `Agent`/`Task` or also workflow-driven delegation, and it must not promise "no native delegation paths" until those tools are checked.
+- **Codex resume and provider selection.** A new-process `session/load` needed `MODEL_PROVIDER` set explicitly. Otherwise the adapter fell back to its default provider. Verify launch and resume provider selection separately from suppression.
+- **OMP `--session-dir` lookup mismatch (18.3.1).** `session/new` writes the session JSONL into the directory given by `--session-dir`, but ACP `session/list` and `session/load` search the cwd-derived default session directories. A copy of the same JSONL placed in an isolated default directory was listed and loaded by a fresh process. Alas must not relocate user session files as a workaround. Either an upstream version threads the launch directory through ACP lookup, or restart support is not claimed for this adapter/version.
+- **OpenCode agent-specific allows defeat a global deny.** `agent.<name>.permission.task = "allow"` in any merged config puts `task` back in the request. A blanket deny can only be reported as enforced after checking the effective config for agent-level overrides.
+- **Pi companion tools.** Excluding only `subagent` leaves `bg_wait` and `subagent_supervisor`, which is the same trap as Claude's companion tools. Other Pi subagent packages register different names, so no fixed exclusion list is complete.
+- **Capability withdrawal is observation-only.** With no client ACP `subagents` capability **and no disabling config**, Codex still ran a no-op `spawn_agent` child and returned `READY`. Leaving out the capability only changes how updates are reported. It never suppresses the tool.
+- **Captured requests are local, not provider-side.** The loopback server shows what the adapter would send. It does not show server-side enforcement on a paid provider, or what managed/enterprise policy would do.
+- **Alas integration not exercised under suppression.** An Alas `session_new` did create an OMP child in the same worktree, and `session_list` showed it idle. `session_send` queued a report request, but no transcript result was observed. Alas cannot yet launch a child with any of these controls applied.
+
+### Pi detail
+
+- `pi-acp` (`dist/index.js`, `PiRpcProcess.spawn`) always runs `pi --mode rpc --no-themes [--session <file>]` and passes its environment through. It has no argument passthrough and reads no tool-related `_meta`. Its only relevant knob is `PI_ACP_PI_COMMAND`, which replaces the `pi` executable.
+- `pi --help` (0.85.1) offers `--tools`, `--exclude-tools`, `--no-tools`, `--no-builtin-tools`, `--no-extensions`, and `-e`. `settings.json` `defaultTools` applies to built-in tools only ("Extension and SDK custom tools remain enabled"). Per-package `extensions` filters can drop a package's extension entry, but they live in user or project settings. No environment variable excludes tools. `PI_CODING_AGENT_DIR` swaps the whole config directory, which would also drop the user's packages and credentials.
+- On the probe host, the user's Pi settings list 18 packages, including `npm:pi-subagents` (0.68.0), plus two local extensions (`alas-notify.ts`, `superset-hooks.ts`). `pi-subagents` is the only one that registers a delegation tool. `pi-superpowers` ships a `subagent-driven-development` skill, not a tool.
+- Result: **extension-dependent; unsupported for enforcement.** Pi has no native subagent tool to suppress. Whether a session can delegate depends on the user's extension set, whose tool names Alas cannot enumerate ahead of time. The only working lever is a `PI_ACP_PI_COMMAND` wrapper that appends `--exclude-tools`, and it needs a complete, extension-specific tool list. Alas should report Pi as "depends on installed extensions" and not offer the suppression toggle.
+
+### Reproduction (sanitized)
+
+Every run follows the same shape. Start a loopback server that records each request body and answers with a minimal completion (or a forced tool call for the rejection runs). Point the agent at it through a throwaway provider entry in a temporary config directory. Drive one ACP `initialize` → `session/new` → `session/prompt` (→ new process → `session/load` → `session/prompt`). Diff the `tools` array between control and suppressed runs. `$T` is a fresh temporary directory, `$PORT` is the loopback port, and credentials are dummies. The original Claude, Codex, OMP, and OpenCode scripts were lost with their branch, so those commands are reconstructed from the recorded controls and show the shape of the run, not a transcript. The Pi commands are the ones actually run.
+
+```bash
+# Claude: pass the control in session/new params, and again on session/load
+#   "_meta": {"claudeCode": {"options": {"disallowedTools": ["Agent", "Task"]}}}
+HOME=$T/home CLAUDE_CODE_EXECUTABLE=$(command -v claude) \
+  ANTHROPIC_BASE_URL=http://127.0.0.1:$PORT ANTHROPIC_API_KEY=dummy claude-agent-acp
+
+# Codex (resume also needs MODEL_PROVIDER)
+HOME=$T/home CODEX_HOME=$T/codex CODEX_PATH=$(command -v codex) MODEL_PROVIDER=probe \
+  CODEX_CONFIG='{"model_providers":{"probe":{"name":"probe","base_url":"http://127.0.0.1:'$PORT'/v1","wire_api":"responses"}},"agents":{"enabled":false},"features":{"multi_agent":false,"multi_agent_v2":{"enabled":false}}}' \
+  codex-acp
+
+# OMP: overlay config with a loopback provider and task.maxRecursionDepth: 0 (control: 2)
+HOME=$T/home omp acp --config $T/omp-overlay.yml --session-dir $T/sessions
+
+# OpenCode: control drops the permission block; override test adds
+#   "agent":{"build":{"permission":{"task":"allow"}}}
+HOME=$T/home XDG_CONFIG_HOME=$T/xdg/config XDG_DATA_HOME=$T/xdg/data XDG_STATE_HOME=$T/xdg/state \
+  OPENCODE_CONFIG_CONTENT='{"provider":{"probe":{...loopback...}},"permission":{"task":"deny"}}' opencode acp
+
+# Pi: models.json in $T/agent defines provider "probe" (api openai-completions, baseUrl loopback)
+# Resolve the installed extension with the real HOME, before HOME is overridden below
+EXT="$HOME/.pi/agent/npm/node_modules/pi-subagents/index.ts"
+cat > $T/pi-wrap.sh <<SH
+#!/bin/bash
+exec pi "\$@" --no-extensions --no-skills --no-context-files \\
+  -e "$EXT" \\
+  --exclude-tools subagent,subagent_supervisor,bg_wait
+SH
+chmod +x $T/pi-wrap.sh
+HOME=$T/home PI_CODING_AGENT_DIR=$T/agent PI_OFFLINE=1 PI_TELEMETRY=0 \
+  PI_ACP_PI_COMMAND=$T/pi-wrap.sh pi-acp
+# Captured tools: read,bash,edit,write
+# Without --exclude-tools:      read,bash,edit,write,subagent,bg_wait,subagent_supervisor
+# Excluding only subagent:      read,bash,edit,write,bg_wait,subagent_supervisor
+```
+
+The Pi wrapper loads the installed extension read-only from its package path with discovery disabled. The run left `~/.pi/agent` unmodified (no file there changed during the run).
+
+### Mapping for implementation issues
+
+- **#1589 (Claude, Codex).** Verified controls: Claude `session/new` (and `session/load`) `_meta.claudeCode.options.disallowedTools = ["Agent","Task"]`, which omits `Agent` but not `ListAgents`/`SendMessage`/`TaskStop`/`Workflow`. Codex `CODEX_CONFIG` with `agents.enabled=false`, `features.multi_agent=false`, and `features.multi_agent_v2.enabled=false`, merged into any existing `CODEX_CONFIG` rather than replacing it. Still open: default bundled runtimes (Claude 2.1.280, Codex 0.156.1), managed-policy precedence, `MODEL_PROVIDER` on resume.
+- **#1590 (OMP).** Verified control: a `task.maxRecursionDepth: 0` config overlay, which omits `task` and makes `eval`'s `agent()` fail at runtime. Static check on 18.2.11: `src/tools/index.ts` still gates the `task` tool on `canSpawnAtDepth(task.maxRecursionDepth, taskDepth)`, and `src/tools/hub/messaging.ts` reuses the same gate for peer messaging. The live results are from 18.3.1. Still open: a re-run on the installed build, and a fix or workaround for the `--session-dir` lookup mismatch before any restart claim.
+- **#1591 (OpenCode).** Verified control: `OPENCODE_CONFIG_CONTENT` with `permission.task = "deny"`. It omits `task`, and a forced call is rejected. Alas must detect agent-specific `permission.task` allows in the effective config and report "not enforced" when one exists. Still open: managed-config precedence.
+- **Pi.** Unsupported for enforcement (extension-dependent). Show that state and offer no toggle. A wrapper-based opt-in could follow later if a stable tool-name contract appears.
+- **Cursor.** Unverified / unsupported. There is no first-class switch, and hook loading was not established (the `sessionStart` marker never appeared). Disabled on the probe host.
+- **Copilot (#1592), Gemini (#1593).** Not installed on the probe host. Implementation is deferred until those issues capture tool inventory, exclusion, and resume on an actually installed runtime. For Gemini, that includes preserving any existing system-settings policy.
