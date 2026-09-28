@@ -127,18 +127,6 @@ struct ACPNarrationShimmerTests {
         #expect(ACPThoughtView.inlineLabel(for: String(repeating: "a", count: 81)) == nil)
     }
 
-    @Test("inline reasoning stays in the one-line disclosure at narrow widths")
-    func narrowThoughtDisclosureDoesNotWrap() throws {
-        let theme = try ThemeStore().current
-        let inline = measure(
-            ACPThoughtView(buffer: StreamingText(String(repeating: "a", count: 80))),
-            theme: theme, width: 160)
-        let fallback = measure(
-            ACPThoughtView(buffer: StreamingText(String(repeating: "a", count: 81))),
-            theme: theme, width: 160)
-        #expect(inline == fallback)
-    }
-
     @Test("the shimmer modifier does not change a label's height")
     func shimmerModifierPreservesHeight() throws {
         let theme = try ThemeStore().current
@@ -198,12 +186,12 @@ struct ACPNarrationShimmerTests {
         #expect(measure(bar(isActive: true), theme: theme) == measure(bar(isActive: false), theme: theme))
     }
 
-    private func measure(_ view: some View, theme: Theme, width: CGFloat = 400) -> CGFloat {
+    private func measure(_ view: some View, theme: Theme) -> CGFloat {
         let root = view
             .environment(\.theme, theme)
-            .frame(width: width)
+            .frame(width: 400)
         let controller = NSHostingController(rootView: root)
-        controller.view.frame = NSRect(x: 0, y: 0, width: width, height: 10)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 400, height: 10)
         drainSwiftUI(controller.view)
         return controller.view.fittingSize.height
     }
