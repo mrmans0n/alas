@@ -485,13 +485,18 @@ struct NewWorktreeDialog: View {
             },
             selectedProjectID: projectId,
             projects: { state.projects },
-            issueResolved: prewarmName
+            resolvedIssueChanged: prewarmName
         )
     }
 
     /// Only a first attachment seeds the name, so re-editing an attached
-    /// issue has nothing to prewarm.
-    private func prewarmName(for source: IssueSnapshot) {
+    /// issue has nothing to prewarm. Backing out of a resolved issue frees
+    /// the local model instead of naming a ticket that may not come back.
+    private func prewarmName(for source: IssueSnapshot?) {
+        guard let source else {
+            namePrewarm.cancel()
+            return
+        }
         guard state.issueWorktreeNameSuggestionAvailable,
               Self.appliesParentFieldsAfterIssueAttach(existingDraft: issueState.draft) else { return }
         let suggester = state.makeIssueWorktreeNameSuggester()
