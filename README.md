@@ -224,16 +224,18 @@ without the hook; a session-open action can also be cancelled.
 
 Use Xcode 26 or later with the full Xcode installation selected as your active
 developer directory. CI builds on macOS 26; the app deployment target is macOS 15.
-Install XcodeGen, Homebrew's patched Zig 0.15, and rustup before building:
+Install XcodeGen, Homebrew's patched Zig 0.15, Zig 0.16, and rustup before building:
 
 ```bash
-brew install xcodegen zig@0.15 rustup
+brew install xcodegen zig@0.15 zig@0.16 rustup
 ```
 
 The build scripts install their pinned Rust toolchains and cross-compilation
 targets through rustup. They currently use Rust 1.96.1 for the SSH helper,
 1.97.0 for the CLI, and 1.97.1 for fff and the tree-sitter grammar pack.
-Use Homebrew's `zig@0.15`, which includes the linker fix needed with Xcode 26.4.
+Ghostty builds with Homebrew's `zig@0.15`, which includes the linker fix needed
+with Xcode 26.4 (override with `ALAS_ZIG_BIN`); zmx requires `zig@0.16`
+(override with `ALAS_ZMX_ZIG_BIN`).
 
 For a fresh checkout:
 
