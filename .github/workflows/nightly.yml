@@ -405,7 +405,7 @@ jobs:
             -derivedDataPath build \
             -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
             -destination 'platform=macOS,arch=arm64' \
-            -skipMacroValidation \
+            -skipMacroValidation -skipPackagePluginValidation \
             -quiet build
 
       # Gate signing on main-built refs only — non-main workflow_dispatch

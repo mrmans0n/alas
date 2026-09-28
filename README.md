@@ -222,8 +222,9 @@ without the hook; a session-open action can also be cancelled.
 
 ## Develop
 
-Use Xcode 26 or later with the full Xcode installation selected as your active
-developer directory. CI builds on macOS 26; the app deployment target is macOS 15.
+Use Xcode 26.3 or later, which includes Swift 6.3 required by the MLX dependency,
+with the full Xcode installation selected as your active developer directory.
+CI builds on macOS 26; the app deployment target is macOS 15.
 Install XcodeGen, Homebrew's patched Zig 0.15, Zig 0.16, and rustup before building:
 
 ```bash
@@ -244,8 +245,8 @@ git clone --recurse-submodules https://github.com/mrmans0n/alas.git
 cd alas
 ./scripts/build-ghostty.sh
 xcodegen
-xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' build
-xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' test
+xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' -skipPackagePluginValidation build
+xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' -skipPackagePluginValidation test
 ```
 
 For an existing checkout, run `git submodule update --init --recursive` first.

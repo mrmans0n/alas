@@ -657,6 +657,8 @@ import Foundation
         let storeB = try ACPSessionStore(path: url.path)
         let mgrB = tempManager(instanceId: "B", store: storeB, hydratorPath: url.path)
         let mirrorSession = try #require(mgrB.placeholderSession(id: "s"))
+        let backfill = HydrationBackfillGate()
+        mgrB.beforeBackfill = { await backfill.wait() }
 
         await mgrB.refreshMirror(sessionId: "s")
 
@@ -667,6 +669,7 @@ import Foundation
             Issue.record("expected first tail message")
         }
 
+        backfill.open()
         await mgrB.awaitBackfill(id: "s")
         #expect(mirrorSession.transcript.messages.count == total)
         if case .user(_, _, let text, _, _) = mirrorSession.transcript.messages.first {
