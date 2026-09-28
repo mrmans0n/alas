@@ -129,6 +129,55 @@ enum ACPSessionOrchestrationPolicy {
         return agentId
     }
 
+    /// The ACP agents a caller may see as delegation targets, in configured
+    /// order. Agents without an ACP launcher are omitted outright: they can
+    /// never be spawned. `configured` must reflect current Settings, so an
+    /// agent disabled a moment ago is reported disabled even before install
+    /// detection re-runs. Models are only ever those the agent advertised.
+    static func delegationAgents(
+        configured: [AgentDefinition],
+        acpAgentIDs: Set<String>,
+        availability: AgentAvailabilityState,
+        catalog: (String) -> (models: [ACPAgentModelCatalog.Model], report: ACPAgentModelCatalog.LaunchReport)
+    ) -> [ACPDelegationAgentSummary] {
+        configured.filter { acpAgentIDs.contains($0.id) }.map { agent in
+            let agentAvailability: ACPDelegationAgentAvailability
+            if !agent.isEnabled {
+                agentAvailability = .disabled
+            } else {
+                switch availability {
+                case .available(let installed):
+                    agentAvailability = installed.contains { $0.id == agent.id } ? .available : .notInstalled
+                case .loading, .failed:
+                    agentAvailability = .unknown
+                }
+            }
+            let (models, report) = catalog(agent.id)
+            let state: ACPDelegationModelCatalogState
+            if !models.isEmpty {
+                state = report == .advertisedModels ? .known : .stale
+            } else {
+                state = report == .advertisedNone ? .unsupported : .notLoaded
+            }
+            let selection: ACPDelegationModelSelection = switch state {
+            case .known, .stale: .supported
+            case .unsupported: .unsupported
+            case .notLoaded, .unavailable: .unknown
+            }
+            let isAvailable = agentAvailability == .available
+            return ACPDelegationAgentSummary(
+                id: agent.id,
+                displayName: agent.displayName,
+                available: isAvailable,
+                availability: agentAvailability,
+                modelSelection: selection,
+                modelCatalog: isAvailable
+                    ? ACPDelegationModelCatalog(state: state, models: models)
+                    : ACPDelegationModelCatalog(state: .unavailable, models: [])
+            )
+        }
+    }
+
     static func validatedPrompt(_ prompt: String) throws -> String {
         let prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else {

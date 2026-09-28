@@ -6798,6 +6798,29 @@ final class AppState {
                         ACPOrchestrationAgent(id: $0.id, isEnabled: true, isACPCapable: acpIDs.contains($0.id))
                     }
                 },
+                delegationAgents: { [weak self] _, worktree in
+                    guard let self else { return [] }
+                    let configured = AgentConfiguredCatalog.all(
+                        builtinState: self.config.agents.builtinState,
+                        customs: self.config.agents.custom
+                    )
+                    var availability = await self.loadAgentAvailabilityForDelegation(worktree)
+                    if case .local = self.agentExecutionTarget(for: worktree) {
+                        // The registry only refreshes on a rescan, so confirm
+                        // the binaries are still there. Keeping the registry
+                        // as a precondition means discovery never offers an
+                        // agent that `session_new` would still reject.
+                        let installed = await AgentDetector.scanCurrentEnvironment(agents: configured)
+                        availability = .available(availability.agents.filter { installed.contains($0.id) })
+                    }
+                    let catalog = self.acpModelCatalog
+                    return ACPSessionOrchestrationPolicy.delegationAgents(
+                        configured: configured,
+                        acpAgentIDs: Set(ACPLaunchCatalog.specs.map(\.agentID)),
+                        availability: availability,
+                        catalog: { (catalog.models(for: $0), catalog.launchReport(for: $0)) }
+                    )
+                },
                 sessionLocation: { [weak self] sessionId in
                     guard let self,
                           let (owner, manager) = self.acpManagers.first(where: { _, manager in
@@ -6978,6 +7001,9 @@ final class AppState {
                     title: title,
                     level: level
                 )
+            },
+            listDelegationAgents: { origin, worktree in
+                await orchestration.discoverAgents(origin: origin, worktree: worktree)
             },
             listDelegatedSessions: { origin in
                 await orchestration.list(origin: origin)

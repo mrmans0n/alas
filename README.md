@@ -62,7 +62,9 @@ respond when it needs you.
   creates worktrees, and starts reviews from the terminal. It's also
   auto-injected into every ACP session as an MCP server. Agents use it to open
   files at the right line, send you notifications, spin up delegated sessions,
-  and work through your review comments.
+  and work through your review comments. Before delegating, agents can list
+  which agents and models are available
+  ([delegation discovery](docs/agent-delegation.md)).
 
 - **A review loop agents can close.** Review a branch, commit, or range
   from the ⇧⌘R palette, and drop inline comments anywhere, changed
