@@ -163,7 +163,7 @@ struct ACPNativeDelegationControlsTests {
 
     @Test(
         "an OPENCODE_CONFIG_CONTENT Alas cannot merge safely fails instead of being replaced",
-        arguments: ["not json", "[1]", #"{"a": }"#, #"{"permission": 3}"#, #"{"agent": []}"#, #"{"agent": {"build": 1}}"#]
+        arguments: ["not json", "[1]", #"{"a": }"#, #"{"share":"disabled"} /*"#, #"{"permission": 3}"#, #"{"agent": []}"#, #"{"agent": {"build": 1}}"#]
     )
     func malformedOpenCodeConfigFails(existing: String) {
         #expect(throws: ACPNativeDelegationError.self) {

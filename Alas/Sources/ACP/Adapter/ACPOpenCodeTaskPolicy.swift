@@ -297,7 +297,7 @@ indirect enum OrderedJSON: Equatable, Sendable {
     static func parse(_ text: String) throws -> OrderedJSON {
         var parser = Parser(bytes: Array(text.utf8))
         let value = try parser.value()
-        parser.skipTrivia()
+        try parser.skipTrivia()
         guard parser.index == parser.bytes.count else { throw ParseError() }
         return value
     }
@@ -307,20 +307,20 @@ indirect enum OrderedJSON: Equatable, Sendable {
         var index = 0
 
         mutating func value() throws -> OrderedJSON {
-            skipTrivia()
+            try skipTrivia()
             guard index < bytes.count else { throw ParseError() }
             switch bytes[index] {
             case UInt8(ascii: "{"):
                 index += 1
                 var members: [Member] = []
                 while true {
-                    skipTrivia()
+                    try skipTrivia()
                     if consume("}") { return .object(members) }
                     guard case .scalar(let raw) = try string(), let key = decodedString(raw) else { throw ParseError() }
-                    skipTrivia()
+                    try skipTrivia()
                     guard consume(":") else { throw ParseError() }
                     members.append(Member(key: key, value: try value()))
-                    skipTrivia()
+                    try skipTrivia()
                     if consume("}") { return .object(members) }
                     guard consume(",") else { throw ParseError() }
                 }
@@ -328,10 +328,10 @@ indirect enum OrderedJSON: Equatable, Sendable {
                 index += 1
                 var items: [OrderedJSON] = []
                 while true {
-                    skipTrivia()
+                    try skipTrivia()
                     if consume("]") { return .array(items) }
                     items.append(try value())
-                    skipTrivia()
+                    try skipTrivia()
                     if consume("]") { return .array(items) }
                     guard consume(",") else { throw ParseError() }
                 }
@@ -374,7 +374,7 @@ indirect enum OrderedJSON: Equatable, Sendable {
         }
 
         /// Skips whitespace and `//` / `/* */` comments.
-        mutating func skipTrivia() {
+        mutating func skipTrivia() throws {
             while index < bytes.count {
                 let byte = bytes[index]
                 if byte == 0x20 || byte == 0x0A || byte == 0x0D || byte == 0x09 {
@@ -386,7 +386,9 @@ indirect enum OrderedJSON: Equatable, Sendable {
                     while index + 1 < bytes.count, !(bytes[index] == UInt8(ascii: "*") && bytes[index + 1] == UInt8(ascii: "/")) {
                         index += 1
                     }
-                    index = min(index + 2, bytes.count)
+                    // An unterminated block comment is malformed, not trailing trivia.
+                    guard index + 1 < bytes.count else { throw ParseError() }
+                    index += 2
                 } else {
                     return
                 }
