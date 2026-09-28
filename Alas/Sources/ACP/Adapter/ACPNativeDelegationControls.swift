@@ -10,6 +10,10 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
     /// `codex-acp`: `CODEX_CONFIG` process env, merged into the Codex config
     /// of every thread the adapter starts or resumes.
     case codexConfigEnvironment
+    /// `opencode acp`: `OPENCODE_CONFIG_CONTENT` process env denying the
+    /// `task` permission, checked against every agent's effective ruleset
+    /// (`opencode agent list`) before each launch.
+    case openCodeConfigContent
 
     /// The `agentInfo.name` of the adapter whose contract was verified. A
     /// different ACP server that happens to share the binary name (Alas
@@ -18,6 +22,7 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
         switch self {
         case .claudeDisallowedTools: ACPManagedAdapterDescriptor.claude.packageName
         case .codexConfigEnvironment: ACPManagedAdapterDescriptor.codex.packageName
+        case .openCodeConfigContent: ACPOpenCodeTaskPolicy.adapterName
         }
     }
 
@@ -28,6 +33,7 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
         switch self {
         case .claudeDisallowedTools: "0.81.2"
         case .codexConfigEnvironment: "1.13.1"
+        case .openCodeConfigContent: "1.18.33"
         }
     }
 }
@@ -53,8 +59,9 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
         switch agentID {
         case ACPManagedAdapterDescriptor.claude.agentID: .toolOmission(.claudeDisallowedTools)
         case ACPManagedAdapterDescriptor.codex.agentID: .toolOmission(.codexConfigEnvironment)
+        case ACPOpenCodeTaskPolicy.agentID: .toolOmission(.openCodeConfigContent)
         case ACPManagedAdapterDescriptor.pi.agentID: .extensionDependent
-        case "cursor-agent", "gemini", "copilot", "opencode", "omp": .unverified
+        case "cursor-agent", "gemini", "copilot", "omp": .unverified
         default: .unsupported
         }
     }
@@ -80,6 +87,12 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
             return "Turns off Codex multi-agent tools (spawn_agent and related) "
                 + "through CODEX_CONFIG, keeping any CODEX_CONFIG you already set. "
                 + "Local sessions only."
+        case .toolOmission(.openCodeConfigContent):
+            return "Removes OpenCode's task tool from every agent through "
+                + "OPENCODE_CONFIG_CONTENT, keeping any OPENCODE_CONFIG_CONTENT you "
+                + "already set. Before each launch Alas checks every OpenCode agent's "
+                + "effective permissions; if managed or other configuration keeps "
+                + "task enabled, the session fails to start instead. Local sessions only."
         case .runtimeDenial:
             return "The native subagent tool stays visible to the model, but "
                 + "its calls are rejected."
@@ -117,6 +130,9 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
 
 enum ACPNativeDelegationError: LocalizedError, Equatable {
     case malformedCodexConfig(String)
+    case malformedOpenCodeConfig(String)
+    case openCodeTaskStillEnabled(agents: [String])
+    case openCodePolicyUnverifiable(String)
     case remoteHostUnsupported(agentID: String)
     case adapterVersionUnverified(agentID: String, found: String?, minimum: String)
     case adapterUnverified(agentID: String, found: String?, expected: String)
@@ -128,6 +144,26 @@ enum ACPNativeDelegationError: LocalizedError, Equatable {
                 + "CODEX_CONFIG environment variable cannot be merged: \(detail). "
                 + "Fix CODEX_CONFIG or turn off \"Disable native subagents\" for "
                 + "Codex in Settings → Agents, then start a new session."
+        case .malformedOpenCodeConfig(let detail):
+            return "Native subagents are disabled for this session, but the "
+                + "OPENCODE_CONFIG_CONTENT environment variable cannot be merged: "
+                + "\(detail). Fix OPENCODE_CONFIG_CONTENT or turn off \"Disable native "
+                + "subagents\" for OpenCode in Settings → Agents, then start a new session."
+        case .openCodeTaskStillEnabled(let agents):
+            return "Native subagents are disabled for this session, but OpenCode "
+                + "configuration keeps the task tool enabled for "
+                + "\(agents.joined(separator: ", ")) even after Alas denies it. "
+                + "Managed configuration (/Library/Application Support/opencode or an "
+                + "MDM profile), OPENCODE_PERMISSION, a legacy \"mode\" entry, or a "
+                + "permission block that lists \"*\" after \"task\" overrides Alas. "
+                + "Remove that override or turn off \"Disable native subagents\" for "
+                + "OpenCode in Settings → Agents, then start a new session."
+        case .openCodePolicyUnverifiable(let detail):
+            return "Native subagents are disabled for this session, but Alas could "
+                + "not check OpenCode's effective permissions (opencode agent list "
+                + "\(detail)). Fix the OpenCode installation or turn off \"Disable "
+                + "native subagents\" for OpenCode in Settings → Agents, then start a "
+                + "new session."
         case .remoteHostUnsupported(let agentID):
             return "Native subagents are disabled for this session, but Alas can "
                 + "only enforce that for \(agentID) on this Mac. Turn off \"Disable "
@@ -176,15 +212,25 @@ enum ACPNativeDelegationControls {
         isRemote: Bool
     ) throws -> ACPLaunchSpec {
         guard nativeSubagentsDisabled,
-              ACPNativeDelegationSupport.resolve(agentID: spec.agentID).mechanism == .codexConfigEnvironment
+              let mechanism = ACPNativeDelegationSupport.resolve(agentID: spec.agentID).mechanism,
+              mechanism != .claudeDisallowedTools
         else { return spec }
         // Remote launches either drop extraEnv or cannot see the remote
-        // user's CODEX_CONFIG, so enforcement there would be unverifiable.
+        // user's configuration, so enforcement there would be unverifiable.
         guard !isRemote else {
             throw ACPNativeDelegationError.remoteHostUnsupported(agentID: spec.agentID)
         }
-        let existing = spec.extraEnv[codexConfigKey] ?? inheritedEnvironment[codexConfigKey]
-        return spec.mergingExtraEnv([codexConfigKey: try mergedCodexConfig(existing: existing)])
+        switch mechanism {
+        case .codexConfigEnvironment:
+            let existing = spec.extraEnv[codexConfigKey] ?? inheritedEnvironment[codexConfigKey]
+            return spec.mergingExtraEnv([codexConfigKey: try mergedCodexConfig(existing: existing)])
+        case .openCodeConfigContent:
+            let key = ACPOpenCodeTaskPolicy.configKey
+            let existing = spec.extraEnv[key] ?? inheritedEnvironment[key]
+            return spec.mergingExtraEnv([key: try ACPOpenCodeTaskPolicy.mergedConfig(existing: existing)])
+        case .claudeDisallowedTools:
+            return spec
+        }
     }
 
     /// Fails unless the adapter identifies itself as the verified package at

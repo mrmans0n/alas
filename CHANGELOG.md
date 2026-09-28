@@ -10,6 +10,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add read-only delegation discovery (`agent_list` MCP tool, `alas agent list`) listing available ACP agents and their remembered model catalogs.
 - Add a per-agent "Disable native subagents" setting for Claude and Codex ACP sessions that removes their native subagent tools so they delegate through Alas child sessions; delegated children no longer see `session_new` in MCP discovery (#1589).
+- Support "Disable native subagents" for OpenCode: Alas denies the `task` tool for every OpenCode agent and verifies the effective permissions before each launch, failing the session when managed or other configuration keeps it enabled (#1591).
 
 ## [0.19.17] - 2026-09-28
 
