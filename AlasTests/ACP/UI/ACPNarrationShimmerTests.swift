@@ -111,6 +111,34 @@ struct ACPNarrationShimmerTests {
         #expect(live == quiet)
     }
 
+    @Test("short reasoning is visible in the disclosure without markdown delimiters")
+    func shortThoughtInlineLabel() {
+        #expect(ACPThoughtView.inlineLabel(for: "  **Checking peer header**  ") == "Checking peer header")
+        #expect(ACPThoughtView.inlineLabel(for: "Checking peer header") == "Checking peer header")
+        #expect(ACPThoughtView.inlineLabel(for: "**partial") == "**partial")
+        #expect(ACPThoughtView.inlineLabel(for: "** **") == nil)
+    }
+
+    @Test("empty, multiline, and long reasoning keep the collapsed disclosure")
+    func longThoughtKeepsDisclosure() {
+        #expect(ACPThoughtView.inlineLabel(for: " \n  ") == nil)
+        #expect(ACPThoughtView.inlineLabel(for: "First step\nSecond step") == nil)
+        #expect(ACPThoughtView.inlineLabel(for: String(repeating: "a", count: 80)) != nil)
+        #expect(ACPThoughtView.inlineLabel(for: String(repeating: "a", count: 81)) == nil)
+    }
+
+    @Test("inline reasoning stays in the one-line disclosure at narrow widths")
+    func narrowThoughtDisclosureDoesNotWrap() throws {
+        let theme = try ThemeStore().current
+        let inline = measure(
+            ACPThoughtView(buffer: StreamingText(String(repeating: "a", count: 80))),
+            theme: theme, width: 160)
+        let fallback = measure(
+            ACPThoughtView(buffer: StreamingText(String(repeating: "a", count: 81))),
+            theme: theme, width: 160)
+        #expect(inline == fallback)
+    }
+
     @Test("the shimmer modifier does not change a label's height")
     func shimmerModifierPreservesHeight() throws {
         let theme = try ThemeStore().current
@@ -170,12 +198,12 @@ struct ACPNarrationShimmerTests {
         #expect(measure(bar(isActive: true), theme: theme) == measure(bar(isActive: false), theme: theme))
     }
 
-    private func measure(_ view: some View, theme: Theme) -> CGFloat {
+    private func measure(_ view: some View, theme: Theme, width: CGFloat = 400) -> CGFloat {
         let root = view
             .environment(\.theme, theme)
-            .frame(width: 400)
+            .frame(width: width)
         let controller = NSHostingController(rootView: root)
-        controller.view.frame = NSRect(x: 0, y: 0, width: 400, height: 10)
+        controller.view.frame = NSRect(x: 0, y: 0, width: width, height: 10)
         drainSwiftUI(controller.view)
         return controller.view.fittingSize.height
     }

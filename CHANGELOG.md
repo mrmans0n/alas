@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### ✨ Features
 
 - Show the active agent logo in the native peer transcript header.
+- Show short ACP thoughts inline in their collapsed disclosure, stripping surrounding `**` markers.
 
 ## [0.19.16] - 2026-09-28
 
