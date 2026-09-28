@@ -6042,7 +6042,14 @@ extension ACPSessionManager {
                         helloSeen: helloSeen, graceElapsed: true)
                 }
             }
-            if createdFreshRemoteSession {
+            // Sessions that start from loaded context (native fork, imported
+            // agent session) skip the fresh-session preamble. When native
+            // subagents are off, they still need the one-time delegation
+            // guidance, so queue it once if nothing was ever queued or sent.
+            let needsDelegationGuidance = nativeSubagentsDisabled
+                && !session.mcpPreambleSent
+                && session.pendingMCPPreamble == nil
+            if createdFreshRemoteSession || needsDelegationGuidance {
                 let preambleMode: ACPMCPPreambleMode
                 let userServerNames: [String]
                 if case .external = spec.mcpInjection {

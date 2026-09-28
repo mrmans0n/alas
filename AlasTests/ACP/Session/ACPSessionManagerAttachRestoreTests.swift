@@ -1752,6 +1752,39 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.detach(sessionId: session.id)
     }
 
+    @Test("an imported session with native subagents disabled is loaded with the controls and still gets delegation guidance")
+    func nativeSubagentsPolicyImportedSessionGetsGuidance() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        var clients: [ACPMockClient] = []
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                let client = ACPMockClient()
+                self.scriptNativeDelegationInitialize(client, agentID: "claude", adapterVersion: "0.81.2")
+                self.scriptSessionResult(client, method: "session/load", sessionId: "remote-imported")
+                clients.append(client)
+                return ACPConnection(client: client)
+            }
+        )
+        manager.nativeSubagentsPreferenceProvider = { _ in true }
+        let row = try #require(await manager.materializeDiscoveredSession(.init(
+            worktreeId: "wt", agentId: "claude", remoteSessionId: "remote-imported",
+            cwd: "/tmp/wt", title: "Imported", updatedAt: nil,
+            additionalDirectories: [], localSessionId: nil
+        )))
+        let session = try #require(manager.placeholderSession(id: row.id))
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        let load = try #require(clients.flatMap(\.sent).first { $0.method == "session/load" })
+        #expect((load.params as? ACPSessionLoadParams)?.meta?.claudeCode?.options.disallowedTools == ["Agent", "Task"])
+        #expect(session.pendingMCPPreamble?.contains("native subagent tool is turned off") == true)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("a Codex session with native subagents disabled launches with merged CODEX_CONFIG and rejects an unverified adapter")
     func nativeSubagentsPolicyCodexLaunch() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
