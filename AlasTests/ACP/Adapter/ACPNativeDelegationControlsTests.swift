@@ -14,14 +14,14 @@ struct ACPNativeDelegationControlsTests {
             ("gemini", .unverified),
             ("copilot", .unverified),
             ("opencode", .unverified),
-            ("omp", .unverified),
+            ("omp", .toolOmission(.ompConfigOverlay)),
             ("3F2504E0-4F89-11D3-9A0C-0305E82C3301", .unsupported),
         ]
     )
     func supportResolution(agentID: String, expected: ACPNativeDelegationSupport) {
         let support = ACPNativeDelegationSupport.resolve(agentID: agentID)
         #expect(support == expected)
-        #expect(support.canEnforce == (agentID == "claude" || agentID == "codex"))
+        #expect(support.canEnforce == ["claude", "codex", "omp"].contains(agentID))
         // Unenforceable states never carry the activation/enforcement copy.
         if !support.canEnforce {
             #expect(support.settingsRowDescription(isOn: true, alasToolsExposed: true)
@@ -124,6 +124,52 @@ struct ACPNativeDelegationControlsTests {
             to: claude, nativeSubagentsDisabled: true, inheritedEnvironment: inherited, isRemote: true) == claude)
     }
 
+    @Test("OMP launches with an owner-only depth-0 overlay only when the policy is on and local")
+    func ompLaunchOverlay() throws {
+        let omp = try #require(ACPLaunchCatalog.spec(for: "omp"))
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("omp-overlay-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func launch(disabled: Bool, remote: Bool) throws -> ACPLaunchSpec {
+            try ACPNativeDelegationControls.applyingLaunchControls(
+                to: omp, nativeSubagentsDisabled: disabled, inheritedEnvironment: [:],
+                isRemote: remote, overlayDirectory: directory)
+        }
+
+        #expect(try launch(disabled: false, remote: false) == omp)
+        #expect(throws: ACPNativeDelegationError.remoteHostUnsupported(agentID: "omp")) {
+            try launch(disabled: true, remote: true)
+        }
+
+        // A tampered overlay from an earlier launch is replaced, not trusted.
+        let overlay = directory.appendingPathComponent("omp-native-subagents-off.yml")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("task:\n  maxRecursionDepth: 2\n".utf8).write(to: overlay)
+        let local = try launch(disabled: true, remote: false)
+        #expect(local.arguments == ["acp", "--config", overlay.path])
+        #expect(try String(contentsOf: overlay, encoding: .utf8) == "task:\n  maxRecursionDepth: 0\n")
+        let permissions = try FileManager.default.attributesOfItem(atPath: overlay.path)[.posixPermissions]
+        #expect(permissions as? Int == 0o600)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == [overlay.lastPathComponent])
+    }
+
+    @Test("an overlay Alas cannot write fails the OMP launch")
+    func unwritableOverlayFailsLaunch() throws {
+        let omp = try #require(ACPLaunchCatalog.spec(for: "omp"))
+        // A regular file where the overlay directory should be.
+        let blocker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("omp-overlay-\(UUID().uuidString)")
+        try Data().write(to: blocker)
+        defer { try? FileManager.default.removeItem(at: blocker) }
+        #expect {
+            try ACPNativeDelegationControls.applyingLaunchControls(
+                to: omp, nativeSubagentsDisabled: true, inheritedEnvironment: [:],
+                isRemote: false, overlayDirectory: blocker)
+        } throws: { error in
+            if case .launchOverlayUnavailable(agentID: "omp", _) = error as? ACPNativeDelegationError { true } else { false }
+        }
+    }
+
     @Test(
         "enforcement requires an adapter at or above the verified version",
         arguments: [
@@ -135,10 +181,12 @@ struct ACPNativeDelegationControlsTests {
             ("codex", "1.13.1", true),
             ("codex", "1.9.9", false),
             ("codex", "garbage", false),
+            ("omp", "18.2.11", true),
+            ("omp", "18.2.10", false),
         ]
     )
     func adapterVersionGate(agentID: String, version: String, passes: Bool) {
-        let name = ACPManagedAdapterDescriptor.descriptor(for: agentID)!.packageName
+        let name = ACPNativeDelegationSupport.resolve(agentID: agentID).mechanism!.verifiedAdapterName
         let info = ACPImplementationInfo(name: name, version: version)
         let verify = {
             try ACPNativeDelegationControls.verifyAdapter(
