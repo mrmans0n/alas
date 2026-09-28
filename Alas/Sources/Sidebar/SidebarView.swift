@@ -324,8 +324,13 @@ struct SidebarView: View {
             state.refreshGGSidebar()
         }
         .onChange(of: worktreeFilter) { resetFilterHighlight() }
-        // The previous space's match is not on the new page.
-        .onChange(of: state.spacesManager.activeSpaceId) { resetFilterHighlight() }
+        // Matches change without a query change on a space switch, or when a
+        // highlighted worktree is archived, deleted or refreshed away. Only a
+        // highlight that is no longer a match moves, back to the first one.
+        .onChange(of: WorktreeSidebarFilter.isActive(worktreeFilter) ? filteredWorktreeIds() : []) { _, ids in
+            guard let id = highlightedWorktreeId, !ids.contains(id) else { return }
+            highlightedWorktreeId = ids.first
+        }
         .onDisappear {
             hideTitleTask?.cancel()
             hideTitleTask = nil
