@@ -345,10 +345,13 @@ jobs:
         with:
           # Compiler content-addressed storage only; Xcode rebuilds its graph
           # against this checkout and verifies the actual compilation inputs.
+          # Workflow-only edits must not invalidate the cache. The broad
+          # fallback recovers entries saved under the previous key format.
           path: .build/xcode/CompilationCache.noindex
-          key: swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-compilation-cache-toolchain', 'project.yml', '.github/workflows/build.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-${{ github.sha }}
+          key: swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-compilation-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-${{ github.sha }}
           restore-keys: |
-            swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-compilation-cache-toolchain', 'project.yml', '.github/workflows/build.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-
+            swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-compilation-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-
+            swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build for testing
         timeout-minutes: 30
@@ -422,7 +425,7 @@ jobs:
       - name: Discover and assign Swift tests
         id: swift-inventory
         timeout-minutes: 3
-        run: python3 scripts/ci_swift_tests.py plan
+        run: python3 scripts/ci_swift_tests.py plan --shard-count 4
 
       - name: Package compiled Swift test products
         timeout-minutes: 5
@@ -485,7 +488,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     env:
       GIT_TERMINAL_PROMPT: "0"
       GIT_ASKPASS: "/usr/bin/true"

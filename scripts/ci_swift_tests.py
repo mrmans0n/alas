@@ -188,13 +188,15 @@ def suite_key(selectors):
                          for selector in selectors}))
 
 
-def assign_shards(plan, timings, suite_seconds=None, invocation_overhead=0.0):
-    """Balance ordinary and isolated invocations across two test runners.
+def assign_shards(plan, timings, suite_seconds=None, invocation_overhead=0.0, shard_count=2):
+    """Balance ordinary and isolated invocations across test runners.
 
     Invocations without an exact or suite-group timing are estimated from
     measured per-suite seconds plus the typical per-invocation launch overhead
     when those are available, and from apportioned invocation time otherwise.
     """
+    if shard_count < 1:
+        raise ValueError("Swift shard count must be positive")
     weights = {}
     groups, suites = {}, {}
     for entry in timings:
@@ -250,11 +252,12 @@ def assign_shards(plan, timings, suite_seconds=None, invocation_overhead=0.0):
             sources[source] += 1
             batch["estimated_seconds"][index] = seconds
             pending.append((seconds, batch["id"], index, batch))
-    totals = [0.0, 0.0]
+    totals = [0.0] * shard_count
     for seconds, _, index, batch in sorted(pending, key=lambda row: (-row[0], row[1], row[2])):
-        shard = min(range(2), key=lambda candidate: (totals[candidate], candidate))
+        shard = min(range(shard_count), key=lambda candidate: (totals[candidate], candidate))
         batch["shards"][index] = shard + 1
         totals[shard] += seconds
+    plan["shard_count"] = shard_count
     plan["shard_seconds"] = totals
     plan["timing_sources"] = sources
 
@@ -363,8 +366,8 @@ def run_batch(plan, directory, lane, index, shard=None):
 
 
 def run_shard(plan, directory, shard):
-    if shard not in (1, 2):
-        raise ValueError("Swift shard must be 1 or 2")
+    if shard not in range(1, plan.get("shard_count", 2) + 1):
+        raise ValueError("Invalid Swift shard")
     success = True
     for batch in plan["batches"]:
         # Do not short-circuit: failed invocations must not suppress later work.
@@ -375,7 +378,7 @@ def run_shard(plan, directory, shard):
 
 def summarize(plan, directory):
     rows, missing, observed = [], [], set()
-    timings, shard_seconds = [], [0.0, 0.0, 0.0]
+    timings, shard_seconds = [], [0.0] * (plan.get("shard_count", 2) + 1)
     suites, overheads, complete_suites = {}, [], True
     timing_path = directory / "timings.json"
     timing_path.unlink(missing_ok=True)
@@ -428,7 +431,7 @@ def summarize(plan, directory):
                + f"\n\nMissing invocation reports: {', '.join(missing) or 'none'}.\n")
     if "shard_seconds" in plan:
         summary += "\n| Lane | Estimated seconds | Actual invocation seconds |\n|---|---:|---:|\n"
-        for shard in (1, 2):
+        for shard in range(1, plan.get("shard_count", 2) + 1):
             seconds = shard_seconds[shard]
             estimate = f"{plan['shard_seconds'][shard - 1]:.2f}"
             summary += f"| {shard} | {estimate} | {seconds:.2f} |\n"
@@ -460,8 +463,9 @@ def main():
     parser.add_argument("--enumeration", type=Path)
     parser.add_argument("--policy", type=Path, default=ROOT / "scripts/ci-swift-test-policy.tsv")
     parser.add_argument("--batch-count", type=int, default=8)
+    parser.add_argument("--shard-count", type=int, default=2)
     parser.add_argument("--batch", type=int, default=0)
-    parser.add_argument("--shard", type=int, choices=[1, 2], default=1)
+    parser.add_argument("--shard", type=int, default=1)
     parser.add_argument("--timings", type=Path, default=ROOT / "scripts/ci-swift-test-timings.json")
     parser.add_argument("--lane", choices=["ordinary", "subprocess"], default="ordinary")
     args = parser.parse_args()
@@ -484,7 +488,8 @@ def main():
         timings = json.loads(args.timings.read_text())
         suite_seconds = timings.get("suites")
         plan = make_plan(json.loads(source.read_text()), rows, args.batch_count, suite_seconds)
-        assign_shards(plan, timings["invocations"], suite_seconds, timings.get("invocation_overhead_seconds", 0.0))
+        assign_shards(plan, timings["invocations"], suite_seconds, timings.get("invocation_overhead_seconds", 0.0),
+                      args.shard_count)
         write_json(plan_path, plan)
         print(f"Discovered {len(plan['tests'])} tests; excluded {len(plan['excluded'])}; "
               f"scheduled {len(plan['tests']) - len(plan['excluded'])}")

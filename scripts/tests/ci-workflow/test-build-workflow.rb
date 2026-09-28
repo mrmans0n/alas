@@ -69,8 +69,11 @@ raise "build-test timeout must cover its sequential steps plus 30 minutes of pre
 workers = jobs.fetch("swift-tests")
 raise "workers must queue only after the builder finishes" unless workers["needs"] == "build-test"
 raise "shard failures must not cancel sibling diagnostics" unless workers.dig("strategy", "fail-fast") == false
-raise "two balanced test workers are required" unless workers.dig("strategy", "matrix", "shard") == [1, 2]
+raise "four balanced test workers are required" unless workers.dig("strategy", "matrix", "shard") == [1, 2, 3, 4]
 builder_steps = swift_job.fetch("steps")
+raise "test plan must assign four shards" unless builder_steps.any? do |step|
+  step["run"] == "python3 scripts/ci_swift_tests.py plan --shard-count 4"
+end
 publish = builder_steps.index { |step| step["name"] == "Upload compiled Swift test products" }
 raise "builder must publish compiled products" unless publish
 raise "builder must not execute test batches" if builder_steps.any? { |step| step.fetch("run", "").match?(/--lane|run-shard/) }
@@ -98,9 +101,10 @@ raise "save and restore must use the same compilation cache" unless
 key = restore.fetch("with").fetch("key")
 prefixes = restore.fetch("with").fetch("restore-keys").lines.map(&:strip)
 raise "cache fallback must retain all compatibility inputs" unless
-  prefixes == [key.delete_suffix("${{ github.sha }}")] &&
+  prefixes == [key.delete_suffix("${{ github.sha }}"), "swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-"] &&
   ["runner.os", "runner.arch", ".xcode-compilation-cache-toolchain", "project.yml",
-   ".github/workflows/build.yml", "Package.resolved"].all? { |input| key.include?(input) }
+   "Package.resolved"].all? { |input| key.include?(input) } &&
+  !key.include?(".github/workflows/build.yml")
 raise "restore before building and save only a successful build" unless
   builder_steps.index(restore) < builder_steps.index(build) &&
   builder_steps.index(save) > builder_steps.index(build) &&

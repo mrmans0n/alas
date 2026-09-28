@@ -87,7 +87,6 @@ struct LocalTextModelLeaseTests {
                 let cleanupDeadline = ContinuousClock.now.advanced(by: .seconds(2))
                 while process.isRunning, ContinuousClock.now < cleanupDeadline { _ = sched_yield() }
             }
-            if !process.isRunning { process.waitUntilExit() }
         }
         func expectResponse(_ expected: String, sourceLocation: SourceLocation = #_sourceLocation) async throws {
             let actual = try await Self.readReply(from: output.fileHandleForReading)
