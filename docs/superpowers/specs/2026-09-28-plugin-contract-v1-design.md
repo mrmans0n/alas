@@ -37,8 +37,8 @@ All new code lives in `Alas/Sources/Plugins/`.
 | `PluginManifest` | Decode and validate `plugin.json`. Pure. | Foundation |
 | `PluginRuntime` | One WasmKit instance on a serial queue. Moves bytes in and out; enforces fuel, memory, message-size, and send-count limits. Knows nothing about Alas. | WasmKit |
 | `PluginHost` | One per (plugin, project). Protocol state machine, capability checks, request routing, event delivery. | `PluginRuntime`, `PluginHostActions` |
-| `PluginHostActions` | Adapter from plugin requests to existing Alas code: snapshot from `AgentSidebarRollupBuilder` and the worktree status stores; actions via `AlasActionService`. | AppState services |
-| `PluginManager` | On `AppState`. Discovery, approvals, starting and stopping hosts as projects open and close and plugins are enabled or disabled. | all of the above |
+| `PluginHostActions` | Adapter from plugin requests to existing Alas code: snapshot from `AgentSidebarRollupBuilder` and the worktree status stores; `worktree/switch` via `AppState.focusGlobalWorktree` after checking the id belongs to the project. | AppState services |
+| `PluginManager` | Discovery, approvals, starting and stopping hosts. In phase 2 it is owned by the Debug → Plugins window controller and starts when that window first opens; phase 3 moves it onto `AppState`. | all of the above |
 
 The phase 1 prototype (`PluginPrototypeRuntime.swift`, `PluginPrototypeWindow.swift`)
 is removed. Its runtime code moves into `PluginRuntime`, and its window becomes
@@ -83,9 +83,10 @@ phase 4.
 This reuses the `RepoHookTrust` pattern. The approval key is
 `SHA256("alas-plugin-trust-v1\0" + manifest bytes + "\0" + wasm bytes)`.
 
-- The first time a plugin is discovered, an approval sheet (modeled on
-  `RepoHookApprovalSheet`) shows its name, id, version, and each requested
-  capability in plain language.
+- In phase 2, an unapproved plugin appears in Debug → Plugins with its name,
+  id, version, each requested capability in plain language, and an
+  "Approve and run" button. The phase 3 install UI replaces this with a real
+  approval sheet.
 - Approval stores `{id, hash, grantedCapabilities}`. In v1 the granted set is
   all of the requested capabilities. It is stored separately so that later
   versions can grant only some of them.
@@ -138,14 +139,15 @@ diff drift.
 }
 ```
 
-- `state` is `AgentSidebarState` in snake_case: `running`, `awaiting_input`,
-  `permission_request`, `idle`, `detached`, `unknown`.
+- `sessions` lists the rollup's active (non-detached) rows. `state` is
+  `AgentSidebarState` in snake_case: `running`, `awaiting_input`,
+  `permission_request`, `idle`, `unknown`.
 - `plan` is omitted when a session has no plan.
 - `dirty` is omitted while the worktree status is still `unknown`.
 
 **Error codes.** `-32601` unknown method. `-32602` invalid params.
-`-32001` capability not granted. `-32002` too many pending requests.
-`-32003` action failed; the message carries the `AlasActionService` error text.
+`-32001` capability not granted. `-32003` action failed, for example an
+unknown worktree id.
 
 ## Lifecycle
 
@@ -156,8 +158,8 @@ plus `failed(reason)` reachable from any running state.
   response to it before `alas_handle` returns. If it sends no response, or an
   error response, the host moves to `failed`.
 - **Active.** Events and responses are delivered. If the plugin holds
-  `workspace.read`, a `workspace/changed` notification is sent right after
-  activation and then on each coalesced change.
+  `workspace.read`, a 500 ms snapshot poll sends `workspace/changed` soon after
+  activation and again whenever the snapshot changes.
 - **Deactivate.** Happens when the project closes, the plugin is disabled, the
   approval is revoked, or the app quits. The host sends `alas/deactivate` with a
   normal fuel budget, then drops the instance whatever the outcome, along with
@@ -193,7 +195,6 @@ These are constants in v1.
 | Linear memory | 64 MiB, or the module's declared maximum if lower. Enforced with `Store.resourceLimiter` (currently `@_spi(Fuzzing)`). | `memory.grow` returns −1; the plugin decides what to do |
 | Message size, either direction | 1 MiB | `failed` |
 | `alas.send` calls per `alas_handle` | 64 | `failed` |
-| Pending plugin → host requests | 32 | `-32002`; the plugin keeps running |
 
 The host validates every guest `ptr`/`len` itself before touching memory,
 because WasmKit's buffer accessors `precondition` on out-of-bounds access.
@@ -201,7 +202,7 @@ because WasmKit's buffer accessors `precondition` on out-of-bounds access.
 **Threading.** Snapshots are built on the main actor from existing observable
 state, encoded there, and handed to the plugin's queue as bytes. All WasmKit
 execution happens on the plugin's serial queue. Results come back to the main
-actor only to apply host actions, which go through `AlasActionService`.
+actor only to apply host actions.
 
 ## Testing
 
@@ -248,6 +249,10 @@ Tests follow the AGENTS.md testing policy.
 - The Rust SDK crate and a CI build of the sample (phase 3).
 - The install UI, real enable/disable settings, and a log viewer (phase 3).
 - Network capabilities, partial grants, signing, remote workspaces, Component Model.
+
+No pending-request cap in v1: every host method answers immediately, and the
+64-send cap bounds each call. Add the cap with the first asynchronous host
+method, such as network access.
 
 ## Risks
 
