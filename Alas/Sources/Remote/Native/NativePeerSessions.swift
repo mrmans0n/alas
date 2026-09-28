@@ -33,6 +33,13 @@ final class NativePeerSessions {
     /// would look current even though a later edit already invalidated it.
     /// Cleared once the retry it queues has been sent.
     @ObservationIgnored private var fileTreeRequestOutdated = false
+    /// Same pair as `fileTreeRequestInFlight`/`fileTreeRequestOutdated`, for
+    /// `listChanges`: `requestChanges()` has no equivalent to
+    /// `beginRootLoad()`'s loaded/not-loaded gate, so without this every
+    /// summary change would fire its own request and the peer's in-flight
+    /// dedup would silently drop all but the first.
+    @ObservationIgnored private var changesRequestInFlight = false
+    @ObservationIgnored private var changesRequestOutdated = false
 
     init(federation: FederatedSessionsProvider,
          peers: @escaping @MainActor () -> [RemoteHelloPeer]) {
@@ -82,6 +89,8 @@ final class NativePeerSessions {
         workspace = NativePeerWorkspace()
         workspaceSummary = nil
         fileTreeRequestOutdated = false
+        changesRequestInFlight = false
+        changesRequestOutdated = false
         fileTreeRequestInFlight = false
     }
 
@@ -104,13 +113,21 @@ final class NativePeerSessions {
             pendingPromptExpectedIndex = nil
             _ = federation.route(.subscribe(sessionId: selectedSessionId), from: downstream)
             workspace = NativePeerWorkspace()
+            // Whatever was in flight before the peer went away will never
+            // get a reply now — without this, reloadWorkspace() below would
+            // find both still "in flight" and gate its own fresh requests.
+            changesRequestInFlight = false
+            changesRequestOutdated = false
+            fileTreeRequestInFlight = false
+            fileTreeRequestOutdated = false
             reloadWorkspace()
         } else if selectedRow?.worktree != workspaceSummary {
-            requestChanges()
+            // A request already in flight for either skips its send; queue a
+            // retry so the eventual (now-stale) reply doesn't stand in as
+            // current — the peer silently drops a duplicate in-flight request.
+            if !requestChanges() { changesRequestOutdated = true }
             // The summary only signals that the peer's worktree changed, not
             // which files — a rename or delete only shows up by re-listing.
-            // A root load already in flight skips the send; queue a retry so
-            // the eventual (now-stale) reply doesn't stand in as current.
             if !loadFileTree() { fileTreeRequestOutdated = true }
         }
     }
@@ -145,6 +162,8 @@ final class NativePeerSessions {
         workspace = NativePeerWorkspace()
         workspaceSummary = nil
         fileTreeRequestOutdated = false
+        changesRequestInFlight = false
+        changesRequestOutdated = false
         fileTreeRequestInFlight = false
     }
 
@@ -176,11 +195,19 @@ final class NativePeerSessions {
         loadFileTree()
     }
 
-    func requestChanges() {
-        guard selectedSessionId != nil else { return }
+    @discardableResult
+    func requestChanges() -> Bool {
+        guard selectedSessionId != nil else { return false }
         workspaceSummary = selectedRow?.worktree
+        guard !changesRequestInFlight else { return false }
+        changesRequestInFlight = true
         workspace.beginChangesLoad()
-        if !routeWhileOnline({ .listChanges(sessionId: $0) }) { workspace.markUnavailable() }
+        if !routeWhileOnline({ .listChanges(sessionId: $0) }) {
+            changesRequestInFlight = false
+            workspace.markUnavailable()
+            return false
+        }
+        return true
     }
 
     @discardableResult
@@ -311,12 +338,21 @@ final class NativePeerSessions {
             deliveryError = "Prompt was not delivered. Your draft was kept."
             return
         }
+        let isChangesReply: Bool = switch message {
+        case .changeList, .changeListFailed: true
+        default: false
+        }
+        if isChangesReply { changesRequestInFlight = false }
         let isRootFileTreeReply: Bool = switch message {
         case .fileTree(_, let path, _, _), .fileTreeFailed(_, let path, _, _): path == nil
         default: false
         }
         if isRootFileTreeReply { fileTreeRequestInFlight = false }
         let handled = workspace.apply(message)
+        if isChangesReply, changesRequestOutdated {
+            changesRequestOutdated = false
+            requestChanges()
+        }
         if isRootFileTreeReply, fileTreeRequestOutdated {
             fileTreeRequestOutdated = false
             loadFileTree()
