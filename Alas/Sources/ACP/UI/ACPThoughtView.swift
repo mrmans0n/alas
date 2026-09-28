@@ -18,7 +18,7 @@ struct ACPThoughtView: View {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !trimmed.contains(where: \.isNewline) else { return nil }
         let text: Substring
-        if trimmed.hasPrefix("**"), trimmed.hasSuffix("**"), trimmed.count > 4 {
+        if trimmed.hasPrefix("**"), trimmed.hasSuffix("**"), trimmed.count >= 4 {
             let unmarked = trimmed.dropFirst(2).dropLast(2)
             guard unmarked.contains(where: { !$0.isWhitespace }) else { return nil }
             text = unmarked

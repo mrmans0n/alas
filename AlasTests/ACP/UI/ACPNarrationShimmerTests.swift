@@ -117,6 +117,7 @@ struct ACPNarrationShimmerTests {
         #expect(ACPThoughtView.inlineLabel(for: "Checking peer header") == "Checking peer header")
         #expect(ACPThoughtView.inlineLabel(for: "**partial") == "**partial")
         #expect(ACPThoughtView.inlineLabel(for: "** **") == nil)
+        #expect(ACPThoughtView.inlineLabel(for: "****") == nil)
     }
 
     @Test("empty, multiline, and long reasoning keep the collapsed disclosure")
