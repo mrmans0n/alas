@@ -31,7 +31,7 @@ packages:
   # over a small C ABI (see scripts/build-treesitter-pack.sh).
   SwiftTreeSitter:
     url: https://github.com/tree-sitter/swift-tree-sitter
-    exactVersion: 0.10.0
+    exactVersion: 0.25.0
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.9.0
