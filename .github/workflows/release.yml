@@ -49,10 +49,10 @@ jobs:
           git config --global --unset-all credential.helper || true
           git config --global credential.helper ""
 
-      - name: Install xcodegen + zig@0.15
+      - name: Install xcodegen + Zig 0.15 + Zig 0.16
         # Homebrew's zig@0.15 ships the patch for Zig 0.15.2 + Xcode 26.4
         # linker bug. See ThirdParty/ghostty/HACKING.md.
-        run: brew install xcodegen zig@0.15 create-dmg
+        run: brew install xcodegen zig@0.15 zig@0.16 create-dmg
 
       - name: Test build-ghostty.sh harness
         run: bash scripts/tests/build-ghostty/run.sh
@@ -142,7 +142,7 @@ jobs:
             git rev-parse HEAD:AlasCLI
             git rev-parse HEAD:ThirdParty/treesitter-pack
             shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh scripts/build-treesitter-pack.sh
-            shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig"
+            shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig" "$(brew --prefix zig@0.16)/bin/zig"
           } >> .tools-pin
           cat .tools-pin
 

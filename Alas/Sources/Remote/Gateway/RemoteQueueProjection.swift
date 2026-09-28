@@ -39,17 +39,18 @@ enum RemoteQueueProjection {
     }
 
     /// Flatten a restored composer draft into the plain text the web
-    /// composer can hold. Mentions become their `@displayName` marker (the
-    /// same form the submit path serializes them to); image segments are
-    /// dropped, since the web client cannot re-stage bytes it never had.
-    /// The queued bubble hides Edit when `imageCount > 0`, so dropping here
-    /// is a defensive fallback rather than the expected path.
+    /// composer can hold. Mentions and references keep their visible spelling;
+    /// image segments are dropped, since the web client cannot re-stage bytes
+    /// it never had. The queued bubble hides Edit when `imageCount > 0`, so
+    /// dropping an image here is a defensive fallback, not the expected path.
     static func plainText(from draft: ACPComposerDraft) -> String {
         var out = ""
         for segment in draft.segments {
             switch segment {
             case .text(let value):
                 out += value
+            case .upstreamReference(let reference):
+                out += reference.spelling
             case .mention(let displayName, _):
                 out += "@\(displayName) "
             case .image:

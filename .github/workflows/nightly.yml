@@ -38,8 +38,8 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Install zig@0.15
-        run: brew install zig@0.15
+      - name: Install Zig 0.15 + Zig 0.16
+        run: brew install zig@0.15 zig@0.16
 
       - name: Test build-ghostty.sh harness
         run: bash scripts/tests/build-ghostty/run.sh
@@ -80,7 +80,7 @@ jobs:
             git rev-parse HEAD:AlasCLI
             git rev-parse HEAD:ThirdParty/treesitter-pack
             shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh scripts/build-treesitter-pack.sh
-            shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig"
+            shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig" "$(brew --prefix zig@0.16)/bin/zig"
           } >> .tools-pin
           cat .tools-pin
 
@@ -194,9 +194,9 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Install xcodegen + zig@0.15 + create-dmg
+      - name: Install xcodegen + Zig 0.15 + Zig 0.16 + create-dmg
         if: steps.skip-check.outputs.skip != 'true'
-        run: brew install xcodegen zig@0.15 create-dmg
+        run: brew install xcodegen zig@0.15 zig@0.16 create-dmg
 
       - name: Test build-ghostty.sh harness
         if: steps.skip-check.outputs.skip != 'true'
@@ -260,7 +260,7 @@ jobs:
             git rev-parse HEAD:AlasCLI
             git rev-parse HEAD:ThirdParty/treesitter-pack
             shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh scripts/build-treesitter-pack.sh
-            shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig"
+            shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig" "$(brew --prefix zig@0.16)/bin/zig"
           } >> .tools-pin
           cat .tools-pin
 

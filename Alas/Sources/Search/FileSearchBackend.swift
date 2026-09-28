@@ -111,7 +111,8 @@ actor FffFileSearchBackend {
                 cache_budget_max_bytes: 0,
                 cache_budget_max_file_size: 0,
                 enable_fs_root_scanning: false,
-                enable_home_dir_scanning: false
+                enable_home_dir_scanning: false,
+                follow_symlinks: false
             )
             guard let envelope = fff_create_instance_with(&options) else {
                 throw FffFileSearchBackendError.createFailed(nil)

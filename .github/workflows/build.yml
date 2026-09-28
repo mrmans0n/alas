@@ -113,10 +113,10 @@ jobs:
           git config --global gc.auto 0
           git config --global receive.autogc false
 
-      - name: Install xcodegen + zig@0.15 + SwiftFormat
+      - name: Install xcodegen + Zig 0.15 + Zig 0.16 + SwiftFormat
         # Homebrew's zig@0.15 ships the patch for Zig 0.15.2 + Xcode 26.4
         # linker bug Ghostty's HACKING.md describes. Vanilla Zig 0.15.2 does not.
-        run: brew install xcodegen zig@0.15 swiftformat ripgrep
+        run: brew install xcodegen zig@0.15 zig@0.16 swiftformat ripgrep
 
       - name: Check formatting
         run: swiftformat Alas AlasTests --lint --reporter github-actions-log
@@ -221,7 +221,7 @@ jobs:
             git rev-parse HEAD:AlasCLI
             git rev-parse HEAD:ThirdParty/treesitter-pack
             shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh scripts/build-treesitter-pack.sh
-            shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig"
+            shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig" "$(brew --prefix zig@0.16)/bin/zig"
           } >> .tools-pin
           cat .tools-pin
 
