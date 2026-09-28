@@ -50,10 +50,13 @@ struct SidebarView: View {
                     showingNewWorkspace: $showingNewWorkspace
                 )
                 SpacePagerContent(spaces: state.spacesManager.spaces, selection: state.spacesManager.activeSpaceId) { spaceID in
-                    SidebarFilterSlotScrollView(onScroll: { old, new in
-                        guard spaceID == state.spacesManager.activeSpaceId else { return }
-                        updateFilterRowReveal(from: old, to: new)
-                    }) {
+                    SidebarFilterSlotScrollView(
+                        scrollTarget: spaceID == state.spacesManager.activeSpaceId ? highlightedWorktreeId : nil,
+                        onScroll: { old, new in
+                            guard spaceID == state.spacesManager.activeSpaceId else { return }
+                            updateFilterRowReveal(from: old, to: new)
+                        }
+                    ) {
                         VStack(alignment: .leading, spacing: SidebarFilterRowMetrics.slotSpacing) {
                             // The filter row's slot; the row itself is drawn
                             // by the overlay below so it can also pin.
@@ -320,9 +323,9 @@ struct SidebarView: View {
         .task(id: state.config.changes.stackedDiffsEnabled && GGAvailability.shared.isInstalled) {
             state.refreshGGSidebar()
         }
-        .onChange(of: worktreeFilter) { _, query in
-            highlightedWorktreeId = WorktreeSidebarFilter.isActive(query) ? filteredWorktreeIds().first : nil
-        }
+        .onChange(of: worktreeFilter) { resetFilterHighlight() }
+        // The previous space's match is not on the new page.
+        .onChange(of: state.spacesManager.activeSpaceId) { resetFilterHighlight() }
         .onDisappear {
             hideTitleTask?.cancel()
             hideTitleTask = nil
@@ -360,6 +363,10 @@ struct SidebarView: View {
                 to: state.projectsManager.visibleWorktrees(projectId: projectId)
             ).map(\.id)
         }
+    }
+
+    private func resetFilterHighlight() {
+        highlightedWorktreeId = WorktreeSidebarFilter.isActive(worktreeFilter) ? filteredWorktreeIds().first : nil
     }
 
     private func moveFilterHighlight(by offset: Int) {
@@ -485,9 +492,11 @@ enum SidebarFilterRowMetrics {
 /// so the row starts hidden and scrolling up reveals it. The content is kept
 /// at least a viewport plus the slot tall so a short sidebar can park too.
 private struct SidebarFilterSlotScrollView<Content: View>: View {
+    /// Worktree row to keep in view, i.e. the filter's keyboard highlight.
+    let scrollTarget: String?
     let onScroll: (ScrollGeometry, ScrollGeometry) -> Void
     @ViewBuilder let content: () -> Content
-    @State private var position = ScrollPosition()
+    @State private var position = ScrollPosition(idType: String.self)
     @State private var viewportHeight: CGFloat = 0
     @State private var parked = false
 
@@ -498,6 +507,11 @@ private struct SidebarFilterSlotScrollView<Content: View>: View {
         }
         .scrollPosition($position)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { viewportHeight = $0 }
+        .onChange(of: scrollTarget) { _, id in
+            // Centered so the pinned filter row never covers the highlight.
+            guard let id else { return }
+            withAnimation(.snappy(duration: 0.2)) { position.scrollTo(id: id, anchor: .center) }
+        }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { old, new in
             if !parked, viewportHeight > 0,
                new.contentSize.height >= new.containerSize.height + SidebarFilterRowMetrics.parkedOffset {

@@ -185,6 +185,8 @@ struct RepoGroupView: View {
                             commitQuery: commitQuery(wt),
                             isHighlighted: wt.id == highlightedWorktreeId
                         )
+                        // Scroll target for the sidebar filter's highlight.
+                        .id(wt.id)
                         .draggable(wt.id)
                         .dropDestination(for: String.self) { ids, _ in
                             guard let draggedId = ids.first, draggedId != wt.id else { return false }
