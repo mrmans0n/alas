@@ -138,7 +138,8 @@ struct ACPNativeDelegationControlsTests {
         ]
     )
     func adapterVersionGate(agentID: String, version: String, passes: Bool) {
-        let info = ACPImplementationInfo(name: "adapter", version: version)
+        let name = ACPManagedAdapterDescriptor.descriptor(for: agentID)!.packageName
+        let info = ACPImplementationInfo(name: name, version: version)
         let verify = {
             try ACPNativeDelegationControls.verifyAdapter(
                 agentID: agentID, nativeSubagentsDisabled: true, agentInfo: info)
@@ -147,6 +148,20 @@ struct ACPNativeDelegationControlsTests {
             #expect(throws: Never.self, performing: verify)
         } else {
             #expect(throws: ACPNativeDelegationError.self, performing: verify)
+        }
+    }
+
+    @Test("a same-named ACP server that is not the verified package is rejected")
+    func foreignAdapterIsRejected() {
+        #expect(throws: ACPNativeDelegationError.adapterUnverified(
+            agentID: "claude",
+            found: "some-fork-acp",
+            expected: "@agentclientprotocol/claude-agent-acp"
+        )) {
+            try ACPNativeDelegationControls.verifyAdapter(
+                agentID: "claude",
+                nativeSubagentsDisabled: true,
+                agentInfo: .init(name: "some-fork-acp", version: "9.9.9"))
         }
     }
 

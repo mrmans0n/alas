@@ -11,6 +11,16 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
     /// of every thread the adapter starts or resumes.
     case codexConfigEnvironment
 
+    /// The `agentInfo.name` of the adapter whose contract was verified. A
+    /// different ACP server that happens to share the binary name (Alas
+    /// accepts any same-named executable on PATH) is not trusted.
+    var verifiedAdapterName: String {
+        switch self {
+        case .claudeDisallowedTools: ACPManagedAdapterDescriptor.claude.packageName
+        case .codexConfigEnvironment: ACPManagedAdapterDescriptor.codex.packageName
+        }
+    }
+
     /// Lowest adapter version whose model-facing request was verified to
     /// omit the native tool. Older or unidentified adapters fail the launch
     /// instead of running as if enforced.
@@ -109,6 +119,7 @@ enum ACPNativeDelegationError: LocalizedError, Equatable {
     case malformedCodexConfig(String)
     case remoteHostUnsupported(agentID: String)
     case adapterVersionUnverified(agentID: String, found: String?, minimum: String)
+    case adapterUnverified(agentID: String, found: String?, expected: String)
 
     var errorDescription: String? {
         switch self {
@@ -129,6 +140,13 @@ enum ACPNativeDelegationError: LocalizedError, Equatable {
                 + "verified from \(minimum). Update the adapter or turn off "
                 + "\"Disable native subagents\" in Settings → Agents, then start a "
                 + "new session."
+        case .adapterUnverified(let agentID, let found, let expected):
+            let name = found.map { "\"\($0)\"" } ?? "an unnamed adapter"
+            return "Native subagents are disabled for this session, but the "
+                + "\(agentID) ACP server identified itself as \(name); disabling "
+                + "them is verified only for \(expected). Point Alas at that adapter "
+                + "or turn off \"Disable native subagents\" in Settings → Agents, "
+                + "then start a new session."
         }
     }
 }
@@ -169,7 +187,8 @@ enum ACPNativeDelegationControls {
         return spec.mergingExtraEnv([codexConfigKey: try mergedCodexConfig(existing: existing)])
     }
 
-    /// Fails when the adapter cannot be identified as a verified version.
+    /// Fails unless the adapter identifies itself as the verified package at
+    /// a verified version.
     static func verifyAdapter(
         agentID: String,
         nativeSubagentsDisabled: Bool,
@@ -178,6 +197,13 @@ enum ACPNativeDelegationControls {
         guard nativeSubagentsDisabled,
               let mechanism = ACPNativeDelegationSupport.resolve(agentID: agentID).mechanism
         else { return }
+        guard agentInfo?.name == mechanism.verifiedAdapterName else {
+            throw ACPNativeDelegationError.adapterUnverified(
+                agentID: agentID,
+                found: agentInfo?.name,
+                expected: mechanism.verifiedAdapterName
+            )
+        }
         guard let version = agentInfo?.version,
               isVersion(version, atLeast: mechanism.minimumAdapterVersion)
         else {

@@ -1722,7 +1722,7 @@ struct ACPSessionManagerAttachRestoreTests {
             setupEvaluator: { _ in .ready },
             connectionFactory: { _, _, _ in
                 let client = ACPMockClient()
-                self.scriptNativeDelegationInitialize(client, adapterVersion: "0.81.2")
+                self.scriptNativeDelegationInitialize(client, agentID: "claude", adapterVersion: "0.81.2")
                 self.scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
                 self.scriptSessionResult(client, method: "session/load", sessionId: "remote-new")
                 clients.append(client)
@@ -1765,7 +1765,7 @@ struct ACPSessionManagerAttachRestoreTests {
             connectionFactory: { spec, _, _ in
                 capturedSpec = spec
                 let client = ACPMockClient()
-                self.scriptNativeDelegationInitialize(client, adapterVersion: adapterVersion)
+                self.scriptNativeDelegationInitialize(client, agentID: "codex", adapterVersion: adapterVersion)
                 self.scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
                 return ACPConnection(client: client)
             }
@@ -5642,13 +5642,18 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
-    private func scriptNativeDelegationInitialize(_ client: ACPMockClient, adapterVersion: String) {
+    private func scriptNativeDelegationInitialize(
+        _ client: ACPMockClient,
+        agentID: String,
+        adapterVersion: String
+    ) {
+        let name = ACPManagedAdapterDescriptor.descriptor(for: agentID)?.packageName ?? agentID
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(
                 protocolVersion: 1,
                 agentCapabilities: .init(loadSession: true),
                 authMethods: [],
-                agentInfo: .init(name: "adapter", version: adapterVersion)
+                agentInfo: .init(name: name, version: adapterVersion)
             ))
         }
     }
