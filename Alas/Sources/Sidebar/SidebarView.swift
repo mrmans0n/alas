@@ -83,6 +83,7 @@ struct SidebarView: View {
                                     selectedWorktreeId: state.selectedWorktreeId,
                                     isMain: { wt in state.projectsManager.isMain(wt, in: project) },
                                     upstreamStatus: { wt in state.worktreeUpstreamStatusStore.status(for: wt.id) },
+                                    onPullUpstream: { wt in state.pullWorktreeFromSidebar(id: wt.id) },
                                     workspaceCheckout: { wt in
                                         WorkspaceCheckoutWorktreeResolver.presentation(
                                             for: wt,
