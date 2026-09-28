@@ -1811,17 +1811,22 @@ final class AppState {
                 )
             }
             let restoredPendingPrompt = record.pendingInitialPrompt != nil
-            // With a model selection, the prompt waits until the selection is
-            // reapplied on the attached session, below.
-            let promptAwaitingSelection = record.modelSelection == nil ? nil : record.pendingInitialPrompt
-            if promptAwaitingSelection != nil {
-                // A crash after the prompt was queued but before the child was
-                // marked ready leaves it in the hydrated queue, where attach
-                // would dispatch it before the selection is re-verified.
-                manager.withholdQueuedDelegatedPrompt(
+            // With a model selection, the initial prompt waits until the
+            // selection is reapplied on the attached session, below. A crash
+            // after it was queued but before the child was marked ready leaves
+            // it in the hydrated queue, where attach would dispatch it before
+            // the selection is re-verified, whether or not the record's
+            // pending copy was already cleared.
+            var promptAwaitingSelection: String?
+            if record.modelSelection != nil {
+                let withheld = manager.withholdQueuedDelegatedPrompt(
                     messageId: acpOrchestration.initialPromptSource(for: record).messageId,
                     in: record.childSessionId
                 )
+                promptAwaitingSelection = record.pendingInitialPrompt ?? withheld
+            }
+            if promptAwaitingSelection != nil {
+                // Queued once the selection is acknowledged.
             } else if let prompt = record.pendingInitialPrompt {
                 let accepted = await manager.enqueueDelegatedPrompt(
                     text: prompt,

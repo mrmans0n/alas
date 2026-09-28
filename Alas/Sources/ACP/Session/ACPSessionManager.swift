@@ -6999,15 +6999,20 @@ extension ACPSessionManager {
     }
 
     /// Takes a delegated prompt out of a hydrated session's queue before
-    /// attach can dispatch it. Startup recovery uses this for a child that
-    /// crashed after queueing its initial prompt but before it was marked
-    /// ready: the prompt must wait until the model selection is re-verified.
-    /// The caller re-queues it, or persists the queue without it on failure.
-    func withholdQueuedDelegatedPrompt(messageId: String, in id: ACPSession.ID) {
+    /// attach can dispatch it, returning its text. Startup recovery uses this
+    /// for a child that crashed after queueing its initial prompt but before
+    /// it was marked ready: the prompt must wait until the model selection is
+    /// re-verified. The caller re-queues it, or persists the queue without it
+    /// on failure.
+    func withholdQueuedDelegatedPrompt(messageId: String, in id: ACPSession.ID) -> String? {
         guard let session = sessions[id], runners[id] == nil,
-              let item = session.queue.first(where: { $0.delegatedSource?.messageId == messageId })
-        else { return }
-        _ = session.removeFromQueue(id: item.id)
+              let item = session.queue.first(where: { $0.delegatedSource?.messageId == messageId }),
+              session.removeFromQueue(id: item.id)
+        else { return nil }
+        return item.blocks.compactMap { block -> String? in
+            guard case .text(let text) = block else { return nil }
+            return text
+        }.joined()
     }
 
     private func applyDelegatedSelectionStep(
