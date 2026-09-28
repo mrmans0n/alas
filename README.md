@@ -271,7 +271,7 @@ and test targets from [project.yml](project.yml).
 | Ghostty | `1547dd667ab6` | Embedded terminal, built from the submodule as `GhosttyKit.xcframework` |
 | zmx | `6084a4e34082` | Persistent terminal sessions |
 | fff | `1bb76f6da687` | File search through a Rust C ABI |
-| SwiftTreeSitter | 0.25.0 | Swift syntax-highlighting API |
+| SwiftTreeSitter | 0.10.0 | Swift syntax-highlighting API |
 | tree-sitter | 0.25.10 | Runtime resolved through SwiftPM |
 | swift-markdown / swift-cmark | 0.8.0 | Markdown parsing |
 | BeautifulMermaidSwift / elk-swift | 1.0.4 / 1.0.2 | Mermaid rendering and graph layout |
