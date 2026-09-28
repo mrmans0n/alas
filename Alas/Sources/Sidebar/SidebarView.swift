@@ -554,10 +554,16 @@ private struct SidebarWorktreeFilterRow: View {
                 placeholder: state.binding(for: .switchRepository)
                     .map { "Filter worktrees · \($0.displayString)" } ?? "Filter worktrees"
             )
-                .onKeyPress(.downArrow) { onMoveHighlight(1); return .handled }
-                .onKeyPress(.upArrow) { onMoveHighlight(-1); return .handled }
-                .onSubmit(onSubmit)
-                .onExitCommand(perform: onClear)
+            .onKeyPress(.downArrow) {
+                onMoveHighlight(1)
+                return .handled
+            }
+            .onKeyPress(.upArrow) {
+                onMoveHighlight(-1)
+                return .handled
+            }
+            .onSubmit(onSubmit)
+            .onExitCommand(perform: onClear)
             WorktreeSortMenu(
                 selection: state.config.worktrees.defaultOrdering,
                 onSelect: { state.setDefaultWorktreeOrdering($0) }
