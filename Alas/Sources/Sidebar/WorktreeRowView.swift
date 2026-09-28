@@ -193,6 +193,8 @@ struct WorktreeRowView: View {
     let onSetGGWorktreeMode: (GGWorktreeMode) -> Void
     let workspaceCheckout: WorktreeWorkspaceCheckoutPresentation?
     var commitQuery: CommitQuery? = nil
+    /// Keyboard cursor from the sidebar filter; drawn like hover.
+    var isHighlighted = false
     @Environment(\.theme) var theme
     @State private var hovering = false
     @State private var loadedCommitQuery: CommitQuery?
@@ -321,7 +323,7 @@ struct WorktreeRowView: View {
                         RoundedRectangle(cornerRadius: 9)
                             .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
                     )
-            } else if hovering {
+            } else if hovering || isHighlighted {
                 RoundedRectangle(cornerRadius: 9)
                     .fill(theme.color("bg-3").opacity(0.55))
                 RoundedRectangle(cornerRadius: 9)

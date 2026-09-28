@@ -1,8 +1,6 @@
 import SwiftUI
 
 struct SidebarHeaderView: View {
-    let worktreeSortMode: AppConfig.WorktreeSortMode
-    let onSetWorktreeSortMode: (AppConfig.WorktreeSortMode) -> Void
     let onSettings: () -> Void
     let onAddProject: () -> Void
     let onSearch: () -> Void
@@ -19,9 +17,7 @@ struct SidebarHeaderView: View {
     var onDismissAttentionItem: (AttentionItem) -> Void = { _ in }
     var onOpenAttentionItem: (AttentionItem) async -> Void = { _ in }
     var onOpenPeerSession: (RemoteSessionSummary) -> Void = { _ in }
-    init(worktreeSortMode: AppConfig.WorktreeSortMode,
-         onSetWorktreeSortMode: @escaping (AppConfig.WorktreeSortMode) -> Void,
-         onSettings: @escaping () -> Void,
+    init(onSettings: @escaping () -> Void,
          onAddProject: @escaping () -> Void,
          onSearch: @escaping () -> Void,
          onHideSidebar: @escaping () -> Void,
@@ -37,8 +33,6 @@ struct SidebarHeaderView: View {
          onDismissAttentionItem: @escaping (AttentionItem) -> Void = { _ in },
          onOpenAttentionItem: @escaping (AttentionItem) async -> Void = { _ in },
          onOpenPeerSession: @escaping (RemoteSessionSummary) -> Void = { _ in }) {
-        self.worktreeSortMode = worktreeSortMode
-        self.onSetWorktreeSortMode = onSetWorktreeSortMode
         self.onSettings = onSettings
         self.onAddProject = onAddProject
         self.onSearch = onSearch
@@ -57,7 +51,6 @@ struct SidebarHeaderView: View {
         self.onOpenPeerSession = onOpenPeerSession
     }
     @Environment(\.theme) private var theme
-    @State private var hovering = false
     @State private var addMenuHovered = false
     /// `Menu` does not expose press state to its label, so both menu-backed
     /// header controls track it with a simultaneous gesture, as the tab bar does.
@@ -78,8 +71,6 @@ struct SidebarHeaderView: View {
         }
         .padding(.horizontal, 11)
         .frame(height: 38)
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
     }
 
     private func attentionToolbarButton(metrics: ToolbarControlMetrics = .standard) -> some View {
@@ -103,11 +94,6 @@ struct SidebarHeaderView: View {
             WindowDragHandle()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             HStack(alignment: .center, spacing: 1) {
-                WorktreeSortMenu(
-                    selection: worktreeSortMode,
-                    onSelect: onSetWorktreeSortMode,
-                    headerHovered: hovering
-                )
                 ToolbarBtn(icon: "search", tooltip: "Search",
                            metrics: .sidebarHeader, action: onSearch)
                 if showsAttentionInbox {
@@ -161,14 +147,6 @@ struct SidebarHeaderView: View {
                     attentionToolbarButton()
                 }
                 Menu {
-                    Menu("Sort worktrees") {
-                        ForEach(WorktreeSortPresentation.modes, id: \.self) { mode in
-                            Toggle(WorktreeSortPresentation.title(for: mode), isOn: Binding(
-                                get: { worktreeSortMode == mode },
-                                set: { selected in if selected { onSetWorktreeSortMode(mode) } }
-                            ))
-                        }
-                    }
                     Button("Add repository...", systemImage: "folder.badge.plus", action: onAddProject)
                     if let onNewWorkspace {
                         Button("New workspace...", systemImage: "square.grid.2x2", action: onNewWorkspace)

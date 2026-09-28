@@ -184,8 +184,7 @@ struct AttentionInboxViewTests {
     }
 
     private func headerSize(count: Int, width: CGFloat = 300, workspacesEnabled: Bool = false) throws -> NSSize {
-        let view = SidebarHeaderView(worktreeSortMode: .lastUpdateDesc, onSetWorktreeSortMode: { _ in },
-                                     onSettings: {}, onAddProject: {}, onSearch: {}, onHideSidebar: {},
+        let view = SidebarHeaderView(onSettings: {}, onAddProject: {}, onSearch: {}, onHideSidebar: {},
                                      onNewWorkspace: workspacesEnabled ? {} : nil,
                                      attentionCount: count, attentionInboxOpen: .constant(false))
             .environment(\.theme, try ThemeStore().current)
