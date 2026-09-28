@@ -61,7 +61,7 @@ project, it may re-run the same install probe that `session_new` uses.
 | `agents[].id` | Stable agent id. Pass it as `session_new`'s `agent` (`--agent` in the CLI). |
 | `agents[].display_name` | Human-readable name. |
 | `agents[].available` | `true` only when `availability` is `available`. Only these agents are valid `session_new` targets. |
-| `agents[].availability` | `available`, `disabled` (turned off in Settings), `not_installed` (its CLI was not detected where the caller's worktree runs), or `unknown` (a remote host's install probe has not answered). |
+| `agents[].availability` | `available`, `disabled` (turned off in Settings), `not_installed` (its CLI was not detected where the caller's worktree runs; for a local project Alas re-checks the binary on every call, and an agent installed after Alas's last scan is listed once Settings rescans), or `unknown` (a remote host's install probe has not answered). |
 | `agents[].model_selection` | `supported` (the agent has advertised models), `unsupported` (a live session advertised none during this app run), or `unknown` (no live session has reported yet). |
 | `agents[].model_catalog.state` | See below. |
 | `agents[].model_catalog.models` | `{id, name}` pairs exactly as the agent advertised them. Present only for `known` and `stale`. |
