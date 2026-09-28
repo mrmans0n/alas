@@ -311,4 +311,92 @@ struct ACPUpstreamReferenceComposerTests {
         #expect(chipSpellings(remountedTextView) == ["#12"])
         #expect(wireText(remountedTextView) == "see #12")
     }
+
+    @Test("edits to deferred reference markers preserve the visible text")
+    func editedDeferredReferenceMarkerUsesVisibleText() {
+        let (textView, coordinator, window) = makeTextView(store: nil)
+        defer { withExtendedLifetime((coordinator, window)) {} }
+
+        let reference = CodeHostReference(sigil: .hash, number: 12)
+        coordinator.restoreDraftForTesting(
+            ACPComposerDraft(segments: [.upstreamReference(reference)]),
+            into: textView
+        )
+        textView.textStorage?.deleteCharacters(in: NSRange(location: 2, length: 1))
+
+        let edited = textView.attributedString()
+        #expect(textView.string == "#1")
+        #expect(ACPInputField.Coordinator.draft(from: edited).plainText == "#1")
+        #expect(ACPInputField.Coordinator.extract(edited).0 == "#1")
+    }
+
+    @Test("GitLab-only references stay plain on GitHub")
+    func gitLabOnlyReferenceRemainsTextOnGitHub() async {
+        let github = await UpstreamReferenceFixtures.store(host: .github)
+        let reference = CodeHostReference(sigil: .bang, number: 12)
+
+        let (restored, restoredCoordinator, restoredWindow) = makeTextView(store: github)
+        defer { withExtendedLifetime((restoredCoordinator, restoredWindow)) {} }
+        restoredCoordinator.restoreDraftForTesting(
+            ACPComposerDraft(segments: [.upstreamReference(reference)]),
+            into: restored
+        )
+        #expect(restored.string == "!12")
+        #expect(chipSpellings(restored).isEmpty)
+        #expect(wireText(restored) == "!12")
+
+        let (late, lateCoordinator, lateWindow) = makeTextView(store: nil)
+        defer { withExtendedLifetime((lateCoordinator, lateWindow)) {} }
+        lateCoordinator.restoreDraftForTesting(
+            ACPComposerDraft(segments: [.upstreamReference(reference)]),
+            into: late
+        )
+        lateCoordinator.attachUpstreamReferences(github)
+        late.chipPersistedUpstreamReferencesIfNeeded()
+        #expect(late.string == "!12")
+        #expect(chipSpellings(late).isEmpty)
+        #expect(wireText(late) == "!12")
+
+        let gitlab = await UpstreamReferenceFixtures.store(host: .gitlab)
+        let (source, sourceCoordinator, sourceWindow) = makeTextView(store: gitlab)
+        defer { withExtendedLifetime((sourceCoordinator, sourceWindow)) {} }
+        #expect(source.insertPlainText("see !12"))
+        #expect(chipSpellings(source) == ["!12"])
+
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        source.selectAll(nil)
+        #expect(source.writeSelection(to: board, types: source.writablePasteboardTypes))
+
+        let (pasted, pastedCoordinator, pastedWindow) = makeTextView(store: github)
+        defer { withExtendedLifetime((pastedCoordinator, pastedWindow)) {} }
+        #expect(pasted.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        #expect(pasted.string == "see !12")
+        #expect(chipSpellings(pasted).isEmpty)
+        #expect(wireText(pasted) == "see !12")
+    }
+
+    @Test("pasting a copied reference inside a code fence keeps it plain text")
+    func pastedComposerReferenceInsideCodeFenceStaysText() async {
+        let store = await UpstreamReferenceFixtures.store()
+        let (source, sourceCoordinator, sourceWindow) = makeTextView(store: store)
+        defer { withExtendedLifetime((sourceCoordinator, sourceWindow)) {} }
+        #expect(source.insertPlainText("see #12"))
+        #expect(chipSpellings(source) == ["#12"])
+
+        let board = NSPasteboard(name: .init("alas-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        source.selectAll(nil)
+        #expect(source.writeSelection(to: board, types: source.writablePasteboardTypes))
+
+        let (target, targetCoordinator, targetWindow) = makeTextView(store: store)
+        defer { withExtendedLifetime((targetCoordinator, targetWindow)) {} }
+        target.string = "```\nlog: "
+        target.setSelectedRange(NSRange(location: (target.string as NSString).length, length: 0))
+
+        #expect(target.readSelection(from: board, type: ACPNSTextView.composerDraftPasteboardType))
+        #expect(target.string == "```\nlog: see #12")
+        #expect(chipSpellings(target).isEmpty)
+        #expect(wireText(target) == "```\nlog: see #12")
+    }
 }

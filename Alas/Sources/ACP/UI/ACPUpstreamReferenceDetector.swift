@@ -70,6 +70,16 @@ enum ACPUpstreamReferenceDetector {
             }
     }
 
+    /// Whether `reference`'s sigil is accepted by the host-specific parser.
+    static func supports(_ reference: CodeHostReference, on host: CodeHostKind) -> Bool {
+        switch reference.sigil {
+        case .hash:
+            return true
+        case .bang:
+            return host == .gitlab
+        }
+    }
+
     private static let urlCandidate = try! NSRegularExpression(pattern: #"https?://[^\s<>()\[\]{}"'`]+"#, options: [.caseInsensitive])
     private static let urlTrailingPunctuation = Set(".,;:!?".utf16)
 

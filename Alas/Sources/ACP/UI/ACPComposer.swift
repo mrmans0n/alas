@@ -722,13 +722,31 @@ struct ACPInputField: NSViewRepresentable {
             }
         }
 
+        /// The upstream-reference attribute marks both real chips and plain-text
+        /// placeholders awaiting a host. A placeholder remains a reference only
+        /// while its visible spelling is unchanged.
+        private static func persistedUpstreamReference(
+            in attributed: NSAttributedString,
+            attributes: [NSAttributedString.Key: Any],
+            range: NSRange
+        ) -> CodeHostReference? {
+            if let chip = attributes[.attachment] as? ACPUpstreamReferenceChipAttachment {
+                return chip.reference
+            }
+            guard let spelling = attributes[.upstreamReference] as? String,
+                  range.length == (spelling as NSString).length,
+                  attributed.attributedSubstring(from: range).string == spelling
+            else { return nil }
+            return CodeHostReference(spelling: spelling)
+        }
+
         static func draft(from attributed: NSAttributedString) -> ACPComposerDraft {
             let full = NSRange(location: 0, length: attributed.length)
             guard attributed.length > 0 else { return ACPComposerDraft(segments: []) }
 
-            // Fast path: no chip mentions or image chips in the storage.
-            // The whole string is plain text, so skip the enumerateAttributes
-            // walk entirely. This is the common case while typing.
+            // Fast path: no composer chips or pending reference markers in
+            // storage. The whole string is plain text, so skip the
+            // enumerateAttributes walk entirely; this is common while typing.
             var hasChip = false
             attributed.enumerateAttributes(in: full) { keys, _, stop in
                 if keys.isComposerChip {
@@ -756,11 +774,13 @@ struct ACPInputField: NSViewRepresentable {
             attributed.enumerateAttributes(in: full) { keys, range, _ in
                 if let command = keys[.commandChipName] as? String {
                     appendText(command)
-                } else if let spelling = keys[.upstreamReference] as? String {
-                    if let reference = CodeHostReference(spelling: spelling) {
+                } else if keys[.upstreamReference] != nil {
+                    if let reference = persistedUpstreamReference(
+                        in: attributed, attributes: keys, range: range
+                    ) {
                         segments.append(.upstreamReference(reference))
                     } else {
-                        appendText(spelling)
+                        appendText(attributed.attributedSubstring(from: range).string)
                     }
                 } else if let uri = keys[.imageAttachmentURI] as? String {
                     let mime = (keys[.imageAttachmentMime] as? String) ?? "image/png"
@@ -804,10 +824,16 @@ struct ACPInputField: NSViewRepresentable {
                     result.append(chip)
                 case .upstreamReference(let reference):
                     if let store = upstreamReferences, let host = store.hostKind {
-                        store.ensureLoaded(reference)
-                        result.append(ACPUpstreamReferenceChip.chip(
-                            for: reference, host: host, store: store, attributes: baseAttributes
-                        ))
+                        if ACPUpstreamReferenceDetector.supports(reference, on: host) {
+                            store.ensureLoaded(reference)
+                            result.append(ACPUpstreamReferenceChip.chip(
+                                for: reference, host: host, store: store, attributes: baseAttributes
+                            ))
+                        } else {
+                            result.append(NSAttributedString(
+                                string: reference.spelling, attributes: baseAttributes
+                            ))
+                        }
                     } else {
                         let marker = NSMutableAttributedString(
                             string: reference.spelling, attributes: baseAttributes
@@ -841,9 +867,9 @@ struct ACPInputField: NSViewRepresentable {
         /// `.imageAttachmentURI`) become image attachments and contribute NO
         /// text. Mention chips (tagged with `.attachmentURI`) become
         /// resource_link attachments and emit `@filename` in the text.
-        /// Everything else is concatenated as-is — the user's markdown
-        /// markers (`**bold**`, `# heading`, etc.) are preserved verbatim for
-        /// the receiving agent.
+        /// Upstream references emit their spelling; edited pending markers
+        /// fall back to the visible text. Other text, including Markdown
+        /// markers, is concatenated verbatim for the receiving agent.
         static func extract(_ attributed: NSAttributedString) -> (String, [ACPMessage.Attachment]) {
             var text = ""
             var atts: [ACPMessage.Attachment] = []
@@ -851,8 +877,14 @@ struct ACPInputField: NSViewRepresentable {
             attributed.enumerateAttributes(in: full) { keys, range, _ in
                 if let command = keys[.commandChipName] as? String {
                     text += command
-                } else if let spelling = keys[.upstreamReference] as? String {
-                    text += spelling
+                } else if keys[.upstreamReference] != nil {
+                    if let reference = persistedUpstreamReference(
+                        in: attributed, attributes: keys, range: range
+                    ) {
+                        text += reference.spelling
+                    } else {
+                        text += attributed.attributedSubstring(from: range).string
+                    }
                 } else if let uri = keys[.imageAttachmentURI] as? String {
                     let mime = (keys[.imageAttachmentMime] as? String) ?? "image/png"
                     let name = URL(string: uri)?.lastPathComponent
@@ -2336,9 +2368,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
         // paste itself was still handled — falling through would let
         // `paste(_:)` retry with the general pasteboard's plain-text form.
         guard !draft.isEmpty else { return true }
+        // Rebuild copied references as text first; the destination's code
+        // context and host determine which ones can become chips.
         let fragment = NSMutableAttributedString(
             attributedString: ACPInputField.Coordinator.attributedString(
-                from: draft, typography: chatTypography, upstreamReferences: coordinator?.upstreamReferences
+                from: draft, typography: chatTypography
             )
         )
         // `draft` was structurally non-empty (it has an `.image` segment),
