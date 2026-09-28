@@ -547,6 +547,9 @@ final class ACPSessionOrchestrationCoordinator {
             updatedAt: environment.now(),
             outcome: outcome
         )) ?? false
+        if record.modelSelection != nil {
+            await discardHeldMessages(to: childSessionId)
+        }
         environment.notifyChanged()
         guard wonTransition else { return }
         await deliverPendingMessages(
@@ -554,6 +557,25 @@ final class ACPSessionOrchestrationCoordinator {
             callerParent: record,
             targetParent: nil
         )
+    }
+
+    /// Drops inbox rows held for a child whose model selection never took
+    /// effect, so no path (including startup recovery) can later run them on
+    /// the agent's default model. A row another instance holds a live claim
+    /// on is left to that instance, which sees the failed phase.
+    private func discardHeldMessages(to childSessionId: String) async {
+        guard let held = try? await environment.persistence.pendingMessages(targetSessionId: childSessionId)
+        else { return }
+        for message in held {
+            guard let claimed = try? await environment.persistence.claimMessage(
+                id: message.id,
+                instanceId: environment.instanceId,
+                token: environment.makeID(),
+                now: environment.now(),
+                staleAfter: 60
+            ) else { continue }
+            try? await environment.persistence.removeDeliveredMessage(id: message.id, claim: claimed.claim)
+        }
     }
 
     /// A delegated child stopped on something only a human can resolve. The

@@ -627,6 +627,31 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(fixture.manager.liveSession(for: "child") == nil)
     }
 
+    @Test("messages held for a child whose model selection failed are discarded, never delivered")
+    func failedSelectedChildDropsHeldMessages() async throws {
+        let fixture = try makeModelSelectionFixture(client: ACPMockClient())
+        defer { fixture.manager.shutdownBackgroundTasks() }
+        try await fixture.persistence.insert(.init(
+            childSessionId: "child", parentSessionId: "parent", projectId: "project",
+            parentWorktreeId: "worktree", childWorktreeId: "worktree", agentId: "claude",
+            worktreeRequest: .current(worktreeId: "worktree"), pendingInitialPrompt: "Review the parser.",
+            phase: .starting, failureMessage: nil, createdAt: 1, updatedAt: 1,
+            modelSelection: ACPDelegatedModelSelection(model: "opus", reasoning: nil)
+        ))
+        try await fixture.persistence.enqueue(.init(
+            id: "follow-up", sourceSessionId: "parent", targetSessionId: "child",
+            prompt: "Also check the lexer.", createdAt: 2
+        ))
+        let held = try await fixture.persistence.delegation(childSessionId: "child")
+        #expect(ACPSessionOrchestrationPolicy.defersInboxDelivery(target: held))
+
+        await fixture.coordinator.markChildFailed(childSessionId: "child", message: "Model opus is not offered by agent claude.")
+
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "child").isEmpty)
+        let failed = try await fixture.persistence.delegation(childSessionId: "child")
+        #expect(ACPSessionOrchestrationPolicy.defersInboxDelivery(target: failed))
+    }
+
     private struct OutcomeFixture {
         let coordinator: ACPSessionOrchestrationCoordinator
         let persistence: ACPOrchestrationPersistence

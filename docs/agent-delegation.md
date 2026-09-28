@@ -133,7 +133,8 @@ worktree, or interrupted by an app restart before its first prompt, applies
 it again before that prompt, or fails visibly if the agent no longer offers
 it. Messages sent to such a child with `session_send` while it starts are
 held until its first prompt is queued, so the task prompt always runs first
-and on the selected model. After that the model is part of the
+and on the selected model. If the child fails instead, the held messages are
+discarded rather than delivered. After that the model is part of the
 child's session like any model picked in the composer: it is restored when the
 session is reopened, and the user can change it.
 

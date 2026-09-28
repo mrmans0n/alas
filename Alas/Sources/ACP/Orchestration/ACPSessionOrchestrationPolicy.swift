@@ -126,12 +126,14 @@ enum ACPSessionOrchestrationPolicy {
         return .failure(.targetIsNotDirectRelative)
     }
 
-    /// A starting child with a model selection takes no inbox prompt before
-    /// its initial prompt, which must be first and on the selected model. Its
-    /// start path drains the inbox once the phase leaves `.starting`.
+    /// A child with a model selection takes inbox prompts only once it is
+    /// `.ready`: its initial prompt must be first and on the selected model,
+    /// and the start path drains the inbox after that transition. A child that
+    /// failed before then may never have applied the selection, so its held
+    /// messages are never delivered (`markChildFailed` discards them).
     static func defersInboxDelivery(target: ACPDelegationRecord?) -> Bool {
         guard let target, target.modelSelection != nil else { return false }
-        return target.phase == .creatingWorktree || target.phase == .starting
+        return target.phase != .ready
     }
 
     static func acceptsMessages(target: ACPDelegationRecord?) -> Bool {
