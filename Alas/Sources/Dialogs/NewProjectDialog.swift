@@ -235,6 +235,7 @@ private struct ProjectDialog: View {
         .onDisappear {
             repoHookInspectionTask?.cancel()
             repoHookReviewTask?.cancel()
+            discardAbandonedStagedIcons()
         }
         .fileImporter(
             isPresented: $imagePickerPresented,
@@ -1229,6 +1230,18 @@ private struct ProjectDialog: View {
             iconImagePath = nil
             iconMode = .letter
         }
+    }
+
+    /// The dialog stages icon previews under its pending project id. When no
+    /// project ends up with that id, nothing references them, so they go with
+    /// the dialog instead of accumulating per abandoned Add flow.
+    private func discardAbandonedStagedIcons() {
+        guard case .add = mode,
+              !state.projectsManager.projects.contains(where: { $0.id == pendingProjectId })
+        else { return }
+        try? FileManager.default.removeItem(
+            at: state.repoIconStagingRoot.appendingPathComponent(pendingProjectId, isDirectory: true)
+        )
     }
 
     private func discoverRepoIcon() -> RepoIconOption? {
