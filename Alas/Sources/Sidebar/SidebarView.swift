@@ -29,7 +29,6 @@ struct SidebarView: View {
     @State private var worktreeFilter = ""
     @State private var highlightedWorktreeId: String?
     @FocusState private var worktreeFilterFocused: Bool
-    @State private var filterRowRevealed = false
     /// Read only by the filter row, so per-frame scroll updates re-render it
     /// alone rather than the whole tree.
     @State private var sidebarScrollOffset: CGFloat = 0
@@ -52,9 +51,9 @@ struct SidebarView: View {
                 SpacePagerContent(spaces: state.spacesManager.spaces, selection: state.spacesManager.activeSpaceId) { spaceID in
                     SidebarFilterSlotScrollView(
                         scrollTarget: spaceID == state.spacesManager.activeSpaceId ? highlightedWorktreeId : nil,
-                        onScroll: { old, new in
+                        onScroll: { offset in
                             guard spaceID == state.spacesManager.activeSpaceId else { return }
-                            updateFilterRowReveal(from: old, to: new)
+                            sidebarScrollOffset = offset
                         }
                     ) {
                         VStack(alignment: .leading, spacing: SidebarFilterRowMetrics.slotSpacing) {
@@ -280,7 +279,6 @@ struct SidebarView: View {
                 .overlay(alignment: .top) {
                     SidebarWorktreeFilterRow(
                         state: state,
-                        revealed: $filterRowRevealed,
                         scrollOffset: $sidebarScrollOffset,
                         text: $worktreeFilter,
                         focused: $worktreeFilterFocused,
@@ -339,23 +337,6 @@ struct SidebarView: View {
         .sheet(isPresented: $showingNewWorkspace) {
             NewWorkspaceDialog(state: state, presented: $showingNewWorkspace)
         }
-    }
-
-    private func updateFilterRowReveal(from old: ScrollGeometry, to new: ScrollGeometry) {
-        sidebarScrollOffset = new.contentOffset.y + new.contentInsets.top
-        // A resize can clamp the offset; only offset changes at a stable size
-        // are the user scrolling (content grows as projects expand, too).
-        guard old.containerSize == new.containerSize, old.contentSize == new.contentSize else { return }
-        let insets = new.contentInsets.top + new.contentInsets.bottom
-        let revealed = WorktreeSidebarFilter.isRowRevealed(
-            filterRowRevealed,
-            scrolledFrom: old.contentOffset.y + old.contentInsets.top,
-            to: new.contentOffset.y + new.contentInsets.top,
-            maxOffset: max(0, new.contentSize.height + insets - new.containerSize.height)
-        )
-        guard revealed != filterRowRevealed else { return }
-        // Only the overlay row moves, so this animates without any re-layout.
-        withAnimation(.snappy(duration: 0.2)) { filterRowRevealed = revealed }
     }
 
     /// Matched worktree ids of the active space, in sidebar display order.
@@ -495,12 +476,15 @@ enum SidebarFilterRowMetrics {
 }
 
 /// Parks the content just past the filter-row slot once it is tall enough,
-/// so the row starts hidden and scrolling up reveals it. The content is kept
-/// at least a viewport plus the slot tall so a short sidebar can park too.
+/// so the row starts hidden and scrolling to the top reveals it. A scroll that
+/// comes to rest partway through the slot snaps fully open or hidden. The
+/// content is kept at least a viewport plus the slot tall so a short sidebar
+/// can park too.
 private struct SidebarFilterSlotScrollView<Content: View>: View {
     /// Worktree row to keep in view, i.e. the filter's keyboard highlight.
     let scrollTarget: String?
-    let onScroll: (ScrollGeometry, ScrollGeometry) -> Void
+    /// Content offset from the top, including any top inset.
+    let onScroll: (CGFloat) -> Void
     @ViewBuilder let content: () -> Content
     @State private var position = ScrollPosition(idType: String.self)
     @State private var viewportHeight: CGFloat = 0
@@ -517,6 +501,7 @@ private struct SidebarFilterSlotScrollView<Content: View>: View {
                 .frame(minHeight: viewportHeight + SidebarFilterRowMetrics.parkedOffset, alignment: .top)
         }
         .scrollPosition($position)
+        .scrollTargetBehavior(FilterSlotSnapBehavior())
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { viewportHeight = $0 }
         .onChange(of: scrollTarget) { _, id in
             // Centered so the pinned filter row never covers the highlight.
@@ -529,17 +514,24 @@ private struct SidebarFilterSlotScrollView<Content: View>: View {
                 parked = true
                 position.scrollTo(y: SidebarFilterRowMetrics.parkedOffset)
             }
-            onScroll(old, new)
+            onScroll(new.contentOffset.y + new.contentInsets.top)
         }
     }
 }
 
+private struct FilterSlotSnapBehavior: ScrollTargetBehavior {
+    func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
+        target.rect.origin.y = WorktreeSidebarFilter.snappedOffset(
+            target.rect.minY, slot: SidebarFilterRowMetrics.parkedOffset
+        )
+    }
+}
+
 /// Rides its slot at the top of the scroll content, and pins over the list
-/// while revealed. Owns the reveal and offset reads so neither re-renders the
-/// sidebar tree.
+/// while filtering. Owns the offset read so it does not re-render the sidebar
+/// tree.
 private struct SidebarWorktreeFilterRow: View {
     @Bindable var state: AppState
-    @Binding var revealed: Bool
     @Binding var scrollOffset: CGFloat
     @Binding var text: String
     var focused: FocusState<Bool>.Binding
@@ -550,7 +542,7 @@ private struct SidebarWorktreeFilterRow: View {
     var body: some View {
         // An active filter keeps its row pinned so the narrowed tree never
         // loses the field that explains it.
-        let pinned = revealed || !text.isEmpty || focused.wrappedValue
+        let pinned = !text.isEmpty || focused.wrappedValue
         let y = WorktreeSidebarFilter.rowY(
             scrollOffset: scrollOffset, pinned: pinned, restY: SidebarFilterRowMetrics.restY
         )
