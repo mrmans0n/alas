@@ -80,9 +80,7 @@ struct StagedComment: Identifiable, Equatable, Codable, Sendable {
     }
 
     private static func storageURL(worktreePath: URL, prNumber: Int?) -> URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appending(path: "Library/Application Support")
-        let base = appSupport.appending(path: "Alas/pending-reviews")
+        let base = Paths.pendingReviewsDir
         let pathHash = worktreePath.path.data(using: .utf8).map {
             $0.reduce(UInt64(14695981039346656037)) { acc, byte in (acc ^ UInt64(byte)) &* 1099511628211 }
         } ?? 0

@@ -272,6 +272,37 @@ See [AGENTS.md](AGENTS.md) for contributor conventions and cache troubleshooting
 See [Swift build measurements](docs/swift-build-performance.md) for per-worktree
 DerivedData reuse, targeted test commands, and measured CI cache behavior.
 
+### Running an isolated second instance
+
+To try a build next to the Alas you are working in, launch it with its own
+profile:
+
+```bash
+open -n path/to/Alas.app --env ALAS_APP_SUPPORT_DIR=/tmp/alas-e2e-profile
+```
+
+`ALAS_APP_SUPPORT_DIR` must be an absolute path (a leading `~` is expanded);
+any other non-empty value stops the app at launch rather than falling back to
+the shared profile. With it set, that instance:
+
+- keeps all of its state (config, projects, tabs, ACP databases, launch
+  markers, pending reviews, remote identity files) under that directory instead
+  of `~/Library/Application Support/Alas`;
+- puts its sockets in a private `/tmp/alas-<uid>-<hash>` directory: the hook/CLI
+  server (`hooks/`), zmx sessions (`zmx/`), and ACP brokers (`acp-brokers/`,
+  passed to the bundled helper as `ALAS_HELPER_STATE_DIR`). It never lists,
+  adopts, or reaps the main instance's terminals or brokers, and an `alas`
+  command run outside Alas cannot discover it;
+- uses a separate Keychain service for remote credentials and skips the startup
+  sweep of legacy hooks in `~/.claude`, `~/.codex`, and `~/.cursor`.
+
+Still shared: your git repositories and worktrees on disk (use scratch repos),
+agent hook installs and other settings you change by hand from Settings, LSP
+servers you install, `UserDefaults` (only the SSH acceleration allow/decline
+host lists are written), and per-run temporary files, whose cleanup only removes
+entries old enough not to belong to a running instance.
+Quit the instance from its own menu so it removes its launch marker.
+
 ## Stack
 
 Swift 6 language mode with strict concurrency, SwiftUI and AppKit, targeting

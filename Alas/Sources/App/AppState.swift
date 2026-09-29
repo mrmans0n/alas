@@ -6523,7 +6523,11 @@ final class AppState {
     }
 
     func startHarness() {
-        LegacyHookSweep.sweepAll()
+        // Rewrites the user's global agent settings (~/.claude, ~/.codex,
+        // ~/.cursor); an isolated profile must leave those to the main instance.
+        if !AlasProfile.current.isIsolated {
+            LegacyHookSweep.sweepAll()
+        }
         harness.notifications.setEnabled(config.harness.notifyOnFinish)
         harness.start(
             stateLookup: { [weak self] sessionId in
@@ -6537,7 +6541,7 @@ final class AppState {
             }
         )
         // Per-leaf symlink: stays valid across Alas restarts (the next
-        // launch's `linkSession` repoints the same `/tmp/alas-<uid>/sock-
+        // launch's `linkSession` repoints the same `<socket dir>/sock-
         // <leafId>` path), and per-leaf scoping avoids collisions between
         // concurrent Alas processes.
         terminal.socketPathProvider = { [weak self] leafId in

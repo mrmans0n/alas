@@ -74,4 +74,15 @@ struct ZmxEnvTests {
         let exists = FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDir)
         #expect(exists && isDir.boolValue)
     }
+
+    @Test
+    func isolatedProfileScopesZmxDirUnderItsRuntimeDirectory() throws {
+        let (bundle, cleanup) = try makeFakeBundle(includeBinary: true, executable: true)
+        defer { cleanup() }
+        let runtime = URL(fileURLWithPath: "/tmp/alas-zmxenv-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: runtime) }
+        let env = ZmxEnv.resolve(bundle: bundle, runtimeDirectory: runtime)
+        #expect(env.zmxDir?.path == runtime.appendingPathComponent("zmx").path)
+        #expect(env.isAvailable)
+    }
 }

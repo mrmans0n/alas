@@ -1,7 +1,78 @@
+import CryptoKit
 import Foundation
+
+/// Which on-disk profile this process runs against.
+///
+/// By default Alas uses `~/Library/Application Support/Alas` and the shared
+/// per-user socket locations. Setting `ALAS_APP_SUPPORT_DIR` to an absolute
+/// path launches an *isolated* profile instead — meant for running a second
+/// dev instance next to the everyday one (`open -n Alas.app --env
+/// ALAS_APP_SUPPORT_DIR=/tmp/alas-e2e`). An isolated profile keeps its state
+/// under that directory and its sockets (hook server, zmx, ACP brokers) under
+/// a private runtime directory keyed by the profile path, so it never sees,
+/// adopts, or reaps anything belonging to another instance.
+struct AlasProfile: Equatable, Sendable {
+    static let environmentKey = "ALAS_APP_SUPPORT_DIR"
+
+    enum Resolution: Equatable, Sendable {
+        case standard
+        case isolated(URL)
+        case invalid(String)
+    }
+
+    /// The app-support override, or nil for the standard profile.
+    let appSupportOverride: URL?
+    /// Private directory for sockets: `/tmp/alas-<uid>-<hash>`. Kept short on
+    /// purpose, since a profile path can be long and `sun_path` holds only 104
+    /// bytes. Nil for the standard profile, which keeps its historical paths.
+    let runtimeDirectory: URL?
+
+    var isIsolated: Bool { appSupportOverride != nil }
+
+    static let current: AlasProfile = {
+        switch resolve(environment: ProcessInfo.processInfo.environment) {
+        case .standard:
+            return AlasProfile(appSupportOverride: nil, runtimeDirectory: nil)
+        case .isolated(let root):
+            let runtime = runtimeDirectory(for: root, uid: getuid())
+            // Fail closed: an isolated instance that silently fell back to the
+            // shared locations would do exactly what the override exists to
+            // prevent.
+            guard AgentHookSocketServer.prepareSocketDirectory(runtime.path, ownerUid: getuid()) else {
+                fatalError("\(environmentKey): cannot create a private runtime directory at \(runtime.path)")
+            }
+            return AlasProfile(appSupportOverride: root, runtimeDirectory: runtime)
+        case .invalid(let value):
+            fatalError("\(environmentKey) must be an absolute path, got \"\(value)\"")
+        }
+    }()
+
+    /// Pure resolution of the override. Unset or blank means the standard
+    /// profile; anything that is not an absolute path (after `~` expansion)
+    /// is invalid rather than silently ignored, because ignoring it would put
+    /// a would-be isolated instance on the shared profile.
+    static func resolve(environment: [String: String]) -> Resolution {
+        guard let raw = environment[environmentKey] else { return .standard }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .standard }
+        let expanded = (trimmed as NSString).expandingTildeInPath
+        guard expanded.hasPrefix("/") else { return .invalid(raw) }
+        return .isolated(URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL)
+    }
+
+    static func runtimeDirectory(for appSupportRoot: URL, uid: uid_t) -> URL {
+        let digest = SHA256.hash(data: Data(appSupportRoot.standardizedFileURL.path.utf8))
+        let hash = digest.prefix(4).map { String(format: "%02x", $0) }.joined()
+        return URL(fileURLWithPath: "/tmp/alas-\(uid)-\(hash)", isDirectory: true)
+    }
+}
 
 enum Paths {
     static let appSupportRoot: URL = {
+        if let override = AlasProfile.current.appSupportOverride {
+            try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
+            return override
+        }
         let base = try! FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
@@ -110,6 +181,10 @@ extension Paths {
 
     static var reviewSessionsFile: URL {
         appSupportRoot.appendingPathComponent("review-sessions.json")
+    }
+
+    static var pendingReviewsDir: URL {
+        appSupportRoot.appendingPathComponent("pending-reviews", isDirectory: true)
     }
 }
 

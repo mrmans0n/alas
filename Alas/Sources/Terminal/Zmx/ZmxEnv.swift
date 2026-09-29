@@ -24,13 +24,26 @@ struct ZmxEnv: Sendable {
     ///    another user or world-permissive, refuse it (`zmxDir = nil`) so
     ///    zmx is marked unavailable rather than silently using an
     ///    attacker-controlled directory.
+    ///
+    /// An isolated profile (`AlasProfile`) replaces steps 2–3 with
+    /// `<runtimeDirectory>/zmx`, so its sessions never share a directory with
+    /// — and so are never listed or reaped by — another Alas instance.
     static func resolve(
         bundle: Bundle = .main,
         fileManager: FileManager = .default,
-        processInfo: ProcessInfo = .processInfo
+        processInfo: ProcessInfo = .processInfo,
+        runtimeDirectory: URL? = AlasProfile.current.runtimeDirectory
     ) -> ZmxEnv {
         let binaryURL = resolveBinaryURL(bundle: bundle, fileManager: fileManager)
-        let zmxDir = resolveZmxDir(fileManager: fileManager, processInfo: processInfo)
+        let zmxDir: URL?
+        if let runtimeDirectory {
+            let scoped = runtimeDirectory.appendingPathComponent("zmx", isDirectory: true)
+            zmxDir = ZmxSunPathBudget.fits(dir: scoped.path)
+                ? secureFallback(at: scoped, fileManager: fileManager)
+                : nil
+        } else {
+            zmxDir = resolveZmxDir(fileManager: fileManager, processInfo: processInfo)
+        }
         return ZmxEnv(binaryURL: binaryURL, zmxDir: zmxDir)
     }
 

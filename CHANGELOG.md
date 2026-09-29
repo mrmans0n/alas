@@ -14,6 +14,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Extend "Disable native subagents" to OMP: a launch-only settings overlay removes the `task` tool and makes eval `agent()`/`workpool()` spawning fail, without changing `~/.omp` or project settings (#1590).
 - Support "Disable native subagents" for OpenCode: Alas denies the `task` tool for every OpenCode agent and verifies the effective permissions before each launch, failing the session when managed or other configuration keeps it enabled (#1591).
 
+### 🏗️ Internal
+
+- Support launching an isolated second instance with `ALAS_APP_SUPPORT_DIR`: its state, hook and zmx sockets, ACP brokers, and remote Keychain items stay separate from the main instance.
+
 ## [0.19.17] - 2026-09-28
 
 ### ✨ Features
