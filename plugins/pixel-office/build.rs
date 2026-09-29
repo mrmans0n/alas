@@ -1,7 +1,7 @@
 //! Decodes assets/*.png into palette-indexed bytes at build time, so the wasm
 //! embeds raw sprites and never decodes PNG. Any colour not in palette.hex fails the build.
 
-use std::{env, fs, path::Path};
+use std::{env, fs, io::BufReader, path::Path};
 
 fn main() {
     println!("cargo:rerun-if-changed=assets");
@@ -23,10 +23,10 @@ fn main() {
     rust += "];\n";
     for name in ["characters", "furniture", "overlays", "font"] {
         let file = fs::File::open(format!("assets/{name}.png")).unwrap();
-        let mut decoder = png::Decoder::new(file);
+        let mut decoder = png::Decoder::new(BufReader::new(file));
         decoder.set_transformations(png::Transformations::normalize_to_color8() | png::Transformations::ALPHA);
         let mut reader = decoder.read_info().unwrap();
-        let mut buf = vec![0; reader.output_buffer_size()];
+        let mut buf = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut buf).unwrap();
         assert_eq!(info.color_type, png::ColorType::Rgba, "{name}.png must decode to RGBA");
         let indices: Vec<u8> = buf[..info.buffer_size()]
