@@ -201,10 +201,10 @@ would reach unrelated sessions and its parent would never hear back. Alas
 sends the same `disallowedTools` on every `session/new`, `session/load`,
 `session/resume`, and `session/fork`, so reconnects and restores keep it. This
 does not check the adapter version: an older adapter that ignores the option
-still starts the child. Every delegated child, of any agent, is told to report
-only with the `alas` server's `session_send` tool (or
-`alas session send <parent-session-id> <prompt>` for CLI-only agents such as
-Pi) and not with any other messaging or agent tool.
+still starts the child. When Alas tools are exposed, every delegated child, of
+any agent, is told to report only with the `alas` server's `session_send` tool
+(or `alas session send <parent-session-id> <prompt>` for CLI-only agents such
+as Pi) and not with any other messaging or agent tool.
 
 ### OpenCode permission precedence
 
