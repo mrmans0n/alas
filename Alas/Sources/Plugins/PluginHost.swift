@@ -237,13 +237,19 @@ final class PluginHost {
     private func handleResponse(id: JSONRPCID, error: JSONRPCError?) {
         guard id == Self.activateID, state == .activating else { return }
         if let error {
-            fail("plugin rejected activation: \(error.message)")
+            fail("plugin rejected activation: \(Self.bounded(error.message))")
         } else {
             state = .active
         }
     }
 
     // MARK: - Helpers
+
+    /// Text a plugin controls is bounded before Alas retains it. Bound by scalars: `String.prefix`
+    /// counts grapheme clusters, and one base character followed by many combining marks is a single one.
+    private static func bounded(_ text: String) -> String {
+        String(String.UnicodeScalarView(text.unicodeScalars.prefix(logMessageLimit)))
+    }
 
     private func fail(_ reason: String) {
         state = .failed(reason)
@@ -252,7 +258,7 @@ final class PluginHost {
     }
 
     private func appendLog(_ level: String, _ message: String) {
-        log.append(PluginLogEntry(level: level, message: String(message.prefix(Self.logMessageLimit))))
+        log.append(PluginLogEntry(level: level, message: Self.bounded(message)))
         if log.count > Self.logLimit { log.removeFirst(log.count - Self.logLimit) }
     }
 

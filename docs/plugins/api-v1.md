@@ -294,7 +294,7 @@ is no response.
 | Param | Type | Meaning |
 |---|---|---|
 | `level` | string | One of `debug`, `info`, `warn` or `error`. |
-| `message` | string | The text. Truncated to 2,000 characters. |
+| `message` | string | The text. Truncated to 2,000 Unicode code points. |
 
 A `log` whose params are missing, whose `message` is not a string, or whose `level` is not one of those four is silently dropped.
 
@@ -487,7 +487,7 @@ Shown next to the folder under **Not loaded**. The plugin does not run.
 | Message size, either direction | 1 MiB | The plugin is stopped. |
 | `alas.send` calls per `alas_handle` | 64 | The plugin is stopped. |
 | Calls into the plugin per delivery | 64 | The plugin is stopped. |
-| `log` message length | 2,000 characters | Truncated. |
+| `log` message length | 2,000 Unicode code points | Truncated. |
 | Log lines kept per instance | 200 | Oldest dropped. **Debug → Plugins…** shows the latest 5. |
 | Messages kept in the trace | 100 | Oldest dropped. **Debug → Plugins…** shows the latest 20, each cut to 2,000 bytes. |
 

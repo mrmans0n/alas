@@ -198,14 +198,32 @@ struct PluginHostTests {
         #expect(host.log.map(\.level) == ["warn"])
     }
 
-    @Test func oversizedLogMessagesAreTruncated() async throws {
+    @Test func anOversizedActivationErrorIsBoundedInTheFailureReason() async throws {
         let long = String(repeating: "x", count: 3000)
+        let host = try makeHost([[.send(#"{"jsonrpc":"2.0","id":0,"error":{"code":1,"message":"\#(long)"}}"#)]])
+        await host.activate()
+        guard case .failed(let reason) = host.state else {
+            Issue.record("expected failed, got \(host.state)")
+            return
+        }
+        #expect(reason.hasPrefix("plugin rejected activation: "))
+        #expect(reason.unicodeScalars.count <= "plugin rejected activation: ".unicodeScalars.count + PluginHost.logMessageLimit)
+    }
+
+    /// The second case is a single grapheme cluster of 3,001 scalars, which a `Character` count would not cut.
+    @Test(arguments: [
+        String(repeating: "x", count: 3000),
+        "e" + String(repeating: "\u{0301}", count: 3000),
+    ])
+    func oversizedLogMessagesAreTruncated(message: String) async throws {
+        var limits = Self.limits
+        limits.maxMessageBytes = 1 << 14
         let host = try makeHost([[
             .send(activateOK),
-            .send(#"{"jsonrpc":"2.0","method":"log","params":{"level":"info","message":"\#(long)"}}"#),
-        ]])
+            .send(#"{"jsonrpc":"2.0","method":"log","params":{"level":"info","message":"\#(message)"}}"#),
+        ]], limits: limits)
         await host.activate()
         #expect(host.log.count == 1)
-        #expect(host.log.first?.message.count == PluginHost.logMessageLimit)
+        #expect(host.log.first?.message.unicodeScalars.count == PluginHost.logMessageLimit)
     }
 }
