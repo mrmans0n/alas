@@ -197,6 +197,10 @@ final class NativePeerSessions {
         // eventual reply doesn't stand in as current.
         if !requestChanges() { changesRequestOutdated = true }
         if !loadFileTree() { fileTreeRequestOutdated = true }
+        // An open diff or file is otherwise left showing its old snapshot —
+        // neither a summary change nor the toolbar's manual refresh touches
+        // it, since both only route through this method.
+        if let document = workspace.document { open(document) }
     }
 
     @discardableResult

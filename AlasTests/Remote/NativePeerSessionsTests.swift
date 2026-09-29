@@ -651,6 +651,29 @@ struct NativePeerSessionsTests {
         #expect(filesCount() == filesAfterSelect + 1)
     }
 
+    @Test func reloadWorkspaceAlsoRefreshesAnOpenDocument() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        client.open(.file(path: "a.swift"))
+
+        let readFileCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .readFile(sessionId: "s", path: "a.swift") }.count
+        }
+        let afterOpen = readFileCount()
+
+        // The peer edited the open file — its summary changes, and the open
+        // document should be re-requested along with changes and files.
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
+        #expect(readFileCount() == afterOpen + 1)
+    }
+
     @Test func planRejectionRequiresAndTrimsReason() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
