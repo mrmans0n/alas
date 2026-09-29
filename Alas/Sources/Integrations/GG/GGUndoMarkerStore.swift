@@ -34,7 +34,7 @@ final class GGUndoMarkerStore: GGUndoMarkerStoring, @unchecked Sendable {
 
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = AlasProfile.userDefaults) {
         self.defaults = defaults
     }
 

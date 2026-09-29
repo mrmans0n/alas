@@ -1891,8 +1891,9 @@ fn validate_proc_id(proc_id: &str) -> Result<(), HelperError> {
 }
 
 fn proc_root() -> Result<PathBuf, HelperError> {
-    let home = std::env::var("HOME").map_err(|_| jsonrpc_error(-32050, "HOME is not set"))?;
-    Ok(PathBuf::from(home).join(".alas").join("procs"))
+    let state =
+        alas_helper::helper_state_dir().ok_or_else(|| jsonrpc_error(-32050, "HOME is not set"))?;
+    Ok(state.join("procs"))
 }
 
 fn proc_dir(proc_id: &str) -> Result<PathBuf, HelperError> {

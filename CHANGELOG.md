@@ -31,6 +31,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Record the native-subagent adapter probe matrix (#1607).
 - Widen the git-gud stream collection deadline for loaded CI shards (#1617).
 
+### 🏗️ Internal
+
+- Support launching an isolated second instance with `ALAS_APP_SUPPORT_DIR`: its state, hook and zmx sockets, ACP brokers, remote Keychain items, and written preferences stay separate from the main instance.
+
 ## [0.19.17] - 2026-09-28
 
 ### ✨ Features
