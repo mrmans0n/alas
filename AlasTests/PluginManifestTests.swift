@@ -18,6 +18,7 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":1,"entry":"p.wasm"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":1,"entry":"p.wasm"}"#, .invalidID("Hello")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":3,"entry":"p.wasm"}"#, .unsupportedAPI(3)),
+        (#"{"id":"io.x.h","name":"H","version":"1","api":1,"entry":"p.wasm","capabilities":["session.focus"]}"#, .capabilityNeedsNewerAPI("session.focus", 2)),
         (#"{"id":"io.x.h","name":"H","version":"1","api":2,"entry":"p.wasm","contributes":{"tabs":[{"id":"a","title":"A"},{"id":"a","title":"B"}]}}"#, .invalidTab("duplicate tab id \"a\"")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":2,"entry":"p.wasm","contributes":{"tabs":[{"id":"a","title":" "}]}}"#, .invalidTab("tab \"a\" needs a title of 1 to 40 characters")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":2,"entry":"p.wasm","contributes":{"tabs":[{"id":"A!","title":"T"}]}}"#, .invalidTab("invalid tab id \"A!\"")),

@@ -6,6 +6,14 @@ enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
     case sessionFocus = "session.focus"
 
     /// Plain-language description shown when the user approves a plugin.
+    /// The first plugin API version that offers this capability.
+    var minimumAPI: Int {
+        switch self {
+        case .workspaceRead, .worktreeSwitch: 1
+        case .sessionFocus: 2
+        }
+    }
+
     var summary: String {
         switch self {
         case .workspaceRead: "Read this project's worktrees and what their agent sessions are doing"
@@ -29,6 +37,7 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
     case unknownCapability(String)
     case invalidEntry(String)
     case invalidTab(String)
+    case capabilityNeedsNewerAPI(String, Int)
 
     var description: String {
         switch self {
@@ -46,6 +55,8 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
             "entry \"\(entry)\" must be a relative path inside the plugin folder"
         case .invalidTab(let reason):
             "invalid tab contribution: \(reason)"
+        case let .capabilityNeedsNewerAPI(name, api):
+            "capability \"\(name)\" requires plugin API \(api); set \"api\": \(api) in plugin.json"
         }
     }
 }
@@ -89,6 +100,8 @@ struct PluginManifest: Equatable, Sendable {
         var capabilities: [PluginCapability] = []
         for name in raw.capabilities ?? [] {
             guard let capability = PluginCapability(rawValue: name) else { throw .unknownCapability(name) }
+            // An API 1 manifest must stay loadable by an API 1-only Alas, which rejects newer capabilities.
+            guard api >= capability.minimumAPI else { throw .capabilityNeedsNewerAPI(name, capability.minimumAPI) }
             capabilities.append(capability)
         }
         guard !entry.hasPrefix("/"), !entry.split(separator: "/").contains("..") else {

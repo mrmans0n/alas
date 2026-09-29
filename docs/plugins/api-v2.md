@@ -34,7 +34,9 @@ index in `contributes.tabs`.
 ## Capability: `session.focus`
 
 Approval text: "Open agent sessions in this project". Required for
-`session/focus`.
+`session/focus`. It is an API 2 capability: a manifest that requests it with
+`"api": 1` is rejected, so that an API 1 manifest always loads on an Alas that
+only supports API 1.
 
 ## `alas.present(tab, ptr, len, width)`
 

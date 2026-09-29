@@ -18,7 +18,7 @@ const MONITOR_RISE: i32 = 8;
 pub struct Renderer {
     background: Canvas,
     frame: Canvas,
-    background_key: Option<String>,
+    background_key: Option<BackgroundKey>,
     previous: Vec<Rect>,
 }
 
@@ -33,14 +33,21 @@ fn draw(canvas: &mut Canvas, sheet: &Sheet, src: Rect, x: i32, y: i32) -> Rect {
     Rect::new(x, y, src.w, src.h)
 }
 
-/// Everything the background depends on, so any change rebuilds it.
-fn background_key(layout: &Layout) -> String {
-    let pods: Vec<String> = layout
-        .pods
-        .iter()
-        .map(|p| format!("{}|{}|{}|{}|{}", p.branch, p.lamp_on, p.papers, p.warning, p.overflow))
-        .collect();
-    format!("{}#{}#{}", layout.height, layout.hidden_worktrees, pods.join(";"))
+/// Everything the background depends on, so any change rebuilds it. Compared structurally:
+/// a joined string would let branch names containing the separators collide.
+#[derive(PartialEq)]
+struct BackgroundKey {
+    height: i32,
+    hidden_worktrees: usize,
+    pods: Vec<(String, bool, u8, bool, usize)>,
+}
+
+fn background_key(layout: &Layout) -> BackgroundKey {
+    BackgroundKey {
+        height: layout.height,
+        hidden_worktrees: layout.hidden_worktrees,
+        pods: layout.pods.iter().map(|p| (p.branch.clone(), p.lamp_on, p.papers, p.warning, p.overflow)).collect(),
+    }
 }
 
 /// One 16 px row of `tile` repeated across the room.
@@ -214,6 +221,26 @@ pub fn regions(world: &World, layout: &Layout) -> (Vec<Region>, Vec<Target>) {
 mod tests {
     use super::*;
     use crate::layout::{layout, tests::snapshot};
+
+    /// Branch names containing the old key's separators must not make different layouts look equal.
+    #[test]
+    fn branch_names_cannot_forge_another_layouts_background_key() {
+        let mut two = snapshot(&[0, 0]);
+        two.worktrees[0].branch = "a".into();
+        two.worktrees[1].branch = "b".into();
+        two.worktrees[1].current = true; // both lamps on, like the forged pod below
+        let mut one = snapshot(&[0]);
+        one.worktrees[0].branch = "a|true|0|false|0;b".into();
+
+        let world = World::default();
+        let (two, one) = (layout(&two), layout(&one));
+        assert_eq!(two.height, one.height, "same height, so only the key can tell them apart");
+        let mut renderer = Renderer::default();
+        renderer.render(&world, &two);
+        let got = renderer.render(&world, &one).pixels.clone();
+        let expected = Renderer::default().render(&world, &one).pixels.clone();
+        assert!(got == expected, "a stale background survived the layout change");
+    }
 
     #[test]
     fn incremental_frames_match_a_full_redraw() {
