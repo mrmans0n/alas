@@ -72,10 +72,11 @@ Plugin to host notification
 tab's click regions. Coordinates are frame pixels.
 
 - At most 256 regions are kept; extras are dropped.
-- `id` is truncated to 64 bytes and `label` to 200 characters. A truncated id
+- `id` is truncated to 64 bytes and `label` to 200 Unicode scalars. A truncated id
   will not round-trip in `canvas/click`, so keep ids short.
 - The host does not range-check `rect` values. Keep them inside the frame.
-- A `tab` out of range, or params that do not decode, is malformed and stops
+- A `tab` out of range, or params that do not decode (including a `rect` that is not exactly 4
+  integers), is malformed and stops
   the plugin.
 - Regions stay as they are when a frame of a different size arrives, until you
   send new ones.
@@ -106,5 +107,5 @@ snapshot; Alas switches to its worktree and focuses its session tab.
 | Tab title | 40 characters |
 | Regions per tab | 256 |
 | Region `id` | 64 bytes (truncated) |
-| Region `label` | 200 characters (truncated) |
+| Region `label` | 200 Unicode scalars (truncated) |
 | Tick rate | 15 fps Release, 5 fps Debug |

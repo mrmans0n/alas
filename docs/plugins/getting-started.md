@@ -33,7 +33,8 @@ This compiles the plugin and copies two files into Alas's plugins folder:
 ## 2. Approve and run it
 
 1. Turn on **Settings → Advanced → Experimental → Plugins**. The Advanced
-   section shows only when `~/.alas/.debug` exists.
+   section appears as **Debug** in the settings sidebar and shows only when
+   `~/.alas/.debug` exists.
 2. Open **Settings → Plugins** and find **Hello Workspace 0.1.0**. It asks for one capability:
    *Read this project's worktrees and what their agent sessions are doing*.
 3. Click **Approve…**.
@@ -104,11 +105,13 @@ Change what the plugin logs in `src/lib.rs`, then:
 ```
 
 `build.sh` installs into a folder named after the directory you run it from, so
-this one lands in `…/Plugins/my-plugin`. In **Settings → Plugins** reload the
-list. Because the wasm changed, Alas asks you to **Approve…** again.
+this one lands in `…/Plugins/my-plugin`. In **Settings → Plugins** click
+**Rescan**. Because the wasm changed, Alas asks you to **Approve…** again.
 
 ## Next steps
 
+- [Pixel Office](../../plugins/pixel-office/README.md) is a full canvas-tab plugin
+  to install and read.
 - [Writing plugins](writing-plugins.md) shows a structure that keeps your logic
   unit-testable and explains the pieces of the sample.
 - The [API v1 reference](api-v1.md) lists every message and its exact shape.
