@@ -104,10 +104,22 @@ struct AlasProfile: Equatable, Sendable {
         return URL(fileURLWithPath: String(cString: buffer), isDirectory: true)
     }
 
-    /// Whether two paths name one existing directory, however they are spelled.
+    /// Whether two paths name one directory, however they are spelled. Either
+    /// may not exist yet (the standard root is only created on first launch),
+    /// so each is canonicalized through its deepest existing ancestor.
     static func isSameDirectory(_ lhs: URL, _ rhs: URL) -> Bool {
-        guard let lhs = canonicalDirectory(lhs), let rhs = canonicalDirectory(rhs) else { return false }
-        return lhs == rhs
+        canonicalPath(lhs) == canonicalPath(rhs)
+    }
+
+    private static func canonicalPath(_ url: URL) -> String {
+        var existing = url.standardizedFileURL
+        var missing: [String] = []
+        while canonicalDirectory(existing) == nil, existing.path != "/" {
+            missing.insert(existing.lastPathComponent, at: 0)
+            existing.deleteLastPathComponent()
+        }
+        let base = canonicalDirectory(existing) ?? existing
+        return missing.reduce(base) { $0.appendingPathComponent($1) }.path
     }
 
     /// Preferences this app writes (update-check timestamp, GG undo markers,

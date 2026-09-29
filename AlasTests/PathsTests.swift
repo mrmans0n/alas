@@ -84,5 +84,7 @@ struct PathsTests {
         // The same comparison is what refuses an override naming the standard profile.
         #expect(AlasProfile.isSameDirectory(alias.appendingPathComponent("Profile"), real))
         #expect(!AlasProfile.isSameDirectory(real, real.deletingLastPathComponent()))
+        // Still matched before the directory exists, as on a first launch.
+        #expect(AlasProfile.isSameDirectory(alias.appendingPathComponent("Profile/new"), real.appendingPathComponent("new")))
     }
 }
