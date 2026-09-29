@@ -31,6 +31,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Record the native-subagent adapter probe matrix (#1607).
 - Widen the git-gud stream collection deadline for loaded CI shards (#1617).
 
+### 🐛 Fixes
+
+- Show the active ACP task's one-based position in the chat task affordance.
+
 ## [0.19.17] - 2026-09-28
 
 ### ✨ Features
