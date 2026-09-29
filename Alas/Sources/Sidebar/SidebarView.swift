@@ -29,9 +29,10 @@ struct SidebarView: View {
     @State private var worktreeFilter = ""
     @State private var highlightedWorktreeId: String?
     @FocusState private var worktreeFilterFocused: Bool
-    /// Read only by the filter row, so per-frame scroll updates re-render it
-    /// alone rather than the whole tree.
-    @State private var sidebarScrollOffset: CGFloat = 0
+    /// Per space, since every page keeps its own scroll view. Read only by the
+    /// filter row, so per-frame scroll updates re-render it alone rather than
+    /// the whole tree.
+    @State private var sidebarScrollOffsets: [String: CGFloat] = [:]
 
     var body: some View {
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
@@ -51,10 +52,7 @@ struct SidebarView: View {
                 SpacePagerContent(spaces: state.spacesManager.spaces, selection: state.spacesManager.activeSpaceId) { spaceID in
                     SidebarFilterSlotScrollView(
                         scrollTarget: spaceID == state.spacesManager.activeSpaceId ? highlightedWorktreeId : nil,
-                        onScroll: { offset in
-                            guard spaceID == state.spacesManager.activeSpaceId else { return }
-                            sidebarScrollOffset = offset
-                        }
+                        onScroll: { sidebarScrollOffsets[spaceID] = $0 }
                     ) {
                         VStack(alignment: .leading, spacing: SidebarFilterRowMetrics.slotSpacing) {
                             // The filter row's slot; the row itself is drawn
@@ -279,7 +277,10 @@ struct SidebarView: View {
                 .overlay(alignment: .top) {
                     SidebarWorktreeFilterRow(
                         state: state,
-                        scrollOffset: $sidebarScrollOffset,
+                        scrollOffset: Binding(
+                            get: { sidebarScrollOffsets[state.spacesManager.activeSpaceId] ?? 0 },
+                            set: { _ in }
+                        ),
                         text: $worktreeFilter,
                         focused: $worktreeFilterFocused,
                         onMoveHighlight: moveFilterHighlight(by:),
