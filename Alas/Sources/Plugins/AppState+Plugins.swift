@@ -38,11 +38,14 @@ extension AppState {
             focusSession: { [weak self] id in
                 guard let self else { return false }
                 // Only sessions the snapshot exposes, so a plugin cannot reach another project's sessions.
-                for worktree in self.projectsManager.worktreesByProject[project.id] ?? []
-                where self.agentSidebarRollup(for: worktree).active.contains(where: {
-                    PluginWorkspaceSnapshot.SessionInput(row: $0).id == id
-                }) {
-                    self.activateHarnessSession(projectId: project.id, worktreeId: worktree.id, sessionId: id)
+                for worktree in self.projectsManager.worktreesByProject[project.id] ?? [] {
+                    guard let row = self.agentSidebarRollup(for: worktree).active.first(where: {
+                        PluginWorkspaceSnapshot.SessionInput(row: $0).id == id
+                    }) else { continue }
+                    self.focusGlobalWorktree(id: worktree.id, projectId: project.id)
+                    // The sidebar's own path: unlike activating an existing tab, it reopens a session
+                    // whose tab was closed, so a click never reports success while doing nothing.
+                    Task { @MainActor in await self.focusAgentSidebarRow(row.id, in: worktree) }
                     return true
                 }
                 return false

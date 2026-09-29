@@ -308,6 +308,22 @@ struct AgentSidebarRollupTests {
     }
 
     @Test @MainActor
+    func pluginFocusOpensALiveSessionThatHasNoTab() async throws {
+        let (state, first, _) = makeAppFixture()
+        let project = try #require(state.projects.first { $0.id == first.projectId })
+        let manager = try #require(state.acpManager(for: first))
+        _ = manager.createSession(id: "plugin-focus-session", agentId: "sidebar-test-agent")
+        #expect(state.tabs.tabs(forWorktree: first.id).isEmpty)
+
+        let focused = state.pluginHostActions(for: project).focusSession("plugin-focus-session")
+
+        #expect(focused)
+        _ = await awaitCondition(within: .seconds(5)) { !state.tabs.tabs(forWorktree: first.id).isEmpty }
+        #expect(state.tabs.tabs(forWorktree: first.id).count == 1)
+        #expect(state.tabs.activeTabId(forWorktree: first.id) != nil)
+    }
+
+    @Test @MainActor
     func terminalFocusUsesExactTabAndRejectsOtherWorktreeRows() async {
         let (state, first, second) = makeAppFixture()
         let terminal = state.tabs.appendTerminal(worktreeId: first.id, title: "First", sessionId: "shell-a")
