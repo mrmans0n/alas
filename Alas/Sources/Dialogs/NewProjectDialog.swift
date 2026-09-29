@@ -116,6 +116,9 @@ private struct ProjectDialog: View {
     @State private var avatarPresetError = false
     @State private var avatarPresetRequestId = UUID()
     @State private var repoIcon: RepoIconOption?
+    /// Set only by choosing the repo icon (or its auto-selection), never inferred
+    /// from `iconImagePath`: identical bytes stage to the same path.
+    @State private var repoIconSelected = false
     @State private var sessionOpenMode: ProjectStartupScriptMode = .useGlobal
     @State private var sessionOpenScript: String = ""
     @State private var worktreeCreateMode: ProjectStartupScriptMode = .useGlobal
@@ -170,11 +173,9 @@ private struct ProjectDialog: View {
         )
     }
 
-    /// Whether the draft shows the repo's own icon. Staging is
-    /// content-addressed, so the staged path identifies that image.
+    /// Whether the draft shows the repo's own icon.
     private var usesRepoIcon: Bool {
-        guard let repoIcon else { return false }
-        return iconMode == .image && iconImagePath == repoIcon.imagePath
+        repoIcon != nil && repoIconSelected && iconMode == .image
     }
 
     /// The icon to save. Picking the repo icon saves the non-explicit default
@@ -1089,6 +1090,7 @@ private struct ProjectDialog: View {
             )
             iconImagePath = staged.imagePath
             iconMode = .image
+            repoIconSelected = false
             errorMessage = nil
         } catch let stagingError as ProjectIconImageStaging.StagingError {
             errorMessage = stagingError.userMessage
@@ -1227,9 +1229,11 @@ private struct ProjectDialog: View {
         if let repoIcon, wasSelected || draftIconIsUntouched {
             iconImagePath = repoIcon.imagePath
             iconMode = .image
+            repoIconSelected = true
         } else if wasSelected {
             iconImagePath = nil
             iconMode = .letter
+            repoIconSelected = false
         }
         discardSupersededPreview(previous)
     }
@@ -1249,13 +1253,20 @@ private struct ProjectDialog: View {
 
     /// The dialog stages icon previews under its pending project id. When no
     /// project ends up with that id, nothing references them, so they go with
-    /// the dialog instead of accumulating per abandoned Add flow.
+    /// the dialog instead of accumulating per abandoned Add flow. After a
+    /// successful add, only a repo preview the project does not use is dropped:
+    /// the selected one must stay because the sidebar's cached repo icon
+    /// points at it.
     private func discardAbandonedStagedIcons() {
-        guard case .add = mode,
-              !state.projectsManager.projects.contains(where: { $0.id == pendingProjectId })
-        else { return }
+        guard case .add = mode else { return }
+        let dir = state.repoIconStagingRoot.appendingPathComponent(pendingProjectId, isDirectory: true)
+        guard let project = state.projectsManager.projects.first(where: { $0.id == pendingProjectId }) else {
+            try? FileManager.default.removeItem(at: dir)
+            return
+        }
+        guard let preview = repoIcon, !repoIconSelected, preview.imagePath != project.icon.imagePath else { return }
         try? FileManager.default.removeItem(
-            at: state.repoIconStagingRoot.appendingPathComponent(pendingProjectId, isDirectory: true)
+            at: ProjectIconImageStaging.url(for: preview.imagePath, root: state.repoIconStagingRoot)
         )
     }
 
@@ -1282,6 +1293,7 @@ private struct ProjectDialog: View {
         guard let repoIcon else { return }
         iconImagePath = repoIcon.imagePath
         iconMode = .image
+        repoIconSelected = true
         errorMessage = nil
     }
 
@@ -1294,6 +1306,7 @@ private struct ProjectDialog: View {
             )
             iconImagePath = staged.imagePath
             iconMode = .image
+            repoIconSelected = false
             errorMessage = nil
         } catch let stagingError as ProjectIconImageStaging.StagingError {
             errorMessage = stagingError.userMessage
