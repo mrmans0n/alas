@@ -6,12 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.19] - 2026-09-29
+
+### ✨ Features
+
+- Make remote peers available without an experimental flag, following remote access and discoverability settings (#1625).
+- Add an opt-in "Keep awake on power" setting that prevents idle sleep while remote control is ready and the Mac uses external power (#1624).
+- Preselect a repository's own icon in the Add project dialog and keep following the repository file (#1622).
+- Default new installations to chat launch mode, collapsed activity, an enabled minimap, and terminal tab title sync. Preserve saved preferences (#1621).
+
 ### 🐛 Fixes
 
-- Open native peer transcripts at the latest message and load earlier messages while scrolling up.
-- Show the active ACP task's one-based position in the chat task affordance.
-- Label a delegated child's `session_send` report in its parent's transcript as "Report from <agent> child · <id>" instead of "Delegated prompt", and prefix the text the parent agent receives with the sending child's session and agent.
+- Open native peer transcripts at the latest message and load earlier messages while scrolling up (#1627).
+- Show the active ACP task's one-based position in the chat task affordance (#1626).
+- Label a delegated child's `session_send` report in its parent's transcript as "Report from <agent> child · <id>" instead of "Delegated prompt", and prefix the text the parent agent receives with the sending child's session and agent (#1632).
 - Stop delegated Claude children from reporting through Claude's `SendMessage`/`ListAgents`, which reach unrelated Claude Code sessions on the same host: children never get those tools and are told to report only with `session_send`. "Disable native subagents" for Claude now also removes `Workflow`, `SendMessage`, and `ListAgents` (#1631).
+- Stop false needs-input and permission notifications in ACP chats, and notify only when a permission is waiting for a human (#1628).
+
+### 🏗️ Internal
+
+- Support launching an isolated second instance with `ALAS_APP_SUPPORT_DIR`: its state, hook and zmx sockets, ACP brokers, remote Keychain items, and written preferences stay separate from the main instance (#1623).
+- Add the v1 WebAssembly plugin contract and a Debug-only plugin host with capability approvals and execution limits (#1619).
+- Stabilize Swift tests and remove remaining sources of flaky CI failures (#1633, #1634).
+- Sync the SwiftTreeSitter package lockfile.
 
 ## [0.19.18] - 2026-09-29
 
@@ -37,10 +54,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Update FFF, MLX Swift, Swift Collections, Swift Transformers, SwiftTreeSitter, and ZMX (#1600, #1601, #1602, #1603, #1604, #1605, #1606).
 - Record the native-subagent adapter probe matrix (#1607).
 - Widen the git-gud stream collection deadline for loaded CI shards (#1617).
-
-### 🏗️ Internal
-
-- Support launching an isolated second instance with `ALAS_APP_SUPPORT_DIR`: its state, hook and zmx sockets, ACP brokers, remote Keychain items, and written preferences stay separate from the main instance.
 
 ## [0.19.17] - 2026-09-28
 
