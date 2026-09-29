@@ -349,9 +349,7 @@ struct ClosedTabAppStateTests {
         #expect(fixture.state.pendingACPDetachCountForTesting == 1)
 
         await gate.release()
-        for _ in 0 ..< 20 where fixture.state.pendingACPDetachCountForTesting != 0 {
-            await Task.yield()
-        }
+        _ = await awaitCondition { fixture.state.pendingACPDetachCountForTesting == 0 }
 
         #expect(fixture.state.pendingACPDetachCountForTesting == 0)
         #expect(fixture.state.canReopenClosedTab)
@@ -389,9 +387,7 @@ struct ClosedTabAppStateTests {
         #expect(fixture.state.pendingACPDetachCountForTesting == 1)
 
         await gate.release()
-        for _ in 0 ..< 20 where fixture.state.pendingACPDetachCountForTesting != 0 {
-            await Task.yield()
-        }
+        _ = await awaitCondition { fixture.state.pendingACPDetachCountForTesting == 0 }
 
         #expect(fixture.state.pendingACPDetachCountForTesting == 0)
     }
@@ -422,9 +418,7 @@ struct ClosedTabAppStateTests {
         #expect(fixture.state.pendingACPDetachCountForTesting == 1)
 
         await gate.release()
-        for _ in 0 ..< 20 where fixture.state.pendingACPDetachCountForTesting != 0 {
-            await Task.yield()
-        }
+        _ = await awaitCondition { fixture.state.pendingACPDetachCountForTesting == 0 }
 
         #expect(fixture.state.pendingACPDetachCountForTesting == 0)
     }
@@ -625,9 +619,7 @@ struct ClosedTabAppStateTests {
         #expect(fixture.state.pendingACPDetachCountForTesting == 1)
 
         await gate.release()
-        for _ in 0 ..< 20 where fixture.state.pendingACPDetachCountForTesting != 0 {
-            await Task.yield()
-        }
+        _ = await awaitCondition { fixture.state.pendingACPDetachCountForTesting == 0 }
 
         #expect(fixture.state.pendingACPDetachCountForTesting == 0)
     }

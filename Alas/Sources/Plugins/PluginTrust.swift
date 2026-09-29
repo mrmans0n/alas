@@ -42,6 +42,19 @@ struct PluginApprovalStore {
         save(approvals)
     }
 
+    private static let disabledKey = "pluginDisabledIDs.v1"
+
+    /// Disabling keeps the approval, so re-enabling needs no new prompt.
+    func isDisabled(id: String) -> Bool {
+        defaults.stringArray(forKey: Self.disabledKey)?.contains(id) == true
+    }
+
+    func setDisabled(id: String, _ disabled: Bool) {
+        var ids = Set(defaults.stringArray(forKey: Self.disabledKey) ?? [])
+        if disabled { ids.insert(id) } else { ids.remove(id) }
+        defaults.set(ids.sorted(), forKey: Self.disabledKey)
+    }
+
     func revoke(id: String) {
         var approvals = all()
         approvals[id] = nil

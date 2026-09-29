@@ -50,6 +50,8 @@ struct AppConfig: Codable, Equatable {
     /// Preview gate for the Needs Attention inbox and project affordances.
     /// Events continue collecting while its presentation is disabled.
     var needsAttentionEnabled: Bool = false
+    /// Opt-in gate for WebAssembly plugins. Off: nothing is scanned, loaded or run.
+    var pluginsEnabled: Bool = false
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
     var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
@@ -594,6 +596,7 @@ struct AppConfig: Codable, Equatable {
         nextPromptSuggestionsEnabled: false,
         sessionSummariesEnabled: false,
         needsAttentionEnabled: false,
+        pluginsEnabled: false,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
         recentWorktreeRefs: [],
@@ -690,6 +693,7 @@ extension AppConfig {
              sessionSummariesEnabled,
              runFailureBriefsEnabled,
              needsAttentionEnabled,
+             pluginsEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
@@ -937,6 +941,7 @@ extension AppConfig {
         runFailureBriefsEnabled = (try? c.decode(Bool.self, forKey: .runFailureBriefsEnabled)) ?? true
         // Needs Attention remains opt-in while its entry points are in preview.
         needsAttentionEnabled = (try? c.decode(Bool.self, forKey: .needsAttentionEnabled)) ?? false
+        pluginsEnabled = (try? c.decode(Bool.self, forKey: .pluginsEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]

@@ -5,9 +5,7 @@ It takes about ten minutes, most of it the first build.
 
 ## Before you start
 
-- A **Debug build of Alas**, running. The **Debug** menu, and with it
-  **Plugins…**, exists only in Debug builds. See *Develop* in the
-  [README](../../README.md#develop) for how to build from source.
+- **Alas**, running.
 - **Rust** with the WebAssembly target:
 
   ```bash
@@ -32,10 +30,15 @@ This compiles the plugin and copies two files into Alas's plugins folder:
 
 ## 2. Approve and run it
 
-1. In Alas, choose **Debug → Plugins…**.
-2. Find **Hello Workspace 0.1.0**. It asks for one capability:
+1. Turn on **Settings → Advanced → Experimental → Plugins**. The Advanced
+   section appears as **Debug** in the settings sidebar and shows only when
+   `~/.alas/.debug` exists.
+2. Open **Settings → Plugins** and find **Hello Workspace 0.1.0**. It asks for one capability:
    *Read this project's worktrees and what their agent sessions are doing*.
-3. Click **Approve and run**.
+3. Click **Approve…**.
+
+In Debug builds of Alas, **Debug → Plugins…** is also available as a message
+inspector.
 
 Plugins never run until you approve them. Alas remembers the approval against the
 exact bytes of `plugin.json` and `plugin.wasm`, so changing either file asks
@@ -43,13 +46,14 @@ again. See [Concepts → Trust](concepts.md#trust-and-approval).
 
 ## 3. See what it does
 
-Every project in Alas gets its own instance of the plugin, shown as a row with
-its state. You should see **active** and log lines like these:
+Every project in Alas gets its own instance of the plugin. **Settings → Plugins**
+lists them under the plugin as `<project>: <state>`. You should see
+`my-project: Active`; expand it for log lines like these:
 
 ```
-[info] activated for "my-project"
+[info] activated for my-project
 [info] snapshot: 3 worktrees, 2 sessions (1 running)
-[warn] worktree/switch replied {"code":-32001,"message":"capability not granted: worktree.switch"}
+[warn] worktree/switch replied -32001 capability not granted: worktree.switch
 ```
 
 - The first line is the plugin acknowledging that Alas started it.
@@ -62,8 +66,9 @@ Now change something. Start an agent session, or let one change state (start
 working, or stop to ask for permission). Within about a second a `changed: …`
 line appears.
 
-Open **Messages** on the row to see every JSON message going in each direction,
-`→` to the plugin and `←` from it. This is the fastest way to learn the protocol.
+In a Debug build of Alas, open **Debug → Plugins…** and then **Messages** on the
+row to see every JSON message going in each direction, `→` to the plugin and `←`
+from it. This is the fastest way to learn the protocol.
 
 ## 4. Make your own
 
@@ -100,11 +105,13 @@ Change what the plugin logs in `src/lib.rs`, then:
 ```
 
 `build.sh` installs into a folder named after the directory you run it from, so
-this one lands in `…/Plugins/my-plugin`. In **Debug → Plugins…** click
-**Reload**. Because the wasm changed, Alas asks you to **Approve and run** again.
+this one lands in `…/Plugins/my-plugin`. In **Settings → Plugins** click
+**Rescan**. Because the wasm changed, Alas asks you to **Approve…** again.
 
 ## Next steps
 
+- [Pixel Office](../../plugins/pixel-office/README.md) is a full canvas-tab plugin
+  to install and read.
 - [Writing plugins](writing-plugins.md) shows a structure that keeps your logic
   unit-testable and explains the pieces of the sample.
 - The [API v1 reference](api-v1.md) lists every message and its exact shape.

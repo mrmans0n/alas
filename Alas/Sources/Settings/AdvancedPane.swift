@@ -45,6 +45,15 @@ struct AdvancedPane: View {
                             }
                         ))
                     }
+                    SettingsRow(
+                        name: "Plugins",
+                        desc: "Runs approved WebAssembly plugins from ~/Library/Application Support/Alas/Plugins."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { state.config.pluginsEnabled },
+                            set: { enabled in Task { @MainActor in await state.setPluginsEnabled(enabled) } }
+                        ))
+                    }
                     if let recovery = state.workspaceRecoveryError {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Workspace recovery required: \(recovery.message)")

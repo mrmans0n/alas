@@ -4,10 +4,12 @@ Alas plugins are WebAssembly modules that extend Alas without changing or
 rebuilding the app. A plugin never touches Alas's internals. It exchanges small
 JSON messages with Alas, and Alas answers only the requests the user approved.
 
-> **Status: developer preview.** Plugins load only in **Debug builds** of Alas,
-> through **Debug → Plugins…**. There is no install UI, no plugin UI surface, and
-> no release-build support yet, and API v1 may still change before plugins ship
-> to everyone. Progress is tracked in
+> **Status: experimental.** Plugins are off by default. Turn them on in
+> **Settings → Advanced → Experimental → Plugins**; the Advanced section appears
+> as **Debug** in the settings sidebar and shows only when `~/.alas/.debug`
+> exists. **Settings → Plugins** then lists installed plugins, where you approve,
+> enable, revoke and restart them and read their logs. Canvas tabs open from
+> **View → Plugins**. The API may still change. Progress is tracked in
 > [#1560](https://github.com/mrmans0n/alas/issues/1560).
 
 ## The idea in one picture
@@ -32,13 +34,14 @@ clock, or environment access.
   for permission, idle).
 - **Be told** when that snapshot changes.
 - **Switch** Alas to another worktree of the same project.
-- **Log** lines that show up in **Debug → Plugins…**.
+- **Draw** canvas tabs with clickable regions (API 2), and focus an agent session.
+- **Log** lines that show up in **Settings → Plugins**.
 
 ## What it cannot do yet
 
-Draw anything (panels, tabs, canvases), make network requests, read or write
-files, run on a timer, or run in a release build. These are planned; see the
-roadmap in [#1560](https://github.com/mrmans0n/alas/issues/1560).
+Draw native panels or sidebars, make network requests, or read or write
+files. These are planned; see the roadmap in
+[#1560](https://github.com/mrmans0n/alas/issues/1560).
 
 ## Where to go next
 
@@ -46,7 +49,7 @@ roadmap in [#1560](https://github.com/mrmans0n/alas/issues/1560).
 |---|---|
 | Run the sample plugin and see it work | [Getting started](getting-started.md) |
 | Understand how plugins run, what they are trusted with, and how they fail | [Concepts](concepts.md) |
-| Look up an exact field, message, error, or limit | [API v1 reference](api-v1.md) |
+| Look up an exact field, message, error, or limit | [API v1 reference](api-v1.md), [API v2 additions](api-v2.md) |
 | Write a plugin: Rust patterns, testing, other languages | [Writing plugins](writing-plugins.md) |
 | Work out why my plugin does not load or stops | [Troubleshooting](troubleshooting.md) |
 

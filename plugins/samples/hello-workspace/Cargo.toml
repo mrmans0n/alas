@@ -11,6 +11,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
+alas-plugin = { path = "../../alas-plugin" }
 serde_json = "1"
 
 [profile.release]

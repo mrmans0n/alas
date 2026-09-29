@@ -27,6 +27,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case ggLanding(GGLandingTabState)
     case webPreview(WebPreviewTabState)
     case runReport(RunReportTabState)
+    case plugin(PluginTabState)
 
     var id: TabID {
         switch self {
@@ -53,6 +54,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .ggLanding(let s):    return s.id
         case .webPreview(let s):   return s.id
         case .runReport(let s):    return s.id
+        case .plugin(let s):       return s.id
         }
     }
 
@@ -81,6 +83,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .ggLanding(let s):    return s.title
         case .webPreview(let s):   return s.title
         case .runReport(let s):    return s.title
+        case .plugin(let s):       return s.title
         }
     }
 
@@ -109,6 +112,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .ggLanding:    return "arrow.down.to.line"
         case .webPreview:   return "globe"
         case .runReport:    return "terminal.fill"
+        case .plugin:       return "puzzlepiece.extension"
         }
     }
 
@@ -193,6 +197,22 @@ struct WebPreviewTabState: Codable, Equatable, Identifiable {
         self.url = url
         self.remoteHost = remoteHost
         self.id = "web-preview:\(ownerKey)"
+    }
+}
+
+/// A plugin's canvas tab. Restores even when the plugin is gone, showing a placeholder instead.
+struct PluginTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let pluginID: String
+    let contributionID: String
+    /// Last known title, so a placeholder can name a plugin that was removed.
+    var title: String
+
+    init(pluginID: String, contributionID: String, title: String) {
+        self.pluginID = pluginID
+        self.contributionID = contributionID
+        self.title = title
+        id = "plugin:\(pluginID)/\(contributionID)"
     }
 }
 

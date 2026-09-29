@@ -756,6 +756,21 @@ struct TabsManagerTests {
         #expect(manager.activeTabId(forWorktree: worktreeId) == first.id)
     }
 
+    @Test func openOrFocusPluginTabRefreshesARenamedContributionInPlace() {
+        let worktreeId = "tabs-manager-plugin-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let first = manager.openOrFocusPluginTab(
+            worktreeId: worktreeId, state: PluginTabState(pluginID: "io.x.p", contributionID: "office", title: "Office"))
+
+        let second = manager.openOrFocusPluginTab(
+            worktreeId: worktreeId, state: PluginTabState(pluginID: "io.x.p", contributionID: "office", title: "Pixel Office"))
+
+        #expect(first.id == second.id)
+        #expect(manager.tabs(forWorktree: worktreeId).count == 1)
+        #expect(manager.tabs(forWorktree: worktreeId).first?.title == "Pixel Office")
+    }
+
     @Test func reviewChangesTabStateRoundTrips() throws {
         let state = ReviewChangesTabState(worktreeId: "wt")
         let tab = Tab.reviewChanges(state)

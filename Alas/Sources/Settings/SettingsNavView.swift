@@ -1,11 +1,12 @@
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case agents, appearance, changes, chat, code, general, remote, shortcuts, spaces, terminal, worktrees, debug
+    case agents, appearance, changes, chat, code, general, remote, shortcuts, spaces, terminal, worktrees, plugins, debug
     var id: String { rawValue }
     var label: String {
         switch self {
         case .debug:      return "Debug"
+        case .plugins:    return "Plugins"
         case .agents:     return "Agents"
         case .appearance: return "Appearance"
         case .changes:    return "Changes"
@@ -22,6 +23,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .debug:      return "wrench.and.screwdriver"
+        case .plugins:    return "puzzlepiece.extension"
         case .agents:     return "sparkle"
         case .appearance: return "palette"
         case .changes:    return "diff"
@@ -36,9 +38,9 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         }
     }
 
-    static func visibleSections(showsDebug: Bool) -> [SettingsSection] {
+    static func visibleSections(showsDebug: Bool, showsPlugins: Bool = false) -> [SettingsSection] {
         SettingsSection.allCases
-            .filter { showsDebug || $0 != .debug }
+            .filter { (showsDebug || $0 != .debug) && (showsPlugins || $0 != .plugins) }
             .sorted(by: {
                 if $0 == .general { return true }
                 if $1 == .general { return false }
@@ -52,6 +54,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 struct SettingsNavView: View {
     @Binding var selection: SettingsSection
     var showsDebug: Bool
+    var showsPlugins: Bool = false
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -87,6 +90,6 @@ struct SettingsNavView: View {
     }
 
     private var sections: [SettingsSection] {
-        SettingsSection.visibleSections(showsDebug: showsDebug)
+        SettingsSection.visibleSections(showsDebug: showsDebug, showsPlugins: showsPlugins)
     }
 }
