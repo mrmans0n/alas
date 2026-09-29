@@ -46,6 +46,7 @@ final class PluginHost {
     private static let traceLimit = 100
     private static let logLimit = 200
     static let logMessageLimit = 2000
+    private static let logLevels: Set<String> = ["debug", "info", "warn", "error"]
 
     let manifest: PluginManifest
     let project: PluginProjectRef
@@ -226,7 +227,8 @@ final class PluginHost {
     /// Notifications never get replies, so bad ones are dropped.
     private func handleNotification(_ method: String, data: Data) {
         guard method == "log",
-              let params = try? JSONDecoder().decode(PluginParams<PluginLogParams>.self, from: data).params
+              let params = try? JSONDecoder().decode(PluginParams<PluginLogParams>.self, from: data).params,
+              Self.logLevels.contains(params.level)
         else { return }
         appendLog(params.level, params.message)
     }

@@ -187,6 +187,17 @@ struct PluginHostTests {
         #expect(recorder.switched.isEmpty)
     }
 
+    @Test func logsWithAnUnknownLevelAreDropped() async throws {
+        let hugeLevel = String(repeating: "x", count: 3000)
+        let host = try makeHost([[
+            .send(activateOK),
+            .send(#"{"jsonrpc":"2.0","method":"log","params":{"level":"\#(hugeLevel)","message":"a"}}"#),
+            .send(#"{"jsonrpc":"2.0","method":"log","params":{"level":"warn","message":"b"}}"#),
+        ]])
+        await host.activate()
+        #expect(host.log.map(\.level) == ["warn"])
+    }
+
     @Test func oversizedLogMessagesAreTruncated() async throws {
         let long = String(repeating: "x", count: 3000)
         let host = try makeHost([[

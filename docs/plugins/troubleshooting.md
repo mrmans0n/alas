@@ -85,7 +85,7 @@ The plugin keeps running. The error is in the response, visible under **Messages
   `alas/activate` message under **Messages**. Then remember that changes are
   checked twice a second, and only *differences* are sent.
 - **You do not see your `log` lines.** The row shows only the latest five. A
-  `log` needs `level` and `message` as strings, or it is dropped silently. And a
+  `log` needs a `level` of `debug`, `info`, `warn` or `error` and a string `message`, or it is dropped silently. And a
   call that fails discards the log lines it sent.
 - **State is missing after a restart.** Expected. A restart is a fresh instance
   with empty memory. See [Working with requests and replies](writing-plugins.md#working-with-requests-and-replies).

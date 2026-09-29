@@ -293,10 +293,10 @@ is no response.
 
 | Param | Type | Meaning |
 |---|---|---|
-| `level` | string | Conventionally `debug`, `info`, `warn` or `error`. Not validated. |
+| `level` | string | One of `debug`, `info`, `warn` or `error`. |
 | `message` | string | The text. Truncated to 2,000 characters. |
 
-A `log` whose params are missing or not two strings is silently dropped.
+A `log` whose params are missing, whose `message` is not a string, or whose `level` is not one of those four is silently dropped.
 
 ### Error responses
 
