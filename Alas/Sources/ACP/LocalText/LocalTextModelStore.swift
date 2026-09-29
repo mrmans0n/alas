@@ -110,7 +110,7 @@ actor LocalTextModelStore {
             let generation = try Self.verify(root: directory.fileDescriptor, name: manifest.revision, manifest: manifest)
             return LocalTextModelLease(directory: root.appendingPathComponent(manifest.revision), generation: generation, handle: lock)
         } catch {
-            try? lock.close()
+            LocalTextModelFiles.unlock(lock)
             if let error = error as? POSIXError, error.code == .ENOENT { throw error }
             throw LocalTextModelFailure.safe(error)
         }
@@ -124,7 +124,7 @@ actor LocalTextModelStore {
             let directory = try LocalTextModelFiles.openRoot(root)
             defer { try? directory.close() }
             let lock = try LocalTextModelFiles.lock(root: directory.fileDescriptor, exclusive: true)
-            defer { try? lock.close() }
+            defer { LocalTextModelFiles.unlock(lock) }
             try LocalTextModelFiles.removeDirectory(parent: directory.fileDescriptor, name: manifest.revision)
             try Self.cleanStaging(root: directory.fileDescriptor, revision: manifest.revision)
             try LocalTextModelFiles.synchronize(directory.fileDescriptor)
@@ -149,7 +149,7 @@ actor LocalTextModelStore {
             defer { try? directory.close() }
             let fd = directory.fileDescriptor
             let lock = try LocalTextModelFiles.lock(root: fd, exclusive: true)
-            defer { try? lock.close() }
+            defer { LocalTextModelFiles.unlock(lock) }
             try cleanStaging(root: fd, revision: manifest.revision)
             do {
                 _ = try verify(root: fd, name: manifest.revision, manifest: manifest)

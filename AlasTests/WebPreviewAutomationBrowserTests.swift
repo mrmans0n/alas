@@ -399,17 +399,20 @@ struct WebPreviewAutomationBrowserTests {
         try await waitUntil("initial page load failed") { browser.webView.url == baseURL && !browser.loading }
 
         let fragmentURL = URL(string: "http://127.0.0.1:\(port.rawValue)/#section")!
-        let navigate = try await browser.automation(command: WebPreviewCommand(action: .navigate, url: fragmentURL.absoluteString, timeoutMS: 1_000))
+        // Default deadlines: a wait that never observes same-document completion
+        // still fails, but each UI-to-WebContent round trip is not held to a
+        // sub-second budget on a loaded CI runner.
+        let navigate = try await browser.automation(command: WebPreviewCommand(action: .navigate, url: fragmentURL.absoluteString))
         #expect(navigate["url"] as? String == fragmentURL.absoluteString)
         #expect(browser.webView.url == fragmentURL)
         try await waitUntil("fragment navigation did not enter back stack") { browser.webView.canGoBack }
 
-        let back = try await browser.automation(command: WebPreviewCommand(action: .back, timeoutMS: 1_000))
+        let back = try await browser.automation(command: WebPreviewCommand(action: .back))
         #expect(back["url"] as? String == baseURL.absoluteString)
         #expect(browser.webView.url == baseURL)
         try await waitUntil("fragment back did not enter forward stack") { browser.webView.canGoForward }
 
-        let forward = try await browser.automation(command: WebPreviewCommand(action: .forward, timeoutMS: 1_000))
+        let forward = try await browser.automation(command: WebPreviewCommand(action: .forward))
         #expect(forward["url"] as? String == fragmentURL.absoluteString)
         #expect(browser.webView.url == fragmentURL)
 

@@ -110,6 +110,9 @@ struct ACPSessionManagerRemoteRestoreTests {
         #expect(client.sent.map(\.method) == ["initialize", "session/resume", "session/new", "session/prompt"])
         #expect(session.agentState == .ready)
         #expect(session.remoteSessionId == "remote-new")
+        // Recovery marks the session restored before its queued
+        // `contextRecoveryPending` write lands; wait for it before reading.
+        await manager.flushAllPersistence()
         #expect(try store.loadSession(id: session.id)?.remoteSessionId == "remote-new")
         #expect(try store.loadSession(id: session.id)?.contextRecoveryPending == false)
         await manager.detach(sessionId: session.id)

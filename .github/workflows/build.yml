@@ -57,6 +57,10 @@ jobs:
     runs-on: macos-26
     # Build once; test runners queue only after products and the plan are published.
     timeout-minutes: 110
+    # "Re-run failed jobs" skips a successful builder, so later attempts must
+    # download the products and plan from the attempt that published them.
+    outputs:
+      artifact-attempt: ${{ github.run_attempt }}
     # Block any git operation from prompting (credential helper, SSH key
     # lookup, etc.). Without these, GitServiceTests.suggestNameFromSshRemote
     # — which sets a `git@github.com:...` remote — hung indefinitely on
@@ -523,13 +527,13 @@ jobs:
       - name: Download compiled Swift test products
         uses: actions/download-artifact@v8
         with:
-          name: swift-test-products-${{ github.run_attempt }}
+          name: swift-test-products-${{ needs.build-test.outputs.artifact-attempt }}
           path: .build/xcode/artifact
 
       - name: Download Swift test plan
         uses: actions/download-artifact@v8
         with:
-          name: swift-test-plan-${{ github.run_attempt }}
+          name: swift-test-plan-${{ needs.build-test.outputs.artifact-attempt }}
           path: .build/xcode/results
 
       - name: Restore and validate compiled test products
@@ -557,8 +561,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: swift-test-reports-${{ github.run_attempt }}-${{ matrix.shard }}
+          name: swift-test-reports-${{ matrix.shard }}
           path: .build/xcode/results/*.report.json
+          overwrite: true
           if-no-files-found: warn
 
       - name: Upload Swift shard diagnostics
@@ -589,13 +594,13 @@ jobs:
       - name: Download Swift test plan
         uses: actions/download-artifact@v8
         with:
-          name: swift-test-plan-${{ github.run_attempt }}
+          name: swift-test-plan-${{ needs.build-test.outputs.artifact-attempt }}
           path: .build/xcode/results
 
       - name: Download every Swift shard coverage report
         uses: actions/download-artifact@v8
         with:
-          pattern: swift-test-reports-${{ github.run_attempt }}-*
+          pattern: swift-test-reports-*
           path: .build/xcode/results/shards
 
       - name: Reconcile Swift coverage and publish timings
@@ -626,7 +631,7 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
-          name: swift-build-summary-${{ github.run_attempt }}
+          name: swift-build-summary-${{ needs.build-test.outputs.artifact-attempt }}
           path: .build/xcode/build-summary
 
       - name: Report CI queue and execution timings

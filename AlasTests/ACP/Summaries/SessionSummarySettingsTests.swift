@@ -53,14 +53,14 @@ struct SessionSummarySettingsTests {
     ) async throws {
         let fixture = try LocalTextModelFixture()
         defer { fixture.removeTemporaryRoot() }
-        let gate = SummaryModelStateReadGate()
+        let gate = LocalTextModelStateReadGate()
         let state = makeState(
             fixture,
             SummarySettingsStore(),
             readModelState: { await gate.read(fixture.store) }
         )
         let enable = Task { await state.enableSessionSummaries() }
-        await gate.waitUntilEntered()
+        try await fixture.waitForInstallation { await gate.entered }
         let modelObserver = state.localTextObservers.tasks.first
         modelObserver?.cancel()
         await modelObserver?.value
@@ -86,6 +86,9 @@ struct SessionSummarySettingsTests {
         #expect(LocalTextModelSettings.sessionSummaryConsent.contains("remain"))
 
         await state.enableSessionSummaries()
+        let storeState = await fixture.store.state
+        try #require(state.localTextModelState == .ready,
+                     "First installation settled as \(state.localTextModelState); store: \(storeState)")
         let installedRequests = fixture.transport.requestCount
         await state.enableNextPromptSuggestions()
 
@@ -118,11 +121,7 @@ struct SessionSummarySettingsTests {
         fixture.transport.mode.withLock { $0 = .waitForCancellation }
         let state = makeState(fixture, SummarySettingsStore())
         let enable = Task { await state.enableSessionSummaries() }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
-        while !fixture.transport.started.withLock({ $0 }), ContinuousClock.now < deadline {
-            await Task.yield()
-        }
-        try #require(fixture.transport.started.withLock { $0 })
+        try await fixture.waitForInstallation(timeout: .seconds(20)) { fixture.transport.started.withLock { $0 } }
 
         await state.disableSessionSummaries()
 
@@ -254,12 +253,6 @@ struct SessionSummarySettingsTests {
         state.sessionSummariesRuntimeEnabled = false
         #expect(state.canRemoveLocalTextModel)
         await state.removeLocalTextModel()
-        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
-        while state.localTextRemovalFailure == .inUse {
-            try #require(ContinuousClock.now < deadline)
-            await Task.yield()
-            await state.removeLocalTextModel()
-        }
         #expect(state.localTextRemovalFailure == nil)
         #expect(state.localTextModelState == .notInstalled)
         await state.shutdownLocalTextFeatures()
@@ -572,7 +565,9 @@ private actor SuspendedRemovalEngine: LocalTextGenerating {
     }
 }
 
-private actor SummaryModelStateReadGate {
+/// Holds the first `.ready` model-state read, which is the one an installation
+/// makes once it finishes, until the test opens it.
+actor LocalTextModelStateReadGate {
     private var continuation: CheckedContinuation<Void, Never>?
     private(set) var entered = false
 
@@ -585,13 +580,32 @@ private actor SummaryModelStateReadGate {
         return value
     }
 
-    func waitUntilEntered() async {
-        while !entered { await Task.yield() }
-    }
-
     func open() {
         continuation?.resume()
         continuation = nil
+    }
+}
+
+extension LocalTextModelFixture {
+    /// Waits for a point that only a progressing installation reaches. An
+    /// installation that settles as `.failed` never gets there, so fail at once
+    /// and name the failure instead of waiting out the deadline.
+    func waitForInstallation(
+        timeout: Duration = .seconds(28),
+        isolation: isolated (any Actor)? = #isolation,
+        sourceLocation: SourceLocation = #_sourceLocation,
+        until condition: () async -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while !(await condition()) {
+            let state = await store.state
+            if case .failed = state {
+                try #require(await condition(), "Installation settled as \(state)", sourceLocation: sourceLocation)
+                return
+            }
+            try #require(ContinuousClock.now < deadline, "Installation still \(state)", sourceLocation: sourceLocation)
+            await Task.yield()
+        }
     }
 }
 

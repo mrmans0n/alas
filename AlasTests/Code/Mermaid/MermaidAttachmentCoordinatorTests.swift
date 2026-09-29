@@ -928,13 +928,14 @@ struct MermaidAttachmentCoordinatorTests {
     private func waitForOutcome(
         in attachment: MermaidTextAttachment
     ) async -> Bool {
-        for _ in 0 ..< 1_000 {
-            if attachment.currentOutcome != nil {
-                return true
-            }
-            await Task.yield()
+        // The outcome returns to the main actor through the same task hops as
+        // the backend events, so poll against a deadline, not a yield count.
+        let deadline = ContinuousClock.now + .seconds(30)
+        while attachment.currentOutcome == nil {
+            guard ContinuousClock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(5))
         }
-        return false
+        return true
     }
 
     private func mouseDown(
@@ -986,16 +987,36 @@ private final class MermaidCellDelegateSpy: MermaidTextAttachmentCellDelegate {
     }
 }
 
+/// Requests and cancellations reach this backend through several unstructured
+/// task hops (coordinator -> render service -> limiter -> backend), so waiters
+/// are resumed by the event itself rather than by counting `Task.yield()`s,
+/// which a loaded cooperative pool can exhaust before the hop is scheduled.
+/// The deadline only bounds a regression where the event never arrives.
 private actor ControlledMermaidBackend: MermaidRenderingBackend {
+    private enum Event: Hashable {
+        case request(String)
+        case cancellation(String)
+    }
+
+    private static let hangGuard: Duration = .seconds(30)
+
     private var continuations: [
         String: CheckedContinuation<MermaidRenderOutcome, Never>
     ] = [:]
     private var cancelledSources: Set<String> = []
+    private var waiters: [UUID: Waiter] = [:]
+
+    private struct Waiter {
+        let event: Event
+        let continuation: CheckedContinuation<Bool, Never>
+        let hangGuard: Task<Void, Never>
+    }
 
     func render(key: MermaidRenderKey) async -> MermaidRenderOutcome {
         await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 continuations[key.source] = continuation
+                signal(.request(key.source))
             }
         } onCancel: {
             Task { await self.recordCancellation(source: key.source) }
@@ -1003,13 +1024,7 @@ private actor ControlledMermaidBackend: MermaidRenderingBackend {
     }
 
     func waitForRequest(source: String) async -> Bool {
-        for _ in 0 ..< 1_000 {
-            if continuations[source] != nil {
-                return true
-            }
-            await Task.yield()
-        }
-        return false
+        await wait(for: .request(source))
     }
 
     func resume(source: String, outcome: MermaidRenderOutcome) {
@@ -1017,16 +1032,44 @@ private actor ControlledMermaidBackend: MermaidRenderingBackend {
     }
 
     func waitForCancellation(source: String) async -> Bool {
-        for _ in 0 ..< 1_000 {
-            if cancelledSources.contains(source) {
-                return true
-            }
-            await Task.yield()
-        }
-        return false
+        await wait(for: .cancellation(source))
     }
 
     private func recordCancellation(source: String) {
         cancelledSources.insert(source)
+        signal(.cancellation(source))
+    }
+
+    private func hasOccurred(_ event: Event) -> Bool {
+        switch event {
+        case let .request(source):
+            return continuations[source] != nil
+        case let .cancellation(source):
+            return cancelledSources.contains(source)
+        }
+    }
+
+    private func wait(for event: Event) async -> Bool {
+        if hasOccurred(event) { return true }
+        let id = UUID()
+        return await withCheckedContinuation { continuation in
+            let hangGuard = Task {
+                try? await Task.sleep(for: Self.hangGuard)
+                await self.expireWaiter(id)
+            }
+            waiters[id] = Waiter(event: event, continuation: continuation, hangGuard: hangGuard)
+        }
+    }
+
+    private func signal(_ event: Event) {
+        for (id, waiter) in waiters where waiter.event == event {
+            waiters.removeValue(forKey: id)
+            waiter.hangGuard.cancel()
+            waiter.continuation.resume(returning: true)
+        }
+    }
+
+    private func expireWaiter(_ id: UUID) {
+        waiters.removeValue(forKey: id)?.continuation.resume(returning: false)
     }
 }
