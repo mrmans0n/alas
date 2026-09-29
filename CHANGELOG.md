@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### 🐛 Fixes
 
+- Open native peer transcripts at the latest message and load earlier messages while scrolling up.
 - Show the active ACP task's one-based position in the chat task affordance.
 
 ## [0.19.18] - 2026-09-29
