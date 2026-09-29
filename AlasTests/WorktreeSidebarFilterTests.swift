@@ -47,19 +47,15 @@ struct WorktreeSidebarFilterTests {
     }
 
     @Test(arguments: [
-        (false, 100.0, 90.0, 500.0, true),     // scroll up reveals
-        (true, 90.0, 100.0, 500.0, false),     // scroll down hides
-        (false, 0.0, -20.0, 0.0, true),        // pull past the top of a short sidebar
-        (true, -20.0, 0.0, 500.0, true),       // top bounce back keeps it
-        (false, 520.0, 500.0, 500.0, false),   // bottom bounce back keeps it hidden
-        (true, 100.0, 100.0, 500.0, true),     // no movement, no change
+        (10.0 as CGFloat, 0.0 as CGFloat),  // mostly shown snaps open
+        (20.0, 32.0),                       // mostly hidden snaps hidden
+        (16.0, 32.0),                       // halfway leans hidden
+        (0.0, 0.0),                         // edges and beyond are left alone
+        (-20.0, -20.0),
+        (400.0, 400.0),
     ])
-    func filterRowFollowsScrollDirection(
-        revealed: Bool, old: Double, new: Double, maxOffset: Double, expected: Bool
-    ) {
-        #expect(WorktreeSidebarFilter.isRowRevealed(
-            revealed, scrolledFrom: old, to: new, maxOffset: maxOffset
-        ) == expected)
+    func filterRowSlotIsMagnetic(offset: CGFloat, expected: CGFloat) {
+        #expect(WorktreeSidebarFilter.snappedOffset(offset, slot: 32) == expected)
     }
 
     @Test(arguments: [

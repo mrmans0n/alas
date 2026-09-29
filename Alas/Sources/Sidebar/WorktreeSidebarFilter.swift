@@ -31,14 +31,11 @@ enum WorktreeSidebarFilter {
         return ids[min(max(index + offset, 0), ids.count - 1)]
     }
 
-    /// Scrolling up reveals and pins the filter row; scrolling down hides it.
-    /// Offsets past either edge are elastic overscroll, so the bounce back
-    /// from each edge is ignored rather than undoing the gesture that caused it.
-    /// That also lets a sidebar too short to scroll reveal the row by pulling.
-    static func isRowRevealed(_ revealed: Bool, scrolledFrom old: CGFloat, to new: CGFloat, maxOffset: CGFloat) -> Bool {
-        if new < old, old <= maxOffset { return true }
-        if new > old, old >= 0 { return false }
-        return revealed
+    /// Magnetic filter-row slot: a scroll landing partway through it finishes
+    /// fully open or fully hidden, leaning hidden past the halfway point.
+    static func snappedOffset(_ offset: CGFloat, slot: CGFloat) -> CGFloat {
+        guard offset > 0, offset < slot else { return offset }
+        return offset < slot / 2 ? 0 : slot
     }
 
     /// Where the filter row draws, from the top of the scroll area. Unpinned
