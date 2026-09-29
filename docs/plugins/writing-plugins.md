@@ -7,23 +7,10 @@ sample uses and the one that has been checked against Alas.
 
 ## The shape of a plugin
 
-Every plugin has the same three parts:
-
-1. **ABI glue.** The two exports Alas calls (`alas_alloc`, `alas_handle`) and the
-   one import it provides (`alas.send`). This is boilerplate you write once.
-2. **A message handler.** Takes one incoming JSON message and decides which
-   messages to send back.
-3. **State.** Whatever the plugin remembers between messages.
-
-Keep part 2 free of anything Wasm-specific. Then you can run it with plain
-`cargo test`, without Alas.
-
-## A structure that tests well
-
-This skeleton keeps all the logic in a `Plugin` type that turns one message into
-zero or more messages. Only the `abi` module knows about WebAssembly, and it
-compiles only for `wasm32`, so `cargo test` on your own machine never tries to
-link the `alas.send` import.
+With the [`alas-plugin`](../../plugins/alas-plugin) Rust SDK a plugin is one
+type and one macro call. The SDK owns the ABI glue (`alas_alloc`, `alas_handle`
+and the `alas.send` import), the JSON-RPC framing, request ids, and the
+activation handshake: `alas/activate` is answered before your code sees it.
 
 `Cargo.toml`:
 
@@ -33,10 +20,14 @@ name = "my-plugin"
 version = "0.1.0"
 edition = "2021"
 
+# Standalone: not part of any parent workspace.
+[workspace]
+
 [lib]
-crate-type = ["cdylib", "rlib"]   # cdylib: the .wasm; rlib: lets cargo test link
+crate-type = ["cdylib"]
 
 [dependencies]
+alas-plugin = { path = "../alas-plugin" }   # adjust to where you keep the SDK
 serde_json = "1"
 
 [profile.release]
@@ -49,156 +40,82 @@ panic = "abort"
 `src/lib.rs`:
 
 ```rust
-use std::collections::HashMap;
-
-use serde_json::{json, Value};
-
-/// What a pending request was for, so its response can be matched by id.
-enum Pending {
-    Snapshot,
-}
+use alas_plugin::{export_plugin, log, request, Event, Plugin};
+use serde_json::json;
 
 #[derive(Default)]
-pub struct Plugin {
-    next_id: i64,
-    pending: HashMap<i64, Pending>,
+struct MyPlugin {
+    snapshot_request: i64,
 }
 
-impl Plugin {
-    fn request(&mut self, method: &str, params: Value, purpose: Pending) -> Value {
-        self.next_id += 1;
-        self.pending.insert(self.next_id, purpose);
-        json!({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params})
-    }
-
-    /// One message in, zero or more messages out. No I/O, so it runs in `cargo test`.
-    pub fn handle(&mut self, input: &str) -> Vec<Value> {
-        let Ok(message) = serde_json::from_str::<Value>(input) else { return vec![] };
-        match message["method"].as_str() {
-            Some("alas/activate") => vec![
-                // Answer the activation first, then start work.
-                json!({"jsonrpc": "2.0", "id": message["id"], "result": {}}),
-                self.request("workspace/snapshot", json!({}), Pending::Snapshot),
-            ],
-            Some("workspace/changed") => vec![log("info", summary(&message["params"]["snapshot"]))],
-            Some(_) => vec![],
-            // No method: this is a response to one of our requests.
-            None => match message["id"].as_i64().and_then(|id| self.pending.remove(&id)) {
-                Some(Pending::Snapshot) => vec![log("info", summary(&message["result"]["snapshot"]))],
-                None => vec![],
-            },
+impl Plugin for MyPlugin {
+    fn handle(&mut self, event: Event) {
+        match event {
+            Event::Activate { project_name, .. } => {
+                log("info", &format!("activated for {project_name}"));
+                self.snapshot_request = request("workspace/snapshot", json!({}));
+            }
+            Event::WorkspaceChanged(snapshot) => {
+                log("info", &format!("{} worktrees", snapshot.worktrees.len()));
+            }
+            Event::Reply { id, result } if id == self.snapshot_request => {
+                log("info", &format!("snapshot reply ok: {}", result.is_ok()));
+            }
+            _ => {}
         }
     }
 }
 
-fn log(level: &str, message: String) -> Value {
-    json!({"jsonrpc": "2.0", "method": "log", "params": {"level": level, "message": message}})
-}
-
-fn summary(snapshot: &Value) -> String {
-    let count = snapshot["worktrees"].as_array().map_or(0, |worktrees| worktrees.len());
-    format!("{count} worktrees")
-}
-
-/// The Wasm ABI. Everything above is plain Rust; only this module talks to Alas.
-#[cfg(target_arch = "wasm32")]
-mod abi {
-    use super::Plugin;
-    use std::cell::RefCell;
-
-    #[link(wasm_import_module = "alas")]
-    extern "C" {
-        #[link_name = "send"]
-        fn alas_send(ptr: *const u8, len: usize);
-    }
-
-    thread_local! {
-        static PLUGIN: RefCell<Plugin> = RefCell::new(Plugin::default());
-    }
-
-    #[no_mangle]
-    pub extern "C" fn alas_alloc(len: usize) -> *mut u8 {
-        Box::into_raw(vec![0u8; len].into_boxed_slice()) as *mut u8
-    }
-
-    /// # Safety
-    /// `ptr`/`len` must come from `alas_alloc`; Alas guarantees this.
-    #[no_mangle]
-    pub unsafe extern "C" fn alas_handle(ptr: *mut u8, len: usize) {
-        // Taking ownership of the buffer frees it when `bytes` goes out of scope.
-        let bytes = Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len));
-        let input = String::from_utf8_lossy(&bytes);
-        let output = PLUGIN.with(|plugin| plugin.borrow_mut().handle(&input));
-        for message in output {
-            let text = message.to_string();
-            alas_send(text.as_ptr(), text.len());
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn activation_is_answered_before_the_snapshot_is_requested() {
-        let mut plugin = Plugin::default();
-        let out = plugin.handle(r#"{"jsonrpc":"2.0","id":0,"method":"alas/activate","params":{}}"#);
-        assert_eq!(out[0]["result"], json!({}));
-        assert_eq!(out[1]["method"], "workspace/snapshot");
-    }
-
-    #[test]
-    fn a_snapshot_response_is_matched_by_id() {
-        let mut plugin = Plugin::default();
-        plugin.handle(r#"{"jsonrpc":"2.0","id":0,"method":"alas/activate","params":{}}"#);
-        let out = plugin.handle(r#"{"jsonrpc":"2.0","id":1,"result":{"snapshot":{"worktrees":[{}, {}]}}}"#);
-        assert_eq!(out[0]["params"]["message"], "2 worktrees");
-        assert!(plugin.handle(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#).is_empty());
-    }
-}
+export_plugin!(MyPlugin);
 ```
 
-Run the tests on your machine, then build the plugin:
+The sample in [`plugins/samples/hello-workspace`](../../plugins/samples/hello-workspace)
+is the same idea with a bit more logic. Its `build.sh` builds and installs it.
+
+### Testing without Alas
+
+On non-wasm targets the SDK replaces the host imports with an in-memory
+recorder, so plain `cargo test` works. Feed messages to `alas_plugin::dispatch`
+and read what the plugin sent with `alas_plugin::test_host::take_sent()`, or the
+frames it presented with `test_host::take_frames()`. The SDK's own tests in
+`plugins/alas-plugin/src/lib.rs` show the pattern.
+
+For that, add `"rlib"` to `crate-type` (`["cdylib", "rlib"]`) so tests can link.
+
+Then build the plugin:
 
 ```bash
 cargo test
 cargo build --release --target wasm32-unknown-unknown
 ```
 
-The sample in [`plugins/samples/hello-workspace`](../../plugins/samples/hello-workspace)
-is the same idea in a single file with no state. Its `build.sh` builds it and
-installs it. It uses a small ABI section you can copy as is.
-
-### About the ABI glue
-
-- **`alas_alloc`** hands Alas a buffer to write the next message into. Here it
-  allocates a zeroed buffer and deliberately leaks it (`Box::into_raw`), so that
-  Rust does not free it while Alas is filling it.
-- **`alas_handle`** takes that buffer back with `Box::from_raw`, which makes Rust
-  free it when the function returns. You must free it. A plugin that never does
-  runs out of its [64 MiB](api-v1.md#7-limits) after enough messages.
-- **`alas.send`** copies the bytes right away, so the `String` you pass can be
-  dropped straight after the call.
-- **`thread_local!`** is the simplest safe way to keep state in a single-threaded
-  module. A `static mut` works too, but needs `unsafe`.
-
 ## Working with requests and replies
 
-- **Answer `alas/activate` first**, in the same call, before any request of your
-  own. Reply with the `id` you were given.
-- **Choose your own request ids** and remember what each was for, as the skeleton
-  does with `pending`. Replies come back later, in the order you asked, and carry
-  the same `id`.
+- **You do not answer `alas/activate`.** The SDK does it in the same call, before
+  your `Event::Activate` handler runs, so any requests you send there follow it.
+- **`request(method, params)` returns the request id.** Remember what each id was
+  for and match it against `Event::Reply { id, result }` later. `result` is
+  `Ok(value)` or `Err(RpcError { code, message })`. Replies come back in the order
+  you asked.
 - **Do not answer every reply with a new request.** Alas stops a plugin that needs
   more than 64 calls to settle a single delivery. Ask again on the next
   `workspace/changed` instead.
 - **You get the snapshot without asking.** `workspace/changed` arrives shortly
-  after activation, so most plugins never need to send `workspace/snapshot`. The
-  skeleton does it only to show the request and reply pattern.
+  after activation, so most plugins never need to send `workspace/snapshot`.
 - **State does not survive a restart.** A restarted plugin is a fresh instance with
   empty memory and receives `alas/activate` again. Rebuild anything you need from
   the next snapshot.
+
+## Canvas tabs (API 2)
+
+API 2 plugins can draw. `present(tab, pixels, width)` hands Alas one RGBA8 frame
+for a canvas tab, `set_regions(tab, &[Region { id, label, rect }])` publishes the
+clickable, accessible regions, and `Event::Tick { dt }` and
+`Event::Click { tab, region }` drive animation and input. Frame and region limits,
+the manifest fields, and the exact wire format are in [api-v2.md](api-v2.md).
+`present` is only available to API 2 plugins: a module that imports it under API 1
+fails to load. The SDK links the import only when `present` is actually called,
+so an API 1 plugin such as `hello-workspace` does not import it.
 
 ## Reading the snapshot
 
@@ -250,6 +167,8 @@ Read the full [limits table](api-v1.md#7-limits). What matters day to day:
   what a dependency uses before adding it.
 
 ## Other languages
+
+The raw ABI is described in [api-v1.md](api-v1.md); the SDK above is just Rust glue over it.
 
 The contract is the module's exports and imports, so any language that can produce
 a core WebAssembly module with the right shape can write a plugin. Rust is the only
