@@ -1112,7 +1112,6 @@ struct RemoteAppStateAccessTests {
     @Test func remoteCreateWorktreeSessionRejectsRemoteDestinationBeforeCreating() async throws {
         let repository = try await makeRemoteBranchesRepository()
         defer {
-            RemoteHostRegistry.shared.unregister(root: repository.path)
             try? FileManager.default.removeItem(at: repository)
         }
         let project = ProjectConfig(
@@ -1594,7 +1593,6 @@ struct RemoteAppStateAccessTests {
     @Test func remoteFileTreeVerifiesRemoteContainmentBeforeListingANonRootDirectory() async throws {
         let repository = try await makeRemoteBranchesRepository()
         defer {
-            RemoteHostRegistry.shared.unregister(root: repository.path)
             try? FileManager.default.removeItem(at: repository)
         }
         let aliasDir = repository.appendingPathComponent("alias")
@@ -1603,7 +1601,7 @@ struct RemoteAppStateAccessTests {
         _ = try await Process.git(["add", "alias"], cwd: repository)
         _ = try await Process.git(["commit", "-q", "-m", "add alias dir"], cwd: repository)
 
-        RemoteHostRegistry.shared.register(root: repository.path, host: "nonexistent-host.invalid")
+        let remoteRepository = URL(fileURLWithPath: RemotePath.virtual(host: "nonexistent-host.invalid", realPath: repository.path))
 
         var cleanupWorktreeId: String?
         defer {
@@ -1611,7 +1609,7 @@ struct RemoteAppStateAccessTests {
                 cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
             }
         }
-        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let state = makeRemoteGitBackedState(repositoryPath: remoteRepository)
         let worktreeId = try #require(state.selectedWorktreeId)
         cleanupWorktreeId = worktreeId
         state.openNewACPSession(agentID: "test-agent")

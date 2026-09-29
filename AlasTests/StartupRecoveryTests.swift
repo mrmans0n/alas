@@ -271,10 +271,6 @@ struct StartupRecoveryTests {
     @Test func recoveryLaunchPopulatesConfiguredProjectWorktrees() {
         let root = "/srv/alas-recovery-\(UUID().uuidString)"
         let linked = "/srv/alas-linked-\(UUID().uuidString)"
-        defer {
-            RemoteHostRegistry.shared.unregister(root: root)
-            RemoteHostRegistry.shared.unregister(root: linked)
-        }
         let cached = Worktree(
             id: linked,
             projectId: "project",
@@ -300,7 +296,6 @@ struct StartupRecoveryTests {
         let rows = manager.worktrees(projectId: project.id)
         #expect(rows.count == 1)
         #expect(rows.first?.id == cached.id)
-        #expect(RemoteHostRegistry.shared.host(forPath: linked) == "devbox")
     }
 
     @Test func recoveryLaunchSkipsMissingLocalCachedWorktrees() throws {

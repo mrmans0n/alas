@@ -1638,9 +1638,7 @@ struct ACPSessionManagerAttachRestoreTests {
 
     @Test("fresh remote session preamble omits built-in but names a surviving user server")
     func freshRemoteSessionPreambleOmitsBuiltInButNamesUserServer() async throws {
-        let root = "/srv/task4-remote-preamble-\(UUID().uuidString)"
-        RemoteHostRegistry.shared.register(root: root, host: "devbox")
-        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let root = RemotePath.virtual(host: "devbox", realPath: "/srv/task4-remote-preamble-\(UUID().uuidString)")
         let store = try ACPSessionStore(path: tmpStorePath())
         let client = ACPMockClient()
         client.script(method: "initialize") { _ in
@@ -1859,9 +1857,7 @@ struct ACPSessionManagerAttachRestoreTests {
 
     @Test("remote attach skips alas CLI env")
     func remoteAttachSkipsCLIEnv() async throws {
-        let root = "/srv/task3-remote-cli-env-\(UUID().uuidString)"
-        RemoteHostRegistry.shared.register(root: root, host: "devbox")
-        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let root = RemotePath.virtual(host: "devbox", realPath: "/srv/task3-remote-cli-env-\(UUID().uuidString)")
         let store = try ACPSessionStore(path: tmpStorePath())
         let client = ACPMockClient()
         scriptInitialize(client)
@@ -1953,9 +1949,7 @@ struct ACPSessionManagerAttachRestoreTests {
 
     @Test("remote pi attach skips the external MCP status provider and reports configured servers as unavailable")
     func remotePiAttachPreservesConfiguredMCPServerNames() async throws {
-        let root = "/srv/task5-remote-external-mcp-names-\(UUID().uuidString)"
-        RemoteHostRegistry.shared.register(root: root, host: "devbox")
-        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let root = RemotePath.virtual(host: "devbox", realPath: "/srv/task5-remote-external-mcp-names-\(UUID().uuidString)")
         let store = try ACPSessionStore(path: tmpStorePath())
         let client = ACPMockClient()
         scriptInitialize(client)
@@ -5122,9 +5116,7 @@ struct ACPSessionManagerAttachRestoreTests {
 
     @Test("remote adapter absence maps to needs setup and prerequisite failure to setup error", arguments: [true, false])
     func remoteAdapterResolutionFailureMapsToSetupState(adapterMissing: Bool) async throws {
-        let root = "/srv/task4-setup-failure-\(UUID().uuidString)"
-        RemoteHostRegistry.shared.register(root: root, host: "devbox")
-        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let root = RemotePath.virtual(host: "devbox", realPath: "/srv/task4-setup-failure-\(UUID().uuidString)")
         let reason = adapterMissing
             ? "codex-acp is not installed on devbox."
             : "Node.js and npm are unavailable."
@@ -5150,9 +5142,7 @@ struct ACPSessionManagerAttachRestoreTests {
 
     @Test("remote setup resolution is reused for absolute launch")
     func remoteSetupResolutionIsReusedForAbsoluteLaunch() async throws {
-        let root = "/srv/task4-ready-\(UUID().uuidString)"
-        RemoteHostRegistry.shared.register(root: root, host: "devbox")
-        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let root = RemotePath.virtual(host: "devbox", realPath: "/srv/task4-ready-\(UUID().uuidString)")
         let store = try ACPSessionStore(path: tmpStorePath())
         let client = ACPMockClient()
         scriptInitialize(client)

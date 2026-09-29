@@ -84,9 +84,7 @@ struct CodeHostProviderTests {
     }
 
     @Test func commandInvocationRoutesRemoteWorkspaceThroughSSH() throws {
-        let cwd = URL(fileURLWithPath: "/srv/alas-code-host-invocation-test")
-        RemoteHostRegistry.shared.register(root: cwd.path, host: "code-host-devbox")
-        defer { RemoteHostRegistry.shared.unregister(root: cwd.path) }
+        let cwd = URL(fileURLWithPath: RemotePath.virtual(host: "code-host-devbox", realPath: "/srv/alas-code-host-invocation-test"))
 
         let invocation = CodeHostCommandInvocation.build(
             executable: "gh",

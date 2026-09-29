@@ -5386,16 +5386,9 @@ final class AppState {
         for candidateId in candidateIds {
             beforeIds.insert(candidateId)
         }
-        let remoteRootsToUnregister: [String]
-        if let project = projects.first(where: { $0.id == id }),
-           project.host != nil {
-            remoteRootsToUnregister = [project.path] + projectsManager.worktrees(projectId: id).map(\.path.path)
-        } else {
-            remoteRootsToUnregister = []
-        }
         stopProjectGitWatcher(projectId: id)
         unpersistedGGWorktreeModes.removeValue(forKey: id)
-        projectsManager.removeProject(id: id, unregisterRemoteRoots: remoteRootsToUnregister.isEmpty)
+        projectsManager.removeProject(id: id)
         spacesManager.removeProjectEverywhere(id)
         runScheduler.pruneSchedules(missingProjectIDs: [id])
         saveProjects()
@@ -5403,9 +5396,6 @@ final class AppState {
         let afterIds = allWorktreeIds()
         let removedIds = beforeIds.subtracting(afterIds)
         cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: afterIds)
-        for root in remoteRootsToUnregister {
-            RemoteHostRegistry.shared.unregister(root: root)
-        }
         for worktreeId in removedIds {
             try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
             try? FileManager.default.removeItem(at: Paths.buffersDir(forWorktreeId: worktreeId))

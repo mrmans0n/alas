@@ -1094,24 +1094,6 @@ extension WorktreeServiceTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
     }
 
-    @Test func fastLocalRemoveNeverStagesARegisteredRemotePath() async throws {
-        let fixture = try await makeLinkedWorktree(suffix: "remote-fallback")
-        defer { fixture.removeFiles() }
-        RemoteHostRegistry.shared.register(root: fixture.worktree.path.path, host: "test-host")
-        defer { RemoteHostRegistry.shared.unregister(root: fixture.worktree.path.path) }
-
-        let outcome = try await fixture.service.removeFastLocal(
-            repoPath: fixture.repo,
-            worktree: fixture.worktree,
-            deleteBranchIfMerged: false,
-            force: false,
-            usesRemoteHostRegistry: false
-        )
-
-        #expect(outcome == .synchronous)
-        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
-    }
-
     @Test func fastLocalRemoveWithDeleteBranchUsesRealBranchName() async throws {
         let repo = try await makeRepo()
         let destination = repo.deletingLastPathComponent()

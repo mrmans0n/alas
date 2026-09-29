@@ -281,14 +281,12 @@ struct RightPaneCheckpointStateTests {
         let repository = try await CheckpointRepositoryTemplate.copy()
         defer { repository.remove() }
         let service = try RecordingCheckpointService(target: repository.target)
-        RemoteHostRegistry.shared.register(root: repository.root.path, host: "remote.example")
-        defer { RemoteHostRegistry.shared.unregister(root: repository.root.path) }
         let remote = Worktree(
             id: "remote",
             projectId: "project",
             name: "Remote",
             branch: "main",
-            path: repository.root,
+            path: URL(fileURLWithPath: RemotePath.virtual(host: "remote.example", realPath: repository.root.path)),
             status: .clean,
             lastActivity: .now
         )

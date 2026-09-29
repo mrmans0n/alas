@@ -106,12 +106,9 @@ struct EditorLSPBindingTests {
     }
 
     @Test func remoteDocumentHasOneOpenChangeRequestCloseLifecycle() async throws {
-        let root = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("alas-remote-lsp-\(UUID().uuidString)")
-        let file = root.appendingPathComponent("main.swift")
         let host = "lsp-test-host"
-        RemoteHostRegistry.shared.register(root: root.path, host: host)
-        defer { RemoteHostRegistry.shared.unregister(root: root.path) }
+        let root = URL(fileURLWithPath: RemotePath.virtual(host: host, realPath: "/srv/alas-remote-lsp-\(UUID().uuidString)"))
+        let file = root.appendingPathComponent("main.swift")
 
         var transport: FakeTransport?
         let manager = WorkspaceLSPManager(

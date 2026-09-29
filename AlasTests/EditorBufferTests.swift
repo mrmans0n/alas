@@ -118,9 +118,7 @@ struct EditorBufferTests {
     /// the theme's base style (font, foreground color) or ran syntax
     /// highlighting. Editors in SSH repos therefore showed the wrong colors.
     @Test func remoteLoadNotifiesObserversWhenContentArrives() async throws {
-        let root = tempWorktree()
-        RemoteHostRegistry.shared.register(root: root.path, host: "devbox")
-        defer { RemoteHostRegistry.shared.unregister(root: root.path) }
+        let root = URL(fileURLWithPath: RemotePath.virtual(host: "devbox", realPath: tempWorktree().path))
 
         let expectedContent = "print(\"hello\")\n"
         EditorBuffer.remoteReadResultForTesting = { _, _ in
@@ -147,10 +145,8 @@ struct EditorBufferTests {
     }
 
     @Test func remoteFailedLSPOpenRetriesThroughNormalReopen() async throws {
-        let root = tempWorktree()
+        let root = URL(fileURLWithPath: RemotePath.virtual(host: "retry-host", realPath: tempWorktree().path))
         let file = root.appendingPathComponent("main.swift")
-        RemoteHostRegistry.shared.register(root: root.path, host: "retry-host")
-        defer { RemoteHostRegistry.shared.unregister(root: root.path) }
 
         let availability = RemoteAvailabilityGate()
         var createdTransport: FakeTransport?
