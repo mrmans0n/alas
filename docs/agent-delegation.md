@@ -245,3 +245,25 @@ themselves and running `omp` from the shell.
 
 Delegated children are leaves in every case. Their MCP discovery does not list
 `session_new`, and Alas still rejects a direct `session_new` call from a child.
+
+## Messages between parent and child
+
+`session_send` (or `alas session send`) reaches only a direct parent or a
+direct child. Alas queues the message as a prompt in the target session.
+
+A child's message to its parent starts with one header line, so the parent
+agent can tell a report from its user's prompt:
+
+```text
+[alas system] Report from delegated session <child-session-id> (<agent-id>, worktree <name>) via session_send:
+<the child's message>
+```
+
+The worktree clause is omitted when the worktree is unknown. In the parent's
+transcript the bubble is captioned **Report from \<agent\> child ·
+\<first 8 characters of the session id\>**. The prompts Alas sends a parent
+about its child (a failure, or a turn that ended without a report) already
+start with `[alas system] Delegated session …` and carry the same caption.
+
+A parent's message to its child is delivered unchanged and captioned
+**Delegated prompt**, as is the child's initial task prompt.

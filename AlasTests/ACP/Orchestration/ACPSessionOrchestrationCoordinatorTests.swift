@@ -847,7 +847,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(try store.claimedMessage(id: "outcome-child-500") == nil)
     }
 
-    @Test("a child's session_send to its parent records the report time")
+    @Test("a child's session_send to its parent is framed as its report and records the report time")
     func sendToParentMarksReport() async throws {
         let fixture = try makeOutcomeFixture()
         try await insertReadyChild(fixture.persistence)
@@ -863,6 +863,10 @@ struct ACPSessionOrchestrationCoordinatorTests {
         }
         let record = try #require(try await fixture.persistence.delegation(childSessionId: "child"))
         #expect(record.lastParentReportAt == 900)
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.map(\.prompt) == [
+            "[alas system] Report from delegated session child (codex, worktree feature-x) via session_send:\nDone: parser fixed."
+        ])
     }
 
     private func eventuallyLoadDelegation(

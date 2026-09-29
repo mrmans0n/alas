@@ -67,6 +67,13 @@ enum ACPDelegatedOutcomeText {
         ].joined(separator: "\n")
     }
 
+    /// A child's `session_send` to its parent: one header line naming the
+    /// sender, then the child's text unchanged. Without it the parent sees
+    /// the report as if the user had typed it.
+    static func childReport(_ context: Context, message: String) -> String {
+        "[alas system] Report from delegated session \(label(context)) via session_send:\n\(message)"
+    }
+
     static func notice(_ context: Context) -> String {
         "Delegated session \(label(context)) finished its turn."
     }

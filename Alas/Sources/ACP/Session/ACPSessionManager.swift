@@ -7015,7 +7015,7 @@ extension ACPSessionManager {
         }
         guard !session.transcript.messages.contains(where: { message in
             guard case .user(_, _, _, _, let recordedSource) = message else { return false }
-            return recordedSource == source
+            return recordedSource?.isSameDelivery(as: source) == true
         }) else {
             return true
         }

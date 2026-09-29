@@ -710,8 +710,16 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 trustedImageRoot: host.trustedImageRoot,
                 isForkEligible: host.session.canForkMessage(at: row.index),
                 forkTargets: host.forkTargets,
-                isLiveNarration: isLiveNarration(host: host, row: row)
+                isLiveNarration: isLiveNarration(host: host, row: row),
+                delegatedLabel: delegatedLabel(host: host, message: message)
             )
+        }
+
+        /// The caption for a delegated prompt, resolved here because the
+        /// sender's display name comes from the host, not the message.
+        private static func delegatedLabel(host: ACPTranscriptScroller, message: ACPMessage) -> String? {
+            guard case .user(_, _, _, _, let source?) = message else { return nil }
+            return ACPDelegatedPromptSource.transcriptLabel(for: source, agentDisplayName: host.agentDisplayName)
         }
 
         /// Whether `row` is the narration the agent is writing into right
@@ -832,7 +840,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 onQuote: host.onQuote,
                 onFork: host.onFork,
                 onRestoreCheckpoint: host.onRestoreCheckpoint,
-                onCancelSubagent: host.onCancelSubagent
+                onCancelSubagent: host.onCancelSubagent,
+                delegatedLabel: delegatedLabel(host: host, message: message)
             )
             // Column framing (max width / horizontal padding / centering)
             // is applied uniformly to every row by `wrapRow`, not here —
