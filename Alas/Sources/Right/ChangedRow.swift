@@ -14,6 +14,8 @@ struct ChangedRow: View {
     var onOpenFile:       (() -> Void)? = nil
     var onCopyRelative:   (() -> Void)? = nil
     var onCopyFull:       (() -> Void)? = nil
+    var onViewStagedChanges: (() -> Void)? = nil
+    var onViewUnstagedChanges: (() -> Void)? = nil
     var onCopyDiff:       (() -> Void)? = nil
     var onViewAtHEAD:     (() -> Void)? = nil
     var onCompareWithHEAD: (() -> Void)? = nil
@@ -39,7 +41,7 @@ struct ChangedRow: View {
         let resolvedStageState = stageState ?? (file.stage == .staged ? .staged : .unstaged)
         return Button(action: onSelect) {
             HStack(spacing: 6) {
-                if let onStage {
+                if onStage != nil || stageState != nil {
                     StageChip(state: resolvedStageState, action: onStage)
                 }
                 HStack(spacing: 6) {
@@ -71,6 +73,15 @@ struct ChangedRow: View {
                     onCopyRelativePath: onCopyRelative,
                     onCopyFullPath: onCopyFull
                 )
+                if onViewStagedChanges != nil || onViewUnstagedChanges != nil {
+                    Divider()
+                    if let onViewStagedChanges {
+                        Button("View Staged Changes") { onViewStagedChanges() }
+                    }
+                    if let onViewUnstagedChanges {
+                        Button("View Unstaged Changes") { onViewUnstagedChanges() }
+                    }
+                }
             } else {
                 FileContextMenuActions(
                     configuration: .workingTreeFile(target: fileContextTarget),

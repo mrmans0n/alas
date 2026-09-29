@@ -165,20 +165,22 @@ struct WorkingTreeSectionView: View {
 struct WorkingTreeRowActions {
     let onSelect: (ChangedFile) -> Void
     let fileContextTarget: (ChangedFile) -> FileContextMenuTarget
-    let onStageAll: (([ChangedFile]) -> Void)?
-    let onUnstageAll: (([ChangedFile]) -> Void)?
-    let onIgnore: ((_ path: String, _ isDirectory: Bool, _ destination: IgnoreDestination) -> Void)?
-    let onDiscardFolder: ((String) -> Void)?
-    let onOpenFile: ((ChangedFile) -> Void)?
-    let onCopyRelative: ((ChangedFile) -> Void)?
-    let onCopyFull: ((ChangedFile) -> Void)?
-    let onCopyDiff: ((ChangedFile) -> Void)?
-    let onViewAtHEAD: ((ChangedFile) -> Void)?
-    let onCompareWithHEAD: ((ChangedFile) -> Void)?
-    let onFileHistory: ((ChangedFile) -> Void)?
-    let onDiscardFile: ((ChangedFile) -> Void)?
-    let isOpenFileEnabled: ((ChangedFile) -> Bool)?
-    let dragPayload: ((ChangedFile) -> DragOutPayload?)?
+    var readOnly = false
+    var onStageAll: (([ChangedFile]) -> Void)? = nil
+    var onUnstageAll: (([ChangedFile]) -> Void)? = nil
+    var onIgnore: ((_ path: String, _ isDirectory: Bool, _ destination: IgnoreDestination) -> Void)? = nil
+    var onDiscardFolder: ((String) -> Void)? = nil
+    var onOpenFile: ((ChangedFile) -> Void)? = nil
+    var onCopyRelative: ((ChangedFile) -> Void)? = nil
+    var onCopyFull: ((ChangedFile) -> Void)? = nil
+    var onSelectStage: ((ChangedFile, ChangeStage) -> Void)? = nil
+    var onCopyDiff: ((ChangedFile) -> Void)? = nil
+    var onViewAtHEAD: ((ChangedFile) -> Void)? = nil
+    var onCompareWithHEAD: ((ChangedFile) -> Void)? = nil
+    var onFileHistory: ((ChangedFile) -> Void)? = nil
+    var onDiscardFile: ((ChangedFile) -> Void)? = nil
+    var isOpenFileEnabled: ((ChangedFile) -> Bool)? = nil
+    var dragPayload: ((ChangedFile) -> DragOutPayload?)? = nil
 }
 
 struct WorkingTreeFlatRowView: View {
@@ -213,12 +215,15 @@ struct WorkingTreeFlatRowView: View {
             else { collapsedPaths.remove(collapseKey) }
         } label: {
             HStack(spacing: 6) {
-                StageChip(state: Self.stageChipState(for: folderState)) {
-                    switch folderState {
-                    case .staged: actions.onUnstageAll?(stagedEntries)
-                    case .mixed, .unstaged: actions.onStageAll?(unstagedEntries)
+                StageChip(
+                    state: Self.stageChipState(for: folderState),
+                    action: actions.readOnly ? nil : {
+                        switch folderState {
+                        case .staged: actions.onUnstageAll?(stagedEntries)
+                        case .mixed, .unstaged: actions.onStageAll?(unstagedEntries)
+                        }
                     }
-                }
+                )
                 FolderIconView(
                     name: node.name,
                     path: node.path,
@@ -240,17 +245,19 @@ struct WorkingTreeFlatRowView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            if !unstagedEntries.isEmpty {
-                Button("Stage Changes") { actions.onStageAll?(unstagedEntries) }
+            if !actions.readOnly {
+                if !unstagedEntries.isEmpty {
+                    Button("Stage Changes") { actions.onStageAll?(unstagedEntries) }
+                }
+                if !stagedEntries.isEmpty {
+                    Button("Unstage Changes") { actions.onUnstageAll?(stagedEntries) }
+                }
+                if !stagedEntries.isEmpty || !unstagedEntries.isEmpty { Divider() }
+                Button("Discard Changes…", role: .destructive) {
+                    actions.onDiscardFolder?(node.path)
+                }
+                if folderUntracked { ignoreMenu(path: node.path, isDirectory: true) }
             }
-            if !stagedEntries.isEmpty {
-                Button("Unstage Changes") { actions.onUnstageAll?(stagedEntries) }
-            }
-            if !stagedEntries.isEmpty || !unstagedEntries.isEmpty { Divider() }
-            Button("Discard Changes…", role: .destructive) {
-                actions.onDiscardFolder?(node.path)
-            }
-            if folderUntracked { ignoreMenu(path: node.path, isDirectory: true) }
         }
     }
 
@@ -267,7 +274,7 @@ struct WorkingTreeFlatRowView: View {
             fileContextTarget: actions.fileContextTarget(file),
             depth: row.depth,
             onSelect: { actions.onSelect(file) },
-            onStage: primaryStageAction(for: group),
+            onStage: actions.readOnly ? nil : primaryStageAction(for: group),
             stageState: Self.stageChipState(for: group.stageState),
             displayAdd: group.add,
             displayDel: group.del,
@@ -276,6 +283,8 @@ struct WorkingTreeFlatRowView: View {
             onOpenFile: actions.onOpenFile.map { fn in { fn(file) } },
             onCopyRelative: actions.onCopyRelative.map { fn in { fn(file) } },
             onCopyFull: actions.onCopyFull.map { fn in { fn(file) } },
+            onViewStagedChanges: stageSelectionAction(for: file, stage: .staged, in: group),
+            onViewUnstagedChanges: stageSelectionAction(for: file, stage: .unstaged, in: group),
             onCopyDiff: actions.onCopyDiff.map { fn in { fn(file) } },
             onViewAtHEAD: actions.onViewAtHEAD.map { fn in { fn(headPathEntry) } },
             onCompareWithHEAD: actions.onCompareWithHEAD.map { fn in { fn(headPathEntry) } },
@@ -284,7 +293,8 @@ struct WorkingTreeFlatRowView: View {
             openFileEnabled: actions.isOpenFileEnabled?(file) ?? true,
             viewAtHEADEnabled: Self.hasHeadVersion(group),
             ignoreMenu: ignore,
-            dragPayload: actions.dragPayload.map { fn in { fn(file) } }
+            dragPayload: actions.dragPayload.map { fn in { fn(file) } },
+            readOnly: actions.readOnly
         )
     }
 
@@ -295,6 +305,17 @@ struct WorkingTreeFlatRowView: View {
         case .mixed, .unstaged:
             return group.unstagedEntries.isEmpty ? nil : { actions.onStageAll?(group.unstagedEntries) }
         }
+    }
+
+    private func stageSelectionAction(
+        for file: ChangedFile,
+        stage: ChangeStage,
+        in group: WorkingTreeChangeGroup
+    ) -> (() -> Void)? {
+        guard actions.readOnly, group.stageState == .mixed, let onSelectStage = actions.onSelectStage else {
+            return nil
+        }
+        return { onSelectStage(file, stage) }
     }
 
     @ViewBuilder
