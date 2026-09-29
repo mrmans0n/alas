@@ -1264,7 +1264,7 @@ private struct ProjectDialog: View {
             try? FileManager.default.removeItem(at: dir)
             return
         }
-        guard let preview = repoIcon, !repoIconSelected, preview.imagePath != project.icon.imagePath else { return }
+        guard let preview = repoIcon, !usesRepoIcon, preview.imagePath != project.icon.imagePath else { return }
         try? FileManager.default.removeItem(
             at: ProjectIconImageStaging.url(for: preview.imagePath, root: state.repoIconStagingRoot)
         )
