@@ -6,7 +6,7 @@ final class ACPOrchestrationStore {
         case malformedWorktreeRequest
     }
 
-    static let targetSchemaVersion = 2
+    static let targetSchemaVersion = 3
 
     let path: String
     let db: SQLiteDatabase
@@ -44,8 +44,9 @@ final class ACPOrchestrationStore {
             INSERT INTO delegations (
                 child_session_id, parent_session_id, project_id, parent_worktree_id,
                 child_worktree_id, agent_id, worktree_request, pending_initial_prompt,
-                phase, failure_message, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                phase, failure_message, created_at, updated_at,
+                requested_model, requested_reasoning
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, bindings: [
                 record.childSessionId,
                 record.parentSessionId,
@@ -59,6 +60,8 @@ final class ACPOrchestrationStore {
                 record.failureMessage,
                 record.createdAt,
                 record.updatedAt,
+                record.modelSelection?.model,
+                record.modelSelection?.reasoning,
             ])
             try db.exec("COMMIT")
         } catch {
@@ -337,6 +340,7 @@ final class ACPOrchestrationStore {
             let current = try currentSchemaVersion()
             if current < 1 { try migrateToV1() }
             if current < 2 { try migrateToV2() }
+            if current < 3 { try migrateToV3() }
             if current == 0 {
                 try db.exec(
                     "INSERT INTO schema_version (version) VALUES (?)",
@@ -399,6 +403,11 @@ final class ACPOrchestrationStore {
         try db.exec("ALTER TABLE delegated_messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'prompt'")
     }
 
+    private func migrateToV3() throws {
+        try db.exec("ALTER TABLE delegations ADD COLUMN requested_model TEXT")
+        try db.exec("ALTER TABLE delegations ADD COLUMN requested_reasoning TEXT")
+    }
+
     private func decodeDelegation(_ row: [String: Any?]) throws -> ACPDelegationRecord {
         guard let requestData = row["worktree_request"] as? Data,
               let request = try? decoder.decode(ACPDelegatedWorktreeRequest.self, from: requestData),
@@ -418,7 +427,11 @@ final class ACPOrchestrationStore {
             failureMessage: row["failure_message"] as? String,
             createdAt: row["created_at"] as? Int64 ?? 0,
             updatedAt: row["updated_at"] as? Int64 ?? 0,
-            lastParentReportAt: row["last_parent_report_at"] as? Int64
+            lastParentReportAt: row["last_parent_report_at"] as? Int64,
+            modelSelection: ACPDelegatedModelSelection(
+                model: row["requested_model"] as? String,
+                reasoning: row["requested_reasoning"] as? String
+            )
         )
     }
 

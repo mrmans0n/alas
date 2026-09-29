@@ -43,6 +43,10 @@ final class ACPSessionOrchestrationCoordinator {
         /// Read-only discovery rows for the caller's worktree, computed on
         /// every request from current Settings and install state.
         let delegationAgents: (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPDelegationAgentSummary]
+        /// The models an agent advertised during this launch on the host the
+        /// worktree runs on, nil when none reported there; the spawn-time
+        /// model check reads it.
+        let launchModels: (String, Worktree) -> [ACPAgentModelCatalog.Model]?
         let sessionLocation: (String) -> SessionLocation?
         let manager: (Worktree) -> ACPSessionManager?
         let newWorktreeDestination: (String, String) -> URL?
@@ -65,6 +69,7 @@ final class ACPSessionOrchestrationCoordinator {
             configuredAgents: @escaping () -> [ACPOrchestrationAgent],
             availableAgents: @escaping (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPOrchestrationAgent],
             delegationAgents: @escaping (ACPOrchestrationSessionOrigin, Worktree) async -> [ACPDelegationAgentSummary] = { _, _ in [] },
+            launchModels: @escaping (String, Worktree) -> [ACPAgentModelCatalog.Model]? = { _, _ in nil },
             sessionLocation: @escaping (String) -> SessionLocation?,
             manager: @escaping (Worktree) -> ACPSessionManager?,
             newWorktreeDestination: @escaping (String, String) -> URL?,
@@ -86,6 +91,7 @@ final class ACPSessionOrchestrationCoordinator {
             self.configuredAgents = configuredAgents
             self.availableAgents = availableAgents
             self.delegationAgents = delegationAgents
+            self.launchModels = launchModels
             self.sessionLocation = sessionLocation
             self.manager = manager
             self.newWorktreeDestination = newWorktreeDestination
@@ -241,11 +247,15 @@ final class ACPSessionOrchestrationCoordinator {
             } catch {
                 return .error("Could not validate delegated session request.")
             }
+            if let rejection = modelSelectionRejection(request.modelSelection, agentID: agentID, worktree: worktree) {
+                return rejection
+            }
             return await createChild(
                 childID: childID,
                 origin: origin,
                 prompt: prompt,
                 agentID: agentID,
+                modelSelection: request.modelSelection,
                 worktree: worktree,
                 request: .current(worktreeId: worktree.id),
                 phase: .starting,
@@ -268,11 +278,15 @@ final class ACPSessionOrchestrationCoordinator {
             } catch {
                 return .error("Could not validate delegated session request.")
             }
+            if let rejection = modelSelectionRejection(request.modelSelection, agentID: agentID, worktree: worktree) {
+                return rejection
+            }
             return await createChild(
                 childID: childID,
                 origin: origin,
                 prompt: prompt,
                 agentID: agentID,
+                modelSelection: request.modelSelection,
                 worktree: worktree,
                 request: .existing(worktreeId: worktree.id),
                 phase: .starting,
@@ -300,6 +314,13 @@ final class ACPSessionOrchestrationCoordinator {
             } catch {
                 return .error("Could not validate delegated session request.")
             }
+            // The new worktree belongs to the same project, so it runs on the
+            // caller's host.
+            if let rejection = modelSelectionRejection(
+                request.modelSelection, agentID: agentID, worktree: environment.worktree(origin.worktreeId)
+            ) {
+                return rejection
+            }
             let optimisticID = "pending-\(childID)"
             let record = ACPDelegationRecord(
                 childSessionId: childID,
@@ -318,7 +339,8 @@ final class ACPSessionOrchestrationCoordinator {
                 phase: .creatingWorktree,
                 failureMessage: nil,
                 createdAt: now,
-                updatedAt: now
+                updatedAt: now,
+                modelSelection: request.modelSelection
             )
             do {
                 try await environment.persistence.insert(record)
@@ -339,6 +361,20 @@ final class ACPSessionOrchestrationCoordinator {
             }
             return json(ACPOrchestrationNewResponse(sessionId: childID, state: "creating_worktree", worktreeId: nil))
         }
+    }
+
+    private func modelSelectionRejection(
+        _ selection: ACPDelegatedModelSelection?,
+        agentID: String,
+        worktree: Worktree?
+    ) -> AlasCLIResponse? {
+        guard let selection else { return nil }
+        guard let error = ACPSessionOrchestrationPolicy.preflightModelSelection(
+            selection,
+            agentId: agentID,
+            launchModels: worktree.flatMap { environment.launchModels(agentID, $0) }
+        ) else { return nil }
+        return .error(error.localizedDescription)
     }
 
     private func resolveAgent(
@@ -511,6 +547,9 @@ final class ACPSessionOrchestrationCoordinator {
             updatedAt: environment.now(),
             outcome: outcome
         )) ?? false
+        if record.modelSelection != nil {
+            await discardHeldMessages(to: childSessionId)
+        }
         environment.notifyChanged()
         guard wonTransition else { return }
         await deliverPendingMessages(
@@ -518,6 +557,25 @@ final class ACPSessionOrchestrationCoordinator {
             callerParent: record,
             targetParent: nil
         )
+    }
+
+    /// Drops inbox rows held for a child whose model selection never took
+    /// effect, so no path (including startup recovery) can later run them on
+    /// the agent's default model. A row another instance holds a live claim
+    /// on is left to that instance, which sees the failed phase.
+    private func discardHeldMessages(to childSessionId: String) async {
+        guard let held = try? await environment.persistence.pendingMessages(targetSessionId: childSessionId)
+        else { return }
+        for message in held {
+            guard let claimed = try? await environment.persistence.claimMessage(
+                id: message.id,
+                instanceId: environment.instanceId,
+                token: environment.makeID(),
+                now: environment.now(),
+                staleAfter: 60
+            ) else { continue }
+            try? await environment.persistence.removeDeliveredMessage(id: message.id, claim: claimed.claim)
+        }
     }
 
     /// A delegated child stopped on something only a human can resolve. The
@@ -604,6 +662,7 @@ final class ACPSessionOrchestrationCoordinator {
         origin: ACPOrchestrationSessionOrigin,
         prompt: String,
         agentID: String,
+        modelSelection: ACPDelegatedModelSelection?,
         worktree: Worktree,
         request: ACPDelegatedWorktreeRequest,
         phase: ACPDelegationPhase,
@@ -622,7 +681,8 @@ final class ACPSessionOrchestrationCoordinator {
             phase: phase,
             failureMessage: nil,
             createdAt: now,
-            updatedAt: now
+            updatedAt: now,
+            modelSelection: modelSelection
         )
             do {
                 self.environment.rememberParent(childID, origin.sessionId)
@@ -687,14 +747,18 @@ final class ACPSessionOrchestrationCoordinator {
                 autoRunDefault: environment.autoRunDefault()
             )
         }
-        let accepted = await manager.enqueueDelegatedPrompt(
-            text: prompt,
-            source: ACPDelegatedPromptSource(sessionId: record.parentSessionId, messageId: "initial-\(childID)"),
-            into: childID
-        )
-        guard accepted else {
-            await markChildFailed(childSessionId: childID, message: "Could not queue initial prompt.")
-            return
+        // Without a model selection the prompt is queued before attach, as it
+        // always was, and goes out once the runner registers. With one, it is
+        // queued only after the selection is acknowledged.
+        if record.modelSelection == nil {
+            guard await manager.enqueueDelegatedPrompt(
+                text: prompt,
+                source: initialPromptSource(for: record),
+                into: childID
+            ) else {
+                await markChildFailed(childSessionId: childID, message: "Could not queue initial prompt.")
+                return
+            }
         }
         await manager.attach(to: childID, freshlyCreated: true)
         guard let session = manager.liveSession(for: childID),
@@ -706,6 +770,11 @@ final class ACPSessionOrchestrationCoordinator {
             )
             return
         }
+        if let selection = record.modelSelection {
+            guard await queueInitialPromptAfterModelSelection(
+                selection, record: record, prompt: prompt, manager: manager
+            ) else { return }
+        }
         try? await environment.persistence.clearPendingInitialPrompt(childSessionId: childID, updatedAt: environment.now())
         try? await environment.persistence.updatePhase(
             childSessionId: childID, phase: .ready, failureMessage: nil, updatedAt: environment.now()
@@ -716,6 +785,46 @@ final class ACPSessionOrchestrationCoordinator {
             callerParent: record,
             targetParent: record
         )
+    }
+
+    func initialPromptSource(for record: ACPDelegationRecord) -> ACPDelegatedPromptSource {
+        ACPDelegatedPromptSource(sessionId: record.parentSessionId, messageId: "initial-\(record.childSessionId)")
+    }
+
+    /// Applies a child's requested model/reasoning on its attached session
+    /// and only then queues the initial prompt, so no prompt can run on the
+    /// agent's default. Any failure marks the child failed, which wakes the
+    /// parent with the reason, and nothing is queued. Also used by startup
+    /// recovery, so a restarted child reapplies the same selection.
+    func queueInitialPromptAfterModelSelection(
+        _ selection: ACPDelegatedModelSelection,
+        record: ACPDelegationRecord,
+        prompt: String,
+        manager: ACPSessionManager
+    ) async -> Bool {
+        do {
+            try await manager.applyDelegatedModelSelection(selection, to: record.childSessionId)
+        } catch {
+            // Recovery may have withheld an already-queued copy of the prompt
+            // in memory; persist the queue without it, and wait for that write,
+            // before the failed phase takes the child out of recovery, so a
+            // later reopen cannot run it on the default model.
+            if let session = manager.liveSession(for: record.childSessionId) {
+                manager.persistQueue(for: session)
+                await manager.flushAllPersistence()
+            }
+            await markChildFailed(childSessionId: record.childSessionId, message: error.localizedDescription)
+            return false
+        }
+        guard await manager.enqueueDelegatedPrompt(
+            text: prompt,
+            source: initialPromptSource(for: record),
+            into: record.childSessionId
+        ) else {
+            await markChildFailed(childSessionId: record.childSessionId, message: "Could not queue initial prompt.")
+            return false
+        }
+        return true
     }
 
     private func delegatedChildStartFailureMessage(_ session: ACPSession?) -> String {
@@ -739,6 +848,12 @@ final class ACPSessionOrchestrationCoordinator {
         callerParent: ACPDelegationRecord?,
         targetParent: ACPDelegationRecord?
     ) async {
+        // Read fresh: a caller's snapshot can predate the start transition.
+        if ACPSessionOrchestrationPolicy.defersInboxDelivery(
+            target: try? await environment.persistence.delegation(childSessionId: sessionID)
+        ) {
+            return
+        }
         let session = environment.sessionLocation(sessionID)?.manager.liveSession(for: sessionID)
         session?.nextPromptWorkCount += 1
         defer { session?.nextPromptWorkCount -= 1 }

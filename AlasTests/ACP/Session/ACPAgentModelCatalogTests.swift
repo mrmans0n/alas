@@ -47,6 +47,16 @@ struct ACPAgentModelCatalogTests {
         relaunched.record(agentID: "claude", models: [opus])
         relaunched.record(agentID: "claude", models: [])
         #expect(relaunched.launchReport(for: "claude") == .advertisedModels)
+        #expect(relaunched.launchModels(for: "claude", host: nil) == [opus])
+        #expect(relaunched.launchModels(for: "pi", host: nil) == [])
+
+        // Another host may run a different adapter: nothing it reported
+        // vouches for this Mac, and vice versa.
+        let sonnet = ACPAgentModelCatalog.Model(id: "sonnet", name: "Sonnet")
+        relaunched.record(agentID: "claude", models: [sonnet], host: "build-box")
+        #expect(relaunched.launchModels(for: "claude", host: "build-box") == [sonnet])
+        #expect(relaunched.launchModels(for: "claude", host: nil) == [opus])
+        #expect(relaunched.launchModels(for: "claude", host: "other-box") == nil)
     }
 
     /// An agent that reports nothing on one connection — a failed provider

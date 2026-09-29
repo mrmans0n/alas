@@ -250,6 +250,80 @@ struct ACPSessionOrchestrationPolicyTests {
         #expect(json == #"{"agents":[{"availability":"not_installed","available":false,"display_name":"Gemini","id":"gemini","model_catalog":{"models":[],"state":"not_loaded"},"model_selection":"unknown"}],"caller_agent_id":"claude","can_delegate":true,"version":1,"worktree_id":"wt-1"}"#)
     }
 
+    @Test("spawn-time model check rejects only what this launch confirmed on the child's host", arguments: [
+        // Known model, advertised on that host this launch.
+        ("codex", "gpt-5.2", nil, ["gpt-5.2"], nil),
+        // Unknown id against a list confirmed there.
+        ("codex", "gpt-9", nil, ["gpt-5.2"],
+         ACPDelegatedModelSelectionError.unknownModel(agentId: "codex", model: "gpt-9", available: ["gpt-5.2"])),
+        // A live session there advertised no models.
+        ("codex", "gpt-5.2", nil, [], .modelSelectionUnsupported(agentId: "codex")),
+        // Nothing confirmed there (stale or another host's list): the live session decides.
+        ("codex", "gpt-9", nil, nil, nil),
+        // pi's thinking is a mode, not a config option.
+        ("pi", nil, "high", nil, .reasoningUnsupported(agentId: "pi")),
+        ("codex", nil, "high", nil, nil),
+    ] as [(String, String?, String?, [String]?, ACPDelegatedModelSelectionError?)])
+    func preflightModelSelection(
+        agentId: String,
+        model: String?,
+        reasoning: String?,
+        launchModels: [String]?,
+        expected: ACPDelegatedModelSelectionError?
+    ) throws {
+        let selection = try #require(ACPDelegatedModelSelection(model: model, reasoning: reasoning))
+        #expect(ACPSessionOrchestrationPolicy.preflightModelSelection(
+            selection,
+            agentId: agentId,
+            launchModels: launchModels?.map { .init(id: $0, name: $0) }
+        ) == expected)
+    }
+
+    @Test("an omitted model and reasoning is no selection at all")
+    func omittedSelectionIsNil() {
+        #expect(ACPDelegatedModelSelection(model: nil, reasoning: nil) == nil)
+    }
+
+    private func chip(_ source: ChipSpec.Source, _ ids: [String], current: String?) -> ChipSpec {
+        ChipSpec(source: source, options: ids.map { .init(id: $0, name: $0, description: nil) }, currentId: current)
+    }
+
+    @Test("live model selection picks the advertised RPC and never guesses")
+    func liveModelStep() throws {
+        let policy = ACPSessionOrchestrationPolicy.self
+        #expect(try policy.liveModelStep(model: "opus", agentId: "claude",
+                                         chip: chip(.model, ["default", "opus"], current: "default")) == .setModel("opus"))
+        #expect(try policy.liveModelStep(model: "gpt-5.2", agentId: "codex",
+                                         chip: chip(.configOption(id: "model"), ["gpt-5.2", "gpt-5.1"], current: "gpt-5.1"))
+                == .setConfigOption(id: "model", value: "gpt-5.2"))
+        #expect(try policy.liveModelStep(model: "opus", agentId: "claude",
+                                         chip: chip(.model, ["opus"], current: "opus")) == nil)
+        #expect(throws: ACPDelegatedModelSelectionError.unknownModel(agentId: "claude", model: "gpt-5.2", available: ["opus"])) {
+            try policy.liveModelStep(model: "gpt-5.2", agentId: "claude", chip: chip(.model, ["opus"], current: nil))
+        }
+        #expect(throws: ACPDelegatedModelSelectionError.modelSelectionUnsupported(agentId: "gemini")) {
+            try policy.liveModelStep(model: "pro", agentId: "gemini", chip: nil)
+        }
+    }
+
+    @Test("live reasoning selection requires an advertised config option")
+    func liveReasoningStep() throws {
+        let policy = ACPSessionOrchestrationPolicy.self
+        #expect(try policy.liveReasoningStep(reasoning: "high", agentId: "codex",
+                                             chip: chip(.configOption(id: "reasoning_effort"), ["low", "high"], current: "low"))
+                == .setConfigOption(id: "reasoning_effort", value: "high"))
+        #expect(throws: ACPDelegatedModelSelectionError.reasoningUnsupported(agentId: "pi")) {
+            try policy.liveReasoningStep(reasoning: "high", agentId: "pi", chip: chip(.mode, ["high"], current: nil))
+        }
+        #expect(throws: ACPDelegatedModelSelectionError.reasoningUnsupported(agentId: "cursor-agent")) {
+            try policy.liveReasoningStep(reasoning: "high", agentId: "cursor-agent", chip: chip(.model, ["high"], current: nil))
+        }
+        #expect(throws: ACPDelegatedModelSelectionError.unknownReasoning(agentId: "codex", reasoning: "max", available: ["low", "high"])) {
+            try policy.liveReasoningStep(reasoning: "max", agentId: "codex",
+                                         chip: chip(.configOption(id: "reasoning_effort"), ["low", "high"], current: nil))
+        }
+    }
+
     @Test("prompt validation rejects blank text")
     func promptValidation() throws {
         let prompt = try ACPSessionOrchestrationPolicy.validatedPrompt("  Task\n")

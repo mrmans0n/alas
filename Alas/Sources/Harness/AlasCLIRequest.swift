@@ -46,7 +46,13 @@ struct AlasCLIRequest: Equatable {
         case review(ReviewCommand)
         case agentList(worktree: String?)
         case sessionList
-        case sessionNew(prompt: String, agentID: String?, worktree: SessionWorktreeSelector)
+        case sessionNew(
+            prompt: String,
+            agentID: String?,
+            worktree: SessionWorktreeSelector,
+            model: String? = nil,
+            reasoning: String? = nil
+        )
         case sessionSend(sessionID: String, prompt: String)
         case resolve
     }
@@ -178,6 +184,8 @@ struct AlasCLIRequest: Equatable {
 
         var prompt: String
         var agent: String?
+        var model: String?
+        var reasoning: String?
         var worktree: String?
         var new_worktree: NewWorktree?
     }
@@ -424,7 +432,9 @@ struct AlasCLIRequest: Equatable {
             command = .sessionNew(
                 prompt: try requiredNonEmpty(params.prompt),
                 agentID: try params.agent.map(requiredNonEmpty),
-                worktree: worktree
+                worktree: worktree,
+                model: try params.model.map(requiredNonEmpty),
+                reasoning: try params.reasoning.map(requiredNonEmpty)
             )
         case "session_send":
             let params = try Self.decodeParams(SessionSendParams.self, from: data)

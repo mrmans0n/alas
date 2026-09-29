@@ -191,6 +191,11 @@ pub enum Command {
         prompt: String,
         agent: Option<String>,
         worktree: SessionWorktreeTarget,
+        /// Model id from `agent list`'s `model_catalog`; the child's first
+        /// prompt runs only after the agent acknowledges it.
+        model: Option<String>,
+        /// Reasoning value for an agent that exposes a reasoning config option.
+        reasoning: Option<String>,
     },
     SessionSend {
         session_id: String,
@@ -509,12 +514,23 @@ pub fn build_request(
             prompt,
             agent,
             worktree,
+            model,
+            reasoning,
         } => {
             let mut r = Request::new("session_new");
             let mut params = serde_json::Map::new();
             params.insert("prompt".into(), serde_json::Value::String(prompt.clone()));
             if let Some(agent) = agent {
                 params.insert("agent".into(), serde_json::Value::String(agent.clone()));
+            }
+            if let Some(model) = model {
+                params.insert("model".into(), serde_json::Value::String(model.clone()));
+            }
+            if let Some(reasoning) = reasoning {
+                params.insert(
+                    "reasoning".into(),
+                    serde_json::Value::String(reasoning.clone()),
+                );
             }
             match worktree {
                 SessionWorktreeTarget::Current => {}
@@ -1187,6 +1203,8 @@ mod tests {
                 branch: "child".into(),
                 base: Some("origin/main".into()),
             },
+            model: Some("gpt-5.2".into()),
+            reasoning: Some("high".into()),
         };
         let request = build_request(&new, Some("acp-1".into()), None);
         assert_eq!(request.session_id.as_deref(), Some("acp-1"));
@@ -1195,6 +1213,8 @@ mod tests {
             Some(serde_json::json!({
                 "prompt": "Task",
                 "agent": "codex",
+                "model": "gpt-5.2",
+                "reasoning": "high",
                 "new_worktree": { "branch": "child", "base": "origin/main" }
             }))
         );
@@ -1210,16 +1230,25 @@ mod tests {
         assert_eq!(send.command, "session_send");
         assert_eq!(send.session_id.as_deref(), Some("acp-1"));
 
-        let agents = build_request(&Command::AgentList { worktree: None }, Some("acp-1".into()), None);
+        let agents = build_request(
+            &Command::AgentList { worktree: None },
+            Some("acp-1".into()),
+            None,
+        );
         assert_eq!(agents.command, "agent_list");
         assert_eq!(agents.session_id.as_deref(), Some("acp-1"));
         assert_eq!(agents.params, Some(serde_json::json!({})));
         let scoped = build_request(
-            &Command::AgentList { worktree: Some("feature".into()) },
+            &Command::AgentList {
+                worktree: Some("feature".into()),
+            },
             Some("acp-1".into()),
             None,
         );
-        assert_eq!(scoped.params, Some(serde_json::json!({ "worktree": "feature" })));
+        assert_eq!(
+            scoped.params,
+            Some(serde_json::json!({ "worktree": "feature" }))
+        );
         assert_eq!(
             send.params,
             Some(serde_json::json!({ "session_id": "child", "prompt": "Follow up" }))
