@@ -42,7 +42,7 @@ struct ACPToolCallGroupHeaderRow: View {
                 Button("Show \(hiddenMemberCount) earlier") { onToggle(true) }
                     .buttonStyle(.plain)
                     .font(.system(size: 11))
-                    .foregroundStyle(theme.color("fg-muted"))
+                    .foregroundStyle(theme.color("fg-faint"))
                     .fixedSize()
             }
         }
