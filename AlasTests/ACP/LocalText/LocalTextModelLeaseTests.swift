@@ -50,6 +50,24 @@ struct LocalTextModelLeaseTests {
         #expect(try String(contentsOf: fixture.root.appendingPathComponent("unrelated"), encoding: .utf8) == "keep")
     }
 
+    @Test func closedLeaseReleasesLockWhileAForkedChildStillSharesItsDescriptor() async throws {
+        let fixture = try LocalTextModelFixture.verifiedInstall()
+        defer { fixture.removeTemporaryRoot() }
+        let root = try LocalTextModelFiles.openRoot(fixture.root)
+        defer { try? root.close() }
+        let handle = try LocalTextModelFiles.lock(root: root.fileDescriptor, exclusive: false)
+        // A child forked before it execs holds a duplicate of the same open file description.
+        let inherited = dup(handle.fileDescriptor)
+        try #require(inherited >= 0)
+        defer { Darwin.close(inherited) }
+        let lease = LocalTextModelLease(directory: fixture.directory, generation: 0, handle: handle)
+
+        lease.close()
+
+        try await fixture.store.remove()
+        #expect(!FileManager.default.fileExists(atPath: fixture.directory.path))
+    }
+
     @Test func childProcessRetainsOriginalLockAcrossRemoveAndRetry() async throws {
         let fixture = try LocalTextModelFixture.verifiedInstall()
         defer { fixture.removeTemporaryRoot() }

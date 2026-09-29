@@ -164,10 +164,10 @@ struct NextPromptSettingsTests {
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
-        let gate = SettingsModelStateReadGate()
+        let gate = LocalTextModelStateReadGate()
         let state = makeState(fixture, SettingsStore(), readModelState: { await gate.read(fixture.store) })
         let enable = Task { await state.enableNextPromptSuggestions() }
-        try await waitUntil { await gate.entered }
+        try await fixture.waitForInstallation { await gate.entered }
         #expect(!state.nextPromptRuntimeEnabled)
         await state.inspectLocalTextModel()
         #expect(state.localTextModelState == .ready)
@@ -186,7 +186,7 @@ struct NextPromptSettingsTests {
         defer { fixture.removeTemporaryRoot() }
         let previous = AlasTerminationCoordinator.shared.flush
         defer { AlasTerminationCoordinator.shared.flush = previous }
-        let gate = SettingsModelStateReadGate()
+        let gate = LocalTextModelStateReadGate()
         let state = makeState(fixture, SettingsStore(), readModelState: { await gate.read(fixture.store) })
         let enable = Task { await state.enableNextPromptSuggestions() }
         // Same signature as cancelledInstallRemainsEnabledUntilExplicitRetry
@@ -198,7 +198,7 @@ struct NextPromptSettingsTests {
             "staleCompletedInstallationReadCannotResumeSuggestions's enable Task has repeatedly needed longer than the wait budget to reach its first scheduling turn under CI load",
             isIntermittent: true
         ) {
-            try await waitUntil { await gate.entered }
+            try await fixture.waitForInstallation { await gate.entered }
             await state.inspectLocalTextModel() // Consume ready before delivering the superseding action.
             switch interruption {
             case "cancel": await state.cancelLocalTextDownload()
@@ -313,7 +313,7 @@ struct NextPromptSettingsTests {
             "cancelledInstallRemainsEnabledUntilExplicitRetry's enable Task has repeatedly needed longer than even a 45s budget to reach its first scheduling turn under CI load",
             isIntermittent: true
         ) {
-            try await waitUntil(timeout: .seconds(45)) { fixture.transport.started.withLock { $0 } }
+            try await fixture.waitForInstallation(timeout: .seconds(45)) { fixture.transport.started.withLock { $0 } }
             #expect(persistence.config.nextPromptSuggestionsEnabled)
             await state.cancelLocalTextDownload()
             await enable.value
@@ -536,23 +536,4 @@ private actor SuspendedSettingsRuntime: NextPromptRuntime {
     func generate(_ request: NextPromptRequest) async throws -> String? { nil }
     func cancelAndUnload() async {}
     func retryAfterFailure() async { retries += 1 }
-}
-
-private actor SettingsModelStateReadGate {
-    private var continuation: CheckedContinuation<Void, Never>?
-    private(set) var entered = false
-
-    func read(_ store: LocalTextModelStore) async -> LocalTextModelState {
-        let value = await store.state
-        if value == .ready, !entered {
-            entered = true
-            await withCheckedContinuation { continuation = $0 }
-        }
-        return value
-    }
-
-    func open() {
-        continuation?.resume()
-        continuation = nil
-    }
 }

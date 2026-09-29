@@ -16,7 +16,7 @@ final class LocalTextModelLease: Sendable {
 
     func close() {
         handle.withLock { value in
-            try? value?.close()
+            if let value { LocalTextModelFiles.unlock(value) }
             value = nil
         }
     }
@@ -88,6 +88,14 @@ enum LocalTextModelFiles {
             throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
         }
         return handle
+    }
+
+    /// Closing alone leaves the lock held while a child forked from any thread
+    /// of this process still shares the descriptor, until that child execs.
+    /// Unlocking releases it for every copy.
+    static func unlock(_ handle: FileHandle) {
+        _ = flock(handle.fileDescriptor, LOCK_UN)
+        try? handle.close()
     }
 
     static func synchronize(_ fd: Int32) throws {
