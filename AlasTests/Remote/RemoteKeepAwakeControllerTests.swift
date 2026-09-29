@@ -10,7 +10,10 @@ struct RemoteKeepAwakeControllerTests {
         var released: [UInt32] = []
         let controller = RemoteKeepAwakeController(
             isOnExternalPower: { power.external },
-            createAssertion: { created += 1; return UInt32(created) },
+            createAssertion: {
+                created += 1
+                return UInt32(created)
+            },
             releaseAssertion: { released.append($0) },
             createPowerSource: { _ in Self.powerSource() }
         )
@@ -40,7 +43,10 @@ struct RemoteKeepAwakeControllerTests {
         var released: [UInt32] = []
         var controller: RemoteKeepAwakeController? = RemoteKeepAwakeController(
             isOnExternalPower: { true },
-            createAssertion: { attempts += 1; return attempts == 1 ? nil : 42 },
+            createAssertion: {
+                attempts += 1
+                return attempts == 1 ? nil : 42
+            },
             releaseAssertion: { released.append($0) },
             createPowerSource: { _ in Self.powerSource() }
         )
@@ -56,7 +62,10 @@ struct RemoteKeepAwakeControllerTests {
         var attempts = 0
         let controller = RemoteKeepAwakeController(
             isOnExternalPower: { true },
-            createAssertion: { attempts += 1; return 1 },
+            createAssertion: {
+                attempts += 1
+                return 1
+            },
             releaseAssertion: { _ in },
             createPowerSource: { _ in nil }
         )
