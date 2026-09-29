@@ -19,9 +19,12 @@ private actor StreamLines {
 /// `readDataToEndOfFile` on stderr) fails the test visibly instead of
 /// hanging the suite forever.
 struct GGCommandRunningStreamingTests {
+    /// The deadline only bounds a regression that never finishes; passing
+    /// runs return as soon as the stream ends. Loaded CI shards have taken
+    /// more than 5 seconds to spawn and reap a trivial `/bin/sh -c printf`.
     private func collectWithTimeout(
         _ stream: AsyncThrowingStream<String, Error>,
-        seconds: UInt64 = 5
+        seconds: UInt64 = 30
     ) async throws -> [String] {
         try await withThrowingTaskGroup(of: [String].self) { group in
             group.addTask {
@@ -579,7 +582,7 @@ struct GGCommandRunningStreamingTests {
             env: nil
         )
         await #expect(throws: GGServiceError.self) {
-            _ = try await collectWithTimeout(stream, seconds: 10)
+            _ = try await collectWithTimeout(stream)
         }
     }
 }
