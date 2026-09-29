@@ -964,6 +964,14 @@ struct NativePeerSessionsTests {
         }.count == 1)
     }
 
+    @Test func olderTranscriptRestoreKeepsThePrefetchOffset() {
+        #expect(NativePeerTranscriptScrollPolicy.restoredContentOffset(
+            previousOffset: 320,
+            previousContentHeight: 1_200,
+            currentContentHeight: 1_800
+        ) == 920)
+    }
+
     @Test func peerTranscriptKeepsTailFollowDuringInitialPositioning() {
         #expect(NativePeerTranscriptScrollPolicy.shouldFollow(
             distanceFromBottom: 120, hasPositionedInitialTail: false
