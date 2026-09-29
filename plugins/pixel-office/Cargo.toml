@@ -15,7 +15,7 @@ alas-plugin = { path = "../alas-plugin" }
 serde_json = "1"
 
 [build-dependencies]
-png = "0.17"
+png = "0.18"
 
 [profile.release]
 opt-level = "s"
