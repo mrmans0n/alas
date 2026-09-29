@@ -7494,7 +7494,7 @@ final class AppState {
             && zmxBinary.map { FileManager.default.isExecutableFile(atPath: $0.path) } == true
         guard installHelper || installZmx else { return }
 
-        let defaults = UserDefaults.standard
+        let defaults = AlasProfile.userDefaults
         var allowed = Set(defaults.stringArray(forKey: "remote.acceleration.allowedHosts") ?? [])
         let declined = Set(defaults.stringArray(forKey: "remote.acceleration.declinedHosts") ?? [])
             .union(defaults.stringArray(forKey: "remote.zmx.declinedHosts") ?? [])

@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 /// Which on-disk profile this process runs against.
@@ -37,7 +38,12 @@ struct AlasProfile: Equatable, Sendable {
             let runtime = runtimeDirectory(for: root, uid: getuid())
             // Fail closed: an isolated instance that silently fell back to the
             // shared locations would do exactly what the override exists to
-            // prevent.
+            // prevent. Both directories may sit in world-writable `/tmp`, so
+            // each must be a real, owner-only directory before anything is
+            // written into it.
+            guard preparePrivateDirectory(root, ownerUid: getuid()) else {
+                fatalError("\(environmentKey): \(root.path) must be a directory owned by this user and closed to others")
+            }
             guard AgentHookSocketServer.prepareSocketDirectory(runtime.path, ownerUid: getuid()) else {
                 fatalError("\(environmentKey): cannot create a private runtime directory at \(runtime.path)")
             }
@@ -60,6 +66,35 @@ struct AlasProfile: Equatable, Sendable {
         return .isolated(URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL)
     }
 
+    /// Creates `url` (and missing parents) owner-only, or tightens an existing
+    /// directory this user owns to `0700`. Refuses a symlink, a non-directory,
+    /// or a directory owned by someone else.
+    static func preparePrivateDirectory(_ url: URL, ownerUid: uid_t) -> Bool {
+        try? FileManager.default.createDirectory(
+            at: url,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: NSNumber(value: 0o700)]
+        )
+        var st = Darwin.stat()
+        guard Darwin.lstat(url.path, &st) == 0,
+              (st.st_mode & S_IFMT) == S_IFDIR,
+              st.st_uid == ownerUid
+        else { return false }
+        return (st.st_mode & 0o077) == 0 || chmod(url.path, 0o700) == 0
+    }
+
+    /// Preferences this app writes (update-check timestamp, GG undo markers,
+    /// SSH acceleration host lists). An isolated profile uses its own suite so
+    /// it cannot suppress the main instance's update check or change its
+    /// persisted state. System preferences (`AppleInterfaceStyle`, …) are still
+    /// read from `.standard`.
+    static var userDefaults: UserDefaults {
+        guard let runtime = current.runtimeDirectory,
+              let suite = UserDefaults(suiteName: "io.nlopez.alas.profile.\(runtime.lastPathComponent)")
+        else { return .standard }
+        return suite
+    }
+
     static func runtimeDirectory(for appSupportRoot: URL, uid: uid_t) -> URL {
         let digest = SHA256.hash(data: Data(appSupportRoot.standardizedFileURL.path.utf8))
         let hash = digest.prefix(4).map { String(format: "%02x", $0) }.joined()
@@ -70,7 +105,6 @@ struct AlasProfile: Equatable, Sendable {
 enum Paths {
     static let appSupportRoot: URL = {
         if let override = AlasProfile.current.appSupportOverride {
-            try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
             return override
         }
         let base = try! FileManager.default.url(

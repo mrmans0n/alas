@@ -46,4 +46,27 @@ struct PathsTests {
         #expect(dir == AlasProfile.runtimeDirectory(for: long, uid: 501))
         #expect(dir != AlasProfile.runtimeDirectory(for: other, uid: 501))
     }
+
+    @Test func privateDirectoryIsCreatedOrTightenedToOwnerOnly() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("alas-profile-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let fresh = base.appendingPathComponent("fresh")
+        let loose = base.appendingPathComponent("loose")
+        try FileManager.default.createDirectory(at: loose, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+        for url in [fresh, loose] {
+            #expect(AlasProfile.preparePrivateDirectory(url, ownerUid: getuid()))
+            let mode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+            #expect(mode == 0o700)
+        }
+    }
+
+    @Test func privateDirectoryRefusesASymlink() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("alas-profile-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let target = base.appendingPathComponent("target")
+        let link = base.appendingPathComponent("link")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        #expect(!AlasProfile.preparePrivateDirectory(link, ownerUid: getuid()))
+    }
 }
