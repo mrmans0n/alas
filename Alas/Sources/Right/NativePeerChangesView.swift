@@ -25,7 +25,14 @@ struct NativePeerChangesView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        fileSection("Working tree", files: changes.staged + changes.unstaged) {
+                        // Two sections, not one merged list: a partially
+                        // staged file appears in both `staged` and
+                        // `unstaged`, and the read-only row has no stage
+                        // chip to tell those two copies apart on sight.
+                        fileSection("Staged", files: changes.staged) {
+                            .diff(path: $0.path, stage: $0.stage)
+                        }
+                        fileSection("Unstaged", files: changes.unstaged) {
                             .diff(path: $0.path, stage: $0.stage)
                         }
                         fileSection(changes.comparisonRef.map { "Since \($0)" } ?? "Branch",

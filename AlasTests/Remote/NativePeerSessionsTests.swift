@@ -722,6 +722,37 @@ struct NativePeerSessionsTests {
         #expect(client.workspace.document == .file(path: "b.swift"))
     }
 
+    @Test func returningToAnEarlierDocumentWaitsForItsOriginalReplyRatherThanResending() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+
+        client.open(.file(path: "a.swift")) // readFile(a) in flight, no reply yet
+        client.open(.file(path: "b.swift")) // readFile(b) in flight, a's reply still pending
+
+        let readFileACount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .readFile(sessionId: "s", path: "a.swift") }.count
+        }
+        let afterFirstOpenOfA = readFileACount()
+
+        // Back to A, before its original reply ever arrived.
+        client.open(.file(path: "a.swift"))
+        #expect(client.workspace.document == .file(path: "a.swift"))
+        // Must not resend — the peer would drop the duplicate by request key.
+        #expect(readFileACount() == afterFirstOpenOfA)
+
+        // A's original (now-stale) reply finally arrives — must trigger a
+        // fresh request rather than silently standing in as current.
+        links.receive(.fileContents(sessionId: "s", path: "a.swift", text: "old", truncated: false), from: "B")
+        #expect(readFileACount() == afterFirstOpenOfA + 1)
+    }
+
     @Test func planRejectionRequiresAndTrimsReason() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
