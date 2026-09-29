@@ -153,6 +153,7 @@ final class PluginManager {
     }
 
     private func performReload() async {
+        guard !isShutDown else { return }
         snapshotTask?.cancel()
         await stopHosts { _ in true }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

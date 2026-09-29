@@ -141,6 +141,7 @@ struct PluginManagerDiscoveryTests {
         defer { cleanup() }
         await manager.shutdown()
         await manager.reconcile()
+        await manager.reload()
         #expect(manager.hostsByKey.isEmpty)
     }
 }

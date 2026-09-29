@@ -95,6 +95,7 @@ struct PluginManifest: Equatable, Sendable {
             throw .invalidEntry(entry)
         }
         // `contributes` is inert before API 2, so older manifests are not validated against it.
+        if api >= 2, raw.contributesMalformed { throw .malformed }
         let tabs = api >= 2 ? try parseTabs(raw.contributes?.tabs ?? []) : []
         return PluginManifest(
             id: id, name: name, version: version, api: api, entry: entry,
@@ -134,6 +135,7 @@ private struct Raw: Decodable {
     let entry: String?
     let capabilities: [String]?
     let contributes: RawContributes?
+    let contributesMalformed: Bool
 
     private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, contributes }
 
@@ -147,6 +149,9 @@ private struct Raw: Decodable {
         // Optional means omitted, not null: `"capabilities": null` is malformed, not "none requested".
         capabilities = container.contains(.capabilities)
             ? try container.decode([String].self, forKey: .capabilities) : nil
-        contributes = try container.decodeIfPresent(RawContributes.self, forKey: .contributes)
+        // Lenient here so API 1 keeps ignoring `contributes`; `parse` rejects a malformed one for API 2.
+        contributes = (try? container.decodeIfPresent(RawContributes.self, forKey: .contributes)) ?? nil
+        contributesMalformed = contributes == nil && container.contains(.contributes)
+            && !((try? container.decodeNil(forKey: .contributes)) ?? false)
     }
 }

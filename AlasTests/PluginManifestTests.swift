@@ -22,6 +22,7 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":"H","version":"1","api":2,"entry":"p.wasm","contributes":{"tabs":[{"id":"a","title":" "}]}}"#, .invalidTab("tab \"a\" needs a title of 1 to 40 characters")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":2,"entry":"p.wasm","contributes":{"tabs":[{"id":"A!","title":"T"}]}}"#, .invalidTab("invalid tab id \"A!\"")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":2,"entry":"p.wasm","contributes":{"tabs":[{"id":"a","title":"T"},{"id":"b","title":"T"},{"id":"c","title":"T"},{"id":"d","title":"T"},{"id":"e","title":"T"}]}}"#, .invalidTab("at most 4 tabs")),
+        (#"{"id":"io.x.h","name":"H","version":"1","api":2,"entry":"p.wasm","contributes":5}"#, .malformed),
         (#"{"id":"io.x.h","name":"H","version":"1","api":1,"entry":"p.wasm","capabilities":["network"]}"#, .unknownCapability("network")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":1,"entry":"p.wasm","capabilities":null}"#, .malformed),
         (#"{"id":"io.x.h","name":"H","version":"1","api":1,"entry":"../p.wasm"}"#, .invalidEntry("../p.wasm")),
@@ -42,5 +43,7 @@ struct PluginManifestTests {
         #expect(v2.capabilities == [.sessionFocus])
         let v1 = try PluginManifest.parse(Data(#"{"id":"io.x.h","name":"H","version":"1","api":1,"entry":"p.wasm",\#(tabs)}"#.utf8))
         #expect(v1.tabs.isEmpty)
+        let v1Junk = try PluginManifest.parse(Data(#"{"id":"io.x.h","name":"H","version":"1","api":1,"entry":"p.wasm","contributes":5}"#.utf8))
+        #expect(v1Junk.tabs.isEmpty)
     }
 }
