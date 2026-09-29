@@ -35,6 +35,12 @@ struct AlasProfile: Equatable, Sendable {
         case .standard:
             return AlasProfile(appSupportOverride: nil, runtimeDirectory: nil)
         case .isolated(let requested):
+            // Checked before anything touches `requested`: preparing it would
+            // tighten the everyday profile's permissions, and using it would
+            // share its files while splitting sockets and preferences.
+            guard !isSameDirectory(requested, Paths.standardAppSupportRoot) else {
+                fatalError("\(environmentKey) names the standard profile at \(Paths.standardAppSupportRoot.path)")
+            }
             // Fail closed: an isolated instance that silently fell back to the
             // shared locations would do exactly what the override exists to
             // prevent. Both directories may sit in world-writable `/tmp`, so
@@ -98,6 +104,12 @@ struct AlasProfile: Equatable, Sendable {
         return URL(fileURLWithPath: String(cString: buffer), isDirectory: true)
     }
 
+    /// Whether two paths name one existing directory, however they are spelled.
+    static func isSameDirectory(_ lhs: URL, _ rhs: URL) -> Bool {
+        guard let lhs = canonicalDirectory(lhs), let rhs = canonicalDirectory(rhs) else { return false }
+        return lhs == rhs
+    }
+
     /// Preferences this app writes (update-check timestamp, GG undo markers,
     /// SSH acceleration host lists). An isolated profile uses its own suite so
     /// it cannot suppress the main instance's update check or change its
@@ -119,9 +131,11 @@ struct AlasProfile: Equatable, Sendable {
 
 enum Paths {
     static let appSupportRoot: URL = {
-        if let override = AlasProfile.current.appSupportOverride {
-            return override
-        }
+        AlasProfile.current.appSupportOverride ?? standardAppSupportRoot
+    }()
+
+    /// `~/Library/Application Support/Alas`: the everyday profile's root.
+    static var standardAppSupportRoot: URL {
         let base = try! FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
@@ -129,7 +143,7 @@ enum Paths {
             create: true
         )
         return base.appendingPathComponent("Alas", isDirectory: true)
-    }()
+    }
 
     static var appConfigFile: URL { appSupportRoot.appendingPathComponent("app.json") }
     static var projectsFile: URL { appSupportRoot.appendingPathComponent("projects.json") }

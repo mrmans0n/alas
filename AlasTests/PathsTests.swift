@@ -81,5 +81,8 @@ struct PathsTests {
         let direct = try #require(AlasProfile.canonicalDirectory(real))
         #expect(viaAlias == direct)
         #expect(AlasProfile.runtimeDirectory(for: viaAlias, uid: 501) == AlasProfile.runtimeDirectory(for: direct, uid: 501))
+        // The same comparison is what refuses an override naming the standard profile.
+        #expect(AlasProfile.isSameDirectory(alias.appendingPathComponent("Profile"), real))
+        #expect(!AlasProfile.isSameDirectory(real, real.deletingLastPathComponent()))
     }
 }

@@ -283,8 +283,8 @@ open -n path/to/Alas.app --env ALAS_APP_SUPPORT_DIR=/tmp/alas-e2e-profile
 
 `ALAS_APP_SUPPORT_DIR` must be an absolute path (a leading `~` is expanded);
 any other non-empty value stops the app at launch rather than falling back to
-the shared profile, as does a directory that is a symlink or owned by another
-user (Alas creates it, or tightens one you own, to mode `0700`). With it set,
+the shared profile, as does a path naming the standard profile's directory, or
+a directory that is a symlink or owned by another user (Alas creates it, or tightens one you own, to mode `0700`). With it set,
 that instance:
 
 - keeps all of its state (config, projects, tabs, ACP databases, launch
