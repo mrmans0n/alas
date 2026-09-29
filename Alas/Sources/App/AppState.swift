@@ -6515,6 +6515,9 @@ final class AppState {
             },
             shouldNotifyOnAwaiting: { [weak self] in
                 self?.config.harness.notifyOnAwaiting ?? true
+            },
+            isExternalSession: { [weak self] sessionId in
+                self?.acpManagers.values.contains { $0.liveSession(for: sessionId) != nil } ?? false
             }
         )
         // Per-leaf symlink: stays valid across Alas restarts (the next
@@ -9502,6 +9505,25 @@ final class AppState {
             .first { !$0.isEmpty }
     }
 
+    /// Permissions only reach here once parked for a human: auto-run and
+    /// remembered decisions never block, so they never notify.
+    private func notifyACPPermissionBlocked(_ blocker: ACPChildBlocker) {
+        guard blocker.kind == .permission,
+              config.harness.notifyOnAwaiting,
+              let (owner, manager) = acpManagers.first(where: { $0.value.liveSession(for: blocker.sessionId) != nil }),
+              let session = manager.liveSession(for: blocker.sessionId),
+              let location = harnessSessionLocation(sessionId: blocker.sessionId)
+        else { return }
+        harness.notifications.notifyHarnessPermission(
+            agent: ACPHarnessBridge.agentKind(for: session.agentId),
+            body: blocker.summary,
+            projectId: location.projectId,
+            worktreeId: location.worktreeId,
+            sessionId: blocker.sessionId,
+            owner: owner
+        )
+    }
+
     private func acpInputNotificationBody(from request: ACPUserInputRequest) -> String? {
         switch request.source {
         case .cursor(_, let params):
@@ -12270,6 +12292,7 @@ final class AppState {
                 }
             },
             onChildBlocked: { [weak self] blocker in
+                self?.notifyACPPermissionBlocked(blocker)
                 Task { @MainActor [weak self] in
                     await self?.acpOrchestration.childBlocked(blocker)
                 }
@@ -12711,6 +12734,7 @@ final class AppState {
                 }
             },
             onChildBlocked: { [weak self] blocker in
+                self?.notifyACPPermissionBlocked(blocker)
                 Task { @MainActor [weak self] in
                     await self?.acpOrchestration.childBlocked(blocker)
                 }
