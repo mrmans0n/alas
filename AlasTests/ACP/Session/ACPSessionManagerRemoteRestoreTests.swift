@@ -429,8 +429,11 @@ struct ACPSessionManagerRemoteRestoreTests {
         }
     }
 
+    /// Polls the condition, so the deadline only bounds a failure. Recovery
+    /// runs several agent round trips and SQLite writes, which a loaded CI
+    /// shard can stretch well past half a second.
     private func waitUntil(
-        timeoutNanos: UInt64 = 500_000_000,
+        timeoutNanos: UInt64 = 10_000_000_000,
         condition: @escaping @MainActor () -> Bool
     ) async throws {
         let start = DispatchTime.now().uptimeNanoseconds
