@@ -27,12 +27,13 @@ struct SettingsWindow: View {
             .overlay(Divider().opacity(0.5), alignment: .bottom)
 
             HStack(spacing: 0) {
-                SettingsNavView(selection: $section, showsDebug: showsDebug)
+                SettingsNavView(selection: $section, showsDebug: showsDebug, showsPlugins: state.pluginManager != nil)
                 Group {
                     switch section {
                     case .general:    GeneralPane(state: state)
                     case .remote:     RemoteServerPane(state: state)
                     case .debug:      AdvancedPane(state: state)
+                    case .plugins:    PluginsPane(state: state)
                     case .agents:     AgentsPane(state: state) { section = $0 }
                     case .appearance: AppearancePane(state: state)
                     case .changes:    ChangesPane(state: state)
@@ -78,6 +79,7 @@ struct SettingsWindow: View {
             if !showsDebug, section == .debug {
                 section = .agents
             }
+            if state.pluginManager == nil, section == .plugins { section = .agents }
             state.rescanAgents()
         }
         .onChange(of: state.pendingSettingsSection) {

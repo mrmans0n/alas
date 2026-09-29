@@ -53,7 +53,7 @@ struct PluginHostRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(host.project.name).bold()
-                Text(Self.label(host.state)).foregroundStyle(.secondary)
+                Text(host.state.displayText).foregroundStyle(.secondary)
                 Spacer()
                 Button("Restart", action: restart)
             }
@@ -70,17 +70,6 @@ struct PluginHostRow: View {
                         .textSelection(.enabled)
                 }
             }
-        }
-    }
-
-    static func label(_ state: PluginHostState) -> String {
-        switch state {
-        case .loaded: "loaded"
-        case .activating: "activating"
-        case .active: "active"
-        case .deactivating: "deactivating"
-        case .stopped: "stopped"
-        case .failed(let reason): "Plugin stopped: \(reason)"
         }
     }
 }
