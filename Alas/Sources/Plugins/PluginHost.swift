@@ -31,6 +31,16 @@ struct PluginHostActions {
     var snapshot: () -> PluginWorkspaceSnapshot
     /// Returns false when `id` is not a worktree of this project.
     var switchWorktree: (String) -> Bool
+    /// Returns false when `id` is not an active session of this project.
+    var focusSession: (String) -> Bool
+
+    /// For hosts whose owner is gone: reads nothing and refuses every action.
+    static var inert: PluginHostActions {
+        PluginHostActions(
+            snapshot: { PluginWorkspaceSnapshot(worktrees: []) },
+            switchWorktree: { _ in false },
+            focusSession: { _ in false })
+    }
 }
 
 /// Runs the v1 protocol for one plugin in one project.
@@ -42,10 +52,14 @@ final class PluginHost {
     private static let requiredCapability: [String: PluginCapability] = [
         "workspace/snapshot": .workspaceRead,
         "worktree/switch": .worktreeSwitch,
+        "session/focus": .sessionFocus,
     ]
     private static let traceLimit = 100
     private static let logLimit = 200
     static let logMessageLimit = 2000
+    static let maxRegions = 256
+    static let regionIDByteLimit = 64
+    static let regionLabelLimit = 200
     private static let logLevels: Set<String> = ["debug", "info", "warn", "error"]
 
     let manifest: PluginManifest
@@ -54,6 +68,11 @@ final class PluginHost {
     private(set) var state: PluginHostState = .loaded
     private(set) var trace: [PluginTraceEntry] = []
     private(set) var log: [PluginLogEntry] = []
+    private(set) var frames: [Int: PluginFrame] = [:]
+    private(set) var regions: [Int: [PluginRegion]] = [:]
+    @ObservationIgnored private var visibleViews = 0
+    @ObservationIgnored private var lastTick: ContinuousClock.Instant?
+    @ObservationIgnored private var deliveriesInFlight = 0
 
     @ObservationIgnored private let wasm: [UInt8]
     @ObservationIgnored private let actions: PluginHostActions
@@ -84,8 +103,10 @@ final class PluginHost {
         state = .activating
         trace = []
         log = []
+        clearCanvas()
         do {
-            let loaded = try await PluginRuntime.load(wasm: wasm, limits: limits)
+            let loaded = try await PluginRuntime.load(
+                wasm: wasm, limits: limits, tabCount: manifest.api >= 2 ? manifest.tabs.count : nil)
             guard state == .activating else { return }  // deactivated while the module loaded
             runtime = loaded
         } catch {
@@ -124,6 +145,36 @@ final class PluginHost {
         _ = try? await runtime.handle(message)
         self.runtime = nil
         state = .stopped
+        clearCanvas()
+    }
+
+    private func clearCanvas() {
+        frames = [:]
+        regions = [:]
+        lastTick = nil
+    }
+
+    /// Each visible instance of one of this plugin's tabs holds one count.
+    func setViewVisible(_ visible: Bool) {
+        visibleViews = max(0, visibleViews + (visible ? 1 : -1))
+        if visibleViews == 0 { lastTick = nil }
+    }
+
+    var isTicking: Bool { state == .active && visibleViews > 0 && !manifest.tabs.isEmpty }
+
+    /// Dropped, not queued, while any delivery is still running, so a slow plugin loses frames instead of lagging.
+    func tick(at now: ContinuousClock.Instant) async {
+        guard isTicking, deliveriesInFlight == 0 else { return }
+        let dt = lastTick.map { max(0, Int(((now - $0) / .milliseconds(1)).rounded())) } ?? 0
+        lastTick = now
+        await deliver(encode(JSONRPCEnvelope(id: nil, method: "tick", params: PluginTickParams(dt: dt))))
+    }
+
+    /// Only regions the plugin declared can be clicked.
+    func click(tab: Int, region: String) async {
+        guard state == .active, regions[tab]?.contains(where: { $0.id == region }) == true else { return }
+        await deliver(encode(JSONRPCEnvelope(
+            id: nil, method: "canvas/click", params: PluginClickParams(tab: tab, region: region))))
     }
 
     // MARK: - Delivery
@@ -140,6 +191,8 @@ final class PluginHost {
     /// The activation response must come from the first call, so an activation
     /// delivery fails as soon as that call's messages are processed without one.
     private func deliver(_ first: Data, isActivation: Bool = false) async {
+        deliveriesInFlight += 1
+        defer { deliveriesInFlight -= 1 }
         var queue = [first]
         var roundTrips = 0
         while !queue.isEmpty, isRunning, let runtime {
@@ -150,14 +203,16 @@ final class PluginHost {
             }
             let message = queue.removeFirst()
             record(.toPlugin, message)
-            let sent: [Data]
+            let delivery: PluginDelivery
             do {
-                sent = try await runtime.handle(message).messages
+                delivery = try await runtime.handle(message)
             } catch {
                 fail(String(describing: error))
                 return
             }
-            for data in sent {
+            guard isRunning, self.runtime === runtime else { return }
+            frames.merge(delivery.frames) { _, new in new }
+            for data in delivery.messages {
                 guard isRunning, self.runtime === runtime else { return }
                 record(.fromPlugin, data)
                 switch process(data) {
@@ -191,8 +246,7 @@ final class PluginHost {
             }
             return .reply(handleRequest(method, id: id, data: data))
         case let (method?, nil):
-            handleNotification(method, data: data)
-            return .none
+            return handleNotification(method, data: data)
         case let (nil, id?):
             // A response carries exactly one of `result` and `error`.
             guard header.hasResult != (header.error != nil) else {
@@ -224,18 +278,52 @@ final class PluginHost {
                 return errorReply(id, code: -32003, "unknown worktree \(params.id)")
             }
             return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
+        case "session/focus":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginSessionFocusParams>.self, from: data).params else {
+                return errorReply(id, code: -32602, "invalid params for \(method)")
+            }
+            guard actions.focusSession(params.id) else {
+                return errorReply(id, code: -32003, "unknown session \(params.id)")
+            }
+            return encode(PluginResponse(id: id, result: PluginEmptyPayload(), error: nil))
         default:
             return errorReply(id, code: -32601, "method not found: \(method)")
         }
     }
 
-    /// Notifications never get replies, so bad ones are dropped.
-    private func handleNotification(_ method: String, data: Data) {
-        guard method == "log",
-              let params = try? JSONDecoder().decode(PluginParams<PluginLogParams>.self, from: data).params,
-              Self.logLevels.contains(params.level)
-        else { return }
-        appendLog(params.level, params.message)
+    /// Notifications never get replies. Bad logs are dropped; bad regions are a protocol violation,
+    /// because a plugin that cannot describe its own canvas is broken rather than noisy.
+    private func handleNotification(_ method: String, data: Data) -> Outcome {
+        switch method {
+        case "log":
+            if let params = try? JSONDecoder().decode(PluginParams<PluginLogParams>.self, from: data).params,
+               Self.logLevels.contains(params.level) {
+                appendLog(params.level, params.message)
+            }
+            return .none
+        case "canvas/regions":
+            guard let params = try? JSONDecoder().decode(PluginParams<PluginRegionsParams>.self, from: data).params,
+                  manifest.tabs.indices.contains(params.tab),
+                  params.regions.allSatisfy({ $0.rect.count == 4 })
+            else { return .violation("plugin sent a malformed canvas/regions") }
+            regions[params.tab] = params.regions.prefix(Self.maxRegions).map {
+                PluginRegion(
+                    id: Self.prefix($0.id, utf8Bytes: Self.regionIDByteLimit),
+                    label: String(String.UnicodeScalarView($0.label.unicodeScalars.prefix(Self.regionLabelLimit))),
+                    rect: $0.rect)
+            }
+            return .none
+        default:
+            return .none
+        }
+    }
+
+    private static func prefix(_ text: String, utf8Bytes limit: Int) -> String {
+        var used = 0
+        return String(String.UnicodeScalarView(text.unicodeScalars.prefix { scalar in
+            used += UTF8.width(scalar)
+            return used <= limit
+        }))
     }
 
     /// Only the activation response matters in v1. Anything else is stray and ignored.
@@ -259,6 +347,7 @@ final class PluginHost {
     private func fail(_ reason: String) {
         state = .failed(reason)
         runtime = nil
+        clearCanvas()
         appendLog("error", reason)
     }
 

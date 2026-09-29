@@ -59,7 +59,7 @@ struct PluginManagerDiscoveryTests {
         let manager = PluginManager(
             directory: root, approvals: PluginApprovalStore(defaults: defaults),
             projects: { [project] },
-            actions: { _ in PluginHostActions(snapshot: { PluginWorkspaceSnapshot(worktrees: []) }, switchWorktree: { _ in false }) })
+            actions: { _ in .inert })
 
         try install(try PluginWATFixture.wasm([[.send(activate)]]))
         await manager.reload()

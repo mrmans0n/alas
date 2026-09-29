@@ -119,7 +119,7 @@ final class PluginsWindowController: NSObject, NSWindowDelegate {
             projects: { [weak state] in state?.projects ?? [] },
             actions: { [weak state] project in
                 state?.pluginHostActions(for: project)
-                    ?? PluginHostActions(snapshot: { PluginWorkspaceSnapshot(worktrees: []) }, switchWorktree: { _ in false })
+                    ?? .inert
             })
         self.manager = manager
         Task { await manager.reload() }

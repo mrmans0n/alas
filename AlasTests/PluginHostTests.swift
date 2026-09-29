@@ -14,18 +14,21 @@ struct PluginHostTests {
 
     final class Recorder {
         var switched: [String] = []
+        var focused: [String] = []
     }
+
+    static let v1Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":1,"entry":"p.wasm"}"#
+    static let v2Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":2,"entry":"p.wasm","contributes":{"tabs":[{"id":"t","title":"T"}]}}"#
 
     func makeHost(
         _ script: [[PluginFixtureStep]],
         grants: Set<PluginCapability> = [],
         recorder: Recorder = Recorder(),
-        limits: PluginLimits = PluginHostTests.limits
+        limits: PluginLimits = PluginHostTests.limits,
+        manifest: String = PluginHostTests.v1Manifest
     ) throws -> PluginHost {
-        let manifest = try PluginManifest.parse(Data(
-            #"{"id":"io.test.plugin","name":"Test","version":"1","api":1,"entry":"p.wasm"}"#.utf8))
-        return PluginHost(
-            manifest: manifest,
+        PluginHost(
+            manifest: try PluginManifest.parse(Data(manifest.utf8)),
             wasm: try PluginWATFixture.wasm(script),
             project: PluginProjectRef(id: "proj", name: "Project"),
             grants: grants,
@@ -34,12 +37,134 @@ struct PluginHostTests {
                 switchWorktree: { id in
                     recorder.switched.append(id)
                     return id == "wt"
+                },
+                focusSession: { id in
+                    recorder.focused.append(id)
+                    return id == "s1"
                 }),
             limits: limits)
     }
 
+    func ticks(_ host: PluginHost) -> [String] {
+        host.trace.filter { $0.direction == .toPlugin && $0.text.contains(#""method":"tick""#) }.map(\.text)
+    }
+
     func lastReply(_ host: PluginHost) -> String? {
         host.trace.last { $0.direction == .toPlugin }?.text
+    }
+
+    private static let regionsR = #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"tab":0,"regions":[{"id":"r","label":"R","rect":[0,0,4,4]}]}}"#
+
+    /// Hiding the tab resets the clock, so the next tick does not carry the hidden time.
+    @Test func ticksNeedAVisibleTabAndResumeWithZeroDelta() async throws {
+        let host = try makeHost([[.send(activateOK)]], manifest: Self.v2Manifest)
+        await host.activate()
+        let start = ContinuousClock.now
+        await host.tick(at: start)
+        #expect(ticks(host).isEmpty)
+        host.setViewVisible(true)
+        await host.tick(at: start)
+        await host.tick(at: start + .milliseconds(66))
+        host.setViewVisible(false)
+        await host.tick(at: start + .seconds(1))
+        host.setViewVisible(true)
+        await host.tick(at: start + .seconds(600))
+        #expect(ticks(host).map { $0.contains(#""dt":0"#) } == [true, false, true])
+        #expect(ticks(host)[1].contains(#""dt":66"#))
+    }
+
+    @Test func aTickIsDroppedWhileADeliveryIsInFlight() async throws {
+        let host = try makeHost([[.send(activateOK)]], manifest: Self.v2Manifest)
+        await host.activate()
+        host.setViewVisible(true)
+        let first = Task { await host.tick(at: .now) }
+        // The tick is traced just before the host suspends inside the plugin call.
+        var spins = 0
+        while ticks(host).isEmpty, spins < 10_000 {
+            await Task.yield()
+            spins += 1
+        }
+        try #require(!ticks(host).isEmpty)
+        await host.tick(at: .now)
+        await first.value
+        #expect(ticks(host).count == 1)
+    }
+
+    @Test func presentedFramesAndRegionsAreKeptUntilTheHostFails() async throws {
+        let host = try makeHost(
+            [[.send(activateOK), .send(Self.regionsR), .present(tab: 0, ptr: 0, len: 16, width: 2)], [.trap]],
+            manifest: Self.v2Manifest)
+        await host.activate()
+        #expect(host.frames[0]?.height == 2)
+        #expect(host.regions[0]?.map(\.id) == ["r"])
+        host.setViewVisible(true)
+        await host.tick(at: .now)
+        #expect(host.frames.isEmpty)
+        #expect(host.regions.isEmpty)
+    }
+
+    @Test func aClickOnAKnownRegionReachesThePlugin() async throws {
+        let host = try makeHost([[.send(activateOK), .send(Self.regionsR)]], manifest: Self.v2Manifest)
+        await host.activate()
+        await host.click(tab: 0, region: "nope")
+        await host.click(tab: 0, region: "r")
+        let clicks = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("canvas/click") }
+        #expect(clicks.count == 1)
+        #expect(clicks.first?.text.contains(#""region":"r""#) == true)
+    }
+
+    @Test(arguments: [
+        #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"tab":3,"regions":[]}}"#,
+        #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"tab":0,"regions":[{"id":"r","label":"R","rect":[0,0,4]}]}}"#,
+        #"{"jsonrpc":"2.0","method":"canvas/regions","params":{"tab":0}}"#,
+    ])
+    func malformedRegionsStopThePlugin(message: String) async throws {
+        let host = try makeHost([[.send(activateOK), .send(message)]], manifest: Self.v2Manifest)
+        await host.activate()
+        guard case .failed(let reason) = host.state else {
+            Issue.record("expected failed, got \(host.state)")
+            return
+        }
+        #expect(reason.contains("canvas/regions"))
+    }
+
+    @Test func oversizedRegionTextIsTruncatedNotFatal() async throws {
+        let id = String(repeating: "i", count: 100)
+        let label = String(repeating: "l", count: 300)
+        var limits = Self.limits
+        limits.maxMessageBytes = 1 << 14
+        let host = try makeHost([[
+            .send(activateOK),
+            .send(#"{"jsonrpc":"2.0","method":"canvas/regions","params":{"tab":0,"regions":[{"id":"\#(id)","label":"\#(label)","rect":[0,0,1,1]}]}}"#),
+        ]], limits: limits, manifest: Self.v2Manifest)
+        await host.activate()
+        #expect(host.state == .active)
+        #expect(host.regions[0]?.first?.id.utf8.count == PluginHost.regionIDByteLimit)
+        #expect(host.regions[0]?.first?.label.unicodeScalars.count == PluginHost.regionLabelLimit)
+    }
+
+    struct FocusCase: Sendable {
+        let grants: Set<PluginCapability>
+        let id: String
+        let reply: String
+        let focused: [String]
+    }
+
+    /// A session that ended answers -32003 and the plugin keeps running.
+    @Test(arguments: [
+        FocusCase(grants: [], id: "s1", reply: #""code":-32001"#, focused: []),
+        FocusCase(grants: [.sessionFocus], id: "s1", reply: #""result":{}"#, focused: ["s1"]),
+        FocusCase(grants: [.sessionFocus], id: "gone", reply: #""code":-32003"#, focused: ["gone"]),
+    ])
+    func sessionFocusIsCheckedAgainstGrants(_ testCase: FocusCase) async throws {
+        let recorder = Recorder()
+        let request = #"{"jsonrpc":"2.0","id":1,"method":"session/focus","params":{"id":"\#(testCase.id)"}}"#
+        let host = try makeHost(
+            [[.send(activateOK), .send(request)]], grants: testCase.grants, recorder: recorder)
+        await host.activate()
+        #expect(host.state == .active)
+        #expect(recorder.focused == testCase.focused)
+        #expect(lastReply(host)?.contains(testCase.reply) == true)
     }
 
     @Test func activationHandshakeMakesTheHostActive() async throws {

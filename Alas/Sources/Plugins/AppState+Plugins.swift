@@ -14,7 +14,8 @@ extension AppState {
                 else { return false }
                 self.focusGlobalWorktree(id: id, projectId: project.id)
                 return true
-            })
+            },
+            focusSession: { _ in false })  // Task 5 wires this
     }
 
     private func pluginWorkspaceSnapshot(projectId: String) -> PluginWorkspaceSnapshot {

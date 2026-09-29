@@ -65,3 +65,28 @@ struct PluginIncomingHeader: Decodable {
 struct PluginParams<Params: Decodable>: Decodable {
     let params: Params
 }
+
+struct PluginTickParams: Codable, Equatable, Sendable {
+    let dt: Int
+}
+
+struct PluginClickParams: Codable, Equatable, Sendable {
+    let tab: Int
+    let region: String
+}
+
+struct PluginRegion: Codable, Equatable, Sendable {
+    let id: String
+    let label: String
+    /// `[x, y, w, h]` in frame pixels.
+    let rect: [Int]
+}
+
+struct PluginRegionsParams: Codable, Equatable, Sendable {
+    let tab: Int
+    let regions: [PluginRegion]
+}
+
+struct PluginSessionFocusParams: Codable, Equatable, Sendable {
+    let id: String
+}
