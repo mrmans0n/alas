@@ -12,6 +12,8 @@ struct PluginLimits: Sendable, Equatable {
     var maxTableElements = 100_000
     /// Calls into the plugin per delivery, counting the replies to its own requests.
     var maxRoundTripsPerDelivery = 64
+    /// A request's string id is echoed back in its reply, so it has to be bounded.
+    var maxRequestIDBytes = 256
 }
 
 enum PluginRuntimeError: Error, Equatable, CustomStringConvertible {

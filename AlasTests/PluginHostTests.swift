@@ -224,6 +224,27 @@ struct PluginHostTests {
         #expect(lastReply(host)?.contains("method not found") == true)
     }
 
+    /// The id is echoed in the reply and cannot be shortened, so the limit is on the id itself.
+    @Test(arguments: [(256, false), (257, true)])
+    func aRequestIDLongerThanTheLimitStopsThePlugin(idBytes: Int, stops: Bool) async throws {
+        let id = String(repeating: "i", count: idBytes)
+        let host = try makeHost([[
+            .send(activateOK),
+            .send(#"{"jsonrpc":"2.0","id":"\#(id)","method":"nope/x"}"#),
+        ]])
+        await host.activate()
+        if stops {
+            guard case .failed(let reason) = host.state else {
+                Issue.record("expected failed, got \(host.state)")
+                return
+            }
+            #expect(reason.contains("request id longer than 256 bytes"))
+        } else {
+            #expect(host.state == .active)
+            #expect(lastReply(host)?.contains("method not found") == true)
+        }
+    }
+
     /// The second case is a single grapheme cluster of 3,001 scalars, which a `Character` count would not cut.
     @Test(arguments: [
         String(repeating: "x", count: 3000),

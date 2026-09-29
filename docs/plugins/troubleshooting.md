@@ -61,6 +61,7 @@ The row shows `Plugin stopped: <reason>`.
 | `Trap: call stack exhausted` | Unbounded recursion. | Iterate instead, or limit depth. |
 | `plugin passed an invalid memory range (ptr …, len …)` | `alas.send` got a pointer and length that are not inside `memory`, or `alas_alloc` returned a buffer that does not fit. | Send from a buffer that is still alive at the moment of the call. Grow memory inside `alas_alloc` if you need more. |
 | `message of … bytes exceeds the size limit` | A message was larger than 1 MiB. | Send less data per message. |
+| `plugin sent a request id longer than 256 bytes` | A request used a string `id` over the limit. | Use short ids: a counter is enough. |
 | `plugin sent more than 64 messages in one call` | Too many `alas.send` calls in one `alas_handle`. | Combine work into fewer messages. |
 | `plugin exceeded 64 round trips in one delivery` | The plugin keeps requesting and each reply triggers another request. | Break the chain. Ask again on the next `workspace/changed` instead of immediately. |
 

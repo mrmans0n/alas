@@ -161,8 +161,10 @@ with `"jsonrpc": "2.0"`. Three shapes exist:
 | Notification | `method`, no `id` | No response. |
 | Response | `id`, plus `result` or `error`, no `method` | Answers a request. |
 
-- `id` is an integer or a string. `null` ids are not supported: a message with a
-  method and a `null` id is treated as a notification.
+- `id` is an integer or a string of at most 256 bytes, because Alas echoes it in
+  the reply. A request with a longer string id stops the plugin. `null` ids are
+  not supported: a message with a method and a `null` id is treated as a
+  notification.
 - Alas uses the integer `0` as the id of `alas/activate`. Your own request ids
   are yours to choose, and Alas echoes them back unchanged.
 - Batches (JSON arrays) are not supported.
@@ -455,6 +457,7 @@ starts a fresh instance.
 | `plugin rejected activation: <message>` | The response to `alas/activate` was an error. |
 | `plugin sent a request before answering alas/activate` | A request came before the activation response. Nothing is acted on. |
 | `plugin sent a malformed message` | Not valid JSON-RPC 2.0. See [Envelope](#envelope). |
+| `plugin sent a request id longer than 256 bytes` | A request had a string `id` over the limit. |
 | `plugin passed an invalid memory range (ptr <p>, len <n>)` | `alas.send` was given a range outside `memory`, or `alas_alloc` returned a buffer that does not fit. |
 | `message of <n> bytes exceeds the size limit` | A message was larger than 1 MiB. |
 | `plugin sent more than 64 messages in one call` | Too many `alas.send` calls in one `alas_handle`. |
@@ -488,6 +491,7 @@ Shown next to the folder under **Not loaded**. The plugin does not run.
 | Table elements | 100,000 | Growth is refused. A larger initial size fails to load. |
 | Message size, either direction | 1 MiB | The plugin is stopped. |
 | `alas.send` calls per `alas_handle` | 64 | The plugin is stopped. |
+| String request `id` | 256 bytes | The plugin is stopped. |
 | Calls into the plugin per delivery | 64 | The plugin is stopped. |
 | `log` message length | 2,000 Unicode code points | Truncated. |
 | Log lines kept per instance | 200 | Oldest dropped. **Debug → Plugins…** shows the latest 5. |

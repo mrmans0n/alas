@@ -184,6 +184,10 @@ final class PluginHost {
             guard state != .activating else {
                 return .violation("plugin sent a request before answering alas/activate")
             }
+            // The id is echoed in the reply, so a string id has to be small enough for that reply to fit.
+            if case .string(let text) = id, text.utf8.count > limits.maxRequestIDBytes {
+                return .violation("plugin sent a request id longer than \(limits.maxRequestIDBytes) bytes")
+            }
             return .reply(handleRequest(method, id: id, data: data))
         case let (method?, nil):
             handleNotification(method, data: data)
