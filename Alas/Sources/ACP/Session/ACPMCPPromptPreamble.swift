@@ -150,8 +150,10 @@ enum ACPMCPPromptPreamble {
                 + "review_comment_add/review_finish, \(sessionTools)."
             if isDelegated {
                 line += " This session was delegated by a parent session: it "
-                    + "cannot create descendants; return results or questions "
-                    + "through session_send."
+                    + "cannot create descendants. Report results and questions to "
+                    + "the parent only with the session_send tool of the \"alas\" "
+                    + "MCP server; do not use SendMessage, ListAgents, or any other "
+                    + "messaging or agent tool for that."
             } else {
                 line += " When a delegated session finishes without reporting "
                     + "back, or fails, you will receive a system message; "
@@ -220,8 +222,10 @@ enum ACPMCPPromptPreamble {
                 + "and `\(sessionCLI)` manages delegated sessions."
             if isDelegated {
                 line += " This session was delegated by a parent session: it cannot "
-                    + "create descendants; return results or questions through "
-                    + "`alas session send`."
+                    + "create descendants. Report results and questions to the parent "
+                    + "only with `alas session send <parent-session-id> <prompt>` "
+                    + "(the parent's id is in $ALAS_PARENT_SESSION_ID); do not use "
+                    + "any other messaging or agent tool for that."
             } else {
                 line += " When a delegated session finishes without reporting back, "
                     + "or fails, you will receive a system message; "

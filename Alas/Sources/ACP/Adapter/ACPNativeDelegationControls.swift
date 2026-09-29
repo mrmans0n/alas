@@ -88,9 +88,12 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
     var settingsDescription: String {
         switch self {
         case .toolOmission(.claudeDisallowedTools):
-            return "Removes Claude's Agent/Task tool from the model's tool list. "
-                + "Other Claude tools that coordinate work, such as SendMessage "
-                + "and Workflow, are not affected."
+            return "Removes Claude's Agent/Task and Workflow tools, and the "
+                + "SendMessage and ListAgents tools that reach other Claude Code "
+                + "sessions on this Mac, from the model's tool list. TaskStop is "
+                + "not affected. Delegated Claude sessions never get SendMessage "
+                + "or ListAgents, whether or not this is on; they report through "
+                + "Alas instead."
         case .toolOmission(.codexConfigEnvironment):
             return "Turns off Codex multi-agent tools (spawn_agent and related) "
                 + "through CODEX_CONFIG, keeping any CODEX_CONFIG you already set. "
@@ -212,18 +215,38 @@ enum ACPNativeDelegationError: LocalizedError, Equatable {
 /// All of them are no-ops when the policy is off or the agent has no
 /// verified mechanism.
 enum ACPNativeDelegationControls {
-    static let claudeDisallowedTools = ["Agent", "Task"]
+    /// Claude tools that start or orchestrate native subagents. Workflow
+    /// runs scripted multi-agent jobs, so it is removed with Agent/Task.
+    static let claudeNativeSubagentTools = ["Agent", "Task", "Workflow"]
+    /// Claude tools that reach other Claude Code sessions on this Mac,
+    /// outside Alas's parent/child authorization. Delegated children always
+    /// lose them, because they must report through Alas's `session_send`.
+    static let claudeCrossSessionTools = ["SendMessage", "ListAgents"]
     static let codexConfigKey = "CODEX_CONFIG"
     /// The whole OMP overlay. It sets nothing else, so every other key keeps
     /// the value from the user's global and project settings.
     static let ompOverlayContents = "task:\n  maxRecursionDepth: 0\n"
 
-    /// The `_meta` Alas sends on every session request for this policy.
-    static func sessionMeta(agentID: String, nativeSubagentsDisabled: Bool) -> ACPSessionMeta? {
-        guard nativeSubagentsDisabled,
-              ACPNativeDelegationSupport.resolve(agentID: agentID).mechanism == .claudeDisallowedTools
+    /// The `_meta` Alas sends on every session request. With the policy on,
+    /// Claude loses its native subagent tools and its cross-session tools. A
+    /// delegated child always loses the cross-session tools, whatever the
+    /// policy, so it reports only through Alas.
+    static func sessionMeta(
+        agentID: String,
+        nativeSubagentsDisabled: Bool,
+        isDelegatedChild: Bool
+    ) -> ACPSessionMeta? {
+        guard ACPNativeDelegationSupport.resolve(agentID: agentID).mechanism == .claudeDisallowedTools
         else { return nil }
-        return ACPSessionMeta(claudeCode: .init(options: .init(disallowedTools: claudeDisallowedTools)))
+        let disallowed: [String]
+        if nativeSubagentsDisabled {
+            disallowed = claudeNativeSubagentTools + claudeCrossSessionTools
+        } else if isDelegatedChild {
+            disallowed = claudeCrossSessionTools
+        } else {
+            return nil
+        }
+        return ACPSessionMeta(claudeCode: .init(options: .init(disallowedTools: disallowed)))
     }
 
     /// Applies process-level controls to the launch spec. `inheritedEnvironment`

@@ -66,12 +66,15 @@ respond when it needs you.
   which agents and models are available
   ([delegation discovery](docs/agent-delegation.md)). For Claude, Codex,
   OpenCode, and OMP, **Settings → Agents → Disable native subagents** removes
-  the agent's own subagent tool (Claude's Agent/Task tool; Codex's multi-agent
-  tools; OpenCode's task tool; OMP's task tool and eval `agent()`; Codex,
-  OpenCode, and OMP in local sessions only) so it delegates through Alas child
-  sessions instead. It applies to sessions created after you change it, does
-  not stop subagents already running, and is not a sandbox
-  ([details](docs/agent-delegation.md#disabling-native-subagents)).
+  the agent's own subagent tool (Claude's Agent/Task and Workflow tools, plus
+  SendMessage and ListAgents, which reach other Claude Code sessions; Codex's
+  multi-agent tools; OpenCode's task tool; OMP's task tool and eval `agent()`;
+  Codex, OpenCode, and OMP in local sessions only) so it delegates through Alas
+  child sessions instead. It applies to sessions created after you change it,
+  does not stop subagents already running, and is not a sandbox
+  ([details](docs/agent-delegation.md#disabling-native-subagents)). Delegated
+  Claude children never get SendMessage or ListAgents, so they report back
+  through Alas.
 
 - **A review loop agents can close.** Review a branch, commit, or range
   from the ⇧⌘R palette, and drop inline comments anywhere, changed

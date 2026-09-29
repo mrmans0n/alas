@@ -134,7 +134,7 @@ fn handle_line_with_parent(
 fn initialize_result(parent_session_id: Option<&str>) -> Value {
     let instructions = match parent_session_id {
         Some(_) => {
-            "Tools that drive the user's Alas workspace UI. This session was delegated by a parent session: it cannot create descendants; return results or questions through session_send."
+            "Tools that drive the user's Alas workspace UI. This session was delegated by a parent session: it cannot create descendants. Report results and questions to the parent only with this server's session_send tool; do not use SendMessage, ListAgents, or any other messaging or agent tool for that."
         }
         None => {
             "Tools that drive the user's Alas workspace UI: open files for the user to look at, manage linked worktrees, and open reviews. Root ACP sessions may delegate direct child sessions: call agent_list first to pick an available agent id (and see its remembered models), then session_new."
@@ -1921,8 +1921,8 @@ mod tests {
     use super::{
         HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, build_http_response,
         cancellation_command_for_message, command_for_tool, dispatch, env_from, handle_line,
-        handle_line_with_parent, http_response, is_initialize_message, parse_http_request,
-        tools_call_command,
+        handle_line_with_parent, http_response, initialize_result, is_initialize_message,
+        parse_http_request, tools_call_command,
     };
     use alas_client::{Command, Response};
     use serde_json::{Value, json};
@@ -2052,6 +2052,21 @@ mod tests {
         assert_eq!(reply["result"]["serverInfo"]["name"], json!("alas"));
         assert!(reply["result"]["capabilities"]["tools"].is_object());
         assert!(reply["result"]["instructions"].is_string());
+    }
+
+    #[test]
+    fn delegated_initialize_instructions_route_reports_through_session_send_only() {
+        let instructions = initialize_result(Some("parent"))["instructions"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(instructions.contains("only with this server's session_send tool"));
+        assert!(instructions.contains("do not use SendMessage, ListAgents"));
+        let root = initialize_result(None)["instructions"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(!root.contains("SendMessage"));
     }
 
     #[test]

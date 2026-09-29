@@ -197,6 +197,11 @@ final class ACPSessionManager: ObservableObject {
     /// the captured value then governs every attach of that session. Set
     /// post-init, mirroring `alasCLIEnvProvider`.
     var nativeSubagentsPreferenceProvider: (@MainActor (_ agentId: String) -> Bool)?
+    /// Whether a session was delegated by a parent Alas session. Read on
+    /// every attach, independent of whether Alas tools are exposed, so a
+    /// delegated Claude child never gets the tools that message other Claude
+    /// Code sessions. Set post-init, mirroring `alasCLIEnvProvider`.
+    var delegatedChildProvider: (@MainActor (_ sessionId: String) async -> Bool)?
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:] {
         willSet {
             for (id, session) in sessions where newValue[id] !== session {
@@ -4936,6 +4941,7 @@ extension ACPSessionManager {
         var cliParentSessionId: String?
         let agentEnvironment: [String: String]
         let nativeSubagentsDisabled = await capturedNativeSubagentsPolicy(sessionId: sessionId)
+        let isDelegatedChild = await delegatedChildProvider?(sessionId) ?? false
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
         do {
             let resolvedSpec = await resolvedLaunchSpec(for: spec, host: host)
@@ -5034,7 +5040,8 @@ extension ACPSessionManager {
         // session/new, session/load, session/resume, and session/fork.
         connection.sessionMeta = ACPNativeDelegationControls.sessionMeta(
             agentID: session.agentId,
-            nativeSubagentsDisabled: nativeSubagentsDisabled
+            nativeSubagentsDisabled: nativeSubagentsDisabled,
+            isDelegatedChild: isDelegatedChild
         )
         // `cliEnvActive` / `cliParentSessionId` are consumed below, once we
         // know whether this attach created a fresh remote session (the

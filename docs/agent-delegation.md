@@ -159,7 +159,7 @@ only where Alas has verified a control:
 
 | Agent | Effect |
 |---|---|
-| Claude | Removes the Agent/Task tool from the model's tool list. Other Claude tools that coordinate work, such as SendMessage and Workflow, are not affected. |
+| Claude | Removes the `Agent`/`Task` and `Workflow` tools, plus `SendMessage` and `ListAgents`, which reach other Claude Code sessions on this Mac, from the model's tool list. `TaskStop` is not affected. |
 | Codex | Turns off Codex multi-agent tools (`spawn_agent` and related) through `CODEX_CONFIG`. Any `CODEX_CONFIG` you already set is merged, not replaced; one Alas cannot merge safely (invalid JSON, a non-object `agents`/`features`, or a dotted key that overlaps these settings) fails the launch with an error. Local sessions only: a remote Codex session with the option on fails to start. |
 | OpenCode | Removes the `task` tool from every OpenCode agent through `OPENCODE_CONFIG_CONTENT`, and checks every agent's effective permissions before each launch (see below). Any `OPENCODE_CONFIG_CONTENT` you already set is merged with its key order kept, not replaced; one Alas cannot parse fails the launch with an error. Local sessions only. |
 | OMP | Starts `omp acp` with a launch-only settings overlay (`--config`) that sets `task.maxRecursionDepth` to 0. This removes the `task` and `hub` tools from the model's tool list, and eval's `agent()` and `workpool()` fail with "Cannot spawn another agent at task depth 0". Eval otherwise works. The overlay is merged over your `~/.omp` and project settings, which Alas does not change, so other settings and extensions keep working. Local sessions only: a remote OMP session with the option on fails to start. |
@@ -190,6 +190,21 @@ When it applies:
   and points it at `session_new` (or `alas session new`). If Alas tools are
   turned off (**Expose Alas tools to agents**), the agent is told it cannot
   delegate at all.
+
+### Delegated Claude children
+
+A Claude session delegated by a parent never gets `SendMessage` or
+`ListAgents`, whether or not **Disable native subagents** is on. Those tools
+list and message other Claude Code sessions on this Mac, outside the
+parent/child sessions Alas authorizes, so a child that used them to report
+would reach unrelated sessions and its parent would never hear back. Alas
+sends the same `disallowedTools` on every `session/new`, `session/load`,
+`session/resume`, and `session/fork`, so reconnects and restores keep it. This
+does not check the adapter version: an older adapter that ignores the option
+still starts the child. Every delegated child, of any agent, is told to report
+only with the `alas` server's `session_send` tool (or
+`alas session send <parent-session-id> <prompt>` for CLI-only agents such as
+Pi) and not with any other messaging or agent tool.
 
 ### OpenCode permission precedence
 
