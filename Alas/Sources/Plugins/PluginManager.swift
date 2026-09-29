@@ -40,6 +40,7 @@ final class PluginManager {
     @ObservationIgnored private let projects: () -> [ProjectConfig]
     @ObservationIgnored private let actions: (ProjectConfig) -> PluginHostActions
     @ObservationIgnored private var snapshotTask: Task<Void, Never>?
+    @ObservationIgnored private var tickTask: Task<Void, Never>?
     @ObservationIgnored private var lastSnapshots: [HostKey: PluginWorkspaceSnapshot] = [:]
     @ObservationIgnored private var lastOperation: Task<Void, Never> = Task {}
 
@@ -57,6 +58,22 @@ final class PluginManager {
 
     func isApproved(_ plugin: Plugin) -> Bool {
         approvals.approval(id: plugin.id, hash: plugin.hash) != nil
+    }
+
+    func isEnabled(_ plugin: Plugin) -> Bool { !approvals.isDisabled(id: plugin.id) }
+
+    func plugin(id: String) -> Plugin? { plugins.first { $0.id == id } }
+
+    func host(pluginID: String, projectID: String) -> PluginHost? {
+        hostsByKey[HostKey(pluginID: pluginID, projectID: projectID)]
+    }
+
+    static var tickInterval: Duration {
+        #if DEBUG
+        .milliseconds(200)  // 5 fps: unoptimized WasmKit is ~400x slower
+        #else
+        .milliseconds(66)   // 15 fps
+        #endif
     }
 
     func hosts(for plugin: Plugin) -> [(key: HostKey, host: PluginHost)] {
@@ -78,7 +95,7 @@ final class PluginManager {
     }
 
     /// Stops everything, rescans the folder, and starts approved plugins for
-    /// every project. Projects added later need another reload (Debug-only for now).
+    /// every project.
     func reload() async {
         await serialized { await self.performReload() }
     }
@@ -93,15 +110,54 @@ final class PluginManager {
         await serialized { await self.performRestart(key) }
     }
 
+    func setEnabled(_ plugin: Plugin, _ enabled: Bool) async {
+        await serialized {
+            self.approvals.setDisabled(id: plugin.id, !enabled)
+            if enabled { await self.start(plugin) } else { await self.stopHosts { $0.pluginID == plugin.id } }
+        }
+    }
+
+    func revoke(_ plugin: Plugin) async {
+        await serialized {
+            self.approvals.revoke(id: plugin.id)
+            await self.stopHosts { $0.pluginID == plugin.id }
+        }
+    }
+
+    /// Starts hosts for projects added since the last pass and stops hosts whose project is gone.
+    func reconcile() async {
+        await serialized {
+            let projectIDs = Set(self.projects().map(\.id))
+            await self.stopHosts { !projectIDs.contains($0.projectID) }
+            for plugin in self.plugins { await self.start(plugin) }
+        }
+    }
+
+    /// Stops every loop and host. The manager is not reused afterwards.
+    func shutdown() async {
+        await serialized {
+            self.snapshotTask?.cancel()
+            self.tickTask?.cancel()
+            await self.stopHosts { _ in true }
+        }
+    }
+
+    private func stopHosts(where matches: (HostKey) -> Bool) async {
+        for key in hostsByKey.keys.filter(matches) {
+            await hostsByKey[key]?.deactivate()
+            hostsByKey[key] = nil
+            lastSnapshots[key] = nil
+        }
+    }
+
     private func performReload() async {
         snapshotTask?.cancel()
-        for host in hostsByKey.values { await host.deactivate() }
-        hostsByKey = [:]
-        lastSnapshots = [:]
+        await stopHosts { _ in true }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         (plugins, invalid) = Self.discover(in: directory)
         for plugin in plugins where isApproved(plugin) { await start(plugin) }
         startSnapshotLoop()
+        startTickLoop()
     }
 
     private func performApprove(_ plugin: Plugin) async {
@@ -118,7 +174,7 @@ final class PluginManager {
     }
 
     private func start(_ plugin: Plugin) async {
-        guard let approval = approvals.approval(id: plugin.id, hash: plugin.hash) else { return }
+        guard isEnabled(plugin), let approval = approvals.approval(id: plugin.id, hash: plugin.hash) else { return }
         for project in projects() {
             let key = HostKey(pluginID: plugin.id, projectID: project.id)
             guard hostsByKey[key] == nil else { continue }
@@ -131,15 +187,35 @@ final class PluginManager {
         }
     }
 
-    // ponytail: polls every 500 ms and diffs, because agent state mixes ObservableObject
+    // ponytail: polls every 500 ms, reconciles projects, and diffs, because agent state mixes ObservableObject
     // and @Observable sources; switch to change notifications if the rebuild shows up in profiles.
     private func startSnapshotLoop() {
         snapshotTask?.cancel()
         snapshotTask = Task { [weak self] in
             while !Task.isCancelled {
+                await self?.reconcile()
                 await self?.pushChangedSnapshots()
                 try? await Task.sleep(for: .milliseconds(500))
             }
+        }
+    }
+
+    // ponytail: one fixed-rate loop for all hosts; a host with no visible tab returns immediately.
+    private func startTickLoop() {
+        tickTask?.cancel()
+        tickTask = Task { [weak self] in
+            while !Task.isCancelled {
+                self?.fireTicks()
+                try? await Task.sleep(for: Self.tickInterval)
+            }
+        }
+    }
+
+    private func fireTicks() {
+        let now = ContinuousClock.now
+        // Each host ticks independently, so one slow plugin cannot delay another's frames.
+        for host in hostsByKey.values where host.isTicking {
+            Task { await host.tick(at: now) }
         }
     }
 

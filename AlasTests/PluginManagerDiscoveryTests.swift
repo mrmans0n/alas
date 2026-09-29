@@ -72,4 +72,65 @@ struct PluginManagerDiscoveryTests {
         #expect(manager.hostsByKey.isEmpty)
         #expect(manager.plugins.first.map(manager.isApproved) == false)
     }
+
+    @MainActor
+    final class ProjectList {
+        var projects: [ProjectConfig]
+        init(_ projects: [ProjectConfig]) { self.projects = projects }
+    }
+
+    static func project(_ id: String) -> ProjectConfig {
+        ProjectConfig(id: id, name: id, path: "/tmp/\(id)", color: "blue", addedAt: Date())
+    }
+
+    @MainActor
+    func approvedManager(projects: ProjectList) async throws -> (PluginManager, cleanup: () -> Void) {
+        let root = FileManager.default.temporaryDirectory.appending(path: "PluginReconcile-\(UUID().uuidString)")
+        let suite = "PluginManagerTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        let dir = root.appending(path: "p")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(#"{"id":"io.x.p","name":"P","version":"1","api":1,"entry":"plugin.wasm"}"#.utf8)
+            .write(to: dir.appending(path: "plugin.json"))
+        try Data(try PluginWATFixture.wasm([[.send(#"{"jsonrpc":"2.0","id":0,"result":{}}"#)]]))
+            .write(to: dir.appending(path: "plugin.wasm"))
+        let manager = PluginManager(
+            directory: root, approvals: PluginApprovalStore(defaults: defaults),
+            projects: { projects.projects }, actions: { _ in .inert })
+        await manager.reload()
+        await manager.approve(try #require(manager.plugins.first))
+        return (manager, {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: suite)
+        })
+    }
+
+    @MainActor
+    @Test func reconcileFollowsTheProjectList() async throws {
+        let projects = ProjectList([Self.project("a")])
+        let (manager, cleanup) = try await approvedManager(projects: projects)
+        defer { cleanup() }
+        let first = try #require(manager.host(pluginID: "io.x.p", projectID: "a"))
+        projects.projects = [Self.project("b")]
+        await manager.reconcile()
+        #expect(manager.hostsByKey.keys.map(\.projectID) == ["b"])
+        #expect(first.state == .stopped)
+        await manager.shutdown()
+    }
+
+    @MainActor
+    @Test func disablingAPluginStopsItsHostsAndEnablingRestartsThem() async throws {
+        let projects = ProjectList([Self.project("a")])
+        let (manager, cleanup) = try await approvedManager(projects: projects)
+        defer { cleanup() }
+        let plugin = try #require(manager.plugins.first)
+        await manager.setEnabled(plugin, false)
+        #expect(manager.hostsByKey.isEmpty)
+        #expect(!manager.isEnabled(plugin))
+        await manager.reconcile()
+        #expect(manager.hostsByKey.isEmpty, "reconcile must not restart a disabled plugin")
+        await manager.setEnabled(plugin, true)
+        #expect(manager.host(pluginID: "io.x.p", projectID: "a")?.state == .active)
+        await manager.shutdown()
+    }
 }
