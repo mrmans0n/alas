@@ -18,15 +18,6 @@ impl Rect {
     pub fn intersects(&self, other: &Rect) -> bool {
         self.x < other.x + other.w && other.x < self.x + self.w && self.y < other.y + other.h && other.y < self.y + self.h
     }
-
-    /// Smallest rect containing both.
-    pub fn union(&self, other: &Rect) -> Rect {
-        let x = self.x.min(other.x);
-        let y = self.y.min(other.y);
-        let right = (self.x + self.w).max(other.x + other.w);
-        let bottom = (self.y + self.h).max(other.y + other.h);
-        Rect::new(x, y, right - x, bottom - y)
-    }
 }
 
 /// Glyphs are 4x6 cells (3 px wide plus 1 px spacing), ASCII 32..=126, 16 per row.

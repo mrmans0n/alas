@@ -43,13 +43,29 @@ fn background_key(layout: &Layout) -> String {
     format!("{}#{}#{}", layout.height, layout.hidden_worktrees, pods.join(";"))
 }
 
+/// One 16 px row of `tile` repeated across the room.
+fn tile_strip(tile: Rect) -> Canvas {
+    let mut strip = Canvas::new(ROOM_W as usize, 16);
+    for x in (0..ROOM_W).step_by(16) {
+        draw(&mut strip, &FURNITURE, tile, x, 0);
+    }
+    strip
+}
+
+/// Wall and floor tiles, copied a row at a time: blitting every tile pixel by pixel
+/// costs a large share of the per-call fuel budget in a tall office.
+fn fill_tiles(c: &mut Canvas) {
+    let (wall, floor) = (tile_strip(WALL), tile_strip(FLOOR));
+    let row = c.width * 4;
+    for (y, out) in c.pixels.chunks_exact_mut(row).enumerate() {
+        let strip = if y / 16 * 16 < 24 { &wall } else { &floor };
+        out.copy_from_slice(&strip.pixels[y % 16 * row..][..row]);
+    }
+}
+
 fn draw_background(layout: &Layout) -> Canvas {
     let mut c = Canvas::new(ROOM_W as usize, layout.height as usize);
-    for y in (0..layout.height).step_by(16) {
-        for x in (0..ROOM_W).step_by(16) {
-            draw(&mut c, &FURNITURE, if y < 24 { WALL } else { FLOOR }, x, y);
-        }
-    }
+    fill_tiles(&mut c);
     draw(&mut c, &FURNITURE, atlas::DOOR, DOOR.0 - 8, 8);
     draw(&mut c, &FURNITURE, COFFEE, LOUNGE[0].0 - 16, 16);
     draw(&mut c, &FURNITURE, COOLER, LOUNGE[2].0 - 16, 16);
@@ -164,17 +180,10 @@ pub enum Target {
 
 /// Region ids are short indexes ("r0", "r1", …) because Alas bounds ids to 64 bytes and
 /// worktree ids can be long; `Target` at the same index says what a click means.
+/// Desks come first because Alas keeps only the first 256 regions of a tab.
 pub fn regions(world: &World, layout: &Layout) -> (Vec<Region>, Vec<Target>) {
     let mut regions = Vec::new();
     let mut targets = Vec::new();
-    for ch in world.characters.iter().filter(|c| !c.leaving) {
-        regions.push(Region {
-            id: format!("r{}", regions.len()),
-            label: format!("{}: {}, {}", ch.agent, ch.title, ch.mood.words()),
-            rect: [ch.x.round() as i32, ch.y.round() as i32, CHAR_W, CHAR_H],
-        });
-        targets.push(Target::Session(ch.session_id.clone()));
-    }
     for pod in &layout.pods {
         let mut label = format!("Worktree {}", pod.branch);
         if let Some(files) = pod.files {
@@ -189,6 +198,14 @@ pub fn regions(world: &World, layout: &Layout) -> (Vec<Region>, Vec<Target>) {
             rect: [pod.desk.x, pod.desk.y, pod.desk.w, pod.desk.h],
         });
         targets.push(Target::Worktree(pod.worktree_id.clone()));
+    }
+    for ch in world.characters.iter().filter(|c| !c.leaving) {
+        regions.push(Region {
+            id: format!("r{}", regions.len()),
+            label: format!("{}: {}, {}", ch.agent, ch.title, ch.mood.words()),
+            rect: [ch.x.round() as i32, ch.y.round() as i32, CHAR_W, CHAR_H],
+        });
+        targets.push(Target::Session(ch.session_id.clone()));
     }
     (regions, targets)
 }
@@ -235,9 +252,24 @@ mod tests {
         let mut world = World::default();
         world.sync(&s, &l);
         let (regions, targets) = regions(&world, &l);
-        assert_eq!(regions[0].label, "claude: T0, working");
-        assert!(matches!(&targets[0], Target::Session(id) if id == "w0s0"));
-        assert_eq!(regions[1].label, "Worktree b0");
-        assert!(matches!(&targets[1], Target::Worktree(id) if id == "w0"));
+        assert_eq!(regions[0].label, "Worktree b0");
+        assert!(matches!(&targets[0], Target::Worktree(id) if id == "w0"));
+        assert_eq!(regions[1].label, "claude: T0, working");
+        assert!(matches!(&targets[1], Target::Session(id) if id == "w0s0"));
+        assert_eq!([regions[0].id.as_str(), regions[1].id.as_str()], ["r0", "r1"]);
+    }
+
+    #[test]
+    fn tile_fill_matches_per_tile_blits_in_a_tall_room() {
+        let height = crate::layout::MAX_H as usize - 5; // not a multiple of 16, so the last row clips
+        let mut fast = Canvas::new(ROOM_W as usize, height);
+        fill_tiles(&mut fast);
+        let mut slow = Canvas::new(ROOM_W as usize, height);
+        for y in (0..height as i32).step_by(16) {
+            for x in (0..ROOM_W).step_by(16) {
+                draw(&mut slow, &FURNITURE, if y < 24 { WALL } else { FLOOR }, x, y);
+            }
+        }
+        assert!(fast.pixels == slow.pixels);
     }
 }

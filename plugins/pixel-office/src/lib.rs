@@ -95,7 +95,8 @@ mod tests {
         let frames = test_host::take_frames();
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].1, layout::ROOM_W as u32);
-        feed(&mut office, json!({"jsonrpc":"2.0","method":"canvas/click","params":{"tab":0,"region":"r0"}}));
+        // r0 is the desk; the character follows it.
+        feed(&mut office, json!({"jsonrpc":"2.0","method":"canvas/click","params":{"tab":0,"region":"r1"}}));
         let sent = test_host::take_sent();
         assert!(sent.iter().any(|m| m["method"] == "canvas/regions"));
         assert!(sent.iter().any(|m| m["method"] == "session/focus" && m["params"]["id"] == "s"));
