@@ -45,15 +45,15 @@ struct AppConfigHarnessTests {
         #expect(cfg.harness.dismissedHookInstallNudges == [])
     }
 
-    @Test("collapse finished tool calls defaults off and decodes off when the key is missing")
-    func collapseFinishedToolCallsDefaultsOff() throws {
-        #expect(!AppConfig.defaults.harness.acpCollapseFinishedToolCalls)
+    @Test("collapse finished tool calls defaults on and decodes on when the key is missing")
+    func collapseFinishedToolCallsDefaultsOn() throws {
+        #expect(AppConfig.defaults.harness.acpCollapseFinishedToolCalls)
         var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(AppConfig.defaults)) as? [String: Any])
         var harness = try #require(object["harness"] as? [String: Any])
         harness.removeValue(forKey: "acpCollapseFinishedToolCalls")
         object["harness"] = harness
         let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONSerialization.data(withJSONObject: object))
-        #expect(!decoded.harness.acpCollapseFinishedToolCalls)
+        #expect(decoded.harness.acpCollapseFinishedToolCalls)
     }
 
     @Test("blocker escalation delay defaults to 30 and decodes to 30 when the key is missing")
@@ -67,13 +67,13 @@ struct AppConfigHarnessTests {
         #expect(decoded.harness.acpDelegatedBlockerEscalationSeconds == 30)
     }
 
-    @Test("collapse finished tool calls round-trips when enabled")
+    @Test("collapse finished tool calls round-trips when disabled")
     func collapseFinishedToolCallsRoundTrip() throws {
         var cfg = AppConfig.defaults
-        cfg.harness.acpCollapseFinishedToolCalls = true
+        cfg.harness.acpCollapseFinishedToolCalls = false
         let data = try JSONEncoder().encode(cfg)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
-        #expect(decoded.harness.acpCollapseFinishedToolCalls)
+        #expect(!decoded.harness.acpCollapseFinishedToolCalls)
     }
 
     @Test("on-device titles can be disabled without disabling legacy configs")
