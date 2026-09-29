@@ -85,13 +85,24 @@ struct PluginHostRow: View {
     }
 }
 
-/// Owns the plugin manager for Phase 2: plugins start the first time this
-/// window opens and keep running after it closes, until the app quits.
+struct PluginsDebugRoot: View {
+    let state: AppState
+
+    var body: some View {
+        if let manager = state.pluginManager {
+            PluginsView(manager: manager)
+        } else {
+            Text("Plugins are off. Turn them on in Settings → Advanced.")
+                .frame(minWidth: 720, minHeight: 480)
+        }
+    }
+}
+
+/// Inspector window only: `AppState` owns the plugin manager.
 @MainActor
 final class PluginsWindowController: NSObject, NSWindowDelegate {
     static let shared = PluginsWindowController()
     private var window: NSWindow?
-    private var manager: PluginManager?
 
     func show(state: AppState) {
         if let window {
@@ -99,31 +110,18 @@ final class PluginsWindowController: NSObject, NSWindowDelegate {
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let manager = self.manager ?? makeManager(state: state)
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false)
         win.title = "Plugins"
         win.isReleasedWhenClosed = false
-        win.contentView = NSHostingView(rootView: PluginsView(manager: manager))
+        win.contentView = NSHostingView(rootView: PluginsDebugRoot(state: state))
         win.center()
         win.delegate = self
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         window = win
-    }
-
-    private func makeManager(state: AppState) -> PluginManager {
-        let manager = PluginManager(
-            projects: { [weak state] in state?.projects ?? [] },
-            actions: { [weak state] project in
-                state?.pluginHostActions(for: project)
-                    ?? .inert
-            })
-        self.manager = manager
-        Task { await manager.reload() }
-        return manager
     }
 
     func windowWillClose(_ notification: Notification) {

@@ -344,6 +344,8 @@ final class AppState {
     /// Observable so Settings and future Workspace navigation can keep the
     /// affected data visible instead of silently treating it as empty.
     private(set) var workspaceRecoveryError: WorkspaceRecoveryState?
+    /// Exists only while `config.pluginsEnabled` is on.
+    var pluginManager: PluginManager?
     var workspaceNavigationState = WorkspaceNavigationState()
     @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
     @ObservationIgnored private var worktreeStatusRescanTask: Task<Void, Never>?

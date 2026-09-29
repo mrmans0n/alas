@@ -128,6 +128,7 @@ struct RootView: View {
                 // Recovery launch avoids replaying the failed refresh, but still
                 // seeds project roots so tab and selection resolution can recover.
                 state.reloadTabs()
+                Task { await state.startPluginsIfEnabled() }
                 if state.selectedWorktreeId == nil {
                     state.selectInitialWorktree(
                         id: state.resolvedSelectionForActiveSpaceForStartup(),
