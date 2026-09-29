@@ -11925,6 +11925,13 @@ final class AppState {
         delegatedSessionParents[childID] = parentID
     }
 
+    /// The parent that delegated `sessionId`, from memory or the persisted
+    /// delegation record.
+    func delegatedParentSessionID(for sessionId: String) async -> String? {
+        if let parent = delegatedSessionParents[sessionId] { return parent }
+        return try? await acpOrchestrationPersistence.parent(childSessionId: sessionId)?.parentSessionId
+    }
+
     func nextPromptHasDelegatedWork(parentID: String) -> Bool {
         acpManagers.values.contains { manager in
             manager.sessions.values.contains { child in
@@ -12372,11 +12379,7 @@ final class AppState {
                 // no injection rather than a dead command for the agent.
                 let binaryPath = (try? TerminalCLIInjection.installExecutables())?
                     .appendingPathComponent(TerminalCLIInjection.executableName).path
-                let persistedParent = try? await self.acpOrchestrationPersistence.parent(
-                    childSessionId: sessionId
-                )
-                let parentSessionId = self.delegatedSessionParents[sessionId]
-                    ?? persistedParent?.parentSessionId
+                let parentSessionId = await self.delegatedParentSessionID(for: sessionId)
                 if let parentSessionId {
                     self.rememberDelegatedSessionParent(childID: sessionId, parentID: parentSessionId)
                 }
@@ -12527,11 +12530,7 @@ final class AppState {
         mgr.alasCLIEnvProvider = { [weak self] worktreePath, sessionId in
             guard let self else { return nil }
             let binDirPath = (try? TerminalCLIInjection.installExecutables())?.path
-            let persistedParent = try? await self.acpOrchestrationPersistence.parent(
-                childSessionId: sessionId
-            )
-            let parentSessionId = self.delegatedSessionParents[sessionId]
-                ?? persistedParent?.parentSessionId
+            let parentSessionId = await self.delegatedParentSessionID(for: sessionId)
             return AlasCLIEnvInjection.environment(
                 enabled: self.config.harness.exposeAlasMCP,
                 binDirPath: binDirPath,
@@ -12544,6 +12543,9 @@ final class AppState {
         }
         mgr.nativeSubagentsPreferenceProvider = { [weak self] agentId in
             self?.config.agents.nativeSubagentsDisabled(for: agentId) ?? false
+        }
+        mgr.delegatedChildProvider = { [weak self] sessionId in
+            await self?.delegatedParentSessionID(for: sessionId) != nil
         }
         mgr.externalMCPStatusProvider = { [weak self] worktreePath in
             guard let self else { return (.unknown, nil, [], [], []) }
