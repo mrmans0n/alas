@@ -111,4 +111,14 @@ struct FileContextMenuActionsTests {
         #expect(AppState.childPath(name: "README.md", directoryPath: "") == "README.md")
         #expect(AppState.childPath(name: "App.swift", directoryPath: "Sources") == "Sources/App.swift")
     }
+
+    @Test(arguments: [FileTreeNode.Kind.file, .dir])
+    func readOnlyTargetsOfferNoLocalOrWriteActions(kind: FileTreeNode.Kind) {
+        let configuration = FileContextMenuConfiguration.readOnlyFile(kind: kind)
+        #expect(configuration.target.localURL == nil)
+        let expected: [FileContextMenuAction] = kind == .file
+            ? [.openInAlas, .copyRelativePath, .copyFullPath]
+            : [.copyRelativePath, .copyFullPath]
+        #expect(configuration.actions == expected)
+    }
 }

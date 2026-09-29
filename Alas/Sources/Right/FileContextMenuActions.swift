@@ -52,6 +52,16 @@ struct FileContextMenuConfiguration: Equatable {
         if target.localURL != nil { actions.append(.revealInFinder) }
         return Self(target: target, actions: actions)
     }
+
+    /// A peer's worktree lives on another Mac: nothing on this disk to open
+    /// or reveal (even when the same path happens to exist here), and no
+    /// write actions to offer.
+    static func readOnlyFile(kind: FileTreeNode.Kind) -> Self {
+        var actions: [FileContextMenuAction] = []
+        if kind == .file { actions.append(.openInAlas) }
+        actions += [.copyRelativePath, .copyFullPath]
+        return Self(target: FileContextMenuTarget(kind: kind, localURL: nil), actions: actions)
+    }
 }
 
 struct FileContextMenuActions: View {

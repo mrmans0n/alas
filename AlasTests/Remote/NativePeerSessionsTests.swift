@@ -33,6 +33,18 @@ struct NativePeerSessionsTests {
         .init(id: id, title: id, agentId: "claude", status: status, canDrive: true)
     }
 
+    private func row(_ id: String, changedFiles: Int) -> RemoteSessionSummary {
+        .init(id: id, title: id, agentId: "claude", status: "idle", canDrive: true,
+              worktree: .init(projectName: "alas", worktreeName: "wt", branch: "feat", path: "/peer/wt",
+                              metricsAvailable: true, comparisonRef: "origin/main", commitCount: 1,
+                              changedFileCount: changedFiles, addedLines: changedFiles, deletedLines: 0,
+                              conflictCount: 0))
+    }
+
+    private func listChangesCount(_ links: FakeLinks, _ id: String) -> Int {
+        links.sent(to: "B").filter { $0 == .listChanges(sessionId: id) }.count
+    }
+
     private func elicitationField(
         _ key: String,
         type: String,
@@ -266,6 +278,194 @@ struct NativePeerSessionsTests {
         #expect(client.selectedSessionId == nil)
     }
 
+    @Test func selectingAPeerSessionLoadsItsWorktreeAndRoutesReplies() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        #expect(links.sent(to: "B").contains(.listChanges(sessionId: "s")))
+        #expect(links.sent(to: "B").contains(.listFiles(sessionId: "s", path: nil)))
+
+        links.receive(.changeList(sessionId: "s", comparisonRef: "origin/main", metricsAvailable: true,
+                                  files: [], staged: [], unstaged: [], commits: [], truncated: false), from: "B")
+        #expect(client.workspace.changes == .loaded(.init(
+            comparisonRef: "origin/main", branchFiles: [], staged: [], unstaged: [], commits: [],
+            truncated: false, commitsTruncated: false)))
+
+        client.open(.diff(path: "a.swift", stage: nil))
+        #expect(links.sent(to: "B").contains(.fileDiff(sessionId: "s", path: "a.swift", stage: nil)))
+        // Clicking the selected session again returns to the transcript.
+        client.select("B:s")
+        #expect(client.workspace.document == nil)
+    }
+
+    @Test func worktreeSummaryChangeRefreshesChanges() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        // Let the initial request complete, so a later summary change is
+        // not racing a request that's still outstanding.
+        links.receive(.changeList(sessionId: "s", comparisonRef: nil, metricsAvailable: true,
+                                  files: [], staged: [], unstaged: [], commits: [], truncated: false), from: "B")
+        let initial = listChangesCount(links, "s")
+
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        #expect(listChangesCount(links, "s") == initial)
+
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
+        #expect(listChangesCount(links, "s") == initial + 1)
+    }
+
+    @Test func secondChangesRefreshWhileFirstRefreshInFlightQueuesARetry() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        links.receive(.changeList(sessionId: "s", comparisonRef: nil, metricsAvailable: true,
+                                  files: [], staged: [], unstaged: [], commits: [], truncated: false), from: "B")
+        let afterInitialLoad = listChangesCount(links, "s")
+
+        // First refresh: nothing in flight, so this sends.
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
+        #expect(listChangesCount(links, "s") == afterInitialLoad + 1)
+
+        // Second refresh while the first is still outstanding: must not send
+        // a second request the peer's dedup would silently drop.
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 3)]), from: "B")
+        #expect(listChangesCount(links, "s") == afterInitialLoad + 1)
+
+        // The first refresh's reply lands — the queued retry must fire now.
+        links.receive(.changeList(sessionId: "s", comparisonRef: nil, metricsAvailable: true,
+                                  files: [], staged: [], unstaged: [], commits: [], truncated: false), from: "B")
+        #expect(listChangesCount(links, "s") == afterInitialLoad + 2)
+    }
+
+    @Test func worktreeSummaryChangeAlsoRefreshesTheFileTree() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        // Let the root listing finish loading, so a later summary change is
+        // re-requesting an already-loaded tree rather than one still in flight.
+        links.receive(.fileTree(sessionId: "s", path: nil, nodes: [], truncated: false), from: "B")
+        let listFilesCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .listFiles(sessionId: "s", path: nil) }.count
+        }
+        let initial = listFilesCount()
+
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
+        #expect(listFilesCount() == initial + 1)
+    }
+
+    @Test func worktreeSummaryChangeDuringRootLoadQueuesARetryOnReply() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s") // the root listFiles request is now in flight
+
+        let listFilesCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .listFiles(sessionId: "s", path: nil) }.count
+        }
+        let afterSelect = listFilesCount()
+
+        // A summary change arrives before the root listing's reply: blocked
+        // by the in-flight load, so nothing new is sent yet.
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
+        #expect(listFilesCount() == afterSelect)
+
+        // The (now-stale) reply for the first request arrives — this must
+        // queue an immediate retry instead of leaving the tree stale.
+        links.receive(.fileTree(sessionId: "s", path: nil, nodes: [], truncated: false), from: "B")
+        #expect(listFilesCount() == afterSelect + 1)
+    }
+
+    @Test func secondRootRefreshWhileFirstRefreshInFlightQueuesARetry() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        // Let the initial root load finish, so the tree is `.loaded` — the
+        // case `beginRootLoad()` always permits sending on its own.
+        links.receive(.fileTree(sessionId: "s", path: nil, nodes: [], truncated: false), from: "B")
+
+        let listFilesCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .listFiles(sessionId: "s", path: nil) }.count
+        }
+        let afterInitialLoad = listFilesCount()
+
+        // First refresh: the tree is loaded but nothing is in flight, so this sends.
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
+        #expect(listFilesCount() == afterInitialLoad + 1)
+
+        // Second refresh while the first is still outstanding: must not send
+        // a second request the peer's dedup would silently drop.
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 3)]), from: "B")
+        #expect(listFilesCount() == afterInitialLoad + 1)
+
+        // The first refresh's reply lands — the queued retry must fire now.
+        links.receive(.fileTree(sessionId: "s", path: nil, nodes: [], truncated: false), from: "B")
+        #expect(listFilesCount() == afterInitialLoad + 2)
+    }
+
+    @Test func switchingSessionsStartsAFreshWorkspace() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s"), row("t")]), from: "B")
+        client.select("B:s")
+        // "s" finishes loading and opens a document before the switch, so a
+        // missing reset would leave both visibly carried over into "t".
+        links.receive(.changeList(sessionId: "s", comparisonRef: "origin/main", metricsAvailable: true,
+                                  files: [], staged: [], unstaged: [], commits: [], truncated: false), from: "B")
+        client.open(.file(path: "a.swift"))
+        #expect(client.workspace.changes != .loading)
+        #expect(client.workspace.document != nil)
+
+        client.select("B:t")
+        #expect(client.workspace.changes == .loading)
+        #expect(client.workspace.document == nil)
+
+        // The earlier session's reply arrives late and must not land on "t".
+        links.receive(.changeList(sessionId: "s", comparisonRef: nil, metricsAvailable: true,
+                                  files: [], staged: [], unstaged: [], commits: [], truncated: false), from: "B")
+        #expect(client.workspace.changes == .loading)
+    }
+
     @Test func transcriptRevisionGapResubscribesUntilANewSnapshotArrives() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
@@ -316,6 +516,7 @@ struct NativePeerSessionsTests {
         links.offline("B")
         peers = [.init(serverId: "B", name: "Mac B", state: "offline")]
         client.refresh()
+        #expect(client.workspace.changes == .failed(NativePeerWorkspace.offlineMessage))
         #expect(client.snapshot.attentionCount == 0)
         #expect(client.snapshot.groups.first?.sessions.isEmpty == true)
         #expect(client.selectedSessionId == "B:s")
@@ -368,13 +569,188 @@ struct NativePeerSessionsTests {
         peers = [.init(serverId: "B", name: "Mac B", state: "online")]
         links.online("B", name: "Mac B")
         let subscriptionsBefore = links.sent(to: "B").filter { $0 == .subscribe(sessionId: "s") }.count
+        let changesBefore = listChangesCount(links, "s")
+        let listFilesCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .listFiles(sessionId: "s", path: nil) }.count
+        }
+        let filesBefore = listFilesCount()
         links.receive(.sessionList(sessions: [row("s")]), from: "B")
         let subscriptionsAfter = links.sent(to: "B").filter { $0 == .subscribe(sessionId: "s") }.count
         #expect(subscriptionsAfter == subscriptionsBefore + 1)
+        #expect(listChangesCount(links, "s") > changesBefore)
+        // The root file listing was in flight when the peer went offline;
+        // reconnecting must not leave it gated on a request that will never
+        // get a reply.
+        #expect(listFilesCount() > filesBefore)
         links.receive(.transcriptSnapshot(sessionId: "s", streamingState: "idle", canDrive: true,
                                           messages: [], firstIndex: 0, totalCount: 0, epoch: 1, revision: 0), from: "B")
         #expect(client.transcript?.canDrive == true)
         #expect(client.draft == "continue later")
+    }
+
+    @Test func openDocumentSurvivesAReconnectAndReplaysItsRequest() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        var peers = [RemoteHelloPeer(serverId: "B", name: "Mac B", state: "online")]
+        let client = NativePeerSessions(federation: federation, peers: { peers })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        client.open(.file(path: "a.swift"))
+        #expect(client.workspace.document == .file(path: "a.swift"))
+
+        links.offline("B")
+        peers = [.init(serverId: "B", name: "Mac B", state: "offline")]
+        client.refresh()
+        // Content is unreadable while offline, but the user's place is kept.
+        #expect(client.workspace.document == .file(path: "a.swift"))
+        #expect(client.workspace.documentContent == .failed(NativePeerWorkspace.offlineMessage))
+
+        peers = [.init(serverId: "B", name: "Mac B", state: "online")]
+        links.online("B", name: "Mac B")
+        let readFileCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .readFile(sessionId: "s", path: "a.swift") }.count
+        }
+        let before = readFileCount()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        // Reconnecting must not silently fall back to the transcript.
+        #expect(client.workspace.document == .file(path: "a.swift"))
+        #expect(readFileCount() == before + 1)
+    }
+
+    @Test func reloadWorkspaceQueuesRetriesWhenRequestsAreAlreadyInFlight() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s") // sends the initial listChanges and root listFiles
+
+        let changesCount: () -> Int = { listChangesCount(links, "s") }
+        let filesCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .listFiles(sessionId: "s", path: nil) }.count
+        }
+        let changesAfterSelect = changesCount()
+        let filesAfterSelect = filesCount()
+
+        // A manual "Refresh from peer" click while both are still outstanding
+        // must not resend yet, but must queue a retry.
+        client.reloadWorkspace()
+        #expect(changesCount() == changesAfterSelect)
+        #expect(filesCount() == filesAfterSelect)
+
+        // The original replies arrive — the queued retries must fire.
+        links.receive(.changeList(sessionId: "s", comparisonRef: nil, metricsAvailable: true,
+                                  files: [], staged: [], unstaged: [], commits: [], truncated: false), from: "B")
+        links.receive(.fileTree(sessionId: "s", path: nil, nodes: [], truncated: false), from: "B")
+        #expect(changesCount() == changesAfterSelect + 1)
+        #expect(filesCount() == filesAfterSelect + 1)
+    }
+
+    @Test func reloadWorkspaceAlsoRefreshesAnOpenDocument() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        client.open(.file(path: "a.swift"))
+        // Let the initial read complete, so the later summary change finds
+        // nothing in flight to gate on.
+        links.receive(.fileContents(sessionId: "s", path: "a.swift", text: "old", truncated: false), from: "B")
+
+        let readFileCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .readFile(sessionId: "s", path: "a.swift") }.count
+        }
+        let afterOpen = readFileCount()
+
+        // The peer edited the open file — its summary changes, and the open
+        // document should be re-requested along with changes and files.
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
+        #expect(readFileCount() == afterOpen + 1)
+    }
+
+    @Test func documentRefreshWhileInFlightQueuesARetry() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        client.open(.file(path: "a.swift")) // readFile is now in flight
+
+        let readFileCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .readFile(sessionId: "s", path: "a.swift") }.count
+        }
+        let afterOpen = readFileCount()
+
+        // Summary changes while the read is still outstanding: must not
+        // resend yet (the peer would drop the duplicate), but must queue
+        // a retry.
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
+        #expect(readFileCount() == afterOpen)
+
+        // The original reply arrives — the queued retry must fire now.
+        links.receive(.fileContents(sessionId: "s", path: "a.swift", text: "old", truncated: false), from: "B")
+        #expect(readFileCount() == afterOpen + 1)
+    }
+
+    @Test func openingADifferentDocumentIsNeverGatedByThePreviousOnesInFlightState() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        client.open(.file(path: "a.swift")) // readFile("a.swift") in flight, no reply yet
+
+        client.open(.file(path: "b.swift"))
+        #expect(links.sent(to: "B").contains(.readFile(sessionId: "s", path: "b.swift")))
+        #expect(client.workspace.document == .file(path: "b.swift"))
+    }
+
+    @Test func returningToAnEarlierDocumentWaitsForItsOriginalReplyRatherThanResending() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+
+        client.open(.file(path: "a.swift")) // readFile(a) in flight, no reply yet
+        client.open(.file(path: "b.swift")) // readFile(b) in flight, a's reply still pending
+
+        let readFileACount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .readFile(sessionId: "s", path: "a.swift") }.count
+        }
+        let afterFirstOpenOfA = readFileACount()
+
+        // Back to A, before its original reply ever arrived.
+        client.open(.file(path: "a.swift"))
+        #expect(client.workspace.document == .file(path: "a.swift"))
+        // Must not resend — the peer would drop the duplicate by request key.
+        #expect(readFileACount() == afterFirstOpenOfA)
+
+        // A's original (now-stale) reply finally arrives — must trigger a
+        // fresh request rather than silently standing in as current.
+        links.receive(.fileContents(sessionId: "s", path: "a.swift", text: "old", truncated: false), from: "B")
+        #expect(readFileACount() == afterFirstOpenOfA + 1)
     }
 
     @Test func planRejectionRequiresAndTrimsReason() {

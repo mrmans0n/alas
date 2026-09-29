@@ -284,6 +284,10 @@ struct RootView: View {
             RightPaneTransitionalView(state: state, worktree: wt, kind: .creating, collapsed: collapsed)
         case .createFailed(let wt):
             RightPaneTransitionalView(state: state, worktree: wt, kind: .createFailed, collapsed: collapsed)
+        case .peer:
+            if let client = state.nativePeerSessions {
+                NativePeerRightPaneView(state: state, client: client, collapsed: collapsed)
+            }
         }
     }
 
@@ -293,7 +297,9 @@ struct RootView: View {
             projects: state.navigationProjects,
             projectsManager: state.projectsManager,
             allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
-            checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope
+            checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope,
+            peerSessionId: state.nativePeerSessions?.selectedSessionId,
+            peerSessionHasWorktree: state.nativePeerSessions?.selectedRow?.worktree != nil
         ).resolve()
     }
 
@@ -308,15 +314,26 @@ struct RootView: View {
         rightPaneStartupSuppressed: Bool
     ) -> some View {
         if let client = state.nativePeerSessions, client.selectedSessionId != nil {
-            NativePeerSessionView(
-                client: client,
-                agentLookup: { state.agent(id: $0) },
-                typography: ACPChatTypography(
-                    fontFamily: state.config.agents.chatFontFamily,
-                    fontSize: state.config.agents.chatFontSize
+            if let document = client.workspace.document {
+                NativePeerDocumentView(
+                    document: document,
+                    content: client.workspace.documentContent,
+                    codeFontFamily: state.config.code.fontFamily,
+                    codeFontSize: CGFloat(state.config.code.fontSize),
+                    onClose: { client.closeDocument() }
                 )
-            )
-            .id(client.selectedSessionId)
+                .id(document)
+            } else {
+                NativePeerSessionView(
+                    client: client,
+                    agentLookup: { state.agent(id: $0) },
+                    typography: ACPChatTypography(
+                        fontFamily: state.config.agents.chatFontFamily,
+                        fontSize: state.config.agents.chatFontSize
+                    )
+                )
+                .id(client.selectedSessionId)
+            }
         } else {
             worktreeCenterContent(
                 effectiveRightPaneVisible: effectiveRightPaneVisible,
