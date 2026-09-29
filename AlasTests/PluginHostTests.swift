@@ -245,6 +245,14 @@ struct PluginHostTests {
         }
     }
 
+    @Test func aRestartedHostStartsWithAnEmptyLog() async throws {
+        let host = try makeHost([[.trap]])
+        await host.activate()
+        #expect(host.log.count == 1)
+        await host.activate()
+        #expect(host.log.count == 1, "the second instance should not show the first one's failure")
+    }
+
     /// The second case is a single grapheme cluster of 3,001 scalars, which a `Character` count would not cut.
     @Test(arguments: [
         String(repeating: "x", count: 3000),

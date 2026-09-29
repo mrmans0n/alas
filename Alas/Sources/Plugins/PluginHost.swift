@@ -83,6 +83,7 @@ final class PluginHost {
         guard !isRunning, state != .deactivating else { return }
         state = .activating
         trace = []
+        log = []
         do {
             let loaded = try await PluginRuntime.load(wasm: wasm, limits: limits)
             guard state == .activating else { return }  // deactivated while the module loaded
