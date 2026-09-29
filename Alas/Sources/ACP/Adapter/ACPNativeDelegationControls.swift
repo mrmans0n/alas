@@ -90,7 +90,7 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
         case .toolOmission(.claudeDisallowedTools):
             return "Removes Claude's Agent/Task and Workflow tools, and the "
                 + "SendMessage and ListAgents tools that reach other Claude Code "
-                + "sessions on this Mac, from the model's tool list. TaskStop is "
+                + "sessions on the same host, from the model's tool list. TaskStop is "
                 + "not affected. Delegated Claude sessions never get SendMessage "
                 + "or ListAgents, whether or not this is on; they report through "
                 + "Alas instead."
@@ -218,7 +218,7 @@ enum ACPNativeDelegationControls {
     /// Claude tools that start or orchestrate native subagents. Workflow
     /// runs scripted multi-agent jobs, so it is removed with Agent/Task.
     static let claudeNativeSubagentTools = ["Agent", "Task", "Workflow"]
-    /// Claude tools that reach other Claude Code sessions on this Mac,
+    /// Claude tools that reach other Claude Code sessions on the same host,
     /// outside Alas's parent/child authorization. Delegated children always
     /// lose them, because they must report through Alas's `session_send`.
     static let claudeCrossSessionTools = ["SendMessage", "ListAgents"]
