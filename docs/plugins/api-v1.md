@@ -57,7 +57,7 @@ The folder name does not matter to Alas. Only `id` identifies a plugin.
 | `version` | string | yes | Non-blank. Shown to the user; not interpreted. |
 | `api` | integer | yes | The plugin API version. Must be `1`. |
 | `entry` | string | yes | Path to the wasm file, relative to the plugin folder. Must not start with `/` or contain a `..` segment, and must name a regular file that, with symlinks resolved, lies inside the folder. A symlink as the file itself is not accepted. |
-| `capabilities` | array of strings | no | Capabilities the plugin wants. Each must be one listed below. |
+| `capabilities` | array of strings | no | Capabilities the plugin wants. Each must be one listed below. May be omitted, but not `null`. |
 
 Unknown fields are ignored. `contributes` is reserved for a later release and
 ignored today.
@@ -437,7 +437,9 @@ Sent as an error response to a plugin request. The plugin keeps running.
 | `-32003` | `unknown worktree <id>` | `worktree/switch` named a worktree that is not in this project. |
 
 Checks run in that order: an unknown method is reported before a missing
-capability, and a missing capability before bad params.
+capability, and a missing capability before bad params. Messages that would echo
+more than 2,000 Unicode code points of your input, such as a very long method
+name, are cut so the reply always fits the message limit.
 
 ### Why a plugin stops
 

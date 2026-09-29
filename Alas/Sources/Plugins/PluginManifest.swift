@@ -58,6 +58,20 @@ struct PluginManifest: Equatable, Sendable {
             let api: Int?
             let entry: String?
             let capabilities: [String]?
+
+            private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                id = try container.decodeIfPresent(String.self, forKey: .id)
+                name = try container.decodeIfPresent(String.self, forKey: .name)
+                version = try container.decodeIfPresent(String.self, forKey: .version)
+                api = try container.decodeIfPresent(Int.self, forKey: .api)
+                entry = try container.decodeIfPresent(String.self, forKey: .entry)
+                // Optional means omitted, not null: `"capabilities": null` is malformed, not "none requested".
+                capabilities = container.contains(.capabilities)
+                    ? try container.decode([String].self, forKey: .capabilities) : nil
+            }
         }
         let raw: Raw
         do {

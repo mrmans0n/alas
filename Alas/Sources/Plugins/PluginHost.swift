@@ -268,8 +268,10 @@ final class PluginHost {
     }
 
     private func errorReply(_ id: JSONRPCID, code: Int, _ message: String) -> Data {
+        // Messages echo plugin-controlled text (a method name, a worktree id). Bounding it keeps the reply
+        // inside the message limit, so a refused request is answered instead of stopping the plugin.
         encode(PluginResponse<PluginEmptyPayload>(
-            id: id, result: nil, error: JSONRPCError(code: code, message: message, data: nil)))
+            id: id, result: nil, error: JSONRPCError(code: code, message: Self.bounded(message), data: nil)))
     }
 
     /// Method names like `workspace/changed` must reach plugins unescaped.

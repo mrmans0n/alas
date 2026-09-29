@@ -210,6 +210,20 @@ struct PluginHostTests {
         #expect(reason.unicodeScalars.count <= "plugin rejected activation: ".unicodeScalars.count + PluginHost.logMessageLimit)
     }
 
+    /// The request fits the 4,096-byte test limit (4,086 bytes) but a reply that echoed the whole
+    /// method name would not (4,129 bytes), which used to stop the plugin instead of answering it.
+    @Test func anErrorReplyThatEchoesAnOversizedMethodStillFits() async throws {
+        let method = String(repeating: "m", count: 4050)
+        let host = try makeHost([[
+            .send(activateOK),
+            .send(#"{"jsonrpc":"2.0","id":1,"method":"\#(method)"}"#),
+        ]])
+        await host.activate()
+        #expect(host.state == .active)
+        // The trace keeps 2,000 bytes and key order is not fixed, so check the text at the start of the message.
+        #expect(lastReply(host)?.contains("method not found") == true)
+    }
+
     /// The second case is a single grapheme cluster of 3,001 scalars, which a `Character` count would not cut.
     @Test(arguments: [
         String(repeating: "x", count: 3000),
