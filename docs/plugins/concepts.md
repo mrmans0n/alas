@@ -53,7 +53,8 @@ does not answer is stopped.
 
 ## Lifecycle
 
-An instance moves through these states, which **Debug → Plugins…** shows per row:
+An instance moves through these states, which **Settings → Plugins** shows per project
+(as Loaded, Starting, Active, Stopping, Stopped, and `Stopped: <reason>` for failed):
 
 ```
  loaded → activating → active → deactivating → stopped

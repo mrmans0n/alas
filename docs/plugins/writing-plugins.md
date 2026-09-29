@@ -131,8 +131,9 @@ state and compare. Alas does not send differences.
 
 ## Logging and debugging
 
-- Send `log` messages, and read them under **Debug → Plugins…**. Open **Messages**
-  on a row for the raw JSON in both directions.
+- Send `log` messages, and read them in **Settings → Plugins** under each
+  project's instance. In Debug builds of Alas, **Debug → Plugins…** also has
+  **Messages** on each row, with the raw JSON in both directions.
 - **A call that fails loses its own output**, `log` included. If a plugin traps,
   the lines it logged during that same message are gone. Log what you are about to
   do in an earlier message, or look at the last **Messages** entry to see which

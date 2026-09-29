@@ -75,7 +75,7 @@ Alas checks a manifest in this order and reports the first problem:
 6. `entry` is a relative path that stays inside the folder.
 
 Then the entry file must exist. A folder that fails any check is listed under
-**Not loaded** in **Debug → Plugins…** with the reason and is never run. See
+**Not loaded** in **Settings → Plugins** with the reason and is never run. See
 [Manifest and discovery errors](#manifest-and-discovery-errors) for the messages.
 
 ### Capabilities
@@ -228,8 +228,9 @@ Sent as a notification, with no params, when Alas is about to discard the
 instance. Use it to clean up. Whatever you send in response is ignored, and the
 instance is discarded afterwards regardless.
 
-Alas sends it when the plugin is reloaded or restarted from **Debug → Plugins…**.
-It is not yet sent when a project is removed or Alas quits.
+Alas sends it on **Rescan** or **Restart**, when the plugin is disabled or its
+approval revoked, when plugins are turned off in settings, and when the plugin's
+project is removed. It is not sent when Alas quits.
 
 #### `workspace/changed`
 
@@ -286,7 +287,7 @@ exists in the project.
 
 #### `log`
 
-Writes a line to the plugin's log in **Debug → Plugins…**. A notification: there
+Writes a line to the plugin's log, shown in **Settings → Plugins**. A notification: there
 is no response.
 
 ```json
@@ -445,7 +446,7 @@ name, are cut so the reply always fits the message limit.
 
 ### Why a plugin stops
 
-The plugin is discarded and the row shows `Plugin stopped: <reason>`. **Restart**
+The plugin is discarded and its instance shows `Stopped: <reason>`. **Restart**
 starts a fresh instance.
 
 | Reason | Cause |
@@ -494,8 +495,8 @@ Shown next to the folder under **Not loaded**. The plugin does not run.
 | String request `id` | 256 bytes | The plugin is stopped. |
 | Calls into the plugin per delivery | 64 | The plugin is stopped. |
 | `log` message length | 2,000 Unicode code points | Truncated. |
-| Log lines kept per instance | 200 | Oldest dropped. **Debug → Plugins…** shows the latest 5. |
-| Messages kept in the trace | 100 | Oldest dropped. **Debug → Plugins…** shows the latest 20, each cut to 2,000 bytes. |
+| Log lines kept per instance | 200 | Oldest dropped. **Settings → Plugins** shows them all; **Debug → Plugins…** the latest 5. |
+| Messages kept in the trace | 100 | Oldest dropped. **Debug → Plugins…** (Debug builds only) shows the latest 20, each cut to 2,000 bytes. |
 
 On an optimized build of Alas, 25,000,000 fuel is on the order of 50 ms of tight
 Wasm execution. Debug builds of Alas run the interpreter unoptimized, hundreds of

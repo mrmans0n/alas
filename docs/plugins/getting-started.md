@@ -5,9 +5,7 @@ It takes about ten minutes, most of it the first build.
 
 ## Before you start
 
-- A **Debug build of Alas**, running. The **Debug** menu, and with it
-  **Plugins…**, exists only in Debug builds. See *Develop* in the
-  [README](../../README.md#develop) for how to build from source.
+- **Alas**, running.
 - **Rust** with the WebAssembly target:
 
   ```bash
@@ -39,8 +37,8 @@ This compiles the plugin and copies two files into Alas's plugins folder:
    *Read this project's worktrees and what their agent sessions are doing*.
 3. Click **Approve…**.
 
-**Debug → Plugins…** stays available as the message inspector, where each
-instance's state and log lines show.
+In Debug builds of Alas, **Debug → Plugins…** is also available as a message
+inspector.
 
 Plugins never run until you approve them. Alas remembers the approval against the
 exact bytes of `plugin.json` and `plugin.wasm`, so changing either file asks
@@ -48,13 +46,14 @@ again. See [Concepts → Trust](concepts.md#trust-and-approval).
 
 ## 3. See what it does
 
-Every project in Alas gets its own instance of the plugin, shown as a row with
-its state. You should see **active** and log lines like these:
+Every project in Alas gets its own instance of the plugin. **Settings → Plugins**
+lists them under the plugin as `<project>: <state>`. You should see
+`my-project: Active`; expand it for log lines like these:
 
 ```
-[info] activated for "my-project"
+[info] activated for my-project
 [info] snapshot: 3 worktrees, 2 sessions (1 running)
-[warn] worktree/switch replied {"code":-32001,"message":"capability not granted: worktree.switch"}
+[warn] worktree/switch replied -32001 capability not granted: worktree.switch
 ```
 
 - The first line is the plugin acknowledging that Alas started it.
@@ -67,8 +66,9 @@ Now change something. Start an agent session, or let one change state (start
 working, or stop to ask for permission). Within about a second a `changed: …`
 line appears.
 
-Open **Messages** on the row to see every JSON message going in each direction,
-`→` to the plugin and `←` from it. This is the fastest way to learn the protocol.
+In a Debug build of Alas, open **Debug → Plugins…** and then **Messages** on the
+row to see every JSON message going in each direction, `→` to the plugin and `←`
+from it. This is the fastest way to learn the protocol.
 
 ## 4. Make your own
 

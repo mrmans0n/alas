@@ -5,12 +5,14 @@ one character per agent session. It uses plugin API 2 (canvas tabs).
 
 ## Build and install
 
+From the repository root:
+
 ```bash
 rustup target add wasm32-unknown-unknown
-./build.sh
+plugins/pixel-office/build.sh
 ```
 
-`build.sh` installs into `~/Library/Application Support/Alas/Plugins/pixel-office`.
+`build.sh` works from any directory and installs into `~/Library/Application Support/Alas/Plugins/pixel-office`.
 
 Then turn on **Settings → Debug → Experimental → Plugins** (the section is
 called Advanced in the config and appears as **Debug** in the sidebar; it only

@@ -75,9 +75,8 @@ tab's click regions. Coordinates are frame pixels.
 - `id` is truncated to 64 bytes and `label` to 200 Unicode scalars. A truncated id
   will not round-trip in `canvas/click`, so keep ids short.
 - The host does not range-check `rect` values. Keep them inside the frame.
-- A `tab` out of range, or params that do not decode (including a `rect` that is not exactly 4
-  integers), is malformed and stops
-  the plugin.
+- A `tab` out of range, or params that do not decode (including a `rect` that is
+  not exactly 4 integers), is malformed and stops the plugin.
 - Regions stay as they are when a frame of a different size arrives, until you
   send new ones.
 

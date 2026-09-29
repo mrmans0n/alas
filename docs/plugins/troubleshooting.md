@@ -1,8 +1,10 @@
 # Troubleshooting
 
-Find your symptom, read the cause, apply the fix. Everything Alas tells you about
-a plugin is in **Debug → Plugins…**: the state of each row, its log lines, and
-under **Messages** the JSON that went in each direction. Start there.
+Find your symptom, read the cause, apply the fix. Start in **Settings → Plugins**:
+it lists every plugin, anything under **Not loaded** with the reason, and per
+project the instance's state with its log lines in a disclosure. In Debug builds
+of Alas, **Debug → Plugins…** also shows, under **Messages**, the JSON that went
+in each direction.
 
 For the full list of messages and what triggers them, see
 [Errors](api-v1.md#6-errors).
@@ -17,16 +19,16 @@ Anything under **Not loaded** shows the folder name and the reason.
 | `plugin.json is not a valid JSON object` | Syntax error in the manifest. | Validate the JSON, for example with `python3 -m json.tool plugin.json`. |
 | `plugin.json is missing "<field>"` | A required field is absent or blank. | Add `id`, `name`, `version`, `api` and `entry`. |
 | `invalid plugin id "…"` | The id is not reverse-DNS. | Use lowercase letters, digits and `-`, in at least two dot-separated segments, such as `com.example.my-plugin`. |
-| `requires plugin API 2; this Alas supports 1` | `api` is not `1`. | Set `"api": 1`. |
-| `unknown capability "…"` | A typo, or a capability this Alas does not have. | Use `workspace.read` or `worktree.switch`. |
+| `requires plugin API 3; this Alas supports 1, 2` | `api` is not `1` or `2`. | Set `"api": 1`, or `2` for canvas tabs. |
+| `unknown capability "…"` | A typo, or a capability this Alas does not have. | Use `workspace.read`, `worktree.switch` or `session.focus`. |
 | `entry "…" must be a relative path inside the plugin folder` | `entry` is absolute, uses `..`, or **the file does not exist, is a symlink, or resolves outside the folder**. | Check the path, and that the build actually copied the wasm file. |
 | `duplicate plugin id …` | Two folders declare the same `id`. | Remove or change one. Neither loads until you do. |
 
 Nothing at all, not even under **Not loaded**? The folder is not in
-`~/Library/Application Support/Alas/Plugins/`, or you have not clicked **Reload**
+`~/Library/Application Support/Alas/Plugins/`, or you have not clicked **Rescan**
 since adding it.
 
-## "Approve and run" appears again
+## "Approve…" appears again
 
 Expected after any change to `plugin.json` or the wasm file. Approval is tied to
 the exact bytes of both, so a rebuild asks again. See
@@ -38,7 +40,7 @@ produces different bytes, so each one needs approving.
 
 ## The plugin stops as soon as it starts
 
-The row shows `Plugin stopped: <reason>`.
+The instance shows `Stopped: <reason>`.
 
 | Reason | Cause | Fix |
 |---|---|---|
@@ -65,8 +67,8 @@ The row shows `Plugin stopped: <reason>`.
 | `plugin sent more than 64 messages in one call` | Too many `alas.send` calls in one `alas_handle`. | Combine work into fewer messages. |
 | `plugin exceeded 64 round trips in one delivery` | The plugin keeps requesting and each reply triggers another request. | Break the chain. Ask again on the next `workspace/changed` instead of immediately. |
 
-After fixing the cause, click **Restart** on the row. If you rebuilt the plugin,
-click **Reload**, and approve it again.
+After fixing the cause, click **Restart** on the instance. If you rebuilt the plugin,
+click **Rescan**, and approve it again.
 
 ## A request comes back with an error
 
@@ -74,7 +76,7 @@ The plugin keeps running. The error is in the response, visible under **Messages
 
 | Code and message | Cause | Fix |
 |---|---|---|
-| `-32001 capability not granted: worktree.switch` | The plugin was not granted that capability. | Add it to `capabilities` in `plugin.json`, then **Reload** and **Approve and run** again. Changing the manifest resets approval, so an old approval never covers a new capability. |
+| `-32001 capability not granted: worktree.switch` | The plugin was not granted that capability. | Add it to `capabilities` in `plugin.json`, then **Rescan** and **Approve…** again. Changing the manifest resets approval, so an old approval never covers a new capability. |
 | `-32601 method not found: …` | A typo in the method name, or a method this Alas does not have. | Compare with the [method list](api-v1.md#summary). |
 | `-32602 invalid params for worktree/switch` | `params.id` is missing or not a string. | Send `{"id": "<worktree id from the snapshot>"}`. |
 | `-32003 unknown worktree …` | The id is not a worktree of this plugin's project. | Take the id from the latest snapshot. Worktrees can be removed while you hold an old id. |
@@ -85,7 +87,8 @@ The plugin keeps running. The error is in the response, visible under **Messages
   capability, granted at approval. Check the plugin's `grants` in the
   `alas/activate` message under **Messages**. Then remember that changes are
   checked twice a second, and only *differences* are sent.
-- **You do not see your `log` lines.** The row shows only the latest five. A
+- **You do not see your `log` lines.** Alas keeps the latest 200 per instance
+  (the Debug window shows only the latest five). A
   `log` needs a `level` of `debug`, `info`, `warn` or `error` and a string `message`, or it is dropped silently. And a
   call that fails discards the log lines it sent.
 - **State is missing after a restart.** Expected. A restart is a fresh instance
@@ -103,4 +106,4 @@ The plugin keeps running. The error is in the response, visible under **Messages
 - **Forget every approval:** `defaults delete io.nlopez.alas pluginApprovals.v1`
   and relaunch Alas.
 - **Remove a plugin:** delete its folder from
-  `~/Library/Application Support/Alas/Plugins/`, then click **Reload**.
+  `~/Library/Application Support/Alas/Plugins/`, then click **Rescan**.
