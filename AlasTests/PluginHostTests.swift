@@ -55,6 +55,7 @@ struct PluginHostTests {
         ([.send(#"{"jsonrpc":"2.0","id":0}"#)], "malformed"),
         ([.send(#"{"jsonrpc":"2.0","id":0,"result":{},"error":{"code":1,"message":"x"}}"#)], "malformed"),
         ([.send(#"{"jsonrpc":"2.0","id":0,"result":{},"error":null}"#)], "malformed"),
+        ([.send(#"{"jsonrpc":"2.0","method":null,"id":0,"result":{}}"#)], "malformed"),
         ([.trap], "unreachable"),
     ])
     func activationFailuresStopThePlugin(steps: [PluginFixtureStep], fragment: String) async throws {

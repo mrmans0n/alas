@@ -41,9 +41,7 @@ final class PluginManager {
     @ObservationIgnored private let actions: (ProjectConfig) -> PluginHostActions
     @ObservationIgnored private var snapshotTask: Task<Void, Never>?
     @ObservationIgnored private var lastSnapshots: [HostKey: PluginWorkspaceSnapshot] = [:]
-    /// Bumped by every `reload()`, so a superseded reload or `start` stops instead of
-    /// installing hosts built from the previous plugin list.
-    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var lastOperation: Task<Void, Never> = Task {}
 
     init(
         directory: URL = PluginManager.defaultDirectory,
@@ -67,43 +65,61 @@ final class PluginManager {
             .sorted { $0.host.project.name < $1.host.project.name }
     }
 
+    /// Runs `operation` after every earlier one has finished, so reload, approve and restart never
+    /// interleave across their suspension points and act on a plugin list that has since changed.
+    private func serialized(_ operation: @escaping @MainActor () async -> Void) async {
+        let previous = lastOperation
+        let current = Task { @MainActor in
+            await previous.value
+            await operation()
+        }
+        lastOperation = current
+        await current.value
+    }
+
     /// Stops everything, rescans the folder, and starts approved plugins for
     /// every project. Projects added later need another reload (Debug-only for now).
     func reload() async {
-        generation += 1
-        let mine = generation
+        await serialized { await self.performReload() }
+    }
+
+    /// Approves `plugin` as shown to the user. Ignored when a rescan has since found different files,
+    /// because the new version is a different plugin that has not been approved.
+    func approve(_ plugin: Plugin) async {
+        await serialized { await self.performApprove(plugin) }
+    }
+
+    func restart(_ key: HostKey) async {
+        await serialized { await self.performRestart(key) }
+    }
+
+    private func performReload() async {
         snapshotTask?.cancel()
         for host in hostsByKey.values { await host.deactivate() }
-        guard mine == generation else { return }
         hostsByKey = [:]
         lastSnapshots = [:]
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         (plugins, invalid) = Self.discover(in: directory)
-        for plugin in plugins where isApproved(plugin) {
-            await start(plugin)
-            guard mine == generation else { return }
-        }
+        for plugin in plugins where isApproved(plugin) { await start(plugin) }
         startSnapshotLoop()
     }
 
-    func approve(_ plugin: Plugin) async {
+    private func performApprove(_ plugin: Plugin) async {
+        guard plugins.contains(where: { $0.id == plugin.id && $0.hash == plugin.hash }) else { return }
         approvals.approve(PluginApproval(id: plugin.id, hash: plugin.hash, capabilities: plugin.manifest.capabilities))
         await start(plugin)
     }
 
-    func restart(_ key: HostKey) async {
+    private func performRestart(_ key: HostKey) async {
         guard let host = hostsByKey[key] else { return }
         await host.deactivate()
-        guard hostsByKey[key] === host else { return }  // a reload replaced it meanwhile
         lastSnapshots[key] = nil
         await host.activate()
     }
 
     private func start(_ plugin: Plugin) async {
         guard let approval = approvals.approval(id: plugin.id, hash: plugin.hash) else { return }
-        let mine = generation
         for project in projects() {
-            guard mine == generation else { return }
             let key = HostKey(pluginID: plugin.id, projectID: project.id)
             guard hostsByKey[key] == nil else { continue }
             let host = PluginHost(

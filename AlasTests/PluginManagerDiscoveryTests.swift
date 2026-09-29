@@ -37,4 +37,39 @@ struct PluginManagerDiscoveryTests {
         #expect(result.plugins.map(\.id) == ["io.x.good"])
         #expect(Set(result.invalid.map(\.folder.lastPathComponent)) == ["no-wasm", "dup-a", "dup-b", "linked-out", "linked-dir"])
     }
+
+    /// The user approves what a row showed. If the files changed and were rescanned since, that
+    /// approval must not start the old bytes or leave the new ones looking approved.
+    @MainActor
+    @Test func approvingAStaleRowStartsNothing() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "PluginStaleApproval-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "PluginManagerTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        func install(_ wasm: [UInt8]) throws {
+            let dir = root.appending(path: "p")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data(#"{"id":"io.x.p","name":"P","version":"1","api":1,"entry":"plugin.wasm"}"#.utf8)
+                .write(to: dir.appending(path: "plugin.json"))
+            try Data(wasm).write(to: dir.appending(path: "plugin.wasm"))
+        }
+        let activate = #"{"jsonrpc":"2.0","id":0,"result":{}}"#
+        let project = ProjectConfig(id: "proj", name: "Project", path: "/tmp/proj", color: "blue", addedAt: Date())
+        let manager = PluginManager(
+            directory: root, approvals: PluginApprovalStore(defaults: defaults),
+            projects: { [project] },
+            actions: { _ in PluginHostActions(snapshot: { PluginWorkspaceSnapshot(worktrees: []) }, switchWorktree: { _ in false }) })
+
+        try install(try PluginWATFixture.wasm([[.send(activate)]]))
+        await manager.reload()
+        let staleRow = try #require(manager.plugins.first)
+
+        try install(try PluginWATFixture.wasm([[.send(activate), .send(activate)]]))
+        await manager.reload()
+        await manager.approve(staleRow)
+
+        #expect(manager.hostsByKey.isEmpty)
+        #expect(manager.plugins.first.map(manager.isApproved) == false)
+    }
 }
