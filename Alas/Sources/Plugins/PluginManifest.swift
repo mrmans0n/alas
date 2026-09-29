@@ -3,14 +3,22 @@ import Foundation
 enum PluginCapability: String, Codable, CaseIterable, Sendable, Hashable {
     case workspaceRead = "workspace.read"
     case worktreeSwitch = "worktree.switch"
+    case sessionFocus = "session.focus"
 
     /// Plain-language description shown when the user approves a plugin.
     var summary: String {
         switch self {
         case .workspaceRead: "Read this project's worktrees and what their agent sessions are doing"
         case .worktreeSwitch: "Switch the selected worktree"
+        case .sessionFocus: "Open agent sessions in this project"
         }
     }
+}
+
+/// A canvas tab the plugin draws with `alas.present`. API 2 and later.
+struct PluginTabContribution: Equatable, Sendable {
+    let id: String
+    let title: String
 }
 
 enum PluginManifestError: Error, Equatable, CustomStringConvertible {
@@ -20,6 +28,7 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
     case unsupportedAPI(Int)
     case unknownCapability(String)
     case invalidEntry(String)
+    case invalidTab(String)
 
     var description: String {
         switch self {
@@ -35,13 +44,17 @@ enum PluginManifestError: Error, Equatable, CustomStringConvertible {
             "unknown capability \"\(name)\""
         case .invalidEntry(let entry):
             "entry \"\(entry)\" must be a relative path inside the plugin folder"
+        case .invalidTab(let reason):
+            "invalid tab contribution: \(reason)"
         }
     }
 }
 
 /// `plugin.json`. Unknown fields are ignored so newer manifests still load.
 struct PluginManifest: Equatable, Sendable {
-    static let supportedAPIVersions = [1]
+    static let supportedAPIVersions = [1, 2]
+    static let maxTabs = 4
+    static let maxTabTitleLength = 40
 
     let id: String
     let name: String
@@ -49,30 +62,9 @@ struct PluginManifest: Equatable, Sendable {
     let api: Int
     let entry: String
     let capabilities: [PluginCapability]
+    var tabs: [PluginTabContribution] = []
 
     static func parse(_ data: Data) throws(PluginManifestError) -> PluginManifest {
-        struct Raw: Decodable {
-            let id: String?
-            let name: String?
-            let version: String?
-            let api: Int?
-            let entry: String?
-            let capabilities: [String]?
-
-            private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities }
-
-            init(from decoder: Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                id = try container.decodeIfPresent(String.self, forKey: .id)
-                name = try container.decodeIfPresent(String.self, forKey: .name)
-                version = try container.decodeIfPresent(String.self, forKey: .version)
-                api = try container.decodeIfPresent(Int.self, forKey: .api)
-                entry = try container.decodeIfPresent(String.self, forKey: .entry)
-                // Optional means omitted, not null: `"capabilities": null` is malformed, not "none requested".
-                capabilities = container.contains(.capabilities)
-                    ? try container.decode([String].self, forKey: .capabilities) : nil
-            }
-        }
         let raw: Raw
         do {
             raw = try JSONDecoder().decode(Raw.self, from: data)
@@ -102,7 +94,59 @@ struct PluginManifest: Equatable, Sendable {
         guard !entry.hasPrefix("/"), !entry.split(separator: "/").contains("..") else {
             throw .invalidEntry(entry)
         }
+        // `contributes` is inert before API 2, so older manifests are not validated against it.
+        let tabs = api >= 2 ? try parseTabs(raw.contributes?.tabs ?? []) : []
         return PluginManifest(
-            id: id, name: name, version: version, api: api, entry: entry, capabilities: capabilities)
+            id: id, name: name, version: version, api: api, entry: entry,
+            capabilities: capabilities, tabs: tabs)
+    }
+
+    private static func parseTabs(_ raw: [Raw.RawTab]) throws(PluginManifestError) -> [PluginTabContribution] {
+        guard raw.count <= maxTabs else { throw .invalidTab("at most \(maxTabs) tabs") }
+        var tabs: [PluginTabContribution] = []
+        for entry in raw {
+            let id = entry.id ?? ""
+            guard id.wholeMatch(of: /[a-z0-9-]+(\.[a-z0-9-]+)*/) != nil else { throw .invalidTab("invalid tab id \"\(id)\"") }
+            guard !tabs.contains(where: { $0.id == id }) else { throw .invalidTab("duplicate tab id \"\(id)\"") }
+            let title = (entry.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (1...maxTabTitleLength).contains(title.count) else {
+                throw .invalidTab("tab \"\(id)\" needs a title of 1 to \(maxTabTitleLength) characters")
+            }
+            tabs.append(PluginTabContribution(id: id, title: title))
+        }
+        return tabs
+    }
+}
+
+private struct Raw: Decodable {
+    struct RawTab: Decodable {
+        let id: String?
+        let title: String?
+    }
+    struct RawContributes: Decodable {
+        let tabs: [RawTab]?
+    }
+
+    let id: String?
+    let name: String?
+    let version: String?
+    let api: Int?
+    let entry: String?
+    let capabilities: [String]?
+    let contributes: RawContributes?
+
+    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, contributes }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        version = try container.decodeIfPresent(String.self, forKey: .version)
+        api = try container.decodeIfPresent(Int.self, forKey: .api)
+        entry = try container.decodeIfPresent(String.self, forKey: .entry)
+        // Optional means omitted, not null: `"capabilities": null` is malformed, not "none requested".
+        capabilities = container.contains(.capabilities)
+            ? try container.decode([String].self, forKey: .capabilities) : nil
+        contributes = try container.decodeIfPresent(RawContributes.self, forKey: .contributes)
     }
 }

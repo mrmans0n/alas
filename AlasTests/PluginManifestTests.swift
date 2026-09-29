@@ -17,7 +17,11 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":" ","version":"1","api":1,"entry":"p.wasm"}"#, .missingField("name")),
         (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":1,"entry":"p.wasm"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":1,"entry":"p.wasm"}"#, .invalidID("Hello")),
-        (#"{"id":"io.x.h","name":"H","version":"1","api":2,"entry":"p.wasm"}"#, .unsupportedAPI(2)),
+        (#"{"id":"io.x.h","name":"H","version":"1","api":3,"entry":"p.wasm"}"#, .unsupportedAPI(3)),
+        (#"{"id":"io.x.h","name":"H","version":"1","api":2,"entry":"p.wasm","contributes":{"tabs":[{"id":"a","title":"A"},{"id":"a","title":"B"}]}}"#, .invalidTab("duplicate tab id \"a\"")),
+        (#"{"id":"io.x.h","name":"H","version":"1","api":2,"entry":"p.wasm","contributes":{"tabs":[{"id":"a","title":" "}]}}"#, .invalidTab("tab \"a\" needs a title of 1 to 40 characters")),
+        (#"{"id":"io.x.h","name":"H","version":"1","api":2,"entry":"p.wasm","contributes":{"tabs":[{"id":"A!","title":"T"}]}}"#, .invalidTab("invalid tab id \"A!\"")),
+        (#"{"id":"io.x.h","name":"H","version":"1","api":2,"entry":"p.wasm","contributes":{"tabs":[{"id":"a","title":"T"},{"id":"b","title":"T"},{"id":"c","title":"T"},{"id":"d","title":"T"},{"id":"e","title":"T"}]}}"#, .invalidTab("at most 4 tabs")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":1,"entry":"p.wasm","capabilities":["network"]}"#, .unknownCapability("network")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":1,"entry":"p.wasm","capabilities":null}"#, .malformed),
         (#"{"id":"io.x.h","name":"H","version":"1","api":1,"entry":"../p.wasm"}"#, .invalidEntry("../p.wasm")),
@@ -28,6 +32,15 @@ struct PluginManifestTests {
     }
 
     @Test func unsupportedAPIMessageNamesBothVersions() {
-        #expect(PluginManifestError.unsupportedAPI(2).description == "requires plugin API 2; this Alas supports 1")
+        #expect(PluginManifestError.unsupportedAPI(3).description == "requires plugin API 3; this Alas supports 1, 2")
+    }
+
+    @Test func apiTwoManifestsDeclareTabsAndApiOneManifestsIgnoreThem() throws {
+        let tabs = #""contributes":{"tabs":[{"id":"office","title":"Office"}]}"#
+        let v2 = try PluginManifest.parse(Data(#"{"id":"io.x.h","name":"H","version":"1","api":2,"entry":"p.wasm","capabilities":["session.focus"],\#(tabs)}"#.utf8))
+        #expect(v2.tabs == [PluginTabContribution(id: "office", title: "Office")])
+        #expect(v2.capabilities == [.sessionFocus])
+        let v1 = try PluginManifest.parse(Data(#"{"id":"io.x.h","name":"H","version":"1","api":1,"entry":"p.wasm",\#(tabs)}"#.utf8))
+        #expect(v1.tabs.isEmpty)
     }
 }
