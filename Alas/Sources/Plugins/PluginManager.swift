@@ -153,7 +153,11 @@ final class PluginManager {
                 let manifestData = try Data(contentsOf: folder.appending(path: "plugin.json"))
                 let manifest = try PluginManifest.parse(manifestData)
                 let entry = folder.appending(path: manifest.entry)
-                guard (try? entry.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+                // `folder` is already resolved, so the resolved entry must stay beneath it. That catches a
+                // symlinked directory in the path; the regular-file check catches a symlink as the file.
+                guard entry.resolvingSymlinksInPath().path.hasPrefix(folder.path + "/"),
+                      (try? entry.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+                else {
                     throw PluginManifestError.invalidEntry(manifest.entry)
                 }
                 let wasm = try Data(contentsOf: entry)

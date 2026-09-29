@@ -56,7 +56,7 @@ The folder name does not matter to Alas. Only `id` identifies a plugin.
 | `name` | string | yes | Non-blank. Shown to the user. |
 | `version` | string | yes | Non-blank. Shown to the user; not interpreted. |
 | `api` | integer | yes | The plugin API version. Must be `1`. |
-| `entry` | string | yes | Path to the wasm file, relative to the plugin folder. Must not start with `/` or contain a `..` segment, and must name a regular file. A symlink is not accepted, even one that points inside the folder. |
+| `entry` | string | yes | Path to the wasm file, relative to the plugin folder. Must not start with `/` or contain a `..` segment, and must name a regular file that, with symlinks resolved, lies inside the folder. A symlink as the file itself is not accepted. |
 | `capabilities` | array of strings | no | Capabilities the plugin wants. Each must be one listed below. |
 
 Unknown fields are ignored. `contributes` is reserved for a later release and

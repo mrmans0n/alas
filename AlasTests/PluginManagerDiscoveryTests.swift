@@ -6,10 +6,10 @@ struct PluginManagerDiscoveryTests {
     @Test func invalidAndDuplicateFoldersAreReportedAndNotLoaded() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "PluginDiscovery-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        func install(_ folder: String, id: String, wasm: Bool = true) throws {
+        func install(_ folder: String, id: String, wasm: Bool = true, entry: String = "plugin.wasm") throws {
             let dir = root.appending(path: folder)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try Data(#"{"id":"\#(id)","name":"N","version":"1","api":1,"entry":"plugin.wasm"}"#.utf8)
+            try Data(#"{"id":"\#(id)","name":"N","version":"1","api":1,"entry":"\#(entry)"}"#.utf8)
                 .write(to: dir.appending(path: "plugin.json"))
             if wasm { try Data([0]).write(to: dir.appending(path: "plugin.wasm")) }
         }
@@ -23,10 +23,18 @@ struct PluginManagerDiscoveryTests {
         try Data([0]).write(to: outside)
         try FileManager.default.createSymbolicLink(
             at: root.appending(path: "linked-out/plugin.wasm"), withDestinationURL: outside)
+        // So does an entry that reaches its file through a symlinked directory.
+        try install("linked-dir", id: "io.x.linkeddir", wasm: false, entry: "link/plugin.wasm")
+        let outsideDir = FileManager.default.temporaryDirectory.appending(path: "PluginDiscoveryOutside-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: outsideDir) }
+        try FileManager.default.createDirectory(at: outsideDir, withIntermediateDirectories: true)
+        try Data([0]).write(to: outsideDir.appending(path: "plugin.wasm"))
+        try FileManager.default.createSymbolicLink(
+            at: root.appending(path: "linked-dir/link"), withDestinationURL: outsideDir)
 
         let result = PluginManager.discover(in: root)
 
         #expect(result.plugins.map(\.id) == ["io.x.good"])
-        #expect(Set(result.invalid.map(\.folder.lastPathComponent)) == ["no-wasm", "dup-a", "dup-b", "linked-out"])
+        #expect(Set(result.invalid.map(\.folder.lastPathComponent)) == ["no-wasm", "dup-a", "dup-b", "linked-out", "linked-dir"])
     }
 }

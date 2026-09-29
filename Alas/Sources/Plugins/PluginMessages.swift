@@ -55,7 +55,8 @@ struct PluginIncomingHeader: Decodable {
         jsonrpc = try container.decode(String.self, forKey: .jsonrpc)
         id = try container.decodeIfPresent(JSONRPCID.self, forKey: .id)
         method = try container.decodeIfPresent(String.self, forKey: .method)
-        error = try container.decodeIfPresent(JSONRPCError.self, forKey: .error)
+        // A present `error` must be an error object: a `null` here is malformed, not "absent".
+        error = container.contains(.error) ? try container.decode(JSONRPCError.self, forKey: .error) : nil
         hasResult = container.contains(.result)
     }
 }
