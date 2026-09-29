@@ -54,6 +54,12 @@ private struct SSHConnectionIssue {
     }
 }
 
+/// The chosen repo's own icon, staged so the dialog can preview it.
+private struct RepoIconOption: Equatable {
+    let imagePath: String
+    let fileName: String
+}
+
 private enum SSHSetupStatus: Equatable {
     case connecting
     case verifying
@@ -109,6 +115,7 @@ private struct ProjectDialog: View {
     @State private var avatarPresetLoading = false
     @State private var avatarPresetError = false
     @State private var avatarPresetRequestId = UUID()
+    @State private var repoIcon: RepoIconOption?
     @State private var sessionOpenMode: ProjectStartupScriptMode = .useGlobal
     @State private var sessionOpenScript: String = ""
     @State private var worktreeCreateMode: ProjectStartupScriptMode = .useGlobal
@@ -161,6 +168,19 @@ private struct ProjectDialog: View {
             imagePath: iconMode == .image ? iconImagePath : nil,
             transparentBackground: iconTransparent
         )
+    }
+
+    /// Whether the draft shows the repo's own icon. Staging is
+    /// content-addressed, so the staged path identifies that image.
+    private var usesRepoIcon: Bool {
+        guard let repoIcon else { return false }
+        return iconMode == .image && iconImagePath == repoIcon.imagePath
+    }
+
+    /// The icon to save. Picking the repo icon saves the non-explicit default
+    /// so the project keeps following `.alas/` rather than a frozen copy.
+    private var persistedIcon: ProjectIcon {
+        usesRepoIcon ? RepoIconResolver.appIconFollowingRepo(draftIcon) : draftIcon
     }
 
     var body: some View {
@@ -224,6 +244,7 @@ private struct ProjectDialog: View {
             loadProjectIconImage(from: url)
         }
         .onChange(of: path) { _, new in
+            refreshRepoIcon()
             if case .add = mode, location == .local {
                 Task {
                     await suggestName(for: new)
@@ -249,6 +270,7 @@ private struct ProjectDialog: View {
             selectedRepository = nil
             repositorySearch = ""
             displayedRepositories = []
+            refreshRepoIcon()
             loadRepositoryCatalogIfNeeded()
             refreshRepoHookPresentations()
         }
@@ -637,6 +659,15 @@ private struct ProjectDialog: View {
     private var imageControls: some View {
         VStack(alignment: .leading, spacing: 8) {
             AlasButton(title: "Choose Image…", icon: "image", action: chooseProjectIconImage)
+            if let repoIcon {
+                HStack(spacing: 8) {
+                    Text("Repository icon (.alas/\(repoIcon.fileName))")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-muted"))
+                    AlasButton(title: usesRepoIcon ? "In use" : "Use", action: useRepoIcon)
+                        .disabled(usesRepoIcon)
+                }
+            }
             if let avatarPreset {
                 HStack(spacing: 8) {
                     Text(avatarPreset.label)
@@ -1184,6 +1215,48 @@ private struct ProjectDialog: View {
         }
     }
 
+    /// Looks for the chosen local repo's own icon (`.alas/config.json`'s
+    /// `icon.image`, else `.alas/icon.<ext>`) and offers it as a choice,
+    /// selecting it while the icon is still the untouched default.
+    private func refreshRepoIcon() {
+        guard case .add = mode else { return }
+        let wasSelected = usesRepoIcon
+        repoIcon = discoverRepoIcon()
+        if let repoIcon, wasSelected || draftIconIsUntouched {
+            iconImagePath = repoIcon.imagePath
+            iconMode = .image
+        } else if wasSelected {
+            iconImagePath = nil
+            iconMode = .letter
+        }
+    }
+
+    private func discoverRepoIcon() -> RepoIconOption? {
+        guard location == .local, !path.isEmpty else { return nil }
+        let checkout = URL(fileURLWithPath: path, isDirectory: true)
+        let resolution = RepoIconResolver.resolve(
+            appIcon: .default(),
+            projectID: pendingProjectId,
+            repoConfig: state.repoConfig(worktreeRoot: checkout),
+            primaryCheckout: checkout,
+            store: state.repoConfigStore,
+            stagingRoot: state.repoIconStagingRoot
+        )
+        guard let source = resolution.sourceURL, let imagePath = resolution.icon.imagePath else { return nil }
+        return RepoIconOption(imagePath: imagePath, fileName: source.lastPathComponent)
+    }
+
+    private var draftIconIsUntouched: Bool {
+        !RepoIconResolver.iconIsExplicit(draftIcon)
+    }
+
+    private func useRepoIcon() {
+        guard let repoIcon else { return }
+        iconImagePath = repoIcon.imagePath
+        iconMode = .image
+        errorMessage = nil
+    }
+
     private func useAvatarPreset() {
         guard let data = avatarPresetData else { return }
         do {
@@ -1266,7 +1339,7 @@ private struct ProjectDialog: View {
                 try await state.addProject(
                     path: destination,
                     displayName: name,
-                    icon: draftIcon,
+                    icon: persistedIcon,
                     id: pendingProjectId,
                     startupScripts: draftStartupScripts,
                     mcpServers: mcpServers,
@@ -1295,7 +1368,7 @@ private struct ProjectDialog: View {
             try await state.addProject(
                 path: url,
                 displayName: name,
-                icon: draftIcon,
+                icon: persistedIcon,
                 host: location == .remoteSSH
                     ? sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
                     : nil,

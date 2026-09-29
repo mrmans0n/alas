@@ -50,6 +50,18 @@ enum RepoIconResolver {
             || icon.imagePath != nil
     }
 
+    /// The app icon to persist when the user picks the repo's own icon: the
+    /// non-explicit default, so the project keeps following the repo file
+    /// instead of freezing a staged copy. Colour and background carry over
+    /// because `resolve` applies them to the repo image.
+    static func appIconFollowingRepo(_ draft: ProjectIcon) -> ProjectIcon {
+        ProjectIcon(
+            mode: .letter,
+            color: draft.color,
+            transparentBackground: draft.transparentBackground
+        )
+    }
+
     /// The icon alone, for the render path. Callers that need to cache the
     /// result must use `resolve` and key on the reported source instead.
     static func effectiveIcon(
