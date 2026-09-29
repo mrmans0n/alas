@@ -3149,7 +3149,8 @@ impl World {
         let present: Vec<&String> = layout.pods.iter().flat_map(|p| &p.seated).collect();
         for c in self.characters.iter_mut().filter(|c| !c.leaving && !present.contains(&&c.session_id)) {
             c.leaving = true;
-            c.walk_to(DOOR, Activity::Walking);
+            // Any non-walking arrival state works: `step` drops leavers once they stop walking.
+            c.walk_to(DOOR, Activity::Seated);
         }
     }
 
