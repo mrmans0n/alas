@@ -10351,7 +10351,7 @@
 			repositoryURL = "https://github.com/tree-sitter/swift-tree-sitter";
 			requirement = {
 				kind = exactVersion;
-				version = 0.10.0;
+				version = 0.25.0;
 			};
 		};
 		E1C99CADFFC5936D126030B0 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {

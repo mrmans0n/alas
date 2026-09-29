@@ -6,13 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.18] - 2026-09-29
+
 ### ✨ Features
 
-- Add read-only delegation discovery (`agent_list` MCP tool, `alas agent list`) listing available ACP agents and their remembered model catalogs.
-- Let `session_new` and `alas session new` pick the delegated child's model (`model`) and, for agents with a reasoning setting, its reasoning level (`reasoning`). Alas applies both before the child's first prompt and fails the child instead of falling back to a default.
-- Add a per-agent "Disable native subagents" setting for Claude and Codex ACP sessions that removes their native subagent tools so they delegate through Alas child sessions; delegated children no longer see `session_new` in MCP discovery (#1589).
-- Extend "Disable native subagents" to OMP: a launch-only settings overlay removes the `task` tool and makes eval `agent()`/`workpool()` spawning fail, without changing `~/.omp` or project settings (#1590).
-- Support "Disable native subagents" for OpenCode: Alas denies the `task` tool for every OpenCode agent and verifies the effective permissions before each launch, failing the session when managed or other configuration keeps it enabled (#1591).
+- Add read-only delegation discovery (`agent_list` MCP tool, `alas agent list`) listing available ACP agents and their remembered model catalogs (#1608).
+- Let `session_new` and `alas session new` pick the delegated child's model (`model`) and, for agents with a reasoning setting, its reasoning level (`reasoning`). Alas applies both before the child's first prompt and fails the child instead of falling back to a default (#1613).
+- Add a per-agent "Disable native subagents" setting for Claude and Codex ACP sessions that removes their native subagent tools so they delegate through Alas child sessions; delegated children no longer see `session_new` in MCP discovery (#1609).
+- Extend "Disable native subagents" to OMP: a launch-only settings overlay removes the `task` tool and makes eval `agent()`/`workpool()` spawning fail, without changing `~/.omp` or project settings (#1615).
+- Support "Disable native subagents" for OpenCode: Alas denies the `task` tool for every OpenCode agent and verifies the effective permissions before each launch, failing the session when managed or other configuration keeps it enabled (#1616).
+- Show the selected peer's worktree in the right rail (#1614).
+- Keep the worktree filter hidden until needed, then pin it magnetically while scrolling (#1618).
+- Limit auto-expanded live activity to the latest groups (#1612).
+
+### 🐛 Fixes
+
+- Preserve trailing reference chips when the composer remounts (#1598).
+- Stop worktree rows from stretching under the filter scroll view (#1599).
+- Keep dictation authorization callbacks off the main actor (#1611).
+
+### 🏗️ Internal
+
+- Update FFF, MLX Swift, Swift Collections, Swift Transformers, SwiftTreeSitter, and ZMX (#1600, #1601, #1602, #1603, #1604, #1605, #1606).
+- Record the native-subagent adapter probe matrix (#1607).
+- Widen the git-gud stream collection deadline for loaded CI shards (#1617).
 
 ## [0.19.17] - 2026-09-28
 
