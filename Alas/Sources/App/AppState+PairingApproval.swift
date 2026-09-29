@@ -43,7 +43,7 @@ private struct DeferredApprovalSigner: ApprovalSigning {
 
 extension AppState {
     private var canRequestPairingApproval: Bool {
-        !pairingApprovalsStopped && config.remote.enabled && config.remote.federationEnabled
+        !pairingApprovalsStopped && config.remote.enabled
             && remoteServer != nil && remotePort != nil
     }
 

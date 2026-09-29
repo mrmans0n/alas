@@ -19,13 +19,12 @@ struct RemoteAppStateAccessTests {
         #expect(signerLoads == 0)
     }
 
-    @Test(arguments: ["discovery", "federation", "remote", "shutdown"])
+    @Test(arguments: ["discovery", "remote", "shutdown"])
     func approvalConfigurationChangesCancelIncomingWork(setting: String) async throws {
         let state = AppState(store: MemoryStore())
         let signer = RemotePairingApprovalClientTests.Signer()
         state.remoteApprovalSignerProvider = { signer }
         state.config.remote.enabled = true
-        state.config.remote.federationEnabled = true
         state.config.remote.discoverable = true
         let port = try availableTCPPort()
         state.config.remote.port = port
@@ -48,8 +47,6 @@ struct RemoteAppStateAccessTests {
         switch setting {
         case "discovery": state.config.remote.discoverable = false
         state.syncRemotePeers()
-        case "federation": state.config.remote.federationEnabled = false
-        state.refreshRemoteAccessState()
         case "remote": state.config.remote.enabled = false
         state.syncRemoteServer()
         default: state.stopPairingApprovals()
@@ -58,7 +55,7 @@ struct RemoteAppStateAccessTests {
         #expect(state.remoteServer?.pairingApprovalVersion == nil)
     }
 
-    @Test(arguments: ["cancel", "federation", "remote", "shutdown"])
+    @Test(arguments: ["cancel", "remote", "shutdown"])
     func outgoingApprovalCancelsWithoutPairingBeforeAllow(setting: String) async throws {
         let state = AppState(store: MemoryStore())
         let exchange = RemotePairingApprovalClientTests.Exchange()
@@ -71,7 +68,6 @@ struct RemoteAppStateAccessTests {
                 sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
         }
         state.config.remote.enabled = true
-        state.config.remote.federationEnabled = true
         state.config.remote.serverId = "requester"
         state.config.remote.allowedHosts = ["approval.test"]
         let port = try availableTCPPort()
@@ -92,8 +88,6 @@ struct RemoteAppStateAccessTests {
         #expect(exchange.issues == 0)
         let task = try #require(state.nearbyApprovalTask)
         switch setting {
-        case "federation": state.config.remote.federationEnabled = false
-        state.syncRemotePeers()
         case "remote": state.config.remote.enabled = false
         state.refreshRemoteAccessState()
         case "shutdown": state.stopPairingApprovals()
@@ -109,7 +103,6 @@ struct RemoteAppStateAccessTests {
     func missingCapabilityOffersCodeOnlyWhenIdentityMatches(mismatch: Bool) async throws {
         let state = AppState(store: MemoryStore())
         state.config.remote.enabled = true
-        state.config.remote.federationEnabled = true
         state.config.remote.allowedHosts = ["approval.test"]
         let port = try availableTCPPort()
         state.config.remote.port = port
@@ -150,7 +143,7 @@ struct RemoteAppStateAccessTests {
         #expect(resolvedInstances == ["receiver"])
     }
 
-    @Test func disablingFederationDuringRedemptionRevokesCounterCodeAndCancelsReceiver() async throws {
+    @Test func disablingRemoteDuringRedemptionRevokesCounterCodeAndCancelsReceiver() async throws {
         let state = AppState(store: MemoryStore())
         let exchange = RemotePairingApprovalClientTests.Exchange()
         exchange.time = Date()
@@ -172,7 +165,6 @@ struct RemoteAppStateAccessTests {
                 })
         }
         state.config.remote.enabled = true
-        state.config.remote.federationEnabled = true
         state.config.remote.allowedHosts = ["approval.test"]
         let port = try availableTCPPort()
         state.config.remote.port = port
@@ -189,8 +181,8 @@ struct RemoteAppStateAccessTests {
         struct Body: Decodable { let peer: RemotePeerAdvertisement }
         let ad = try JSONDecoder().decode(Body.self, from: #require(request.httpBody)).peer
         let counterCode = try #require(ad.counterCode)
-        state.config.remote.federationEnabled = false
-        state.syncRemotePeers()
+        state.config.remote.enabled = false
+        state.refreshRemoteAccessState()
         await task.value
         #expect(state.nearbyApprovalState == .cancelled)
         #expect(exchange.coordinator.entries.first?.phase == .cancelled)

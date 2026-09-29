@@ -57,24 +57,21 @@ struct RemoteBonjourServiceTests {
         #expect(RemoteBonjourService.serviceName(ascii).utf8.count == RemoteBonjourService.maxServiceNameBytes)
     }
 
-    private func remote(enabled: Bool, federation: Bool, discoverable: Bool) -> AppConfig.Remote {
-        AppConfig.Remote(enabled: enabled, serverId: "srv-a",
-                         federationEnabled: federation, discoverable: discoverable)
+    private func remote(enabled: Bool, discoverable: Bool) -> AppConfig.Remote {
+        AppConfig.Remote(enabled: enabled, serverId: "srv-a", discoverable: discoverable)
     }
 
-    @Test func advertisesOnlyWhenTheServerFederationAndDiscoveryAreAllOn() {
+    @Test func advertisesOnlyWhenTheServerAndDiscoveryAreBothOn() {
         let advertised = RemoteBonjourAdvertisement.forSettings(
-            remote(enabled: true, federation: true, discoverable: true), displayName: "Mac A", model: "Mac16,6")
+            remote(enabled: true, discoverable: true), displayName: "Mac A", model: "Mac16,6")
         #expect(advertised?.txt.serverId == "srv-a")
         #expect(advertised?.displayName == "Mac A")
         #expect(advertised?.txt.model == "Mac16,6")
 
-        // Any one of the three off withdraws the record.
+        // Either one off withdraws the record.
         #expect(RemoteBonjourAdvertisement.forSettings(
-            remote(enabled: false, federation: true, discoverable: true), displayName: "Mac A", model: nil) == nil)
+            remote(enabled: false, discoverable: true), displayName: "Mac A", model: nil) == nil)
         #expect(RemoteBonjourAdvertisement.forSettings(
-            remote(enabled: true, federation: false, discoverable: true), displayName: "Mac A", model: nil) == nil)
-        #expect(RemoteBonjourAdvertisement.forSettings(
-            remote(enabled: true, federation: true, discoverable: false), displayName: "Mac A", model: nil) == nil)
+            remote(enabled: true, discoverable: false), displayName: "Mac A", model: nil) == nil)
     }
 }

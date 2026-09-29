@@ -906,8 +906,8 @@ struct RemoteProtocolTests {
         #expect(snapshot.name == nil)
     }
 
-    @Test func helloEncodesFederationEnabledAndDefaultsItOff() throws {
-        let on = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", federationEnabled: true))
+    @Test func helloAlwaysAdvertisesFederationAndDecodesLegacyAsOff() throws {
+        let on = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n"))
         let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(on)) as? [String: Any])
         #expect(object["federationEnabled"] as? Bool == true)
 
@@ -917,14 +917,13 @@ struct RemoteProtocolTests {
     }
 
     @Test func helloCarriesPeersOnlyWhenThereAreAny() throws {
-        let none = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", federationEnabled: true))
+        let none = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n"))
         let noneObject = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(none)) as? [String: Any])
         #expect(noneObject["peers"] == nil)
 
         let peers = [RemoteHelloPeer(serverId: "srv-b", name: "Mac B", state: "online"),
                      RemoteHelloPeer(serverId: "srv-c", name: "Mac C", state: "offline")]
-        let some = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n",
-                                                                  federationEnabled: true, peers: peers))
+        let some = RemoteServerMessage.hello(RemoteServerIdentity(serverId: "s", name: "n", peers: peers))
         #expect(try roundTrip(some) == some)
         let someObject = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(some)) as? [String: Any])
         let encodedPeers = try #require(someObject["peers"] as? [[String: Any]])

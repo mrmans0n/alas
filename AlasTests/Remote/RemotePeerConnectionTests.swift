@@ -127,7 +127,7 @@ struct RemotePeerConnectionTests {
                 RemoteDiagnosticsSnapshot(appName: "Alas", port: port, addresses: [],
                                           usesPlainHTTP: true, pairedDeviceCount: 0, serverId: serverId)
             },
-            identity: { RemoteServerIdentity(serverId: helloServerId, name: "Mac A", federationEnabled: true) },
+            identity: { RemoteServerIdentity(serverId: helloServerId, name: "Mac A") },
             signer: signer
         )
         try server.start(port: 0)
@@ -168,7 +168,7 @@ struct RemotePeerConnectionTests {
         #expect(events.hellos == ["srv-a"])
         #expect(events.helloNames == ["Mac A"])
         #expect(events.helloVersions == [RemoteProtocolVersion.current])
-        // `startServer`'s identity sets federationEnabled: true.
+        // Servers always advertise federationEnabled: true in hello.
         #expect(events.helloFederation == [true])
         #expect(events.origins == [origin])
         #expect(link.lastOrigin == origin)
@@ -565,47 +565,6 @@ struct RemotePeerConnectionTests {
         // never paired with — so this is "unreachable peer", not "revoked".
         try await waitUntil { link.state == .offline }
         #expect(!events.states.contains(.unauthorized))
-    }
-
-    // A refused upgrade looks identical whether the token was genuinely
-    // revoked or the peer merely has federation off right now — but only the
-    // first should ever stop the link from retrying. `.alasInstance` because
-    // the authorize-time federation gate (RemoteServer.accept) only applies
-    // to peer devices, not browsers.
-    @Test func federationDisabledOnThePeerIsRetryableNotUnauthorized() async throws {
-        let pairing = RemotePairingService(store: InMemoryDeviceStore())
-        let result = try pairing.redeemPeer(code: pairing.beginPairing(), deviceName: "Mac B", peerServerId: "srv-b")
-        var federationEnabled = false
-        let server = RemoteServer(
-            pairing: pairing,
-            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
-            provider: FakeSessionsProvider(),
-            identity: { RemoteServerIdentity(serverId: "srv-a", name: "Mac A", federationEnabled: federationEnabled) }
-        )
-        try server.start(port: 0)
-        defer { server.stop() }
-        for _ in 0..<50 where server.port == nil {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        let port = try #require(server.port)
-        let origin = "http://127.0.0.1:\(port)"
-
-        let events = Events()
-        let link = RemotePeerConnection(origins: [origin], lastOrigin: nil, token: result.token,
-                                        expectedServerId: "srv-a", config: fastConfig()) { events.all.append($0) }
-        link.connect()
-        defer { link.disconnect() }
-        // The upgrade is refused (federation is off there) and /health
-        // confirms it's really the expected Mac — but that must not read as
-        // a revocation.
-        try await waitUntil { events.states.filter { $0 == .connecting }.count >= 2 }
-        #expect(!events.states.contains(.unauthorized))
-        #expect(!events.states.contains(.online))
-
-        // The other Mac's owner flips the flag back on: the very next retry
-        // must succeed, proving the link never gave up.
-        federationEnabled = true
-        try await waitUntil { link.state == .online }
     }
 
     @Test func helloFromAnotherIdentityIsRefusedButRetriesLater() async throws {

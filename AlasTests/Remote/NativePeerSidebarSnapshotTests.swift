@@ -27,7 +27,7 @@ struct NativePeerSidebarSnapshotTests {
                                  status: "awaitingInput", canDrive: false)
         ]
 
-        let snapshot = NativePeerSidebarSnapshot.build(peers: peers, rows: rows, enabled: true)
+        let snapshot = NativePeerSidebarSnapshot.build(peers: peers, rows: rows)
 
         #expect(snapshot.groups.map(\.serverId) == ["b", "c", "d"])
         #expect(snapshot.groups[0].sessions.map(\.id).sorted() == ["b:one", "b:three", "b:two"])
@@ -45,25 +45,15 @@ struct NativePeerSidebarSnapshotTests {
             RemoteHelloPeer(serverId: "a", name: "Mac", state: "online")
         ]
         let rows = [row("s", peer: "z", status: "idle")]
-        let first = NativePeerSidebarSnapshot.build(peers: peers, rows: rows, enabled: true)
+        let first = NativePeerSidebarSnapshot.build(peers: peers, rows: rows)
         let renamed = NativePeerSidebarSnapshot.build(
             peers: [RemoteHelloPeer(serverId: "z", name: "Renamed", state: "online"), peers[1]],
-            rows: rows, enabled: true
+            rows: rows
         )
 
         #expect(first.groups.map(\.serverId) == ["a", "z"])
         #expect(renamed.groups.last?.name == "Renamed")
         #expect(renamed.groups.last?.sessions.first?.id == "z:s")
-    }
-
-    @Test func flagOffHidesPeersAndTheirAttention() {
-        let snapshot = NativePeerSidebarSnapshot.build(
-            peers: [RemoteHelloPeer(serverId: "b", name: "B", state: "online")],
-            rows: [row("s", peer: "b", status: "awaitingInput")], enabled: false
-        )
-        #expect(snapshot.groups.isEmpty)
-        #expect(snapshot.attentionRows.isEmpty)
-        #expect(snapshot.attentionCount == 0)
     }
 
     @Test func statusLabelsDistinguishRevocationAndUnprovenIdentity() {

@@ -29,7 +29,6 @@ import Testing
 
     @Test func capabilityAdvertisementRequiresEnabledGatesAndPersistentKey() {
         let signer = RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
-        var federation = true
         let server = RemoteServer(pairing: RemotePairingService(store: InMemoryDeviceStore()),
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())), provider: FakeSessionsProvider(),
             diagnostics: { _ in
@@ -37,7 +36,7 @@ import Testing
                     pairedDeviceCount: 0, pairingApprovalVersion: 99)
             },
             identity: { () -> RemoteServerIdentity in
-                RemoteServerIdentity(serverId: "receiver", name: "Mac", federationEnabled: federation)
+                RemoteServerIdentity(serverId: "receiver", name: "Mac")
             },
             signer: signer)
         #expect(server.diagnosticsSnapshot().pairingApprovalVersion == nil)
@@ -47,9 +46,6 @@ import Testing
             ApprovalPeer(serverID: "receiver", publicKey: signer.publicKey, name: "Mac", origins: ["http://10.0.0.1:8765"])
         }, signer: signer)
         #expect(server.diagnosticsSnapshot().pairingApprovalVersion == 1)
-        federation = false
-        #expect(server.pairingApprovalVersion == nil)
-        federation = true
         server.approvalEnabled = { false }
         #expect(server.pairingApprovalVersion == nil)
     }
@@ -59,7 +55,7 @@ import Testing
         let server = RemoteServer(pairing: RemotePairingService(store: InMemoryDeviceStore()),
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())), provider: FakeSessionsProvider(),
             identity: { () -> RemoteServerIdentity in
-                RemoteServerIdentity(serverId: "receiver", name: "Mac", federationEnabled: true)
+                RemoteServerIdentity(serverId: "receiver", name: "Mac")
             },
             signer: signer)
         server.approvalEnabled = { true }

@@ -65,7 +65,7 @@ final class NativePeerSessions {
 
     func refresh() {
         guard downstream != nil else { return }
-        snapshot = .build(peers: peers(), rows: federation.peerSessionSummaries, enabled: true)
+        snapshot = .build(peers: peers(), rows: federation.peerSessionSummaries)
         guard selectedSessionId != nil else { return }
         guard let group = selectedPeer else {
             clearSelection()
