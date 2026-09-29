@@ -27,6 +27,43 @@ struct ACPOrchestrationVisibleSession: Equatable, Sendable {
     let relationship: ACPOrchestrationRelationship?
 }
 
+/// One acknowledged RPC that applies part of a delegated model selection.
+enum ACPDelegatedSelectionStep: Equatable, Sendable {
+    case setModel(String)
+    case setConfigOption(id: String, value: String)
+}
+
+enum ACPDelegatedModelSelectionError: Error, Equatable, LocalizedError {
+    case modelSelectionUnsupported(agentId: String)
+    case unknownModel(agentId: String, model: String, available: [String])
+    case reasoningUnsupported(agentId: String)
+    case unknownReasoning(agentId: String, reasoning: String, available: [String])
+    /// The agent refused or did not apply a change it had advertised.
+    case rejected(agentId: String, setting: String, value: String, reason: String)
+    case sessionUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .modelSelectionUnsupported(let agentId):
+            return "Agent \(agentId) does not offer model selection."
+        case .unknownModel(let agentId, let model, let available):
+            return "Model \(model) is not offered by agent \(agentId)." + Self.availableSuffix(available)
+        case .reasoningUnsupported(let agentId):
+            return "Agent \(agentId) does not expose a reasoning setting Alas can apply."
+        case .unknownReasoning(let agentId, let reasoning, let available):
+            return "Reasoning \(reasoning) is not offered by agent \(agentId)." + Self.availableSuffix(available)
+        case .rejected(let agentId, let setting, let value, let reason):
+            return "Agent \(agentId) did not apply \(setting) \(value): \(reason)"
+        case .sessionUnavailable:
+            return "The delegated session was not ready to apply its model selection."
+        }
+    }
+
+    private static func availableSuffix(_ ids: [String]) -> String {
+        ids.isEmpty ? "" : " Available: \(ids.joined(separator: ", "))."
+    }
+}
+
 struct ACPOrchestrationAgent: Equatable, Sendable {
     let id: String
     let isEnabled: Bool
@@ -87,6 +124,16 @@ enum ACPSessionOrchestrationPolicy {
         }
 
         return .failure(.targetIsNotDirectRelative)
+    }
+
+    /// A child with a model selection takes inbox prompts only once it is
+    /// `.ready`: its initial prompt must be first and on the selected model,
+    /// and the start path drains the inbox after that transition. A child that
+    /// failed before then may never have applied the selection, so its held
+    /// messages are never delivered (`markChildFailed` discards them).
+    static func defersInboxDelivery(target: ACPDelegationRecord?) -> Bool {
+        guard let target, target.modelSelection != nil else { return false }
+        return target.phase != .ready
     }
 
     static func acceptsMessages(target: ACPDelegationRecord?) -> Bool {
@@ -176,6 +223,76 @@ enum ACPSessionOrchestrationPolicy {
                     : ACPDelegationModelCatalog(state: .unavailable, models: [])
             )
         }
+    }
+
+    /// Spawn-time check, before any child record exists. Rejects only what
+    /// this launch confirmed on the child's execution host (`launchModels`):
+    /// a model id missing from the list the agent advertised there, an agent
+    /// that advertised no models there, or reasoning for an agent whose
+    /// thinking control is not a config option. Anything unconfirmed (nil)
+    /// defers to the live session, which always validates again.
+    static func preflightModelSelection(
+        _ selection: ACPDelegatedModelSelection,
+        agentId: String,
+        launchModels: [ACPAgentModelCatalog.Model]?
+    ) -> ACPDelegatedModelSelectionError? {
+        if let model = selection.model, let launchModels {
+            if launchModels.isEmpty {
+                return .modelSelectionUnsupported(agentId: agentId)
+            }
+            if !launchModels.contains(where: { $0.id == model }) {
+                return .unknownModel(agentId: agentId, model: model, available: launchModels.map(\.id))
+            }
+        }
+        if selection.reasoning != nil {
+            switch ACPAgentProfiles.routing(for: agentId).thinkingSource {
+            case .none, .mode:
+                return .reasoningUnsupported(agentId: agentId)
+            case .configOption, .heuristic:
+                break
+            }
+        }
+        return nil
+    }
+
+    /// How to apply a requested model on a live session, from what the agent
+    /// advertised in `session/new`. Nil means it is already selected.
+    static func liveModelStep(
+        model: String,
+        agentId: String,
+        chip: ChipSpec?
+    ) throws -> ACPDelegatedSelectionStep? {
+        guard let chip else { throw ACPDelegatedModelSelectionError.modelSelectionUnsupported(agentId: agentId) }
+        guard chip.options.contains(where: { $0.id == model }) else {
+            throw ACPDelegatedModelSelectionError.unknownModel(agentId: agentId, model: model, available: chip.options.map(\.id))
+        }
+        guard chip.currentId != model else { return nil }
+        switch chip.source {
+        case .model:
+            return .setModel(model)
+        case .configOption(let id):
+            return .setConfigOption(id: id, value: model)
+        case .mode:
+            throw ACPDelegatedModelSelectionError.modelSelectionUnsupported(agentId: agentId)
+        }
+    }
+
+    /// Reasoning is only applied through a select config option the agent
+    /// advertised, so the acknowledgement is verifiable. Thinking encoded as a
+    /// mode (pi) or as model-id variants (Cursor) is rejected, never guessed.
+    static func liveReasoningStep(
+        reasoning: String,
+        agentId: String,
+        chip: ChipSpec?
+    ) throws -> ACPDelegatedSelectionStep? {
+        guard let chip, case .configOption(let id) = chip.source else {
+            throw ACPDelegatedModelSelectionError.reasoningUnsupported(agentId: agentId)
+        }
+        guard chip.options.contains(where: { $0.id == reasoning }) else {
+            throw ACPDelegatedModelSelectionError.unknownReasoning(agentId: agentId, reasoning: reasoning, available: chip.options.map(\.id))
+        }
+        guard chip.currentId != reasoning else { return nil }
+        return .setConfigOption(id: id, value: reasoning)
     }
 
     static func validatedPrompt(_ prompt: String) throws -> String {

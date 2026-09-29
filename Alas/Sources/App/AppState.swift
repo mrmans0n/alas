@@ -1811,7 +1811,23 @@ final class AppState {
                 )
             }
             let restoredPendingPrompt = record.pendingInitialPrompt != nil
-            if let prompt = record.pendingInitialPrompt {
+            // With a model selection, the initial prompt waits until the
+            // selection is reapplied on the attached session, below. A crash
+            // after it was queued but before the child was marked ready leaves
+            // it in the hydrated queue, where attach would dispatch it before
+            // the selection is re-verified, whether or not the record's
+            // pending copy was already cleared.
+            var promptAwaitingSelection: String?
+            if record.modelSelection != nil {
+                let withheld = manager.withholdQueuedDelegatedPrompt(
+                    messageId: acpOrchestration.initialPromptSource(for: record).messageId,
+                    in: record.childSessionId
+                )
+                promptAwaitingSelection = record.pendingInitialPrompt ?? withheld
+            }
+            if promptAwaitingSelection != nil {
+                // Queued once the selection is acknowledged.
+            } else if let prompt = record.pendingInitialPrompt {
                 let accepted = await manager.enqueueDelegatedPrompt(
                     text: prompt,
                     source: ACPDelegatedPromptSource(
@@ -1843,6 +1859,11 @@ final class AppState {
                     message: recoveredDelegatedSessionFailureMessage(manager.liveSession(for: record.childSessionId))
                 )
                 continue
+            }
+            if let prompt = promptAwaitingSelection, let selection = record.modelSelection {
+                guard await acpOrchestration.queueInitialPromptAfterModelSelection(
+                    selection, record: record, prompt: prompt, manager: manager
+                ) else { continue }
             }
             if restoredPendingPrompt {
                 try? await acpOrchestrationPersistence.clearPendingInitialPrompt(
@@ -6820,6 +6841,14 @@ final class AppState {
                         availability: availability,
                         catalog: { (catalog.models(for: $0), catalog.launchReport(for: $0)) }
                     )
+                },
+                launchModels: { [weak self] agentID, worktree in
+                    guard let self else { return nil }
+                    let host: String? = switch self.agentExecutionTarget(for: worktree) {
+                    case .local: nil
+                    case .ssh(let host): host
+                    }
+                    return self.acpModelCatalog.launchModels(for: agentID, host: host)
                 },
                 sessionLocation: { [weak self] sessionId in
                     guard let self,
@@ -12408,10 +12437,11 @@ final class AppState {
             onSessionEnded: { [weak self] sessionId in
                 self?.mcpHTTPSupervisor.end(sessionId: sessionId)
             },
-            onModelsObserved: { [weak self] agentId, models in
+            onModelsObserved: { [weak self] agentId, host, models in
                 self?.acpModelCatalog.record(
                     agentID: agentId,
-                    models: models.map { ACPAgentModelCatalog.Model(id: $0.id, name: $0.name) }
+                    models: models.map { ACPAgentModelCatalog.Model(id: $0.id, name: $0.name) },
+                    host: host
                 )
             },
             ggMCPProvider: { [weak self] worktreePath in
@@ -12776,10 +12806,11 @@ final class AppState {
                 guard let self else { return nil }
                 return self.workspaceFrozenMCPAttachments(for: self.currentWorkspaceCheckoutSnapshot(checkout))
             },
-            onModelsObserved: { [weak self] agentId, models in
+            onModelsObserved: { [weak self] agentId, host, models in
                 self?.acpModelCatalog.record(
                     agentID: agentId,
-                    models: models.map { ACPAgentModelCatalog.Model(id: $0.id, name: $0.name) }
+                    models: models.map { ACPAgentModelCatalog.Model(id: $0.id, name: $0.name) },
+                    host: host
                 )
             }
         )
@@ -13524,6 +13555,11 @@ final class AppState {
     }
 
     private func deliverPendingDelegatedMessages(to sessionId: String, manager: ACPSessionManager) async {
+        if ACPSessionOrchestrationPolicy.defersInboxDelivery(
+            target: try? await acpOrchestrationPersistence.delegation(childSessionId: sessionId)
+        ) {
+            return
+        }
         let session = manager.liveSession(for: sessionId)
         session?.nextPromptWorkCount += 1
         defer { session?.nextPromptWorkCount -= 1 }

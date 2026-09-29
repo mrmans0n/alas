@@ -31,6 +31,14 @@ final class ACPAgentModelCatalog {
 
     private(set) var modelsByAgent: [String: [Model]] = [:]
     @ObservationIgnored private var launchReports: [String: LaunchReport] = [:]
+    /// What each agent advertised on each execution host during this launch
+    /// (nil host = this Mac). Hosts can run different adapter versions, so a
+    /// list confirmed on one never vouches for another.
+    @ObservationIgnored private var launchModelsByHost: [HostKey: [Model]] = [:]
+    private struct HostKey: Hashable {
+        let agentID: String
+        let host: String?
+    }
 
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let fileURL: URL
@@ -53,11 +61,21 @@ final class ACPAgentModelCatalog {
         launchReports[agentID] ?? .notObserved
     }
 
+    /// The models `agentID` advertised on `host` during this launch: nil when
+    /// no live session there has reported, empty when one advertised none.
+    func launchModels(for agentID: String, host: String?) -> [Model]? {
+        launchModelsByHost[HostKey(agentID: agentID, host: host)]
+    }
+
     /// Replaces what is remembered for `agentID` with the list it just
     /// advertised. An empty list is ignored: an agent that reports no models
     /// on one connection (a failed provider lookup, say) should not erase a
     /// list it reported before.
-    func record(agentID: String, models: [Model]) {
+    func record(agentID: String, models: [Model], host: String? = nil) {
+        let key = HostKey(agentID: agentID, host: host)
+        if !models.isEmpty || launchModelsByHost[key]?.isEmpty != false {
+            launchModelsByHost[key] = models
+        }
         guard !models.isEmpty else {
             if launchReports[agentID] != .advertisedModels {
                 launchReports[agentID] = .advertisedNone
