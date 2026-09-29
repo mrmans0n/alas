@@ -4949,9 +4949,10 @@ extension ACPSessionManager {
                     cliParentSessionId = launchSpec.extraEnv["ALAS_PARENT_SESSION_ID"]
                 }
             }
-            // Process-level native-delegation controls (Codex) must be in
-            // the spawn environment; a policy that cannot be applied fails
-            // the launch here rather than running unenforced.
+            // Process-level native-delegation controls (Codex env, OMP
+            // config overlay) must be in the spawn environment/arguments; a
+            // policy that cannot be applied fails the launch here rather
+            // than running unenforced.
             launchSpec = try ACPNativeDelegationControls.applyingLaunchControls(
                 to: launchSpec,
                 nativeSubagentsDisabled: nativeSubagentsDisabled,

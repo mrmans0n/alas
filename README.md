@@ -64,10 +64,11 @@ respond when it needs you.
   files at the right line, send you notifications, spin up delegated sessions,
   and work through your review comments. Before delegating, agents can list
   which agents and models are available
-  ([delegation discovery](docs/agent-delegation.md)). For Claude and Codex,
-  **Settings → Agents → Disable native subagents** removes the agent's own
-  subagent tool (Claude's Agent/Task tool; Codex's multi-agent tools, local
-  sessions only) so it delegates through Alas child sessions instead. It
+  ([delegation discovery](docs/agent-delegation.md)). For Claude, Codex, and
+  OMP, **Settings → Agents → Disable native subagents** removes the agent's own
+  subagent tool (Claude's Agent/Task tool; Codex's multi-agent tools; OMP's
+  task tool and eval `agent()`; Codex and OMP local sessions only) so it
+  delegates through Alas child sessions instead. It
   applies to sessions created after you change it, does not stop subagents
   already running, and is not a sandbox
   ([details](docs/agent-delegation.md#disabling-native-subagents)).

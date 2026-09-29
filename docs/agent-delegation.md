@@ -108,8 +108,9 @@ only where Alas has verified a control:
 |---|---|
 | Claude | Removes the Agent/Task tool from the model's tool list. Other Claude tools that coordinate work, such as SendMessage and Workflow, are not affected. |
 | Codex | Turns off Codex multi-agent tools (`spawn_agent` and related) through `CODEX_CONFIG`. Any `CODEX_CONFIG` you already set is merged, not replaced; one Alas cannot merge safely (invalid JSON, a non-object `agents`/`features`, or a dotted key that overlaps these settings) fails the launch with an error. Local sessions only: a remote Codex session with the option on fails to start. |
+| OMP | Starts `omp acp` with a launch-only settings overlay (`--config`) that sets `task.maxRecursionDepth` to 0. This removes the `task` and `hub` tools from the model's tool list, and eval's `agent()` and `workpool()` fail with "Cannot spawn another agent at task depth 0". Eval otherwise works. The overlay is merged over your `~/.omp` and project settings, which Alas does not change, so other settings and extensions keep working. Local sessions only: a remote OMP session with the option on fails to start. |
 | Pi | Unavailable. Pi has no built-in subagent tool; extensions may add one, and Alas does not disable extensions. |
-| Cursor, Gemini, Copilot, OpenCode, OMP | Unavailable until a control is verified. |
+| Cursor, Gemini, Copilot, OpenCode | Unavailable until a control is verified. |
 | Custom agents | Unavailable. |
 
 When it applies:
@@ -120,15 +121,25 @@ When it applies:
   already running are not stopped.
 - Alas checks the adapter before sending any session request. If it does not
   identify itself as `@agentclientprotocol/claude-agent-acp` 0.81.2 or later
-  (Claude) or `@agentclientprotocol/codex-acp` 1.13.1 or later (Codex), the
-  session fails to start instead of running unenforced.
+  (Claude), `@agentclientprotocol/codex-acp` 1.13.1 or later (Codex), or
+  `oh-my-pi` 18.2.11 or later (OMP), the session fails to start instead of
+  running unenforced.
+- The OMP overlay is a single owner-only file,
+  `~/Library/Application Support/Alas/acp-launch-overlays/omp-native-subagents-off.yml`.
+  Alas rewrites it before every launch that uses it, including reconnects and
+  restores, and passes it on the command line; sessions with the option off
+  are launched without it. OMP reads the file again while a session runs (for
+  example when eval calls `agent()`), so Alas keeps it in place instead of
+  deleting it after launch. If it cannot be written, the session fails to
+  start.
 - The session's first prompt tells the agent its native subagent tool is off
   and points it at `session_new` (or `alas session new`). If Alas tools are
   turned off (**Expose Alas tools to agents**), the agent is told it cannot
   delegate at all.
 
 This is not a sandbox: shell commands and extensions can still start other
-agents or processes.
+agents or processes. For OMP, that includes extension tools that spawn agents
+themselves and running `omp` from the shell.
 
 Delegated children are leaves in every case. Their MCP discovery does not list
 `session_new`, and Alas still rejects a direct `session_new` call from a child.
