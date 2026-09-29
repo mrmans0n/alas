@@ -52,8 +52,10 @@ struct PathsTests {
         defer { try? FileManager.default.removeItem(at: base) }
         let fresh = base.appendingPathComponent("fresh")
         let loose = base.appendingPathComponent("loose")
+        let untraversable = base.appendingPathComponent("untraversable")
         try FileManager.default.createDirectory(at: loose, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
-        for url in [fresh, loose] {
+        try FileManager.default.createDirectory(at: untraversable, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o600])
+        for url in [fresh, loose, untraversable] {
             #expect(AlasProfile.preparePrivateDirectory(url, ownerUid: getuid()))
             let mode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
             #expect(mode == 0o700)
@@ -85,6 +87,6 @@ struct PathsTests {
         #expect(AlasProfile.isSameDirectory(alias.appendingPathComponent("Profile"), real))
         #expect(!AlasProfile.isSameDirectory(real, real.deletingLastPathComponent()))
         // Still matched before the directory exists, as on a first launch.
-        #expect(AlasProfile.isSameDirectory(alias.appendingPathComponent("Profile/new"), real.appendingPathComponent("new")))
+        #expect(AlasProfile.isSameDirectory(alias.appendingPathComponent("Profile/new"), real.appendingPathComponent("NEW")))
     }
 }

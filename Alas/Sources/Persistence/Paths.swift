@@ -88,7 +88,7 @@ struct AlasProfile: Equatable, Sendable {
               (st.st_mode & S_IFMT) == S_IFDIR,
               st.st_uid == ownerUid
         else { return false }
-        return (st.st_mode & 0o077) == 0 || chmod(url.path, 0o700) == 0
+        return (st.st_mode & 0o777) == 0o700 || chmod(url.path, 0o700) == 0
     }
 
     /// The filesystem's own spelling of an existing directory: symlinks in any
@@ -107,8 +107,11 @@ struct AlasProfile: Equatable, Sendable {
     /// Whether two paths name one directory, however they are spelled. Either
     /// may not exist yet (the standard root is only created on first launch),
     /// so each is canonicalized through its deepest existing ancestor.
+    /// Components that do not exist yet are compared case-insensitively, as
+    /// the default macOS volume would treat them once created; erring toward
+    /// "same" only ever refuses a launch.
     static func isSameDirectory(_ lhs: URL, _ rhs: URL) -> Bool {
-        canonicalPath(lhs) == canonicalPath(rhs)
+        canonicalPath(lhs).caseInsensitiveCompare(canonicalPath(rhs)) == .orderedSame
     }
 
     private static func canonicalPath(_ url: URL) -> String {
