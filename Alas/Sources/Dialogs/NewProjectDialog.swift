@@ -1222,6 +1222,7 @@ private struct ProjectDialog: View {
     private func refreshRepoIcon() {
         guard case .add = mode else { return }
         let wasSelected = usesRepoIcon
+        let previous = repoIcon
         repoIcon = discoverRepoIcon()
         if let repoIcon, wasSelected || draftIconIsUntouched {
             iconImagePath = repoIcon.imagePath
@@ -1230,6 +1231,20 @@ private struct ProjectDialog: View {
             iconImagePath = nil
             iconMode = .letter
         }
+        discardSupersededPreview(previous)
+    }
+
+    /// Each folder change stages another preview under the pending id. Drop
+    /// the one just replaced unless the draft still points at that file (a
+    /// custom image with identical bytes shares its content-addressed path).
+    private func discardSupersededPreview(_ previous: RepoIconOption?) {
+        guard let previous,
+              previous.imagePath != repoIcon?.imagePath,
+              previous.imagePath != iconImagePath
+        else { return }
+        try? FileManager.default.removeItem(
+            at: ProjectIconImageStaging.url(for: previous.imagePath, root: state.repoIconStagingRoot)
+        )
     }
 
     /// The dialog stages icon previews under its pending project id. When no
