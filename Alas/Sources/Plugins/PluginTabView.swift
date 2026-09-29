@@ -92,6 +92,7 @@ struct PluginTabView: View {
 private struct PluginCanvasView: View {
     let host: PluginHost
     let tabIndex: Int
+    @FocusState private var focused: String?
 
     var body: some View {
         GeometryReader { geometry in
@@ -110,13 +111,24 @@ private struct PluginCanvasView: View {
                         .accessibilityHidden(true)
                     ForEach(host.regions[tabIndex] ?? [], id: \.id) { region in
                         // Rects are not range-checked by the host: never hand SwiftUI a negative size.
-                        Button { Task { await host.click(tab: tabIndex, region: region.id) } } label: {
+                        let activate = { Task { await host.click(tab: tabIndex, region: region.id) } }
+                        Button(action: { activate() }) {
                             Color.clear.contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        // Explicitly focusable so Tab reaches regions in list order, and Return/Space activate.
+                        .focusable()
+                        .focused($focused, equals: region.id)
+                        .onKeyPress(.return) { activate(); return .handled }
+                        .onKeyPress(.space) { activate(); return .handled }
                         .frame(
                             width: CGFloat(max(0, region.rect[2])) * scale,
                             height: CGFloat(max(0, region.rect[3])) * scale)
+                        .overlay {
+                            if focused == region.id {
+                                RoundedRectangle(cornerRadius: 2).stroke(Color.accentColor, lineWidth: 2)
+                            }
+                        }
                         .offset(
                             x: origin.x + CGFloat(region.rect[0]) * scale,
                             y: origin.y + CGFloat(region.rect[1]) * scale)
