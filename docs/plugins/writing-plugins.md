@@ -185,8 +185,8 @@ installs it. It uses a small ABI section you can copy as is.
 
 ## Working with requests and replies
 
-- **Answer `alas/activate` first**, in the same call, before anything else. Reply
-  with the `id` you were given.
+- **Answer `alas/activate` first**, in the same call, before any request of your
+  own. Reply with the `id` you were given.
 - **Choose your own request ids** and remember what each was for, as the skeleton
   does with `pending`. Replies come back later, in the order you asked, and carry
   the same `id`.

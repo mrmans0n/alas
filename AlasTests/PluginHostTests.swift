@@ -67,16 +67,17 @@ struct PluginHostTests {
         #expect(reason.contains(fragment))
     }
 
-    @Test func theActivationReplyMustComeInTheFirstCall() async throws {
-        // The first call only sends a request; the reply triggers a second call, which answers activation too late.
-        let request = #"{"jsonrpc":"2.0","id":1,"method":"workspace/snapshot"}"#
-        let host = try makeHost([[.send(request)], [.send(activateOK)]], grants: [.workspaceRead])
+    @Test func aRequestBeforeTheActivationReplyStopsThePluginWithoutBeingActedOn() async throws {
+        let recorder = Recorder()
+        let host = try makeHost(
+            [[.send(switchToWT), .send(activateOK)]], grants: [.worktreeSwitch], recorder: recorder)
         await host.activate()
         guard case .failed(let reason) = host.state else {
             Issue.record("expected failed, got \(host.state)")
             return
         }
-        #expect(reason.contains("did not respond to alas/activate"))
+        #expect(reason.contains("before answering alas/activate"))
+        #expect(recorder.switched.isEmpty)
     }
 
     /// A single case for `requestsAreCheckedAgainstGrants`. Swift Testing's

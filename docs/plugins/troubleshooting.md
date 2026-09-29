@@ -47,6 +47,7 @@ The row shows `Plugin stopped: <reason>`.
 | `plugin export alas_alloc has the wrong signature` | Types do not match `(i32) -> i32`. | In Rust: `alas_alloc(len: usize) -> *mut u8`. It must take one integer and return one. |
 | `plugin export alas_handle has the wrong signature` | Types do not match `(i32, i32) -> ()`. | `alas_handle(ptr: *mut u8, len: usize)` must return nothing. |
 | `plugin did not respond to alas/activate` | No reply to `alas/activate` in the first call. | Send `{"jsonrpc":"2.0","id":<the id you received>,"result":{}}` from inside `alas_handle`. Check under **Messages** that a message went out (`←`). |
+| `plugin sent a request before answering alas/activate` | The plugin asked for something (a snapshot, a worktree switch) before it replied to activation. | Send the `alas/activate` response first; requests come after it. |
 | `plugin rejected activation: …` | You replied to `alas/activate` with an error. | Return a `result` unless you really mean to refuse. |
 | `plugin sent a malformed message` | A message was not valid JSON-RPC 2.0. | Check the `"jsonrpc": "2.0"` field, and that each message has a `method` or an `id`. Send one object per `alas.send`, not an array. |
 

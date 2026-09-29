@@ -216,7 +216,7 @@ The first message a plugin receives. It starts the plugin for one project.
 { "jsonrpc": "2.0", "id": 0, "result": {} }
 ```
 
-Send it before anything else. Any `result` is accepted. An `error` response stops
+Send it before any request of your own (a `log` notification may come first). Any `result` is accepted. An `error` response stops
 the plugin with `plugin rejected activation: <message>`, and no response at all
 stops it with `plugin did not respond to alas/activate`.
 
@@ -451,6 +451,7 @@ starts a fresh instance.
 | `plugin export <name> has the wrong signature` | `alas_alloc` or `alas_handle` has a different type from the one required. |
 | `plugin did not respond to alas/activate` | No response to `alas/activate` in the first call. |
 | `plugin rejected activation: <message>` | The response to `alas/activate` was an error. |
+| `plugin sent a request before answering alas/activate` | A request came before the activation response. Nothing is acted on. |
 | `plugin sent a malformed message` | Not valid JSON-RPC 2.0. See [Envelope](#envelope). |
 | `plugin passed an invalid memory range (ptr <p>, len <n>)` | `alas.send` was given a range outside `memory`, or `alas_alloc` returned a buffer that does not fit. |
 | `message of <n> bytes exceeds the size limit` | A message was larger than 1 MiB. |

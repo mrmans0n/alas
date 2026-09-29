@@ -179,6 +179,10 @@ final class PluginHost {
         else { return .violation("plugin sent a malformed message") }
         switch (header.method, header.id) {
         case let (method?, id?):
+            // Nothing is acted on for a plugin that has not yet answered activation.
+            guard state != .activating else {
+                return .violation("plugin sent a request before answering alas/activate")
+            }
             return .reply(handleRequest(method, id: id, data: data))
         case let (method?, nil):
             handleNotification(method, data: data)
