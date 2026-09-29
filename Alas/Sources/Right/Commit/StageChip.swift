@@ -8,7 +8,7 @@ struct StageChip: View {
     }
 
     let state: DisplayState
-    let action: () -> Void
+    let action: (() -> Void)?
     @Environment(\.theme) var theme
     @State private var hovering = false
 
@@ -17,13 +17,13 @@ struct StageChip: View {
         self.action = action
     }
 
-    init(state: DisplayState, action: @escaping () -> Void) {
+    init(state: DisplayState, action: (() -> Void)?) {
         self.state = state
         self.action = action
     }
 
     var body: some View {
-        Button(action: action) {
+        Button(action: action ?? {}) {
             ZStack {
                 RoundedRectangle(cornerRadius: 3)
                     .fill(fill)
@@ -39,7 +39,9 @@ struct StageChip: View {
             .opacity(state != .unstaged || hovering ? 1.0 : 0.55)
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .disabled(action == nil)
+        .onHover { hovering = action != nil && $0 }
+        .accessibilityLabel(accessibilityLabel)
         .help(help)
     }
 
@@ -94,10 +96,19 @@ struct StageChip: View {
     }
 
     private var help: String {
+        guard action != nil else { return accessibilityLabel }
         switch state {
         case .staged: return "Unstage"
         case .mixed: return "Stage remaining changes"
         case .unstaged: return "Stage"
+        }
+    }
+
+    private var accessibilityLabel: String {
+        switch state {
+        case .staged: return "Staged"
+        case .mixed: return "Partially staged"
+        case .unstaged: return "Unstaged"
         }
     }
 }

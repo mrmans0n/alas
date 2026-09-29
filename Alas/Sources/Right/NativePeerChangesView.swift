@@ -11,6 +11,7 @@ struct NativePeerChangesView: View {
 
     @Environment(\.theme) private var theme
     @State private var collapsedSections: Set<String> = []
+    @State private var collapsedChangePaths: Set<String> = []
 
     var body: some View {
         switch changes {
@@ -25,16 +26,7 @@ struct NativePeerChangesView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        // Two sections, not one merged list: a partially
-                        // staged file appears in both `staged` and
-                        // `unstaged`, and the read-only row has no stage
-                        // chip to tell those two copies apart on sight.
-                        fileSection("Staged", files: changes.staged) {
-                            .diff(path: $0.path, stage: $0.stage)
-                        }
-                        fileSection("Unstaged", files: changes.unstaged) {
-                            .diff(path: $0.path, stage: $0.stage)
-                        }
+                        workingTreeSection(changes.staged + changes.unstaged)
                         fileSection(changes.comparisonRef.map { "Since \($0)" } ?? "Branch",
                                     files: changes.branchFiles) {
                             .diff(path: $0.path, stage: nil)
@@ -45,6 +37,52 @@ struct NativePeerChangesView: View {
                         }
                     }
                     .padding(.vertical, 4)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func workingTreeSection(_ files: [ChangedFile]) -> some View {
+        if !files.isEmpty {
+            let title = "Working tree"
+            let expanded = !collapsedSections.contains(title)
+            let groups = WorkingTreeChangeGroup.group(files: files)
+            let groupsByPath = Dictionary(uniqueKeysWithValues: groups.map { ($0.path, $0) })
+            SectionHeader(
+                role: .workingTree,
+                title: title,
+                count: groups.count,
+                expanded: expanded,
+                onToggle: { toggle(title) },
+                stats: (
+                    add: groups.reduce(0) { $0 + $1.add },
+                    del: groups.reduce(0) { $0 + $1.del }
+                )
+            ) { EmptyView() }
+            if expanded {
+                ForEach(WorkingTreeFlatRow.make(
+                    groups: groups,
+                    collapsedPaths: collapsedChangePaths
+                )) { row in
+                    WorkingTreeFlatRowView(
+                        row: row,
+                        groups: groups,
+                        groupsByPath: groupsByPath,
+                        collapsedPaths: $collapsedChangePaths,
+                        actions: WorkingTreeRowActions(
+                            onSelect: { onOpen(.diff(path: $0.path, stage: $0.stage)) },
+                            fileContextTarget: { _ in
+                                FileContextMenuTarget(kind: .file, localURL: nil)
+                            },
+                            readOnly: true,
+                            onOpenFile: { onOpen(.file(path: $0.path)) },
+                            onCopyRelative: { Clipboard.copy($0.path) },
+                            onCopyFull: {
+                                Clipboard.copy(worktreePath.appendingPathComponent($0.path).path)
+                            }
+                        )
+                    )
                 }
             }
         }

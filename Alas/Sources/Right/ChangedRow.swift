@@ -39,7 +39,7 @@ struct ChangedRow: View {
         let resolvedStageState = stageState ?? (file.stage == .staged ? .staged : .unstaged)
         return Button(action: onSelect) {
             HStack(spacing: 6) {
-                if let onStage {
+                if onStage != nil || stageState != nil {
                     StageChip(state: resolvedStageState, action: onStage)
                 }
                 HStack(spacing: 6) {
