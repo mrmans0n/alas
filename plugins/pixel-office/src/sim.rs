@@ -171,7 +171,9 @@ impl World {
     /// `_layout` is unused today; it is part of the signature so seats can move without an API change.
     pub fn step(&mut self, dt_ms: u32, _layout: &Layout) {
         self.clock_ms += dt_ms as u64;
-        for c in &mut self.characters {
+        for i in 0..self.characters.len() {
+            let taken = taken_spots(&self.characters);
+            let c = &mut self.characters[i];
             c.walk_ms = c.walk_ms.wrapping_add(dt_ms);
             if c.mood == Mood::Idle && !c.leaving {
                 c.idle_ms = c.idle_ms.saturating_add(dt_ms);
@@ -182,7 +184,7 @@ impl World {
             }
             if c.mood == Mood::Idle && !c.leaving {
                 if c.idle_ms >= SLEEP_AFTER_MS && c.activity != Activity::Sleeping {
-                    let spot = COUCH_SPOTS[(c.next_random() as usize) % COUCH_SPOTS.len()];
+                    let spot = pick_spot(c, &COUCH_SPOTS, &taken);
                     c.walk_to(spot, Activity::Sleeping);
                     continue;
                 }
@@ -195,7 +197,7 @@ impl World {
                         let seat = c.seat;
                         c.walk_to(seat, Activity::Seated);
                     } else {
-                        let spot = LOUNGE[(c.next_random() as usize) % LOUNGE.len()];
+                        let spot = pick_spot(c, &LOUNGE, &taken);
                         c.walk_to(spot, Activity::Lounging);
                     }
                 }
@@ -205,8 +207,30 @@ impl World {
     }
 }
 
+/// Where every non-leaving character is, or is heading to.
+fn taken_spots(characters: &[Character]) -> Vec<(i32, i32)> {
+    characters
+        .iter()
+        .filter(|c| !c.leaving)
+        .map(|c| match (c.activity, c.path.last()) {
+            (Activity::Walking, Some(&(x, y))) => (x as i32, y as i32),
+            _ => (c.x as i32, c.y as i32),
+        })
+        .collect()
+}
+
+/// A random spot nobody occupies or is heading to; any spot if all are taken.
+fn pick_spot(c: &mut Character, spots: &[(i32, i32)], taken: &[(i32, i32)]) -> (i32, i32) {
+    let free: Vec<_> = spots.iter().copied().filter(|s| !taken.contains(s)).collect();
+    let pool = if free.is_empty() { spots } else { &free };
+    pool[c.next_random() as usize % pool.len()]
+}
+
 fn reroute(c: &mut Character) {
     if c.wants_seat() {
+        if c.activity == Activity::Seated && (c.x, c.y) == (c.seat.0 as f32, c.seat.1 as f32) {
+            return; // already at the desk: busy moods just change the pose
+        }
         let seat = c.seat;
         c.walk_to(seat, Activity::Seated);
     } else {
@@ -329,5 +353,44 @@ mod tests {
         assert!(world.characters[0].leaving);
         settle(&mut world, &l2, 30_000);
         assert!(world.characters.is_empty());
+    }
+
+    #[test]
+    fn a_seated_agent_stays_put_when_its_busy_mood_changes() {
+        let l = layout(&snapshot(&[1]));
+        let mut world = World::default();
+        world.sync(&snapshot(&[1]), &l);
+        settle(&mut world, &l, 20_000);
+        for state in ["awaiting_input", "permission_request", "running", "unknown"] {
+            world.sync(&with_state(snapshot(&[1]), state), &l);
+            for _ in 0..50 {
+                world.step(100, &l);
+                assert_eq!(world.characters[0].activity, Activity::Seated, "{state}");
+            }
+        }
+    }
+
+    #[test]
+    fn idlers_never_share_a_lounge_spot() {
+        let mut s = snapshot(&[2]); // the couch has two spots
+        for session in &mut s.worktrees[0].sessions {
+            session.state = "idle".into();
+        }
+        let l = layout(&s);
+        let mut world = World::default();
+        world.sync(&s, &l);
+        for _ in 0..4_000 {
+            world.step(100, &l);
+            let mut spots: Vec<_> = world
+                .characters
+                .iter()
+                .filter(|c| c.activity == Activity::Lounging || c.activity == Activity::Sleeping)
+                .map(|c| (c.x as i32, c.y as i32))
+                .collect();
+            let n = spots.len();
+            spots.sort();
+            spots.dedup();
+            assert_eq!(spots.len(), n, "two characters share a spot");
+        }
     }
 }
