@@ -289,9 +289,8 @@ struct RemotePairingApprovalIntegrationTests {
                 diagnostics: { .init(appName: "Alas", port: 8765, addresses: [], usesPlainHTTP: true,
                     pairedDeviceCount: self.pairing.devices.count, serverId: self.id, name: self.peer.name,
                     pairingApprovalVersion: self.enabled ? 1 : nil) })
-            result.acceptsPeers = { self.enabled }
             result.identity = { () -> RemoteServerIdentity in
-                RemoteServerIdentity(serverId: self.id, name: self.peer.name, federationEnabled: true)
+                RemoteServerIdentity(serverId: self.id, name: self.peer.name)
             }
             result.identityProof = { RemoteIdentityCrypto.sign(serverId: self.id, challenge: $0, with: self.signer.key) }
             result.approval = RemotePairingApprovalHTTP(coordinator: coordinator, enabled: { self.enabled })

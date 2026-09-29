@@ -43,7 +43,7 @@ struct RemoteFederationAggregationTests {
                 assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
                 provider: provider,
                 identity: {
-                    RemoteServerIdentity(serverId: serverId, name: name, federationEnabled: true)
+                    RemoteServerIdentity(serverId: serverId, name: name)
                 },
                 signer: signer)
         }
@@ -98,7 +98,9 @@ struct RemoteFederationAggregationTests {
         /// `aPeerGoingAwayClosesItsSessionsForThePhone` test needs to avoid.
         func dropFederationLinks() {
             peers.disconnectAll()
-            server.disconnectAllPeerDevices()
+            for device in pairing.devices where device.kind == .alasInstance {
+                server.disconnectDevice(device.id)
+            }
         }
 
         /// Plants a live session on this Mac and returns its id.

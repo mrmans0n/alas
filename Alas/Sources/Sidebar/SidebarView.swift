@@ -243,8 +243,7 @@ struct SidebarView: View {
                                     highlightedWorktreeId: highlightedWorktreeId
                                 )
                             }
-                            if state.config.remote.federationEnabled,
-                               let nativePeerSessions = state.nativePeerSessions {
+                            if let nativePeerSessions = state.nativePeerSessions {
                                 NativePeerSidebarView(
                                     client: nativePeerSessions,
                                     icon: { name in
@@ -436,7 +435,7 @@ private struct SidebarAttentionHeader: View {
 
     var body: some View {
         let aggregation = state.attentionAggregation
-        let peerRows = state.config.remote.federationEnabled && state.config.needsAttentionEnabled
+        let peerRows = state.config.needsAttentionEnabled
             ? state.nativePeerSessions?.snapshot.attentionRows ?? [] : []
         let presentation = SidebarAttentionPresentation(
             enabled: state.config.needsAttentionEnabled, aggregation: aggregation,

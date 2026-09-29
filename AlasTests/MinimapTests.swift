@@ -216,7 +216,7 @@ struct MinimapTests {
         #expect(bottom.blueComponent > bottom.redComponent + 0.5)
     }
 
-    @Test("Legacy settings leave both minimaps off")
+    @Test("Legacy settings show the editor minimap and hide the transcript minimap")
     func legacyPreferences() throws {
         var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(AppConfig.defaults)) as? [String: Any])
         var code = try #require(object["code"] as? [String: Any])
@@ -226,7 +226,7 @@ struct MinimapTests {
         object["code"] = code
         object["harness"] = harness
         let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONSerialization.data(withJSONObject: object))
-        #expect(!decoded.code.showMinimap)
+        #expect(decoded.code.showMinimap)
         #expect(!decoded.harness.acpShowMinimap)
     }
 

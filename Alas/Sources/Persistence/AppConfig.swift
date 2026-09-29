@@ -72,10 +72,8 @@ struct AppConfig: Codable, Equatable {
         var serverId: String = ""
         /// Name advertised in `hello`. Empty means "use the computer name".
         var displayName: String = ""
-        /// Experiment: lets this Mac pair with other Macs running Alas.
-        var federationEnabled: Bool = false
         /// Advertise this Mac on the local network with Bonjour and browse for
-        /// other Alas instances there. Only meaningful with `federationEnabled`.
+        /// other Alas instances there.
         var discoverable: Bool = false
 
         init(
@@ -87,7 +85,6 @@ struct AppConfig: Codable, Equatable {
             allowedOrigins: [String] = [],
             serverId: String = "",
             displayName: String = "",
-            federationEnabled: Bool = false,
             discoverable: Bool = false
         ) {
             self.enabled = enabled
@@ -98,13 +95,12 @@ struct AppConfig: Codable, Equatable {
             self.allowedOrigins = allowedOrigins
             self.serverId = serverId
             self.displayName = displayName
-            self.federationEnabled = federationEnabled
             self.discoverable = discoverable
         }
 
         enum CodingKeys: String, CodingKey {
             case enabled, keepAwake, port, allowedHosts, preferredAdvertisedHost
-            case allowedOrigins, serverId, displayName, federationEnabled, discoverable
+            case allowedOrigins, serverId, displayName, discoverable
         }
 
         init(from decoder: Decoder) throws {
@@ -117,7 +113,6 @@ struct AppConfig: Codable, Equatable {
             allowedOrigins = (try? c.decode([String].self, forKey: .allowedOrigins)) ?? []
             serverId = (try? c.decode(String.self, forKey: .serverId)) ?? ""
             displayName = (try? c.decode(String.self, forKey: .displayName)) ?? ""
-            federationEnabled = (try? c.decode(Bool.self, forKey: .federationEnabled)) ?? false
             discoverable = (try? c.decode(Bool.self, forKey: .discoverable)) ?? false
         }
 
@@ -278,7 +273,7 @@ struct AppConfig: Codable, Equatable {
             cursorBlink = try c.decode(Bool.self, forKey: .cursorBlink)
             scrollbackLines = try c.decode(Int.self, forKey: .scrollbackLines)
             bell = try c.decode(String.self, forKey: .bell)
-            syncTabTitleWithTerminalTitle = (try? c.decode(Bool.self, forKey: .syncTabTitleWithTerminalTitle)) ?? false
+            syncTabTitleWithTerminalTitle = (try? c.decode(Bool.self, forKey: .syncTabTitleWithTerminalTitle)) ?? true
             confirmCloseTabs = (try? c.decode(Bool.self, forKey: .confirmCloseTabs)) ?? false
             keepSessionsAlive = (try? c.decode(Bool.self, forKey: .keepSessionsAlive)) ?? true
         }
@@ -337,7 +332,7 @@ struct AppConfig: Codable, Equatable {
              acpAutoRunByDefault: Bool = false,
              acpLocalTitlesEnabled: Bool = true,
              acpShowMinimap: Bool = false,
-             acpCollapseFinishedToolCalls: Bool = false,
+             acpCollapseFinishedToolCalls: Bool = true,
              exposeAlasMCP: Bool = true,
              alasMCPTransport: AlasMCPTransport = .stdio,
              acpDictationLocale: String = "")
@@ -371,7 +366,7 @@ struct AppConfig: Codable, Equatable {
             acpAutoRunByDefault = (try? c.decode(Bool.self, forKey: .acpAutoRunByDefault)) ?? false
             acpLocalTitlesEnabled = (try? c.decode(Bool.self, forKey: .acpLocalTitlesEnabled)) ?? true
             acpShowMinimap = (try? c.decode(Bool.self, forKey: .acpShowMinimap)) ?? false
-            acpCollapseFinishedToolCalls = (try? c.decode(Bool.self, forKey: .acpCollapseFinishedToolCalls)) ?? false
+            acpCollapseFinishedToolCalls = (try? c.decode(Bool.self, forKey: .acpCollapseFinishedToolCalls)) ?? true
             exposeAlasMCP = (try? c.decode(Bool.self, forKey: .exposeAlasMCP)) ?? true
             alasMCPTransport = (try? c.decode(AlasMCPTransport.self, forKey: .alasMCPTransport)) ?? .stdio
             acpDictationLocale = (try? c.decode(String.self, forKey: .acpDictationLocale)) ?? ""
@@ -386,7 +381,7 @@ struct AppConfig: Codable, Equatable {
         var languageServers: [LanguageServerConfig]
         var dismissedInstallNudges: [String]
         var userDefinedRecipes: [String: [InstallRecipe]]
-        var showMinimap: Bool = false
+        var showMinimap: Bool = true
         var showInvisibleCharacters: Bool = false
         var showSpaces: Bool = true
         var showTabs: Bool = true
@@ -558,7 +553,7 @@ struct AppConfig: Codable, Equatable {
             cursorBlink: true,
             scrollbackLines: 10000,
             bell: "visual",
-            syncTabTitleWithTerminalTitle: false,
+            syncTabTitleWithTerminalTitle: true,
             confirmCloseTabs: false,
             keepSessionsAlive: true
         ),
@@ -590,7 +585,7 @@ struct AppConfig: Codable, Equatable {
                 agentId: nil,
                 useBypassPermissions: false
             ),
-            defaultLauncherMode: .terminal,
+            defaultLauncherMode: .acp,
             chatFontFamily: "",
             chatFontSize: 13
         ),
@@ -733,7 +728,7 @@ extension AppConfig {
             let cursorBlink = (try? termContainer.decode(Bool.self, forKey: .cursorBlink)) ?? true
             let scrollbackLines = (try? termContainer.decode(Int.self, forKey: .scrollbackLines)) ?? 10000
             let bell = (try? termContainer.decode(String.self, forKey: .bell)) ?? "visual"
-            let syncTabTitleWithTerminalTitle = (try? termContainer.decode(Bool.self, forKey: .syncTabTitleWithTerminalTitle)) ?? false
+            let syncTabTitleWithTerminalTitle = (try? termContainer.decode(Bool.self, forKey: .syncTabTitleWithTerminalTitle)) ?? true
             let confirmCloseTabs = (try? termContainer.decode(Bool.self, forKey: .confirmCloseTabs)) ?? false
             let keepSessionsAlive = (try? termContainer.decode(Bool.self, forKey: .keepSessionsAlive)) ?? true
             terminal = Terminal(
@@ -765,7 +760,7 @@ extension AppConfig {
                 cursorBlink: true,
                 scrollbackLines: 10000,
                 bell: "visual",
-                syncTabTitleWithTerminalTitle: false,
+                syncTabTitleWithTerminalTitle: true,
                 confirmCloseTabs: false,
                 keepSessionsAlive: true
             )
@@ -805,7 +800,7 @@ extension AppConfig {
                 languageServers: servers,
                 dismissedInstallNudges: dismissed,
                 userDefinedRecipes: userRecipes,
-                showMinimap: (try? codeContainer.decode(Bool.self, forKey: .showMinimap)) ?? false,
+                showMinimap: (try? codeContainer.decode(Bool.self, forKey: .showMinimap)) ?? true,
                 showInvisibleCharacters: showInvisibleCharacters,
                 showSpaces: showSpaces,
                 showTabs: showTabs,
@@ -892,7 +887,7 @@ extension AppConfig {
             )) ?? WorktreeAutoLaunch(agentId: nil, useBypassPermissions: false)
             let defaultMode = (try? agentsContainer.decode(
                 LauncherMode.self, forKey: .defaultLauncherMode
-            )) ?? .terminal
+            )) ?? .acp
             let chatFontFamily = (try? agentsContainer.decode(
                 String.self, forKey: .chatFontFamily
             )) ?? ""
@@ -915,7 +910,7 @@ extension AppConfig {
                 worktreeAutoLaunch: WorktreeAutoLaunch(
                     agentId: nil, useBypassPermissions: false
                 ),
-                defaultLauncherMode: .terminal,
+                defaultLauncherMode: .acp,
                 chatFontFamily: "",
                 chatFontSize: 13
             )

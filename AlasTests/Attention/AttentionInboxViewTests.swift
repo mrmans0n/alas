@@ -25,7 +25,7 @@ struct AttentionInboxViewTests {
                                         serverId: "B", serverName: "Mac B")
         let snapshot = NativePeerSidebarSnapshot.build(
             peers: [.init(serverId: "B", name: "Mac B", state: "online")],
-            rows: [peer, peer], enabled: true
+            rows: [peer, peer]
         )
         let badge = SidebarAttentionPresentation(enabled: true, aggregation: local,
                                                  peerRows: snapshot.attentionRows)
@@ -55,16 +55,13 @@ struct AttentionInboxViewTests {
                                            status: "idle", canDrive: false,
                                            serverId: "B", serverName: "Mac B")
         let peers = [RemoteHelloPeer(serverId: "B", name: "Mac B", state: "online")]
-        let active = NativePeerSidebarSnapshot.build(peers: peers, rows: [peer], enabled: true)
-        let resolved = NativePeerSidebarSnapshot.build(peers: peers, rows: [cleared], enabled: true)
-        let disabled = NativePeerSidebarSnapshot.build(peers: peers, rows: [peer], enabled: false)
+        let active = NativePeerSidebarSnapshot.build(peers: peers, rows: [peer])
+        let resolved = NativePeerSidebarSnapshot.build(peers: peers, rows: [cleared])
 
         #expect(SidebarAttentionPresentation(enabled: true, aggregation: local,
                                             peerRows: active.attentionRows).count == 2)
         #expect(SidebarAttentionPresentation(enabled: true, aggregation: local,
                                             peerRows: resolved.attentionRows).count == 1)
-        #expect(SidebarAttentionPresentation(enabled: true, aggregation: local,
-                                            peerRows: disabled.attentionRows).count == 1)
         #expect(SidebarAttentionPresentation(enabled: false, aggregation: local,
                                             peerRows: active.attentionRows).count == 0)
         #expect(local.unresolvedCount == 1)

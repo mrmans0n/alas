@@ -132,20 +132,18 @@ struct RemoteServerPane: View {
                                 placeholder: state.remoteDisplayName
                             )
                         }
-                        if state.config.remote.federationEnabled {
-                            SettingsRow(
-                                name: "Discoverable on this network",
-                                desc: "Advertise this Mac with Bonjour and list other Macs running Alas nearby. Allow pairing requests on the receiving Mac."
-                            ) {
-                                AlasToggle(on: Binding(
-                                    get: { state.config.remote.discoverable },
-                                    set: {
-                                        state.config.remote.discoverable = $0
-                                        state.saveConfig()
-                                        state.syncRemoteDiscovery()
-                                    }
-                                ))
-                            }
+                        SettingsRow(
+                            name: "Discoverable on this network",
+                            desc: "Advertise this Mac with Bonjour and list other Macs running Alas nearby. Allow pairing requests on the receiving Mac."
+                        ) {
+                            AlasToggle(on: Binding(
+                                get: { state.config.remote.discoverable },
+                                set: {
+                                    state.config.remote.discoverable = $0
+                                    state.saveConfig()
+                                    state.syncRemoteDiscovery()
+                                }
+                            ))
                         }
                         SettingsRow(
                             name: "Allowed origins",
@@ -178,23 +176,19 @@ struct RemoteServerPane: View {
                             QRView(text: link)
                                 .frame(width: 180, height: 180)
                                 .padding(.top, 8)
-                            if state.config.remote.federationEnabled {
-                                Text(code)
-                                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .padding(.top, 6)
-                                AlasButton(title: "Copy code", style: .subtle) {
-                                    copyAddress(code)
-                                }
+                            Text(code)
+                                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                                .textSelection(.enabled)
                                 .padding(.top, 6)
+                            AlasButton(title: "Copy code", style: .subtle) {
+                                copyAddress(code)
                             }
+                            .padding(.top, 6)
                             AlasButton(title: "Copy pairing link", style: .subtle) {
                                 copyAddress(link)
                             }
                             .padding(.top, 6)
-                            Text(state.config.remote.federationEnabled
-                                 ? "Refreshes automatically — scan it, paste the copied link into Alas remote on another device, or type the code into a nearby Mac's Peers list."
-                                 : "Refreshes automatically — scan it, or paste the copied link into Alas remote on another device to add this Mac.")
+                            Text("Refreshes automatically — scan it, paste the copied link into Alas remote on another device, or type the code into a nearby Mac's Peers list.")
                                 .font(.system(size: 11))
                                 .foregroundColor(theme.color("fg-dim"))
                                 .padding(.bottom, 8)
@@ -257,7 +251,7 @@ struct RemoteServerPane: View {
                     }
                 }
 
-                if state.config.remote.enabled, state.config.remote.federationEnabled {
+                if state.config.remote.enabled {
                     SettingsGroup(title: "Peers") {
                         if state.remotePeers.peers.isEmpty {
                             SettingsRow(name: "No peers", desc: "Pick a nearby Mac or paste another Mac's pairing link below. Both Macs end up paired with each other.") {

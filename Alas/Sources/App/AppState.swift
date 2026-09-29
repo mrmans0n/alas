@@ -653,7 +653,7 @@ final class AppState {
         }
         return federation
     }()
-    /// Native sidebar consumer, present only while Remote and federation run.
+    /// Native sidebar consumer, present only while Remote runs.
     private(set) var nativePeerSessions: NativePeerSessions?
 
     #if DEBUG
@@ -743,10 +743,9 @@ final class AppState {
         RemoteServerIdentity(
             serverId: config.remote.serverId,
             name: remoteDisplayName,
-            federationEnabled: config.remote.federationEnabled,
-            // Only reach for the lazy manager when a server is up and peer
-            // federation is enabled, for the same reason `syncRemotePeers` does.
-            peers: config.remote.federationEnabled && remoteServer != nil ? remotePeers.helloPeers : []
+            // Only reach for the lazy manager when a server is up, for the
+            // same reason `syncRemotePeers` does.
+            peers: remoteServer != nil ? remotePeers.helloPeers : []
         )
     }
 
@@ -847,10 +846,6 @@ final class AppState {
                 Task { @MainActor in await self?.remotePeers.handleInboundPeer(request) }
             }
             configurePairingApprovals(server: server)
-            // Always set, flag or no flag: with federation off no link is
-            // online, so `sessionCarryingPeers` is empty and the provider
-            // routes nothing. Gating here instead would need a server
-            // restart on every toggle.
             server.federation = remoteFederation
             do {
                 // Pin a stable default port so a paired phone's URL survives app
@@ -894,12 +889,12 @@ final class AppState {
         )
     }
 
-    /// Keeps peer links alive only while the server is up and the experiment
-    /// is on; peers stay stored either way. The Bonjour advertisement follows
-    /// the same lifecycle, gated further by `discoverable`.
+    /// Keeps peer links alive only while the server is up; peers stay stored
+    /// either way. The Bonjour advertisement follows the same lifecycle,
+    /// gated further by `discoverable`.
     func syncRemotePeers() {
         syncPairingApprovalState()
-        if config.remote.enabled, config.remote.federationEnabled, remoteServer != nil {
+        if config.remote.enabled, remoteServer != nil {
             remotePeers.connectAll()
             if nativePeerSessions == nil {
                 let client = NativePeerSessions(federation: remoteFederation,
@@ -909,20 +904,6 @@ final class AppState {
             } else {
                 nativePeerSessions?.refresh()
             }
-        } else if remoteServer != nil {
-            nativePeerSessions?.stop()
-            nativePeerSessions = nil
-            // Same reason as `syncRemoteServer`'s disabled branch: without a
-            // server no link was ever opened, and reaching for `remotePeers`
-            // would force the lazy manager and its stores into existence.
-            remotePeers.disconnectAll()
-            // Cuts an already-open peer socket immediately: `disconnectAll()`
-            // above only stops OUR outbound links, it does nothing to a
-            // connection another Mac holds INTO this one. The `authorize`
-            // closure in `RemoteServer.accept` refuses a peer's token going
-            // forward; this closes the sockets that opened before the toggle
-            // flipped.
-            remoteServer?.disconnectAllPeerDevices()
         }
         remoteServer?.advertise(remoteBonjourAdvertisement())
     }
