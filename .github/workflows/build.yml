@@ -358,7 +358,9 @@ jobs:
             swift-cas-v1-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build for testing
-        timeout-minutes: 30
+        # A cold compilation cache takes about 25 minutes on a macos-26 runner,
+        # so slow runners need headroom beyond that.
+        timeout-minutes: 45
         # Splitting build/test into `build-for-testing` + `test-without-building`
         # avoids the lsregister/CoreServices hang we observed locally and on CI
         # when xcodebuild's `test` action re-validates the build description and
