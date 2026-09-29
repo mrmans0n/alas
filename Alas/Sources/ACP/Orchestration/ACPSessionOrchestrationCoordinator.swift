@@ -440,11 +440,19 @@ final class ACPSessionOrchestrationCoordinator {
         targetSession?.nextPromptWorkCount += 1
         var deliveryScheduled = false
         defer { if !deliveryScheduled { targetSession?.nextPromptWorkCount -= 1 } }
+        // A child's report is framed at enqueue, not delivery, so every
+        // delivery path (and an older build sharing the store) hands the
+        // parent the same text.
+        let deliveredPrompt = callerParent.flatMap { record in
+            record.parentSessionId == request.targetSessionId
+                ? ACPDelegatedOutcomeText.childReport(outcomeContext(for: record), message: prompt)
+                : nil
+        } ?? prompt
         let message = ACPDelegatedMessage(
             id: environment.makeID(),
             sourceSessionId: origin.sessionId,
             targetSessionId: request.targetSessionId,
-            prompt: prompt,
+            prompt: deliveredPrompt,
             createdAt: environment.now()
         )
         do {
@@ -923,8 +931,10 @@ final class ACPSessionOrchestrationCoordinator {
             accepted = await target.manager.enqueueDelegatedPrompt(
                 text: claimed.message.prompt,
                 source: ACPDelegatedPromptSource(
-                    sessionId: claimed.message.sourceSessionId,
-                    messageId: claimed.message.id
+                    message: claimed.message,
+                    senderDelegation: try? await environment.persistence.delegation(
+                        childSessionId: claimed.message.sourceSessionId
+                    )
                 ),
                 into: claimed.message.targetSessionId
             )

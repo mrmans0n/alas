@@ -67,6 +67,10 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     /// Cancels one native subagent by child session id. Nil when the host
     /// can't cancel (read-only mirror), which also hides the action.
     var onCancelSubagent: ((String) -> Void)?
+    /// Resolved caption for a delegated prompt's bubble. Compared, because
+    /// it folds in the sender's agent display name, which lives outside
+    /// `message`.
+    var delegatedLabel: String? = nil
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         guard lhs.messagePhase == rhs.messagePhase else { return false }
@@ -80,7 +84,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             typography: lhs.typography,
             trustedImageRoot: lhs.trustedImageRoot,
             isForkEligible: lhs.isForkEligible, forkTargets: lhs.forkTargets,
-            isLiveNarration: lhs.isLiveNarration
+            isLiveNarration: lhs.isLiveNarration,
+            delegatedLabel: lhs.delegatedLabel
         )
         == equalityKey(
             stableId: rhs.stableId, message: rhs.message,
@@ -92,7 +97,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             typography: rhs.typography,
             trustedImageRoot: rhs.trustedImageRoot,
             isForkEligible: rhs.isForkEligible, forkTargets: rhs.forkTargets,
-            isLiveNarration: rhs.isLiveNarration
+            isLiveNarration: rhs.isLiveNarration,
+            delegatedLabel: rhs.delegatedLabel
         )
     }
 
@@ -110,7 +116,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         trustedImageRoot: URL?,
         isForkEligible: Bool = false,
         forkTargets: [ACPSessionForkTarget] = [],
-        isLiveNarration: Bool = false
+        isLiveNarration: Bool = false,
+        delegatedLabel: String? = nil
     ) -> EqualityKey {
         EqualityKey(
             stableId: stableId, message: message,
@@ -121,7 +128,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             availableTrailingGutterWidth: availableTrailingGutterWidth ?? .infinity,
             typography: typography, trustedImageRoot: trustedImageRoot,
             isForkEligible: isForkEligible, forkTargets: forkTargets,
-            isLiveNarration: isLiveNarration
+            isLiveNarration: isLiveNarration,
+            delegatedLabel: delegatedLabel
         )
     }
 
@@ -138,6 +146,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         let isForkEligible: Bool
         let forkTargets: [ACPSessionForkTarget]
         let isLiveNarration: Bool
+        let delegatedLabel: String?
     }
 
     static func presentationPhase(of message: ACPMessage) -> ACPMessagePhase? {
@@ -181,7 +190,9 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                 UserMessageRow(
                     text: text,
                     attachments: attachments,
-                    isDelegated: delegatedSource != nil,
+                    delegatedLabel: delegatedSource.map {
+                        delegatedLabel ?? ACPDelegatedPromptSource.transcriptLabel(for: $0, agentDisplayName: { $0 })
+                    },
                     contentMaxWidth: contentMaxWidth,
                     typography: typography,
                     session: session

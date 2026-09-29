@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -74,5 +75,57 @@ struct ACPDelegatedOutcomeTextTests {
         )
         #expect(!text.contains("\n"))
         #expect(text.count < 500)
+    }
+
+    // MARK: - Delivered prompt source and transcript label
+
+    private static func delegation(child: String, parent: String) -> ACPDelegationRecord {
+        .init(
+            childSessionId: child, parentSessionId: parent, projectId: "p",
+            parentWorktreeId: "w", childWorktreeId: "w", agentId: "codex",
+            worktreeRequest: .current(worktreeId: "w"), pendingInitialPrompt: nil,
+            phase: .ready, failureMessage: nil, createdAt: 1, updatedAt: 1
+        )
+    }
+
+    struct Delivery: Sendable, CustomTestStringConvertible {
+        let source: String
+        let target: String
+        /// The delegation record whose child is `source`, if any.
+        let senderDelegation: ACPDelegationRecord?
+        let label: String
+        var testDescription: String { "\(source) → \(target)" }
+    }
+
+    static let deliveries: [Delivery] = [
+        .init(source: "c4f1a2b3-9d", target: "parent",
+              senderDelegation: delegation(child: "c4f1a2b3-9d", parent: "parent"),
+              label: "Report from Codex child · c4f1a2b3"),
+        // Parent→child: the sender is a root, or itself the child of a third session.
+        .init(source: "parent", target: "c4f1a2b3-9d", senderDelegation: nil, label: "Delegated prompt"),
+        .init(source: "parent", target: "c4f1a2b3-9d",
+              senderDelegation: delegation(child: "parent", parent: "root"), label: "Delegated prompt"),
+        .init(source: "mission:s1", target: "s1", senderDelegation: nil, label: "Delegated prompt"),
+    ]
+
+    @Test("a delivered prompt is labelled as a child report only when its sender is the target's child", arguments: deliveries)
+    func deliveredLabel(_ delivery: Delivery) {
+        let message = ACPDelegatedMessage(
+            id: "m1", sourceSessionId: delivery.source, targetSessionId: delivery.target, prompt: "x", createdAt: 1
+        )
+        let source = ACPDelegatedPromptSource(message: message, senderDelegation: delivery.senderDelegation)
+        #expect(source.isSameDelivery(as: .init(sessionId: delivery.source, messageId: "m1")))
+        let label = ACPDelegatedPromptSource.transcriptLabel(for: source) { $0 == "codex" ? "Codex" : $0 }
+        #expect(label == delivery.label)
+    }
+
+    @Test("a persisted source from before sender fields, or with an unknown relationship, decodes to the generic label", arguments: [
+        #"{"sessionId":"parent","messageId":"m1"}"#,
+        #"{"sessionId":"parent","messageId":"m1","senderRelationship":"sibling","senderAgentId":"codex"}"#,
+    ])
+    func legacySourceDecodes(json: String) throws {
+        let source = try JSONDecoder().decode(ACPDelegatedPromptSource.self, from: Data(json.utf8))
+        #expect(source.isSameDelivery(as: .init(sessionId: "parent", messageId: "m1")))
+        #expect(ACPDelegatedPromptSource.transcriptLabel(for: source) { $0 } == "Delegated prompt")
     }
 }

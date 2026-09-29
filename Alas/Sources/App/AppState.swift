@@ -13607,8 +13607,10 @@ final class AppState {
                 accepted = await manager.enqueueDelegatedPrompt(
                     text: claimed.message.prompt,
                     source: ACPDelegatedPromptSource(
-                        sessionId: claimed.message.sourceSessionId,
-                        messageId: claimed.message.id
+                        message: claimed.message,
+                        senderDelegation: try? await acpOrchestrationPersistence.delegation(
+                            childSessionId: claimed.message.sourceSessionId
+                        )
                     ),
                     into: sessionId
                 )

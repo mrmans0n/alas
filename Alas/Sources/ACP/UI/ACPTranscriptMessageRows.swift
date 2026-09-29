@@ -5,7 +5,9 @@ import SwiftUI
 struct UserMessageRow: View {
     let text: String
     let attachments: [ACPMessage.Attachment]
-    let isDelegated: Bool
+    /// Caption above a prompt Alas delivered on someone else's behalf
+    /// (`ACPDelegatedPromptSource.transcriptLabel`); nil for the user's own.
+    let delegatedLabel: String?
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
     let session: ACPSession
@@ -15,8 +17,8 @@ struct UserMessageRow: View {
         HStack {
             Spacer(minLength: 40)
             VStack(alignment: .trailing, spacing: 4) {
-                if isDelegated {
-                    Text("Delegated prompt")
+                if let delegatedLabel {
+                    Text(delegatedLabel)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(theme.color("fg-faint"))
                 }
