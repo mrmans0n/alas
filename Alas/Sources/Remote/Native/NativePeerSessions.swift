@@ -40,6 +40,12 @@ final class NativePeerSessions {
     /// dedup would silently drop all but the first.
     @ObservationIgnored private var changesRequestInFlight = false
     @ObservationIgnored private var changesRequestOutdated = false
+    /// Same pair again, for the currently open document's `readFile`/
+    /// `fileDiff` request. Only meaningful while `workspace.document` is
+    /// non-nil and unchanged — opening a different document resets both,
+    /// since whatever was in flight for the old one no longer matters.
+    @ObservationIgnored private var documentRequestInFlight = false
+    @ObservationIgnored private var documentRequestOutdated = false
 
     init(federation: FederatedSessionsProvider,
          peers: @escaping @MainActor () -> [RemoteHelloPeer]) {
@@ -91,6 +97,8 @@ final class NativePeerSessions {
         fileTreeRequestOutdated = false
         changesRequestInFlight = false
         changesRequestOutdated = false
+        documentRequestInFlight = false
+        documentRequestOutdated = false
         fileTreeRequestInFlight = false
     }
 
@@ -165,6 +173,8 @@ final class NativePeerSessions {
         fileTreeRequestOutdated = false
         changesRequestInFlight = false
         changesRequestOutdated = false
+        documentRequestInFlight = false
+        documentRequestOutdated = false
         fileTreeRequestInFlight = false
     }
 
@@ -200,7 +210,9 @@ final class NativePeerSessions {
         // An open diff or file is otherwise left showing its old snapshot —
         // neither a summary change nor the toolbar's manual refresh touches
         // it, since both only route through this method.
-        if let document = workspace.document { open(document) }
+        if let document = workspace.document, !open(document) {
+            documentRequestOutdated = true
+        }
     }
 
     @discardableResult
@@ -236,8 +248,22 @@ final class NativePeerSessions {
         if !routeWhileOnline({ .listFiles(sessionId: $0, path: path) }) { workspace.markUnavailable() }
     }
 
-    func open(_ document: NativePeerWorkspace.Document) {
-        guard selectedSessionId != nil else { return }
+    /// Opens `document`, or — when it's already the open one — refreshes it.
+    /// A refresh is gated the same way changes/file-tree refreshes are: a
+    /// request already in flight for this same document skips the send, and
+    /// `reloadWorkspace()` queues a retry. Opening a genuinely different
+    /// document always proceeds; whatever was in flight for the previous one
+    /// no longer matters.
+    @discardableResult
+    func open(_ document: NativePeerWorkspace.Document) -> Bool {
+        guard selectedSessionId != nil else { return false }
+        if document != workspace.document {
+            documentRequestInFlight = false
+            documentRequestOutdated = false
+        } else if documentRequestInFlight {
+            return false
+        }
+        documentRequestInFlight = true
         workspace.beginDocument(document)
         let sent = switch document {
         case .diff(let path, let stage):
@@ -245,7 +271,12 @@ final class NativePeerSessions {
         case .file(let path):
             routeWhileOnline { .readFile(sessionId: $0, path: path) }
         }
-        if !sent { workspace.markUnavailable() }
+        if !sent {
+            documentRequestInFlight = false
+            workspace.markUnavailable()
+            return false
+        }
+        return true
     }
 
     func closeDocument() {
@@ -356,6 +387,14 @@ final class NativePeerSessions {
         default: false
         }
         if isRootFileTreeReply { fileTreeRequestInFlight = false }
+        let isDocumentReply: Bool = switch message {
+        case .fileDiffResult(_, let path, let stage, _, _, _), .fileDiffFailed(_, let path, let stage, _, _):
+            workspace.document == .diff(path: path, stage: stage.flatMap(ChangeStage.init(rawValue:)))
+        case .fileContents(_, let path, _, _), .fileUnavailable(_, let path, _, _, _):
+            workspace.document == .file(path: path)
+        default: false
+        }
+        if isDocumentReply { documentRequestInFlight = false }
         let handled = workspace.apply(message)
         if isChangesReply, changesRequestOutdated {
             changesRequestOutdated = false
@@ -364,6 +403,10 @@ final class NativePeerSessions {
         if isRootFileTreeReply, fileTreeRequestOutdated {
             fileTreeRequestOutdated = false
             loadFileTree()
+        }
+        if isDocumentReply, documentRequestOutdated, let document = workspace.document {
+            documentRequestOutdated = false
+            open(document)
         }
         if handled { return }
         let needsResubscribe = transcript?.apply(message) == true

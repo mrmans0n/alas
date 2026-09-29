@@ -662,6 +662,9 @@ struct NativePeerSessionsTests {
         links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
         client.select("B:s")
         client.open(.file(path: "a.swift"))
+        // Let the initial read complete, so the later summary change finds
+        // nothing in flight to gate on.
+        links.receive(.fileContents(sessionId: "s", path: "a.swift", text: "old", truncated: false), from: "B")
 
         let readFileCount: () -> Int = {
             links.sent(to: "B").filter { $0 == .readFile(sessionId: "s", path: "a.swift") }.count
@@ -672,6 +675,51 @@ struct NativePeerSessionsTests {
         // document should be re-requested along with changes and files.
         links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
         #expect(readFileCount() == afterOpen + 1)
+    }
+
+    @Test func documentRefreshWhileInFlightQueuesARetry() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 1)]), from: "B")
+        client.select("B:s")
+        client.open(.file(path: "a.swift")) // readFile is now in flight
+
+        let readFileCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .readFile(sessionId: "s", path: "a.swift") }.count
+        }
+        let afterOpen = readFileCount()
+
+        // Summary changes while the read is still outstanding: must not
+        // resend yet (the peer would drop the duplicate), but must queue
+        // a retry.
+        links.receive(.sessionList(sessions: [row("s", changedFiles: 2)]), from: "B")
+        #expect(readFileCount() == afterOpen)
+
+        // The original reply arrives — the queued retry must fire now.
+        links.receive(.fileContents(sessionId: "s", path: "a.swift", text: "old", truncated: false), from: "B")
+        #expect(readFileCount() == afterOpen + 1)
+    }
+
+    @Test func openingADifferentDocumentIsNeverGatedByThePreviousOnesInFlightState() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        client.open(.file(path: "a.swift")) // readFile("a.swift") in flight, no reply yet
+
+        client.open(.file(path: "b.swift"))
+        #expect(links.sent(to: "B").contains(.readFile(sessionId: "s", path: "b.swift")))
+        #expect(client.workspace.document == .file(path: "b.swift"))
     }
 
     @Test func planRejectionRequiresAndTrimsReason() {
