@@ -78,4 +78,14 @@ struct SSHCommandTests {
             #expect(argv.contains("ServerAliveCountMax=3"))
         }
     }
+
+    @Test func argvStripsThisHostsVirtualPaths() {
+        let script = SSHCommand.remoteScript(
+            cwd: "/.alas-remote/mini/srv/repo",
+            command: "git -C '/.alas-remote/mini/srv/repo' status"
+        )
+        let argv = SSHCommand(host: "mini", mode: .batch).argv(remoteScript: script)
+        #expect(argv.last?.contains("/.alas-remote") == false)
+        #expect(argv.last?.contains("/srv/repo") == true)
+    }
 }

@@ -72,7 +72,7 @@ struct SSHCommand: Equatable {
     /// Argv after `SSHCommand.executable`. The script rides as the final
     /// argument; sshd hands it to the remote shell as a single string.
     func argv(remoteScript: String) -> [String] {
-        optionArgs + [host, remoteScript]
+        optionArgs + [host, RemotePath.stripping(host: host, in: remoteScript)]
     }
 
     /// Address an existing multiplexed master without opening a new SSH

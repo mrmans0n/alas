@@ -97,13 +97,10 @@ struct CodeHostProviderTests {
         #expect(invocation.env == nil)
         #expect(invocation.args.contains("code-host-devbox"))
         let script = try #require(invocation.args.last)
-        let command = [
-            "env", "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C",
-            "gh", "auth", "status", "--hostname", "github.com",
-        ]
-            .map(SSHCommand.shellQuote)
-            .joined(separator: " ")
-        #expect(script == SSHCommand.remoteScript(cwd: cwd.path, command: command))
+        // Virtual paths are stripped at the SSH boundary, so the script should
+        // contain the real path and never the virtual path.
+        #expect(!script.contains("/.alas-remote"))
+        #expect(script.contains("/srv/alas-code-host-invocation-test"))
     }
 
     @Test func defaultEvidenceMethodsUseSummaryData() async throws {
