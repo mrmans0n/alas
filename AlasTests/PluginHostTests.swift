@@ -167,10 +167,12 @@ struct PluginHostTests {
         #expect(lastReply(host)?.contains(testCase.reply) == true)
     }
 
-    @Test func activationHandshakeMakesTheHostActive() async throws {
-        let host = try makeHost([[.send(activateOK)]])
+    @Test(arguments: [1, 2])
+    func activationHandshakeMakesTheHostActive(api: Int) async throws {
+        let host = try makeHost([[.send(activateOK)]], manifest: api == 1 ? Self.v1Manifest : Self.v2Manifest)
         await host.activate()
         #expect(host.state == .active)
+        #expect(lastReply(host)?.contains(#""api":\#(api)"#) == true)
     }
 
     @Test(arguments: [

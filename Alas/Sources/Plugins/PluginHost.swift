@@ -43,11 +43,10 @@ struct PluginHostActions {
     }
 }
 
-/// Runs the v1 protocol for one plugin in one project.
+/// Runs the protocol version the manifest declares (1 or 2) for one plugin in one project.
 @MainActor
 @Observable
 final class PluginHost {
-    static let apiVersion = 1
     private static let activateID = JSONRPCID.number(0)
     private static let requiredCapability: [String: PluginCapability] = [
         "workspace/snapshot": .workspaceRead,
@@ -115,7 +114,7 @@ final class PluginHost {
             return
         }
         let params = PluginActivateParams(
-            api: Self.apiVersion, project: project,
+            api: manifest.api, project: project,
             grants: grants.sorted { $0.rawValue < $1.rawValue })
         await deliver(
             encode(JSONRPCEnvelope(id: Self.activateID, method: "alas/activate", params: params)),
