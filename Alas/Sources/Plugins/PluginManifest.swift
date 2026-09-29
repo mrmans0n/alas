@@ -67,7 +67,7 @@ struct PluginManifest: Equatable, Sendable {
         }
 
         func required(_ value: String?, _ field: String) throws(PluginManifestError) -> String {
-            guard let value, !value.trimmingCharacters(in: .whitespaces).isEmpty else {
+            guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw .missingField(field)
             }
             return value

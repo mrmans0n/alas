@@ -15,6 +15,7 @@ struct PluginManifestTests {
         ("{", PluginManifestError.malformed),
         (#"{"name":"H","version":"1","api":1,"entry":"p.wasm"}"#, .missingField("id")),
         (#"{"id":"io.x.h","name":" ","version":"1","api":1,"entry":"p.wasm"}"#, .missingField("name")),
+        (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":1,"entry":"p.wasm"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":1,"entry":"p.wasm"}"#, .invalidID("Hello")),
         (#"{"id":"io.x.h","name":"H","version":"1","api":2,"entry":"p.wasm"}"#, .unsupportedAPI(2)),
         (#"{"id":"io.x.h","name":"H","version":"1","api":1,"entry":"p.wasm","capabilities":["network"]}"#, .unknownCapability("network")),
