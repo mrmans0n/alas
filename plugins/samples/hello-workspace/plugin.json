@@ -1,0 +1,8 @@
+{
+  "id": "io.nlopez.hello-workspace",
+  "name": "Hello Workspace",
+  "version": "0.1.0",
+  "api": 1,
+  "entry": "plugin.wasm",
+  "capabilities": ["workspace.read"]
+}

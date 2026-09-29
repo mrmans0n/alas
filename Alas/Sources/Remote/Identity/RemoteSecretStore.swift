@@ -20,7 +20,13 @@ protocol RemoteSecretStore: AnyObject, Sendable {
 }
 
 enum RemoteSecretStores {
-    static let service = "io.nlopez.alas.remote"
+    /// An isolated profile gets its own Keychain service, so a second
+    /// instance can neither read nor overwrite the main instance's identity
+    /// key and peer tokens.
+    static var service: String {
+        guard let runtime = AlasProfile.current.runtimeDirectory else { return "io.nlopez.alas.remote" }
+        return "io.nlopez.alas.remote.\(runtime.lastPathComponent)"
+    }
 
     /// The production store: Keychain, falling back to owner-only files.
     static func makeDefault() -> any RemoteSecretStore {

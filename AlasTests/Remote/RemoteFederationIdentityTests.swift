@@ -43,7 +43,7 @@ struct RemoteFederationIdentityTests {
                 pairing: self.pairing,
                 assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
                 provider: FakeSessionsProvider(),
-                identity: { RemoteServerIdentity(serverId: serverId, name: name, federationEnabled: true) },
+                identity: { RemoteServerIdentity(serverId: serverId, name: name) },
                 signer: signer)
         }
 

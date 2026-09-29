@@ -624,6 +624,21 @@ struct HarnessServiceTests {
         #expect(collector.requests[0].content.body == "Session is waiting for you.")
     }
 
+    @Test(arguments: [ActivityEvent.awaitingInput, .permissionRequest])
+    func acpSessionHookPromptsAreIgnored(event: ActivityEvent) {
+        let (service, collector) = makeService()
+        service.setExternalActivity(sessionId: "session-1", agent: .claude, state: .busy)
+        service.handleSocketEvent(
+            makeEvent(event: event, agent: .claude),
+            stateLookup: { _ in (projectId: "p1", worktreeId: "w1") },
+            shouldNotifyOnAwaiting: { true },
+            isExternalSession: { $0 == "session-1" }
+        )
+
+        #expect(service.activityBySession["session-1"]?.state == .busy)
+        #expect(collector.requests.isEmpty)
+    }
+
     @Test func agentKindMapsToHarnessKind() {
         #expect(AgentKind.claude.asHarnessKind == .claudeCode)
         #expect(AgentKind.codex.asHarnessKind == .codex)

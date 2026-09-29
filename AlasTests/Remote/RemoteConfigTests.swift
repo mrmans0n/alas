@@ -18,10 +18,12 @@ struct RemoteConfigTests {
     @Test func remoteConfigRoundTripsJSON() throws {
         var cfg = AppConfig.defaults
         cfg.remote.enabled = true
+        cfg.remote.keepAwake = true
         cfg.remote.port = 8765
         let data = try JSONEncoder().encode(cfg)
         let back = try JSONDecoder().decode(AppConfig.self, from: data)
         #expect(back.remote.enabled == true)
+        #expect(back.remote.keepAwake == true)
         #expect(back.remote.port == 8765)
     }
 
@@ -57,13 +59,14 @@ struct RemoteConfigTests {
         #expect(back.remote.port == 0)
     }
 
-    @Test func oldRemoteConfigWithoutHostFieldsDecodesDefaults() throws {
+    @Test func oldRemoteConfigWithoutOptionalSettingsDecodesDefaults() throws {
         let data = try JSONEncoder().encode(AppConfig.defaults)
         var json = try #require(
             try JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
         var remote = try #require(json["remote"] as? [String: Any])
         remote.removeValue(forKey: "allowedHosts")
+        remote.removeValue(forKey: "keepAwake")
         remote.removeValue(forKey: "preferredAdvertisedHost")
         json["remote"] = remote
 
@@ -71,6 +74,7 @@ struct RemoteConfigTests {
         let back = try JSONDecoder().decode(AppConfig.self, from: stripped)
 
         #expect(back.remote.allowedHosts == [])
+        #expect(back.remote.keepAwake == false)
         #expect(back.remote.preferredAdvertisedHost == nil)
     }
 
@@ -121,24 +125,6 @@ struct RemoteConfigTests {
         #expect(back.remote.allowedOrigins == [])
         #expect(back.remote.serverId == "")
         #expect(back.remote.displayName == "")
-    }
-
-    @Test func federationDefaultsOffAndRoundTrips() throws {
-        #expect(AppConfig.defaults.remote.federationEnabled == false)
-        var cfg = AppConfig.defaults
-        cfg.remote.federationEnabled = true
-        let back = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(cfg))
-        #expect(back.remote.federationEnabled == true)
-    }
-
-    @Test func oldRemoteConfigWithoutFederationKeyDecodesFalse() throws {
-        let data = try JSONEncoder().encode(AppConfig.defaults)
-        var json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        var remote = try #require(json["remote"] as? [String: Any])
-        remote.removeValue(forKey: "federationEnabled")
-        json["remote"] = remote
-        let back = try JSONDecoder().decode(AppConfig.self, from: JSONSerialization.data(withJSONObject: json))
-        #expect(back.remote.federationEnabled == false)
     }
 
     @Test func discoverableDefaultsOffAndRoundTrips() throws {

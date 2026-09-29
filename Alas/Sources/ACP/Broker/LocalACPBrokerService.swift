@@ -28,21 +28,34 @@ actor LocalACPBrokerService {
         self.client = client
     }
 
-    init(resourceURL: URL) throws {
+    init(resourceURL: URL, profile: AlasProfile = .current) throws {
         let binary = try Self.resolveBundledHelper(resourceURL: resourceURL)
+        let environment = Self.helperEnvironment(profile: profile)
         client = RemoteHelperClient(
             host: "local",
             transportFactory: {
                 JSONRPCStdioTransport(
                     executable: binary,
                     arguments: ["serve"],
-                    environment: nil,
+                    environment: environment,
                     framing: .newline,
                     terminationScope: .processOnly
                 )
             }
         )
     }
+
+    /// Extra environment for the local helper, merged over the inherited one.
+    /// The helper keeps broker state under `$HOME/.alas` by default, which
+    /// every instance shares; an isolated profile moves it into its private
+    /// runtime directory so its brokers are never listed, adopted, or closed
+    /// by another instance (and vice versa).
+    static func helperEnvironment(profile: AlasProfile) -> [String: String]? {
+        guard let runtime = profile.runtimeDirectory else { return nil }
+        return [helperStateDirectoryKey: runtime.path]
+    }
+
+    static let helperStateDirectoryKey = "ALAS_HELPER_STATE_DIR"
 
     static func resolveBundledHelper(resourceURL: URL) throws -> URL {
         guard let binary = RemoteHelperInstaller.bundledBinaryPath(

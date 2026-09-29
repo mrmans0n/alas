@@ -50,6 +50,8 @@ final class AgentHookSocketServer: @unchecked Sendable {
     private var _onMCPHello: MCPHelloHandler?
 
     private let clientTasks = ClientTaskRegistry(limit: AgentHookSocketServer.maxConcurrentClientTasks)
+    /// Where per-leaf `sock-<leafId>` symlinks live: next to the bind path.
+    private let sessionLinkDirectory: String
 
     /// Path that callers (and the `ALAS_SOCKET_PATH` env var) should use to
     /// reach the live socket. May be a symlink pointing at the bind path —
@@ -76,6 +78,7 @@ final class AgentHookSocketServer: @unchecked Sendable {
     private static let clientIOTimeout = timeval(tv_sec: 5, tv_usec: 0)
 
     init(socketPath: String) {
+        sessionLinkDirectory = (socketPath as NSString).deletingLastPathComponent
         unlink(socketPath)
         guard startListening(path: socketPath) else { return }
         // The listening socket is bound to the same path callers use, so
@@ -87,8 +90,12 @@ final class AgentHookSocketServer: @unchecked Sendable {
         }
     }
 
-    convenience init(uid: uid_t = getuid(), pid: pid_t = ProcessInfo.processInfo.processIdentifier) {
-        let directory = "/tmp/alas-\(uid)"
+    convenience init(
+        uid: uid_t = getuid(),
+        pid: pid_t = ProcessInfo.processInfo.processIdentifier,
+        profile: AlasProfile = .current
+    ) {
+        let directory = Self.socketDirectory(uid: uid, profile: profile)
         guard Self.prepareSocketDirectory(directory, ownerUid: uid) else {
             self.init(socketPath: "/dev/null")
             return
@@ -98,8 +105,19 @@ final class AgentHookSocketServer: @unchecked Sendable {
         self.init(socketPath: path)
     }
 
+    /// `/tmp/alas-<uid>` for the standard profile, which is also where the
+    /// `alas` CLI discovers live instances when `ALAS_SOCKET_PATH` is unset.
+    /// An isolated profile binds inside its private runtime directory instead,
+    /// so it is neither discovered by nor sweeps sockets of other instances.
+    static func socketDirectory(uid: uid_t, profile: AlasProfile) -> String {
+        if let runtime = profile.runtimeDirectory {
+            return runtime.appendingPathComponent("hooks", isDirectory: true).path
+        }
+        return "/tmp/alas-\(uid)"
+    }
+
     /// Creates (or updates) a leaf-scoped symlink at
-    /// `/tmp/alas-<uid>/sock-<leafId>` pointing at the live bind path, and
+    /// `<socket dir>/sock-<leafId>` pointing at the live bind path, and
     /// returns the symlink path. Used as the per-session `ALAS_SOCKET_PATH`
     /// so the env var stays valid across Alas relaunches: on the next
     /// launch we re-bind to a fresh `pid-<pid>` path and `linkSession`
@@ -112,9 +130,9 @@ final class AgentHookSocketServer: @unchecked Sendable {
     ///
     /// Returns nil if the server isn't bound, or if symlink creation
     /// failed — the caller can fall back to the raw bind path.
-    func linkSession(leafId: String, uid: uid_t = getuid()) -> String? {
+    func linkSession(leafId: String) -> String? {
         guard let bindPath = lock.withLock({ _bindPath }) else { return nil }
-        let linkPath = "/tmp/alas-\(uid)/sock-\(leafId)"
+        let linkPath = "\(sessionLinkDirectory)/sock-\(leafId)"
         unlink(linkPath)
         guard symlink(bindPath, linkPath) == 0 else { return nil }
         return linkPath
@@ -122,9 +140,9 @@ final class AgentHookSocketServer: @unchecked Sendable {
 
     /// Best-effort removal of a leaf's per-session symlink. Called when
     /// `TerminalService` explicitly closes a pane so we don't leave
-    /// orphan symlinks under `/tmp/alas-<uid>/`.
-    func unlinkSession(leafId: String, uid: uid_t = getuid()) {
-        unlink("/tmp/alas-\(uid)/sock-\(leafId)")
+    /// orphan symlinks in the socket directory.
+    func unlinkSession(leafId: String) {
+        unlink("\(sessionLinkDirectory)/sock-\(leafId)")
     }
 
     /// Ensures `path` is a real directory (no symlink) owned by `ownerUid`

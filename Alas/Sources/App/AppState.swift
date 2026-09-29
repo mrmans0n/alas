@@ -653,7 +653,7 @@ final class AppState {
         }
         return federation
     }()
-    /// Native sidebar consumer, present only while Remote and federation run.
+    /// Native sidebar consumer, present only while Remote runs.
     private(set) var nativePeerSessions: NativePeerSessions?
 
     #if DEBUG
@@ -665,6 +665,7 @@ final class AppState {
     /// by `syncRemoteServer()`.
     @ObservationIgnored
     private(set) var remoteServer: RemoteServer?
+    @ObservationIgnored private let remoteKeepAwake = RemoteKeepAwakeController()
     /// Last bind/start failure, surfaced by the Settings pane. Nil when the
     /// server is running or intentionally stopped. Observable so the pane
     /// reacts when a bind fails.
@@ -742,10 +743,9 @@ final class AppState {
         RemoteServerIdentity(
             serverId: config.remote.serverId,
             name: remoteDisplayName,
-            federationEnabled: config.remote.federationEnabled,
-            // Only reach for the lazy manager when a server is up and peer
-            // federation is enabled, for the same reason `syncRemotePeers` does.
-            peers: config.remote.federationEnabled && remoteServer != nil ? remotePeers.helloPeers : []
+            // Only reach for the lazy manager when a server is up, for the
+            // same reason `syncRemotePeers` does.
+            peers: remoteServer != nil ? remotePeers.helloPeers : []
         )
     }
 
@@ -793,7 +793,10 @@ final class AppState {
     /// in `lastRemoteError` rather than thrown — the app must not crash because
     /// a port is busy.
     func syncRemoteServer() {
-        defer { syncPairingApprovalState() }
+        defer {
+            syncPairingApprovalState()
+            syncRemoteKeepAwake()
+        }
         if config.remote.enabled {
             if config.remote.ensureServerId() { saveConfig() }
             guard remoteServer == nil else {
@@ -829,6 +832,7 @@ final class AppState {
             server.onPortChange = { [weak self] p in
                 self?.remotePort = p
                 self?.refreshRemoteAccessState()
+                self?.syncRemoteKeepAwake()
             }
             server.onConnectionDeviceCountsChange = { [weak self] counts in
                 self?.remoteConnectedDeviceCountsSnapshot = counts
@@ -842,10 +846,6 @@ final class AppState {
                 Task { @MainActor in await self?.remotePeers.handleInboundPeer(request) }
             }
             configurePairingApprovals(server: server)
-            // Always set, flag or no flag: with federation off no link is
-            // online, so `sessionCarryingPeers` is empty and the provider
-            // routes nothing. Gating here instead would need a server
-            // restart on every toggle.
             server.federation = remoteFederation
             do {
                 // Pin a stable default port so a paired phone's URL survives app
@@ -882,12 +882,19 @@ final class AppState {
         }
     }
 
-    /// Keeps peer links alive only while the server is up and the experiment
-    /// is on; peers stay stored either way. The Bonjour advertisement follows
-    /// the same lifecycle, gated further by `discoverable`.
+    func syncRemoteKeepAwake() {
+        remoteKeepAwake.update(
+            enabled: config.remote.keepAwake,
+            serverRunning: config.remote.enabled && remoteServer != nil && remotePort != nil
+        )
+    }
+
+    /// Keeps peer links alive only while the server is up; peers stay stored
+    /// either way. The Bonjour advertisement follows the same lifecycle,
+    /// gated further by `discoverable`.
     func syncRemotePeers() {
         syncPairingApprovalState()
-        if config.remote.enabled, config.remote.federationEnabled, remoteServer != nil {
+        if config.remote.enabled, remoteServer != nil {
             remotePeers.connectAll()
             if nativePeerSessions == nil {
                 let client = NativePeerSessions(federation: remoteFederation,
@@ -897,20 +904,6 @@ final class AppState {
             } else {
                 nativePeerSessions?.refresh()
             }
-        } else if remoteServer != nil {
-            nativePeerSessions?.stop()
-            nativePeerSessions = nil
-            // Same reason as `syncRemoteServer`'s disabled branch: without a
-            // server no link was ever opened, and reaching for `remotePeers`
-            // would force the lazy manager and its stores into existence.
-            remotePeers.disconnectAll()
-            // Cuts an already-open peer socket immediately: `disconnectAll()`
-            // above only stops OUR outbound links, it does nothing to a
-            // connection another Mac holds INTO this one. The `authorize`
-            // closure in `RemoteServer.accept` refuses a peer's token going
-            // forward; this closes the sockets that opened before the toggle
-            // flipped.
-            remoteServer?.disconnectAllPeerDevices()
         }
         remoteServer?.advertise(remoteBonjourAdvertisement())
     }
@@ -6523,7 +6516,11 @@ final class AppState {
     }
 
     func startHarness() {
-        LegacyHookSweep.sweepAll()
+        // Rewrites the user's global agent settings (~/.claude, ~/.codex,
+        // ~/.cursor); an isolated profile must leave those to the main instance.
+        if !AlasProfile.current.isIsolated {
+            LegacyHookSweep.sweepAll()
+        }
         harness.notifications.setEnabled(config.harness.notifyOnFinish)
         harness.start(
             stateLookup: { [weak self] sessionId in
@@ -6534,10 +6531,13 @@ final class AppState {
             },
             shouldNotifyOnAwaiting: { [weak self] in
                 self?.config.harness.notifyOnAwaiting ?? true
+            },
+            isExternalSession: { [weak self] sessionId in
+                self?.acpManagers.values.contains { $0.liveSession(for: sessionId) != nil } ?? false
             }
         )
         // Per-leaf symlink: stays valid across Alas restarts (the next
-        // launch's `linkSession` repoints the same `/tmp/alas-<uid>/sock-
+        // launch's `linkSession` repoints the same `<socket dir>/sock-
         // <leafId>` path), and per-leaf scoping avoids collisions between
         // concurrent Alas processes.
         terminal.socketPathProvider = { [weak self] leafId in
@@ -7490,7 +7490,7 @@ final class AppState {
             && zmxBinary.map { FileManager.default.isExecutableFile(atPath: $0.path) } == true
         guard installHelper || installZmx else { return }
 
-        let defaults = UserDefaults.standard
+        let defaults = AlasProfile.userDefaults
         var allowed = Set(defaults.stringArray(forKey: "remote.acceleration.allowedHosts") ?? [])
         let declined = Set(defaults.stringArray(forKey: "remote.acceleration.declinedHosts") ?? [])
             .union(defaults.stringArray(forKey: "remote.zmx.declinedHosts") ?? [])
@@ -9519,6 +9519,25 @@ final class AppState {
             .map(\.prompt)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
+    }
+
+    /// Permissions only reach here once parked for a human: auto-run and
+    /// remembered decisions never block, so they never notify.
+    private func notifyACPPermissionBlocked(_ blocker: ACPChildBlocker) {
+        guard blocker.kind == .permission,
+              config.harness.notifyOnAwaiting,
+              let (owner, manager) = acpManagers.first(where: { $0.value.liveSession(for: blocker.sessionId) != nil }),
+              let session = manager.liveSession(for: blocker.sessionId),
+              let location = harnessSessionLocation(sessionId: blocker.sessionId)
+        else { return }
+        harness.notifications.notifyHarnessPermission(
+            agent: ACPHarnessBridge.agentKind(for: session.agentId),
+            body: blocker.summary,
+            projectId: location.projectId,
+            worktreeId: location.worktreeId,
+            sessionId: blocker.sessionId,
+            owner: owner
+        )
     }
 
     private func acpInputNotificationBody(from request: ACPUserInputRequest) -> String? {
@@ -12289,6 +12308,7 @@ final class AppState {
                 }
             },
             onChildBlocked: { [weak self] blocker in
+                self?.notifyACPPermissionBlocked(blocker)
                 Task { @MainActor [weak self] in
                     await self?.acpOrchestration.childBlocked(blocker)
                 }
@@ -12730,6 +12750,7 @@ final class AppState {
                 }
             },
             onChildBlocked: { [weak self] blocker in
+                self?.notifyACPPermissionBlocked(blocker)
                 Task { @MainActor [weak self] in
                     await self?.acpOrchestration.childBlocked(blocker)
                 }

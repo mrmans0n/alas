@@ -22,14 +22,11 @@ struct RemoteHelloPeer: Codable, Equatable, Sendable {
 struct RemoteServerIdentity: Equatable, Sendable {
     let serverId: String
     let name: String
-    let federationEnabled: Bool
     let peers: [RemoteHelloPeer]
 
-    init(serverId: String, name: String, federationEnabled: Bool = false,
-         peers: [RemoteHelloPeer] = []) {
+    init(serverId: String, name: String, peers: [RemoteHelloPeer] = []) {
         self.serverId = serverId
         self.name = name
-        self.federationEnabled = federationEnabled
         self.peers = peers
     }
 }
@@ -883,7 +880,8 @@ extension RemoteServerMessage {
             protocolVersion: RemoteProtocolVersion.current,
             serverId: identity.serverId,
             name: identity.name,
-            federationEnabled: identity.federationEnabled,
+            // Older peers refuse to link to a Mac that doesn't advertise this.
+            federationEnabled: true,
             peers: identity.peers)
     }
 }

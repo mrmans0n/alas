@@ -86,17 +86,19 @@ struct ACPPlanPillStateTests {
         #expect(state?.isAnimating == false)
     }
 
-    @Test("display strings keep compact and accessibility copy distinct")
-    func displayStrings() {
-        let state = ACPPlanPillState(items: [
-            .init(content: "Read code", status: "completed"),
-            .init(content: "Implement toolbar control", status: "in_progress"),
-            .init(content: "Test", status: "pending")
-        ])
+    @Test("active task progress uses its one-based position", arguments: [
+        (0, "1/5", "Tasks, 0 of 5 complete, Phase 1"),
+        (4, "5/5", "Tasks, 4 of 5 complete, Phase 5"),
+    ])
+    func displayStrings(activeIndex: Int, expectedProgress: String, expectedAccessibilityLabel: String) {
+        let items = (0..<5).map { index in
+            let status = index < activeIndex ? "completed" : index == activeIndex ? "in_progress" : "pending"
+            return Item(content: "Phase \(index + 1)", status: status)
+        }
+        let state = ACPPlanPillState(items: items)
 
-        #expect(state?.progressText == "1/3")
-        #expect(state?.accessibilityLabel
-            == "Tasks, 1 of 3 complete, Implement toolbar control")
+        #expect(state?.progressText == expectedProgress)
+        #expect(state?.accessibilityLabel == expectedAccessibilityLabel)
     }
 
     @Test("outline animation respects activity and Reduce Motion")

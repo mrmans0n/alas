@@ -228,6 +228,25 @@ struct RepoIconResolverTests {
         #expect(RepoIconResolver.iconIsExplicit(.init(mode: .image, color: "#5fb7c4", imagePath: "p/x.png")))
     }
 
+    @Test func pickingTheRepoIconKeepsFollowingTheRepoFile() throws {
+        let fixture = try Fixture()
+        try fixture.writeIcon("icon.png", bytes: Self.pngBytes)
+        let preview = resolve(appIcon: .default(color: "#112233"), in: fixture)
+        var draft = preview
+        draft.transparentBackground = true
+
+        let persisted = RepoIconResolver.appIconFollowingRepo(draft)
+        #expect(!RepoIconResolver.iconIsExplicit(persisted))
+
+        // A later edit to the repo file must reach the project, not a frozen copy.
+        try fixture.writeIcon("icon.png", bytes: Self.otherPNGBytes)
+        let updated = resolve(appIcon: persisted, in: fixture)
+        #expect(updated.mode == .image)
+        #expect(updated.imagePath != preview.imagePath)
+        #expect(updated.color == "#112233")
+        #expect(updated.transparentBackground)
+    }
+
     // MARK: - Resolution source
 
     @Test func resolveReportsTheDiscoveredFileAsTheSource() throws {

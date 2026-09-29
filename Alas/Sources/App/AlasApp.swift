@@ -492,6 +492,9 @@ struct AlasApp: App {
                 openMemoryReport(state: state)
             }
             .keyboardShortcut("M", modifiers: [.command, .shift, .control])
+            Button("Plugins…") {
+                PluginsWindowController.shared.show(state: state)
+            }
         }
         #endif
     }

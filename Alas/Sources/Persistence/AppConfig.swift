@@ -60,6 +60,7 @@ struct AppConfig: Codable, Equatable {
 
     struct Remote: Codable, Equatable {
         var enabled: Bool = false
+        var keepAwake: Bool = false
         var port: UInt16 = 0          // 0 = OS-assigned
         var allowedHosts: [String] = []
         var preferredAdvertisedHost: String? = nil
@@ -71,49 +72,47 @@ struct AppConfig: Codable, Equatable {
         var serverId: String = ""
         /// Name advertised in `hello`. Empty means "use the computer name".
         var displayName: String = ""
-        /// Experiment: lets this Mac pair with other Macs running Alas.
-        var federationEnabled: Bool = false
         /// Advertise this Mac on the local network with Bonjour and browse for
-        /// other Alas instances there. Only meaningful with `federationEnabled`.
+        /// other Alas instances there.
         var discoverable: Bool = false
 
         init(
             enabled: Bool = false,
+            keepAwake: Bool = false,
             port: UInt16 = 0,
             allowedHosts: [String] = [],
             preferredAdvertisedHost: String? = nil,
             allowedOrigins: [String] = [],
             serverId: String = "",
             displayName: String = "",
-            federationEnabled: Bool = false,
             discoverable: Bool = false
         ) {
             self.enabled = enabled
+            self.keepAwake = keepAwake
             self.port = port
             self.allowedHosts = allowedHosts
             self.preferredAdvertisedHost = preferredAdvertisedHost
             self.allowedOrigins = allowedOrigins
             self.serverId = serverId
             self.displayName = displayName
-            self.federationEnabled = federationEnabled
             self.discoverable = discoverable
         }
 
         enum CodingKeys: String, CodingKey {
-            case enabled, port, allowedHosts, preferredAdvertisedHost
-            case allowedOrigins, serverId, displayName, federationEnabled, discoverable
+            case enabled, keepAwake, port, allowedHosts, preferredAdvertisedHost
+            case allowedOrigins, serverId, displayName, discoverable
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? false
+            keepAwake = (try? c.decode(Bool.self, forKey: .keepAwake)) ?? false
             port = (try? c.decode(UInt16.self, forKey: .port)) ?? 0
             allowedHosts = (try? c.decode([String].self, forKey: .allowedHosts)) ?? []
             preferredAdvertisedHost = try? c.decodeIfPresent(String.self, forKey: .preferredAdvertisedHost)
             allowedOrigins = (try? c.decode([String].self, forKey: .allowedOrigins)) ?? []
             serverId = (try? c.decode(String.self, forKey: .serverId)) ?? ""
             displayName = (try? c.decode(String.self, forKey: .displayName)) ?? ""
-            federationEnabled = (try? c.decode(Bool.self, forKey: .federationEnabled)) ?? false
             discoverable = (try? c.decode(Bool.self, forKey: .discoverable)) ?? false
         }
 

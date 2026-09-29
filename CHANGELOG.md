@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### 🐛 Fixes
 
 - Open native peer transcripts at the latest message and load earlier messages while scrolling up.
+- Show the active ACP task's one-based position in the chat task affordance.
 
 ## [0.19.18] - 2026-09-29
 
@@ -34,6 +35,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Update FFF, MLX Swift, Swift Collections, Swift Transformers, SwiftTreeSitter, and ZMX (#1600, #1601, #1602, #1603, #1604, #1605, #1606).
 - Record the native-subagent adapter probe matrix (#1607).
 - Widen the git-gud stream collection deadline for loaded CI shards (#1617).
+
+### 🏗️ Internal
+
+- Support launching an isolated second instance with `ALAS_APP_SUPPORT_DIR`: its state, hook and zmx sockets, ACP brokers, remote Keychain items, and written preferences stay separate from the main instance.
 
 ## [0.19.17] - 2026-09-28
 

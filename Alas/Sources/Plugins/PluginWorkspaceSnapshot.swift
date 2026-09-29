@@ -1,0 +1,92 @@
+import Foundation
+
+/// What `workspace.read` exposes: one project's worktrees and their agent
+/// sessions. Always the whole project, so plugins never reconcile diffs.
+struct PluginWorkspaceSnapshot: Codable, Equatable, Sendable {
+    struct WorktreeEntry: Codable, Equatable, Sendable {
+        let id: String
+        let branch: String
+        let current: Bool
+        /// Omitted until the first status scan finishes.
+        let dirty: Dirty?
+        let sessions: [Session]
+    }
+
+    struct Dirty: Codable, Equatable, Sendable {
+        let files: Int
+        let conflicts: Int
+    }
+
+    struct Session: Codable, Equatable, Sendable {
+        let id: String
+        let agent: String
+        let title: String
+        let state: String
+        let plan: Plan?
+    }
+
+    struct Plan: Codable, Equatable, Sendable {
+        let completed: Int
+        let total: Int
+    }
+
+    let worktrees: [WorktreeEntry]
+}
+
+extension PluginWorkspaceSnapshot {
+    struct SessionInput {
+        let id: String
+        let agent: String
+        let title: String
+        let state: AgentSidebarState
+        let plan: AgentSidebarPlanProgress?
+    }
+
+    struct WorktreeInput {
+        let worktree: Worktree
+        let dirty: WorktreeDirtyState
+        let sessions: [SessionInput]
+    }
+
+    init(worktrees: [WorktreeInput], selectedWorktreeId: String?) {
+        self.init(worktrees: worktrees.map { input in
+            let dirty: Dirty? = switch input.dirty {
+            case .unknown: nil
+            case .clean: Dirty(files: 0, conflicts: 0)
+            case let .dirty(files, conflicts): Dirty(files: files, conflicts: conflicts)
+            }
+            return WorktreeEntry(
+                id: input.worktree.id,
+                branch: input.worktree.branch,
+                current: input.worktree.id == selectedWorktreeId,
+                dirty: dirty,
+                sessions: input.sessions.map { session in
+                    Session(
+                        id: session.id, agent: session.agent, title: session.title,
+                        state: Self.wireName(session.state),
+                        plan: session.plan.map { Plan(completed: $0.completed, total: $0.total) })
+                })
+        })
+    }
+
+    static func wireName(_ state: AgentSidebarState) -> String {
+        switch state {
+        case .running: "running"
+        case .awaitingInput: "awaiting_input"
+        case .permissionRequest: "permission_request"
+        case .idle: "idle"
+        case .detached: "detached"
+        case .unknown: "unknown"
+        }
+    }
+}
+
+extension PluginWorkspaceSnapshot.SessionInput {
+    init(row: AgentSidebarRow) {
+        let id: String = switch row.id {
+        case .acp(let sessionID): sessionID
+        case .terminal(_, let sessionID): sessionID
+        }
+        self.init(id: id, agent: row.agentID, title: row.title, state: row.state, plan: row.plan)
+    }
+}

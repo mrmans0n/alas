@@ -265,7 +265,7 @@ Inside an Alas-spawned terminal:
 
 These checks need two Macs running Alas on a reachable LAN or tailnet. They
 remain pending until performed with two interactive instances. Enable remote
-access, federation, and discovery on both Macs and keep a window visible.
+access and discovery on both Macs and keep a window visible.
 
 1. On Mac A, open Settings > Remote > Peers and click Pair beside Mac B.
    Confirm A says it is waiting for approval and offers Cancel. B shows a
@@ -289,8 +289,8 @@ access, federation, and discovery on both Macs and keep a window visible.
    peer is added. Repeat by closing A's settings pane. Leave another request
    unanswered for 120 seconds and confirm both the card and waiting state end.
    Allow near that deadline must not give submission another 120 seconds.
-6. While waiting, disable B's remote access, federation, or discovery, testing
-   each separately. The card disappears and the attempt grants no access.
+6. While waiting, disable B's remote access or discovery, testing each
+   separately. The card disappears and the attempt grants no access.
    Restart B during another pending request and confirm it is lost. A must
    require an explicit retry to create a new prompt after failure.
 7. Interrupt the connection just after Allow, then restore it. Confirm a lost

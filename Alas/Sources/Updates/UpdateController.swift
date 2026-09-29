@@ -22,7 +22,7 @@ final class UpdateController {
         identity: BuildIdentity = BuildIdentity.current(),
         checker: ReleaseChecker = ReleaseChecker(),
         installSource: InstallSource = .detect(),
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AlasProfile.userDefaults,
         isEnabled: @escaping () -> Bool
     ) {
         self.identity = identity

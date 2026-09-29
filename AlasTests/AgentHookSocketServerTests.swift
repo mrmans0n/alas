@@ -276,4 +276,27 @@ struct AgentHookSocketServerTests {
         #expect(result == 0)
         #expect(value == 1)
     }
+
+    @Test
+    func isolatedProfileBindsInsideItsRuntimeDirectory() {
+        let runtime = URL(fileURLWithPath: "/tmp/alas-501-0123abcd", isDirectory: true)
+        let isolated = AlasProfile(appSupportOverride: URL(fileURLWithPath: "/tmp/p"), runtimeDirectory: runtime)
+        let standard = AlasProfile(appSupportOverride: nil, runtimeDirectory: nil)
+        #expect(AgentHookSocketServer.socketDirectory(uid: 501, profile: isolated) == "/tmp/alas-501-0123abcd/hooks")
+        #expect(AgentHookSocketServer.socketDirectory(uid: 501, profile: standard) == "/tmp/alas-501")
+    }
+
+    @Test
+    func sessionLinksLiveNextToTheBindPath() throws {
+        let (dir, cleanup) = tmpSocketDir()
+        defer { cleanup() }
+        let path = "\(dir)/pid-1"
+        let server = AgentHookSocketServer(socketPath: path)
+        defer { server.shutdown() }
+        let link = try #require(server.linkSession(leafId: "leaf"))
+        #expect(link == "\(dir)/sock-leaf")
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link) == path)
+        server.unlinkSession(leafId: "leaf")
+        #expect(!FileManager.default.fileExists(atPath: link))
+    }
 }

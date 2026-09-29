@@ -161,11 +161,7 @@ struct NativePeerSidebarSnapshot: Equatable {
 
     var attentionCount: Int { attentionRows.count }
 
-    static func build(
-        peers: [RemoteHelloPeer], rows: [RemoteSessionSummary], enabled: Bool
-    ) -> Self {
-        guard enabled else { return .init(groups: [], attentionRows: []) }
-
+    static func build(peers: [RemoteHelloPeer], rows: [RemoteSessionSummary]) -> Self {
         var uniqueRows: [String: [String: RemoteSessionSummary]] = [:]
         for row in rows {
             guard let owner = row.serverId,

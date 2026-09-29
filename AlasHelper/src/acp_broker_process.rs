@@ -2407,8 +2407,8 @@ fn validate_broker_id(broker_id: &str) -> Result<(), AcpBrokerProcessError> {
 }
 
 fn broker_root() -> Result<PathBuf, AcpBrokerProcessError> {
-    let home = std::env::var("HOME").map_err(|_| broker_error(-32070, "HOME is not set"))?;
-    Ok(PathBuf::from(home).join(".alas").join("acp-brokers"))
+    let state = crate::helper_state_dir().ok_or_else(|| broker_error(-32070, "HOME is not set"))?;
+    Ok(state.join("acp-brokers"))
 }
 
 fn broker_dir(broker_id: &str) -> Result<PathBuf, AcpBrokerProcessError> {
