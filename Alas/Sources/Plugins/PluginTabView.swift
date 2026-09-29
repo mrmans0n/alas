@@ -92,7 +92,8 @@ struct PluginTabView: View {
 private struct PluginCanvasView: View {
     let host: PluginHost
     let tabIndex: Int
-    @FocusState private var focused: String?
+    /// Index into the region list: ids are plugin-chosen and the host truncates them, so they can collide.
+    @FocusState private var focused: Int?
 
     var body: some View {
         GeometryReader { geometry in
@@ -109,7 +110,7 @@ private struct PluginCanvasView: View {
                         .frame(width: size.width * scale, height: size.height * scale)
                         .offset(x: origin.x, y: origin.y)
                         .accessibilityHidden(true)
-                    ForEach(host.regions[tabIndex] ?? [], id: \.id) { region in
+                    ForEach(Array((host.regions[tabIndex] ?? []).enumerated()), id: \.offset) { index, region in
                         // Rects are not range-checked by the host: never hand SwiftUI a negative size.
                         let activate = { Task { await host.click(tab: tabIndex, region: region.id) } }
                         Button(action: { activate() }) {
@@ -118,14 +119,20 @@ private struct PluginCanvasView: View {
                         .buttonStyle(.plain)
                         // Explicitly focusable so Tab reaches regions in list order, and Return/Space activate.
                         .focusable()
-                        .focused($focused, equals: region.id)
-                        .onKeyPress(.return) { activate(); return .handled }
-                        .onKeyPress(.space) { activate(); return .handled }
+                        .focused($focused, equals: index)
+                        .onKeyPress(.return) {
+                            activate()
+                            return .handled
+                        }
+                        .onKeyPress(.space) {
+                            activate()
+                            return .handled
+                        }
                         .frame(
                             width: CGFloat(max(0, region.rect[2])) * scale,
                             height: CGFloat(max(0, region.rect[3])) * scale)
                         .overlay {
-                            if focused == region.id {
+                            if focused == index {
                                 RoundedRectangle(cornerRadius: 2).stroke(Color.accentColor, lineWidth: 2)
                             }
                         }

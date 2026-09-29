@@ -144,4 +144,42 @@ struct PluginManagerDiscoveryTests {
         await manager.reload()
         #expect(manager.hostsByKey.isEmpty)
     }
+
+    /// Enabling from a settings row that a rescan has since replaced must not start the old bytes,
+    /// whose approval is still stored under the old hash.
+    @MainActor
+    @Test func enablingAStaleRowDoesNotStartTheReplacedPlugin() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "PluginStaleEnable-\(UUID().uuidString)")
+        let suite = "PluginManagerTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: suite)
+        }
+        func install(_ wasm: [UInt8]) throws {
+            let dir = root.appending(path: "p")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data(#"{"id":"io.x.p","name":"P","version":"1","api":1,"entry":"plugin.wasm"}"#.utf8)
+                .write(to: dir.appending(path: "plugin.json"))
+            try Data(wasm).write(to: dir.appending(path: "plugin.wasm"))
+        }
+        let activate = #"{"jsonrpc":"2.0","id":0,"result":{}}"#
+        let projects = ProjectList([Self.project("a")])
+        let manager = PluginManager(
+            directory: root, approvals: PluginApprovalStore(defaults: defaults),
+            projects: { projects.projects }, actions: { _ in .inert })
+
+        try install(try PluginWATFixture.wasm([[.send(activate)]]))
+        await manager.reload()
+        let staleRow = try #require(manager.plugins.first)
+        await manager.approve(staleRow)
+        await manager.setEnabled(staleRow, false)
+
+        try install(try PluginWATFixture.wasm([[.send(activate), .send(activate)]]))
+        await manager.reload()
+        await manager.setEnabled(staleRow, true)
+
+        #expect(manager.hostsByKey.isEmpty)
+        await manager.shutdown()
+    }
 }

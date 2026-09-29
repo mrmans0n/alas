@@ -114,7 +114,13 @@ final class PluginManager {
     func setEnabled(_ plugin: Plugin, _ enabled: Bool) async {
         await serialized {
             self.approvals.setDisabled(id: plugin.id, !enabled)
-            if enabled { await self.start(plugin) } else { await self.stopHosts { $0.pluginID == plugin.id } }
+            if enabled {
+                // `plugin` is the row the user saw. A rescan may have replaced it since, so start what is
+                // discovered now: `start` then checks the current files' approval, never stale bytes.
+                if let current = self.plugin(id: plugin.id) { await self.start(current) }
+            } else {
+                await self.stopHosts { $0.pluginID == plugin.id }
+            }
         }
     }
 
