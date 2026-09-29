@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0002CD0916DDDAA9ACC89C12 /* CheckpointTestRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87A4D51E84CA952506A66F9B /* CheckpointTestRepository.swift */; };
 		004A8BA5B9353F67AAA3AE83 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2975A1465CA308E9766521F2 /* NotificationService.swift */; };
+		006679286D79E0CD2604ED2C /* ACPOpenCodeTaskPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EADB4F55B795183E9980993 /* ACPOpenCodeTaskPolicy.swift */; };
 		0081FC8497ADEC2FF4EF7D25 /* GGActionEventsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A25C83033616FE27526C945 /* GGActionEventsTests.swift */; };
 		00D95534280A5CED2356D06D /* AlasCLIWorktreeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 457858DB2CF0B558A1A490BC /* AlasCLIWorktreeResolver.swift */; };
 		00E3590C2A56A5BF2C707580 /* RunScriptStackDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F99A6DA89AA8E70B01FBD89 /* RunScriptStackDetector.swift */; };
@@ -3440,6 +3441,7 @@
 		9E26E24BB9CA3F672E4F7E94 /* RemoteIdentityKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteIdentityKey.swift; sourceTree = "<group>"; };
 		9E3AA8F6924E0D93EA550742 /* ReviewTargetDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewTargetDialog.swift; sourceTree = "<group>"; };
 		9E5D831638E003D6F8DE472B /* ACPNativeDelegationControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPNativeDelegationControls.swift; sourceTree = "<group>"; };
+		9EADB4F55B795183E9980993 /* ACPOpenCodeTaskPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPOpenCodeTaskPolicy.swift; sourceTree = "<group>"; };
 		9EB428BCB1036DEEFCDC0694 /* RepoMCPTrustBannerPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoMCPTrustBannerPolicy.swift; sourceTree = "<group>"; };
 		9EE9D8FC092856E46369F7B6 /* ACPImageChipHover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPImageChipHover.swift; sourceTree = "<group>"; };
 		9F31D837F83B4F8B9FB348BD /* ACPPermissionPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPermissionPolicyTests.swift; sourceTree = "<group>"; };
@@ -4448,6 +4450,7 @@
 				8528D2A61E1FC9F51296C9F6 /* ACPLaunchSpec.swift */,
 				DA89D4C70102BCF7B6B2450B /* ACPManagedAdapterDescriptor.swift */,
 				9E5D831638E003D6F8DE472B /* ACPNativeDelegationControls.swift */,
+				9EADB4F55B795183E9980993 /* ACPOpenCodeTaskPolicy.swift */,
 				FC8E722C16FFBEEEC43337D5 /* ACPSetupCheck.swift */,
 				3E9864A515B0ED49C68739B6 /* ACPSetupChecker.swift */,
 				3F239EBD79AA346B7976B544 /* AdapterUpdateState.swift */,
@@ -8081,6 +8084,7 @@
 				7950F5765E0B95EB1CB5B818 /* ACPNewChatEmptyStatePolicy.swift in Sources */,
 				58ED3DFB6576F9B3C473D16C /* ACPNewChatEmptyStateView.swift in Sources */,
 				B379CB75F3A6122EDEAA51BB /* ACPOpenCodeChildUpdate.swift in Sources */,
+				006679286D79E0CD2604ED2C /* ACPOpenCodeTaskPolicy.swift in Sources */,
 				12EB0B042A0225258B8A6C99 /* ACPOrchestrationModels.swift in Sources */,
 				59F07BEDA39E5266B33DC47A /* ACPOrchestrationPersistence.swift in Sources */,
 				B7F21BA3E994F3A0990D4C06 /* ACPOrchestrationStore.swift in Sources */,

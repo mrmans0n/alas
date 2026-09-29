@@ -4960,6 +4960,15 @@ extension ACPSessionManager {
                 inheritedEnvironment: ProcessInfo.processInfo.environment,
                 isRemote: host != nil
             )
+            // OpenCode agent-specific and managed configuration can re-enable
+            // `task` after that deny; confirm every agent drops it, on every
+            // attach, before the adapter starts.
+            launchSpec = try await ACPOpenCodeTaskPolicy.verifyingLaunch(
+                launchSpec,
+                nativeSubagentsDisabled: nativeSubagentsDisabled,
+                cwd: worktreePath
+            )
+            guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
             agentEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: launchSpec.extraEnv)
             if let injectedConnectionFactory {
                 connection = try injectedConnectionFactory(launchSpec, host, worktreePath)

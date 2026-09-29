@@ -161,9 +161,10 @@ only where Alas has verified a control:
 |---|---|
 | Claude | Removes the Agent/Task tool from the model's tool list. Other Claude tools that coordinate work, such as SendMessage and Workflow, are not affected. |
 | Codex | Turns off Codex multi-agent tools (`spawn_agent` and related) through `CODEX_CONFIG`. Any `CODEX_CONFIG` you already set is merged, not replaced; one Alas cannot merge safely (invalid JSON, a non-object `agents`/`features`, or a dotted key that overlaps these settings) fails the launch with an error. Local sessions only: a remote Codex session with the option on fails to start. |
+| OpenCode | Removes the `task` tool from every OpenCode agent through `OPENCODE_CONFIG_CONTENT`, and checks every agent's effective permissions before each launch (see below). Any `OPENCODE_CONFIG_CONTENT` you already set is merged with its key order kept, not replaced; one Alas cannot parse fails the launch with an error. Local sessions only. |
 | OMP | Starts `omp acp` with a launch-only settings overlay (`--config`) that sets `task.maxRecursionDepth` to 0. This removes the `task` and `hub` tools from the model's tool list, and eval's `agent()` and `workpool()` fail with "Cannot spawn another agent at task depth 0". Eval otherwise works. The overlay is merged over your `~/.omp` and project settings, which Alas does not change, so other settings and extensions keep working. Local sessions only: a remote OMP session with the option on fails to start. |
 | Pi | Unavailable. Pi has no built-in subagent tool; extensions may add one, and Alas does not disable extensions. |
-| Cursor, Gemini, Copilot, OpenCode | Unavailable until a control is verified. |
+| Cursor, Gemini, Copilot | Unavailable until a control is verified. |
 | Custom agents | Unavailable. |
 
 When it applies:
@@ -174,9 +175,9 @@ When it applies:
   already running are not stopped.
 - Alas checks the adapter before sending any session request. If it does not
   identify itself as `@agentclientprotocol/claude-agent-acp` 0.81.2 or later
-  (Claude), `@agentclientprotocol/codex-acp` 1.13.1 or later (Codex), or
-  `oh-my-pi` 18.2.11 or later (OMP), the session fails to start instead of
-  running unenforced.
+  (Claude), `@agentclientprotocol/codex-acp` 1.13.1 or later (Codex),
+  `OpenCode` 1.18.33 or later, or `oh-my-pi` 18.2.11 or later (OMP), the
+  session fails to start instead of running unenforced.
 - The OMP overlay is a single owner-only file,
   `~/Library/Application Support/Alas/acp-launch-overlays/omp-native-subagents-off.yml`.
   Alas rewrites it before every launch that uses it, including reconnects and
@@ -189,6 +190,39 @@ When it applies:
   and points it at `session_new` (or `alas session new`). If Alas tools are
   turned off (**Expose Alas tools to agents**), the agent is told it cannot
   delegate at all.
+
+### OpenCode permission precedence
+
+OpenCode hides `task` from an agent when the last permission rule that matches
+it is a blanket `deny`. Rules are evaluated in the order their keys appear, and
+agent-specific rules come after top-level ones. Alas's
+`OPENCODE_CONFIG_CONTENT` loads after your global and project configuration
+(including `.opencode/` agents), but before managed configuration
+(`/Library/Application Support/opencode/opencode.json` and the
+`ai.opencode.managed` MDM profile), legacy `mode` entries, and
+`OPENCODE_PERMISSION`.
+
+So on every launch and reconnect, Alas runs `opencode agent list` with the
+session's environment and directory and reads each agent's effective rules:
+
+1. With a top-level `permission.task` deny added, every agent that drops
+   `task` is fine as is.
+2. Agents that still keep `task` (usually an agent-specific allow in your own
+   configuration) get an agent-specific deny, and the check runs again.
+3. If any agent still keeps `task`, the session fails to start and names the
+   agents. This happens when managed configuration, `OPENCODE_PERMISSION`, a
+   legacy `mode` entry, or a permission block that lists `"*"` after `"task"`
+   re-enables it. Remove that override or turn the option off.
+
+Every agent is checked, not only the one the session starts with, so switching
+agents (modes) during the session cannot bring `task` back. A per-subagent
+rule such as `"task": {"general": "deny"}` only narrows which subagents `task`
+offers; it does not count. A running OpenCode process computes each agent's
+rules once, when it loads the project, and does not reread configuration files
+afterwards. Edits made after that take effect, and are checked, when OpenCode
+next starts. A reconnect that reattaches to a still-running adapter keeps the
+rules that were checked at its launch. A subagent you invoke yourself
+(for example an `@general` mention) still runs.
 
 This is not a sandbox: shell commands and extensions can still start other
 agents or processes. For OMP, that includes extension tools that spawn agents
