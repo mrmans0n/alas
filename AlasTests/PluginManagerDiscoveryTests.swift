@@ -133,4 +133,14 @@ struct PluginManagerDiscoveryTests {
         #expect(manager.host(pluginID: "io.x.p", projectID: "a")?.state == .active)
         await manager.shutdown()
     }
+
+    @MainActor
+    @Test func aShutDownManagerDoesNotRestartHosts() async throws {
+        let projects = ProjectList([Self.project("a")])
+        let (manager, cleanup) = try await approvedManager(projects: projects)
+        defer { cleanup() }
+        await manager.shutdown()
+        await manager.reconcile()
+        #expect(manager.hostsByKey.isEmpty)
+    }
 }

@@ -41,6 +41,7 @@ final class PluginManager {
     @ObservationIgnored private let actions: (ProjectConfig) -> PluginHostActions
     @ObservationIgnored private var snapshotTask: Task<Void, Never>?
     @ObservationIgnored private var tickTask: Task<Void, Never>?
+    @ObservationIgnored private var isShutDown = false
     @ObservationIgnored private var lastSnapshots: [HostKey: PluginWorkspaceSnapshot] = [:]
     @ObservationIgnored private var lastOperation: Task<Void, Never> = Task {}
 
@@ -136,6 +137,7 @@ final class PluginManager {
     /// Stops every loop and host. The manager is not reused afterwards.
     func shutdown() async {
         await serialized {
+            self.isShutDown = true
             self.snapshotTask?.cancel()
             self.tickTask?.cancel()
             await self.stopHosts { _ in true }
@@ -174,7 +176,7 @@ final class PluginManager {
     }
 
     private func start(_ plugin: Plugin) async {
-        guard isEnabled(plugin), let approval = approvals.approval(id: plugin.id, hash: plugin.hash) else { return }
+        guard !isShutDown, isEnabled(plugin), let approval = approvals.approval(id: plugin.id, hash: plugin.hash) else { return }
         for project in projects() {
             let key = HostKey(pluginID: plugin.id, projectID: project.id)
             guard hostsByKey[key] == nil else { continue }
