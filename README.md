@@ -64,13 +64,14 @@ respond when it needs you.
   files at the right line, send you notifications, spin up delegated sessions,
   and work through your review comments. Before delegating, agents can list
   which agents and models are available
-  ([delegation discovery](docs/agent-delegation.md)). For Claude, Codex, and
-  OpenCode, **Settings → Agents → Disable native subagents** removes the agent's
-  own subagent tool (Claude's Agent/Task tool; Codex's multi-agent tools;
-  OpenCode's task tool; Codex and OpenCode in local sessions only) so it
-  delegates through Alas child sessions instead. It applies to sessions created
-  after you change it, does not stop subagents already running, and is not a
-  sandbox ([details](docs/agent-delegation.md#disabling-native-subagents)).
+  ([delegation discovery](docs/agent-delegation.md)). For Claude, Codex,
+  OpenCode, and OMP, **Settings → Agents → Disable native subagents** removes
+  the agent's own subagent tool (Claude's Agent/Task tool; Codex's multi-agent
+  tools; OpenCode's task tool; OMP's task tool and eval `agent()`; Codex,
+  OpenCode, and OMP in local sessions only) so it delegates through Alas child
+  sessions instead. It applies to sessions created after you change it, does
+  not stop subagents already running, and is not a sandbox
+  ([details](docs/agent-delegation.md#disabling-native-subagents)).
 
 - **A review loop agents can close.** Review a branch, commit, or range
   from the ⇧⌘R palette, and drop inline comments anywhere, changed

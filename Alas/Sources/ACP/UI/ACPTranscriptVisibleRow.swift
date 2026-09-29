@@ -50,7 +50,7 @@ struct ACPTranscriptVisibleRowLookup {
         var spanById: [String: ClosedRange<Int>] = [:]
         indexById.reserveCapacity(rows.count)
         rowIdByStableId.reserveCapacity(rows.count)
-        for row in rows {
+        for (position, row) in rows.enumerated() {
             switch row {
             case .message(let visible), .toolCallGroupMember(let visible, _):
                 // An expanded bundle's member is indexed exactly like a
@@ -73,9 +73,28 @@ struct ACPTranscriptVisibleRowLookup {
                 // member follows as its own row and owns that index. So it
                 // gets an anchor index (anchors and remaps still resolve
                 // it) but deliberately NO span — see `localIndexSpan`.
-                // Members are not registered here; each registers itself as
-                // its own row above.
+                // Tiled members register themselves as their own rows, and
+                // those rows follow this one so they overwrite the entries
+                // below. What remains are members the live cap left out:
+                // the header stands in for them, so an anchor recorded on
+                // one still resolves instead of going stale.
                 indexById[group.id] = group.members[0].index
+                for member in group.members {
+                    indexById[member.stableId] = member.index
+                    rowIdByStableId[member.stableId] = group.id
+                }
+                // The header alone stands for the omitted prefix, so it gets
+                // that prefix's span (minimap and logical scroll then scale
+                // across it). With nothing omitted it keeps no span.
+                var tiled = 0
+                while position + 1 + tiled < rows.count,
+                      case .toolCallGroupMember(_, group.id) = rows[position + 1 + tiled] {
+                    tiled += 1
+                }
+                let omitted = group.members.count - tiled
+                if omitted > 0 {
+                    spanById[group.id] = group.members[0].index...group.members[omitted - 1].index
+                }
             }
         }
         self.indexById = indexById

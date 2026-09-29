@@ -14,6 +14,11 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
     /// `task` permission, checked against every agent's effective ruleset
     /// (`opencode agent list`) before each launch.
     case openCodeConfigContent
+    /// `omp acp`: a launch-only `--config` overlay setting
+    /// `task.maxRecursionDepth` to 0. OMP deep merges it over the user's
+    /// global and project settings, which removes the `task` and `hub` tools
+    /// and makes eval's `agent()`/`workpool()` fail their spawn preflight.
+    case ompConfigOverlay
 
     /// The `agentInfo.name` of the adapter whose contract was verified. A
     /// different ACP server that happens to share the binary name (Alas
@@ -23,6 +28,7 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
         case .claudeDisallowedTools: ACPManagedAdapterDescriptor.claude.packageName
         case .codexConfigEnvironment: ACPManagedAdapterDescriptor.codex.packageName
         case .openCodeConfigContent: ACPOpenCodeTaskPolicy.adapterName
+        case .ompConfigOverlay: "oh-my-pi"
         }
     }
 
@@ -34,6 +40,7 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
         case .claudeDisallowedTools: "0.81.2"
         case .codexConfigEnvironment: "1.13.1"
         case .openCodeConfigContent: "1.18.33"
+        case .ompConfigOverlay: "18.2.11"
         }
     }
 }
@@ -61,7 +68,8 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
         case ACPManagedAdapterDescriptor.codex.agentID: .toolOmission(.codexConfigEnvironment)
         case ACPOpenCodeTaskPolicy.agentID: .toolOmission(.openCodeConfigContent)
         case ACPManagedAdapterDescriptor.pi.agentID: .extensionDependent
-        case "cursor-agent", "gemini", "copilot", "omp": .unverified
+        case "omp": .toolOmission(.ompConfigOverlay)
+        case "cursor-agent", "gemini", "copilot": .unverified
         default: .unsupported
         }
     }
@@ -93,6 +101,12 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
                 + "already set. Before each launch Alas checks every OpenCode agent's "
                 + "effective permissions; if managed or other configuration keeps "
                 + "task enabled, the session fails to start instead. Local sessions only."
+        case .toolOmission(.ompConfigOverlay):
+            return "Starts OMP with a launch-only settings overlay that sets "
+                + "task.maxRecursionDepth to 0. This removes the task and hub tools "
+                + "and makes eval's agent() and workpool() fail; eval otherwise "
+                + "works. Your ~/.omp and project settings are not changed. "
+                + "Local sessions only."
         case .runtimeDenial:
             return "The native subagent tool stays visible to the model, but "
                 + "its calls are rejected."
@@ -136,6 +150,7 @@ enum ACPNativeDelegationError: LocalizedError, Equatable {
     case remoteHostUnsupported(agentID: String)
     case adapterVersionUnverified(agentID: String, found: String?, minimum: String)
     case adapterUnverified(agentID: String, found: String?, expected: String)
+    case launchOverlayUnavailable(agentID: String, detail: String)
 
     var errorDescription: String? {
         switch self {
@@ -183,6 +198,12 @@ enum ACPNativeDelegationError: LocalizedError, Equatable {
                 + "them is verified only for \(expected). Point Alas at that adapter "
                 + "or turn off \"Disable native subagents\" in Settings → Agents, "
                 + "then start a new session."
+        case .launchOverlayUnavailable(let agentID, let detail):
+            return "Native subagents are disabled for this session, but Alas could "
+                + "not write the \(agentID) launch settings file: \(detail). Check "
+                + "that Alas's Application Support folder is writable or turn off "
+                + "\"Disable native subagents\" in Settings → Agents, then start a "
+                + "new session."
         }
     }
 }
@@ -193,6 +214,9 @@ enum ACPNativeDelegationError: LocalizedError, Equatable {
 enum ACPNativeDelegationControls {
     static let claudeDisallowedTools = ["Agent", "Task"]
     static let codexConfigKey = "CODEX_CONFIG"
+    /// The whole OMP overlay. It sets nothing else, so every other key keeps
+    /// the value from the user's global and project settings.
+    static let ompOverlayContents = "task:\n  maxRecursionDepth: 0\n"
 
     /// The `_meta` Alas sends on every session request for this policy.
     static func sessionMeta(agentID: String, nativeSubagentsDisabled: Bool) -> ACPSessionMeta? {
@@ -209,27 +233,44 @@ enum ACPNativeDelegationControls {
         to spec: ACPLaunchSpec,
         nativeSubagentsDisabled: Bool,
         inheritedEnvironment: [String: String],
-        isRemote: Bool
+        isRemote: Bool,
+        overlayDirectory: URL = ACPLaunchOverlay.defaultDirectory
     ) throws -> ACPLaunchSpec {
         guard nativeSubagentsDisabled,
-              let mechanism = ACPNativeDelegationSupport.resolve(agentID: spec.agentID).mechanism,
-              mechanism != .claudeDisallowedTools
+              let mechanism = ACPNativeDelegationSupport.resolve(agentID: spec.agentID).mechanism
         else { return spec }
         // Remote launches either drop extraEnv or cannot see the remote
-        // user's configuration, so enforcement there would be unverifiable.
-        guard !isRemote else {
-            throw ACPNativeDelegationError.remoteHostUnsupported(agentID: spec.agentID)
+        // user's CODEX_CONFIG, OPENCODE_CONFIG_CONTENT, or a local overlay file, so enforcement there
+        // would be unverifiable.
+        func requireLocal() throws {
+            if isRemote { throw ACPNativeDelegationError.remoteHostUnsupported(agentID: spec.agentID) }
         }
         switch mechanism {
+        case .claudeDisallowedTools:
+            // Session-level control (`sessionMeta`); nothing to launch with.
+            return spec
         case .codexConfigEnvironment:
+            try requireLocal()
             let existing = spec.extraEnv[codexConfigKey] ?? inheritedEnvironment[codexConfigKey]
             return spec.mergingExtraEnv([codexConfigKey: try mergedCodexConfig(existing: existing)])
         case .openCodeConfigContent:
+            try requireLocal()
             let key = ACPOpenCodeTaskPolicy.configKey
             let existing = spec.extraEnv[key] ?? inheritedEnvironment[key]
             return spec.mergingExtraEnv([key: try ACPOpenCodeTaskPolicy.mergedConfig(existing: existing)])
-        case .claudeDisallowedTools:
-            return spec
+        case .ompConfigOverlay:
+            try requireLocal()
+            let overlay: URL
+            do {
+                overlay = try ACPLaunchOverlay.ensure(
+                    ompOverlayContents, named: "omp-native-subagents-off.yml", in: overlayDirectory)
+            } catch {
+                throw ACPNativeDelegationError.launchOverlayUnavailable(
+                    agentID: spec.agentID, detail: error.localizedDescription)
+            }
+            // Appended last: OMP applies `--config` files in order, so this
+            // one wins over any overlay passed earlier on the command line.
+            return spec.appendingArguments(["--config", overlay.path])
         }
     }
 
@@ -335,5 +376,43 @@ enum ACPNativeDelegationControls {
             if l != r { return l > r }
         }
         return !isPrerelease
+    }
+}
+
+/// Alas-owned settings files passed to adapters on their command line.
+///
+/// An OMP process re-reads its `--config` files after startup (eval's
+/// `agent()` loads settings again, and fails with "Config overlay not found"
+/// if the file is gone), so an overlay must outlive every process launched
+/// with it, including processes a broker keeps running across Alas restarts.
+/// Each overlay is therefore one fixed file per policy, rewritten atomically
+/// before every launch that uses it and never deleted while Alas runs. Its
+/// contents are fixed and hold no user data.
+enum ACPLaunchOverlay {
+    static var defaultDirectory: URL {
+        Paths.appSupportRoot.appendingPathComponent("acp-launch-overlays", isDirectory: true)
+    }
+
+    /// Makes `directory/name` hold exactly `contents` (owner-only) and
+    /// returns its URL. A reader never sees a partial file.
+    static func ensure(_ contents: String, named name: String, in directory: URL) throws -> URL {
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let url = directory.appendingPathComponent(name)
+        let data = Data(contents.utf8)
+        let staging = directory.appendingPathComponent(".\(name).\(UUID().uuidString)")
+        guard fileManager.createFile(atPath: staging.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
+        }
+        guard rename(staging.path, url.path) == 0 else {
+            let code = errno
+            try? fileManager.removeItem(at: staging)
+            throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+        }
+        return url
     }
 }
