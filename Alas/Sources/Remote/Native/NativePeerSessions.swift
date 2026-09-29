@@ -127,13 +127,9 @@ final class NativePeerSessions {
             reloadWorkspace()
             if let openDocument { open(openDocument) }
         } else if selectedRow?.worktree != workspaceSummary {
-            // A request already in flight for either skips its send; queue a
-            // retry so the eventual (now-stale) reply doesn't stand in as
-            // current — the peer silently drops a duplicate in-flight request.
-            if !requestChanges() { changesRequestOutdated = true }
             // The summary only signals that the peer's worktree changed, not
             // which files — a rename or delete only shows up by re-listing.
-            if !loadFileTree() { fileTreeRequestOutdated = true }
+            reloadWorkspace()
         }
     }
 
@@ -196,8 +192,11 @@ final class NativePeerSessions {
     /// Re-asks the peer for the selected session's changes and file tree.
     /// Replies land through `receive`.
     func reloadWorkspace() {
-        requestChanges()
-        loadFileTree()
+        // A request already in flight (e.g. the user hit refresh while the
+        // initial load was still out) skips its send; queue a retry so the
+        // eventual reply doesn't stand in as current.
+        if !requestChanges() { changesRequestOutdated = true }
+        if !loadFileTree() { fileTreeRequestOutdated = true }
     }
 
     @discardableResult

@@ -619,6 +619,38 @@ struct NativePeerSessionsTests {
         #expect(readFileCount() == before + 1)
     }
 
+    @Test func reloadWorkspaceQueuesRetriesWhenRequestsAreAlreadyInFlight() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s") // sends the initial listChanges and root listFiles
+
+        let changesCount: () -> Int = { listChangesCount(links, "s") }
+        let filesCount: () -> Int = {
+            links.sent(to: "B").filter { $0 == .listFiles(sessionId: "s", path: nil) }.count
+        }
+        let changesAfterSelect = changesCount()
+        let filesAfterSelect = filesCount()
+
+        // A manual "Refresh from peer" click while both are still outstanding
+        // must not resend yet, but must queue a retry.
+        client.reloadWorkspace()
+        #expect(changesCount() == changesAfterSelect)
+        #expect(filesCount() == filesAfterSelect)
+
+        // The original replies arrive — the queued retries must fire.
+        links.receive(.changeList(sessionId: "s", comparisonRef: nil, metricsAvailable: true,
+                                  files: [], staged: [], unstaged: [], commits: [], truncated: false), from: "B")
+        links.receive(.fileTree(sessionId: "s", path: nil, nodes: [], truncated: false), from: "B")
+        #expect(changesCount() == changesAfterSelect + 1)
+        #expect(filesCount() == filesAfterSelect + 1)
+    }
+
     @Test func planRejectionRequiresAndTrimsReason() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
