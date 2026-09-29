@@ -1200,6 +1200,16 @@ final class TabsManager {
     @discardableResult
     func openOrFocusPluginTab(worktreeId: String, state: PluginTabState) -> Tab {
         if let existing = tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) {
+            // A plugin update can rename a contribution while keeping its id; refresh the stored title.
+            if case .plugin(let old) = existing, old.title != state.title,
+               var file = byWorktree[worktreeId],
+               let idx = file.tabs.firstIndex(where: { $0.id == state.id }) {
+                file.tabs[idx] = .plugin(state)
+                byWorktree[worktreeId] = file
+                persist(worktreeId)
+                activate(worktreeId: worktreeId, tabId: state.id)
+                return file.tabs[idx]
+            }
             activate(worktreeId: worktreeId, tabId: state.id)
             return existing
         }
