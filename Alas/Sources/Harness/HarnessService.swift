@@ -75,7 +75,8 @@ final class HarnessService {
     func start(
         stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?,
         ownerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil },
-        shouldNotifyOnAwaiting: @escaping () -> Bool = { true }
+        shouldNotifyOnAwaiting: @escaping () -> Bool = { true },
+        isExternalSession: @escaping (String) -> Bool = { _ in false }
     ) {
         detector.onUpdate = { [weak self] sid, kind in
             guard let self else { return }
@@ -94,7 +95,7 @@ final class HarnessService {
         }
 
         socketServer.onEvent = { [weak self] event in
-            self?.handleSocketEvent(event, stateLookup: stateLookup, ownerLookup: ownerLookup, shouldNotifyOnAwaiting: shouldNotifyOnAwaiting)
+            self?.handleSocketEvent(event, stateLookup: stateLookup, ownerLookup: ownerLookup, shouldNotifyOnAwaiting: shouldNotifyOnAwaiting, isExternalSession: isExternalSession)
         }
     }
 
@@ -132,7 +133,8 @@ final class HarnessService {
         _ event: AgentHookEvent,
         stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?,
         ownerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil },
-        shouldNotifyOnAwaiting: () -> Bool
+        shouldNotifyOnAwaiting: () -> Bool,
+        isExternalSession: (String) -> Bool = { _ in false }
     ) {
         let previous = activityBySession[event.sessionId]
         let previousState = previous?.state
@@ -172,6 +174,13 @@ final class HarnessService {
             } else if event.event != .detached, detachedSocketSessions.contains(event.sessionId) {
                 return
             }
+        }
+        // ACP sessions export ALAS_SESSION_ID, so the agent's own hooks fire
+        // too. Claude's hook reports idle prompts and permissions that auto-run
+        // grants anyway; ACP already reports real questions and permissions.
+        if event.event == .awaitingInput || event.event == .permissionRequest,
+           isExternalSession(event.sessionId) {
+            return
         }
         emitWorktreeActivityEventIfNeeded(event: event, stateLookup: stateLookup, ownerLookup: ownerLookup)
         var transitionHandledSeparately = event.event == .idle
