@@ -217,8 +217,11 @@ session's environment and directory and reads each agent's effective rules:
 Every agent is checked, not only the one the session starts with, so switching
 agents (modes) during the session cannot bring `task` back. A per-subagent
 rule such as `"task": {"general": "deny"}` only narrows which subagents `task`
-offers; it does not count. Configuration edited after the session starts is
-checked on the next reconnect, not immediately. A subagent you invoke yourself
+offers; it does not count. A running OpenCode process computes each agent's
+rules once, when it loads the project, and does not reread configuration files
+afterwards. Edits made after that take effect, and are checked, when OpenCode
+next starts. A reconnect that reattaches to a still-running adapter keeps the
+rules that were checked at its launch. A subagent you invoke yourself
 (for example an `@general` mention) still runs.
 
 This is not a sandbox: shell commands and extensions can still start other
