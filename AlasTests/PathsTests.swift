@@ -69,4 +69,17 @@ struct PathsTests {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
         #expect(!AlasProfile.preparePrivateDirectory(link, ownerUid: getuid()))
     }
+
+    @Test func aliasedSpellingsOfAProfileShareOneIdentity() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("alas-profile-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let real = base.appendingPathComponent("real/Profile")
+        let alias = base.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: real.deletingLastPathComponent())
+        let viaAlias = try #require(AlasProfile.canonicalDirectory(alias.appendingPathComponent("Profile")))
+        let direct = try #require(AlasProfile.canonicalDirectory(real))
+        #expect(viaAlias == direct)
+        #expect(AlasProfile.runtimeDirectory(for: viaAlias, uid: 501) == AlasProfile.runtimeDirectory(for: direct, uid: 501))
+    }
 }

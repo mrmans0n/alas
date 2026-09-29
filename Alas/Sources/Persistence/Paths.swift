@@ -34,16 +34,18 @@ struct AlasProfile: Equatable, Sendable {
         switch resolve(environment: ProcessInfo.processInfo.environment) {
         case .standard:
             return AlasProfile(appSupportOverride: nil, runtimeDirectory: nil)
-        case .isolated(let root):
-            let runtime = runtimeDirectory(for: root, uid: getuid())
+        case .isolated(let requested):
             // Fail closed: an isolated instance that silently fell back to the
             // shared locations would do exactly what the override exists to
             // prevent. Both directories may sit in world-writable `/tmp`, so
             // each must be a real, owner-only directory before anything is
             // written into it.
-            guard preparePrivateDirectory(root, ownerUid: getuid()) else {
-                fatalError("\(environmentKey): \(root.path) must be a directory owned by this user and closed to others")
+            guard preparePrivateDirectory(requested, ownerUid: getuid()),
+                  let root = canonicalDirectory(requested)
+            else {
+                fatalError("\(environmentKey): \(requested.path) must be a directory owned by this user and closed to others")
             }
+            let runtime = runtimeDirectory(for: root, uid: getuid())
             guard AgentHookSocketServer.prepareSocketDirectory(runtime.path, ownerUid: getuid()) else {
                 fatalError("\(environmentKey): cannot create a private runtime directory at \(runtime.path)")
             }
@@ -81,6 +83,19 @@ struct AlasProfile: Equatable, Sendable {
               st.st_uid == ownerUid
         else { return false }
         return (st.st_mode & 0o077) == 0 || chmod(url.path, 0o700) == 0
+    }
+
+    /// The filesystem's own spelling of an existing directory: symlinks in any
+    /// component resolved and letter case as stored. The runtime directory,
+    /// preference suite, and Keychain service all derive from this path, so
+    /// two spellings of one profile (`/tmp/x` vs `/private/tmp/X`) must agree.
+    static func canonicalDirectory(_ url: URL) -> URL? {
+        let fd = open(url.path, O_RDONLY | O_DIRECTORY)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(fd, F_GETPATH, &buffer) == 0 else { return nil }
+        return URL(fileURLWithPath: String(cString: buffer), isDirectory: true)
     }
 
     /// Preferences this app writes (update-check timestamp, GG undo markers,
