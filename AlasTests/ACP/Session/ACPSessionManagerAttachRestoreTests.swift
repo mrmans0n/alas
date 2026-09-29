@@ -1747,7 +1747,46 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(requests.map(\.method) == ["session/new", "session/load"])
         let newMeta = (requests.first?.params as? ACPSessionNewParams)?.meta
         let loadMeta = (requests.last?.params as? ACPSessionLoadParams)?.meta
-        #expect(newMeta?.claudeCode?.options.disallowedTools == ["Agent", "Task"])
+        #expect(newMeta?.claudeCode?.options.disallowedTools == ["Agent", "Task", "Workflow", "SendMessage", "ListAgents"])
+        #expect(loadMeta == newMeta)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("a delegated Claude child loses cross-session tools on fresh and restored attaches without the policy")
+    func delegatedClaudeChildDisallowsCrossSessionToolsOnEveryAttach() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        var clients: [ACPMockClient] = []
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                let client = ACPMockClient()
+                // Below the policy's verified floor: the child control is
+                // best-effort and must not fail a delegated child's launch.
+                self.scriptNativeDelegationInitialize(client, agentID: "claude", adapterVersion: "0.80.0")
+                self.scriptSessionResult(client, method: "session/new", sessionId: "remote-child")
+                self.scriptSessionResult(client, method: "session/load", sessionId: "remote-child")
+                clients.append(client)
+                return ACPConnection(client: client)
+            }
+        )
+        manager.nativeSubagentsPreferenceProvider = { _ in false }
+        manager.delegatedChildProvider = { _ in true }
+        let session = manager.createSession(agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+        await manager.flushAllPersistence()
+        await manager.detach(sessionId: session.id)
+        let reopened = try #require(manager.placeholderSession(id: session.id))
+        await manager.hydrateIfNeeded(id: reopened.id)
+        await manager.attach(to: reopened.id, freshlyCreated: false)
+
+        let requests = clients.flatMap(\.sent).filter { $0.method.hasPrefix("session/") && $0.method != "session/prompt" }
+        #expect(requests.map(\.method) == ["session/new", "session/load"])
+        let newMeta = (requests.first?.params as? ACPSessionNewParams)?.meta
+        let loadMeta = (requests.last?.params as? ACPSessionLoadParams)?.meta
+        #expect(newMeta?.claudeCode?.options.disallowedTools == ["SendMessage", "ListAgents"])
         #expect(loadMeta == newMeta)
         await manager.detach(sessionId: session.id)
     }
@@ -1780,7 +1819,7 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.attach(to: session.id, freshlyCreated: false)
 
         let load = try #require(clients.flatMap(\.sent).first { $0.method == "session/load" })
-        #expect((load.params as? ACPSessionLoadParams)?.meta?.claudeCode?.options.disallowedTools == ["Agent", "Task"])
+        #expect((load.params as? ACPSessionLoadParams)?.meta?.claudeCode?.options.disallowedTools == ["Agent", "Task", "Workflow", "SendMessage", "ListAgents"])
         #expect(session.pendingMCPPreamble?.contains("native subagent tool is turned off") == true)
         await manager.detach(sessionId: session.id)
     }

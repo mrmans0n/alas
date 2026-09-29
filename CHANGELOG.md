@@ -11,6 +11,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Open native peer transcripts at the latest message and load earlier messages while scrolling up.
 - Show the active ACP task's one-based position in the chat task affordance.
 - Label a delegated child's `session_send` report in its parent's transcript as "Report from <agent> child · <id>" instead of "Delegated prompt", and prefix the text the parent agent receives with the sending child's session and agent.
+- Stop delegated Claude children from reporting through Claude's `SendMessage`/`ListAgents`, which reach unrelated Claude Code sessions on the same host: children never get those tools and are told to report only with `session_send`. "Disable native subagents" for Claude now also removes `Workflow`, `SendMessage`, and `ListAgents` (#1631).
 
 ## [0.19.18] - 2026-09-29
 

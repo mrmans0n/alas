@@ -42,15 +42,27 @@ struct ACPNativeDelegationControlsTests {
         #expect(!AppConfig.defaults.agents.nativeSubagentsDisabled(for: "claude"))
     }
 
-    @Test("Claude gets disallowedTools session meta only when the policy is on")
-    func claudeSessionMeta() throws {
-        let meta = try #require(ACPNativeDelegationControls.sessionMeta(
+    @Test(
+        "Claude disallowedTools follow the policy, and delegated children always lose cross-session tools",
+        arguments: [
+            (false, false, nil),
+            (false, true, ["SendMessage", "ListAgents"]),
+            (true, false, ["Agent", "Task", "Workflow", "SendMessage", "ListAgents"]),
+            (true, true, ["Agent", "Task", "Workflow", "SendMessage", "ListAgents"]),
+        ] as [(Bool, Bool, [String]?)]
+    )
+    func claudeSessionMeta(policyOn: Bool, isDelegatedChild: Bool, expected: [String]?) {
+        let meta = ACPNativeDelegationControls.sessionMeta(
             agentID: "claude",
-            nativeSubagentsDisabled: true
-        ))
-        #expect(meta.claudeCode?.options.disallowedTools == ["Agent", "Task"])
-        #expect(ACPNativeDelegationControls.sessionMeta(agentID: "claude", nativeSubagentsDisabled: false) == nil)
-        #expect(ACPNativeDelegationControls.sessionMeta(agentID: "codex", nativeSubagentsDisabled: true) == nil)
+            nativeSubagentsDisabled: policyOn,
+            isDelegatedChild: isDelegatedChild
+        )
+        #expect(meta?.claudeCode?.options.disallowedTools == expected)
+        #expect(ACPNativeDelegationControls.sessionMeta(
+            agentID: "codex",
+            nativeSubagentsDisabled: policyOn,
+            isDelegatedChild: isDelegatedChild
+        ) == nil)
     }
 
     @Test("CODEX_CONFIG merge keeps unrelated keys and forces every enforcement key off")

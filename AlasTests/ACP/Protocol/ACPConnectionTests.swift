@@ -225,7 +225,8 @@ struct ACPConnectionTests {
         }
         let meta = try #require(ACPNativeDelegationControls.sessionMeta(
             agentID: "claude",
-            nativeSubagentsDisabled: true
+            nativeSubagentsDisabled: true,
+            isDelegatedChild: false
         ))
         let conn = ACPConnection(client: mock, sessionMeta: meta)
 
@@ -247,7 +248,7 @@ struct ACPConnectionTests {
         let options = (wire["_meta"] as? [String: Any])
             .flatMap { $0["claudeCode"] as? [String: Any] }
             .flatMap { $0["options"] as? [String: Any] }
-        #expect(options?["disallowedTools"] as? [String] == ["Agent", "Task"])
+        #expect(options?["disallowedTools"] as? [String] == meta.claudeCode?.options.disallowedTools)
         let plain = try #require(
             JSONSerialization.jsonObject(
                 with: JSONEncoder().encode(ACPSessionNewParams(cwd: "/tmp", mcpServers: []))
