@@ -45,6 +45,19 @@ struct PluginIncomingHeader: Decodable {
     let id: JSONRPCID?
     let method: String?
     let error: JSONRPCError?
+    /// Whether a `result` key is present, even when its value is `null`.
+    let hasResult: Bool
+
+    private enum CodingKeys: String, CodingKey { case jsonrpc, id, method, result, error }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        jsonrpc = try container.decode(String.self, forKey: .jsonrpc)
+        id = try container.decodeIfPresent(JSONRPCID.self, forKey: .id)
+        method = try container.decodeIfPresent(String.self, forKey: .method)
+        error = try container.decodeIfPresent(JSONRPCError.self, forKey: .error)
+        hasResult = container.contains(.result)
+    }
 }
 
 struct PluginParams<Params: Decodable>: Decodable {

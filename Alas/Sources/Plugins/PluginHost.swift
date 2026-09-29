@@ -94,10 +94,9 @@ final class PluginHost {
         let params = PluginActivateParams(
             api: Self.apiVersion, project: project,
             grants: grants.sorted { $0.rawValue < $1.rawValue })
-        await deliver(encode(JSONRPCEnvelope(id: Self.activateID, method: "alas/activate", params: params)))
-        if state == .activating {
-            fail("plugin did not respond to alas/activate")
-        }
+        await deliver(
+            encode(JSONRPCEnvelope(id: Self.activateID, method: "alas/activate", params: params)),
+            isActivation: true)
     }
 
     func workspaceChanged(_ snapshot: PluginWorkspaceSnapshot) async {
@@ -136,7 +135,9 @@ final class PluginHost {
     /// Delivers `first`, then any replies to requests the plugin made, each in
     /// its own `alas_handle` call. Stops as soon as the host leaves the running
     /// states, which drops everything still queued.
-    private func deliver(_ first: Data) async {
+    /// The activation response must come from the first call, so an activation
+    /// delivery fails as soon as that call's messages are processed without one.
+    private func deliver(_ first: Data, isActivation: Bool = false) async {
         var queue = [first]
         var roundTrips = 0
         while !queue.isEmpty, isRunning, let runtime {
@@ -165,6 +166,10 @@ final class PluginHost {
                     return
                 }
             }
+            if isActivation, roundTrips == 1, state == .activating {
+                fail("plugin did not respond to alas/activate")
+                return
+            }
         }
     }
 
@@ -179,6 +184,10 @@ final class PluginHost {
             handleNotification(method, data: data)
             return .none
         case let (nil, id?):
+            // A response carries exactly one of `result` and `error`.
+            guard header.hasResult != (header.error != nil) else {
+                return .violation("plugin sent a malformed message")
+            }
             handleResponse(id: id, error: header.error)
             return .none
         case (nil, nil):

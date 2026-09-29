@@ -19,7 +19,7 @@ Anything under **Not loaded** shows the folder name and the reason.
 | `invalid plugin id "…"` | The id is not reverse-DNS. | Use lowercase letters, digits and `-`, in at least two dot-separated segments, such as `com.example.my-plugin`. |
 | `requires plugin API 2; this Alas supports 1` | `api` is not `1`. | Set `"api": 1`. |
 | `unknown capability "…"` | A typo, or a capability this Alas does not have. | Use `workspace.read` or `worktree.switch`. |
-| `entry "…" must be a relative path inside the plugin folder` | `entry` is absolute, uses `..`, or **the file does not exist**. | Check the path, and that the build actually copied the wasm file. |
+| `entry "…" must be a relative path inside the plugin folder` | `entry` is absolute, uses `..`, or **the file does not exist or is a symlink**. | Check the path, and that the build actually copied the wasm file. |
 | `duplicate plugin id …` | Two folders declare the same `id`. | Remove or change one. Neither loads until you do. |
 
 Nothing at all, not even under **Not loaded**? The folder is not in

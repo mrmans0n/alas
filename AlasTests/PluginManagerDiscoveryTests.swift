@@ -17,10 +17,16 @@ struct PluginManagerDiscoveryTests {
         try install("no-wasm", id: "io.x.nowasm", wasm: false)
         try install("dup-a", id: "io.x.dup")
         try install("dup-b", id: "io.x.dup")
+        // An entry symlinked to a file outside its folder escapes the folder.
+        try install("linked-out", id: "io.x.linkedout", wasm: false)
+        let outside = root.appending(path: "outside.wasm")
+        try Data([0]).write(to: outside)
+        try FileManager.default.createSymbolicLink(
+            at: root.appending(path: "linked-out/plugin.wasm"), withDestinationURL: outside)
 
         let result = PluginManager.discover(in: root)
 
         #expect(result.plugins.map(\.id) == ["io.x.good"])
-        #expect(Set(result.invalid.map(\.folder.lastPathComponent)) == ["no-wasm", "dup-a", "dup-b"])
+        #expect(Set(result.invalid.map(\.folder.lastPathComponent)) == ["no-wasm", "dup-a", "dup-b", "linked-out"])
     }
 }

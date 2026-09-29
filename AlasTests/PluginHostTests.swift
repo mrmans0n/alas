@@ -52,6 +52,8 @@ struct PluginHostTests {
         ([PluginFixtureStep](), "did not respond to alas/activate"),
         ([.send(#"{"jsonrpc":"2.0","id":0,"error":{"code":1,"message":"nope"}}"#)], "rejected activation: nope"),
         ([.send("{not json")], "malformed"),
+        ([.send(#"{"jsonrpc":"2.0","id":0}"#)], "malformed"),
+        ([.send(#"{"jsonrpc":"2.0","id":0,"result":{},"error":{"code":1,"message":"x"}}"#)], "malformed"),
         ([.trap], "unreachable"),
     ])
     func activationFailuresStopThePlugin(steps: [PluginFixtureStep], fragment: String) async throws {
@@ -62,6 +64,18 @@ struct PluginHostTests {
             return
         }
         #expect(reason.contains(fragment))
+    }
+
+    @Test func theActivationReplyMustComeInTheFirstCall() async throws {
+        // The first call only sends a request; the reply triggers a second call, which answers activation too late.
+        let request = #"{"jsonrpc":"2.0","id":1,"method":"workspace/snapshot"}"#
+        let host = try makeHost([[.send(request)], [.send(activateOK)]], grants: [.workspaceRead])
+        await host.activate()
+        guard case .failed(let reason) = host.state else {
+            Issue.record("expected failed, got \(host.state)")
+            return
+        }
+        #expect(reason.contains("did not respond to alas/activate"))
     }
 
     /// A single case for `requestsAreCheckedAgainstGrants`. Swift Testing's
