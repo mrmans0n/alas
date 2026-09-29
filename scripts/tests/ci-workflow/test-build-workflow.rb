@@ -79,9 +79,11 @@ raise "builder must publish compiled products" unless publish
 raise "builder must not execute test batches" if builder_steps.any? { |step| step.fetch("run", "").match?(/--lane|run-shard/) }
 worker_steps = workers.fetch("steps")
 raise "workers must not reserve runners waiting for products" if worker_steps.any? { |step| step.fetch("run", "").include?("wait-products") }
-raise "workers must download this attempt's products" unless worker_steps.any? do |step|
+raise "builder must expose the attempt that published its artifacts" unless
+  swift_job.dig("outputs", "artifact-attempt") == "${{ github.run_attempt }}"
+raise "workers must download the products of the builder's attempt, even on a partial re-run" unless worker_steps.any? do |step|
   step.fetch("uses", "").start_with?("actions/download-artifact@") &&
-    step.dig("with", "name") == "swift-test-products-${{ github.run_attempt }}"
+    step.dig("with", "name") == "swift-test-products-${{ needs.build-test.outputs.artifact-attempt }}"
 end
 raise "workers must execute both lanes assigned to their shard" unless worker_steps.any? do |step|
   step["run"] == "python3 scripts/ci_swift_tests.py run-shard --shard ${{ matrix.shard }}"
@@ -118,11 +120,13 @@ end
 audit = jobs.fetch("swift-coverage")
 audit_download = audit.fetch("steps").find { |step| step.dig("with", "pattern") }
 raise "coverage audit must download compact reports, not diagnostic bundles" unless
-  audit_download&.dig("with", "pattern") == "swift-test-reports-${{ github.run_attempt }}-*"
+  audit_download&.dig("with", "pattern") == "swift-test-reports-*"
 [workers].each do |job|
   reports = job.fetch("steps").find { |step| step.dig("with", "name")&.start_with?("swift-test-reports-") }
   raise "each lane must publish reports even after failure" unless
     reports && reports["if"] == "always()" && reports.dig("with", "path") == ".build/xcode/results/*.report.json"
+  raise "a re-run shard must replace its earlier report so the audit sees every shard once" unless
+    reports.dig("with", "name") == "swift-test-reports-${{ matrix.shard }}" && reports.dig("with", "overwrite") == true
   raise "keep full result bundles for diagnosis" unless job.fetch("steps").any? do |step|
     step["if"] == "always()" && step.dig("with", "name")&.start_with?("swift-test-results-")
   end
