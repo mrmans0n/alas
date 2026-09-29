@@ -375,18 +375,28 @@ struct RemotePeerManagerTests {
     /// simulate a matching reciprocal confirmation capture the real value
     /// from the wire instead of fabricating one.
     private func awaitCapturedCounterCode(from requests: Requests) async -> String? {
+        guard await awaitCondition({ capturedCounterCode(from: requests) != nil }) else { return nil }
+        return capturedCounterCode(from: requests)
+    }
+
+    private func capturedCounterCode(from requests: Requests) -> String? {
+        guard let last = requests.seen.last,
+              let body = try? self.body(of: last),
+              let ad = body["peer"] as? [String: Any] else { return nil }
+        return ad["counterCode"] as? String
+    }
+
+    /// Polls `condition` until it holds, the deadline passes, or the task is
+    /// cancelled. Returns whether it held, so a missed state fails the test
+    /// instead of spinning forever.
+    private func awaitCondition(_ condition: () -> Bool) async -> Bool {
         let deadline = ContinuousClock.now.advanced(by: .seconds(2))
         while ContinuousClock.now < deadline {
-            if Task.isCancelled { return nil }
-            if let last = requests.seen.last,
-               let body = try? self.body(of: last),
-               let ad = body["peer"] as? [String: Any],
-               let code = ad["counterCode"] as? String {
-                return code
-            }
+            if Task.isCancelled { return false }
+            if condition() { return true }
             try? await Task.sleep(nanoseconds: 1_000_000)
         }
-        return nil
+        return condition()
     }
 
     /// Simulates A's reciprocal call landing WHILE `addPeer`'s confirmation
@@ -638,16 +648,15 @@ struct RemotePeerManagerTests {
         manager.connectAll()
 
         async let early: RemotePeerManager.AddError? = manager.addPeer(link: linkFromA)
-        while requests.seen.isEmpty { try? await Task.sleep(nanoseconds: 1_000_000) }
-        let earlyCounterCode = try #require((try body(of: requests.seen[0])["peer"] as? [String: Any])?["counterCode"] as? String)
+        let earlyCounterCode = try #require(await awaitCapturedCounterCode(from: requests))
         // Wait for EARLY's own upsert to have definitely completed before
         // starting LATE, so LATE's own `previousState` snapshot captures it.
-        while manager.peers.first?.token != "tokEarly" { try? await Task.sleep(nanoseconds: 1_000_000) }
+        try #require(await awaitCondition { manager.peers.first?.token == "tokEarly" })
 
         async let late: RemotePeerManager.AddError? = manager.addPeer(link: linkFromA)
         // Wait for LATE's own upsert to have definitely completed too,
         // before delivering EARLY's confirmation.
-        while manager.peers.first?.token != "tokLate" { try? await Task.sleep(nanoseconds: 1_000_000) }
+        try #require(await awaitCondition { manager.peers.first?.token == "tokLate" })
 
         // Confirm ONLY EARLY's own counter-code — LATE's own is never
         // confirmed and will time out.
@@ -687,15 +696,19 @@ struct RemotePeerManagerTests {
             return (Data(#"{"token":"\#(token)","serverId":"srv-a","name":"Mac A"}"#.utf8),
                     HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }, timeout: 1)
-        let manager = makeManager(store: store, pairer: pairer, links: Links(), reciprocalConfirmationTimeout: 0.05)
+        // The timeout only has to outlast the test's own MainActor setup
+        // below: with 0.05s, a stalled runner could let EARLY roll back to
+        // "old-token" before the test observed "tokEarly", and the poll
+        // for it never finished. Both attempts time out concurrently, so
+        // this costs ~2s once, not per attempt.
+        let manager = makeManager(store: store, pairer: pairer, links: Links(), reciprocalConfirmationTimeout: 2)
         manager.connectAll()
 
         async let early: RemotePeerManager.AddError? = manager.addPeer(link: linkFromA)
-        while requests.seen.isEmpty { try? await Task.sleep(nanoseconds: 1_000_000) }
-        while manager.peers.first?.token != "tokEarly" { try? await Task.sleep(nanoseconds: 1_000_000) }
+        try #require(await awaitCondition { manager.peers.first?.token == "tokEarly" })
 
         async let late: RemotePeerManager.AddError? = manager.addPeer(link: linkFromA)
-        while manager.peers.first?.token != "tokLate" { try? await Task.sleep(nanoseconds: 1_000_000) }
+        try #require(await awaitCondition { manager.peers.first?.token == "tokLate" })
 
         // Neither attempt's own counter-code is ever confirmed — both time out.
         let earlyResult = await early
