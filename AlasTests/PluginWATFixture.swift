@@ -5,6 +5,7 @@ enum PluginFixtureStep: Sendable {
     case send(String)
     case sendRepeated(String, times: Int)
     case sendRange(ptr: Int, len: Int)
+    case present(tab: Int, ptr: Int, len: Int, width: Int)
     case trap
     case spin
 }
@@ -36,22 +37,28 @@ enum PluginWATFixture {
                     offset += length
                 case .sendRange(let ptr, let len):
                     body += "(call $send (i32.const \(ptr)) (i32.const \(len)))"
+                case let .present(tab, ptr, len, width):
+                    body += "(call $present (i32.const \(tab)) (i32.const \(ptr)) (i32.const \(len)) (i32.const \(width)))"
                 case .trap:
                     body += "unreachable"
                 case .spin:
                     body += "(loop $forever (br $forever))"
                 }
             }
-            calls += "(if (i32.eq (global.get $calls) (i32.const \(index))) (then \(body)))\n"
+            calls += "(if (i32.eq (local.get $n) (i32.const \(index))) (then \(body)))\n"
         }
         let alloc = allocReturns.map { "(i32.const \($0))" } ?? """
             (local.set $p (global.get $heap))
             (global.set $heap (i32.add (global.get $heap) (local.get $n)))
             (local.get $p)
             """
+        let usesPresent = script.joined().contains { if case .present = $0 { true } else { false } }
+        let presentImport = usesPresent
+            ? #"(import "alas" "present" (func $present (param i32 i32 i32 i32)))"# : ""
         return try PluginWAT.compile("""
         (module
           (import "alas" "send" (func $send (param i32 i32)))
+          \(presentImport)
           (memory (export "memory") 1)
           (global $heap (mut i32) (i32.const 32768))
           (global $calls (mut i32) (i32.const 0))
@@ -60,8 +67,10 @@ enum PluginWATFixture {
             (local $p i32)
             \(alloc))
           (func (export "alas_handle") (param $ptr i32) (param $len i32)
-            \(calls)
-            (global.set $calls (i32.add (global.get $calls) (i32.const 1))))
+            (local $n i32)
+            (local.set $n (global.get $calls))
+            (global.set $calls (i32.add (local.get $n) (i32.const 1)))
+            \(calls))
         )
         """)
     }

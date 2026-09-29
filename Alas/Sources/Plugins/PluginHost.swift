@@ -152,7 +152,7 @@ final class PluginHost {
             record(.toPlugin, message)
             let sent: [Data]
             do {
-                sent = try await runtime.handle(message)
+                sent = try await runtime.handle(message).messages
             } catch {
                 fail(String(describing: error))
                 return
