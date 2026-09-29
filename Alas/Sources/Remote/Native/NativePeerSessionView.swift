@@ -11,6 +11,8 @@ struct NativePeerSessionView: View {
     @Environment(\.openURL) private var openURL
     @State private var rowCache = NativePeerRowCache()
     @State private var followsTranscriptTail = true
+    @State private var hasPositionedInitialTail = false
+    @State private var paginationAnchorID: String?
     @FocusState private var composerFocused: Bool
 
     private var online: Bool { client.selectedPeer?.state.carriesSessions == true }
@@ -115,17 +117,20 @@ struct NativePeerSessionView: View {
                     if !online || transcript.isClosed {
                         unavailableBanner.modifier(PeerRowFrame(contentMaxWidth: contentMaxWidth))
                     }
-                    if transcript.olderPageBeforeIndex != nil && online {
-                        HStack {
+                    if let before = transcript.olderPageBeforeIndex, online {
+                        HStack(spacing: 6) {
                             Spacer()
-                            Button {
-                                client.fetchOlder()
-                            } label: {
-                                Label("Load older messages", systemImage: "arrow.up.circle")
+                            if client.isFetchingOlderMessages {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Loading earlier messages…")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(theme.color("fg-muted"))
                             }
-                            .buttonStyle(PeerChipButtonStyle(theme: theme))
                             Spacer()
                         }
+                        .frame(height: 26)
+                        .id("native-peer-older-\(before)")
                     }
                     ForEach(transcript.messages, id: \.stableId) { message in
                         row(message, contentMaxWidth: contentMaxWidth)
@@ -139,18 +144,43 @@ struct NativePeerSessionView: View {
                 }
                 .padding(.top, 20)
             }
-            .onAppear {
+            .defaultScrollAnchor(.bottom)
+            .task(id: transcript.epoch) {
+                hasPositionedInitialTail = false
+                followsTranscriptTail = true
+                paginationAnchorID = nil
+                guard transcript.epoch != nil else { return }
+                await Task.yield()
+                guard !Task.isCancelled else { return }
                 proxy.scrollTo(NativePeerTranscriptScrollPolicy.tailAnchorID, anchor: .bottom)
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                hasPositionedInitialTail = true
             }
             .onChange(of: transcript) { _, _ in
-                guard followsTranscriptTail else { return }
+                guard hasPositionedInitialTail, followsTranscriptTail else { return }
                 proxy.scrollTo(NativePeerTranscriptScrollPolicy.tailAnchorID, anchor: .bottom)
+            }
+            .onChange(of: transcript.firstIndex) { oldIndex, newIndex in
+                guard newIndex < oldIndex, let anchorID = paginationAnchorID else { return }
+                Task { @MainActor in
+                    await Task.yield()
+                    proxy.scrollTo(anchorID, anchor: .top)
+                    paginationAnchorID = nil
+                }
+            }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y <= 400
+            } action: { _, shouldFetchOlder in
+                guard shouldFetchOlder, hasPositionedInitialTail else { return }
+                fetchOlderIfNeeded(transcript)
             }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 let distanceFromBottom = geometry.contentSize.height - geometry.contentOffset.y
                     - geometry.containerSize.height
                 return NativePeerTranscriptScrollPolicy.shouldFollow(
-                    distanceFromBottom: distanceFromBottom
+                    distanceFromBottom: distanceFromBottom,
+                    hasPositionedInitialTail: hasPositionedInitialTail
                 )
             } action: { _, shouldFollow in
                 followsTranscriptTail = shouldFollow
@@ -159,6 +189,14 @@ struct NativePeerSessionView: View {
         .onChange(of: transcript.messages, initial: true) { _, messages in
             rowCache.sync(messages)
         }
+    }
+
+    private func fetchOlderIfNeeded(_ transcript: NativePeerTranscript) {
+        guard paginationAnchorID == nil,
+              let anchorID = transcript.messages.first?.stableId,
+              client.fetchOlder()
+        else { return }
+        paginationAnchorID = anchorID
     }
 
     /// `scrollTo` targets this view, so the spacer must be the target itself;
@@ -486,7 +524,10 @@ enum NativePeerTranscriptScrollPolicy {
     static let tailAnchorID = "native-peer-transcript-tail"
     private static let bottomTolerance: CGFloat = 72
 
-    static func shouldFollow(distanceFromBottom: CGFloat) -> Bool {
-        distanceFromBottom <= bottomTolerance
+    static func shouldFollow(
+        distanceFromBottom: CGFloat,
+        hasPositionedInitialTail: Bool = true
+    ) -> Bool {
+        !hasPositionedInitialTail || distanceFromBottom <= bottomTolerance
     }
 }

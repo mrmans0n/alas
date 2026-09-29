@@ -8,6 +8,7 @@ final class NativePeerSessions {
     private let peers: @MainActor () -> [RemoteHelloPeer]
     @ObservationIgnored private var downstream: FederatedDownstream?
     @ObservationIgnored private var pendingPromptExpectedIndex: Int?
+    private(set) var isFetchingOlderMessages = false
     private(set) var pendingPrompt: String?
 
     private(set) var snapshot = NativePeerSidebarSnapshot(groups: [], attentionRows: [])
@@ -98,6 +99,7 @@ final class NativePeerSessions {
         draft = ""
         pendingPrompt = nil
         pendingPromptExpectedIndex = nil
+        isFetchingOlderMessages = false
         deliveryError = nil
         workspace = NativePeerWorkspace()
         workspaceSummary = nil
@@ -119,6 +121,7 @@ final class NativePeerSessions {
         }
         if !group.state.carriesSessions || selectedRow == nil {
             transcript?.markUnavailable()
+            isFetchingOlderMessages = false
             workspace.markUnavailable()
         } else if transcript?.isClosed == true, let selectedSessionId, let downstream {
             // The provider discarded subscriptions when this peer went away.
@@ -126,6 +129,7 @@ final class NativePeerSessions {
             transcript = NativePeerTranscript(sessionId: selectedSessionId)
             pendingPrompt = nil
             pendingPromptExpectedIndex = nil
+            isFetchingOlderMessages = false
             _ = federation.route(.subscribe(sessionId: selectedSessionId), from: downstream)
             // Preserved across the reset below: losing it would silently
             // drop the center pane back to the transcript on every
@@ -176,6 +180,7 @@ final class NativePeerSessions {
         draft = ""
         pendingPrompt = nil
         pendingPromptExpectedIndex = nil
+        isFetchingOlderMessages = false
         deliveryError = nil
         workspace = NativePeerWorkspace()
         workspaceSummary = nil
@@ -296,10 +301,21 @@ final class NativePeerSessions {
         workspace.closeDocument()
     }
 
-    func fetchOlder() {
-        guard let before = transcript?.olderPageBeforeIndex else { return }
-        routeWhileOnline { .fetchOlder(sessionId: $0, beforeIndex: before,
-                                      limit: RemoteTranscriptSync.tailWindow) }
+    @discardableResult
+    func fetchOlder() -> Bool {
+        guard !isFetchingOlderMessages,
+              let before = transcript?.olderPageBeforeIndex
+        else { return false }
+        isFetchingOlderMessages = true
+        guard routeWhileOnline({
+            .fetchOlder(
+                sessionId: $0, beforeIndex: before, limit: RemoteTranscriptSync.tailWindow
+            )
+        }) else {
+            isFetchingOlderMessages = false
+            return false
+        }
+        return true
     }
 
     func decidePermission(requestId: Int, optionId: String) {
@@ -384,6 +400,12 @@ final class NativePeerSessions {
 
     private func receive(_ message: RemoteServerMessage) {
         guard let selectedSessionId, message.sessionId == selectedSessionId else { return }
+        switch message {
+        case .transcriptSnapshot, .transcriptPage:
+            isFetchingOlderMessages = false
+        default:
+            break
+        }
         if case .promptRejected = message {
             pendingPrompt = nil
             pendingPromptExpectedIndex = nil

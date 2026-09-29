@@ -922,6 +922,57 @@ struct NativePeerSessionsTests {
         #expect(client.draft.isEmpty)
     }
 
+    @Test func olderTranscriptFetchIsSingleFlight() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let federation = FederatedSessionsProvider(links: links)
+        let client = NativePeerSessions(federation: federation, peers: {
+            [.init(serverId: "B", name: "Mac B", state: "online")]
+        })
+        client.start()
+        links.receive(.sessionList(sessions: [row("s")]), from: "B")
+        client.select("B:s")
+        let tail = RemoteWireMessage(
+            stableId: "agent-180", kind: "agent", text: "Latest response", json: nil, index: 180
+        )
+        links.receive(.transcriptSnapshot(
+            sessionId: "s", streamingState: "idle", canDrive: true,
+            messages: [tail], firstIndex: 180, totalCount: 181, epoch: 1, revision: 0
+        ), from: "B")
+
+        client.fetchOlder()
+        client.fetchOlder()
+
+        #expect(links.sent(to: "B").filter {
+            $0 == .fetchOlder(
+                sessionId: "s", beforeIndex: 180, limit: RemoteTranscriptSync.tailWindow
+            )
+        }.count == 1)
+
+        let older = RemoteWireMessage(
+            stableId: "agent-90", kind: "agent", text: "Older response", json: nil, index: 90
+        )
+        links.receive(.transcriptPage(
+            sessionId: "s", epoch: 1, firstIndex: 90, messages: [older]
+        ), from: "B")
+        client.fetchOlder()
+
+        #expect(links.sent(to: "B").filter {
+            $0 == .fetchOlder(
+                sessionId: "s", beforeIndex: 90, limit: RemoteTranscriptSync.tailWindow
+            )
+        }.count == 1)
+    }
+
+    @Test func peerTranscriptKeepsTailFollowDuringInitialPositioning() {
+        #expect(NativePeerTranscriptScrollPolicy.shouldFollow(
+            distanceFromBottom: 120, hasPositionedInitialTail: false
+        ))
+        #expect(!NativePeerTranscriptScrollPolicy.shouldFollow(
+            distanceFromBottom: 120, hasPositionedInitialTail: true
+        ))
+    }
+
     @Test func peerTranscriptTailFollowPausesWhenScrolledAway() {
         #expect(NativePeerTranscriptScrollPolicy.shouldFollow(distanceFromBottom: 0))
         #expect(NativePeerTranscriptScrollPolicy.shouldFollow(distanceFromBottom: 48))
