@@ -18,10 +18,12 @@ struct RemoteConfigTests {
     @Test func remoteConfigRoundTripsJSON() throws {
         var cfg = AppConfig.defaults
         cfg.remote.enabled = true
+        cfg.remote.keepAwake = true
         cfg.remote.port = 8765
         let data = try JSONEncoder().encode(cfg)
         let back = try JSONDecoder().decode(AppConfig.self, from: data)
         #expect(back.remote.enabled == true)
+        #expect(back.remote.keepAwake == true)
         #expect(back.remote.port == 8765)
     }
 
@@ -57,13 +59,14 @@ struct RemoteConfigTests {
         #expect(back.remote.port == 0)
     }
 
-    @Test func oldRemoteConfigWithoutHostFieldsDecodesDefaults() throws {
+    @Test func oldRemoteConfigWithoutOptionalSettingsDecodesDefaults() throws {
         let data = try JSONEncoder().encode(AppConfig.defaults)
         var json = try #require(
             try JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
         var remote = try #require(json["remote"] as? [String: Any])
         remote.removeValue(forKey: "allowedHosts")
+        remote.removeValue(forKey: "keepAwake")
         remote.removeValue(forKey: "preferredAdvertisedHost")
         json["remote"] = remote
 
@@ -71,6 +74,7 @@ struct RemoteConfigTests {
         let back = try JSONDecoder().decode(AppConfig.self, from: stripped)
 
         #expect(back.remote.allowedHosts == [])
+        #expect(back.remote.keepAwake == false)
         #expect(back.remote.preferredAdvertisedHost == nil)
     }
 

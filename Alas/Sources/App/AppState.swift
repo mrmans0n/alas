@@ -665,6 +665,7 @@ final class AppState {
     /// by `syncRemoteServer()`.
     @ObservationIgnored
     private(set) var remoteServer: RemoteServer?
+    @ObservationIgnored private let remoteKeepAwake = RemoteKeepAwakeController()
     /// Last bind/start failure, surfaced by the Settings pane. Nil when the
     /// server is running or intentionally stopped. Observable so the pane
     /// reacts when a bind fails.
@@ -793,7 +794,10 @@ final class AppState {
     /// in `lastRemoteError` rather than thrown — the app must not crash because
     /// a port is busy.
     func syncRemoteServer() {
-        defer { syncPairingApprovalState() }
+        defer {
+            syncPairingApprovalState()
+            syncRemoteKeepAwake()
+        }
         if config.remote.enabled {
             if config.remote.ensureServerId() { saveConfig() }
             guard remoteServer == nil else {
@@ -829,6 +833,7 @@ final class AppState {
             server.onPortChange = { [weak self] p in
                 self?.remotePort = p
                 self?.refreshRemoteAccessState()
+                self?.syncRemoteKeepAwake()
             }
             server.onConnectionDeviceCountsChange = { [weak self] counts in
                 self?.remoteConnectedDeviceCountsSnapshot = counts
@@ -880,6 +885,13 @@ final class AppState {
             remoteConnectedDeviceCountsSnapshot = [:]
             lastRemoteError = nil
         }
+    }
+
+    func syncRemoteKeepAwake() {
+        remoteKeepAwake.update(
+            enabled: config.remote.keepAwake,
+            serverRunning: config.remote.enabled && remoteServer != nil && remotePort != nil
+        )
     }
 
     /// Keeps peer links alive only while the server is up and the experiment

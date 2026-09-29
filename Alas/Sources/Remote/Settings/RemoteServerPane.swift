@@ -42,6 +42,20 @@ struct RemoteServerPane: View {
                         ))
                     }
 
+                    SettingsRow(
+                        name: "Keep awake on power",
+                        desc: "Prevent idle sleep while remote control is running and this Mac is plugged in. The display can still sleep. Closing the lid or choosing Sleep still puts the Mac to sleep."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { state.config.remote.keepAwake },
+                            set: {
+                                state.config.remote.keepAwake = $0
+                                state.saveConfig()
+                                state.syncRemoteKeepAwake()
+                            }
+                        ))
+                    }
+
                     if let error = state.lastRemoteError {
                         SettingsRow(name: "Error", desc: error) {
                             Icon(name: "alert", size: 14, color: theme.color("warn"))

@@ -60,6 +60,7 @@ struct AppConfig: Codable, Equatable {
 
     struct Remote: Codable, Equatable {
         var enabled: Bool = false
+        var keepAwake: Bool = false
         var port: UInt16 = 0          // 0 = OS-assigned
         var allowedHosts: [String] = []
         var preferredAdvertisedHost: String? = nil
@@ -79,6 +80,7 @@ struct AppConfig: Codable, Equatable {
 
         init(
             enabled: Bool = false,
+            keepAwake: Bool = false,
             port: UInt16 = 0,
             allowedHosts: [String] = [],
             preferredAdvertisedHost: String? = nil,
@@ -89,6 +91,7 @@ struct AppConfig: Codable, Equatable {
             discoverable: Bool = false
         ) {
             self.enabled = enabled
+            self.keepAwake = keepAwake
             self.port = port
             self.allowedHosts = allowedHosts
             self.preferredAdvertisedHost = preferredAdvertisedHost
@@ -100,13 +103,14 @@ struct AppConfig: Codable, Equatable {
         }
 
         enum CodingKeys: String, CodingKey {
-            case enabled, port, allowedHosts, preferredAdvertisedHost
+            case enabled, keepAwake, port, allowedHosts, preferredAdvertisedHost
             case allowedOrigins, serverId, displayName, federationEnabled, discoverable
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? false
+            keepAwake = (try? c.decode(Bool.self, forKey: .keepAwake)) ?? false
             port = (try? c.decode(UInt16.self, forKey: .port)) ?? 0
             allowedHosts = (try? c.decode([String].self, forKey: .allowedHosts)) ?? []
             preferredAdvertisedHost = try? c.decodeIfPresent(String.self, forKey: .preferredAdvertisedHost)
