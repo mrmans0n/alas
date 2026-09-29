@@ -6,6 +6,7 @@ import Foundation
 struct ACPPlanPillState: Equatable {
     let done: Int
     let total: Int
+    private let progress: Int
     let currentStep: String
     let isAnimating: Bool
 
@@ -16,20 +17,24 @@ struct ACPPlanPillState: Equatable {
         self.total = items.count
         self.done = items.filter { $0.status == "completed" }.count
 
-        if let inProgress = items.first(where: { $0.status == "in_progress" }) {
-            self.currentStep = inProgress.content
+        if let inProgressIndex = items.firstIndex(where: { $0.status == "in_progress" }) {
+            self.progress = inProgressIndex + 1
+            self.currentStep = items[inProgressIndex].content
             self.isAnimating = true
-        } else if done == total {
-            self.currentStep = "All steps complete"
-            self.isAnimating = false
-        } else if let pending = items.first(where: { $0.status == "pending" }) {
-            self.currentStep = pending.content
-            self.isAnimating = false
         } else {
-            // Unknown status values fall through — show the last item's
-            // content as a least-bad default. Snake stays off.
-            self.currentStep = items.last?.content ?? ""
-            self.isAnimating = false
+            self.progress = done
+            if done == total {
+                self.currentStep = "All steps complete"
+                self.isAnimating = false
+            } else if let pending = items.first(where: { $0.status == "pending" }) {
+                self.currentStep = pending.content
+                self.isAnimating = false
+            } else {
+                // Unknown status values fall through — show the last item's
+                // content as a least-bad default. Snake stays off.
+                self.currentStep = items.last?.content ?? ""
+                self.isAnimating = false
+            }
         }
     }
 
@@ -43,7 +48,7 @@ struct ACPPlanPillState: Equatable {
     }
 
     var progressText: String {
-        "\(done)/\(total)"
+        "\(progress)/\(total)"
     }
 
     var accessibilityLabel: String {

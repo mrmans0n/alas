@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Show the active ACP task's one-based position in the chat task affordance.
+
 ## [0.19.18] - 2026-09-29
 
 ### ✨ Features
