@@ -61,3 +61,26 @@ extension AppState {
             selectedWorktreeId: selectedWorktreeId)
     }
 }
+
+extension AppState {
+    /// Tab contributions of plugins running for the selected worktree's project.
+    func pluginTabContributions() -> [PluginTabState] {
+        guard let manager = pluginManager,
+              let worktreeId = selectedWorktreeId,
+              let projectId = worktree(withId: worktreeId)?.projectId
+        else { return [] }
+        return manager.plugins
+            .filter { manager.host(pluginID: $0.id, projectID: projectId)?.state == .active }
+            .flatMap { plugin in
+                plugin.manifest.tabs.map {
+                    PluginTabState(pluginID: plugin.id, contributionID: $0.id, title: $0.title)
+                }
+            }
+    }
+
+    func openPluginTab(_ tab: PluginTabState) {
+        guard let worktreeId = selectedWorktreeId else { return }
+        tabs.openOrFocusPluginTab(worktreeId: worktreeId, state: tab)
+        activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tab.id)
+    }
+}

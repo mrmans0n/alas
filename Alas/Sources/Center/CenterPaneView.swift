@@ -691,6 +691,10 @@ struct CenterPaneView: View {
                             .id(s.id + (s.remoteHost ?? ""))
                             .onAppear { completeStartupRecoveryIfActive(s.id) }
                             .task { completeStartupRecoveryIfActive(s.id) }
+                    case .plugin(let s):
+                        PluginTabView(state: state, worktree: worktree, tab: s)
+                            .id(s.id)
+                            .onAppear { completeStartupRecoveryIfActive(s.id) }
                     case .runReport(let s):
                         RunReportTabView(state: state, tabState: s)
                             .id(s.id)

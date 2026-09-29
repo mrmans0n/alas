@@ -466,6 +466,15 @@ struct AlasApp: App {
         }
         CommandGroup(after: .toolbar) {
             Divider()
+            let pluginTabs = state.pluginTabContributions()
+            if !pluginTabs.isEmpty {
+                Menu("Plugins") {
+                    ForEach(pluginTabs) { tab in
+                        Button(tab.title) { state.openPluginTab(tab) }
+                    }
+                }
+                Divider()
+            }
             Button("Increase Font Size") {
                 NSApp.sendAction(#selector(FontSizeResponder.increaseFontSize(_:)), to: nil, from: nil)
             }

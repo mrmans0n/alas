@@ -1197,6 +1197,17 @@ final class TabsManager {
         return tab
     }
 
+    @discardableResult
+    func openOrFocusPluginTab(worktreeId: String, state: PluginTabState) -> Tab {
+        if let existing = tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) {
+            activate(worktreeId: worktreeId, tabId: state.id)
+            return existing
+        }
+        let tab = Tab.plugin(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
     func closeRunReports(worktreeId: String) {
         let reportIDs = tabs(forWorktree: worktreeId).compactMap { tab -> TabID? in
             guard case .runReport = tab else { return nil }

@@ -46,7 +46,7 @@ roadmap in [#1560](https://github.com/mrmans0n/alas/issues/1560).
 |---|---|
 | Run the sample plugin and see it work | [Getting started](getting-started.md) |
 | Understand how plugins run, what they are trusted with, and how they fail | [Concepts](concepts.md) |
-| Look up an exact field, message, error, or limit | [API v1 reference](api-v1.md) |
+| Look up an exact field, message, error, or limit | [API v1 reference](api-v1.md), [API v2 additions](api-v2.md) |
 | Write a plugin: Rust patterns, testing, other languages | [Writing plugins](writing-plugins.md) |
 | Work out why my plugin does not load or stops | [Troubleshooting](troubleshooting.md) |
 

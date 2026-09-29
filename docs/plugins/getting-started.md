@@ -32,10 +32,14 @@ This compiles the plugin and copies two files into Alas's plugins folder:
 
 ## 2. Approve and run it
 
-1. In Alas, choose **Debug → Plugins…**.
-2. Find **Hello Workspace 0.1.0**. It asks for one capability:
+1. Turn on **Settings → Advanced → Experimental → Plugins**. The Advanced
+   section shows only when `~/.alas/.debug` exists.
+2. Open **Settings → Plugins** and find **Hello Workspace 0.1.0**. It asks for one capability:
    *Read this project's worktrees and what their agent sessions are doing*.
-3. Click **Approve and run**.
+3. Click **Approve…**.
+
+**Debug → Plugins…** stays available as the message inspector, where each
+instance's state and log lines show.
 
 Plugins never run until you approve them. Alas remembers the approval against the
 exact bytes of `plugin.json` and `plugin.wasm`, so changing either file asks
@@ -100,8 +104,8 @@ Change what the plugin logs in `src/lib.rs`, then:
 ```
 
 `build.sh` installs into a folder named after the directory you run it from, so
-this one lands in `…/Plugins/my-plugin`. In **Debug → Plugins…** click
-**Reload**. Because the wasm changed, Alas asks you to **Approve and run** again.
+this one lands in `…/Plugins/my-plugin`. In **Settings → Plugins** reload the
+list. Because the wasm changed, Alas asks you to **Approve…** again.
 
 ## Next steps
 
