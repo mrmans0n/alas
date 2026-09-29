@@ -76,7 +76,6 @@ import Testing
         var responder = RemoteHTTPResponder(pairing: pairing,
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
             diagnostics: { RemoteDiagnosticsSnapshot(appName: "Alas", port: 1, addresses: [], usesPlainHTTP: true, pairedDeviceCount: 0) })
-        responder.acceptsPeers = { true }
         responder.approval = f.http
         var callbacks = 0
         responder.onApprovedPeerPaired = { _, _, _ in callbacks += 1 }
@@ -93,7 +92,6 @@ import Testing
         f.coordinator.complete(requestID: p.requestID, succeeded: true)
         f.enabled = false
         f.coordinator.setEnabled(false)
-        responder.acceptsPeers = { false }
         #expect(try response(body()) == first)
         #expect(callbacks == 1)
         #expect(pairing.devices.count == 1)

@@ -60,10 +60,9 @@ struct RemoteBonjourAdvertisement: Equatable, Sendable {
 extension RemoteBonjourAdvertisement {
     /// The advertisement for these settings, or nil when this Mac must not be
     /// discoverable. Discovery is gated by the remote server being on AND the
-    /// federation experiment AND the discoverable toggle: turning off any one
-    /// of them withdraws the record.
+    /// discoverable toggle: turning off either one withdraws the record.
     static func forSettings(_ remote: AppConfig.Remote, displayName: String, model: String?) -> RemoteBonjourAdvertisement? {
-        guard remote.enabled, remote.federationEnabled, remote.discoverable else { return nil }
+        guard remote.enabled, remote.discoverable else { return nil }
         return RemoteBonjourAdvertisement(
             displayName: displayName,
             txt: RemoteBonjourTXT(serverId: remote.serverId, model: model))

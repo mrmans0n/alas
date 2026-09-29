@@ -43,9 +43,6 @@ struct RemoteHTTPResponder {
     let assets: RemoteWebAssets
     let diagnostics: () -> RemoteDiagnosticsSnapshot
     var originPolicy: RemoteOriginPolicy = .loopback
-    /// Whether `POST /pair` may carry a `peer` object. Off means a peer
-    /// request gets 403 and its code stays unconsumed.
-    var acceptsPeers: @MainActor () -> Bool = { false }
     /// Fired after a peer redeemed a code here, so the app can pair back.
     var onPeerPaired: (@MainActor (RemotePeerPairingRequest) -> Void)? = nil
     /// The identity this Mac advertises. Shared with the `hello` frame so a
@@ -79,13 +76,11 @@ struct RemoteHTTPResponder {
             // from an unrelated Alas instance that happens to answer at the
             // same address (a DHCP-reused LAN IP, or another server sharing
             // this Mac's own loopback address) before trusting a 2xx as
-            // proof the paired Mac is still authorized. federationEnabled
-            // lets a peer connection tell "the flag is temporarily off over
-            // there" apart from "our token was actually revoked" — the
-            // upgrade is refused identically in both cases, but only the
-            // second one should ever stop the link from retrying.
+            // proof the paired Mac is still authorized. federationEnabled is
+            // always true now; older peers still read it to tell a refused
+            // upgrade caused by a disabled flag apart from a revoked token.
             return Self.json(["ok": true, "serverId": diagnostics().serverId,
-                              "federationEnabled": identity?().federationEnabled], extraHeaders: cors)
+                              "federationEnabled": true], extraHeaders: cors)
         }
         if req.method == "GET", req.path == "/remote-info" {
             let data = (try? JSONEncoder().encode(diagnostics())) ?? Data(#"{"error":"encode"}"#.utf8)
@@ -169,7 +164,7 @@ struct RemoteHTTPResponder {
                   pr.deviceName == p.requester.name else { return RemotePairingApprovalHTTP.failure(.unauthorized) }
             do {
                 let bytes = try approval.coordinator.redeem(envelope) {
-                    guard acceptsPeers(), approval.enabled(), let callback = onApprovedPeerPaired
+                    guard approval.enabled(), let callback = onApprovedPeerPaired
                     else { throw ApprovalFailure.disabled }
                     let result = pairing.issueApprovedPeer(deviceName: peer.name, peerServerId: peer.serverId)
                     do {
@@ -194,7 +189,6 @@ struct RemoteHTTPResponder {
         guard let code = pr.code else { return unauthorized }
         let token: String
         if let peer = pr.peer {
-            guard acceptsPeers() else { return forbidden("federation disabled") }
             // Everything in `peer` is attacker-controlled and only the 1 MB
             // body cap bounds it. Reject an implausible advertisement BEFORE
             // redeeming, so a rejected request leaves the pairing code
