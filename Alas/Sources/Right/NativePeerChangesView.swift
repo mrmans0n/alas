@@ -80,6 +80,9 @@ struct NativePeerChangesView: View {
                             onCopyRelative: { Clipboard.copy($0.path) },
                             onCopyFull: {
                                 Clipboard.copy(worktreePath.appendingPathComponent($0.path).path)
+                            },
+                            onSelectStage: { file, stage in
+                                onOpen(.diff(path: file.path, stage: stage))
                             }
                         )
                     )

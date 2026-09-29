@@ -173,6 +173,7 @@ struct WorkingTreeRowActions {
     var onOpenFile: ((ChangedFile) -> Void)? = nil
     var onCopyRelative: ((ChangedFile) -> Void)? = nil
     var onCopyFull: ((ChangedFile) -> Void)? = nil
+    var onSelectStage: ((ChangedFile, ChangeStage) -> Void)? = nil
     var onCopyDiff: ((ChangedFile) -> Void)? = nil
     var onViewAtHEAD: ((ChangedFile) -> Void)? = nil
     var onCompareWithHEAD: ((ChangedFile) -> Void)? = nil
@@ -282,6 +283,8 @@ struct WorkingTreeFlatRowView: View {
             onOpenFile: actions.onOpenFile.map { fn in { fn(file) } },
             onCopyRelative: actions.onCopyRelative.map { fn in { fn(file) } },
             onCopyFull: actions.onCopyFull.map { fn in { fn(file) } },
+            onViewStagedChanges: stageSelectionAction(for: file, stage: .staged, in: group),
+            onViewUnstagedChanges: stageSelectionAction(for: file, stage: .unstaged, in: group),
             onCopyDiff: actions.onCopyDiff.map { fn in { fn(file) } },
             onViewAtHEAD: actions.onViewAtHEAD.map { fn in { fn(headPathEntry) } },
             onCompareWithHEAD: actions.onCompareWithHEAD.map { fn in { fn(headPathEntry) } },
@@ -302,6 +305,17 @@ struct WorkingTreeFlatRowView: View {
         case .mixed, .unstaged:
             return group.unstagedEntries.isEmpty ? nil : { actions.onStageAll?(group.unstagedEntries) }
         }
+    }
+
+    private func stageSelectionAction(
+        for file: ChangedFile,
+        stage: ChangeStage,
+        in group: WorkingTreeChangeGroup
+    ) -> (() -> Void)? {
+        guard actions.readOnly, group.stageState == .mixed, let onSelectStage = actions.onSelectStage else {
+            return nil
+        }
+        return { onSelectStage(file, stage) }
     }
 
     @ViewBuilder
