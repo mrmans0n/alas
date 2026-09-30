@@ -31,13 +31,16 @@ final class PluginStorage {
         return root.appending(path: "PluginData").appending(path: pluginID).appending(path: name + ".json")
     }
 
+    static func isValidKey(_ key: String) -> Bool {
+        (1...maxKeyBytes).contains(key.utf8.count)
+    }
+
     func get(_ key: String) -> Data? {
         load()?[key]
     }
 
     func set(_ key: String, value: Data?) -> SetResult {
-        let keyBytes = key.utf8.count
-        guard (1...Self.maxKeyBytes).contains(keyBytes) else { return .invalidKey }
+        guard Self.isValidKey(key) else { return .invalidKey }
         guard var next = load() else { return .failed }
         if let value {
             // Foundation also accepts UTF-16/32 and a BOM, which would corrupt the UTF-8 file.

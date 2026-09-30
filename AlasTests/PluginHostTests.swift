@@ -554,16 +554,18 @@ struct PluginHostTests {
             request(3, "storage/keys", "{}"),
             request(4, "storage/set", #"{"key":"","value":1}"#),
             request(5, "storage/set", #"{"key":"k2","value":"\#(String(repeating: "y", count: 200))"}"#),
+            request(6, "storage/get", #"{"key":"\#(String(repeating: "k", count: 129))"}"#),
         ]], manifest: Self.v3Manifest, storage: storage)
         await host.activate()
         #expect(host.state == .active)
         let sent = replies(host)
-        try #require(sent.count == 6)
+        try #require(sent.count == 7)
         #expect(sent[1].contains(#""result":{}"#))
         #expect(sent[2].contains(#""value":{"a":1}"#))
         #expect(sent[3].contains(#"["big","k"]"#))
         #expect(sent[4].contains(#""code":-32602"#))
         #expect(sent[5].contains(#""code":-32003"#) && sent[5].contains("storage full"))
         #expect(storage.get("k2") == nil)
+        #expect(sent[6].contains(#""code":-32602"#) && sent[6].contains("invalid storage key"))
     }
 }

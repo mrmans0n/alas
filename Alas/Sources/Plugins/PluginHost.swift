@@ -349,6 +349,7 @@ final class PluginHost {
             guard let params = try? JSONDecoder().decode(PluginParams<PluginStorageKeyParams>.self, from: data).params else {
                 return errorReply(id, code: -32602, "invalid params for \(method)")
             }
+            guard PluginStorage.isValidKey(params.key) else { return errorReply(id, code: -32602, "invalid storage key") }
             // Splice the stored bytes in as they are; a typed model would re-type numbers.
             var reply = Data(#"{"jsonrpc":"2.0","id":"#.utf8)
             reply.append(encode(id))
