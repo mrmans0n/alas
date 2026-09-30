@@ -402,6 +402,50 @@ struct ACPSessionOrchestrationPolicyTests {
             result: .cancelled, lastParentReportAt: nil, turnStartedAt: 100) == .notice)
     }
 
+    private static func head(
+        status: QueuedPrompt.Status = .pending,
+        dispatched: Bool = false,
+        lastError: String? = nil,
+        uncertain: Bool = false,
+        scheduled: Bool = false
+    ) -> QueuedPrompt {
+        QueuedPrompt(
+            blocks: [.text("report back")],
+            scheduledAt: scheduled ? Date(timeIntervalSince1970: 1) : nil,
+            status: status,
+            lastError: lastError ?? (uncertain ? QueuedPrompt.deliveryUncertaintyMessage : nil),
+            transcriptRecorded: status == .sending || dispatched,
+            dispatchedBrokerGeneration: dispatched ? ACPBrokerGeneration(rawValue: 7) : nil,
+            deliveryUncertain: uncertain
+        )
+    }
+
+    @Test("startup re-attaches a ready child only while its queue head is still owed to the parent", arguments: [
+        (ACPDelegationPhase.ready, head(status: .sending, dispatched: true) as QueuedPrompt?, true),
+        (.ready, head(dispatched: true), true),
+        (.ready, head(), true),
+        (.ready, head(uncertain: true), true),
+        (.ready, head(lastError: "Rate limited"), false),
+        (.ready, head(scheduled: true), false),
+        (.ready, nil, false),
+        (.failed, head(status: .sending, dispatched: true), false),
+    ])
+    func restartAttachFollowsTheQueueHead(phase: ACPDelegationPhase, head: QueuedPrompt?, expected: Bool) {
+        #expect(ACPSessionOrchestrationPolicy.needsRestartAttach(phase: phase, queueHead: head) == expected)
+    }
+
+    @Test("after a restart, a turn is lost only if its child cannot resume it")
+    func restartedTurnLoss() {
+        #expect(ACPSessionOrchestrationPolicy.restartedTurnLoss(
+            attachFailure: nil, queueHead: Self.head(dispatched: true)) == nil)
+        #expect(ACPSessionOrchestrationPolicy.restartedTurnLoss(attachFailure: nil, queueHead: nil) == nil)
+        #expect(ACPSessionOrchestrationPolicy.restartedTurnLoss(
+            attachFailure: nil, queueHead: Self.head(uncertain: true)) != nil)
+        let failure = ACPSessionOrchestrationPolicy.restartedTurnLoss(
+            attachFailure: "Codex needs authentication.", queueHead: Self.head(dispatched: true))
+        #expect(failure?.hasSuffix("Codex needs authentication.") == true)
+    }
+
     private func blocker(_ key: String = "n42") -> ACPChildBlocker {
         .init(sessionId: "child", requestKey: key, kind: .permission, summary: "Write file")
     }

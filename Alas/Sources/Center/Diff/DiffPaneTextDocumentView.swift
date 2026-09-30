@@ -1322,6 +1322,8 @@ final class DiffPaneCodeTextView: NSTextView {
     var commandClickHandler: ((NSPoint) -> Void)?
     var flagsChangedHandler: ((NSEvent) -> Void)?
     var mouseExitedHandler: (() -> Void)?
+    /// Set once a `mouseMoved` lands under an overlay drawn above this view.
+    private var isPointerCovered = false
     var contextExpansionHandler: DiffContextExpansionHandler = { _, _, _ in }
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var lspContext: DiffPaneLSPContext?
@@ -1397,6 +1399,16 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     override func mouseMoved(with event: NSEvent) {
+        // Tracking areas still fire under overlays (launcher, palettes); a
+        // covered move behaves like leaving the view, once.
+        guard isTopmostHitTarget(atWindowLocation: event.locationInWindow) else {
+            if !isPointerCovered {
+                isPointerCovered = true
+                clearPointerHoverState()
+            }
+            return
+        }
+        isPointerCovered = false
         super.mouseMoved(with: event)
         let point = convert(event.locationInWindow, from: nil)
         hoverHandler?(point)
@@ -1463,6 +1475,10 @@ final class DiffPaneCodeTextView: NSTextView {
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
+        clearPointerHoverState()
+    }
+
+    private func clearPointerHoverState() {
         hoverExpansionTarget = nil
         // Restore the default cursor when leaving the view, otherwise a pointing
         // hand set over an expandable row can linger over the surrounding

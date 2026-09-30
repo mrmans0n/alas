@@ -242,6 +242,13 @@ final class ACPOrchestrationStore {
         ).map(decodeDelegation)
     }
 
+    func readyDelegations() throws -> [ACPDelegationRecord] {
+        try db.query(
+            "SELECT * FROM delegations WHERE phase = ?",
+            bindings: [ACPDelegationPhase.ready.rawValue]
+        ).map(decodeDelegation)
+    }
+
     func claimMessage(
         id: String,
         instanceId: String,

@@ -15,6 +15,12 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     /// user bubble per retry. Persisted so a relaunch-mid-attempt
     /// doesn't double-record either.
     var transcriptRecorded: Bool
+    /// Epoch milliseconds at which the turn for this item started, captured
+    /// with `transcriptRecorded`. A resend of the same prompt (a relaunch
+    /// re-attaching to a broker that kept the turn running) reports this as
+    /// the turn's start instead of the resend time, so a delegated child's
+    /// report made mid-turn is still seen as covering it.
+    var turnStartedAt: Int64?
     /// Structured composer state captured at enqueue time, so editing a
     /// queued prompt restores the EXACT original draft instead of inverting
     /// the lossy `blocks` serialization. `nil` for block-only origins
@@ -46,6 +52,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
          draft: ACPComposerDraft? = nil,
          delegatedSource: ACPDelegatedPromptSource? = nil,
          transcriptRecorded: Bool = false,
+         turnStartedAt: Int64? = nil,
          brokerOperationAttempt: Int = 0,
          dispatchedBrokerGeneration: ACPBrokerGeneration? = nil,
          deliveryUncertain: Bool = false)
@@ -59,6 +66,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         self.draft = draft
         self.delegatedSource = delegatedSource
         self.transcriptRecorded = transcriptRecorded
+        self.turnStartedAt = turnStartedAt
         self.brokerOperationAttempt = brokerOperationAttempt
         self.dispatchedBrokerGeneration = dispatchedBrokerGeneration
         self.deliveryUncertain = deliveryUncertain
@@ -66,7 +74,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, blocks, enqueuedAt, scheduledAt, status, lastError, draft, delegatedSource
-        case transcriptRecorded, brokerOperationAttempt, dispatchedBrokerGeneration, deliveryUncertain
+        case transcriptRecorded, turnStartedAt, brokerOperationAttempt, dispatchedBrokerGeneration, deliveryUncertain
     }
 
     init(from decoder: Decoder) throws {
@@ -80,6 +88,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         draft = try? c.decode(ACPComposerDraft.self, forKey: .draft)
         delegatedSource = try? c.decode(ACPDelegatedPromptSource.self, forKey: .delegatedSource)
         transcriptRecorded = (try? c.decode(Bool.self, forKey: .transcriptRecorded)) ?? false
+        turnStartedAt = try? c.decode(Int64.self, forKey: .turnStartedAt)
         brokerOperationAttempt = (try? c.decode(Int.self, forKey: .brokerOperationAttempt)) ?? 0
         dispatchedBrokerGeneration = try? c.decode(ACPBrokerGeneration.self, forKey: .dispatchedBrokerGeneration)
         deliveryUncertain = (try? c.decode(Bool.self, forKey: .deliveryUncertain)) ?? false

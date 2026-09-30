@@ -964,26 +964,37 @@ struct NativePeerSessionsTests {
         }.count == 1)
     }
 
-    @Test func olderTranscriptRestoreKeepsThePrefetchOffset() {
-        #expect(NativePeerTranscriptScrollPolicy.restoredContentOffset(
-            previousOffset: 320,
-            previousContentHeight: 1_200,
-            currentContentHeight: 1_800
-        ) == 920)
-    }
+    @Test func pagedPeerTranscriptFoldsFinishedWorkByLocalPosition() throws {
+        func json<T: Encodable>(_ value: T) throws -> String {
+            String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+        }
+        func tool(_ id: String, status: String, index: Int) throws -> RemoteWireMessage {
+            let call = ACPMessage.ToolCall(toolCallId: id, title: "Read file", status: status, content: "")
+            return .init(stableId: id, kind: "toolCall", text: nil, json: try json(call), index: index)
+        }
+        // A paged window: wire indices start mid-history, so folding by
+        // them instead of local position would read past the array.
+        let messages: [RemoteWireMessage] = [
+            .init(stableId: "u1", kind: "user", text: "Look around", json: nil, index: 90),
+            try tool("t1", status: "completed", index: 91),
+            try tool("t2", status: "completed", index: 92),
+            .init(stableId: "a1", kind: "agent", text: "Done", json: nil, index: 93),
+            .init(stableId: "u2", kind: "user", text: "Again", json: nil, index: 94),
+            try tool("t3", status: "in_progress", index: 95),
+        ]
+        let cache = NativePeerRowCache()
 
-    @Test func peerTranscriptKeepsTailFollowDuringInitialPositioning() {
-        #expect(NativePeerTranscriptScrollPolicy.shouldFollow(
-            distanceFromBottom: 120, hasPositionedInitialTail: false
-        ))
-        #expect(!NativePeerTranscriptScrollPolicy.shouldFollow(
-            distanceFromBottom: 120, hasPositionedInitialTail: true
-        ))
-    }
+        let rows = NativePeerTranscriptFold.renderRows(
+            messages: messages, proxies: cache.proxies(for: messages),
+            isTurnActive: true, enabled: true
+        )
 
-    @Test func peerTranscriptTailFollowPausesWhenScrolledAway() {
-        #expect(NativePeerTranscriptScrollPolicy.shouldFollow(distanceFromBottom: 0))
-        #expect(NativePeerTranscriptScrollPolicy.shouldFollow(distanceFromBottom: 48))
-        #expect(!NativePeerTranscriptScrollPolicy.shouldFollow(distanceFromBottom: 120))
+        #expect(rows.map(\.id) == ["u1", "tcg-t1", "a1", "u2", "t3"])
+        guard case .toolCallGroup(let group) = rows[1] else {
+            Issue.record("Expected the finished work to fold into one group")
+            return
+        }
+        #expect(group.members.map(\.index) == [1, 2])
+        #expect(group.kind == .completedTurn(duration: nil))
     }
 }

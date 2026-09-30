@@ -41,18 +41,21 @@ struct NativePeerSidebarView: View {
     @State private var plusHovering = false
 
     var body: some View {
-        // The section header — and its "pair a peer" affordance — stays
-        // visible even with zero peers: that empty state is exactly when a
-        // way to add one is needed. Only the peer rows below it depend on
-        // there being any groups to show.
-        VStack(alignment: .leading, spacing: 0) {
-            sectionHeader
-            ForEach(client.snapshot.groups) { group in
-                peerGroup(group)
+        // No peers, no section: the caption plus the "pair a peer" affordance
+        // would only advertise infrastructure the user never wired up. The empty
+        // pairing state is explained in Settings' Remote pane instead.
+        if client.snapshot.groups.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader
+                ForEach(client.snapshot.groups) { group in
+                    peerGroup(group)
+                }
             }
+            .onAppear { expandNewPeers() }
+            .onChange(of: client.snapshot.groups.map(\.id)) { expandNewPeers() }
         }
-        .onAppear { expandNewPeers() }
-        .onChange(of: client.snapshot.groups.map(\.id)) { expandNewPeers() }
     }
 
     /// Default-expands any peer id seen for the first time — covering both

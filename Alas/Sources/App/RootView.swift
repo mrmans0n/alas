@@ -331,7 +331,8 @@ struct RootView: View {
                     typography: ACPChatTypography(
                         fontFamily: state.config.agents.chatFontFamily,
                         fontSize: state.config.agents.chatFontSize
-                    )
+                    ),
+                    collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls
                 )
                 .id(client.selectedSessionId)
             }
