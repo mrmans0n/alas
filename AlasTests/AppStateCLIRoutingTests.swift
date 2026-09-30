@@ -566,6 +566,23 @@ struct AppStateCLIRoutingTests {
         #expect(route == .unhandled)
     }
 
+    @Test(arguments: [
+        ("/Volumes/Workspace/alas", "/Volumes/Workspace/alas/Foo.swift"),
+        ("/.alas-remote/mini/Volumes/Workspace/alas", "/.alas-remote/mini/Volumes/Workspace/alas/Foo.swift"),
+    ])
+    func absoluteLinkPathResolvesOnTheWorktreesOwnHost(root: String, expected: String) {
+        let worktree = Worktree(
+            id: root, projectId: "project", name: "main", branch: "main",
+            path: URL(fileURLWithPath: root), status: .clean, lastActivity: .distantPast
+        )
+
+        let resolved = AppState.resolveLocalFilePath(
+            "/Volumes/Workspace/alas/Foo.swift", worktree: worktree, baseDirectory: nil
+        )
+
+        #expect(resolved.path == expected)
+    }
+
     @Test func routeTerminalOpenURLReturnsFalseForPathOutsideWorkspace() async throws {
         let (state, project, worktree) = try await makeStateWithWorktree(name: "ghostty-outside")
         defer { try? FileManager.default.removeItem(at: worktree.path) }

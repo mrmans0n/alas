@@ -10067,11 +10067,11 @@ final class AppState {
         baseDirectory: URL?
     ) -> LocalFileOpenTarget? {
         let target: LocalFileOpenTarget
-        let resolved = resolveLocalFilePath(candidatePath, worktree: worktree, baseDirectory: baseDirectory)
+        let resolved = Self.resolveLocalFilePath(candidatePath, worktree: worktree, baseDirectory: baseDirectory)
         if FileManager.default.fileExists(atPath: resolved.path) {
             target = LocalFileOpenTarget(url: resolved, revealLine: nil, revealCharacter: nil)
         } else if let parsed = Self.parseLocalPathPosition(candidatePath) {
-            let resolvedParsed = resolveLocalFilePath(parsed.path, worktree: worktree, baseDirectory: baseDirectory)
+            let resolvedParsed = Self.resolveLocalFilePath(parsed.path, worktree: worktree, baseDirectory: baseDirectory)
             target = LocalFileOpenTarget(
                 url: resolvedParsed,
                 revealLine: parsed.line - 1,
@@ -10122,13 +10122,16 @@ final class AppState {
         return relativePath.isEmpty ? nil : relativePath
     }
 
-    private func resolveLocalFilePath(
+    /// An absolute path clicked in a remote worktree names a file on that
+    /// host, so it is made virtual: a same-path local twin must never be
+    /// opened in its place.
+    nonisolated static func resolveLocalFilePath(
         _ rawPath: String,
         worktree: Worktree,
         baseDirectory: URL?
     ) -> URL {
         if (rawPath as NSString).isAbsolutePath {
-            return URL(fileURLWithPath: rawPath).standardizedFileURL
+            return URL(fileURLWithPath: RemotePath.virtualizing(rawPath, like: worktree.path.path)).standardizedFileURL
         }
         let base = baseDirectory ?? worktree.path
         let baseRelative = base.appendingPathComponent(rawPath).standardizedFileURL
@@ -13100,7 +13103,8 @@ final class AppState {
         let result = try await Process.git(["rev-parse", "--git-path", "info/exclude"], cwd: worktreeURL)
         let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.hasPrefix("/") {
-            return URL(fileURLWithPath: raw)
+            // A remote git prints a host path; keep it off a same-path local twin.
+            return URL(fileURLWithPath: RemotePath.virtualizing(raw, like: worktreeURL.path))
         }
         return URL(fileURLWithPath: raw, relativeTo: worktreeURL).standardizedFileURL
     }

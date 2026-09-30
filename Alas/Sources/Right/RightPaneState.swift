@@ -4124,7 +4124,8 @@ final class RightPaneState: GGSplitCommitServicing {
         )
         let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.hasPrefix("/") {
-            return URL(fileURLWithPath: raw)
+            // A remote git prints a host path; keep it off a same-path local twin.
+            return URL(fileURLWithPath: RemotePath.virtualizing(raw, like: worktreePath.path))
         }
         return URL(fileURLWithPath: raw, relativeTo: worktreePath).standardizedFileURL
     }
