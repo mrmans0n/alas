@@ -447,6 +447,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let idx: Int
             let typography: ACPChatTypography
             let position: Int
+            let moveUpTarget: Int?
+            let moveDownTarget: Int?
             let canMoveUp: Bool
             let canMoveDown: Bool
         }
@@ -1013,7 +1015,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ))
             }
 
-            let queueHeaderCount = ACPTranscriptQueuePolicy.queueHeaderCount(statuses: session.queue.map(\.status))
+            let queueHeaderCount = ACPTranscriptQueuePolicy.queueHeaderCount(queue: session.queue)
             if queueHeaderCount > 0 {
                 specs.append(ACPTranscriptRowSpec(
                     id: "__queue_header__",
@@ -1027,16 +1029,20 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             }
 
             for (idx, item) in session.queue.enumerated()
-            where ACPTranscriptQueuePolicy.shouldRenderQueueBubble(status: item.status) {
-                let position = ACPTranscriptQueuePolicy.queuePosition(
-                    at: idx, statuses: session.queue.map(\.status)
+            where ACPTranscriptQueuePolicy.shouldRenderQueueBubble(item) {
+                let position = ACPTranscriptQueuePolicy.queuePosition(at: idx, queue: session.queue)
+                let moveUpTarget = ACPTranscriptQueuePolicy.adjacentRenderedIndex(
+                    from: idx, step: -1, queue: session.queue
                 )
-                let canMoveUp = ACPTranscriptQueuePolicy.canMoveQueueItem(
-                    from: idx, to: idx - 1, queue: session.queue
+                let moveDownTarget = ACPTranscriptQueuePolicy.adjacentRenderedIndex(
+                    from: idx, step: 1, queue: session.queue
                 )
-                let canMoveDown = ACPTranscriptQueuePolicy.canMoveQueueItem(
-                    from: idx, to: idx + 1, queue: session.queue
-                )
+                let canMoveUp = moveUpTarget.map {
+                    ACPTranscriptQueuePolicy.canMoveQueueItem(from: idx, to: $0, queue: session.queue)
+                } ?? false
+                let canMoveDown = moveDownTarget.map {
+                    ACPTranscriptQueuePolicy.canMoveQueueItem(from: idx, to: $0, queue: session.queue)
+                } ?? false
                 specs.append(ACPTranscriptRowSpec(
                     id: "__queue_\(item.id)",
                     // Beyond `item` (and theme/contentMaxWidth folded by
@@ -1048,13 +1054,15 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     // `canMoveUp`, `canMoveDown` — must be in the token: a
                     // typography change would otherwise leave the mounted
                     // row measured with stale text metrics, and a stale
-                    // `idx` (or derived value) after the queue reorders
+                    // `idx` (or derived value, like the move targets) after the queue reorders
                     // would send a subsequent action on this retained row
                     // to the wrong slot or show a stale affordance.
                     equalityToken: token(
                         QueueBubbleTokenInputs(
                             item: item, idx: idx, typography: host.typography,
-                            position: position, canMoveUp: canMoveUp, canMoveDown: canMoveDown
+                            position: position,
+                            moveUpTarget: moveUpTarget, moveDownTarget: moveDownTarget,
+                            canMoveUp: canMoveUp, canMoveDown: canMoveDown
                         ),
                         host: host
                     ),
@@ -1072,8 +1080,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                                 onEdit: { host.onQueueEdit(item) },
                                 onRemove: { host.onQueueRemove(item.id) },
                                 onRetry: { host.onQueueRetry(item.id) },
-                                onMoveUp: { host.onQueueReorder(idx, idx - 1) },
-                                onMoveDown: { host.onQueueReorder(idx, idx + 1) }
+                                onMoveUp: { moveUpTarget.map { host.onQueueReorder(idx, $0) } },
+                                onMoveDown: { moveDownTarget.map { host.onQueueReorder(idx, $0) } }
                             )
                             .dropDestination(for: String.self) { items, _ in
                                 guard let s = items.first,

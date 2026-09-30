@@ -124,6 +124,15 @@ struct RemoteQueueProjectionTests {
         #expect(RemoteQueueProjection.visibleCount(projected) == 2)
     }
 
+    @Test func omitsDelegatedPrompts() {
+        let report = QueuedPrompt(
+            blocks: [.text("report")],
+            delegatedSource: ACPDelegatedPromptSource(sessionId: "child", messageId: "m")
+        )
+        let projected = RemoteQueueProjection.project([item(text: "mine"), report])
+        #expect(projected.map(\.text) == ["mine"])
+    }
+
     @Test func plainTextFlattensTextMentionsAndReferences() {
         let draft = ACPComposerDraft(segments: [
             .text("look at "),

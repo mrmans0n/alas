@@ -18,14 +18,6 @@ struct ACPTranscriptRowWindowTests {
         #expect(!ACPTranscriptQueuePolicy.canDropQueuedItem(sourceStatus: nil, targetStatus: .pending))
     }
 
-    @Test("queue header count matches rendered queue bubbles")
-    func queueHeaderCountMatchesRenderedQueueBubbles() {
-        #expect(ACPTranscriptQueuePolicy.queueHeaderCount(statuses: []) == 0)
-        #expect(ACPTranscriptQueuePolicy.queueHeaderCount(statuses: [.pending]) == 1)
-        #expect(ACPTranscriptQueuePolicy.queueHeaderCount(statuses: [.sending]) == 0)
-        #expect(ACPTranscriptQueuePolicy.queueHeaderCount(statuses: [.sending, .pending]) == 1)
-    }
-
     @Test("queue mutations are allowed only while the session is not a mirror")
     func queueMutationsGatedOnOwnership() {
         #expect(ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: false))

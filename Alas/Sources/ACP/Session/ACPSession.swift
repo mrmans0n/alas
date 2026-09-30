@@ -2352,18 +2352,23 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Remove all `.pending` items. A `.sending` item is left in place —
     /// it's mid-RPC.
     @discardableResult
+    /// Removes the user's pending prompts. Delegated prompts stay: they are
+    /// hidden from the queue UI, and their inbox row is already gone, so
+    /// dropping one here would lose it for good.
     func clearPendingQueue() -> [QueuedPrompt] {
-        let snapshot = queue.filter { $0.status == .pending }
-        queue.removeAll { $0.status == .pending }
+        let isCleared: (QueuedPrompt) -> Bool = { $0.status == .pending && $0.delegatedSource == nil }
+        let snapshot = queue.filter(isCleared)
+        queue.removeAll(where: isCleared)
         forceSendAfterSendingHeadId = nil
         return snapshot
     }
 
-    /// Number of pending queue items. The transcript UI may render additional
-    /// queue rows, such as an in-flight `.sending` head, for row-local status
-    /// and action placement.
+    /// Number of the user's pending queue items. Delegated prompts are not
+    /// counted: the queue UI does not show them. The transcript UI may
+    /// render additional queue rows, such as an in-flight `.sending` head,
+    /// for row-local status and action placement.
     var visibleQueueCount: Int {
-        queue.reduce(0) { $0 + ($1.status == .sending ? 0 : 1) }
+        ACPTranscriptQueuePolicy.queueHeaderCount(queue: queue)
     }
 
     /// Mark the head item `.sending`. Called by the flusher right before

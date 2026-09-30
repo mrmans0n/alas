@@ -6,11 +6,11 @@ import SwiftUI
 /// dispatch order reads top-to-bottom, with a leading position number, a
 /// hover toolbar, and a right-click menu carrying the same actions plus
 /// move up/down. Items in `.sending` never reach this view — see
-/// `ACPTranscriptQueuePolicy.shouldRenderQueueBubble`.
+/// `ACPTranscriptQueuePolicy.shouldRenderQueueBubble(_:)`.
 struct ACPQueueItemRow: View {
     let item: QueuedPrompt
     /// 1-based dispatch position among rendered rows. See
-    /// `ACPTranscriptQueuePolicy.queuePosition(at:statuses:)`.
+    /// `ACPTranscriptQueuePolicy.queuePosition(at:queue:)`.
     let position: Int
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography

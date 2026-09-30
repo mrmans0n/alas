@@ -5,8 +5,10 @@ import Foundation
 /// can be unit-tested on its own — it is the single place that knows how a
 /// `QueuedPrompt` becomes something a browser can render.
 enum RemoteQueueProjection {
+    /// Delegated prompts are left out, as in the native queue list: they are
+    /// not the user's to edit, reorder, or remove.
     static func project(_ items: [QueuedPrompt]) -> [RemoteQueuedPrompt] {
-        items.map { item in
+        items.filter { $0.delegatedSource == nil }.map { item in
             var text = ""
             var imageCount = 0
             var resourceCount = 0
