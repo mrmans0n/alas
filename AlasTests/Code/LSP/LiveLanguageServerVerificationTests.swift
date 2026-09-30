@@ -28,7 +28,7 @@ struct LiveLanguageServerVerificationTests {
             do { try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: output) }
             catch { Issue.record("Cannot write live verification report: \(error)") }
         }
-        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [LanguageServerConfig(language: language, extensions: [fixture.file.pathExtension], command: executable, args: [], env: [:], rootMarkers: [], enabled: true)]), makeClient: { _, _, _, _, _ in client })
+        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [LanguageServerConfig(language: language, extensions: [fixture.file.pathExtension], command: executable, args: [], env: [:], rootMarkers: [], enabled: true)]), makeClient: { _, _, _, _, _, _ in client })
         let tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: fixture.root.appendingPathComponent("buffers")), lsp: manager, tabsDirectory: fixture.root.appendingPathComponent("tabs"), workspaceEditJournal: WorkspaceEditJournal(root: fixture.root.appendingPathComponent("journal")))
         let buffer = tabs.buffer(worktreeId: "live", tabId: "source", worktreeRoot: fixture.root, relativePath: fixture.relativePath)
         defer { buffer.close(persistDirtySnapshot: false) }

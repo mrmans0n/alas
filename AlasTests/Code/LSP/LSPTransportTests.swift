@@ -302,3 +302,23 @@ private extension String {
             !contains("if !rootHasExited {\n            orphanedDescendants.subtract")
     }
 }
+
+@Suite("RemotePathLSPTransport")
+struct RemotePathLSPTransportTests {
+    @Test("strips virtual paths outbound and virtualizes file URIs inbound")
+    func translatesBothDirections() async throws {
+        let inner = FakeTransport()
+        let transport = RemotePathLSPTransport(inner: inner, host: "mini")
+
+        try transport.send(Data(#"{"rootUri":"file:///.alas-remote/mini/Users/me/proj"}"#.utf8))
+        #expect(inner.sent == [#"{"rootUri":"file:///Users/me/proj"}"#])
+
+        inner.deliverFrame(#"{"uri":"file:///usr/include/x.h"}"#)
+        inner.finish()
+        var frames: [String] = []
+        for await event in transport.incoming {
+            if case .frame(let data) = event { frames.append(String(decoding: data, as: UTF8.self)) }
+        }
+        #expect(frames == [#"{"uri":"file:///.alas-remote/mini/usr/include/x.h"}"#])
+    }
+}

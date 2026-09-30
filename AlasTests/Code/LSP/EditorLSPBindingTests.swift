@@ -39,7 +39,7 @@ struct EditorLSPBindingTests {
                 environment: [:], xcrunFind: { _ in nil }, additionalPathDirectories: [],
                 gatekeeperAssessor: { _ in .allowed }
             ) },
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 let transport = FakeTransport()
                 transport.onSend = { message in
                     guard let id = Self.requestID(in: message) else { return }
@@ -122,7 +122,7 @@ struct EditorLSPBindingTests {
             remoteLSPAvailable: { command, requestedHost, _ in
                 command == "/usr/bin/true" && requestedHost == host
             },
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 let fake = FakeTransport()
                 fake.onSend = { message in
                     guard let id = Self.requestID(in: message) else { return }
@@ -188,7 +188,7 @@ struct EditorLSPBindingTests {
                 environment: [:], xcrunFind: { _ in nil }, additionalPathDirectories: [],
                 gatekeeperAssessor: { _ in .allowed }
             ) },
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 let transport = FakeTransport()
                 transport.onSend = { message in
                     guard let id = Self.requestID(in: message) else { return }

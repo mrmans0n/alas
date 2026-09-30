@@ -440,7 +440,7 @@ struct DiffPaneLSPLineMapTests {
                     gatekeeperAssessor: { _ in .allowed }
                 )
             },
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 LSPClient(transport: transport, language: language, rootURI: rootURI)
             }
         )

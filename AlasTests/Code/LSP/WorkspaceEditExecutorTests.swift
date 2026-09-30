@@ -176,7 +176,7 @@ struct WorkspaceEditExecutorTests {
         var transports: [FakeTransport] = []
         let lsp = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [
             LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)
-        ]), makeClient: { _, _, _, language, rootURI in
+        ]), makeClient: { _, _, _, language, rootURI, _ in
             let transport = FakeTransport()
             transport.onSend = { sent in
                 if sent.contains(#""method":"initialize""#) {
@@ -251,7 +251,7 @@ struct WorkspaceEditExecutorTests {
         var transports: [FakeTransport] = []
         let lsp = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [
             LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)
-        ]), makeClient: { _, _, _, language, rootURI in
+        ]), makeClient: { _, _, _, language, rootURI, _ in
             let transport = FakeTransport()
             transport.onSend = { sent in
                 if sent.contains(#""method":"initialize""#) {

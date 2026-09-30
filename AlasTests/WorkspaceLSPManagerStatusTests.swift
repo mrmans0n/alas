@@ -17,9 +17,9 @@ struct WorkspaceLSPManagerStatusTests {
 
     private func manager(
         withFakeEntry language: String = "swift",
-        makeClient: ((_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String) -> LSPClient)? = nil
+        makeClient: ((_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String, _ remoteHost: String?) -> LSPClient)? = nil
     ) -> WorkspaceLSPManager {
-        let makeClient = makeClient ?? { _, _, _, language, rootURI in
+        let makeClient = makeClient ?? { _, _, _, language, rootURI, _ in
             readyClient(language: language, rootURI: rootURI)
         }
         let registry = LanguageServerRegistry(userDefined: [
@@ -295,7 +295,7 @@ struct WorkspaceLSPManagerStatusTests {
                     }
                 )
             },
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 readyClient(language: language, rootURI: rootURI)
             }
         )
@@ -371,7 +371,7 @@ struct WorkspaceLSPManagerStatusTests {
                     gatekeeperRemediator: { _, _ in await box.waitForBothRemediationAttempts() }
                 )
             },
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 readyClient(language: language, rootURI: rootURI)
             }
         )
@@ -476,7 +476,7 @@ struct WorkspaceLSPManagerStatusTests {
         }
         let mgr = manager(
             withFakeEntry: "swift",
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 LSPClient(transport: transport, language: language, rootURI: rootURI)
             }
         )
@@ -518,7 +518,7 @@ struct WorkspaceLSPManagerStatusTests {
         }
         let mgr = manager(
             withFakeEntry: "swift",
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 LSPClient(transport: transport, language: language, rootURI: rootURI)
             }
         )
@@ -576,7 +576,7 @@ struct WorkspaceLSPManagerStatusTests {
         }
         let mgr = manager(
             withFakeEntry: "swift",
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 LSPClient(transport: transport, language: language, rootURI: rootURI)
             }
         )
@@ -622,7 +622,7 @@ struct WorkspaceLSPManagerStatusTests {
         }
         let mgr = manager(
             withFakeEntry: "swift",
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 LSPClient(transport: transport, language: language, rootURI: rootURI)
             }
         )

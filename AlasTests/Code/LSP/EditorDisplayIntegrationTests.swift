@@ -18,7 +18,7 @@ struct EditorDisplayIntegrationTests {
         try Data("value".utf8).write(to: external)
         var transports: [FakeTransport] = []
         var externalMethods = Set<String>()
-        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)]), makeClient: { _, _, _, language, uri in
+        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)]), makeClient: { _, _, _, language, uri, _ in
             let transport = FakeTransport()
             transports.append(transport)
             transport.onSend = { sent in
@@ -166,7 +166,7 @@ struct EditorDisplayIntegrationTests {
             transport.deliverFrame(String(decoding: try! LSPJSONValue.object(["jsonrpc": .string("2.0"), "id": id, "result": result]).encodedData(), as: UTF8.self))
         }
         let client = LSPClient(transport: transport, language: "swift", rootURI: root.lspURI)
-        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)]), makeClient: { _, _, _, _, _ in client })
+        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)]), makeClient: { _, _, _, _, _, _ in client })
         let tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: root.appendingPathComponent("buffers")), lsp: manager, tabsDirectory: root.appendingPathComponent("tabs"), workspaceEditJournal: WorkspaceEditJournal(root: root.appendingPathComponent("journal")))
         let app = AppState(tabsManager: tabs, lspManager: manager)
         defer { app.harness.stop() } // Do not leak this AppState's agent-hook listener into later tests.
@@ -364,7 +364,7 @@ struct EditorDisplayIntegrationTests {
             transport.deliverFrame(String(decoding: try! response.encodedData(), as: UTF8.self))
         }
         let client = LSPClient(transport: transport, language: "swift", rootURI: root.lspURI)
-        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)]), makeClient: { _, _, _, _, _ in client })
+        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [LanguageServerConfig(language: "swift", extensions: ["swift"], command: "/usr/bin/true", args: [], env: [:], rootMarkers: [], enabled: true)]), makeClient: { _, _, _, _, _, _ in client })
         let tabs = TabsManager(bufferStore: EditorBufferStore(rootOverride: root.appendingPathComponent("buffers")), lsp: manager, tabsDirectory: root.appendingPathComponent("tabs"), workspaceEditJournal: WorkspaceEditJournal(root: root.appendingPathComponent("journal")))
         let app = AppState(tabsManager: tabs, lspManager: manager)
         defer { app.harness.stop() } // Do not leak this AppState's agent-hook listener into later tests.

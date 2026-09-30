@@ -122,7 +122,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
     private func bumpStateTick() { stateTick &+= 1 }
 
     private var registry: LanguageServerRegistry
-    private let makeClient: (_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String) -> LSPClient
+    private let makeClient: (_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String, _ remoteHost: String?) -> LSPClient
     private let remoteLSPAvailable: (_ command: String, _ host: String, _ environment: [String: String]) async -> Bool
 
     /// Cached per-language availability so the status badge doesn't re-run
@@ -141,9 +141,10 @@ final class WorkspaceLSPManager: DocumentFormatter {
         remoteLSPAvailable: @escaping (_ command: String, _ host: String, _ environment: [String: String]) async -> Bool = { command, host, environment in
             await RemoteLSPLauncher.isAvailable(command: command, host: host, env: environment)
         },
-        makeClient: @escaping (_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String) -> LSPClient = { executable, arguments, environment, language, rootURI in
-            LSPClient(
-                transport: LSPTransport(executable: executable, arguments: arguments, environment: environment),
+        makeClient: @escaping (_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String, _ remoteHost: String?) -> LSPClient = { executable, arguments, environment, language, rootURI, remoteHost in
+            let transport = LSPTransport(executable: executable, arguments: arguments, environment: environment)
+            return LSPClient(
+                transport: remoteHost.map { RemotePathLSPTransport(inner: transport, host: $0) } ?? transport,
                 language: language,
                 rootURI: rootURI
             )
@@ -347,7 +348,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
                     remoteHost: remoteHost,
                     rootPath: lspRoot.path
                 )
-                let newClient = makeClient(spawn.executable, spawn.arguments, spawn.environment, languageId, lspRoot.lspURI)
+                let newClient = makeClient(spawn.executable, spawn.arguments, spawn.environment, languageId, lspRoot.lspURI, remoteHost)
                 let task = Task<Bool, Never> {
                     await newClient.setConfigurationHandler { [weak self] scope, section in
                         await self?.configurationValue(scope: scope, section: section, key: key) ?? .null

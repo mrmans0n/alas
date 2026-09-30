@@ -158,7 +158,7 @@ struct EditorBufferTests {
                 )
             ]),
             remoteLSPAvailable: { _, _, _ in await availability.probe() },
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 let transport = FakeTransport()
                 transport.onSend = { message in
                     guard let data = message.data(using: .utf8),
@@ -767,7 +767,7 @@ struct EditorBufferTests {
                 rootMarkers: [],
                 enabled: true
             )
-        ]), makeClient: { _, _, _, language, rootURI in
+        ]), makeClient: { _, _, _, language, rootURI, _ in
             LSPClient(transport: FakeTransport(), language: language, rootURI: rootURI)
         })
 
@@ -803,7 +803,7 @@ struct EditorBufferTests {
                 rootMarkers: [],
                 enabled: true
             )
-        ]), makeClient: { _, _, _, language, rootURI in
+        ]), makeClient: { _, _, _, language, rootURI, _ in
             LSPClient(transport: transport, language: language, rootURI: rootURI)
         })
         let buffer = EditorBuffer(
@@ -862,7 +862,7 @@ struct EditorBufferTests {
         )
         let lsp = WorkspaceLSPManager(
             registry: LanguageServerRegistry(userDefined: [unavailable]),
-            makeClient: { _, _, _, language, rootURI in
+            makeClient: { _, _, _, language, rootURI, _ in
                 LSPClient(transport: transport, language: language, rootURI: rootURI)
             }
         )
@@ -1009,7 +1009,7 @@ struct EditorBufferTests {
                 rootMarkers: [],
                 enabled: true
             )
-        ]), makeClient: { _, _, _, language, rootURI in
+        ]), makeClient: { _, _, _, language, rootURI, _ in
             LSPClient(transport: transport, language: language, rootURI: rootURI)
         })
         let buffer = EditorBuffer(
