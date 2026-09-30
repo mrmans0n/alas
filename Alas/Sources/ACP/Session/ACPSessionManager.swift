@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 private struct ACPTranscriptScrollMemory: Equatable {
@@ -7131,13 +7132,19 @@ extension ACPSessionManager {
 
     /// Whether the session's config options change within `timeout`.
     private func configOptionsChange(of session: ACPSession, within timeout: Duration) async -> Bool {
+        // Snapshot and subscribe in one main-actor turn, so an update landing
+        // before the wait starts is buffered rather than missed. `@Published`
+        // replays the current value on subscription and emits in `willSet`;
+        // the waiter resumes after the assignment.
         let revision = session.availableConfigOptionsRevision
-        let outcome = await runBounded(timeout: timeout) { @MainActor in
-            // `@Published` replays the current value on subscription and
-            // emits in `willSet`; the loop resumes after the assignment.
-            for await _ in session.$availableConfigOptions.dropFirst().values {
-                return
-            }
+        let (changes, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let subscription = session.$availableConfigOptions.dropFirst().sink { _ in continuation.yield() }
+        defer {
+            subscription.cancel()
+            continuation.finish()
+        }
+        let outcome = await runBounded(timeout: timeout) {
+            for await _ in changes { return }
         }
         if case .succeeded = outcome { return true }
         return session.availableConfigOptionsRevision != revision
