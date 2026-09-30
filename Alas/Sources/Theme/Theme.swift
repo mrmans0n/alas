@@ -38,6 +38,11 @@ struct Theme: Codable, Equatable, Hashable {
     /// convert OKLCH strings during every SwiftUI body pass.
     private(set) var resolvedColors: [String: Color] = [:]
 
+    /// Editor palette for code surfaces, resolved by `ThemeStore` from the
+    /// user's code theme family. `nil` = use this theme's syntax tokens.
+    /// Runtime-only: excluded from `Codable` via `CodingKeys`.
+    var codePalette: CodePalette? = nil
+
     enum CodingKeys: String, CodingKey { case id, name, tokens }
 
     static func == (lhs: Theme, rhs: Theme) -> Bool {
@@ -46,6 +51,7 @@ struct Theme: Codable, Equatable, Hashable {
             && lhs.tokens == rhs.tokens
             && lhs.accentOverrideHex == rhs.accentOverrideHex
             && lhs.resolvedColorOverrides == rhs.resolvedColorOverrides
+            && lhs.codePalette == rhs.codePalette
     }
 
     // Hashes exactly the fields `==` compares; `resolvedColors` stays
@@ -56,6 +62,7 @@ struct Theme: Codable, Equatable, Hashable {
         hasher.combine(tokens)
         hasher.combine(accentOverrideHex)
         hasher.combine(resolvedColorOverrides)
+        hasher.combine(codePalette?.id)
     }
 
     static let bundledIds = ["cool-slate", "light"]

@@ -70,4 +70,20 @@ struct ThemeStoreTests {
         store.setMatchSystem(false)
         #expect(store.current.id == "light")
     }
+
+    @Test(arguments: [
+        ("solarized", "cool-slate", "solarized-dark"),
+        ("solarized", "light", "solarized-light"),
+        ("nord", "light", nil),
+        ("default", "cool-slate", nil),
+        ("monokai", "cool-slate", nil),
+    ] as [(String, String, String?)])
+    func codeThemeResolvesVariantFromAppTheme(family: String, appTheme: String, expected: String?) throws {
+        let store = try ThemeStore()
+        // Family first, app theme second: switching the app theme must
+        // re-resolve the variant.
+        store.setCodeTheme(family: family)
+        try store.activate(id: appTheme)
+        #expect(store.current.codePalette?.id == expected)
+    }
 }
