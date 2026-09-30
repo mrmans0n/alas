@@ -24,7 +24,8 @@ struct ACPMentionPickerView: View {
     private let maxDisplay = 80
 
     private var isAbsoluteQuery: Bool {
-        MentionAbsolutePath.isAbsolute(query: query.trimmingCharacters(in: .whitespacesAndNewlines))
+        !worktreeRoot.isRemoteAlasPath
+            && MentionAbsolutePath.isAbsolute(query: query.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     var body: some View {
@@ -204,7 +205,7 @@ struct ACPMentionPickerView: View {
             if q.isEmpty {
                 result = Array(files.prefix(maxDisplay))
             } else {
-                result = MentionAbsolutePath.isAbsolute(query: q)
+                result = !root.isRemoteAlasPath && MentionAbsolutePath.isAbsolute(query: q)
                     ? MentionAbsolutePath.entries(forQuery: q, limit: maxDisplay)
                     : MentionFuzzy.rank(files: files, query: q, limit: maxDisplay, relativeTo: root)
             }

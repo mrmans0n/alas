@@ -51,7 +51,9 @@ extension ACPNSTextView {
         let prefix = string.substring(to: range.location) as NSString
         let closed = ACPUpstreamReferenceDetector.codeRanges(in: prefix, unclosedRunsExtendToEnd: false)
         let open = ACPUpstreamReferenceDetector.codeRanges(in: prefix, unclosedRunsExtendToEnd: true)
-        guard open.count <= closed.count else { return false }
+        guard open.count <= closed.count,
+              prefix.range(of: Self.openLinkDestinationPattern, options: .regularExpression).location == NSNotFound
+        else { return false }
         let before: unichar? = range.location > 0 ? string.character(at: range.location - 1) : nil
         let after: unichar? = NSMaxRange(range) < string.length ? string.character(at: NSMaxRange(range)) : nil
         let code = Self.codeRanges(in: fragment.string, unclosedRunsExtendToEnd: false)
@@ -71,9 +73,19 @@ extension ACPNSTextView {
         })
     }
 
+    /// A `](` whose destination is still open at the end of the text.
+    private static let openLinkDestinationPattern = #"\]\([^)\n]*$"#
+
+    /// Ranges a path must not be chipped in: code, and Markdown link
+    /// destinations (`[text](/path)`), which stay link syntax.
     private static func codeRanges(in text: String, unclosedRunsExtendToEnd: Bool) -> [NSRange] {
-        MarkdownFenceEditing.blocks(in: text).map(\.outerRange)
-            + ACPUpstreamReferenceDetector.codeRanges(in: text as NSString, unclosedRunsExtendToEnd: unclosedRunsExtendToEnd)
+        let string = text as NSString
+        var ranges = MarkdownFenceEditing.blocks(in: text).map(\.outerRange)
+            + ACPUpstreamReferenceDetector.codeRanges(in: string, unclosedRunsExtendToEnd: unclosedRunsExtendToEnd)
+        if let links = try? NSRegularExpression(pattern: #"\]\([^)\n]*\)"#) {
+            ranges += links.matches(in: text, range: NSRange(location: 0, length: string.length)).map(\.range)
+        }
+        return ranges
     }
 
     private static func isWhitespace(_ ch: unichar) -> Bool {
