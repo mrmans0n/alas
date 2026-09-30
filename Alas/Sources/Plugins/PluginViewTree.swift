@@ -151,10 +151,14 @@ enum PluginViewTree {
             guard items.count <= maxMenuItems else { throw err("\(prefix) has more than \(maxMenuItems) items") }
             var itemIDs = Set<String>()
             for item in items {
-                guard let itemID = item.id, !itemID.isEmpty, itemIDs.insert(itemID).inserted else {
-                    throw err("\(prefix) needs unique non-empty item ids")
+                guard let itemID = item.id, (1...maxIDBytes).contains(itemID.utf8.count) else {
+                    throw err("menu item ids must be 1 to \(maxIDBytes) bytes")
                 }
-                guard let itemLabel = try string(item.label, required: "item labels") else { continue }
+                guard itemIDs.insert(itemID).inserted else { throw err("\(prefix) has duplicate item id \"\(itemID)\"") }
+                guard let itemLabel = item.label else { throw err("\(prefix) needs item labels") }
+                guard itemLabel.unicodeScalars.count <= maxString else {
+                    throw err("menu item label is longer than \(maxString) characters")
+                }
                 node.items.append(.init(id: itemID, label: itemLabel))
             }
         default: break

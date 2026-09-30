@@ -31,6 +31,9 @@ struct PluginViewTreeTests {
         (#"{"id":"a","kind":"vstack","spacing":99,"children":[]}"#, "vstack \"a\" spacing must be 0 to 32"),
         (#"{"id":"a","kind":"scroll","axis":"diagonal","child":{"id":"b","kind":"spacer"}}"#, "scroll \"a\" needs an axis"),
         (#"{"id":"","kind":"spacer"}"#, "node ids must be 1 to 64 bytes"),
+        (#"{"id":"a","kind":"menu","label":"m","items":[{"id":"","label":"x"}]}"#, "menu item ids must be 1 to 64 bytes"),
+        (#"{"id":"a","kind":"menu","label":"m","items":[{"id":"\#(String(repeating: "i", count: 65))","label":"x"}]}"#, "menu item ids must be 1 to 64 bytes"),
+        (#"{"id":"a","kind":"menu","label":"m","items":[{"id":"i","label":"\#(String(repeating: "x", count: 4_001))"}]}"#, "menu item label is longer than 4000 characters"),
     ])
     func invalidTreesAreRejected(json: String, reason: String) {
         #expect(throws: PluginViewTreeError(reason: reason)) { try decode(json).get() }
