@@ -1,6 +1,6 @@
 //! Renders the board as a view tree. Pure: no SDK calls besides the node types.
 
-use crate::board::{Board, Card, Column};
+use crate::board::{Board, Card, Column, MAX_CARD_TEXT_BYTES};
 use alas_plugin::{Axis, ButtonStyle, MenuItem, Node, TextStyle, Tone};
 
 // ponytail: fixed per-column cap keeps the tree under the host's 2,000-node limit;
@@ -63,10 +63,10 @@ fn column(board: &Board, col: Column, form: u64) -> Node {
         });
     }
     if col == Column::Backlog && board.nearly_full() {
-        let text = if board.cards.iter().any(|c| c.column == Column::Done) {
+        let text = if board.has_room(MAX_CARD_TEXT_BYTES) {
             "The board is nearly full: new cards remove the oldest Done cards."
         } else {
-            "The board is full: delete cards or move them to Done to add more."
+            "The board is nearly full: delete cards or move them to Done to make room."
         };
         children.push(self::text("board-full".into(), text, Some(TextStyle::Caption), Some(Tone::Dim)));
     }

@@ -93,9 +93,10 @@ mod sys {
 /// is entered. The default allocator's `malloc`/`free` are large bodies, so every
 /// allocation cost thousands of fuel. This one is a handful of instructions: power-of-two
 /// size classes with a free list each, carved from a bump region grown with `memory.grow`.
-// ponytail: freed blocks are never coalesced or returned, so a plugin's memory stays at its
-// peak per size class (at most 2x of what it has live). Fine for the 64 MiB cap and
-// JSON-sized payloads; switch back to dlmalloc for plugins with widely varying large buffers.
+// ponytail: freed blocks are never coalesced, split or returned, so memory use is the sum of
+// each size class's peak, not what is live now (plus up to 2x rounding per block). Fine for
+// the 64 MiB cap and JSON-sized payloads; switch back to dlmalloc for plugins whose large
+// buffers keep changing size class.
 #[cfg(target_arch = "wasm32")]
 mod allocator {
     use std::alloc::{GlobalAlloc, Layout};
@@ -204,7 +205,15 @@ pub mod test_host {
 /// Serialises straight to text: going through `json!` would copy large payloads
 /// (a view tree, a stored board) into a `Value` tree first, which costs fuel.
 fn send<T: Serialize + ?Sized>(message: &T) {
-    let Ok(text) = serde_json::to_string(message) else { return };
+    let text = match serde_json::to_string(message) {
+        Ok(text) => text,
+        Err(error) => {
+            debug_assert!(false, "could not serialise a message: {error}");
+            // `log` sends a plain `Value`, which always serialises.
+            log("error", &format!("could not serialise a message: {error}"));
+            return;
+        }
+    };
     #[cfg(target_arch = "wasm32")]
     unsafe {
         sys::send(text.as_ptr(), text.len())

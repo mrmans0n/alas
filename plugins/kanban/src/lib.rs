@@ -7,6 +7,8 @@ use alas_plugin::{export_plugin, log, render, request, request_snapshot, storage
 use board::{Board, Column};
 use serde_json::json;
 
+const BOARD_FULL: &str = "The board is full: delete or finish some cards first.";
+
 #[derive(Default)]
 pub struct Kanban {
     board: Board,
@@ -71,7 +73,15 @@ impl Kanban {
             let title: String = self.draft_title.chars().take(200).collect();
             let prompt: String = value.unwrap_or_default().chars().take(8000).collect();
             if self.board.add(&title, &prompt) == 0 {
+                // Empty input adds nothing; otherwise the board is full. The form keeps its text.
+                if !(title.trim().is_empty() && prompt.trim().is_empty()) && !self.load_failed {
+                    self.notice = Some(BOARD_FULL.into());
+                    self.render();
+                }
                 return;
+            }
+            if self.notice.as_deref() == Some(BOARD_FULL) {
+                self.notice = None;
             }
             self.draft_title.clear();
             self.form += 1;
@@ -249,6 +259,27 @@ mod tests {
         let (col, card) = rendered_column("card-1");
         assert_eq!(col, "col-backlog");
         assert!(card.to_string().contains("Start failed: no worktree"));
+    }
+
+    #[test]
+    fn a_refused_card_shows_a_notice_keeps_the_typed_text_and_the_next_add_clears_it() {
+        let mut k = loaded_with_a_card();
+        while k.board.add("filler", "p") != 0 {}
+        let submit = |k: &mut Kanban, field: &str, value: &str| {
+            let id = format!("{field}-{}", k.form);
+            feed(k, json!({"jsonrpc":"2.0","method":"view/event","params":{"tab":0,"id":id,"kind":"submit","value":value}}));
+        };
+        submit(&mut k, "new-title", "T");
+        submit(&mut k, "new-prompt", "P");
+        let sent = test_host::take_sent();
+        assert!(!sent.iter().any(|m| m["method"] == "storage/set"));
+        assert!(sent.last().unwrap()["params"]["root"].to_string().contains(BOARD_FULL));
+        assert_eq!((k.draft_title.as_str(), k.form), ("T", 0), "the form keeps its text");
+
+        k.board.delete(1);
+        submit(&mut k, "new-prompt", "P");
+        assert_eq!(k.notice, None);
+        assert!(!test_host::take_sent().last().unwrap()["params"]["root"].to_string().contains(BOARD_FULL));
     }
 
     #[test]

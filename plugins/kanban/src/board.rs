@@ -73,8 +73,8 @@ pub struct Card {
 pub const MAX_CARDS: usize = 50;
 /// Title and prompt bytes across all cards.
 pub const MAX_TEXT_BYTES: usize = 96_000;
-/// The most text one card can add: a 200-char title and an 8,000-char prompt, ASCII.
-pub const MAX_CARD_TEXT_BYTES: usize = 8_200;
+/// The most text one card can add: a 200-char title and an 8,000-char prompt, 4 UTF-8 bytes each.
+pub const MAX_CARD_TEXT_BYTES: usize = (200 + 8_000) * 4;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -97,7 +97,7 @@ impl Board {
             return 0;
         }
         let bytes = title.len() + prompt.len();
-        if !self.fits(bytes, |c| c.column != Column::Done) {
+        if !self.has_room(bytes) {
             return 0;
         }
         while !self.fits(bytes, |_| true) {
@@ -126,6 +126,11 @@ impl Board {
         let kept = self.cards.iter().filter(|c| keep(c));
         let (count, used) = kept.fold((0, 0), |(n, b), c| (n + 1, b + c.title.len() + c.prompt.len()));
         count < MAX_CARDS && used + text_bytes <= MAX_TEXT_BYTES
+    }
+
+    /// Whether `add` would take a card with `text_bytes` of text, removing Done cards if needed.
+    pub fn has_room(&self, text_bytes: usize) -> bool {
+        self.fits(text_bytes, |c| c.column != Column::Done)
     }
 
     /// Whether the next card, at its largest, might not fit without removing Done cards.
