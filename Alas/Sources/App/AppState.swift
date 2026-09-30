@@ -3348,10 +3348,10 @@ final class AppState {
         return checkout.members.first { member in
             guard member.availability == .available,
                   member.projectID == worktree.projectId,
-                  Self.canonicalWorktreePath(member.worktreePath) == worktreePath
+                  Self.canonicalWorktreePath(checkout.inAppWorktreePath(member.worktreePath)) == worktreePath
             else { return false }
             if let plannedDestination = member.plan?.destinationPath {
-                return Self.canonicalWorktreePath(plannedDestination) == worktreePath
+                return Self.canonicalWorktreePath(checkout.inAppWorktreePath(plannedDestination)) == worktreePath
             }
             return true
         }
@@ -3744,7 +3744,7 @@ final class AppState {
                 throw WorkspaceCheckoutCoordinatorError.checkoutMissing
             }
             let memberOperationIsInFlight = current.members.contains { member in
-                let worktreeID = Worktree.makeId(path: URL(fileURLWithPath: member.worktreePath))
+                let worktreeID = Worktree.makeId(path: URL(fileURLWithPath: current.inAppWorktreePath(member.worktreePath)))
                 return Self.blocksWorktreeSessionAdmission(
                     self.projectsManager.operationState(
                         forWorktreeId: worktreeID,
@@ -3882,7 +3882,7 @@ final class AppState {
         var resolved: [UUID: Worktree] = [:]
         for member in checkout.members {
             guard let worktreeID = ids[member.id] else { continue }
-            let expectedPath = URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
+            let expectedPath = URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path
             guard let worktree = projectsManager.worktrees(projectId: member.projectID).first(where: {
                 $0.id == worktreeID
                     && $0.projectId == member.projectID
@@ -3932,9 +3932,12 @@ final class AppState {
     /// path could since be occupied by something this checkout never
     /// touched — closing tabs or clearing selection there would tear down
     /// an unrelated worktree's runtime state instead of this member's own.
-    private static func synthesizedWorktreeIfOwned(for member: WorkspaceCheckoutMember) -> Worktree? {
+    private static func synthesizedWorktreeIfOwned(
+        for member: WorkspaceCheckoutMember,
+        in checkout: WorkspaceCheckout
+    ) -> Worktree? {
         guard member.cleanupOwnership.worktreeCreated else { return nil }
-        let path = URL(fileURLWithPath: member.worktreePath)
+        let path = URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath))
         return Worktree(
             id: Worktree.makeId(path: path),
             projectId: member.projectID,
@@ -4018,7 +4021,9 @@ final class AppState {
             // are registered under it — so the risk shown here must count
             // the same sessions it's about to silently terminate.
             if let worktreeID = resolvedWorktreeIDs[member.id]
-                ?? (member.cleanupOwnership.worktreeCreated ? Worktree.makeId(path: URL(fileURLWithPath: member.worktreePath)) : nil) {
+                ?? (member.cleanupOwnership.worktreeCreated
+                    ? Worktree.makeId(path: URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)))
+                    : nil) {
                 let sessionCount = worktreeCleanupSessionIDs(worktreeId: worktreeID).count
                 if sessionCount > 0 {
                     risks.append("\(member.fallbackProjectName): \(sessionCount) \(sessionCount == 1 ? "session" : "sessions") will close")
@@ -4107,7 +4112,7 @@ final class AppState {
         // never owned at all, and its stale sessions would never close.
         let ownershipBeforeDeletion = Dictionary(uniqueKeysWithValues: before.members.map { ($0.id, $0) })
         func worktreeToCleanUp(for member: WorkspaceCheckoutMember) -> Worktree? {
-            resolvedWorktrees[member.id] ?? ownershipBeforeDeletion[member.id].flatMap(Self.synthesizedWorktreeIfOwned)
+            resolvedWorktrees[member.id] ?? ownershipBeforeDeletion[member.id].flatMap { Self.synthesizedWorktreeIfOwned(for: $0, in: before) }
         }
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         for worktree in resolvedWorktrees.values {
@@ -9543,7 +9548,7 @@ final class AppState {
               let memberID = workspaceNavigationState.focusedCheckoutMemberID,
               let member = checkout.members.first(where: { $0.id == memberID && $0.availability == .available })
         else { return nil }
-        let targetPath = URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
+        let targetPath = URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path
         guard let worktree = projectsManager.worktrees(projectId: member.projectID).first(where: {
             $0.id == id && $0.path.standardizedFileURL.path == targetPath
         }) else { return nil }
@@ -10779,7 +10784,7 @@ final class AppState {
         return workspacesManager.ownershipCheckouts.compactMap { checkout in
             guard let member = checkout.members.first(where: { member in
                 guard member.projectID == worktree.projectId,
-                      URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path == path
+                      URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path == path
                 else { return false }
                 if let memberLineage = member.gitLineageID,
                    let worktreeLineage = worktree.lineageID,
@@ -12111,7 +12116,7 @@ final class AppState {
             guard checkout.archivedAt == nil,
                   let member = checkout.members.first(where: {
                       $0.projectID == worktree.projectId &&
-                          URL(fileURLWithPath: $0.worktreePath).standardizedFileURL.path == worktreePath
+                          URL(fileURLWithPath: checkout.inAppWorktreePath($0.worktreePath)).standardizedFileURL.path == worktreePath
                   })
             else { return nil }
             return (checkout, member)
@@ -12163,7 +12168,7 @@ final class AppState {
                   checkout.executionLocation.normalized == location.normalized
             else { return [] }
             return Set(checkout.members.compactMap { member in
-                checkpointMemberWorktree(for: member)?.lineageID
+                checkpointMemberWorktree(for: member, in: checkout)?.lineageID
             })
         }
     }
@@ -12181,7 +12186,7 @@ final class AppState {
 
     private func checkpointTerminalAdmissionDisabled(for checkout: WorkspaceCheckout) -> Bool {
         for member in checkout.members where member.availability == .available {
-            guard let worktree = checkpointMemberWorktree(for: member) else { continue }
+            guard let worktree = checkpointMemberWorktree(for: member, in: checkout) else { continue }
             if checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) { return true }
         }
         return false
@@ -12189,17 +12194,18 @@ final class AppState {
 
     private func checkpointTerminalAdmissionDisabledAfterDiscovery(for checkout: WorkspaceCheckout) async -> Bool {
         for member in checkout.members where member.availability == .available {
-            guard let worktree = checkpointMemberWorktree(for: member) else { continue }
+            guard let worktree = checkpointMemberWorktree(for: member, in: checkout) else { continue }
             if await checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) { return true }
         }
         return false
     }
 
-    private func checkpointMemberWorktree(for member: WorkspaceCheckoutMember) -> Worktree? {
+    private func checkpointMemberWorktree(for member: WorkspaceCheckoutMember, in checkout: WorkspaceCheckout) -> Worktree? {
         let liveWorktrees = projectsManager.worktrees(projectId: member.projectID)
         let cachedWorktrees = projects.first(where: { $0.id == member.projectID })?.cachedWorktrees ?? []
         return (liveWorktrees + cachedWorktrees).first(where: {
-                Self.canonicalWorktreePath($0.path.path) == Self.canonicalWorktreePath(member.worktreePath)
+                Self.canonicalWorktreePath($0.path.path)
+                    == Self.canonicalWorktreePath(checkout.inAppWorktreePath(member.worktreePath))
         })
     }
 
@@ -12762,7 +12768,8 @@ final class AppState {
                     || target.hasPrefix(Self.canonicalWorktreePath(member.worktreePath) + "/")
                 else { continue }
                 guard let worktree = self.projectsManager.worktrees(projectId: member.projectID).first(where: {
-                    Self.canonicalWorktreePath($0.path.path) == Self.canonicalWorktreePath(member.worktreePath)
+                    Self.canonicalWorktreePath($0.path.path)
+                        == Self.canonicalWorktreePath(current.inAppWorktreePath(member.worktreePath))
                 }) else { return nil }
                 return worktree.id
             }

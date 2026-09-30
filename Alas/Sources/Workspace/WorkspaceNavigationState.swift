@@ -136,7 +136,8 @@ enum WorkspaceMemberWorktreeResolver {
             guard member.availability == .available,
                   let worktree = worktrees.first(where: {
                       $0.projectId == member.projectID
-                          && $0.path.standardizedFileURL.path == URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
+                          && $0.path.standardizedFileURL.path
+                              == URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path
                   })
             else { return nil }
             return (member.id, worktree.id)
@@ -180,7 +181,7 @@ enum WorkspaceCheckoutWorktreeResolver {
                 member.availability == .available
                     && member.projectID == worktree.projectId
                     && (member.gitLineageID == nil || worktree.lineageID == nil || member.gitLineageID == worktree.lineageID)
-                    && URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
+                    && URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path
                         == worktree.path.standardizedFileURL.path
             }
         }
