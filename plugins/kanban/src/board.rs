@@ -188,29 +188,25 @@ impl Board {
     }
 
     /// `sessions` is (session id, state) from the snapshot. Returns whether any card changed.
+    /// A following card moves only when its session's state changes, so a manual move holds
+    /// until the agent does something new. A session not seen yet leaves the card alone.
     pub fn sync(&mut self, sessions: &[(String, String)]) -> bool {
         let mut changed = false;
         for c in self.cards.iter_mut().filter(|c| c.following) {
             let Some(sid) = c.session_id.as_deref() else { continue };
-            let column = match sessions.iter().find(|(id, _)| id == sid) {
-                Some((_, state)) => {
-                    if !c.seen || c.agent_state.as_deref() != Some(state) {
-                        c.seen = true;
-                        c.agent_state = Some(state.clone());
-                        changed = true;
-                    }
-                    match state.as_str() {
-                        "running" => Column::Running,
-                        "awaiting_input" | "permission_request" => Column::NeedsYou,
-                        "idle" => Column::Review,
-                        _ => c.column,
-                    }
-                }
-                None if c.seen => Column::Review,
-                None => c.column,
+            let state = sessions.iter().find(|(id, _)| id == sid).map(|(_, s)| s.as_str());
+            if (state.is_none() && !c.seen) || (c.seen && c.agent_state.as_deref() == state) {
+                continue;
+            }
+            c.column = match state {
+                Some("running") => Column::Running,
+                Some("awaiting_input" | "permission_request") => Column::NeedsYou,
+                Some("idle") | None => Column::Review,
+                Some(_) => c.column,
             };
-            changed |= c.column != column;
-            c.column = column;
+            c.seen = true;
+            c.agent_state = state.map(str::to_owned);
+            changed = true;
         }
         changed
     }
@@ -263,6 +259,17 @@ mod tests {
         b.sync(&sess("running"));
         b.sync(&[]);
         assert_eq!(b.cards[0].column, Column::Review);
+    }
+
+    #[test]
+    fn a_manual_move_holds_until_the_session_state_changes() {
+        let (mut b, id) = started_board();
+        b.sync(&sess("idle"));
+        b.move_to(id, Column::NeedsYou);
+        assert!(!b.sync(&sess("idle")));
+        assert_eq!(b.cards[0].column, Column::NeedsYou);
+        assert!(b.sync(&sess("running")));
+        assert_eq!(b.cards[0].column, Column::Running);
     }
 
     #[test]
