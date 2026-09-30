@@ -1,6 +1,6 @@
 import Foundation
 
-/// Transient sidebar filter over worktree name and branch. It only narrows
+/// Transient sidebar filter over worktree title, name, and branch. It only narrows
 /// what the sidebar renders; worktree visibility and order are never mutated,
 /// so the active sort mode still applies and clearing restores the full tree.
 enum WorktreeSidebarFilter {
@@ -10,8 +10,9 @@ enum WorktreeSidebarFilter {
 
     static func matches(_ worktree: Worktree, query: String) -> Bool {
         let query = normalized(query)
-        return FuzzyMatch.score(query: query, target: worktree.branch) != nil
-            || FuzzyMatch.score(query: query, target: worktree.name) != nil
+        return [worktree.title, worktree.branch, worktree.name].contains {
+            FuzzyMatch.score(query: query, target: $0) != nil
+        }
     }
 
     /// Keeps the input order, so callers pass lists already in sort order.

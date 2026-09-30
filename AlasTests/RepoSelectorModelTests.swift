@@ -459,6 +459,43 @@ struct RepoSelectorModelTests {
         #expect(indices == [0, 1, 2])
     }
 
+    private func worktreeIds(_ model: RepoSelectorModel, _ e: RepoSelectorEnvironment) -> [String] {
+        model.rows(environment: e).compactMap {
+            if case .worktree(let w, _, _) = $0 { return w.id } else { return nil }
+        }
+    }
+
+    @Test(arguments: [
+        ("flick", ["fix-flicker"]),                    // directory name tells detached worktrees apart
+        ("detached", ["fix-flicker", "scratch"]),      // the state still lists all of them
+    ])
+    func filterModeMatchesDetachedWorktrees(query: String, expected: [String]) {
+        let model = RepoSelectorModel()
+        let p1 = project("p1")
+        let flicker = worktree("fix-flicker", projectId: "p1", branch: "(detached)")
+        let scratch = worktree("scratch", projectId: "p1", branch: "(detached)")
+        model.query = query
+        #expect(worktreeIds(model, env(projects: [p1], worktrees: ["p1": [flicker, scratch]])) == expected)
+    }
+
+    @Test func filterModeScopesDetachedTagSearchByProjectName() {
+        let model = RepoSelectorModel()
+        let p1 = project("p1")
+        let acme = project("p2", name: "acme")
+        let flicker = worktree("fix-flicker", projectId: "p1", branch: "(detached)")
+        let other = worktree("other", projectId: "p2", branch: "(detached)")
+        model.query = "acme detached"
+        #expect(worktreeIds(model, env(projects: [p1, acme], worktrees: ["p1": [flicker], "p2": [other]])) == ["other"])
+    }
+
+    @Test func emptyQuerySortsDetachedWorktreesByDirectoryName() {
+        let model = RepoSelectorModel()
+        let p1 = project("p1")
+        let flicker = worktree("fix-flicker", projectId: "p1", branch: "(detached)")
+        let scratch = worktree("scratch", projectId: "p1", branch: "(detached)")
+        #expect(worktreeIds(model, env(projects: [p1], worktrees: ["p1": [scratch, flicker]])) == ["fix-flicker", "scratch"])
+    }
+
     @Test func filterModePropagatesCurrentFlag() {
         let model = RepoSelectorModel()
         let p1 = project("p1")

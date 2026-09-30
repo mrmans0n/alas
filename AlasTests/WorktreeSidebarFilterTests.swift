@@ -22,6 +22,15 @@ struct WorktreeSidebarFilterTests {
         #expect(WorktreeSidebarFilter.matches(wt, query: query) == expected)
     }
 
+    @Test(arguments: [
+        ("flicker", ["fix-flicker"]),               // directory name tells detached worktrees apart
+        ("detached", ["fix-flicker", "scratch"]),   // the state still finds all of them
+    ])
+    func detachedWorktreesMatchByDirectoryName(query: String, expected: [String]) {
+        let detached = ["fix-flicker", "scratch"].map { worktree($0, branch: "(detached)") }
+        #expect(WorktreeSidebarFilter.apply(query, to: detached).map(\.id) == expected)
+    }
+
     @Test func applyKeepsSortedOrderAndBlankQueryRestoresEverything() {
         let sorted = [
             worktree("1", branch: "fix/login"),
