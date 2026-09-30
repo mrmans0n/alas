@@ -195,7 +195,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                     },
                     contentMaxWidth: contentMaxWidth,
                     typography: typography,
-                    session: session
+                    session: session,
+                    chipsAbsolutePaths: !(trustedImageRoot?.isRemoteAlasPath ?? false)
                 )
             }
         case .agent(_, _, let buf):

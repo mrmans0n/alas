@@ -166,6 +166,23 @@ struct ACPMentionPickerTests {
         #expect(dirs.allSatisfy { $0.hasDirectoryPath })
     }
 
+    @Test("absolute query lists one directory, folders first, hiding dotfiles until a dot is typed")
+    func absoluteQueryBrowsesOneDirectory() throws {
+        let root = try makeTempTree(["zeta/inner.txt", "alpha.txt", "beta.md", ".hidden"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.path + "/"
+
+        let names = { (query: String) in
+            MentionAbsolutePath.entries(forQuery: query, limit: 80).map(\.lastPathComponent)
+        }
+        #expect(names(dir) == ["zeta", "alpha.txt", "beta.md"])
+        #expect(names(dir + "AL") == ["alpha.txt"])
+        #expect(names(dir + "eta") == ["zeta", "beta.md"])
+        #expect(names(dir + ".") == [".hidden", "alpha.txt", "beta.md"])
+        #expect(MentionAbsolutePath.query(entering: root.appendingPathComponent("zeta", isDirectory: true))
+            == root.path + "/zeta/")
+    }
+
     private func makeTempTree(_ relativeFiles: [String]) throws -> URL {
         let fm = FileManager.default
         let root = fm.temporaryDirectory

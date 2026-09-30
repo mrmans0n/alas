@@ -11,6 +11,7 @@ struct UserMessageRow: View {
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
     let session: ACPSession
+    let chipsAbsolutePaths: Bool
     @Environment(\.theme) private var theme
     @Environment(\.acpUpstreamReferenceStore) private var upstreamReferences
     var body: some View {
@@ -56,7 +57,8 @@ struct UserMessageRow: View {
                     text: text,
                     attachments: attachments,
                     typography: typography,
-                    session: session
+                    session: session,
+                    chipsAbsolutePaths: chipsAbsolutePaths
                 )
                 .acpUserBubble()
             }
