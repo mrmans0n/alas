@@ -577,13 +577,12 @@ final class ACPSessionOrchestrationCoordinator {
     }
 
     /// Lifts a selected child's prompt hold (`ACPSessionManager
-    /// .holdPromptsForDelegatedSelection`) on whichever manager has it live.
-    /// Once the child failed, its initial prompt must never run on the
-    /// agent's default model, so it is dropped from the queue first.
+    /// .holdPromptsForDelegatedSelection`) on the manager that has it live; a
+    /// session that is not live holds nothing, and its next attach derives no
+    /// hold from the failed phase. Once the child failed, its initial prompt
+    /// must never run on the agent's default model, so it is dropped first.
     private func releaseSelectionHold(for record: ACPDelegationRecord, discardingInitialPrompt: Bool) {
-        let manager = environment.sessionLocation(record.childSessionId)?.manager
-            ?? record.childWorktreeId.flatMap(environment.worktree).flatMap(environment.manager)
-        manager?.releaseDelegatedSelectionHold(
+        environment.sessionLocation(record.childSessionId)?.manager.releaseDelegatedSelectionHold(
             record.childSessionId,
             discardingDelegatedPrompt: discardingInitialPrompt ? initialPromptSource(for: record).messageId : nil
         )
