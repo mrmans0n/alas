@@ -83,3 +83,11 @@ enum ScheduledWorktreeDestination {
         return .exhausted
     }
 }
+
+/// A branch and worktree path handed out by `AppState.reserveWorktreeDestination` whose
+/// worktree is not created yet.
+struct WorktreeDestinationClaim: Hashable {
+    let projectID: String
+    let branch: String
+    let path: String
+}

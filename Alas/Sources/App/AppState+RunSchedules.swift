@@ -311,6 +311,7 @@ extension AppState {
         // worktree went away.
         switch await reserveWorktreeDestination(rendered: rendered, project: project) {
         case let .success((branch, destination, base)):
+            defer { releaseWorktreeDestination(projectID: project.id, branch: branch, destination: destination) }
             return await createWorktreeAndWait(
                 projectId: project.id,
                 base: base,
@@ -325,6 +326,8 @@ extension AppState {
 
     /// The first free branch and worktree path for `rendered` (suffixed when
     /// the name is taken), plus the base branch a new worktree is cut from.
+    /// The pair stays claimed until `releaseWorktreeDestination`, which the
+    /// caller owes once the worktree is created or has failed.
     func reserveWorktreeDestination(
         rendered: String,
         project: ProjectConfig
@@ -335,19 +338,10 @@ extension AppState {
         // a branch from `refs/heads/<branch>`, and a remote-tracking
         // `origin/nightly` with no local branch is still cut from the base.
         let existingBranches = Set((try? await git.localBranches(at: repoPath)) ?? [])
-        let probe = scheduledDestinationExistence
         let host = project.host
-        let free = await ScheduledWorktreeDestination.firstFree(
-            rendered: rendered,
-            pathTemplate: config.worktrees.pathTemplate,
-            worktreeRoot: config.worktrees.rootPath,
-            repoName: project.name,
-            existingBranches: existingBranches,
-            pathState: { await probe($0, host) }
-        )
         let branch: String
         let destination: URL
-        switch free {
+        switch await claimFreeDestination(rendered: rendered, project: project, existingBranches: existingBranches) {
         case let .free(freeBranch, freeDestination):
             branch = freeBranch
             destination = freeDestination
@@ -366,6 +360,45 @@ extension AppState {
             configuredDefault: config.worktrees.baseBranch
         )
         return .success((branch, destination, base))
+    }
+
+    /// `firstFree` with the destinations other reservations hold counted as taken, claiming the
+    /// result. `firstFree` awaits the host per candidate, so another reservation may claim the
+    /// same pair meanwhile: the claims are checked and recorded with no await in between, and a
+    /// clash reruns the search.
+    private func claimFreeDestination(
+        rendered: String,
+        project: ProjectConfig,
+        existingBranches: Set<String>
+    ) async -> ScheduledWorktreeDestination.Outcome {
+        let probe = scheduledDestinationExistence
+        let host = project.host
+        while true {
+            let claims = worktreeDestinationClaims
+            let claimedPaths = Set(claims.map(\.path))
+            let outcome = await ScheduledWorktreeDestination.firstFree(
+                rendered: rendered,
+                pathTemplate: config.worktrees.pathTemplate,
+                worktreeRoot: config.worktrees.rootPath,
+                repoName: project.name,
+                existingBranches: existingBranches.union(claims.filter { $0.projectID == project.id }.map(\.branch)),
+                pathState: { claimedPaths.contains($0.path) ? .occupied : await probe($0, host) }
+            )
+            guard case let .free(branch, destination) = outcome else { return outcome }
+            let clashes = worktreeDestinationClaims.contains {
+                ($0.projectID == project.id && $0.branch == branch) || $0.path == destination.path
+            }
+            if !clashes {
+                worktreeDestinationClaims.insert(
+                    WorktreeDestinationClaim(projectID: project.id, branch: branch, path: destination.path))
+                return outcome
+            }
+        }
+    }
+
+    func releaseWorktreeDestination(projectID: String, branch: String, destination: URL) {
+        worktreeDestinationClaims.remove(
+            WorktreeDestinationClaim(projectID: projectID, branch: branch, path: destination.path))
     }
 
     private func runScheduledScript(

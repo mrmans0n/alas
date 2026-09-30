@@ -104,6 +104,7 @@ extension AppState {
         case .failure(let failure):
             return failure.message
         case let .success((branch, destination, base)):
+            defer { releaseWorktreeDestination(projectID: project.id, branch: branch, destination: destination) }
             guard !Task.isCancelled else { return cancelled }
             switch await createWorktreeAndWait(
                 projectId: project.id, base: base, branch: branch, destination: destination, runStartup: true
