@@ -56,7 +56,7 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
-        NSColor(theme.color("bg-1")).setFill()
+        EditorTheme(theme: theme).bg.setFill()
         bounds.fill()
 
         guard
@@ -194,7 +194,7 @@ final class CodeEditorLineNumberRulerView: NSRulerView {
         paragraph.alignment = .right
         return [
             .font: font ?? .monospacedSystemFont(ofSize: 13, weight: .regular),
-            .foregroundColor: NSColor(theme.color("fg-faint")),
+            .foregroundColor: EditorTheme(theme: theme).gutterFG,
             .paragraphStyle: paragraph
         ]
     }

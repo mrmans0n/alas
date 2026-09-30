@@ -145,7 +145,7 @@ struct CodeEditorView: NSViewRepresentable {
         scroll.borderType = .noBorder
         scroll.autohidesScrollers = false
         scroll.drawsBackground = true
-        scroll.backgroundColor = NSColor(theme.color("bg-1"))
+        scroll.backgroundColor = EditorTheme(theme: theme).bg
         // Since the macOS 14 SDK `clipsToBounds` defaults to `false`, so the
         // scroll view no longer clips its subviews. Without this, the vertical
         // ruler's responsive-scrolling overdraw paints line numbers above the
@@ -204,7 +204,7 @@ struct CodeEditorView: NSViewRepresentable {
             family: fontFamily,
             size: CGFloat(fontSize)
         )
-        textView.backgroundColor = NSColor(theme.color("bg-1"))
+        textView.backgroundColor = EditorTheme(theme: theme).bg
         textView.drawsBackground = true
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
