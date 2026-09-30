@@ -131,8 +131,11 @@ struct SSHIntegrationTests {
             Issue.record("expected remote worktree session creation, got \(result)")
             return
         }
-        let worktree = try #require(summary.worktree)
-        let worktreeId = Worktree.makeId(path: URL(fileURLWithPath: worktree.path))
+        // The summary carries the display form (`host:/path`); the in-app
+        // identity comes from the selected worktree itself.
+        let summaryWorktree = try #require(summary.worktree)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        let worktree = try #require(state.worktree(withId: worktreeId))
         defer {
             try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
             let database = Paths.acpSessionsDB(forWorktreeId: worktreeId)
@@ -140,8 +143,9 @@ struct SSHIntegrationTests {
             try? FileManager.default.removeItem(at: URL(fileURLWithPath: database.path + "-wal"))
             try? FileManager.default.removeItem(at: URL(fileURLWithPath: database.path + "-shm"))
         }
-        #expect(FileManager.default.fileExists(atPath: RemotePath.realPath(worktree.path)))
-        #expect(state.selectedWorktreeId == worktreeId)
+        #expect(worktree.projectId == project.id)
+        #expect(summaryWorktree.path == RemotePath.display(worktree.path.path))
+        #expect(FileManager.default.fileExists(atPath: RemotePath.realPath(worktree.path.path)))
         #expect(state.tabs.tabs(forWorktree: worktreeId).contains { tab in
             if case let .acpSession(session) = tab { return session.sessionId == summary.id }
             return false
