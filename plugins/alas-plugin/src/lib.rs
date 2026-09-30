@@ -1,4 +1,4 @@
-//! SDK for Alas plugins (API 1 and 2). Handles the ABI, JSON-RPC framing, the
+//! SDK for Alas plugins (API 1 to 3). Handles the ABI, JSON-RPC framing, the
 //! activation handshake and request ids. On non-wasm targets the host imports are
 //! replaced by an in-memory recorder (`test_host`) so plugins can be unit tested.
 
@@ -66,6 +66,10 @@ pub enum Event {
     Snapshot(Snapshot),
     Tick { dt: u32 },
     Click { tab: u32, region: String },
+    /// A control in a view tab was used (`kind` is e.g. `click`, `change`, `submit`).
+    ViewEvent { tab: u32, id: String, kind: String, value: Option<String> },
+    /// A task started with `task_start` failed to launch in the background.
+    TaskFailed { session_id: String, reason: String },
     Reply { id: i64, result: Result<Value, RpcError> },
 }
 
@@ -158,6 +162,114 @@ pub fn set_regions(tab: u32, regions: &[Region]) {
     send(&json!({"jsonrpc": "2.0", "method": "canvas/regions", "params": {"tab": tab, "regions": regions}}));
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Axis { Vertical, Horizontal }
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextStyle { Body, Caption, Title, Monospaced }
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Tone { Normal, Dim, Accent, Warn, Danger }
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ButtonStyle { Normal, Primary, Plain }
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MenuItem {
+    pub id: String,
+    pub label: String,
+}
+
+/// A node of a view tab's tree. Ids must be unique within the tree.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Node {
+    Vstack {
+        id: String,
+        children: Vec<Node>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        spacing: Option<u8>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        width: Option<u16>,
+    },
+    Hstack {
+        id: String,
+        children: Vec<Node>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        spacing: Option<u8>,
+    },
+    Scroll { id: String, axis: Axis, child: Box<Node> },
+    Text {
+        id: String,
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        style: Option<TextStyle>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tone: Option<Tone>,
+    },
+    Badge {
+        id: String,
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tone: Option<Tone>,
+    },
+    Button {
+        id: String,
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        icon: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        style: Option<ButtonStyle>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        disabled: bool,
+    },
+    TextField {
+        id: String,
+        value: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        placeholder: Option<String>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        multiline: bool,
+    },
+    Menu { id: String, label: String, items: Vec<MenuItem> },
+    Card {
+        id: String,
+        children: Vec<Node>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tone: Option<Tone>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        clickable: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        width: Option<u16>,
+    },
+    Divider { id: String },
+    Spacer { id: String },
+}
+
+/// Replaces the tree shown in view tab `tab`.
+pub fn render(tab: u32, root: &Node) {
+    send(&json!({"jsonrpc": "2.0", "method": "view/render", "params": {"tab": tab, "root": root}}));
+}
+
+/// Starts a task in a new worktree. The reply (`Event::Reply`) holds `{sessionId, branch}`.
+pub fn task_start(title: &str, prompt: &str) -> i64 {
+    request("task/start", json!({"title": title, "prompt": prompt}))
+}
+
+/// The reply holds the value at `result["value"]` (`null` when unset).
+pub fn storage_get(key: &str) -> i64 {
+    request("storage/get", json!({"key": key}))
+}
+
+/// A `null` value deletes the key.
+pub fn storage_set(key: &str, value: &Value) -> i64 {
+    request("storage/set", json!({"key": key, "value": value}))
+}
+
 /// Payloads stay raw until their method is known, so the snapshot is parsed once,
 /// straight into typed structs, never through a generic `Value` tree.
 #[derive(Deserialize)]
@@ -203,6 +315,22 @@ struct ClickParams {
     region: String,
 }
 
+#[derive(Deserialize)]
+struct ViewEventParams {
+    tab: u32,
+    id: String,
+    kind: String,
+    #[serde(default)]
+    value: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TaskFailedParams {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    reason: String,
+}
+
 fn parse<'a, T: Deserialize<'a>>(raw: Option<&'a RawValue>) -> Option<T> {
     serde_json::from_str(raw?.get()).ok()
 }
@@ -228,6 +356,14 @@ pub fn dispatch<P: Plugin>(plugin: &mut P, bytes: &[u8]) {
         },
         Some("canvas/click") => match parse::<ClickParams>(message.params) {
             Some(params) => Event::Click { tab: params.tab, region: params.region },
+            None => return,
+        },
+        Some("view/event") => match parse::<ViewEventParams>(message.params) {
+            Some(p) => Event::ViewEvent { tab: p.tab, id: p.id, kind: p.kind, value: p.value },
+            None => return,
+        },
+        Some("task/failed") => match parse::<TaskFailedParams>(message.params) {
+            Some(p) => Event::TaskFailed { session_id: p.session_id, reason: p.reason },
             None => return,
         },
         Some(_) => return,
@@ -381,5 +517,50 @@ mod tests {
         set_regions(0, &[Region { id: "r0".into(), label: "L".into(), rect: [1, 2, 3, 4] }]);
         assert_eq!(test_host::take_sent()[0]["params"],
             json!({"tab": 0, "regions": [{"id": "r0", "label": "L", "rect": [1, 2, 3, 4]}]}));
+    }
+
+    #[test]
+    fn view_nodes_encode_to_the_wire_shape() {
+        test_host::take_sent();
+        let s = |v: &str| v.to_string();
+        let tree = Node::Vstack { id: s("root"), spacing: None, width: Some(300), children: vec![
+            Node::TextField { id: s("t"), value: s("v"), placeholder: Some(s("p")), multiline: false },
+            Node::Menu { id: s("m"), label: s("M"), items: vec![MenuItem { id: s("a"), label: s("A") }] },
+            Node::Card { id: s("c"), tone: Some(Tone::Warn), clickable: true, width: None, children: vec![
+                Node::Button { id: s("b"), label: s("B"), icon: None, style: Some(ButtonStyle::Primary), disabled: false },
+            ] },
+        ] };
+        render(2, &tree);
+        assert_eq!(test_host::take_sent()[0], json!({"jsonrpc":"2.0","method":"view/render","params":{"tab":2,"root":{
+            "kind":"vstack","id":"root","width":300,"children":[
+                {"kind":"textField","id":"t","value":"v","placeholder":"p"},
+                {"kind":"menu","id":"m","label":"M","items":[{"id":"a","label":"A"}]},
+                {"kind":"card","id":"c","tone":"warn","clickable":true,"children":[
+                    {"kind":"button","id":"b","label":"B","style":"primary"}]}]}}}));
+    }
+
+    #[test]
+    fn view_events_and_task_failures_decode() {
+        let mut plugin = Recorder::default();
+        feed(&mut plugin, json!({"jsonrpc":"2.0","method":"view/event","params":{"tab":1,"id":"f","kind":"change","value":"x"}}));
+        feed(&mut plugin, json!({"jsonrpc":"2.0","method":"view/event","params":{"tab":1,"id":"b","kind":"click"}}));
+        feed(&mut plugin, json!({"jsonrpc":"2.0","method":"task/failed","params":{"sessionId":"s","reason":"boom"}}));
+        assert_eq!(plugin.0, vec![
+            Event::ViewEvent { tab: 1, id: "f".into(), kind: "change".into(), value: Some("x".into()) },
+            Event::ViewEvent { tab: 1, id: "b".into(), kind: "click".into(), value: None },
+            Event::TaskFailed { session_id: "s".into(), reason: "boom".into() },
+        ]);
+    }
+
+    #[test]
+    fn task_and_storage_helpers_send_the_documented_requests() {
+        test_host::take_sent();
+        task_start("T", "do it");
+        storage_get("k");
+        storage_set("k", &json!([1]));
+        let sent = test_host::take_sent();
+        assert_eq!((sent[0]["method"].clone(), sent[0]["params"].clone()), (json!("task/start"), json!({"title":"T","prompt":"do it"})));
+        assert_eq!((sent[1]["method"].clone(), sent[1]["params"].clone()), (json!("storage/get"), json!({"key":"k"})));
+        assert_eq!((sent[2]["method"].clone(), sent[2]["params"].clone()), (json!("storage/set"), json!({"key":"k","value":[1]})));
     }
 }
