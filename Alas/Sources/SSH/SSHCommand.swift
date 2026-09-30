@@ -79,7 +79,7 @@ struct SSHCommand: Equatable {
     /// connection. Used to tell whether an interactive first-contact flow
     /// actually established the connection needed by background commands.
     func controlArgv(_ command: ControlCommand) -> [String] {
-        ["-o", "ControlPath=\(Self.controlPath)", "-O", command.rawValue, host]
+        Self.refusal(for: host) + ["-o", "ControlPath=\(Self.controlPath)", "-O", command.rawValue, host]
     }
 
     /// scp rides the same multiplexed batch connection as remote commands.
@@ -90,8 +90,23 @@ struct SSHCommand: Equatable {
             + ["-q", localPath, "\(host):\(remotePath)"]
     }
 
+    /// Options that make ssh and scp fail before connecting to
+    /// `RemotePath.unavailableHost`, whatever the user's ssh config says:
+    /// `-F /dev/null` skips every config file (aliases, `Host` and `Match`
+    /// blocks), and command-line `-o` values win over later ones, so the
+    /// failing proxy and the disabled control socket cannot be overridden.
+    private static func refusal(for host: String) -> [String] {
+        guard host == RemotePath.unavailableHost else { return [] }
+        return [
+            "-F", "/dev/null",
+            "-o", "ProxyCommand=/usr/bin/false",
+            "-o", "ControlMaster=no",
+            "-o", "ControlPath=none",
+        ]
+    }
+
     private var optionArgs: [String] {
-        var options: [String] = [
+        var options: [String] = Self.refusal(for: host) + [
             "-o", "ControlMaster=auto",
             // %C is a short hash of (host, port, user); keeps the socket
             // path well under the ~104-byte unix-socket limit.

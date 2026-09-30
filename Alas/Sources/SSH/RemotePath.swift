@@ -5,8 +5,9 @@ import Foundation
 /// across hosts; the real path is restored at the transport boundary.
 enum RemotePath {
     static let root = "/.alas-remote"
-    /// Host for a persisted remote project whose ssh host is invalid. The
-    /// `.invalid` TLD never resolves (RFC 2606), so its operations fail fast.
+    /// Host for a persisted remote project that cannot be routed. Never
+    /// routable: the ssh transport refuses it explicitly (`SSHCommand`), and
+    /// the `.invalid` TLD (RFC 2606) is a second, independent layer.
     static let unavailableHost = "unavailable.invalid"
 
     /// True for the namespace root itself and anything under it, as written
