@@ -104,6 +104,22 @@ struct ProjectsManagerTests {
         #expect(project.icon.imagePath == "project-1/icon.png")
     }
 
+    /// `RemotePath.virtual` traps on a malformed host, so user input must
+    /// fail as a normal error before it gets that far.
+    @Test(arguments: ["", "user@host/x"])
+    func addProjectRejectsInvalidRemoteHost(host: String) async {
+        let mgr = ProjectsManager(persistedProjects: [])
+        await #expect(throws: (any Error).self) {
+            try await mgr.addProject(
+                path: URL(fileURLWithPath: "/srv/repo"),
+                displayName: "repo",
+                icon: .default(color: "#fff"),
+                host: host
+            )
+        }
+        #expect(mgr.projects.isEmpty)
+    }
+
     @Test func refreshWorktreesPopulatesIt() async throws {
         let repo = try await makeRepo(name: "beta")
         defer { try? FileManager.default.removeItem(at: repo) }

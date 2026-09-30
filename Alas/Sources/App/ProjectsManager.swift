@@ -121,9 +121,16 @@ final class ProjectsManager {
         mcpServers: [ProjectMCPServer] = [],
         approvedRepoHookHashes: [String] = []
     ) async throws -> ProjectConfig {
+        let storedPath: String
         if let host {
+            guard RemotePath.isValidHost(host) else {
+                throw NSError(domain: "ProjectsManager", code: 2,
+                              userInfo: [NSLocalizedDescriptionKey: "Invalid SSH host: \"\(host)\""])
+            }
             try await RemoteRepoValidator.validate(host: host, path: path.path)
+            storedPath = RemotePath.virtual(host: host, realPath: path.path)
         } else {
+            storedPath = path.path
             let isRepo = try await git.isGitRepository(path)
             guard isRepo else {
                 throw NSError(domain: "ProjectsManager", code: 1,
@@ -133,7 +140,7 @@ final class ProjectsManager {
         let project = ProjectConfig(
             id: id,
             name: displayName,
-            path: path.path,
+            path: storedPath,
             color: icon.color,
             addedAt: Date(),
             icon: icon,

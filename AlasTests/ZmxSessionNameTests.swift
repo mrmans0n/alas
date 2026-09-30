@@ -23,6 +23,29 @@ struct ZmxSessionNameTests {
         #expect(worktree.hasPrefix("alas-"))
     }
 
+    /// Remote sessions live on their own host, so the name hashes the real
+    /// path and survives the move to virtual worktree ids.
+    @Test
+    func remoteWorktreeHashesItsRealPath() {
+        #expect(
+            ZmxSessionName.derive(worktreeId: "/.alas-remote/mini/srv/wt/a", leafId: "L")
+                == ZmxSessionName.derive(worktreeId: "/srv/wt/a", leafId: "L")
+        )
+    }
+
+    /// The orphan sweep must map a virtual known id to the hash of a
+    /// session named from its real path, or leftover sessions leak.
+    @Test
+    func orphanSweepMatchesSessionNamedFromRealPath() {
+        let name = ZmxSessionName.derive(worktreeId: "/srv/wt/a", leafId: "stale-leaf")
+        let orphans = TerminalService.orphanSessionNames(
+            allSessionNames: [name],
+            knownWorktreeIdHashes: ZmxSessionName.worktreeHashes(["/.alas-remote/mini/srv/wt/a"]),
+            knownLeafIdHashes: []
+        )
+        #expect(orphans == [name])
+    }
+
     @Test
     func legacyNameKeepsPreScopedFormatForUpgradeFallback() {
         #expect(ZmxSessionName.legacy(leafId: "leaf-123") == "alas-leaf-123")

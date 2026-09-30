@@ -140,7 +140,7 @@ struct SSHIntegrationTests {
             try? FileManager.default.removeItem(at: URL(fileURLWithPath: database.path + "-wal"))
             try? FileManager.default.removeItem(at: URL(fileURLWithPath: database.path + "-shm"))
         }
-        #expect(FileManager.default.fileExists(atPath: worktree.path))
+        #expect(FileManager.default.fileExists(atPath: RemotePath.realPath(worktree.path)))
         #expect(state.selectedWorktreeId == worktreeId)
         #expect(state.tabs.tabs(forWorktree: worktreeId).contains { tab in
             if case let .acpSession(session) = tab { return session.sessionId == summary.id }

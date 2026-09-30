@@ -6,8 +6,12 @@ import Foundation
 enum RemotePath {
     static let root = "/.alas-remote"
 
+    static func isValidHost(_ host: String) -> Bool {
+        !host.isEmpty && !host.contains("/")
+    }
+
     static func virtual(host: String, realPath: String) -> String {
-        precondition(!host.isEmpty && !host.contains("/"), "invalid ssh host \(host)")
+        precondition(isValidHost(host), "invalid ssh host \(host)")
         return "\(root)/\(host)\(realPath)"
     }
 

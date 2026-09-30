@@ -3,6 +3,41 @@ import Foundation
 @testable import Alas
 
 struct ProjectConfigTests {
+    /// Remote projects persisted before virtual paths carry real paths in
+    /// every worktree-keyed field; decoding moves them under the host's
+    /// namespace and reports the id renames. Local projects are untouched.
+    @Test(arguments: [nil, "mini"] as [String?])
+    func decodeVirtualizesLegacyRemoteProjectPaths(host: String?) throws {
+        let worktree = Worktree(
+            id: "/srv/wt/a", projectId: "p", name: "a", branch: "a",
+            path: URL(fileURLWithPath: "/srv/wt/a"), status: .clean, lastActivity: .distantPast
+        )
+        let legacy = ProjectConfig(
+            id: "p", name: "P", path: "/srv/repo", color: "#fff", addedAt: .distantPast,
+            hiddenWorktreePaths: ["/srv/wt/h"], worktreeOrder: ["/srv/wt/a"],
+            cachedWorktrees: [worktree], host: host, ggWorktreeModes: ["/srv/wt/a": .on]
+        )
+        let v: (String) -> String = { real in host.map { RemotePath.virtual(host: $0, realPath: real) } ?? real }
+
+        let decoded = try JSONDecoder().decode(ProjectConfig.self, from: JSONEncoder().encode(legacy))
+
+        #expect(decoded.path == v("/srv/repo"))
+        #expect(decoded.cachedWorktrees.map(\.id) == [v("/srv/wt/a")])
+        #expect(decoded.cachedWorktrees.map(\.path.path) == [v("/srv/wt/a")])
+        #expect(decoded.hiddenWorktreePaths == [v("/srv/wt/h")])
+        #expect(decoded.worktreeOrder == [v("/srv/wt/a")])
+        #expect(decoded.ggWorktreeModes == [v("/srv/wt/a"): .on])
+        #expect(decoded.legacyWorktreeIDs == (host == nil ? [:] : [
+            "/srv/repo": v("/srv/repo"), "/srv/wt/a": v("/srv/wt/a"), "/srv/wt/h": v("/srv/wt/h"),
+        ]))
+
+        // Already-virtual values decode unchanged.
+        let again = try JSONDecoder().decode(ProjectConfig.self, from: JSONEncoder().encode(decoded))
+        var expected = decoded
+        expected.legacyWorktreeIDs = [:]
+        #expect(again == expected)
+    }
+
     @Test func decodingOlderProjectsFileSuppliesEmptyHiddenPaths() throws {
         // Older projects.json files predate hiddenWorktreePaths.
         let json = """

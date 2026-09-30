@@ -1117,7 +1117,7 @@ struct RemoteAppStateAccessTests {
         let project = ProjectConfig(
             id: "project-remote-collision",
             name: "Remote Collision",
-            path: repository.path,
+            path: RemotePath.virtual(host: "remote.test", realPath: repository.path),
             color: "blue",
             addedAt: Date(),
             host: "remote.test"

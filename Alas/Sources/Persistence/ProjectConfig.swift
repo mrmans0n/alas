@@ -172,6 +172,9 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var disabledRepoMCPServers: [String] = []
     /// SHA-256 hashes of exact repository hook bytes approved for this project.
     var approvedRepoHookHashes: [String] = []
+    /// Worktree ids renamed by this decode (legacy real path → virtual).
+    /// In-memory only, for migrating stores keyed by the old ids.
+    var legacyWorktreeIDs: [String: String] = [:]
 
     enum CodingKeys: String, CodingKey {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
@@ -270,6 +273,36 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         repoMCPTrust = (try? c.decode([String: RepoMCPTrustState].self, forKey: .repoMCPTrust)) ?? [:]
         disabledRepoMCPServers = (try? c.decode([String].self, forKey: .disabledRepoMCPServers)) ?? []
         approvedRepoHookHashes = (try? c.decode([String].self, forKey: .approvedRepoHookHashes)) ?? []
+        if let host, RemotePath.isValidHost(host) {
+            virtualizeLegacyRemotePaths(host: host)
+        }
+    }
+
+    /// Remote projects saved before virtual paths stored real remote paths.
+    /// Move every path and worktree-id-keyed field under the host's virtual
+    /// namespace; already-virtual values are left alone.
+    private mutating func virtualizeLegacyRemotePaths(host: String) {
+        let anchor = RemotePath.virtual(host: host, realPath: "/")
+        var renamed: [String: String] = [:]
+        func v(_ old: String) -> String {
+            let new = RemotePath.virtualizing(old, like: anchor)
+            if new != old { renamed[old] = new }
+            return new
+        }
+        path = v(path)
+        hiddenWorktreePaths = hiddenWorktreePaths.map(v)
+        worktreeOrder = worktreeOrder.map(v)
+        cachedWorktrees = cachedWorktrees.map { wt in
+            Worktree(
+                id: v(wt.id), projectId: wt.projectId, name: wt.name, branch: wt.branch,
+                path: URL(fileURLWithPath: v(wt.path.path)), isMainWorktree: wt.isMainWorktree,
+                status: wt.status, lastActivity: wt.lastActivity, createdAt: wt.createdAt,
+                lineageID: wt.lineageID, addedLines: wt.addedLines, deletedLines: wt.deletedLines
+            )
+        }
+        ggWorktreeModes = Dictionary(ggWorktreeModes.map { (v($0.key), $0.value) }, uniquingKeysWith: { a, _ in a })
+        issueAttachments = Dictionary(issueAttachments.map { (v($0.key), $0.value) }, uniquingKeysWith: { a, _ in a })
+        legacyWorktreeIDs = renamed
     }
 
     func encode(to encoder: Encoder) throws {
