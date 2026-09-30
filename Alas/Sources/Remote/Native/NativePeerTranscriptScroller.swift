@@ -69,7 +69,18 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
 
         func attach(scroller: ACPTranscriptScrollerView, host: NativePeerTranscriptScroller) {
             self.scroller = scroller
-            reconciler = ACPTranscriptScrollerReconciler(tiling: tiling, pool: pool, scroller: scroller)
+            let reconciler = ACPTranscriptScrollerReconciler(tiling: tiling, pool: pool, scroller: scroller)
+            // A bundle's id follows its first member, so a page revealing an
+            // earlier member re-keys it; remap the reader's anchor to it.
+            reconciler.resolveStaleRowId = { [weak self] staleId in
+                guard let self, let host = self.host, let fold = self.fold else { return nil }
+                guard let resolution = ACPTranscriptScroller.Coordinator.resolveStaleRowId(
+                    staleId, lookup: ACPTranscriptVisibleRowLookup(rows: fold.rows),
+                    groupingEnabled: host.collapsesFinishedToolCalls
+                ) else { return nil }
+                return (resolution.rowId, resolution.assumeHeadGrowth)
+            }
+            self.reconciler = reconciler
             expansionSeeds.onChange = { [weak self] in
                 guard let self, let host = self.host else { return }
                 self.update(host: host)
@@ -80,6 +91,12 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                     viewportHeight: viewportHeight, contentHeight: contentHeight,
                     isProgrammatic: isProgrammatic
                 )
+            }
+            // The scroller routes its knob and track through this callback
+            // instead of AppKit's default action. With no logical history
+            // range installed, its value spans the physical document.
+            scroller.onLogicalScrollCommit = { [weak self] value in
+                self?.commitScrollbar(value: value)
             }
             scroller.onContentWidthChange = { [weak self] in
                 guard let self, let host = self.host, self.reconciler?.isApplyingSpecs == false else { return }
@@ -363,6 +380,19 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
             default:
                 break
             }
+            reconciler.layoutMountedRowsForScroll()
+            scheduleFetchOlderIfNeeded()
+        }
+
+        private func commitScrollbar(value: Double) {
+            guard let scroller, let reconciler else { return }
+            let atTail = value >= 1 - Double.ulpOfOne
+            followsTail = atTail
+            reconciler.setFollowsTail(atTail)
+            reconciler.invalidatePendingAnchorRestore()
+            reconciler.noteUserScroll()
+            let maxY = max(0, scroller.contentHeight - scroller.viewportHeight)
+            scroller.setScrollY(maxY * CGFloat(min(max(value, 0), 1)))
             reconciler.layoutMountedRowsForScroll()
             scheduleFetchOlderIfNeeded()
         }
