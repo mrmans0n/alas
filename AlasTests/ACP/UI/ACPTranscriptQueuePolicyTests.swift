@@ -9,35 +9,76 @@ struct ACPTranscriptQueuePolicyTests {
         ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
     }
 
-    // MARK: - queuePosition
-
-    @Test("queuePosition numbers pending items 1-based in FIFO order")
-    func queuePositionNumbersFIFO() {
-        let statuses: [QueuedPrompt.Status] = [.pending, .pending, .pending]
-        #expect(ACPTranscriptQueuePolicy.queuePosition(at: 0, statuses: statuses) == 1)
-        #expect(ACPTranscriptQueuePolicy.queuePosition(at: 1, statuses: statuses) == 2)
-        #expect(ACPTranscriptQueuePolicy.queuePosition(at: 2, statuses: statuses) == 3)
+    private func queue(_ statuses: [QueuedPrompt.Status], delegatedAt delegated: Set<Int> = []) -> [QueuedPrompt] {
+        statuses.enumerated().map { idx, status in
+            QueuedPrompt(
+                blocks: [.text("\(idx)")],
+                status: status,
+                delegatedSource: delegated.contains(idx)
+                    ? ACPDelegatedPromptSource(sessionId: "child", messageId: "m\(idx)")
+                    : nil
+            )
+        }
     }
 
-    @Test("queuePosition skips a .sending head, so the first pending item is still position 1")
-    func queuePositionSkipsSendingHead() {
-        let statuses: [QueuedPrompt.Status] = [.sending, .pending, .pending]
-        #expect(ACPTranscriptQueuePolicy.queuePosition(at: 1, statuses: statuses) == 1)
-        #expect(ACPTranscriptQueuePolicy.queuePosition(at: 2, statuses: statuses) == 2)
+    // MARK: - queuePosition
+
+    @Test("queuePosition numbers rendered items 1-based, skipping a .sending head and delegated prompts")
+    func queuePositionSkipsUnrenderedItems() {
+        let fifo = queue([.pending, .pending, .pending])
+        #expect([0, 1, 2].map { ACPTranscriptQueuePolicy.queuePosition(at: $0, queue: fifo) } == [1, 2, 3])
+        let mixed = queue([.sending, .pending, .pending, .pending], delegatedAt: [2])
+        #expect(ACPTranscriptQueuePolicy.queuePosition(at: 1, queue: mixed) == 1)
+        #expect(ACPTranscriptQueuePolicy.queuePosition(at: 3, queue: mixed) == 2)
     }
 
     // MARK: - queueHeaderCount
 
-    @Test("queueHeaderCount is visible with a single pending item")
-    func queueHeaderCountShowsForOneItem() {
-        #expect(ACPTranscriptQueuePolicy.queueHeaderCount(statuses: [.pending]) > 0)
-        #expect(ACPTranscriptQueuePolicy.queueHeaderCount(statuses: [.pending]) == 1)
+    @Test(
+        "queueHeaderCount counts only the user's pending items",
+        arguments: [
+            ([QueuedPrompt.Status.pending], [Int](), 1),
+            ([.sending], [], 0),
+            ([.sending, .pending], [], 1),
+            ([.pending, .pending], [1], 1),
+            ([.pending], [0], 0),
+        ]
+    )
+    func queueHeaderCountCountsUserPendingItems(
+        statuses: [QueuedPrompt.Status], delegated: [Int], expected: Int
+    ) {
+        #expect(ACPTranscriptQueuePolicy.queueHeaderCount(queue: queue(statuses, delegatedAt: Set(delegated))) == expected)
     }
 
-    @Test("queueHeaderCount excludes a .sending head")
-    func queueHeaderCountExcludesSending() {
-        #expect(ACPTranscriptQueuePolicy.queueHeaderCount(statuses: [.sending]) == 0)
-        #expect(ACPTranscriptQueuePolicy.queueHeaderCount(statuses: [.sending, .pending]) == 1)
+    @Test("a failed delegated prompt gets a row, so its Retry and Remove stay reachable")
+    func failedDelegatedPromptIsRendered() {
+        var items = queue([.pending], delegatedAt: [0])
+        #expect(!ACPTranscriptQueuePolicy.shouldRenderQueueBubble(items[0]))
+        items[0].lastError = "boom"
+        #expect(ACPTranscriptQueuePolicy.shouldRenderQueueBubble(items[0]))
+    }
+
+    // MARK: - adjacentRenderedIndex
+
+    @Test("adjacentRenderedIndex steps over hidden delegated prompts")
+    func adjacentRenderedIndexSkipsDelegated() {
+        let items = queue([.pending, .pending, .pending], delegatedAt: [1])
+        #expect(ACPTranscriptQueuePolicy.adjacentRenderedIndex(from: 2, step: -1, queue: items) == 0)
+        #expect(ACPTranscriptQueuePolicy.adjacentRenderedIndex(from: 0, step: 1, queue: items) == 2)
+        #expect(ACPTranscriptQueuePolicy.adjacentRenderedIndex(from: 2, step: 1, queue: items) == nil)
+        let trailing = queue([.pending, .pending], delegatedAt: [1])
+        #expect(ACPTranscriptQueuePolicy.adjacentRenderedIndex(from: 0, step: 1, queue: trailing) == nil)
+    }
+
+    @Test("moving to the adjacent rendered index reorders past a hidden delegated prompt")
+    func moveToAdjacentRenderedIndexReorders() throws {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("a")])
+        s.enqueue(blocks: [.text("report")], delegatedSource: ACPDelegatedPromptSource(sessionId: "child", messageId: "m"))
+        s.enqueue(blocks: [.text("b")])
+        let up = try #require(ACPTranscriptQueuePolicy.adjacentRenderedIndex(from: 2, step: -1, queue: s.queue))
+        s.moveInQueue(from: 2, to: up)
+        #expect(s.queue.map(\.blocks) == [[.text("b")], [.text("a")], [.text("report")]])
     }
 
     // MARK: - canMoveQueueItem

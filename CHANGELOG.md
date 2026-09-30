@@ -15,6 +15,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Set an existing hook socket or isolated-profile runtime directory owned by the user to `0700` instead of accepting an owner-only mode that cannot be traversed, which left hooks, persistent terminals, and ACP brokers unable to start. Refuse such a directory, or an isolated profile root, that group or others could write (#1640).
 - Keep delegated children connected to Alas across an app restart: their `alas` CLI and MCP server now reach the app through a per-session socket link that each attach repoints, and on launch Alas re-attaches children that had a turn in progress, so their reports and turn outcomes still reach the parent (#1641).
+- Render delegated prompts and child reports as cards instead of user bubbles, and keep them out of the user's Up next queue.
 
 ## [0.19.19] - 2026-09-29
 

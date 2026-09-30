@@ -5,9 +5,6 @@ import SwiftUI
 struct UserMessageRow: View {
     let text: String
     let attachments: [ACPMessage.Attachment]
-    /// Caption above a prompt Alas delivered on someone else's behalf
-    /// (`ACPDelegatedPromptSource.transcriptLabel`); nil for the user's own.
-    let delegatedLabel: String?
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
     let session: ACPSession
@@ -18,11 +15,6 @@ struct UserMessageRow: View {
         HStack {
             Spacer(minLength: 40)
             VStack(alignment: .trailing, spacing: 4) {
-                if let delegatedLabel {
-                    Text(delegatedLabel)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(theme.color("fg-faint"))
-                }
                 let visibleAttachments = attachments.filter { !$0.isCheckpointReference }
                 if !visibleAttachments.isEmpty {
                     let images = visibleAttachments.filter { ($0.mimeType?.hasPrefix("image/")) == true }
@@ -176,6 +168,45 @@ struct ACPUserBubbleChrome: ViewModifier {
 extension View {
     func acpUserBubble() -> some View {
         modifier(ACPUserBubbleChrome())
+    }
+}
+
+// MARK: - Delegated prompt (full-width card)
+
+/// A prompt Alas delivered on another session's behalf: a child's report to
+/// its parent, or a parent's (or mission's) prompt to a child. Nobody typed
+/// it here, so it renders as a left-aligned card with the sender in its
+/// header instead of the user's accent bubble.
+struct DelegatedPromptRow: View {
+    let text: String
+    let label: String
+    let isFromChild: Bool
+    let typography: ACPChatTypography
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 7) {
+                Image(systemName: isFromChild ? "arrow.turn.down.left" : "arrow.turn.down.right")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("fg-faint"))
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.color("fg-faint"))
+            }
+            ACPMarkdownText(raw: text, typography: typography)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(theme.color("bg-1").opacity(0.5))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+        )
     }
 }
 

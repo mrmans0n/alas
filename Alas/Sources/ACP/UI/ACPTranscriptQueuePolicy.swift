@@ -12,21 +12,43 @@ enum ACPTranscriptQueuePolicy {
         }
     }
 
-    nonisolated static func queueHeaderCount(statuses: [QueuedPrompt.Status]) -> Int {
-        statuses.reduce(0) { count, status in
-            count + (shouldRenderQueueBubble(status: status) ? 1 : 0)
+    /// Whether `item` gets a row in the "Up next" list. A delegated prompt
+    /// (a child's report, a parent's prompt) does not while it waits: it is
+    /// not the user's to edit, reorder, or remove, and it dispatches on its
+    /// own once the current turn ends. A failed one does, so it can be
+    /// retried or removed (see `QueuedPrompt.isShownToUser`).
+    nonisolated static func shouldRenderQueueBubble(_ item: QueuedPrompt) -> Bool {
+        item.isShownToUser && shouldRenderQueueBubble(status: item.status)
+    }
+
+    nonisolated static func queueHeaderCount(queue: [QueuedPrompt]) -> Int {
+        queue.reduce(0) { count, item in
+            count + (shouldRenderQueueBubble(item) ? 1 : 0)
         }
     }
 
-    /// 1-based dispatch position of the pending item at `idx` among the
-    /// items that actually render a row (i.e. excluding any in-flight
-    /// `.sending` head). `idx` must itself be `.pending`; every other
-    /// pending item before it, whether it's a plain queued prompt or a
-    /// scheduled one, counts toward its position — scheduled items still
-    /// occupy a slot in the visible list, they just dispatch on their own
-    /// clock instead of FIFO order.
-    nonisolated static func queuePosition(at idx: Int, statuses: [QueuedPrompt.Status]) -> Int {
-        statuses[..<idx].filter { shouldRenderQueueBubble(status: $0) }.count + 1
+    /// 1-based dispatch position of the item at `idx` among the items that
+    /// actually render a row (excluding any in-flight `.sending` head and any
+    /// delegated prompt). `idx` must itself render; every other rendered
+    /// item before it, whether it's a plain queued prompt or a scheduled
+    /// one, counts toward its position — scheduled items still occupy a slot
+    /// in the visible list, they just dispatch on their own clock instead of
+    /// FIFO order.
+    nonisolated static func queuePosition(at idx: Int, queue: [QueuedPrompt]) -> Int {
+        queue[..<idx].filter { shouldRenderQueueBubble($0) }.count + 1
+    }
+
+    /// The `moveInQueue` destination for a one-row "Move up" (`step == -1`)
+    /// or "Move down" (`step == 1`) from `idx`: the index of the neighboring
+    /// rendered row, skipping hidden delegated items so the move is never a
+    /// visual no-op. Nil when there is no rendered neighbor that way.
+    nonisolated static func adjacentRenderedIndex(from idx: Int, step: Int, queue: [QueuedPrompt]) -> Int? {
+        var candidate = idx + step
+        while candidate >= 0, candidate < queue.count {
+            if shouldRenderQueueBubble(queue[candidate]) { return candidate }
+            candidate += step
+        }
+        return nil
     }
 
     nonisolated static func canDropQueuedItem(
