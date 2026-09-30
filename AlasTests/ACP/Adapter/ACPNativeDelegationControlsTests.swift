@@ -381,6 +381,14 @@ struct ACPNativeDelegationControlsTests {
             })
         }
         #expect(coverage == expected)
+        // A custom PI_ACP_PI_COMMAND can pass a later --exclude-tools, so it is never covered.
+        let custom = ACPPiSubagentExtensions.coverage(
+            agentDirectory: agentDir, projects: [("demo", project)], customPiCommand: "/opt/my-pi")
+        guard case .unrecognized(_, let names) = custom else {
+            Issue.record("a custom PI_ACP_PI_COMMAND must not count as enforced")
+            return
+        }
+        #expect(names.last == "PI_ACP_PI_COMMAND /opt/my-pi")
         // Detection only reads.
         #expect(try FileManager.default.subpathsOfDirectory(atPath: root.path).sorted() == before)
     }

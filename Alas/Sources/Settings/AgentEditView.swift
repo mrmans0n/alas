@@ -26,8 +26,8 @@ struct AgentEditView: View {
         _piExtensionCoverage = State(initialValue: targetID == ACPManagedAdapterDescriptor.pi.agentID
             ? ACPPiSubagentExtensions.coverage(
                 agentDirectory: ACPPiSubagentExtensions.agentDirectory(),
-                projects: state.projects.filter { $0.host == nil }
-                    .map { ($0.name, URL(fileURLWithPath: $0.path, isDirectory: true)) })
+                projects: Self.localPiRoots(state.projects),
+                customPiCommand: ProcessInfo.processInfo.environment[ACPPiSubagentExtensions.piCommandKey])
             : nil)
         switch target {
         case .new:
@@ -183,6 +183,21 @@ struct AgentEditView: View {
             Button("Delete", role: .destructive, action: delete)
             Button("Cancel", role: .cancel) {}
         }
+    }
+
+    /// Every local checkout a Pi session can start in: each project's main
+    /// checkout and its linked worktrees, since Pi reads the session's own
+    /// `.pi` folder.
+    private static func localPiRoots(_ projects: [ProjectConfig]) -> [(name: String, root: URL)] {
+        var seen = Set<String>()
+        var roots: [(name: String, root: URL)] = []
+        for project in projects where project.host == nil {
+            roots.append((project.name, URL(fileURLWithPath: project.path, isDirectory: true)))
+            for worktree in project.cachedWorktrees {
+                roots.append(("\(project.name), \(worktree.name)", worktree.path))
+            }
+        }
+        return roots.filter { seen.insert($0.root.standardizedFileURL.path).inserted }
     }
 
     /// Custom agents resolve to `.unsupported` (their ids are UUIDs).

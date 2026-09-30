@@ -210,8 +210,10 @@ extensions:
 
 - **Your own command is kept.** If `PI_ACP_PI_COMMAND` is already set (in the
   agent's environment or Alas's), the wrapper runs that command instead of
-  `pi`. If it adds its own `--exclude-tools`, Pi uses the last one, which is
-  Alas's, so include your exclusions in Pi settings instead.
+  `pi`, with the exclusion appended. Alas cannot see what that command does:
+  if it appends its own `--exclude-tools`, Pi keeps the last one and Alas's
+  list is lost. Settings therefore reports a custom `PI_ACP_PI_COMMAND` as
+  not enforced.
 - **Every launch, fresh or resumed.** Alas rewrites the wrapper before every
   launch that uses it, including reconnects and restores, and never deletes it
   while Alas runs, because `pi-acp` runs it again for every loaded session. Pi
@@ -223,15 +225,16 @@ extensions:
 - **Settings shows what it covers.** Alas reads, without changing, the
   `packages` and `extensions` in your Pi settings (`~/.pi/agent/settings.json`,
   or `$PI_CODING_AGENT_DIR/settings.json`), the files in its `extensions`
-  folder, and the same in each local project's `.pi` folder. Extensions your
+  folder, and the same in the `.pi` folder of each local project and its
+  worktrees. Extensions your
   settings disable (`-path` or `!pattern` entries) are skipped. It reports one of:
   - *Covers the installed …*: every installed extension is recognized, and the
     known subagent extensions among them are covered.
   - *Nothing to remove yet*: no known subagent extension is installed, and
     nothing unrecognized is.
-  - *Not enforced for extensions Alas does not recognize*: names the packages
-    and local extensions Alas does not know. A subagent tool one of them adds
-    stays available. `pi-mcp-adapter` and Alas's own `alas-notify.ts` hook
+  - *Not enforced for extensions or commands Alas does not recognize*: names
+    the packages, local extensions, and custom `PI_ACP_PI_COMMAND` Alas does
+    not know. A subagent tool one of them adds stays available. `pi-mcp-adapter` and Alas's own `alas-notify.ts` hook
     count as recognized; project extensions are listed even if Pi has not
     been told to trust that project.
 

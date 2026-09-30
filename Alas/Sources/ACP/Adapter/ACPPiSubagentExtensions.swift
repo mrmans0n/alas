@@ -120,8 +120,9 @@ enum ACPPiSubagentExtensions {
         /// Every installed extension is recognized; these known subagent
         /// extensions have all their delegation tools excluded.
         case enforced(covered: [String])
-        /// Some installed extension (or settings file Alas could not read)
-        /// is not recognized. A subagent tool it adds stays available.
+        /// Some installed extension, settings file Alas could not read, or
+        /// custom `PI_ACP_PI_COMMAND` is not recognized. A subagent tool it
+        /// adds, or a later `--exclude-tools` it passes, keeps a tool available.
         case unrecognized(covered: [String], unrecognized: [String])
 
         var settingsDescription: String {
@@ -134,8 +135,8 @@ enum ACPPiSubagentExtensions {
                 let shown = unrecognized.prefix(3).joined(separator: ", ")
                 let more = unrecognized.count > 3 ? ", and \(unrecognized.count - 3) more" : ""
                 let coveredText = covered.isEmpty ? "" : "Covers the installed \(Self.list(covered)). "
-                return coveredText + "Not enforced for extensions Alas does not recognize (\(shown)\(more)): "
-                    + "a subagent tool they add stays available."
+                return coveredText + "Not enforced for extensions or commands Alas does not "
+                    + "recognize (\(shown)\(more)): they can keep a subagent tool available."
             }
         }
 
@@ -159,8 +160,19 @@ enum ACPPiSubagentExtensions {
     /// `extensions`, plus `<agentDir>/extensions/`) and each project's
     /// `.pi/settings.json` and `.pi/extensions/`. Project resources count
     /// even though Pi loads them only for trusted projects, so this can
-    /// over-report but never misses one.
-    static func coverage(agentDirectory: URL, projects: [(name: String, root: URL)] = []) -> Coverage {
+    /// over-report but never misses one. `projects` should list every local
+    /// worktree a session can start in, since Pi reads the session's own
+    /// `.pi` folder.
+    ///
+    /// A `customPiCommand` (the user's own `PI_ACP_PI_COMMAND`) is chained,
+    /// not replaced, but Alas cannot see what it runs: one that appends its
+    /// own `--exclude-tools` after the arguments replaces Alas's list, since
+    /// Pi keeps the last one. It is reported, never counted as covered.
+    static func coverage(
+        agentDirectory: URL,
+        projects: [(name: String, root: URL)] = [],
+        customPiCommand: String? = nil
+    ) -> Coverage {
         var covered: [String] = []
         var unrecognized: [String] = []
         func note(_ name: String, into list: inout [String]) {
@@ -201,6 +213,9 @@ enum ACPPiSubagentExtensions {
         scan(base: agentDirectory, label: nil, isGlobal: true)
         for project in projects {
             scan(base: project.root.appendingPathComponent(".pi", isDirectory: true), label: project.name, isGlobal: false)
+        }
+        if let customPiCommand, !customPiCommand.isEmpty {
+            note("PI_ACP_PI_COMMAND \(customPiCommand)", into: &unrecognized)
         }
         if !unrecognized.isEmpty { return .unrecognized(covered: covered, unrecognized: unrecognized) }
         return covered.isEmpty ? .nothingToDisable : .enforced(covered: covered)
