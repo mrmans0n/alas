@@ -51,8 +51,13 @@ extension AppState {
                 return false
             },
             startTask: { [weak self] request, completion in
-                self?.startPluginTask(request, project: project, completion: completion)
-                    ?? .rejected(code: -32003, message: "Alas is shutting down")
+                // The host outlives project edits, so use the project as it is now: a rename
+                // changes the worktree path template's `{repo}`.
+                guard let self else { return .rejected(code: -32003, message: "Alas is shutting down") }
+                guard let current = self.projects.first(where: { $0.id == project.id }) else {
+                    return .rejected(code: -32003, message: "\(project.name) is no longer in Alas")
+                }
+                return self.startPluginTask(request, project: current, completion: completion)
             })
     }
 
