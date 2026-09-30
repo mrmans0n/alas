@@ -38,6 +38,25 @@ struct ProjectConfigTests {
         #expect(again == expected)
     }
 
+    /// When a legacy key and its virtual form both exist, the virtual entry is
+    /// the newer one and wins. Many keys so a random winner can't pass by luck.
+    @Test func decodePrefersVirtualEntryOverLegacyDuplicate() throws {
+        var modes: [String: GGWorktreeMode] = [:]
+        for i in 0..<20 {
+            modes["/srv/wt/\(i)"] = .off
+            modes[RemotePath.virtual(host: "mini", realPath: "/srv/wt/\(i)")] = .on
+        }
+        let legacy = ProjectConfig(
+            id: "p", name: "P", path: "/srv/repo", color: "#fff", addedAt: .distantPast,
+            host: "mini", ggWorktreeModes: modes
+        )
+
+        let decoded = try JSONDecoder().decode(ProjectConfig.self, from: JSONEncoder().encode(legacy))
+
+        #expect(decoded.ggWorktreeModes.count == 20)
+        #expect(decoded.ggWorktreeModes.values.allSatisfy { $0 == .on })
+    }
+
     @Test func decodingOlderProjectsFileSuppliesEmptyHiddenPaths() throws {
         // Older projects.json files predate hiddenWorktreePaths.
         let json = """

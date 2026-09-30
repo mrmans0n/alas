@@ -300,8 +300,17 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
                 lineageID: wt.lineageID, addedLines: wt.addedLines, deletedLines: wt.deletedLines
             )
         }
-        ggWorktreeModes = Dictionary(ggWorktreeModes.map { (v($0.key), $0.value) }, uniquingKeysWith: { a, _ in a })
-        issueAttachments = Dictionary(issueAttachments.map { (v($0.key), $0.value) }, uniquingKeysWith: { a, _ in a })
+        // A key present in both forms keeps the already-virtual (newer) value.
+        func vKeys<Value>(_ dict: [String: Value]) -> [String: Value] {
+            var out: [String: Value] = [:]
+            for (key, value) in dict {
+                let new = v(key)
+                if new == key || out[new] == nil { out[new] = value }
+            }
+            return out
+        }
+        ggWorktreeModes = vKeys(ggWorktreeModes)
+        issueAttachments = vKeys(issueAttachments)
         legacyWorktreeIDs = renamed
     }
 

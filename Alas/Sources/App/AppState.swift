@@ -1452,9 +1452,23 @@ final class AppState {
         self.acpModelCatalog = acpModelCatalog ?? ACPAgentModelCatalog(store: store)
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceBridge)
-        let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
+        var config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
-        let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
+        var spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
+        // Legacy remote worktrees were renamed to virtual ids on decode. Move
+        // their id-keyed state now: tabs must be in place before `reloadTabs`
+        // and the zmx orphan sweep, or live remote sessions look orphaned.
+        // The test host shares the user's app support dir, so it skips files.
+        let legacyWorktreeIDs = projectsFile.projects.reduce(into: [String: String]()) {
+            $0.merge($1.legacyWorktreeIDs) { a, _ in a }
+        }
+        if !legacyWorktreeIDs.isEmpty {
+            if !Self.isRunningUnitTests {
+                RemotePathMigration.migrate(idMap: legacyWorktreeIDs)
+            }
+            RemotePathMigration.rewrite(&config, idMap: legacyWorktreeIDs)
+            if spacesFile != nil { RemotePathMigration.rewrite(&spacesFile!, idMap: legacyWorktreeIDs) }
+        }
         self.config = config
         self.languageServerConfigChangeTracker = LanguageServerConfigChangeTracker(
             initial: config.code.languageServers

@@ -1,0 +1,106 @@
+import Foundation
+import Testing
+@testable import Alas
+
+struct RemotePathMigrationTests {
+    private let old = "/srv/wt/a"
+    private let new = RemotePath.virtual(host: "mini", realPath: "/srv/wt/a")
+
+    private func makeRoot() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-migration-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    /// Writes `text` at `url`, creating parents. Directory stores get a child file.
+    private func seed(_ store: RemotePathMigration.Store, root: URL, id: String, text: String) throws -> URL {
+        var url = store.url(root: root, id: id)
+        if store == .buffers { url.appendPathComponent("tab.json") }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: url)
+        return url
+    }
+
+    private func relocated(_ url: URL, root: URL, store: RemotePathMigration.Store) -> URL {
+        let oldBase = store.url(root: root, id: old).path
+        let newBase = store.url(root: root, id: new).path
+        return URL(fileURLWithPath: newBase + url.path.dropFirst(oldBase.count))
+    }
+
+    @Test(arguments: RemotePathMigration.Store.allCases)
+    func movesLegacyStoreToVirtualId(store: RemotePathMigration.Store) throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var seeded = [try seed(store, root: root, id: old, text: "data")]
+        if store == .acpSessions {
+            let wal = URL(fileURLWithPath: seeded[0].path + "-wal")
+            try Data("wal".utf8).write(to: wal)
+            seeded.append(wal)
+        }
+
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+
+        for url in seeded {
+            #expect(!FileManager.default.fileExists(atPath: url.path))
+            #expect(FileManager.default.fileExists(atPath: relocated(url, root: root, store: store).path))
+        }
+    }
+
+    @Test func existingDestinationIsKeptAndRerunIsNoOp() throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let oldFile = try seed(.tabs, root: root, id: old, text: "old")
+        let newFile = try seed(.tabs, root: root, id: new, text: "new")
+
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+
+        #expect(try String(contentsOf: oldFile, encoding: .utf8) == "old")
+        #expect(try String(contentsOf: newFile, encoding: .utf8) == "new")
+    }
+
+    /// Another worktree's buffers can live in a subdirectory of the legacy id
+    /// (e.g. a local worktree nested under the remote path). They stay put.
+    @Test func directoryStoreLeavesNestedDirectoriesInPlace() throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let nested = try seed(.buffers, root: root, id: old + "/nested", text: "local")
+
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+
+        #expect(FileManager.default.fileExists(atPath: nested.path))
+    }
+
+    /// Ruling: tabs must be under the virtual id before `loadAll` and the zmx
+    /// orphan sweep run, or live remote sessions look orphaned and get killed.
+    /// `@MainActor`: `TabsManager` is main-actor isolated.
+    @MainActor
+    @Test func tabsPersistedUnderLegacyIdLoadUnderVirtualIdAfterMigration() throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let tabsDir = root.appendingPathComponent("tabs", isDirectory: true)
+        let tab = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDir)
+            .appendTerminal(worktreeId: old, title: "shell", sessionId: "s")
+
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+
+        let loaded = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDir)
+        loaded.loadAll(worktreeIds: [new])
+        #expect(loaded.tabs(forWorktree: new).map(\.id) == [tab.id])
+    }
+
+    @Test func rewritesWorktreeIdsInRecentsAndSpaces() {
+        var config = AppConfig.defaults
+        config.recentWorktreeIdsByProject = ["p": [old, "/local"]]
+        config.recentWorktreeRefs = [.init(projectId: "p", worktreeId: old)]
+        var spaces = SpacesFile(activeSpaceId: "s", spaces: [
+            SpaceConfig(id: "s", name: "S", emoji: "x", projectIds: ["p"], lastSelectedWorktreeId: old, createdAt: .distantPast),
+        ])
+
+        RemotePathMigration.rewrite(&config, idMap: [old: new])
+        RemotePathMigration.rewrite(&spaces, idMap: [old: new])
+
+        #expect(config.recentWorktreeIdsByProject == ["p": [new, "/local"]])
+        #expect(config.recentWorktreeRefs.map(\.worktreeId) == [new])
+        #expect(spaces.spaces.map(\.lastSelectedWorktreeId) == [new])
+    }
+}
