@@ -53,7 +53,10 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
         private let tiling = ACPTranscriptTilingController()
         private let pool = ACPTranscriptRowHostingPool()
         private let rowCache = NativePeerRowCache()
-        private let expansionSeeds = ACPToolCallGroupExpansionSeeds()
+        /// Keyed by stable ids, which the peer derives from position; a new
+        /// epoch can hand the same ids to different messages, so it starts
+        /// a fresh store.
+        private var expansionSeeds = ACPToolCallGroupExpansionSeeds()
         private var host: NativePeerTranscriptScroller?
         private var followsTail = true
         private var epoch: Int?
@@ -81,10 +84,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                 return (resolution.rowId, resolution.assumeHeadGrowth)
             }
             self.reconciler = reconciler
-            expansionSeeds.onChange = { [weak self] in
-                guard let self, let host = self.host else { return }
-                self.update(host: host)
-            }
+            observeExpansionSeeds()
             scroller.onScroll = { [weak self] previousY, newY, viewportHeight, contentHeight, isProgrammatic in
                 self?.handleScroll(
                     previousY: previousY, newY: newY,
@@ -117,6 +117,9 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                 // A fresh snapshot replaces the window; start from its tail.
                 epoch = host.transcript.epoch
                 followsTail = true
+                expansionSeeds = ACPToolCallGroupExpansionSeeds()
+                observeExpansionSeeds()
+                fold = nil
             }
             reconciler.apply(
                 specs: specs(host: host),
@@ -124,6 +127,13 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                 followsTail: followsTail
             )
             scheduleFetchOlderIfNeeded()
+        }
+
+        private func observeExpansionSeeds() {
+            expansionSeeds.onChange = { [weak self] in
+                guard let self, let host = self.host else { return }
+                self.update(host: host)
+            }
         }
 
         // MARK: Rows
