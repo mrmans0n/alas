@@ -3056,7 +3056,15 @@ extension ACPSessionRunner {
                     }
                     return (false, nil)
                 }
-                self.activePromptStartedAt = Int64(Date().timeIntervalSince1970 * 1000)
+                // A queued prompt whose turn already started (its user prompt
+                // is recorded) keeps that start: this is a resend of the same
+                // turn, e.g. after a relaunch re-attached to a broker that
+                // kept it running. Reporting the resend time instead would
+                // treat a delegated child's mid-turn report as stale.
+                let queuedTurnStartedAt = queuedItemId.flatMap { qid in
+                    self.session.queue.first(where: { $0.id == qid && $0.transcriptRecorded })?.turnStartedAt
+                }
+                self.activePromptStartedAt = queuedTurnStartedAt ?? Int64(Date().timeIntervalSince1970 * 1000)
                 self.activePromptDelegatedSource = delegatedSource
                 // Captured before the user prompt is recorded below, so the
                 // floor points at this turn's own first transcript entry.
@@ -3109,6 +3117,7 @@ extension ACPSessionRunner {
                     if let qid = queuedItemId,
                        let idx = self.session.queue.firstIndex(where: { $0.id == qid }) {
                         self.session.queue[idx].transcriptRecorded = true
+                        self.session.queue[idx].turnStartedAt = self.activePromptStartedAt
                         if normalUserTurn {
                             self.session.normalQueuedTurnUserMessageIDs[qid] = messageID
                         }

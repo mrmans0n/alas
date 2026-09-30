@@ -111,6 +111,10 @@ actor ACPOrchestrationPersistence {
         try openedStore().incompleteDelegations()
     }
 
+    func readyDelegations() throws -> [ACPDelegationRecord] {
+        try openedStore().readyDelegations()
+    }
+
     func claimMessage(
         id: String,
         instanceId: String,

@@ -326,6 +326,35 @@ enum ACPSessionOrchestrationPolicy {
         }
     }
 
+    /// Whether startup must re-attach a ready delegated child, judged from
+    /// its queue head as persisted. A head that was sending or dispatched
+    /// when Alas quit is a turn the child's broker may still be running, or
+    /// finished while the app was down; a head that never went out is work
+    /// the parent is waiting on. Re-attaching resends it under the same
+    /// broker operation, so the broker hands back the live or finished turn
+    /// and its completion produces the usual parent outcome. A head waiting
+    /// on the user's Retry is left for the user, and scheduled prompts have
+    /// their own startup path.
+    static func needsRestartAttach(phase: ACPDelegationPhase, queueHead: QueuedPrompt?) -> Bool {
+        guard phase == .ready, let head = queueHead, head.scheduledAt == nil else { return false }
+        return head.lastError == nil || head.deliveryUncertain
+    }
+
+    /// After that re-attach, why the child's pending turn can no longer
+    /// report, or nil when it can. A child that did not come back ready
+    /// cannot run it; an uncertain head means the broker that ran it is gone
+    /// (a new broker generation), and the flusher never resends one on its
+    /// own, so without this the parent would wait forever.
+    static func restartedTurnLoss(attachFailure: String?, queueHead: QueuedPrompt?) -> String? {
+        if let attachFailure {
+            return "Alas restarted and could not reconnect to the delegated session: \(attachFailure)"
+        }
+        if queueHead?.deliveryUncertain == true {
+            return "Alas restarted while the delegated session was working, and its turn could not be recovered."
+        }
+        return nil
+    }
+
     /// Escalate only while the child is still blocked on the SAME request.
     /// Matching the specific key matters: a child that cleared one prompt and
     /// hit another is blocked, but not on the thing the parent was told about,
