@@ -55,7 +55,6 @@ struct PluginViewTreeTests {
         _ = try decode(json).get()
     }
 
-    /// Review focus 2.
     @Test func excessiveNestingIsRejectedBeforeDecoding() {
         let json = String(repeating: "[", count: 100_000) + String(repeating: "]", count: 100_000)
         #expect(throws: PluginViewTreeError(reason: "tree is deeper than 16 levels")) { try decode(json).get() }

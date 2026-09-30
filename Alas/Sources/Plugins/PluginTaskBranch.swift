@@ -7,7 +7,9 @@ enum PluginTaskBranch {
 
     static func name(title: String, requested: String?) -> String {
         let requested = requested?.isEmpty == false ? requested : nil
-        if let requested, GitNameValidator.validateBranchName(requested) == .valid {
+        // `HEAD` passes the name check but names no branch.
+        if let requested, requested.caseInsensitiveCompare("HEAD") != .orderedSame,
+           GitNameValidator.validateBranchName(requested) == .valid {
             return requested
         }
         let folded = (requested ?? title)

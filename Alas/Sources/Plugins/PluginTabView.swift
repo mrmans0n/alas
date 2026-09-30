@@ -83,8 +83,8 @@ struct PluginTabView: View {
                 }
             }
         }
-        // The host ticks only while a canvas for it is on screen (it never ticks view tabs).
-        .background(PluginVisibilityReporter(host: content == .content || content == .loading ? host : nil))
+        // The host ticks only while a canvas for it is on screen; a view tab never reports, so it never ticks.
+        .background(PluginVisibilityReporter(host: !isView && (content == .content || content == .loading) ? host : nil))
     }
 
     private func placeholder(_ text: String, button: String, action: @escaping () -> Void) -> some View {

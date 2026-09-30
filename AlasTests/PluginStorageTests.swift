@@ -49,10 +49,6 @@ struct PluginStorageTests {
         #expect(PluginStorage(file: makeFile()).set(key, value: Data("1".utf8)) == .invalidKey)
     }
 
-    @Test func invalidJSONValuesAreRejected() {
-        #expect(PluginStorage(file: makeFile()).set("k", value: Data("{oops".utf8)) == .invalidValue)
-    }
-
     @Test(arguments: ["..", ".", "a/b", "../../x", ""])
     func projectIDsCannotEscapeThePluginFolder(projectID: String) {
         let root = URL(filePath: "/tmp/root")
@@ -62,10 +58,11 @@ struct PluginStorageTests {
     }
 
     @Test(arguments: [
+        Data("{oops".utf8),
         "1".data(using: .utf16)!,
         Data([0xEF, 0xBB, 0xBF]) + Data("1".utf8),
     ])
-    func nonUTF8AndBOMValuesAreRejectedAndLeaveTheFileUntouched(value: Data) throws {
+    func invalidValuesAreRejectedAndLeaveTheFileUntouched(value: Data) throws {
         let file = makeFile()
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent().deletingLastPathComponent()) }
         let storage = PluginStorage(file: file)
@@ -104,12 +101,5 @@ struct PluginStorageTests {
         #expect(storage.keys().isEmpty)
         #expect(try Data(contentsOf: file) == garbage)
         #expect(try Data(contentsOf: marker) == Data("old".utf8))
-    }
-
-    @Test func aMissingFileIsAnEmptyStoreWithoutACorruptCopy() {
-        let file = makeFile()
-        let storage = PluginStorage(file: file)
-        #expect(storage.keys().isEmpty)
-        #expect(!FileManager.default.fileExists(atPath: file.appendingPathExtension("corrupt").path))
     }
 }

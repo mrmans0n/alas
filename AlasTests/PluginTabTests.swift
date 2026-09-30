@@ -67,6 +67,8 @@ struct PluginTabTests {
         ("", nil, "task/task"),
         ("x", "feature/my-branch", "feature/my-branch"),
         ("x", "bad..name", "task/bad-name"),
+        ("x", "HEAD", "task/head"),
+        ("x", "head", "task/head"),
         (String(repeating: "word ", count: 40), nil, "task/" + Array(repeating: "word", count: 40).joined(separator: "-").prefix(48).trimmingCharacters(in: CharacterSet(charactersIn: "-"))),
     ])
     func taskBranchNamesAreAlwaysValid(title: String, requested: String?, expected: String) {
