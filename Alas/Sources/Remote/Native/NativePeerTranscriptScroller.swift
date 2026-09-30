@@ -268,7 +268,6 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
             let hiddenMemberCount = expanded
                 ? max(0, memberStableIds.count - (expansionSeeds.memberLimit(group) ?? memberStableIds.count))
                 : 0
-            let expansionSeeds = expansionSeeds
             return ACPTranscriptRowSpec(
                 id: group.id,
                 equalityToken: Self.token(
@@ -284,7 +283,11 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                             summary: summary,
                             expanded: expanded,
                             hiddenMemberCount: hiddenMemberCount,
-                            onToggle: { expansionSeeds.setExpanded($0, members: memberStableIds) }
+                            // Through the coordinator, not a captured store: a
+                            // new epoch swaps the store under a mounted header.
+                            onToggle: { [weak self] in
+                                self?.expansionSeeds.setExpanded($0, members: memberStableIds)
+                            }
                         )
                     }
                 }
