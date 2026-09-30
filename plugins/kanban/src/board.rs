@@ -51,15 +51,22 @@ pub struct Card {
     pub title: String,
     pub prompt: String,
     pub column: Column,
+    #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
     pub branch: Option<String>,
+    #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
     pub following: bool,
+    #[serde(default)]
     pub seen: bool,
+    #[serde(default)]
     pub agent_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Board {
     pub cards: Vec<Card>,
     pub next_id: u64,
@@ -77,7 +84,8 @@ impl Board {
         if title.is_empty() {
             return 0;
         }
-        self.next_id += 1;
+        // A stale stored next_id must not reuse an existing id.
+        self.next_id = self.next_id.max(self.cards.iter().map(|c| c.id).max().unwrap_or(0)) + 1;
         self.cards.push(Card {
             id: self.next_id,
             title: title.into(),
@@ -249,6 +257,8 @@ mod tests {
         assert_eq!(b.add(" ", "\n "), 0);
         assert_eq!(b.cards.len(), 1);
         assert_eq!(b.in_column(Column::Backlog)[0].id, id);
+        b.delete(id);
+        assert_ne!(b.add("again", ""), id);
     }
 
     #[test]
@@ -257,5 +267,15 @@ mod tests {
         let back: Board = serde_json::from_str(&serde_json::to_string(&b).unwrap()).unwrap();
         assert_eq!(b, back);
         assert_eq!(Column::from_key("needs_you"), Some(Column::NeedsYou));
+    }
+
+    #[test]
+    fn stored_boards_load_tolerantly() {
+        let b: Board = serde_json::from_str(
+            r#"{"cards":[{"id":3,"title":"t","prompt":"p","column":"Review","extra":1}]}"#,
+        )
+        .unwrap();
+        assert!(!b.cards[0].following && !b.cards[0].seen);
+        assert!(serde_json::from_str::<Board>("not json{").is_err());
     }
 }
