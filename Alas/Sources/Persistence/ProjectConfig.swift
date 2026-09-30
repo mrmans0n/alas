@@ -175,8 +175,11 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var disabledRepoMCPServers: [String] = []
     /// SHA-256 hashes of exact repository hook bytes approved for this project.
     var approvedRepoHookHashes: [String] = []
-    /// Worktree ids renamed by this decode (legacy real path → virtual).
-    /// In-memory only, for migrating stores keyed by the old ids.
+    /// Worktree ids renamed to virtual ones (legacy real path → virtual)
+    /// whose stores have not all migrated yet. Persisted as
+    /// `pendingLegacyWorktreeIDs` (omitted when empty) so a failed store move
+    /// is retried on the next launch even after this file is re-saved with
+    /// the virtual ids; cleared once a migration run fully succeeds.
     var legacyWorktreeIDs: [String: String] = [:]
 
     enum CodingKeys: String, CodingKey {
@@ -184,7 +187,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
              cachedWorktrees, worktreeOrderIsManual, startupScripts,
              mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, host, ggMode,
              ggWorktreeModes, issueAttachments, fileBookmarks,
-             repoMCPTrust, disabledRepoMCPServers, approvedRepoHookHashes
+             repoMCPTrust, disabledRepoMCPServers, approvedRepoHookHashes, pendingLegacyWorktreeIDs
     }
 
     init(
@@ -276,6 +279,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         repoMCPTrust = (try? c.decode([String: RepoMCPTrustState].self, forKey: .repoMCPTrust)) ?? [:]
         disabledRepoMCPServers = (try? c.decode([String].self, forKey: .disabledRepoMCPServers)) ?? []
         approvedRepoHookHashes = (try? c.decode([String].self, forKey: .approvedRepoHookHashes)) ?? []
+        legacyWorktreeIDs = (try? c.decode([String: String].self, forKey: .pendingLegacyWorktreeIDs)) ?? [:]
         if let host {
             if RemotePath.isValidHost(host) {
                 virtualizeLegacyRemotePaths(host: host)
@@ -349,7 +353,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         }
         ggWorktreeModes = vKeys(ggWorktreeModes)
         issueAttachments = vKeys(issueAttachments)
-        legacyWorktreeIDs = renamed
+        legacyWorktreeIDs.merge(renamed) { _, new in new }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -390,6 +394,9 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         let approvedRepoHookHashes = Array(Set(approvedRepoHookHashes)).sorted()
         if !approvedRepoHookHashes.isEmpty {
             try c.encode(approvedRepoHookHashes, forKey: .approvedRepoHookHashes)
+        }
+        if !legacyWorktreeIDs.isEmpty {
+            try c.encode(legacyWorktreeIDs, forKey: .pendingLegacyWorktreeIDs)
         }
     }
 

@@ -202,6 +202,35 @@ struct RemotePathMigrationTests {
         #expect(entry?.portConflict == .ownedByRun(worktreeID: new, branch: "b", scriptName: "s"))
     }
 
+    /// A failed step keeps the projects' pending ids so the next launch
+    /// retries; a run where every step succeeds clears them.
+    @Test func pendingIdsStayUntilEveryStepSucceeds() throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let tabs = try seed(.tabs, root: root, id: old, text: "tabs")
+        // A file where the destination's parent directory must go.
+        let blocker = RemotePathMigration.Store.tabs.url(root: root, id: new).deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: blocker.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: blocker)
+        var project = ProjectConfig(
+            id: "p", name: "P", path: RemotePath.virtual(host: "mini", realPath: "/srv/repo"), color: "#fff",
+            addedAt: .distantPast, host: "mini"
+        )
+        project.legacyWorktreeIDs = [old: new]
+        var projects = [project]
+
+        _ = RemotePathMigration.migratePending(projects: &projects, root: root)
+
+        #expect(projects[0].legacyWorktreeIDs == [old: new])
+        #expect(FileManager.default.fileExists(atPath: tabs.path))
+
+        try FileManager.default.removeItem(at: blocker)
+        _ = RemotePathMigration.migratePending(projects: &projects, root: root)
+
+        #expect(projects[0].legacyWorktreeIDs.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: relocated(tabs, root: root, store: .tabs).path))
+    }
+
     /// An interrupted `.new` delegation is recovered by its destination path,
     /// which must match the virtual path of the cached worktree.
     @Test(arguments: [

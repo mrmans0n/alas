@@ -1427,10 +1427,24 @@ final class AppState {
         // `reloadTabs` and the zmx orphan sweep, or live remote sessions look
         // orphaned. The test host shares the user's app support dir, so it
         // skips the files.
-        let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
-        let legacyWorktreeIDs = RemotePathMigration.legacyIDMap(projects: projectsFile.projects)
-        if !legacyWorktreeIDs.isEmpty, !Self.isRunningUnitTests {
-            RemotePathMigration.migrate(idMap: legacyWorktreeIDs, defaults: AlasProfile.userDefaults)
+        var projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
+        let legacyWorktreeIDs: [String: String]
+        if Self.isRunningUnitTests {
+            legacyWorktreeIDs = RemotePathMigration.legacyIDMap(projects: projectsFile.projects)
+        } else {
+            let hadPending = projectsFile.projects.contains { !$0.legacyWorktreeIDs.isEmpty }
+            legacyWorktreeIDs = RemotePathMigration.migratePending(
+                projects: &projectsFile.projects, defaults: AlasProfile.userDefaults
+            )
+            // Record completion right away; on failure the pending maps stay
+            // and are saved with projects.json whenever it is next written.
+            if hadPending, projectsFile.projects.allSatisfy(\.legacyWorktreeIDs.isEmpty) {
+                do {
+                    try store.write(projectsFile, to: Paths.projectsFile)
+                } catch {
+                    Self.logger.error("Saving projects after the id migration failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
         }
         self.store = store
         let suggestionStore = localTextModelStore ?? LocalTextModelStore()

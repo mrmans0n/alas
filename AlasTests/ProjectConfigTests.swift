@@ -39,11 +39,13 @@ struct ProjectConfigTests {
             "/srv/repo": v("/srv/repo"), "/srv/wt/a": v("/srv/wt/a"), "/srv/wt/h": v("/srv/wt/h"),
         ]))
 
-        // Already-virtual values decode unchanged.
-        let again = try JSONDecoder().decode(ProjectConfig.self, from: JSONEncoder().encode(decoded))
-        var expected = decoded
-        expected.legacyWorktreeIDs = [:]
-        #expect(again == expected)
+        // Already-virtual values decode unchanged, and the pending id map
+        // survives a save until the store migration clears it; projects with
+        // nothing pending encode without it.
+        let json = try JSONEncoder().encode(decoded)
+        #expect(String(decoding: json, as: UTF8.self).contains("pendingLegacyWorktreeIDs") == (host != nil))
+        let again = try JSONDecoder().decode(ProjectConfig.self, from: json)
+        #expect(again == decoded)
     }
 
     /// Paths already virtual under a host that is no longer valid move to the

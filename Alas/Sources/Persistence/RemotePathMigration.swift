@@ -10,10 +10,11 @@ import os
 /// scheduler load their files, and before any tabs load, zmx orphan sweep,
 /// or per-worktree ACP store open. The run-history database may already be
 /// open (a default argument); SQLite serializes the second connection's write.
-/// Idempotent: decode re-reports the map until projects.json is rewritten, so
-/// a missing source is skipped, an existing destination never overwritten,
-/// and already-virtual ids are left alone. Failures are logged and skipped;
-/// nothing is deleted.
+/// Idempotent: a missing source is skipped, an existing destination never
+/// overwritten, and already-virtual ids are left alone. Failures are logged
+/// and reported, never thrown; the caller keeps the map (persisted in
+/// projects.json) until a run succeeds, so failed steps are retried on the
+/// next launch. Nothing is deleted.
 ///
 /// ACP image attachments are deliberately not moved: transcripts reference
 /// them by absolute file URL, and nothing reads the directory by id.
@@ -78,19 +79,43 @@ enum RemotePathMigration {
         }
     }
 
+    /// Migrates the stores for every pending legacy id and clears the
+    /// projects' pending maps only when every step succeeded; otherwise they
+    /// stay (and persist with projects.json) so the next launch retries.
+    /// Returns the map that was applied.
+    static func migratePending(
+        projects: inout [ProjectConfig],
+        root: URL = Paths.appSupportRoot,
+        fileManager: FileManager = .default,
+        defaults: UserDefaults? = nil
+    ) -> [String: String] {
+        let idMap = legacyIDMap(projects: projects)
+        guard idMap.isEmpty || migrate(idMap: idMap, root: root, fileManager: fileManager, defaults: defaults) else {
+            return idMap
+        }
+        for index in projects.indices {
+            projects[index].legacyWorktreeIDs = [:]
+        }
+        return idMap
+    }
+
+    /// Returns true when every step succeeded or had nothing to do.
+    @discardableResult
     static func migrate(
         idMap: [String: String],
         root: URL = Paths.appSupportRoot,
         fileManager: FileManager = .default,
         defaults: UserDefaults? = nil
-    ) {
+    ) -> Bool {
+        var ok = true
+        func step(_ succeeded: Bool) { ok = succeeded && ok }
         for (old, new) in idMap {
             for store in Store.allCases {
                 let from = store.url(root: root, id: old)
                 let to = store.url(root: root, id: new)
                 switch store {
                 case .tabs:
-                    move(from, to, fileManager)
+                    step(move(from, to, fileManager))
                 case .acpSessions:
                     // Sidecars hold committed rows, so they move before the main
                     // file: an interrupted run leaves the main file at the old
@@ -100,9 +125,9 @@ enum RemotePathMigration {
                     let mainAtDestination = fileManager.fileExists(atPath: to.path)
                     guard mainAtSource != mainAtDestination else { continue }
                     for sidecar in ["-wal", "-shm"] {
-                        move(URL(fileURLWithPath: from.path + sidecar), URL(fileURLWithPath: to.path + sidecar), fileManager)
+                        step(move(URL(fileURLWithPath: from.path + sidecar), URL(fileURLWithPath: to.path + sidecar), fileManager))
                     }
-                    move(from, to, fileManager)
+                    step(move(from, to, fileManager))
                 case .buffers:
                     // Files only: a subdirectory is another worktree's
                     // buffers nested under this path, migrated on its own.
@@ -111,23 +136,24 @@ enum RemotePathMigration {
                     )) ?? []
                     for child in children
                     where (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true {
-                        move(child, to.appendingPathComponent(child.lastPathComponent), fileManager)
+                        step(move(child, to.appendingPathComponent(child.lastPathComponent), fileManager))
                     }
                 }
             }
         }
-        movePendingReviews(idMap, in: reroot(Paths.pendingReviewsDir, root), fileManager)
+        step(movePendingReviews(idMap, in: reroot(Paths.pendingReviewsDir, root), fileManager))
         for store in JSONStore.allCases {
-            rewriteJSONFile(reroot(store.url, root), store.rewriter(idMap))
+            step(rewriteJSONFile(reroot(store.url, root), store.rewriter(idMap)))
         }
-        updateSQLite(reroot(Paths.runHistoryDB, root), fileManager) { db in
+        step(updateSQLite(reroot(Paths.runHistoryDB, root), fileManager) { db in
             try renameColumns(db, table: "run_history", ["worktree_id", "conflict_worktree_id"], idMap)
-        }
-        updateSQLite(reroot(Paths.acpOrchestrationDB, root), fileManager) { db in
+        })
+        step(updateSQLite(reroot(Paths.acpOrchestrationDB, root), fileManager) { db in
             try renameColumns(db, table: "delegations", ["parent_worktree_id", "child_worktree_id"], idMap)
             try rewriteWorktreeRequests(db, LegacyIDRewriter(idMap: idMap, idKeys: ["worktreeId", "destinationPath"]))
-        }
+        })
         if let defaults { rekeyGGUndoMarkers(defaults, idMap) }
+        return ok
     }
 
     private static func reroot(_ url: URL, _ root: URL) -> URL {
@@ -135,42 +161,49 @@ enum RemotePathMigration {
     }
 
     /// Pending-review files are named `<pathHash>[-pr<N>].json`.
-    private static func movePendingReviews(_ idMap: [String: String], in dir: URL, _ fileManager: FileManager) {
+    private static func movePendingReviews(_ idMap: [String: String], in dir: URL, _ fileManager: FileManager) -> Bool {
         let names = (try? fileManager.contentsOfDirectory(atPath: dir.path)) ?? []
-        guard !names.isEmpty else { return }
+        var ok = true
         for (old, new) in idMap {
             let oldStem = String(PendingReview.pathHash(old))
             let newStem = String(PendingReview.pathHash(new))
             for name in names where name.hasPrefix(oldStem) {
                 let suffix = name.dropFirst(oldStem.count)
                 guard suffix == ".json" || suffix.hasPrefix("-pr") else { continue }
-                move(dir.appendingPathComponent(name), dir.appendingPathComponent(newStem + suffix), fileManager)
+                ok = move(dir.appendingPathComponent(name), dir.appendingPathComponent(newStem + suffix), fileManager) && ok
             }
         }
+        return ok
     }
 
-    private static func rewriteJSONFile(_ url: URL, _ rewriter: LegacyIDRewriter) {
-        guard let data = try? Data(contentsOf: url) else { return }
+    /// A missing file has nothing to migrate; unreadable or unwritable
+    /// content is a failure.
+    private static func rewriteJSONFile(_ url: URL, _ rewriter: LegacyIDRewriter) -> Bool {
+        guard FileManager.default.fileExists(atPath: url.path) else { return true }
         do {
-            let object = try JSONSerialization.jsonObject(with: data)
+            let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url))
             let rewritten = rewriter.rewrite(object)
-            guard !(rewritten as AnyObject).isEqual(object) else { return }
+            guard !(rewritten as AnyObject).isEqual(object) else { return true }
             try JSONSerialization.data(withJSONObject: rewritten, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
                 .write(to: url, options: .atomic)
+            return true
         } catch {
             logger.error("Skipping \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
     /// Opens only an existing database (the wrapper would create one) and
     /// applies `work` in one transaction.
-    private static func updateSQLite(_ url: URL, _ fileManager: FileManager, _ work: (SQLiteDatabase) throws -> Void) {
-        guard fileManager.fileExists(atPath: url.path) else { return }
+    private static func updateSQLite(_ url: URL, _ fileManager: FileManager, _ work: (SQLiteDatabase) throws -> Void) -> Bool {
+        guard fileManager.fileExists(atPath: url.path) else { return true }
         do {
             let db = try SQLiteDatabase(path: url.path)
             try db.transaction { try work(db) }
+            return true
         } catch {
             logger.error("Skipping \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -260,9 +293,10 @@ enum RemotePathMigration {
         }
     }
 
-    @discardableResult
+    /// True when moved or nothing to do (no source, or the destination
+    /// already exists and is never overwritten); false on a real error.
     private static func move(_ from: URL, _ to: URL, _ fileManager: FileManager) -> Bool {
-        guard fileManager.fileExists(atPath: from.path), !fileManager.fileExists(atPath: to.path) else { return false }
+        guard fileManager.fileExists(atPath: from.path), !fileManager.fileExists(atPath: to.path) else { return true }
         do {
             try fileManager.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
             try fileManager.moveItem(at: from, to: to)
