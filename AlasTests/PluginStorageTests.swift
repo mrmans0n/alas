@@ -60,4 +60,38 @@ struct PluginStorageTests {
         #expect(file.deletingLastPathComponent().path == "/tmp/root/PluginData/io.x.p")
         #expect(file.lastPathComponent.hasSuffix(".json"))
     }
+
+    @Test(arguments: [
+        "1".data(using: .utf16)!,
+        Data([0xEF, 0xBB, 0xBF]) + Data("1".utf8),
+    ])
+    func nonUTF8AndBOMValuesAreRejectedAndLeaveTheFileUntouched(value: Data) throws {
+        let file = makeFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent().deletingLastPathComponent()) }
+        let storage = PluginStorage(file: file)
+        #expect(storage.set("a", value: Data("1".utf8)) == .stored)
+        let before = try Data(contentsOf: file)
+        #expect(storage.set("b", value: value) == .invalidValue)
+        #expect(try Data(contentsOf: file) == before)
+    }
+
+    @Test func anUnreadableFileIsMovedAsideBeforeTheFirstWrite() throws {
+        let file = makeFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent().deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let garbage = Data("not json".utf8)
+        try garbage.write(to: file)
+        let storage = PluginStorage(file: file)
+        #expect(storage.keys().isEmpty)
+        #expect(storage.set("new", value: Data("1".utf8)) == .stored)
+        #expect(try Data(contentsOf: file.appendingPathExtension("corrupt")) == garbage)
+        #expect(PluginStorage(file: file).keys() == ["new"])
+    }
+
+    @Test func aMissingFileIsAnEmptyStoreWithoutACorruptCopy() {
+        let file = makeFile()
+        let storage = PluginStorage(file: file)
+        #expect(storage.keys().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: file.appendingPathExtension("corrupt").path))
+    }
 }

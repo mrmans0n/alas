@@ -40,7 +40,11 @@ final class PluginStorage {
         guard (1...Self.maxKeyBytes).contains(keyBytes) else { return .invalidKey }
         var next = load()
         if let value {
-            guard (try? JSONSerialization.jsonObject(with: value, options: .fragmentsAllowed)) != nil else {
+            // Foundation also accepts UTF-16/32 and a BOM, which would corrupt the UTF-8 file.
+            guard String(data: value, encoding: .utf8) != nil,
+                  !value.starts(with: [0xEF, 0xBB, 0xBF]),
+                  (try? JSONSerialization.jsonObject(with: value, options: .fragmentsAllowed)) != nil
+            else {
                 return .invalidValue
             }
             next[key] = value
@@ -63,7 +67,18 @@ final class PluginStorage {
 
     private func load() -> [String: Data] {
         if let entries { return entries }
-        let loaded = (try? Data(contentsOf: file)).flatMap(Self.parse) ?? [:]
+        var loaded: [String: Data] = [:]
+        if FileManager.default.fileExists(atPath: file.path) {
+            if let parsed = (try? Data(contentsOf: file)).flatMap(Self.parse) {
+                loaded = parsed
+            } else {
+                // Never overwrite user data: move the unreadable file aside first.
+                // ponytail: only the latest .corrupt is kept.
+                let aside = file.appendingPathExtension("corrupt")
+                try? FileManager.default.removeItem(at: aside)
+                try? FileManager.default.moveItem(at: file, to: aside)
+            }
+        }
         entries = loaded
         return loaded
     }
@@ -80,6 +95,7 @@ final class PluginStorage {
             out.append(entries[key]!)
         }
         out.append(UInt8(ascii: "}"))
+        guard Self.parse(out) != nil else { return false }
         do {
             try FileManager.default.createDirectory(
                 at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -92,7 +108,7 @@ final class PluginStorage {
 
     /// Splits a top-level JSON object into key -> raw value bytes; nil when malformed.
     private static func parse(_ data: Data) -> [String: Data]? {
-        guard (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else { return nil }
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         let bytes = [UInt8](data)
         var i = 0
         func skipSpace() { while i < bytes.count, [0x20, 0x09, 0x0A, 0x0D].contains(bytes[i]) { i += 1 } }
@@ -136,6 +152,7 @@ final class PluginStorage {
             while end > valueStart, [0x20, 0x09, 0x0A, 0x0D].contains(bytes[end - 1]) { end -= 1 }
             result[key] = Data(bytes[valueStart..<end])
         }
-        return result
+        // A scanner/Foundation disagreement fails loudly instead of losing keys.
+        return Set(result.keys) == Set(object.keys) ? result : nil
     }
 }
