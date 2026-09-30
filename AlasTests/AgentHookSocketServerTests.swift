@@ -299,4 +299,31 @@ struct AgentHookSocketServerTests {
         server.unlinkSession(leafId: "leaf")
         #expect(!FileManager.default.fileExists(atPath: link))
     }
+
+    /// A delegated child keeps the `ALAS_SOCKET_PATH` it was spawned with for
+    /// its whole life, across app relaunches; the same path must reach
+    /// whichever instance is running now.
+    @Test
+    func sessionLinkReachesTheRelaunchedInstance() async throws {
+        let (dir, cleanup) = tmpSocketDir()
+        defer { cleanup() }
+        let key = AgentHookSocketServer.acpSessionLinkKey("child")
+        let first = AgentHookSocketServer(socketPath: "\(dir)/pid-1")
+        let link = try #require(first.linkSession(leafId: key))
+        first.shutdown()
+
+        // The relaunch's sweep drops the link left dangling by the quit...
+        AgentHookSocketServer.sweepStaleSockets(in: dir)
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: link)) == nil)
+
+        // ...and re-attaching the session recreates it at the same path.
+        let second = AgentHookSocketServer(socketPath: "\(dir)/pid-2")
+        defer { second.shutdown() }
+        #expect(second.linkSession(leafId: key) == link)
+        AgentHookSocketServer.sweepStaleSockets(in: dir)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link) == "\(dir)/pid-2")
+
+        let response = try await sendToSocket(path: link, payload: "not json")
+        #expect(response.contains("\"ok\":false") || response.contains("\"ok\": false"))
+    }
 }

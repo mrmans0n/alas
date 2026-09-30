@@ -267,3 +267,36 @@ start with `[alas system] Delegated session …` and carry the same caption.
 
 A parent's message to its child is delivered unchanged and captioned
 **Delegated prompt**, as is the child's initial task prompt.
+
+## Across an app restart
+
+A delegated child's agent runs in an ACP broker that outlives Alas, so quitting
+Alas does not stop a child mid-task. Its `alas mcp` server and `alas` CLI reach
+Alas through a per-session link, `sock-acp-<session-id>`, in the socket
+directory (`/tmp/alas-<uid>`, or the isolated profile's runtime directory),
+never through the PID-named socket itself. Every time a session attaches, the
+attaching instance points that link at its own socket. Only the instance that
+holds the session's lease attaches it, so a second instance on the same profile
+cannot take over another instance's link.
+
+On launch, Alas re-attaches every ready child whose queue still holds a prompt
+the parent is waiting on: one that was running when Alas quit, or one that had
+not been sent yet. The prompt is resent under its original broker operation, so
+the broker returns the turn that is still running, or the one that finished
+while Alas was down, rather than starting a new one. Then:
+
+- a `session_send` the child makes after the relaunch reaches the parent;
+- when the turn ends, the parent gets the usual outcome: a notice if the child
+  reported during the turn, including before the quit, and otherwise a "finished
+  without a result" or failure prompt;
+- if the broker did not survive (for example, after a reboot) or the child
+  cannot be reconnected, the child is marked `failed` and the parent is told
+  that its turn was lost.
+
+A message the child tried to send while Alas was down was never queued. The
+child sees the error, and the parent learns about the turn from its outcome.
+
+Limits: children started by builds before this change still use the old
+PID-named socket and cannot reach Alas until their adapter restarts. The
+built-in MCP server's HTTP transport (**Settings → Agents**) runs under the
+app, so it does not survive a restart; the default stdio transport does.

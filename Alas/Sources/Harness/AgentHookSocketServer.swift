@@ -130,12 +130,31 @@ final class AgentHookSocketServer: @unchecked Sendable {
     ///
     /// Returns nil if the server isn't bound, or if symlink creation
     /// failed — the caller can fall back to the raw bind path.
+    ///
+    /// ACP sessions use the same mechanism, keyed by `acpSessionLinkKey`:
+    /// their adapters (and the `alas mcp` / `alas` processes under them) live
+    /// in brokers that outlive the app, so a PID-named path would strand
+    /// them after a relaunch. Every attach repoints the session's link.
+    ///
+    /// The link is replaced atomically (a temporary link renamed over the old
+    /// one), so a client connecting while it is repointed never finds it
+    /// missing.
     func linkSession(leafId: String) -> String? {
         guard let bindPath = lock.withLock({ _bindPath }) else { return nil }
         let linkPath = "\(sessionLinkDirectory)/sock-\(leafId)"
-        unlink(linkPath)
-        guard symlink(bindPath, linkPath) == 0 else { return nil }
+        let stagingPath = "\(sessionLinkDirectory)/.sock-\(leafId).\(UUID().uuidString.prefix(8))"
+        guard symlink(bindPath, stagingPath) == 0 else { return nil }
+        guard rename(stagingPath, linkPath) == 0 else {
+            unlink(stagingPath)
+            return nil
+        }
         return linkPath
+    }
+
+    /// The `linkSession` key of an ACP session. Prefixed so it can never
+    /// collide with a terminal leaf id.
+    static func acpSessionLinkKey(_ sessionId: String) -> String {
+        "acp-\(sessionId)"
     }
 
     /// Best-effort removal of a leaf's per-session symlink. Called when
@@ -163,6 +182,11 @@ final class AgentHookSocketServer: @unchecked Sendable {
             && (modeBits & 0o077) == 0
     }
 
+    /// Removes `pid-<pid>` sockets of exited processes, then any session
+    /// link (or leftover staging link) that no longer resolves to a socket.
+    /// A dangling link reaches nobody; the owner of the session recreates it
+    /// on its next attach (see `linkSession`), so dropping it only stops dead
+    /// links from piling up. Links of other live instances resolve and stay.
     static func sweepStaleSockets(in directory: String) {
         guard let entries = try? FileManager.default.contentsOfDirectory(atPath: directory) else { return }
         for entry in entries {
@@ -170,6 +194,15 @@ final class AgentHookSocketServer: @unchecked Sendable {
                   let pid = Int32(entry.dropFirst(4)) else { continue }
             guard kill(pid, 0) != 0 else { continue }
             unlink("\(directory)/\(entry)")
+        }
+        for entry in entries where entry.hasPrefix("sock-") || entry.hasPrefix(".sock-") {
+            let path = "\(directory)/\(entry)"
+            var linkStat = Darwin.stat()
+            guard Darwin.lstat(path, &linkStat) == 0,
+                  (linkStat.st_mode & S_IFMT) == S_IFLNK,
+                  access(path, F_OK) != 0
+            else { continue }
+            unlink(path)
         }
     }
 

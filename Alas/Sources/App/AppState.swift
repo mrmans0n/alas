@@ -1874,7 +1874,56 @@ final class AppState {
             )
             await deliverPendingDelegatedMessages(to: record.childSessionId, manager: manager)
         }
+        await attachDelegatedChildrenWithPendingTurns()
         await drainRecoveredDelegatedMessageTargets()
+    }
+
+    /// Re-attaches ready delegated children that had a turn in flight, or
+    /// waiting to go out, when Alas last quit. Their adapters run in brokers
+    /// that survive the quit, so a child may still be working, or may have
+    /// finished while the app was down. Nothing else attaches a child without
+    /// an open tab, and without an attach its turn completion never reaches
+    /// the parent and its `session_send` has no live session to come from.
+    /// The attach repoints the child's socket link (`acpSessionSocketPath`)
+    /// and resends the queued prompt under its original broker operation, so
+    /// the broker hands back the running or finished turn and the usual
+    /// outcome follows.
+    private func attachDelegatedChildrenWithPendingTurns() async {
+        guard let records = try? await acpOrchestrationPersistence.readyDelegations() else { return }
+        let tasks = records.map { record in
+            Task { @MainActor [weak self] in
+                await self?.attachDelegatedChildWithPendingTurn(record)
+            }
+        }
+        for task in tasks { await task.value }
+    }
+
+    private func attachDelegatedChildWithPendingTurn(_ record: ACPDelegationRecord) async {
+        let childId = record.childSessionId
+        guard let worktree = record.childWorktreeId.flatMap(worktree(withId:)),
+              let manager = acpManager(for: worktree),
+              let persistedQueue = try? await manager.persistence.loadQueue(sessionId: childId),
+              ACPSessionOrchestrationPolicy.needsRestartAttach(phase: record.phase, queueHead: persistedQueue.first),
+              await manager.persistedSessionRow(id: childId) != nil,
+              manager.placeholderSession(id: childId) != nil
+        else { return }
+        rememberDelegatedSessionParent(childID: childId, parentID: record.parentSessionId)
+        // The child is now a live session, so point its link here before the
+        // attach finishes: a report it sends meanwhile is accepted.
+        _ = acpSessionSocketPath(sessionId: childId)
+        await manager.hydrateIfNeeded(id: childId)
+        await manager.attach(to: childId, freshlyCreated: false)
+        // Another instance holding the child's lease runs it and owns the
+        // outcome.
+        guard manager.isWriter(for: childId) else { return }
+        let session = manager.liveSession(for: childId)
+        let attachFailure = session?.agentState == .ready ? nil : recoveredDelegatedSessionFailureMessage(session)
+        if let loss = ACPSessionOrchestrationPolicy.restartedTurnLoss(
+            attachFailure: attachFailure,
+            queueHead: session?.queue.first
+        ) {
+            await acpOrchestration.markChildFailed(childSessionId: childId, message: loss)
+        }
     }
 
     private func recoveredDelegatedSessionFailureMessage(_ session: ACPSession?) -> String {
@@ -6719,6 +6768,19 @@ final class AppState {
             }
         }
         return nil
+    }
+
+    /// `ALAS_SOCKET_PATH` for an ACP session's adapter, `alas mcp` server and
+    /// `alas` CLI: the session's own link to the live socket, not the
+    /// PID-named bind path. Those processes run in brokers that survive an
+    /// app quit, so a relaunch must be able to reach them again; every attach
+    /// runs this and repoints the link at the new instance. Only the instance
+    /// holding the session's lease attaches it, so two instances on one
+    /// profile never fight over a link. Falls back to the bind path when the
+    /// link cannot be created.
+    func acpSessionSocketPath(sessionId: String) -> String? {
+        harness.socketServer.linkSession(leafId: AgentHookSocketServer.acpSessionLinkKey(sessionId))
+            ?? harness.socketServer.socketPath
     }
 
     /// Walks every persisted terminal-tab leaf across every worktree and
@@ -12409,7 +12471,7 @@ final class AppState {
                 }()
                 if self.config.harness.alasMCPTransport == .http,
                    adapterSupportsHTTP,
-                   let binaryPath, let socketPath = self.harness.socketServer.socketPath,
+                   let binaryPath, let socketPath = self.acpSessionSocketPath(sessionId: sessionId),
                    BuiltInAlasMCP.shouldInject(
                        enabled: self.config.harness.exposeAlasMCP,
                        configuredServers: configuredServers,
@@ -12427,7 +12489,7 @@ final class AppState {
                             enabled: self.config.harness.exposeAlasMCP,
                             configuredServers: configuredServers,
                             binaryPath: binaryPath,
-                            socketPath: self.harness.socketServer.socketPath,
+                            socketPath: socketPath,
                             worktreePath: worktreePath,
                             sessionId: sessionId,
                             parentSessionId: parentSessionId,
@@ -12447,7 +12509,7 @@ final class AppState {
                     enabled: self.config.harness.exposeAlasMCP,
                     configuredServers: configuredServers,
                     binaryPath: binaryPath,
-                    socketPath: self.harness.socketServer.socketPath,
+                    socketPath: self.acpSessionSocketPath(sessionId: sessionId),
                     worktreePath: worktreePath,
                     sessionId: sessionId,
                     parentSessionId: parentSessionId
@@ -12536,7 +12598,7 @@ final class AppState {
             return AlasCLIEnvInjection.environment(
                 enabled: self.config.harness.exposeAlasMCP,
                 binDirPath: binDirPath,
-                socketPath: self.harness.socketServer.socketPath,
+                socketPath: self.acpSessionSocketPath(sessionId: sessionId),
                 worktreePath: worktreePath,
                 sessionId: sessionId,
                 parentSessionId: parentSessionId,
@@ -12790,7 +12852,7 @@ final class AppState {
                 )
                 if self.config.harness.alasMCPTransport == .http,
                    adapterSupportsHTTP,
-                   let socketPath = self.harness.socketServer.socketPath,
+                   let socketPath = self.acpSessionSocketPath(sessionId: sessionId),
                    BuiltInAlasMCP.shouldInject(
                        enabled: self.config.harness.exposeAlasMCP,
                        configuredServers: configuredServers,
@@ -12809,7 +12871,7 @@ final class AppState {
                         enabled: self.config.harness.exposeAlasMCP,
                         configuredServers: configuredServers,
                         binaryPath: binaryPath,
-                        socketPath: self.harness.socketServer.socketPath,
+                        socketPath: socketPath,
                         worktreePath: worktreePath,
                         sessionId: sessionId,
                         httpEndpoint: endpoint,
@@ -12821,7 +12883,7 @@ final class AppState {
                     enabled: self.config.harness.exposeAlasMCP,
                     configuredServers: configuredServers,
                     binaryPath: binaryPath,
-                    socketPath: self.harness.socketServer.socketPath,
+                    socketPath: self.acpSessionSocketPath(sessionId: sessionId),
                     worktreePath: worktreePath,
                     sessionId: sessionId,
                     workspaceContext: context
@@ -12845,7 +12907,7 @@ final class AppState {
             return AlasCLIEnvInjection.environment(
                 enabled: self.config.harness.exposeAlasMCP,
                 binDirPath: binDirPath,
-                socketPath: self.harness.socketServer.socketPath,
+                socketPath: self.acpSessionSocketPath(sessionId: sessionId),
                 worktreePath: worktreePath,
                 sessionId: sessionId,
                 parentSessionId: nil,
