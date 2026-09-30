@@ -202,6 +202,39 @@ struct RemotePathMigrationTests {
         #expect(entry?.portConflict == .ownedByRun(worktreeID: new, branch: "b", scriptName: "s"))
     }
 
+    /// An interrupted `.new` delegation is recovered by its destination path,
+    /// which must match the virtual path of the cached worktree.
+    @Test(arguments: [
+        (
+            ACPDelegatedWorktreeRequest.existing(worktreeId: "/srv/wt/a"),
+            ACPDelegatedWorktreeRequest.existing(worktreeId: "/.alas-remote/mini/srv/wt/a")
+        ),
+        (
+            ACPDelegatedWorktreeRequest.new(branch: "b", base: nil, destinationPath: "/srv/wt/a", optimisticId: "pending-child"),
+            ACPDelegatedWorktreeRequest.new(
+                branch: "b", base: nil, destinationPath: "/.alas-remote/mini/srv/wt/a", optimisticId: "pending-child"
+            )
+        ),
+    ])
+    func delegationRowsFollowTheVirtualId(request: ACPDelegatedWorktreeRequest, expected: ACPDelegatedWorktreeRequest) throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let path = root.appendingPathComponent("acp-orchestration.sqlite").path
+        try ACPOrchestrationStore(path: path).insert(ACPDelegationRecord(
+            childSessionId: "child", parentSessionId: "parent", projectId: "project", parentWorktreeId: old,
+            childWorktreeId: nil, agentId: "codex", worktreeRequest: request, pendingInitialPrompt: nil,
+            phase: .creatingWorktree, failureMessage: nil, createdAt: 1, updatedAt: 1
+        ))
+
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+
+        let record = try #require(try ACPOrchestrationStore(path: path).delegation(childSessionId: "child"))
+        #expect(record.parentWorktreeId == new)
+        #expect(record.worktreeRequest == expected)
+    }
+
     /// Pending review files are named by a hash of the worktree path.
     @Test(arguments: ["", "-pr7"])
     func pendingReviewMovesToVirtualPathHash(suffix: String) throws {

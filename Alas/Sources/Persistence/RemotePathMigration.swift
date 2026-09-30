@@ -125,7 +125,7 @@ enum RemotePathMigration {
         }
         updateSQLite(reroot(Paths.acpOrchestrationDB, root), fileManager) { db in
             try renameColumns(db, table: "delegations", ["parent_worktree_id", "child_worktree_id"], idMap)
-            try rewriteWorktreeRequests(db, LegacyIDRewriter(idMap: idMap, idKeys: ["worktreeId"]))
+            try rewriteWorktreeRequests(db, LegacyIDRewriter(idMap: idMap, idKeys: ["worktreeId", "destinationPath"]))
         }
         if let defaults { rekeyGGUndoMarkers(defaults, idMap) }
     }
