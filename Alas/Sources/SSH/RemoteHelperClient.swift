@@ -222,14 +222,18 @@ actor RemoteHelperClient {
     }
 
     func stat(paths: [String]) async throws -> RemoteHelperFSStatResult {
-        try await request(method: "fs/stat", params: RemoteHelperFSStatParams(paths: paths))
+        let result: RemoteHelperFSStatResult = try await request(
+            method: "fs/stat", params: RemoteHelperFSStatParams(paths: paths)
+        )
+        return RemoteHelperFSStatResult(entries: result.entries.map { $0.virtualized(host: host) })
     }
 
     func lineCounts(root: String, paths: [String]) async throws -> RemoteHelperFSLineCountsResult {
-        try await request(
+        let result: RemoteHelperFSLineCountsResult = try await request(
             method: "fs/line-counts",
             params: RemoteHelperFSLineCountsParams(root: root, paths: paths)
         )
+        return RemoteHelperFSLineCountsResult(entries: result.entries.map { $0.virtualized(host: host) })
     }
 
     func list(path: String) async throws -> RemoteHelperFSListResult {
@@ -529,7 +533,7 @@ actor RemoteHelperClient {
 
         nextId += 1
         let id = JSONRPCID.number(nextId)
-        let body = try Self.encodeRequest(method: method, params: params, id: id)
+        let body = try Self.encodeRequest(method: method, params: params, id: id, host: host)
 
         let data: Data
         do {
@@ -738,10 +742,11 @@ actor RemoteHelperClient {
 
         guard head.method == "watch/event",
               let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteHelperWatchEvent>.self, from: data),
-              let event = env.params
+              let rawEvent = env.params
         else {
             return
         }
+        let event = rawEvent.virtualized(host: host)
         guard let (clientSubscriptionId, subscription) = activeSubscriptions.first(where: {
             $0.value.helperGeneration == generation
                 && $0.value.helperSubscriptionId == event.subscriptionId
@@ -898,15 +903,19 @@ actor RemoteHelperClient {
         RemoteHostStatusStore.shared.reportSuccess(host: host)
     }
 
-    private static func encodeRequest<Params: Encodable>(
+    /// Strips the virtual `/.alas-remote/<host>` prefix from every path in the
+    /// serialized request; the helper only knows real remote paths.
+    static func encodeRequest<Params: Encodable>(
         method: String,
         params: Params,
-        id: JSONRPCID
+        id: JSONRPCID,
+        host: String
     ) throws -> Data {
         var dict: [String: Any] = ["jsonrpc": "2.0", "id": id.asJSON, "method": method]
         let paramsData = try JSONEncoder().encode(RemoteHelperAnyEncodableBox(params))
         dict["params"] = try JSONSerialization.jsonObject(with: paramsData)
-        return try JSONSerialization.data(withJSONObject: dict)
+        let data = try JSONSerialization.data(withJSONObject: dict, options: [.withoutEscapingSlashes])
+        return Data(RemotePath.stripping(host: host, in: String(decoding: data, as: UTF8.self)).utf8)
     }
 
     private static func responseErrorIndicatesLiveHost(_ error: Error) -> Bool {

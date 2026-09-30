@@ -808,7 +808,7 @@ struct RemoteHelperClientTests {
         #expect((try await listing.value).entries == [RemoteHelperFSListEntry(name: "src", isDirectory: true)])
     }
 
-    @Test func watchEventNotificationsAreYielded() async throws {
+    @Test func watchEventNotificationsAreYieldedWithVirtualPaths() async throws {
         let transport = FakeJSONRPCTransport()
         let client = RemoteHelperClient(
             host: "devbox",
@@ -833,10 +833,22 @@ struct RemoteHelperClientTests {
 
         #expect(await iterator.next() == RemoteHelperWatchEvent(
             subscriptionId: "sub-1",
-            root: "/srv/repo",
+            root: "/.alas-remote/devbox/srv/repo",
             kind: .files,
-            paths: ["/srv/repo/README.md"]
+            paths: ["/.alas-remote/devbox/srv/repo/README.md"]
         ))
+    }
+
+    @Test func requestsStripVirtualPathPrefixBeforeReachingHelper() throws {
+        let body = try RemoteHelperClient.encodeRequest(
+            method: "fs/read",
+            params: RemoteHelperFSReadParams(path: "/.alas-remote/mini/srv/a"),
+            id: .number(1),
+            host: "mini"
+        )
+        let text = String(decoding: body, as: UTF8.self)
+        #expect(text.contains("\"/srv/a\""))
+        #expect(!text.contains(".alas-remote"))
     }
 
     @Test func legacyWatchEventBufferDropsOldestEventsAtItsLimit() async throws {
@@ -905,9 +917,9 @@ struct RemoteHelperClientTests {
         """#.utf8))
         #expect(await updates.next() == .event(RemoteHelperWatchEvent(
             subscriptionId: "client-1",
-            root: "/srv/repo",
+            root: "/.alas-remote/devbox/srv/repo",
             kind: .files,
-            paths: ["/srv/repo/README.md"]
+            paths: ["/.alas-remote/devbox/srv/repo/README.md"]
         )))
 
         transport.send(exitStatus: 1)

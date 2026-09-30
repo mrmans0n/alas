@@ -69,6 +69,21 @@ struct RemoteHelperWatchEvent: Codable, Equatable, Sendable {
     let root: String
     let kind: RemoteHelperWatchKind
     let paths: [String]
+
+    func virtualized(host: String) -> Self {
+        Self(
+            subscriptionId: subscriptionId,
+            root: remoteHelperVirtualPath(host: host, root),
+            kind: kind,
+            paths: paths.map { remoteHelperVirtualPath(host: host, $0) }
+        )
+    }
+}
+
+/// Helper responses carry real remote paths; only absolute ones are
+/// virtualized (line-count entries echo the caller's relative paths).
+private func remoteHelperVirtualPath(host: String, _ path: String) -> String {
+    path.hasPrefix("/") ? RemotePath.virtual(host: host, realPath: path) : path
 }
 
 enum RemoteHelperWatchUpdate: Equatable, Sendable {
@@ -133,6 +148,13 @@ struct RemoteHelperFSStatEntry: Codable, Equatable, Sendable {
     let isFile: Bool
     let size: UInt64?
     let mtime: Double?
+
+    func virtualized(host: String) -> Self {
+        Self(
+            path: remoteHelperVirtualPath(host: host, path), exists: exists,
+            isDirectory: isDirectory, isFile: isFile, size: size, mtime: mtime
+        )
+    }
 }
 
 struct RemoteHelperFSLineCountsParams: Codable, Equatable, Sendable {
@@ -147,6 +169,10 @@ struct RemoteHelperFSLineCountsResult: Codable, Equatable, Sendable {
 struct RemoteHelperFSLineCountEntry: Codable, Equatable, Sendable {
     let path: String
     let lineCount: Int
+
+    func virtualized(host: String) -> Self {
+        Self(path: remoteHelperVirtualPath(host: host, path), lineCount: lineCount)
+    }
 }
 
 struct RemoteHelperFSListParams: Codable, Equatable, Sendable {
