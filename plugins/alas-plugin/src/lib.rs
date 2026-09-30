@@ -4,7 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::cell::Cell;
+use serde_json::value::RawValue;
+use std::cell::{Cell, RefCell};
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Snapshot {
@@ -61,6 +62,8 @@ pub enum Event {
     Activate { project_id: String, project_name: String, grants: Vec<String> },
     Deactivate,
     WorkspaceChanged(Snapshot),
+    /// The reply to `request_snapshot`.
+    Snapshot(Snapshot),
     Tick { dt: u32 },
     Click { tab: u32, region: String },
     Reply { id: i64, result: Result<Value, RpcError> },
@@ -129,6 +132,18 @@ pub fn request(method: &str, params: Value) -> i64 {
     id
 }
 
+thread_local! {
+    static SNAPSHOT_REQUESTS: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Requests the whole workspace snapshot. The reply arrives as `Event::Snapshot`,
+/// decoded straight into typed structs (it is the one large payload).
+pub fn request_snapshot() -> i64 {
+    let id = request("workspace/snapshot", json!({}));
+    SNAPSHOT_REQUESTS.with(|ids| ids.borrow_mut().push(id));
+    id
+}
+
 /// Hands Alas one RGBA8 frame for tab `tab`. Alas copies it during this call.
 pub fn present(tab: u32, pixels: &[u8], width: u32) {
     #[cfg(target_arch = "wasm32")]
@@ -143,38 +158,97 @@ pub fn set_regions(tab: u32, regions: &[Region]) {
     send(&json!({"jsonrpc": "2.0", "method": "canvas/regions", "params": {"tab": tab, "regions": regions}}));
 }
 
+/// Payloads stay raw until their method is known, so the snapshot is parsed once,
+/// straight into typed structs, never through a generic `Value` tree.
+#[derive(Deserialize)]
+struct Incoming<'a> {
+    #[serde(default)]
+    id: Option<Value>,
+    #[serde(default)]
+    method: Option<String>,
+    #[serde(borrow, default)]
+    params: Option<&'a RawValue>,
+    #[serde(borrow, default)]
+    result: Option<&'a RawValue>,
+    #[serde(borrow, default)]
+    error: Option<&'a RawValue>,
+}
+
+#[derive(Deserialize)]
+struct SnapshotPayload {
+    snapshot: Snapshot,
+}
+
+#[derive(Deserialize)]
+struct ActivateParams {
+    project: ProjectRef,
+    #[serde(default)]
+    grants: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ProjectRef {
+    id: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct TickParams {
+    dt: u32,
+}
+
+#[derive(Deserialize)]
+struct ClickParams {
+    tab: u32,
+    region: String,
+}
+
+fn parse<'a, T: Deserialize<'a>>(raw: Option<&'a RawValue>) -> Option<T> {
+    serde_json::from_str(raw?.get()).ok()
+}
+
 /// Parses one incoming message and hands it to `plugin`. Activation is answered
 /// before the plugin sees it, so a plugin cannot forget the handshake.
 pub fn dispatch<P: Plugin>(plugin: &mut P, bytes: &[u8]) {
-    let Ok(message) = serde_json::from_slice::<Value>(bytes) else { return };
-    let params = &message["params"];
-    let event = match message["method"].as_str() {
+    let Ok(message) = serde_json::from_slice::<Incoming>(bytes) else { return };
+    let event = match message.method.as_deref() {
         Some("alas/activate") => {
-            send(&json!({"jsonrpc": "2.0", "id": message["id"], "result": {}}));
-            Event::Activate {
-                project_id: params["project"]["id"].as_str().unwrap_or_default().to_string(),
-                project_name: params["project"]["name"].as_str().unwrap_or_default().to_string(),
-                grants: serde_json::from_value(params["grants"].clone()).unwrap_or_default(),
-            }
+            send(&json!({"jsonrpc": "2.0", "id": message.id, "result": {}}));
+            let Some(params) = parse::<ActivateParams>(message.params) else { return };
+            Event::Activate { project_id: params.project.id, project_name: params.project.name, grants: params.grants }
         }
         Some("alas/deactivate") => Event::Deactivate,
-        Some("workspace/changed") => match serde_json::from_value(params["snapshot"].clone()) {
-            Ok(snapshot) => Event::WorkspaceChanged(snapshot),
-            Err(_) => return,
+        Some("workspace/changed") => match parse::<SnapshotPayload>(message.params) {
+            Some(payload) => Event::WorkspaceChanged(payload.snapshot),
+            None => return,
         },
-        Some("tick") => Event::Tick { dt: params["dt"].as_u64().unwrap_or(0) as u32 },
-        Some("canvas/click") => Event::Click {
-            tab: params["tab"].as_u64().unwrap_or(0) as u32,
-            region: params["region"].as_str().unwrap_or_default().to_string(),
+        Some("tick") => match parse::<TickParams>(message.params) {
+            Some(params) => Event::Tick { dt: params.dt },
+            None => return,
+        },
+        Some("canvas/click") => match parse::<ClickParams>(message.params) {
+            Some(params) => Event::Click { tab: params.tab, region: params.region },
+            None => return,
         },
         Some(_) => return,
         None => {
-            let Some(id) = message["id"].as_i64() else { return };
-            let result = match serde_json::from_value::<RpcError>(message["error"].clone()) {
-                Ok(error) => Err(error),
-                Err(_) => Ok(message["result"].clone()),
-            };
-            Event::Reply { id, result }
+            let Some(id) = message.id.as_ref().and_then(Value::as_i64) else { return };
+            if let Some(error) = parse::<RpcError>(message.error) {
+                SNAPSHOT_REQUESTS.with(|ids| ids.borrow_mut().retain(|&pending| pending != id));
+                Event::Reply { id, result: Err(error) }
+            } else if SNAPSHOT_REQUESTS.with(|ids| {
+                let mut ids = ids.borrow_mut();
+                let found = ids.iter().position(|&pending| pending == id);
+                found.map(|index| ids.remove(index)).is_some()
+            }) {
+                match parse::<SnapshotPayload>(message.result) {
+                    Some(payload) => Event::Snapshot(payload.snapshot),
+                    None => return,
+                }
+            } else {
+                let result = message.result.and_then(|raw| serde_json::from_str(raw.get()).ok()).unwrap_or(Value::Null);
+                Event::Reply { id, result: Ok(result) }
+            }
         }
     };
     plugin.handle(event);
@@ -274,6 +348,31 @@ mod tests {
         let Event::WorkspaceChanged(snapshot) = &plugin.0[2] else { panic!("expected a snapshot") };
         assert_eq!(snapshot.worktrees[0].dirty, None);
         assert_eq!(snapshot.worktrees[0].sessions[0].plan, Some(Plan { completed: 1, total: 3 }));
+    }
+
+    /// The snapshot is the one large payload; it must decode straight into typed structs.
+    #[test]
+    fn a_snapshot_reply_arrives_as_a_typed_snapshot_and_other_replies_stay_values() {
+        test_host::take_sent();
+        let snapshot_id = request_snapshot();
+        assert_eq!(test_host::take_sent()[0]["method"], "workspace/snapshot");
+        let other_id = request("worktree/switch", json!({"id": "w"}));
+        let mut plugin = Recorder::default();
+        feed(&mut plugin, json!({"jsonrpc":"2.0","id":snapshot_id,"result":{"snapshot":{"worktrees":[
+            {"id":"w","branch":"main","current":false,"dirty":{"files":2,"conflicts":0},"sessions":[]}]}}}));
+        feed(&mut plugin, json!({"jsonrpc":"2.0","id":other_id,"result":{}}));
+        let Event::Snapshot(snapshot) = &plugin.0[0] else { panic!("expected a snapshot, got {:?}", plugin.0[0]) };
+        assert_eq!(snapshot.worktrees[0].dirty, Some(Dirty { files: 2, conflicts: 0 }));
+        assert_eq!(plugin.0[1], Event::Reply { id: other_id, result: Ok(json!({})) });
+    }
+
+    #[test]
+    fn malformed_messages_are_ignored() {
+        let mut plugin = Recorder::default();
+        dispatch(&mut plugin, b"{not json");
+        feed(&mut plugin, json!({"jsonrpc":"2.0","method":"workspace/changed","params":{"snapshot":5}}));
+        feed(&mut plugin, json!({"jsonrpc":"2.0","method":"tick","params":"x"}));
+        assert!(plugin.0.is_empty());
     }
 
     #[test]

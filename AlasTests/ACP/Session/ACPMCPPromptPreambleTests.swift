@@ -312,21 +312,31 @@ struct ACPMCPPromptPreambleTests {
     @Test(
         "disabled native subagents steer roots to Alas delegation and keep children leaves",
         arguments: [
-            (ACPMCPPreambleMode.mcp, "session_new tool"),
-            (.cli(serverAvailability: .noServers), "alas session new"),
-        ]
+            (ACPMCPPreambleMode.mcp, "session_new tool", nil, "native subagent tool is turned off"),
+            (.cli(serverAvailability: .noServers), "alas session new", nil, "native subagent tool is turned off"),
+            // Pi has no native tool; the registry's extension tools are named, without claiming they are gone.
+            (
+                .cli(serverAvailability: .noServers), "alas session new", .piCommandWrapper,
+                "Do not use subagent tools from Pi extensions (such as subagent, bg_wait, subagent_supervisor)"
+            ),
+        ] as [(ACPMCPPreambleMode, String, ACPNativeDelegationMechanism?, String)]
     )
-    func nativeSubagentsDisabled(mode: ACPMCPPreambleMode, route: String) throws {
+    func nativeSubagentsDisabled(
+        mode: ACPMCPPreambleMode,
+        route: String,
+        mechanism: ACPNativeDelegationMechanism?,
+        off: String
+    ) throws {
         let root = try #require(ACPMCPPromptPreamble.text(
             builtInInjected: true, isDelegated: false, userServerNames: [],
-            mode: mode, nativeSubagentsDisabled: true))
-        #expect(root.contains("native subagent tool is turned off"))
+            mode: mode, nativeSubagentsDisabled: true, nativeDelegationMechanism: mechanism))
+        #expect(root.contains(off))
         #expect(root.contains(route))
 
         let child = try #require(ACPMCPPromptPreamble.text(
             builtInInjected: true, isDelegated: true, userServerNames: [],
-            mode: mode, nativeSubagentsDisabled: true))
-        #expect(child.contains("native subagent tool is turned off"))
+            mode: mode, nativeSubagentsDisabled: true, nativeDelegationMechanism: mechanism))
+        #expect(child.contains(off))
         #expect(!child.contains("session_new"))
         #expect(!child.contains("session new"))
     }

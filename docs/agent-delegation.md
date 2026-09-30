@@ -163,7 +163,7 @@ only where Alas has verified a control:
 | Codex | Turns off Codex multi-agent tools (`spawn_agent` and related) through `CODEX_CONFIG`. Any `CODEX_CONFIG` you already set is merged, not replaced; one Alas cannot merge safely (invalid JSON, a non-object `agents`/`features`, or a dotted key that overlaps these settings) fails the launch with an error. Local sessions only: a remote Codex session with the option on fails to start. |
 | OpenCode | Removes the `task` tool from every OpenCode agent through `OPENCODE_CONFIG_CONTENT`, and checks every agent's effective permissions before each launch (see below). Any `OPENCODE_CONFIG_CONTENT` you already set is merged with its key order kept, not replaced; one Alas cannot parse fails the launch with an error. Local sessions only. |
 | OMP | Starts `omp acp` with a launch-only settings overlay (`--config`) that sets `task.maxRecursionDepth` to 0. This removes the `task` and `hub` tools from the model's tool list, and eval's `agent()` and `workpool()` fail with "Cannot spawn another agent at task depth 0". Eval otherwise works. The overlay is merged over your `~/.omp` and project settings, which Alas does not change, so other settings and extensions keep working. Local sessions only: a remote OMP session with the option on fails to start. |
-| Pi | Unavailable. Pi has no built-in subagent tool; extensions may add one, and Alas does not disable extensions. |
+| Pi | Pi has no built-in subagent tool; extensions add them. Removes the tools of known Pi subagent extensions (`subagent`, `bg_wait`, and `subagent_supervisor` from `pi-subagents`) by starting Pi through an Alas wrapper that adds `--exclude-tools` (see below). Tools from other extensions are not affected. Your Pi settings and any `PI_ACP_PI_COMMAND` you set are kept. Local sessions only: a remote Pi session with the option on fails to start. |
 | Cursor, Gemini, Copilot | Unavailable until a control is verified. |
 | Custom agents | Unavailable. |
 
@@ -176,8 +176,9 @@ When it applies:
 - Alas checks the adapter before sending any session request. If it does not
   identify itself as `@agentclientprotocol/claude-agent-acp` 0.81.2 or later
   (Claude), `@agentclientprotocol/codex-acp` 1.13.1 or later (Codex),
-  `OpenCode` 1.18.33 or later, or `oh-my-pi` 18.2.11 or later (OMP), the
-  session fails to start instead of running unenforced.
+  `OpenCode` 1.18.33 or later, `oh-my-pi` 18.2.11 or later (OMP), or `pi-acp`
+  0.0.34 or later (Pi), the session fails to start instead of running
+  unenforced.
 - The OMP overlay is a single owner-only file,
   `~/Library/Application Support/Alas/acp-launch-overlays/omp-native-subagents-off.yml`.
   Alas rewrites it before every launch that uses it, including reconnects and
@@ -190,6 +191,65 @@ When it applies:
   and points it at `session_new` (or `alas session new`). If Alas tools are
   turned off (**Expose Alas tools to agents**), the agent is told it cannot
   delegate at all.
+
+### Pi subagent extensions
+
+`pi-acp` starts Pi as `pi --mode rpc --no-themes [--session <file>]` for every
+new and loaded session, and has no way to pass other arguments. Its one lever
+is `PI_ACP_PI_COMMAND`, the command it runs instead of `pi`. With the option
+on, Alas sets it to an owner-only wrapper,
+`~/Library/Application Support/Alas/acp-launch-overlays/pi-native-subagents-off.sh`
+(inside the instance's own folder for an isolated `ALAS_APP_SUPPORT_DIR`
+instance). The wrapper runs the Pi command with every argument `pi-acp` passed,
+plus `--exclude-tools` with every tool in Alas's registry of known subagent
+extensions:
+
+| Extension | Verified versions | Excluded tools |
+|---|---|---|
+| `pi-subagents` (`npm:pi-subagents` or its GitHub source) | 0.68.x | `subagent`, `bg_wait`, `subagent_supervisor` |
+
+The tools are excluded whatever version is installed. Settings counts the
+extension as covered only when the installed version (the `version` in its
+`package.json` under Pi's `npm/node_modules/` or `git/` folder) is verified.
+Any other version, or one Alas cannot read, shows as *pi-subagents
+&lt;version&gt; not verified*. To verify a new release, capture its model
+request with and without the wrapper (see the #1620 section of
+`docs/research/2026-09-25-bb-cross-harness-delegation-research.md`), then widen
+`verifiedVersions` or add its new tools in `ACPPiSubagentExtensions.known`.
+
+- **Your own command is kept.** If `PI_ACP_PI_COMMAND` is already set (in the
+  agent's environment or Alas's), the wrapper runs that command instead of
+  `pi`, with the exclusion appended. Alas cannot see what that command does:
+  if it appends its own `--exclude-tools`, Pi keeps the last one and Alas's
+  list is lost. Settings therefore reports a custom `PI_ACP_PI_COMMAND` as
+  not enforced.
+- **Every launch, fresh or resumed.** Alas rewrites the wrapper before every
+  launch that uses it, including reconnects and restores, and never deletes it
+  while Alas runs, because `pi-acp` runs it again for every loaded session. Pi
+  applies the exclusion to tools an extension registers later, too.
+- **Failures stop the launch.** If the wrapper cannot be written, or the Pi
+  command it runs (your `PI_ACP_PI_COMMAND`, or `pi` on the launch `PATH`)
+  cannot be found, the session fails to start with an error instead of running
+  unenforced.
+- **Settings shows what it covers.** Alas reads, without changing, the
+  `packages` and `extensions` in your Pi settings (`~/.pi/agent/settings.json`,
+  or `$PI_CODING_AGENT_DIR/settings.json`), the files in its `extensions`
+  folder, and the same in the `.pi` folder of each local project, its
+  worktrees, and each local workspace checkout. Extensions your
+  settings disable (`-path` or `!pattern` entries) are skipped. It reports one of:
+  - *Covers the installed …*: every installed extension is recognized, and the
+    known subagent extensions among them are covered.
+  - *Nothing to remove yet*: no known subagent extension is installed, and
+    nothing unrecognized is.
+  - *Not enforced for extensions or commands Alas does not recognize*: names
+    the packages, local extensions, and custom `PI_ACP_PI_COMMAND` Alas does
+    not know. A subagent tool one of them adds stays available.
+    `pi-mcp-adapter` and Alas's own `alas-notify.ts` hook (while it carries
+    Alas's marker) count as recognized; project extensions are listed even if
+    Pi has not been told to trust that project.
+
+The option makes no claim about other extensions, extensions passed with `-e`
+by your own command, or Pi started from a shell.
 
 ### Delegated Claude children
 
