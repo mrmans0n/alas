@@ -13389,7 +13389,13 @@ final class AppState {
             ),
             to: worktree.id
         )
-        activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
+        if worktree.id == selectedWorktreeId {
+            activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
+        } else {
+            // A background launch (scheduled run, plugin task) only picks the tab its worktree shows
+            // when opened; the center-tab path would also clear what the user is looking at now.
+            tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+        }
         do {
             _ = try await startACPSession(
                 worktree: worktree,

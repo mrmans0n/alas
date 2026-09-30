@@ -992,6 +992,9 @@ struct AppStateRunScheduleTests {
         #expect(state.tabs.tabs(forWorktree: main.id).isEmpty)
     }
 
+    /// Also pins that the launch leaves the user's view alone: the new
+    /// worktree's chat tab becomes its active tab, but the selection and a
+    /// pending review reveal elsewhere survive.
     @Test func aChatPromptNotSentAutomaticallyIsLeftInTheComposer() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -999,6 +1002,12 @@ struct AppStateRunScheduleTests {
         defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
         let main = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
         state.harness.notifications.notificationAdder = { _ in }
+        state.selectedWorktreeId = main.id
+        state.attentionPendingReviewReveal = AttentionPendingReviewReveal(
+            worktreeID: main.id, tabID: "review", sessionID: "s",
+            command: DiffReviewDraftCommentScrollCommand(
+                commentID: "c", fileID: DiffReviewFileID(namespace: "review", path: "a.swift"), generation: 1),
+            eventIDs: [])
 
         _ = await state.runSchedule(schedule(
             target: .project(id: project.id),
@@ -1017,6 +1026,9 @@ struct AppStateRunScheduleTests {
         #expect(session.queue.isEmpty)
         #expect(session.composerDraft == ACPComposerDraft(segments: [.text("Fix the build.")]))
         #expect(manager.pendingModel[session.id] == nil)
+        #expect(state.tabs.activeTabId(forWorktree: created.id) == tab.id)
+        #expect(state.selectedWorktreeId == main.id)
+        #expect(state.attentionPendingReviewReveal?.worktreeID == main.id)
     }
 
     /// The surface is decided by the agent the schedule resolves to, at fire
