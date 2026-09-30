@@ -11,7 +11,7 @@ struct AlasCLIWorktreeResolverTests {
         #expect(rows == ["* main              /tmp/repo", "  feature/review    /tmp/repo-feature"])
     }
 
-    @Test(arguments: [true, false], ["switch", "delete", "agentList", "sessionNew"])
+    @Test(arguments: [true, false], ["switch", "delete", "agentList", "sessionNew", "commentAdd"])
     func printedRealPathResolvesAgainstCallersHost(remoteCaller: Bool, kind: String) {
         let local = Self.worktree(branch: "local", path: "/srv/repo")
         let remote = Self.worktree(branch: "remote", path: "/.alas-remote/mini/srv/repo")
@@ -22,6 +22,8 @@ struct AlasCLIWorktreeResolverTests {
         case "switch": .worktree(.switch(target: "/srv/repo"))
         case "delete": .worktree(.delete(target: "/srv/repo", force: false, keepBranch: false))
         case "agentList": .agentList(worktree: "/srv/repo")
+        case "commentAdd":
+            .review(.commentAdd(path: "/srv/repo", startLine: 1, endLine: nil, side: nil, body: "b", sessionID: nil))
         default: .sessionNew(prompt: "p", agentID: nil, worktree: .existing(worktreeID: "/srv/repo"))
         }
         let request = AlasCLIRequest(version: 1, sessionId: nil, cwd: nil, command: command)
@@ -29,7 +31,7 @@ struct AlasCLIWorktreeResolverTests {
         let target: String
         switch request.virtualizingPaths(like: anchor).command {
         case .worktree(.switch(let t)), .worktree(.delete(let t, _, _)), .agentList(worktree: let t?),
-             .sessionNew(_, _, .existing(let t), _, _):
+             .sessionNew(_, _, .existing(let t), _, _), .review(.commentAdd(let t, _, _, _, _, _)):
             target = t
         default:
             Issue.record("unexpected command")
