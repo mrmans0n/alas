@@ -518,9 +518,13 @@ struct ACPSessionOrchestrationCoordinatorTests {
             setupEvaluator: { _ in .ready },
             connectionFactory: { _, _, _ in ACPConnection(client: client) },
             delegatedSelectionHoldResolver: { id in
-                ACPSessionOrchestrationPolicy.holdsPromptDispatch(
-                    target: try? await persistence.delegation(childSessionId: id)
-                )
+                do {
+                    return ACPSessionOrchestrationPolicy.holdsPromptDispatch(
+                        target: try await persistence.delegation(childSessionId: id)
+                    )
+                } catch {
+                    return nil
+                }
             },
             delegatedReasoningRefreshTimeout: reasoningRefreshTimeout
         )
@@ -752,6 +756,48 @@ struct ACPSessionOrchestrationCoordinatorTests {
             #expect(record.failureMessage == ACPDelegatedModelSelectionError.reasoningUnsupported(agentId: "claude").errorDescription)
             #expect(childRequests(client) == ["set_model:opus"])
         }
+    }
+
+    @Test("after a model switch the reasoning is sent even when the old model's chip already shows it")
+    func reasoningIsReappliedAfterModelSwitch() async throws {
+        let client = makeSelectionClient(configOptions: [ACPConfigOption(
+            id: "effort", name: "Effort", currentValue: "high",
+            options: [.init(id: "low", name: "Low"), .init(id: "high", name: "High")]
+        )])
+        let fixture = try makeModelSelectionFixture(client: client)
+        defer { fixture.manager.shutdownBackgroundTasks() }
+
+        _ = await fixture.coordinator.create(
+            origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
+            request: .init(prompt: "Review the parser.", agentId: nil, worktree: .current,
+                           modelSelection: ACPDelegatedModelSelection(model: "opus", reasoning: "high"))
+        )
+
+        try await waitUntil { childRequests(client).count == 3 }
+        #expect(childRequests(client) == [
+            "set_model:opus", "set_config_option:effort=\(ACPConfigValue.string("high"))", "prompt:Review the parser.",
+        ])
+    }
+
+    /// Two instances sharing the store: this one attached the child while it
+    /// was starting, and the other one finished starting it.
+    @Test("a hold another instance resolved is lifted on the next attach")
+    func holdResolvedElsewhereIsLiftedOnAttach() async throws {
+        let client = makeSelectionClient()
+        let fixture = try makeModelSelectionFixture(client: client)
+        defer { fixture.manager.shutdownBackgroundTasks() }
+        try await fixture.persistence.insert(selectedChildRecord())
+        _ = fixture.manager.createSession(id: "child", agentId: "claude")
+        await fixture.manager.attach(to: "child", freshlyCreated: true)
+        try #require(fixture.manager.runners["child"]).send(text: "Also check the lexer.", attachments: [])
+        let child = try #require(fixture.manager.liveSession(for: "child"))
+        #expect(child.queue.count == 1)
+
+        try await fixture.persistence.updatePhase(childSessionId: "child", phase: .ready, failureMessage: nil, updatedAt: 2)
+        await fixture.manager.attach(to: "child", freshlyCreated: false)
+
+        try await waitUntil { childRequests(client).count == 1 }
+        #expect(childRequests(client) == ["prompt:Also check the lexer."])
     }
 
     @Test("messages held for a child whose model selection failed are discarded, never delivered")

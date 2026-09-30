@@ -12449,10 +12449,14 @@ final class AppState {
                 return try LocalACPBrokerService(resourceURL: resourceURL)
             },
             delegatedSelectionHoldResolver: { [weak self] sessionId in
-                guard let self else { return false }
-                return ACPSessionOrchestrationPolicy.holdsPromptDispatch(
-                    target: try? await self.acpOrchestrationPersistence.delegation(childSessionId: sessionId)
-                )
+                guard let self else { return nil }
+                do {
+                    return ACPSessionOrchestrationPolicy.holdsPromptDispatch(
+                        target: try await self.acpOrchestrationPersistence.delegation(childSessionId: sessionId)
+                    )
+                } catch {
+                    return nil
+                }
             },
             mcpProjectContextProvider: { [weak self] in
                 guard let project = self?.projects.first(where: { $0.id == worktree.projectId }) else {

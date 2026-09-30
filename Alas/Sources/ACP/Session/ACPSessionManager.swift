@@ -1257,10 +1257,11 @@ final class ACPSessionManager: ObservableObject {
     private let attachmentStartupTimeout: Duration
     private let restartTeardownTimeout: Duration
     /// Answers, at attach, whether a session is a delegated child whose
-    /// requested model/reasoning is still unacknowledged. Every attach path
-    /// (a restored tab, startup recovery, a delegated start) runs it before
-    /// the runner can drain the queue, so none can dispatch a prompt first.
-    private let delegatedSelectionHoldResolver: (@MainActor (ACPSession.ID) async -> Bool)?
+    /// requested model/reasoning is still unacknowledged (nil: unknown, e.g.
+    /// a store read failed). Every attach path (a restored tab, startup
+    /// recovery, a delegated start) runs it before the runner can drain the
+    /// queue, so none can dispatch a prompt first.
+    private let delegatedSelectionHoldResolver: (@MainActor (ACPSession.ID) async -> Bool?)?
     /// How long delegated reasoning validation waits for the config options
     /// an agent publishes after `session/set_model` before rejecting.
     private let delegatedReasoningRefreshTimeout: Duration
@@ -1429,7 +1430,7 @@ final class ACPSessionManager: ObservableObject {
          isolatedBrokerServiceFactory: ACPBrokerServiceFactory? = nil,
          attachmentStartupTimeout: Duration = .seconds(2),
          restartTeardownTimeout: Duration = .seconds(2),
-         delegatedSelectionHoldResolver: (@MainActor (ACPSession.ID) async -> Bool)? = nil,
+         delegatedSelectionHoldResolver: (@MainActor (ACPSession.ID) async -> Bool?)? = nil,
          delegatedReasoningRefreshTimeout: Duration = .seconds(5),
          mcpProjectContextProvider: MCPProjectContextProvider? = nil,
          builtInMCPProvider: BuiltInMCPProvider? = nil,
@@ -4542,6 +4543,11 @@ extension ACPSessionManager {
         if let session = sessions[sessionId],
            case .ready = session.agentState,
            runners[sessionId] != nil {
+            // Another instance sharing the store may have marked the child
+            // ready or failed since this one armed the hold.
+            if session.holdsPromptsForDelegatedSelection {
+                await resolveDelegatedSelectionHold(sessionId)
+            }
             return nil
         }
         let attempt = AttachmentAttempt()
@@ -4577,11 +4583,7 @@ extension ACPSessionManager {
             }
         }
         await waitForTeardown(sessionId: sessionId)
-        if let resolver = delegatedSelectionHoldResolver,
-           sessions[sessionId]?.delegatedSelectionHold == ACPSession.DelegatedSelectionHold.none,
-           await resolver(sessionId) {
-            sessions[sessionId]?.holdPromptsForDelegatedSelection()
-        }
+        await resolveDelegatedSelectionHold(sessionId)
         guard let session = sessions[sessionId],
               isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
         else {
@@ -7090,7 +7092,7 @@ extension ACPSessionManager {
         }
         if let reasoning = selection.reasoning,
            let step = try await delegatedReasoningStep(
-               reasoning, in: session, awaitingRefresh: modelChanged
+               reasoning, in: session, afterModelChange: modelChanged
            ) {
             try await applyDelegatedSelectionStep(step, setting: "reasoning", to: session)
         }
@@ -7102,19 +7104,26 @@ extension ACPSessionManager {
     /// new model's levels yet (its `session/set_model` reply can precede the
     /// config options update), so a failed check waits for the next update,
     /// up to `delegatedReasoningRefreshTimeout`, and checks again. Without a
-    /// switch, or once the wait runs out, the last error stands.
+    /// switch, or once the wait runs out, the last error stands. After a
+    /// switch the level is always sent, even when the chip already shows it:
+    /// that value may be the old model's, and the new one may reset it.
     private func delegatedReasoningStep(
         _ reasoning: String,
         in session: ACPSession,
-        awaitingRefresh: Bool
+        afterModelChange: Bool
     ) async throws -> ACPDelegatedSelectionStep? {
         let deadline = ContinuousClock.now.advanced(by: delegatedReasoningRefreshTimeout)
-        var waitExpired = !awaitingRefresh
+        var waitExpired = !afterModelChange
         while true {
             do {
-                return try ACPSessionOrchestrationPolicy.liveReasoningStep(
+                let step = try ACPSessionOrchestrationPolicy.liveReasoningStep(
                     reasoning: reasoning, agentId: session.agentId, chip: session.chipState.thinking
                 )
+                if step == nil, afterModelChange,
+                   case .configOption(let id)? = session.chipState.thinking?.source {
+                    return .setConfigOption(id: id, value: reasoning)
+                }
+                return step
             } catch {
                 guard !waitExpired else { throw error }
             }
@@ -7148,6 +7157,23 @@ extension ACPSessionManager {
         }
         if case .succeeded = outcome { return true }
         return session.availableConfigOptionsRevision != revision
+    }
+
+    /// Arms the hold for a delegated child still applying its selection, or
+    /// lifts a pending one whose delegation has since become ready or failed
+    /// (possibly in another instance sharing the store). A released hold is
+    /// never re-armed, and an unknown answer changes nothing.
+    private func resolveDelegatedSelectionHold(_ id: ACPSession.ID) async {
+        guard let resolver = delegatedSelectionHoldResolver,
+              sessions[id]?.delegatedSelectionHold != .released,
+              let holds = await resolver(id),
+              let session = sessions[id]
+        else { return }
+        if holds {
+            session.holdPromptsForDelegatedSelection()
+        } else if session.holdsPromptsForDelegatedSelection {
+            releaseDelegatedSelectionHold(id)
+        }
     }
 
     /// Holds every prompt in a delegated child's queue, including composer
