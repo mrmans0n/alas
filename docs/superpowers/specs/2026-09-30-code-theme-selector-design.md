@@ -86,8 +86,10 @@ Every code surface already builds `EditorTheme(theme:)` from the environment
 ## Surface coverage
 
 - **Full theme (bg + fg + syntax):** code editor (incl. gutter, selection),
-  merge conflict/result panes, markdown code blocks, ACP transcript code
-  blocks.
+  merge conflict/result panes.
+- **fg + syntax, app background:** markdown and ACP transcript code blocks.
+  They sit inside app-chrome cards; a palette background there would need
+  card-level changes across several ACP views.
 - **Syntax colors only:** diff and review views. Their background and
   add/delete row tints stay on app tokens, which are tuned against the app
   background.
@@ -103,8 +105,9 @@ and decoded in `AppConfig.init(from:)` with the existing
 ## Settings UI
 
 In `CodePane.swift`, add a "Theme" row at the top of the **Appearance**
-group: a menu picker of family names. Each item shows three color dots
-(keyword, string, function) from the variant matching the current mode.
+group: a menu picker of family names, with three color dots (keyword, string,
+function) of the active code theme beside it. Dots do not go inside menu
+items: macOS menus template-tint SwiftUI images.
 Row description: "Follows the app's light/dark theme; dark-only themes use
 Default in light mode." Selecting saves config and calls `setCodeTheme`.
 No preview pane.
@@ -122,15 +125,15 @@ No preview pane.
 2. `ThemeStoreTests`: parameterized variant resolution. Solarized + dark app
    theme → `solarized-dark`; after activating `light` → `solarized-light`;
    Nord + light → `nil`; unknown family → `nil`.
-3. `DiffPaneViewTests`: extend one existing syntax test to assert that a
-   comment on an added line gets `fg`, pinning the rule now owned by
+3. No new diff test: `DiffSelectableTextTests` already pins "comments on
+   changed rows use `fg`" for both diff paths, so it guards the move into
    `EditorTheme`.
 
 Not tested: picker row composition, menu dots, gutter/selection forwarding,
 decode defaults.
 
 Local checks: `-only-testing` for `ThemeTests`, `ThemeStoreTests`,
-`DiffPaneViewTests`, `ACPCodeBlockHighlighterTests`, `MarkdownRendererTests`
+`DiffSelectableTextTests`, `DiffPaneViewTests`, `ACPCodeBlockHighlighterTests`, `MarkdownRendererTests`
 after `xcodegen`.
 
 ## Out of scope
