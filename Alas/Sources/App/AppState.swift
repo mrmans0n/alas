@@ -899,8 +899,11 @@ final class AppState {
         if config.remote.enabled, remoteServer != nil {
             remotePeers.connectAll()
             if nativePeerSessions == nil {
-                let client = NativePeerSessions(federation: remoteFederation,
-                                                peers: { [weak self] in self?.remotePeers.helloPeers ?? [] })
+                let client = NativePeerSessions(
+                    federation: remoteFederation,
+                    peers: { [weak self] in self?.remotePeers.helloPeers ?? [] },
+                    comparisonMode: { [weak self] in self?.config.changes.comparisonMode }
+                )
                 nativePeerSessions = client
                 client.start()
             } else {
@@ -15270,7 +15273,10 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
-    func remoteChangeList(sessionId: String) async -> RemoteChangeListResult {
+    func remoteChangeList(
+        sessionId: String,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode? = nil
+    ) async -> RemoteChangeListResult {
         let worktree: Worktree
         switch remoteWorktreeContext(sessionId: sessionId) {
         case .sessionUnknown:
@@ -15286,7 +15292,9 @@ extension AppState: RemoteSessionsProvider {
                 at: worktree.path,
                 baseBranch: config.worktrees.baseBranch,
                 resolution: GitService.BaseResolution.forCommits(
-                    mode: config.changes.comparisonMode, userOverrodeBaseBranch: false))
+                    mode: comparisonMode ?? config.changes.comparisonMode,
+                    userOverrodeBaseBranch: false
+                ))
             let statusEntries = try await git.status(worktreePath: worktree.path)
             let changed = try await git.changedFilesAgainstRef(
                 worktreePath: worktree.path, ref: commits.comparisonRef,
@@ -15309,7 +15317,12 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
-    func remoteFileDiff(sessionId: String, path: String, stage: String? = nil) async -> RemoteFileDiffResult {
+    func remoteFileDiff(
+        sessionId: String,
+        path: String,
+        stage: String? = nil,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode? = nil
+    ) async -> RemoteFileDiffResult {
         let worktree: Worktree
         switch remoteWorktreeContext(sessionId: sessionId) {
         case .sessionUnknown:
@@ -15341,7 +15354,9 @@ extension AppState: RemoteSessionsProvider {
                 at: worktree.path,
                 baseBranch: config.worktrees.baseBranch,
                 resolution: GitService.BaseResolution.forCommits(
-                    mode: config.changes.comparisonMode, userOverrodeBaseBranch: false))
+                    mode: comparisonMode ?? config.changes.comparisonMode,
+                    userOverrodeBaseBranch: false
+                ))
             // Threading `comparisonRef` through lets `isPathIgnored` exempt a
             // path that existed there even though it's since been deleted —
             // otherwise a deleted, gitignore-pattern-matching file's
@@ -15406,7 +15421,11 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
-    func remoteFileTree(sessionId: String, path: String?) async -> RemoteFileTreeResult {
+    func remoteFileTree(
+        sessionId: String,
+        path: String?,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode? = nil
+    ) async -> RemoteFileTreeResult {
         let worktree: Worktree
         switch remoteWorktreeContext(sessionId: sessionId) {
         case .sessionUnknown:
@@ -15436,7 +15455,9 @@ extension AppState: RemoteSessionsProvider {
                 at: worktree.path,
                 baseBranch: config.worktrees.baseBranch,
                 resolution: GitService.BaseResolution.forCommits(
-                    mode: config.changes.comparisonMode, userOverrodeBaseBranch: false))
+                    mode: comparisonMode ?? config.changes.comparisonMode,
+                    userOverrodeBaseBranch: false
+                ))
             let changedEntries = try await git.changedFileBadges(
                 worktreePath: worktree.path, ref: commits.comparisonRef)
 

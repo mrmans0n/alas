@@ -178,6 +178,50 @@ struct FederatedSessionsProviderTests {
         #expect(links.sent(to: "srv-b").contains(.unsubscribe(sessionId: "s1")))
     }
 
+    @Test func comparisonSensitiveRepliesReturnOnlyToTheirRequestingDownstream() {
+        let links = FakeLinks()
+        let provider = FederatedSessionsProvider(links: links)
+        let first = Client()
+        let second = Client()
+        provider.attach(first.downstream)
+        provider.attach(second.downstream)
+        links.goOnline("srv-b", name: "Mac B")
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: first.downstream)
+        _ = provider.route(.subscribe(sessionId: "srv-b:s1"), from: second.downstream)
+        links.sent.removeAll()
+
+        _ = provider.route(
+            .listChanges(sessionId: "srv-b:s1", comparisonMode: .auto),
+            from: first.downstream
+        )
+        _ = provider.route(
+            .listChanges(sessionId: "srv-b:s1", comparisonMode: .branchUpstream),
+            from: second.downstream
+        )
+
+        #expect(links.sent(to: "srv-b") == [
+            .listChanges(sessionId: "s1", comparisonMode: .auto),
+        ])
+
+        let firstReply = RemoteServerMessage.changeList(
+            sessionId: "s1", comparisonRef: "main", metricsAvailable: true,
+            files: [], staged: [], unstaged: [], commits: [], truncated: false)
+        links.receive(firstReply, from: "srv-b")
+        #expect(first.received == [firstReply.replacingSessionId("srv-b:s1")])
+        #expect(second.received.isEmpty)
+        #expect(links.sent(to: "srv-b") == [
+            .listChanges(sessionId: "s1", comparisonMode: .auto),
+            .listChanges(sessionId: "s1", comparisonMode: .branchUpstream),
+        ])
+
+        let secondReply = RemoteServerMessage.changeList(
+            sessionId: "s1", comparisonRef: "origin/main", metricsAvailable: true,
+            files: [], staged: [], unstaged: [], commits: [], truncated: false)
+        links.receive(secondReply, from: "srv-b")
+        #expect(first.received.count == 1)
+        #expect(second.received == [secondReply.replacingSessionId("srv-b:s1")])
+    }
+
     @Test func aNewSubscriberReceivesActivePlanAndElicitationRequestsWithoutDuplicatingThem() {
         let links = FakeLinks()
         let provider = FederatedSessionsProvider(links: links)

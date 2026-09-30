@@ -4962,7 +4962,7 @@ extension ACPSessionManager {
                 }
             }
             // Process-level native-delegation controls (Codex env, OMP
-            // config overlay) must be in the spawn environment/arguments; a
+            // config overlay, Pi command wrapper) must be in the spawn environment/arguments; a
             // policy that cannot be applied fails the launch here rather
             // than running unenforced.
             launchSpec = try ACPNativeDelegationControls.applyingLaunchControls(
@@ -6111,7 +6111,8 @@ extension ACPSessionManager {
                     mode: preambleMode,
                     ggStack: ggStackContext,
                     issue: issuePreambleProvider?(worktreeId),
-                    nativeSubagentsDisabled: nativeSubagentsDisabled
+                    nativeSubagentsDisabled: nativeSubagentsDisabled,
+                    nativeDelegationMechanism: ACPNativeDelegationSupport.resolve(agentID: session.agentId).mechanism
                 )
                 if isWriter(for: sessionId) {
                     session.pendingMCPPreamble = preamble

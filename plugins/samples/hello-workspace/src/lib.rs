@@ -2,12 +2,11 @@
 //! agent sessions, and deliberately calls `worktree/switch` without the
 //! capability to show the denial path.
 
-use alas_plugin::{export_plugin, log, request, Event, Plugin, Snapshot};
+use alas_plugin::{export_plugin, log, request, request_snapshot, Event, Plugin, Snapshot};
 use serde_json::json;
 
 #[derive(Default)]
 struct Hello {
-    snapshot_request: i64,
     switch_request: i64,
 }
 
@@ -22,15 +21,11 @@ impl Plugin for Hello {
         match event {
             Event::Activate { project_name, .. } => {
                 log("info", &format!("activated for {project_name}"));
-                self.snapshot_request = request("workspace/snapshot", json!({}));
+                request_snapshot();
                 self.switch_request = request("worktree/switch", json!({"id": "any"}));
             }
             Event::WorkspaceChanged(snapshot) => log("info", &format!("changed: {}", summary(&snapshot))),
-            Event::Reply { id, result } if id == self.snapshot_request => {
-                if let Some(snapshot) = result.ok().and_then(|v| serde_json::from_value(v["snapshot"].clone()).ok()) {
-                    log("info", &format!("snapshot: {}", summary(&snapshot)));
-                }
-            }
+            Event::Snapshot(snapshot) => log("info", &format!("snapshot: {}", summary(&snapshot))),
             Event::Reply { id, result: Err(error), .. } if id == self.switch_request => {
                 log("warn", &format!("worktree/switch replied {} {}", error.code, error.message));
             }

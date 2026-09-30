@@ -166,6 +166,7 @@ struct WorkingTreeRowActions {
     let onSelect: (ChangedFile) -> Void
     let fileContextTarget: (ChangedFile) -> FileContextMenuTarget
     var readOnly = false
+    var showsStageState = true
     var onStageAll: (([ChangedFile]) -> Void)? = nil
     var onUnstageAll: (([ChangedFile]) -> Void)? = nil
     var onIgnore: ((_ path: String, _ isDirectory: Bool, _ destination: IgnoreDestination) -> Void)? = nil
@@ -215,15 +216,17 @@ struct WorkingTreeFlatRowView: View {
             else { collapsedPaths.remove(collapseKey) }
         } label: {
             HStack(spacing: 6) {
-                StageChip(
-                    state: Self.stageChipState(for: folderState),
-                    action: actions.readOnly ? nil : {
-                        switch folderState {
-                        case .staged: actions.onUnstageAll?(stagedEntries)
-                        case .mixed, .unstaged: actions.onStageAll?(unstagedEntries)
+                if actions.showsStageState {
+                    StageChip(
+                        state: Self.stageChipState(for: folderState),
+                        action: actions.readOnly ? nil : {
+                            switch folderState {
+                            case .staged: actions.onUnstageAll?(stagedEntries)
+                            case .mixed, .unstaged: actions.onStageAll?(unstagedEntries)
+                            }
                         }
-                    }
-                )
+                    )
+                }
                 FolderIconView(
                     name: node.name,
                     path: node.path,
@@ -274,8 +277,8 @@ struct WorkingTreeFlatRowView: View {
             fileContextTarget: actions.fileContextTarget(file),
             depth: row.depth,
             onSelect: { actions.onSelect(file) },
-            onStage: actions.readOnly ? nil : primaryStageAction(for: group),
-            stageState: Self.stageChipState(for: group.stageState),
+            onStage: actions.readOnly || !actions.showsStageState ? nil : primaryStageAction(for: group),
+            stageState: actions.showsStageState ? Self.stageChipState(for: group.stageState) : nil,
             displayAdd: group.add,
             displayDel: group.del,
             onStageEntries: canStage ? { actions.onStageAll?(group.unstagedEntries) } : nil,

@@ -303,11 +303,18 @@ final class RemoteSessionGateway {
         case .queueClear(let id):
             guard provider.isWriter(for: id) else { return }
             await provider.queueClear(for: id)
-        case .listChanges(let id):
-            let key = "listChanges\u{0}\(id)"
+        case .listChanges(let id, let comparisonMode):
+            let key = if let comparisonMode {
+                "listChanges\u{0}\(id)\u{0}\(comparisonMode.rawValue)"
+            } else {
+                "listChanges\u{0}\(id)"
+            }
             guard inFlightFileRequests.insert(key).inserted else { return }
             defer { inFlightFileRequests.remove(key) }
-            switch await provider.remoteChangeList(sessionId: id) {
+            switch await provider.remoteChangeList(
+                sessionId: id,
+                comparisonMode: comparisonMode
+            ) {
             case .success(let ref, let available, let files, let staged, let unstaged, let commits, let truncated, let commitsTruncated):
                 send(.changeList(
                     sessionId: id, comparisonRef: ref, metricsAvailable: available,
@@ -316,11 +323,20 @@ final class RemoteSessionGateway {
             case .failure(let reason, let message):
                 send(.changeListFailed(sessionId: id, reason: reason, message: message))
             }
-        case .fileDiff(let id, let path, let stage):
-            let key = "fileDiff\u{0}\(id)\u{0}\(path)\u{0}\(stage ?? "")"
+        case .fileDiff(let id, let path, let stage, let comparisonMode):
+            let key = if let comparisonMode {
+                "fileDiff\u{0}\(id)\u{0}\(path)\u{0}\(stage ?? "")\u{0}\(comparisonMode.rawValue)"
+            } else {
+                "fileDiff\u{0}\(id)\u{0}\(path)\u{0}\(stage ?? "")"
+            }
             guard inFlightFileRequests.insert(key).inserted else { return }
             defer { inFlightFileRequests.remove(key) }
-            switch await provider.remoteFileDiff(sessionId: id, path: path, stage: stage) {
+            switch await provider.remoteFileDiff(
+                sessionId: id,
+                path: path,
+                stage: stage,
+                comparisonMode: comparisonMode
+            ) {
             case .success(let hunks, let truncated, let metadataNote):
                 send(.fileDiffResult(
                     sessionId: id, path: path, stage: stage, hunks: hunks, truncated: truncated,
@@ -328,11 +344,19 @@ final class RemoteSessionGateway {
             case .failure(let reason, let message):
                 send(.fileDiffFailed(sessionId: id, path: path, stage: stage, reason: reason, message: message))
             }
-        case .listFiles(let id, let path):
-            let key = "listFiles\u{0}\(id)\u{0}\(path ?? "")"
+        case .listFiles(let id, let path, let comparisonMode):
+            let key = if let comparisonMode {
+                "listFiles\u{0}\(id)\u{0}\(path ?? "")\u{0}\(comparisonMode.rawValue)"
+            } else {
+                "listFiles\u{0}\(id)\u{0}\(path ?? "")"
+            }
             guard inFlightFileRequests.insert(key).inserted else { return }
             defer { inFlightFileRequests.remove(key) }
-            switch await provider.remoteFileTree(sessionId: id, path: path) {
+            switch await provider.remoteFileTree(
+                sessionId: id,
+                path: path,
+                comparisonMode: comparisonMode
+            ) {
             case .success(let nodes, let truncated):
                 send(.fileTree(sessionId: id, path: path, nodes: nodes, truncated: truncated))
             case .failure(let reason, let message):

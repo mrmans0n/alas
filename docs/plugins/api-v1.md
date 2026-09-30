@@ -27,6 +27,9 @@ recognize.
 
 Alas scans `~/Library/Application Support/Alas/Plugins/`. Every sub-folder is a
 candidate plugin. Symlinked folders are followed, which is handy in development.
+An instance launched with `ALAS_APP_SUPPORT_DIR` scans `Plugins/` under that
+directory instead, and keeps its own approvals; the sample `build.sh` scripts
+install there when the variable is set.
 
 ```
 Plugins/

@@ -11,7 +11,8 @@ struct NativePeerChangesView: View {
 
     @Environment(\.theme) private var theme
     @State private var collapsedSections: Set<String> = []
-    @State private var collapsedChangePaths: Set<String> = []
+    @State private var collapsedWorkingTreePaths: Set<String> = []
+    @State private var collapsedBranchPaths: Set<String> = []
 
     var body: some View {
         switch changes {
@@ -26,11 +27,22 @@ struct NativePeerChangesView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        workingTreeSection(changes.staged + changes.unstaged)
-                        fileSection(changes.comparisonRef.map { "Since \($0)" } ?? "Branch",
-                                    files: changes.branchFiles) {
-                            .diff(path: $0.path, stage: nil)
-                        }
+                        treeSection(
+                            "Working tree",
+                            files: changes.staged + changes.unstaged,
+                            collapsedPaths: $collapsedWorkingTreePaths,
+                            document: { .diff(path: $0.path, stage: $0.stage) },
+                            onSelectStage: { file, stage in
+                                onOpen(.diff(path: file.path, stage: stage))
+                            }
+                        )
+                        treeSection(
+                            changes.comparisonRef.map { "Since \($0)" } ?? "Branch",
+                            files: changes.branchFiles,
+                            collapsedPaths: $collapsedBranchPaths,
+                            document: { .diff(path: $0.path, stage: nil) },
+                            showsStageState: false
+                        )
                         commitSection(changes.commits, truncated: changes.commitsTruncated)
                         if changes.truncated {
                             NativePeerRailMessage(text: "The peer shortened these lists.")
@@ -43,9 +55,15 @@ struct NativePeerChangesView: View {
     }
 
     @ViewBuilder
-    private func workingTreeSection(_ files: [ChangedFile]) -> some View {
+    private func treeSection(
+        _ title: String,
+        files: [ChangedFile],
+        collapsedPaths: Binding<Set<String>>,
+        document: @escaping (ChangedFile) -> NativePeerWorkspace.Document,
+        onSelectStage: ((ChangedFile, ChangeStage) -> Void)? = nil,
+        showsStageState: Bool = true
+    ) -> some View {
         if !files.isEmpty {
-            let title = "Working tree"
             let expanded = !collapsedSections.contains(title)
             let groups = WorkingTreeChangeGroup.group(files: files)
             let groupsByPath = Dictionary(uniqueKeysWithValues: groups.map { ($0.path, $0) })
@@ -63,60 +81,27 @@ struct NativePeerChangesView: View {
             if expanded {
                 ForEach(WorkingTreeFlatRow.make(
                     groups: groups,
-                    collapsedPaths: collapsedChangePaths
+                    collapsedPaths: collapsedPaths.wrappedValue
                 )) { row in
                     WorkingTreeFlatRowView(
                         row: row,
                         groups: groups,
                         groupsByPath: groupsByPath,
-                        collapsedPaths: $collapsedChangePaths,
+                        collapsedPaths: collapsedPaths,
                         actions: WorkingTreeRowActions(
-                            onSelect: { onOpen(.diff(path: $0.path, stage: $0.stage)) },
+                            onSelect: { onOpen(document($0)) },
                             fileContextTarget: { _ in
                                 FileContextMenuTarget(kind: .file, localURL: nil)
                             },
                             readOnly: true,
+                            showsStageState: showsStageState,
                             onOpenFile: { onOpen(.file(path: $0.path)) },
                             onCopyRelative: { Clipboard.copy($0.path) },
                             onCopyFull: {
                                 Clipboard.copyPath(worktreePath.appendingPathComponent($0.path).path)
                             },
-                            onSelectStage: { file, stage in
-                                onOpen(.diff(path: file.path, stage: stage))
-                            }
+                            onSelectStage: onSelectStage
                         )
-                    )
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func fileSection(
-        _ title: String,
-        files: [ChangedFile],
-        document: @escaping (ChangedFile) -> NativePeerWorkspace.Document
-    ) -> some View {
-        if !files.isEmpty {
-            let expanded = !collapsedSections.contains(title)
-            SectionHeader(
-                role: .workingTree,
-                title: title,
-                count: files.count,
-                expanded: expanded,
-                onToggle: { toggle(title) },
-                stats: (add: files.reduce(0) { $0 + $1.add }, del: files.reduce(0) { $0 + $1.del })
-            ) { EmptyView() }
-            if expanded {
-                ForEach(files) { file in
-                    ChangedRow(
-                        file: file,
-                        fileContextTarget: FileContextMenuTarget(kind: .file, localURL: nil),
-                        onSelect: { onOpen(document(file)) },
-                        onOpenFile: { onOpen(.file(path: file.path)) },
-                        onCopyRelative: { Clipboard.copy(file.path) },
-                        onCopyFull: { Clipboard.copyPath(worktreePath.appendingPathComponent(file.path).path) },
-                        readOnly: true
                     )
                 }
             }

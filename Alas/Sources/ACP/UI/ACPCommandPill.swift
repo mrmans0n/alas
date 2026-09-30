@@ -438,21 +438,31 @@ struct ACPUserMessageText: View {
     let attachments: [ACPMessage.Attachment]
     let typography: ACPChatTypography
     let session: ACPSession
+    /// False for remote sessions, where a local existence check says nothing.
+    let chipsAbsolutePaths: Bool
     @State private var suggestions: [ACPPromptSuggestion]
     @Environment(\.acpUpstreamReferenceStore) private var upstreamReferences
     @State private var upstreamHost: CodeHostKind?
 
-    init(text: String, attachments: [ACPMessage.Attachment], typography: ACPChatTypography, session: ACPSession) {
+    init(
+        text: String,
+        attachments: [ACPMessage.Attachment],
+        typography: ACPChatTypography,
+        session: ACPSession,
+        chipsAbsolutePaths: Bool
+    ) {
         self.text = text
         self.attachments = attachments
         self.typography = typography
         self.session = session
+        self.chipsAbsolutePaths = chipsAbsolutePaths
         _suggestions = State(initialValue: session.promptSuggestions)
     }
 
     var body: some View {
         content
             .environment(\.acpUpstreamReferenceChipping, chipping)
+            .environment(\.acpAbsolutePathChipping, chipsAbsolutePaths)
             .onReceive(session.$promptSuggestions) { latest in
                 if latest != suggestions { suggestions = latest }
             }

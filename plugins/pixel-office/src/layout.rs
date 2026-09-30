@@ -43,8 +43,31 @@ pub struct Layout {
     pub hidden_worktrees: usize,
 }
 
+/// Desk pods drawn at most; the rest go on the "+N more" sign. Measured worst case (every
+/// pod seating four sessions) is about 1.4M fuel per pod plus 1.3M, so 12 pods cost about
+/// 18M of a call's 25M budget. The rest of the headroom is for slower-than-measured phases.
+pub const MAX_PODS: usize = 12;
+
 pub fn max_pods() -> usize {
-    ((MAX_H - TOP - BOTTOM_MARGIN) / ROW_H) as usize * PODS_PER_ROW
+    MAX_PODS.min(((MAX_H - TOP - BOTTOM_MARGIN) / ROW_H) as usize * PODS_PER_ROW)
+}
+
+/// Which worktrees get a desk, as indexes into the snapshot in snapshot order. Past the cap,
+/// the current worktree comes first, then those with sessions, then the quiet ones, so a cap
+/// never hides what the user is looking at or an active agent. Membership changes only when
+/// the set crosses the cap, so desks do not shuffle as sessions start and stop.
+fn shown_worktrees(snapshot: &Snapshot) -> Vec<usize> {
+    let worktrees = &snapshot.worktrees;
+    let rank = |i: usize| match (worktrees[i].current, worktrees[i].sessions.is_empty()) {
+        (true, _) => 0,
+        (false, false) => 1,
+        (false, true) => 2,
+    };
+    let mut order: Vec<usize> = (0..worktrees.len()).collect();
+    order.sort_by_key(|&i| rank(i)); // stable: snapshot order breaks ties
+    order.truncate(max_pods());
+    order.sort_unstable();
+    order
 }
 
 pub fn papers_bucket(dirty: Option<Dirty>) -> u8 {
@@ -62,10 +85,12 @@ pub fn aisle_y(y: i32) -> i32 {
 }
 
 pub fn layout(snapshot: &Snapshot) -> Layout {
-    let shown = snapshot.worktrees.len().min(max_pods());
+    let indexes = shown_worktrees(snapshot);
+    let shown = indexes.len();
     let rows = shown.div_ceil(PODS_PER_ROW) as i32;
-    let pods = snapshot.worktrees[..shown]
+    let pods = indexes
         .iter()
+        .map(|&index| &snapshot.worktrees[index])
         .enumerate()
         .map(|(i, worktree)| {
             let x = (i % PODS_PER_ROW) as i32 * (ROOM_W / PODS_PER_ROW as i32);
@@ -145,6 +170,52 @@ pub(crate) mod tests {
         assert_eq!(big.pods.len(), max_pods());
         assert_eq!(big.hidden_worktrees, 4);
         assert!(big.height <= MAX_H);
+    }
+
+    /// A cap must never hide the worktrees that matter: active sessions and the current one
+    /// stay, the quiet ones make way, and the order on screen is still the snapshot's.
+    #[test]
+    fn the_cap_keeps_worktrees_with_sessions_and_the_current_one_in_snapshot_order() {
+        let mut counts = vec![0; max_pods() + 6];
+        for busy in [max_pods() + 2, max_pods() + 4] {
+            counts[busy] = 1;
+        }
+        let mut snap = snapshot(&counts);
+        snap.worktrees[0].current = false;
+        snap.worktrees[3].current = true;
+
+        let laid_out = layout(&snap);
+        let shown: Vec<&str> = laid_out.pods.iter().map(|p| p.worktree_id.as_str()).collect();
+
+        assert_eq!(shown.len(), max_pods());
+        let position = |id: &str| shown.iter().position(|shown| *shown == id);
+        let (current, first_busy, second_busy) = (position("w3"), position(&format!("w{}", max_pods() + 2)), position(&format!("w{}", max_pods() + 4)));
+        assert!(current.is_some() && first_busy.is_some() && second_busy.is_some());
+        assert!(current < first_busy && first_busy < second_busy, "snapshot order is kept: {shown:?}");
+        assert!(shown.windows(2).all(|pair| index(pair[0]) < index(pair[1])));
+    }
+
+    /// The current worktree is the one the user is looking at: even when more than a cap's worth
+    /// of earlier worktrees are busy, it keeps its desk.
+    #[test]
+    fn the_current_worktree_keeps_its_desk_when_earlier_worktrees_fill_the_cap() {
+        let mut counts = vec![1; max_pods() + 3];
+        counts.push(0);
+        let mut snap = snapshot(&counts);
+        snap.worktrees[0].current = false;
+        let last = snap.worktrees.len() - 1;
+        snap.worktrees[last].current = true;
+
+        let laid_out = layout(&snap);
+        let shown: Vec<&str> = laid_out.pods.iter().map(|p| p.worktree_id.as_str()).collect();
+
+        assert_eq!(shown.len(), max_pods());
+        assert!(shown.contains(&format!("w{last}").as_str()), "current worktree dropped: {shown:?}");
+        assert!(shown.windows(2).all(|pair| index(pair[0]) < index(pair[1])), "snapshot order is kept: {shown:?}");
+    }
+
+    fn index(id: &str) -> usize {
+        id.trim_start_matches('w').parse().unwrap()
     }
 
     #[test]
