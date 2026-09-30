@@ -182,6 +182,13 @@ actor ACPSessionPersistence {
         try openedStore().setAuthStatus(sessionId: sessionId, status: status)
     }
 
+    func setPromptSuggestions(sessionId: String, suggestions: [ACPPromptSuggestion]?, fence: ACPSessionLeaseFence?) throws {
+        let store = try openedStore()
+        let operation = { try store.setPromptSuggestions(sessionId: sessionId, suggestions: suggestions) }
+        if let fence { _ = try store.withLeaseFence(fence, operation) }
+        else { try operation() }
+    }
+
     @discardableResult
     func updateHelperProcOffsets(
         sessionId: String,

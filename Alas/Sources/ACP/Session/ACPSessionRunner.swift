@@ -831,6 +831,23 @@ final class ACPSessionRunner {
         await task?.value
     }
 
+    /// Persists an `available_commands_update` list (slash commands and
+    /// skills) so their pills and chips survive an app restart and appear in
+    /// mirror sessions. Fenced like every other runner-owned mutation; only
+    /// a non-empty list is written, so an agent that later retracts the list
+    /// never erases the stored one — a replayed pill beats a guaranteed
+    /// absence.
+    private func persistPromptSuggestions(_ suggestions: [ACPPromptSuggestion]) {
+        guard holdsLeaseForWrite() else { return }
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        enqueuePersistence { persistence in
+            _ = try await persistence.setPromptSuggestions(
+                sessionId: sessionId, suggestions: suggestions, fence: fence
+            )
+        }
+    }
+
     /// Applies a `_auth/status_update` notification. Unlike a failed-prompt
     /// `authRequired`, the connection here is healthy — the agent is simply
     /// reporting it has no signed-in credentials yet — so this shows the
@@ -1173,6 +1190,9 @@ final class ACPSessionRunner {
             } else {
                 let dirty = session.apply(params.update, worktreeRoot: worktreePath)
                 flushStreamingPersist()
+                if case .availableCommandsUpdate(let suggestions) = params.update {
+                    persistPromptSuggestions(suggestions)
+                }
                 let isSubagentLifecycleUpdate: Bool
                 switch params.update {
                 case .subagentSpawned, .subagentStateUpdate: isSubagentLifecycleUpdate = true

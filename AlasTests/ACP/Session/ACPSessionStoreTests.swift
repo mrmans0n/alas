@@ -65,6 +65,35 @@ struct ACPSessionStoreSchemaTests {
         #expect(try store.loadSession(id: "legacy")?.nativeSubagentsDisabled == nil)
     }
 
+    @Test("agent prompt suggestions round-trip and a nil rewrite keeps the stored list")
+    func promptSuggestionsRoundTrip() throws {
+        let store = try tmpStore()
+        let suggestions = [
+            ACPPromptSuggestion(command: "/review", description: "Review", hint: nil),
+            ACPPromptSuggestion(command: "/$brainstorming", description: "Ideas", hint: "[topic]"),
+        ]
+        try store.upsertSession(.init(
+            id: "skilled", agentId: "claude", title: "Skilled",
+            currentModel: nil, currentMode: nil,
+            promptSuggestions: suggestions,
+            autoRun: false, createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false
+        ))
+        #expect(try store.loadSession(id: "skilled")?.promptSuggestions == suggestions)
+
+        // Rows rebuilt without the field (an older process upserting) keep
+        // the stored list instead of erasing it.
+        try store.setPromptSuggestions(sessionId: "other", suggestions: nil)
+        try store.upsertSession(.init(
+            id: "skilled", agentId: "claude", title: "Skilled",
+            currentModel: nil, currentMode: nil,
+            autoRun: false, createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false
+        ))
+        #expect(try store.loadSession(id: "skilled")?.promptSuggestions == suggestions)
+
+        try store.setPromptSuggestions(sessionId: "skilled", suggestions: nil)
+        #expect(try store.loadSession(id: "skilled")?.promptSuggestions == nil)
+    }
+
     @Test("re-opening doesn't double-apply migrations")
     func idempotent() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("acp-store-\(UUID()).sqlite")

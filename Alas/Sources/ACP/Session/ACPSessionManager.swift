@@ -1657,6 +1657,7 @@ final class ACPSessionManager: ObservableObject {
                 currentModel: nil,
                 currentMode: nil,
                 nativeSubagentsDisabled: nativeSubagentsPreference(agentId: targetAgentID),
+                promptSuggestions: source.promptSuggestions.isEmpty ? nil : source.promptSuggestions,
                 autoRun: autoRunDefault,
                 createdAt: now,
                 updatedAt: now,
@@ -1693,6 +1694,12 @@ final class ACPSessionManager: ObservableObject {
             )
             target.autoRunEnabled = targetRow.autoRun
             target.forkRecord = forkRecord
+            // The fork starts with the source agent's command/skill list in
+            // the persisted row; mirror the live session too so pills render
+            // before any attach re-advertises them.
+            if let suggestions = targetRow.promptSuggestions {
+                target.promptSuggestions = suggestions
+            }
             for message in copiedMessages {
                 target.transcript.appendMessage(try ACPMessageCodec.decode(
                     kind: message.kind,
@@ -1905,6 +1912,12 @@ final class ACPSessionManager: ObservableObject {
         session.mcpPreambleSent = result.row.mcpPreambleSent
         session.authStatus = result.row.authStatus
         session.autoRunEnabled = result.row.autoRun
+        // Restored before any attach: pills and chips for the agent's own
+        // commands/skills render against the persisted list until a live
+        // `available_commands_update` replaces it.
+        if let suggestions = result.row.promptSuggestions, session.promptSuggestions.isEmpty {
+            session.promptSuggestions = suggestions
+        }
         // Title intentionally NOT overwritten: `placeholderSession` already
         // seeded it from the same row, and a rename made through the
         // toolbar during the hydration window should win against the value
@@ -2679,6 +2692,21 @@ final class ACPSessionManager: ObservableObject {
                 sessionId: sessionId,
                 items: items,
                 fence: fence
+            )
+        }
+    }
+
+    /// Persist the agent's advertised commands/skills (`promptSuggestions`)
+    /// whenever they change at attach time, so their pills survive an app
+    /// restart and reach mirror sessions. Only a non-empty list is written —
+    /// a retracted list never erases the stored one, matching
+    /// `ACPSessionRunner.persistPromptSuggestions`.
+    private func persistPromptSuggestions(_ suggestions: [ACPPromptSuggestion], for sessionId: ACPSession.ID) {
+        guard !suggestions.isEmpty else { return }
+        let fence = leaseFence(sessionId: sessionId)
+        enqueuePersistence { persistence in
+            _ = try await persistence.setPromptSuggestions(
+                sessionId: sessionId, suggestions: suggestions, fence: fence
             )
         }
     }
@@ -4497,6 +4525,12 @@ extension ACPSessionManager {
         session.currentMode = row.currentMode
         session.autoRunEnabled = row.autoRun
         session.authStatus = row.authStatus
+        // Mirrors never run their own attach, so the persisted suggestions
+        // list is the ONLY source for their pills and chips. A fresh list
+        // wins over an empty one; the writer's newer list replaces the old.
+        if let suggestions = row.promptSuggestions, !suggestions.isEmpty {
+            session.promptSuggestions = suggestions
+        }
         // Mirrors never run their own attach/runner, so nothing else ever
         // re-applies the `.needsAuth` semantics the writer's attach derives
         // from a signed-out status — do it here too, or a mirror keeps
@@ -6180,7 +6214,14 @@ extension ACPSessionManager {
             session.availableModes = result.availableModes
             session.currentModel = result.currentModel
             session.currentMode = result.currentMode
-            session.promptSuggestions = result.promptSuggestions
+            // An attach result without suggestions keeps whatever hydration
+            // restored, so a restart never blanks the pills/chips in the
+            // attach window; the persisted row is refreshed only from a
+            // genuinely non-empty result.
+            if !result.promptSuggestions.isEmpty || session.promptSuggestions.isEmpty {
+                session.promptSuggestions = result.promptSuggestions
+            }
+            persistPromptSuggestions(session.promptSuggestions, for: sessionId)
             session.availableConfigOptions = result.configOptions
             session.providerCapabilities = initialized.providerCapabilities
             session.availableProviders = providers
