@@ -1900,18 +1900,33 @@ final class AppState {
 
     private func attachDelegatedChildWithPendingTurn(_ record: ACPDelegationRecord) async {
         let childId = record.childSessionId
-        guard let worktree = record.childWorktreeId.flatMap(worktree(withId:)),
+        // Read the queue from the store the child was persisted in, which
+        // stays keyed by the worktree id recorded at creation even if the
+        // worktree is no longer known under it.
+        guard let childWorktreeId = record.childWorktreeId,
+              FileManager.default.fileExists(atPath: Paths.acpSessionsDB(forWorktreeId: childWorktreeId).path),
+              let persistedQueue = try? await ACPSessionPersistence(
+                  path: Paths.acpSessionsDB(forWorktreeId: childWorktreeId).path
+              ).loadQueue(sessionId: childId),
+              ACPSessionOrchestrationPolicy.needsRestartAttach(phase: record.phase, queueHead: persistedQueue.first)
+        else { return }
+        guard let worktree = worktree(withId: childWorktreeId),
               let manager = acpManager(for: worktree),
-              let persistedQueue = try? await manager.persistence.loadQueue(sessionId: childId),
-              ACPSessionOrchestrationPolicy.needsRestartAttach(phase: record.phase, queueHead: persistedQueue.first),
               await manager.persistedSessionRow(id: childId) != nil,
               manager.placeholderSession(id: childId) != nil
-        else { return }
+        else {
+            // The parent is waiting on this turn; say it is gone rather than
+            // leave the child `ready` forever.
+            await acpOrchestration.markChildFailed(
+                childSessionId: childId,
+                message: "Alas restarted, and the delegated session's worktree is no longer available."
+            )
+            return
+        }
         rememberDelegatedSessionParent(childID: childId, parentID: record.parentSessionId)
-        // The child is now a live session, so point its link here before the
-        // attach finishes: a report it sends meanwhile is accepted.
-        _ = acpSessionSocketPath(sessionId: childId)
         await manager.hydrateIfNeeded(id: childId)
+        // The attach repoints the child's socket link once it holds the
+        // session's lease (the env providers run after lease acquisition).
         await manager.attach(to: childId, freshlyCreated: false)
         // Another instance holding the child's lease runs it and owns the
         // outcome.
