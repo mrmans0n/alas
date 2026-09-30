@@ -32,7 +32,8 @@ struct AlasCLIWorktreeResolverTests {
              .sessionNew(_, _, .existing(let t), _, _):
             target = t
         default:
-            Issue.record("unexpected command"); return
+            Issue.record("unexpected command")
+            return
         }
 
         #expect(AlasCLIWorktreeResolver.resolve(target: target, worktrees: [local, remote])

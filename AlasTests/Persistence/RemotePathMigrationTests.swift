@@ -108,7 +108,8 @@ struct RemotePathMigrationTests {
         loaded.loadAll(worktreeIds: [id])
 
         guard case .editor(let state) = loaded.tabs(forWorktree: id).first else {
-            Issue.record("editor tab not restored"); return
+            Issue.record("editor tab not restored")
+            return
         }
         #expect(state.externalAbsolutePath == (remote ? RemotePath.virtual(host: "mini", realPath: external) : external))
     }
