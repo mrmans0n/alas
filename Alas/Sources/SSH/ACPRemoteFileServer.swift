@@ -11,11 +11,13 @@ enum RemotePathContainment {
         }
     }
 
-    static func lexicallyResolveInsideWorktree(path: String, worktreeRoot: String) throws -> String {
+    static func lexicallyResolveInsideWorktree(path rawPath: String, worktreeRoot: String) throws -> String {
+        // Agents report real paths; a remote worktree root is virtual.
+        let path = RemotePath.virtualizing(rawPath, like: worktreeRoot)
         let absolute = path.hasPrefix("/") ? path : worktreeRoot + "/" + path
         let normalized = URL(fileURLWithPath: absolute).standardizedFileURL.path
         guard normalized == worktreeRoot || normalized.hasPrefix(worktreeRoot + "/") else {
-            throw ContainmentError.outsideWorktree(path)
+            throw ContainmentError.outsideWorktree(rawPath)
         }
         return normalized
     }

@@ -23,6 +23,9 @@ struct RemoteHostRegistryTests {
         #expect(split.realPath == real)
         #expect(RemotePath.realPath(virtual) == real)
         #expect(RemotePath.display(virtual) == "\(host):\(real)")
+        #expect(RemotePath.virtualizing(real, like: virtual) == virtual)
+        #expect(RemotePath.virtualizing(virtual, like: virtual) == virtual)
+        #expect(RemotePath.virtualizing(real, like: real) == real)
     }
 
     @Test(arguments: ["/Volumes/Workspace/alas", "/.alas-remote", "/.alas-remote/", "/.alas-remote/host"])
@@ -43,4 +46,26 @@ struct RemoteHostRegistryTests {
                 == #"{"uri":"file:///.alas-remote/mini/srv/a.swift","other":"file:///.alas-remote/mini/usr/include/x.h"}"#
         )
     }
+
+    @Test(arguments: [
+        #"{"cwd":"/.alas-remote/mini/srv/repo","n":"/.alas-remote/mini.lan/x"}"#,
+        #"{"cwd":"\/.alas-remote\/mini\/srv\/repo","n":"\/.alas-remote\/mini.lan\/x"}"#,
+    ])
+    func outboundTransportStripsPlainAndEscapedSlashes(payload: String) throws {
+        let inner = RecordingTransport()
+        let transport = RemotePathStrippingTransport(host: "mini", inner: inner)
+        try transport.send(Data(payload.utf8))
+        try transport.send(Data(payload.utf8), onWritten: {})
+        let sent = inner.sent.map { String(decoding: $0, as: UTF8.self) }
+        #expect(sent.count == 2)
+        #expect(sent.allSatisfy { $0.contains("mini.lan") && !$0.contains("alas-remote/mini/") && !$0.contains("alas-remote\\/mini\\/") })
+    }
+}
+
+private final class RecordingTransport: JSONRPCStdioTransporting, @unchecked Sendable {
+    let incoming = AsyncStream<JSONRPCStdioTransport.Incoming> { _ in }
+    private(set) var sent: [Data] = []
+    func start() throws {}
+    func send(_ data: Data) throws { sent.append(data) }
+    func terminate() {}
 }

@@ -64,7 +64,7 @@ final class ACPTerminalHost: ObservableObject {
     }
 
     func recordMetadataTerminalInfo(terminalId: String, cwd: String?) {
-        _ = metadataTerminal(terminalId: terminalId, cwd: cwd)
+        _ = metadataTerminal(terminalId: terminalId, cwd: cwd.map { RemotePath.virtualizing($0, like: sessionCwd) })
     }
 
     func appendMetadataOutput(terminalId: String, data: Data, replace: Bool) {

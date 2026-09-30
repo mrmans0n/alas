@@ -37,4 +37,41 @@ enum RemotePath {
     static func virtualizingFileURIs(host: String, in text: String) -> String {
         text.replacingOccurrences(of: "file:///", with: "file://\(root)/\(host)/")
     }
+
+    /// Inbound: an absolute real path reported by a process on the same host
+    /// as `anchor` becomes virtual; everything else is returned unchanged.
+    static func virtualizing(_ path: String, like anchor: String) -> String {
+        guard let host = split(anchor)?.host, path.hasPrefix("/"), split(path) == nil else { return path }
+        return virtual(host: host, realPath: path)
+    }
+}
+
+/// Strips this host's virtual paths from every ACP frame sent to a remote
+/// agent. Frames come from JSONSerialization/JSONEncoder, which escape `/` as
+/// `\/`, so both spellings are stripped rather than changing every encoder.
+final class RemotePathStrippingTransport: JSONRPCStdioTransporting, @unchecked Sendable {
+    private let host: String
+    private let inner: JSONRPCStdioTransporting
+
+    init(host: String, inner: JSONRPCStdioTransporting) {
+        self.host = host
+        self.inner = inner
+    }
+
+    var incoming: AsyncStream<JSONRPCStdioTransport.Incoming> { inner.incoming }
+    var requestIDPrefix: String? { inner.requestIDPrefix }
+    func start() throws { try inner.start() }
+    func terminate() { inner.terminate() }
+    func send(_ data: Data) throws { try inner.send(strip(data)) }
+    func send(_ data: Data, onWritten: @escaping @Sendable () -> Void) throws {
+        try inner.send(strip(data), onWritten: onWritten)
+    }
+
+    private func strip(_ data: Data) -> Data {
+        let text = String(decoding: data, as: UTF8.self)
+        let plain = RemotePath.stripping(host: host, in: text)
+        return Data(plain.replacingOccurrences(
+            of: "\\/.alas-remote\\/\(host)\\/", with: "\\/"
+        ).utf8)
+    }
 }
