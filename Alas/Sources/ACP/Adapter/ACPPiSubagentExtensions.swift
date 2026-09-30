@@ -169,8 +169,10 @@ enum ACPPiSubagentExtensions {
         func scan(base: URL, label: String?, isGlobal: Bool) {
             let suffix = label.map { " (project \($0))" } ?? ""
             let settingsURL = base.appendingPathComponent("settings.json")
+            var overrides: [String] = []
             if FileManager.default.fileExists(atPath: settingsURL.path) {
                 if let settings = readSettings(settingsURL) {
+                    overrides = settings.extensions.filter(isOverride)
                     for entry in settings.packages {
                         switch classifyPackage(entry) {
                         case .known(let name): note(name, into: &covered)
@@ -178,15 +180,21 @@ enum ACPPiSubagentExtensions {
                         case .unrecognized(let name): note(name + suffix, into: &unrecognized)
                         }
                     }
-                    for path in settings.extensions {
-                        note((path as NSString).lastPathComponent + suffix, into: &unrecognized)
+                    // Plain entries add a local path; glob entries only
+                    // narrow those, so ignoring them over-reports.
+                    for path in settings.extensions where !isOverride(path) && !isGlob(path) {
+                        let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : base.appendingPathComponent(path)
+                        guard isEnabled(url, base: base, overrides: overrides) else { continue }
+                        note(url.lastPathComponent + suffix, into: &unrecognized)
                     }
                 } else {
                     note("unreadable \(settingsURL.path)", into: &unrecognized)
                 }
             }
-            for name in autoDiscoveredExtensions(in: base.appendingPathComponent("extensions", isDirectory: true)) {
+            let folder = base.appendingPathComponent("extensions", isDirectory: true)
+            for name in autoDiscoveredExtensions(in: folder) {
                 if isGlobal, knownSafeGlobalExtensions.contains(name) { continue }
+                guard isEnabled(folder.appendingPathComponent(name), base: base, overrides: overrides) else { continue }
                 note(name + suffix, into: &unrecognized)
             }
         }
@@ -263,8 +271,8 @@ enum ACPPiSubagentExtensions {
 
     private struct Settings {
         var packages: [Any]
-        /// Top-level `extensions` entries that add a path; `-`/`!` entries
-        /// only disable auto-discovered files.
+        /// Top-level `extensions` entries: local paths, globs, and
+        /// `!`/`+`/`-` overrides.
         var extensions: [String]
     }
 
@@ -282,11 +290,44 @@ enum ACPPiSubagentExtensions {
         switch object["extensions"] {
         case nil, is NSNull: extensions = []
         case let array as [String]:
-            extensions = array.filter { !$0.hasPrefix("-") && !$0.hasPrefix("!") }
-                .map { $0.hasPrefix("+") ? String($0.dropFirst()) : $0 }
+            extensions = array
         default: return nil
         }
         return Settings(packages: packages, extensions: extensions)
+    }
+
+    private static func isOverride(_ entry: String) -> Bool {
+        entry.hasPrefix("!") || entry.hasPrefix("+") || entry.hasPrefix("-")
+    }
+
+    private static func isGlob(_ entry: String) -> Bool {
+        entry.contains("*") || entry.contains("?")
+    }
+
+    /// Pi's override rules (0.85.1 `isEnabledByOverrides`) for a file under
+    /// `base`: `!glob` disables a match on its base-relative path, name, or
+    /// absolute path; `+path` re-enables and `-path` disables an exact
+    /// base-relative or absolute path, in that order. Globs use `fnmatch`
+    /// with `FNM_PATHNAME`, which matches no more than Pi's minimatch, so a
+    /// disabled extension may still be reported but an enabled one is never
+    /// hidden.
+    static func isEnabled(_ file: URL, base: URL, overrides: [String]) -> Bool {
+        let absolute = file.standardizedFileURL.path
+        let basePath = base.standardizedFileURL.path
+        let relative = absolute.hasPrefix(basePath + "/") ? String(absolute.dropFirst(basePath.count + 1)) : absolute
+        let name = file.lastPathComponent
+        func exact(_ pattern: Substring) -> Bool {
+            let normalized = pattern.hasPrefix("./") ? String(pattern.dropFirst(2)) : String(pattern)
+            return normalized == relative || normalized == absolute
+        }
+        func glob(_ pattern: Substring) -> Bool {
+            [relative, name, absolute].contains { fnmatch(String(pattern), $0, FNM_PATHNAME) == 0 }
+        }
+        var enabled = true
+        if overrides.contains(where: { $0.hasPrefix("!") && glob($0.dropFirst()) }) { enabled = false }
+        if overrides.contains(where: { $0.hasPrefix("+") && exact($0.dropFirst()) }) { enabled = true }
+        if overrides.contains(where: { $0.hasPrefix("-") && exact($0.dropFirst()) }) { enabled = false }
+        return enabled
     }
 
     /// Entries Pi auto-loads from an `extensions` folder: `.ts`/`.js` files

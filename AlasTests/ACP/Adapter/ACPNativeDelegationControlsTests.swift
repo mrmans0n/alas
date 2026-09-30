@@ -324,9 +324,15 @@ struct ACPNativeDelegationControlsTests {
                 .enforced(covered: ["pi-subagents"])
             ),
             (
-                #"{"packages":["npm:pi-subagents","npm:pi-web-access"],"extensions":["+tools/x.ts","-auto.ts"]}"#,
+                #"{"packages":["npm:pi-subagents","npm:pi-web-access"],"extensions":["tools/x.ts","*.ts"]}"#,
                 ["mine.ts", "notes.md", ".hidden.ts", "helper"], nil, [],
                 .unrecognized(covered: ["pi-subagents"], unrecognized: ["pi-web-access", "x.ts", "helper", "mine.ts"])
+            ),
+            // Extensions the settings disable are not reported.
+            (
+                #"{"extensions":["-extensions/off.ts","!old-*","+extensions/old-kept.ts","tools/y.ts","-tools/y.ts"]}"#,
+                ["off.ts", "old-a.ts", "old-kept.ts"], nil, [],
+                .unrecognized(covered: [], unrecognized: ["old-kept.ts"])
             ),
             (
                 nil, [], #"{"packages":["npm:pi-subagents","npm:other"]}"#, ["team.ts"],

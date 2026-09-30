@@ -223,7 +223,8 @@ extensions:
 - **Settings shows what it covers.** Alas reads, without changing, the
   `packages` and `extensions` in your Pi settings (`~/.pi/agent/settings.json`,
   or `$PI_CODING_AGENT_DIR/settings.json`), the files in its `extensions`
-  folder, and the same in each local project's `.pi` folder. It reports one of:
+  folder, and the same in each local project's `.pi` folder. Extensions your
+  settings disable (`-path` or `!pattern` entries) are skipped. It reports one of:
   - *Covers the installed …*: every installed extension is recognized, and the
     known subagent extensions among them are covered.
   - *Nothing to remove yet*: no known subagent extension is installed, and
