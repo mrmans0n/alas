@@ -492,4 +492,23 @@ struct ACPOrchestrationStoreTests {
 
         #expect(try sending.pendingMessages(targetSessionId: "child").map(\.id) == ["claimed"])
     }
+
+    @Test("a selected child's inbox rows are claimable only once it is ready, and dropped once it failed", arguments: [
+        (ACPDelegationPhase.starting, false, true), (.ready, true, true), (.failed, false, false),
+    ])
+    func selectedChildInboxClaims(phase: ACPDelegationPhase, claimable: Bool, rowKept: Bool) throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        var record = newRecord()
+        record.phase = phase
+        record.modelSelection = ACPDelegatedModelSelection(model: "opus", reasoning: nil)
+        try store.insert(record)
+        try store.enqueue(.init(
+            id: "held", sourceSessionId: "parent", targetSessionId: "child", prompt: "Also check the lexer.", createdAt: 700
+        ))
+
+        let claim = try store.claimMessage(id: "held", instanceId: "i", token: "t", now: 700, staleAfter: 60)
+
+        #expect((claim != nil) == claimable)
+        #expect(try store.pendingMessages(targetSessionId: "child").isEmpty == !rowKept)
+    }
 }

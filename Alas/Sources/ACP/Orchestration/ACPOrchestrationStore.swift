@@ -132,11 +132,12 @@ final class ACPOrchestrationStore {
     /// a later call would correctly lose the claim, and startup
     /// reconciliation only reloads creating/starting records.
     ///
-    /// `discardingHeldMessages` (a child whose model selection never took
-    /// effect) also deletes the child's inbox rows in the same transaction,
-    /// except ones another instance holds a live claim on; that instance
-    /// sees the failed phase (claims expire against `updatedAt`, the clock
-    /// `claimMessage` uses). Together with `enqueueUnlessTargetEnded`, which
+    /// `discardingHeldMessages` (a child with a model selection) also deletes
+    /// the child's inbox rows in the same transaction, except ones another
+    /// instance holds a live claim on (claims expire against `updatedAt`, the
+    /// clock `claimMessage` uses). `claimMessage` never claims a row for a
+    /// selected child that is not ready, so a live claim means the selection
+    /// was already applied. Together with `enqueueUnlessTargetEnded`, which
     /// checks the phase under the same write lock, no row can be accepted
     /// for the child once this commits, and none accepted before survives.
     func claimFailedPhase(
@@ -304,6 +305,27 @@ final class ACPOrchestrationStore {
         let expiresAt = now + staleAfter
         try db.exec("BEGIN IMMEDIATE")
         do {
+            // A child with a model selection takes inbox rows only once it is
+            // ready (`ACPSessionOrchestrationPolicy.defersInboxDelivery`).
+            // Checked here, under the claim's write lock, so no instance can
+            // claim a row that a concurrent failure should discard; a row
+            // for a child that failed that way is dropped instead.
+            let heldPhase = try db.query("""
+            SELECT d.phase FROM delegated_messages m
+            JOIN delegations d ON d.child_session_id = m.target_session_id
+            WHERE m.id = ? AND d.phase != ?
+              AND (d.requested_model IS NOT NULL OR d.requested_reasoning IS NOT NULL)
+            """, bindings: [id, ACPDelegationPhase.ready.rawValue]).first?["phase"] as? String
+            if let heldPhase {
+                if heldPhase == ACPDelegationPhase.failed.rawValue {
+                    _ = try db.execChanges("""
+                    DELETE FROM delegated_messages
+                    WHERE id = ? AND (claim_token IS NULL OR claim_expires_at < ?)
+                    """, bindings: [id, now])
+                }
+                try db.exec("COMMIT")
+                return nil
+            }
             let changed = try db.execChanges("""
             UPDATE delegated_messages
             SET claim_instance_id = ?, claim_token = ?, claim_expires_at = ?

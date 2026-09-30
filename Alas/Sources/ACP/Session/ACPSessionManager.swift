@@ -7151,21 +7151,36 @@ extension ACPSessionManager {
         sessions[id]?.holdPromptsForDelegatedSelection()
     }
 
-    /// Lifts the hold once the child is ready on its selection, or failed.
-    /// On failure the caller names the delegated prompt that must never run
-    /// on the agent's default model; it is dropped from the queue, and the
-    /// queue persisted, before anything else can drain. Prompts a human
-    /// queued in the tab stay and go out.
-    func releaseDelegatedSelectionHold(_ id: ACPSession.ID, discardingDelegatedPrompt messageId: String? = nil) {
-        guard let session = sessions[id] else { return }
-        let wasHeld = session.releaseDelegatedSelectionHold()
-        if let messageId, session.hydrationState == .ready {
-            if let item = session.queue.first(where: { $0.delegatedSource?.messageId == messageId }) {
-                session.removeFromQueue(id: item.id)
-            }
-            persistQueue(for: session)
+    /// Lifts the hold once the child is ready on its selection, or durably
+    /// failed. Prompts a human queued in the tab stay and go out.
+    func releaseDelegatedSelectionHold(_ id: ACPSession.ID) {
+        guard let session = sessions[id], session.releaseDelegatedSelectionHold() else { return }
+        runners[id]?.flushQueueIfIdle()
+    }
+
+    /// Drops a failing child's delegated prompt from its queue, and waits for
+    /// the queue to be written without it, so the prompt cannot come back on
+    /// a later hydration once the failed phase has lifted the hold. Also
+    /// writes the queue when the prompt was already withheld in memory.
+    /// Returns whether it is durably gone; true when this instance has no
+    /// hydrated copy of the session, which leaves nothing here to dispatch.
+    func discardDelegatedPrompt(messageId: String, in id: ACPSession.ID) async -> Bool {
+        guard let session = sessions[id], session.hydrationState == .ready else { return true }
+        if let item = session.queue.first(where: { $0.delegatedSource?.messageId == messageId }),
+           !session.removeFromQueue(id: item.id) {
+            return false
         }
-        if wasHeld { runners[id]?.flushQueueIfIdle() }
+        let items = session.queue
+        let fence = leaseFence(sessionId: id)
+        beginManagerQueuePersistence(sessionId: id)
+        session.pendingQueuePersistenceCount += 1
+        let task = enqueuePersistenceResult { persistence in
+            try await persistence.upsertQueue(sessionId: id, items: items, fence: fence)
+        }
+        let persisted = await task.value == true
+        session.pendingQueuePersistenceCount -= 1
+        endManagerQueuePersistence(sessionId: id)
+        return persisted
     }
 
     /// Takes a delegated prompt out of a hydrated session's queue before it

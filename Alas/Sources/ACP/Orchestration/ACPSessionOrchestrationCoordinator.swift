@@ -554,6 +554,16 @@ final class ACPSessionOrchestrationCoordinator {
             createdAt: environment.now(),
             kind: .prompt
         )
+        // A child still waiting on its model selection must never run the
+        // parent's prompt on the agent's default model: drop it from the
+        // session's queue, durably, before `.failed` lifts the prompt hold
+        // (a later hydration of a failed child is not held).
+        let holdsDispatch = ACPSessionOrchestrationPolicy.holdsPromptDispatch(target: record)
+        let heldManager = holdsDispatch ? environment.sessionLocation(childSessionId)?.manager : nil
+        let initialPromptGone = await heldManager?.discardDelegatedPrompt(
+            messageId: initialPromptSource(for: record).messageId,
+            in: childSessionId
+        ) ?? true
         // A child whose model selection never took effect loses its held
         // inbox rows in the same transaction, so no path (startup recovery
         // included) can later run them on the agent's default model.
@@ -566,10 +576,11 @@ final class ACPSessionOrchestrationCoordinator {
         )) ?? false
         // Lift the hold only once `.failed` is durable: a claim that threw
         // (busy timeout, I/O) left the child `starting`, and a released hold
-        // cannot be re-armed on this session object.
-        if ACPSessionOrchestrationPolicy.holdsPromptDispatch(target: record),
+        // cannot be re-armed on this session object. If the prompt could not
+        // be written out of the queue, the hold stays for this process.
+        if let heldManager, initialPromptGone,
            (try? await environment.persistence.delegation(childSessionId: childSessionId))??.phase == .failed {
-            releaseSelectionHold(for: record, discardingInitialPrompt: true)
+            heldManager.releaseDelegatedSelectionHold(childSessionId)
         }
         environment.notifyChanged()
         guard wonTransition else { return }
@@ -577,18 +588,6 @@ final class ACPSessionOrchestrationCoordinator {
             to: outcome.targetSessionId,
             callerParent: record,
             targetParent: nil
-        )
-    }
-
-    /// Lifts a selected child's prompt hold (`ACPSessionManager
-    /// .holdPromptsForDelegatedSelection`) on the manager that has it live; a
-    /// session that is not live holds nothing, and its next attach derives no
-    /// hold from the failed phase. Once the child failed, its initial prompt
-    /// must never run on the agent's default model, so it is dropped first.
-    private func releaseSelectionHold(for record: ACPDelegationRecord, discardingInitialPrompt: Bool) {
-        environment.sessionLocation(record.childSessionId)?.manager.releaseDelegatedSelectionHold(
-            record.childSessionId,
-            discardingDelegatedPrompt: discardingInitialPrompt ? initialPromptSource(for: record).messageId : nil
         )
     }
 
@@ -828,14 +827,9 @@ final class ACPSessionOrchestrationCoordinator {
         do {
             try await manager.applyDelegatedModelSelection(selection, to: record.childSessionId)
         } catch {
-            // Recovery may have withheld an already-queued copy of the prompt
-            // in memory; persist the queue without it, and wait for that write,
-            // before the failed phase takes the child out of recovery, so a
-            // later reopen cannot run it on the default model.
-            if let session = manager.liveSession(for: record.childSessionId) {
-                manager.persistQueue(for: session)
-                await manager.flushAllPersistence()
-            }
+            // `markChildFailed` writes the queue without the prompt, which
+            // recovery may have withheld in memory, before the failed phase
+            // takes the child out of recovery.
             await markChildFailed(childSessionId: record.childSessionId, message: error.localizedDescription)
             return false
         }
