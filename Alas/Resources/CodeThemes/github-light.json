@@ -1,0 +1,18 @@
+{
+  "id": "github-light",
+  "name": "GitHub Light",
+  "colors": {
+    "bg": "#ffffff",
+    "fg": "#1f2328",
+    "gutter-fg": "#8c959f",
+    "selection": "#dbe9f9",
+    "comment": "#59636e",
+    "keyword": "#cf222e",
+    "string": "#0a3069",
+    "number": "#0550ae",
+    "type": "#953800",
+    "function": "#8250df",
+    "constant": "#0550ae",
+    "attribute": "#116329"
+  }
+}

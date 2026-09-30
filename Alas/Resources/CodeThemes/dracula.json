@@ -1,0 +1,18 @@
+{
+  "id": "dracula",
+  "name": "Dracula",
+  "colors": {
+    "bg": "#282a36",
+    "fg": "#f8f8f2",
+    "gutter-fg": "#6272a4",
+    "selection": "#44475a",
+    "comment": "#6272a4",
+    "keyword": "#ff79c6",
+    "string": "#f1fa8c",
+    "number": "#bd93f9",
+    "type": "#8be9fd",
+    "function": "#50fa7b",
+    "constant": "#bd93f9",
+    "attribute": "#50fa7b"
+  }
+}

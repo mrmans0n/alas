@@ -1,0 +1,18 @@
+{
+  "id": "catppuccin-mocha",
+  "name": "Catppuccin Mocha",
+  "colors": {
+    "bg": "#1e1e2e",
+    "fg": "#cdd6f4",
+    "gutter-fg": "#6c7086",
+    "selection": "#313244",
+    "comment": "#9399b2",
+    "keyword": "#cba6f7",
+    "string": "#a6e3a1",
+    "number": "#fab387",
+    "type": "#f9e2af",
+    "function": "#89b4fa",
+    "constant": "#fab387",
+    "attribute": "#f5c2e7"
+  }
+}

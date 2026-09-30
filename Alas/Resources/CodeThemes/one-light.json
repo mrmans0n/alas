@@ -1,0 +1,18 @@
+{
+  "id": "one-light",
+  "name": "One Light",
+  "colors": {
+    "bg": "#fafafa",
+    "fg": "#383a42",
+    "gutter-fg": "#9d9d9f",
+    "selection": "#e5e5e6",
+    "comment": "#a0a1a7",
+    "keyword": "#a626a4",
+    "string": "#50a14f",
+    "number": "#986801",
+    "type": "#c18401",
+    "function": "#4078f2",
+    "constant": "#986801",
+    "attribute": "#0184bc"
+  }
+}

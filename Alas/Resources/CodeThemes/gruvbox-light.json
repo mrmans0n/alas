@@ -1,0 +1,18 @@
+{
+  "id": "gruvbox-light",
+  "name": "Gruvbox Light",
+  "colors": {
+    "bg": "#fbf1c7",
+    "fg": "#3c3836",
+    "gutter-fg": "#a89984",
+    "selection": "#ebdbb2",
+    "comment": "#928374",
+    "keyword": "#9d0006",
+    "string": "#79740e",
+    "number": "#8f3f71",
+    "type": "#b57614",
+    "function": "#427b58",
+    "constant": "#8f3f71",
+    "attribute": "#af3a03"
+  }
+}

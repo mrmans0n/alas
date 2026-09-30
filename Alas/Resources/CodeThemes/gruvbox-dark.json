@@ -1,0 +1,18 @@
+{
+  "id": "gruvbox-dark",
+  "name": "Gruvbox Dark",
+  "colors": {
+    "bg": "#282828",
+    "fg": "#ebdbb2",
+    "gutter-fg": "#7c6f64",
+    "selection": "#504945",
+    "comment": "#928374",
+    "keyword": "#fb4934",
+    "string": "#b8bb26",
+    "number": "#d3869b",
+    "type": "#fabd2f",
+    "function": "#8ec07c",
+    "constant": "#d3869b",
+    "attribute": "#fe8019"
+  }
+}
