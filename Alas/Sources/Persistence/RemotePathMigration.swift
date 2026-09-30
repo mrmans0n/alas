@@ -59,18 +59,39 @@ enum RemotePathMigration {
         }
     }
 
-    static func rewrite(_ config: inout AppConfig, idMap: [String: String]) {
+    /// Rewrites recents and last selections, then saves whichever file
+    /// changed. Saving here matters: projects.json can be re-saved with the
+    /// virtual ids before any settings save, and the legacy map is then gone.
+    /// `store` is nil in the test host, which shares the user's app support dir.
+    static func rewrite(
+        _ config: inout AppConfig,
+        _ spaces: inout SpacesFile?,
+        idMap: [String: String],
+        saving store: (any PersistenceStoreProtocol)?
+    ) {
+        let (oldConfig, oldSpaces) = (config, spaces)
         config.recentWorktreeIdsByProject = config.recentWorktreeIdsByProject.mapValues { $0.map { idMap[$0] ?? $0 } }
         config.recentWorktreeRefs = config.recentWorktreeRefs.map {
             .init(projectId: $0.projectId, worktreeId: idMap[$0.worktreeId] ?? $0.worktreeId)
         }
+        if var file = spaces {
+            for i in file.spaces.indices {
+                if let old = file.spaces[i].lastSelectedWorktreeId, let new = idMap[old] {
+                    file.spaces[i].lastSelectedWorktreeId = new
+                }
+            }
+            spaces = file
+        }
+        guard let store else { return }
+        if config != oldConfig { save(config, to: Paths.appConfigFile, store) }
+        if let spaces, spaces != oldSpaces { save(spaces, to: Paths.spacesFile, store) }
     }
 
-    static func rewrite(_ spaces: inout SpacesFile, idMap: [String: String]) {
-        for i in spaces.spaces.indices {
-            if let old = spaces.spaces[i].lastSelectedWorktreeId, let new = idMap[old] {
-                spaces.spaces[i].lastSelectedWorktreeId = new
-            }
+    private static func save(_ value: some Encodable, to url: URL, _ store: any PersistenceStoreProtocol) {
+        do {
+            try store.write(value, to: url)
+        } catch {
+            logger.error("Saving \(url.path, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

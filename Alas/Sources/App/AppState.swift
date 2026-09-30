@@ -1466,8 +1466,9 @@ final class AppState {
             if !Self.isRunningUnitTests {
                 RemotePathMigration.migrate(idMap: legacyWorktreeIDs)
             }
-            RemotePathMigration.rewrite(&config, idMap: legacyWorktreeIDs)
-            if spacesFile != nil { RemotePathMigration.rewrite(&spacesFile!, idMap: legacyWorktreeIDs) }
+            RemotePathMigration.rewrite(
+                &config, &spacesFile, idMap: legacyWorktreeIDs, saving: Self.isRunningUnitTests ? nil : store
+            )
         }
         self.config = config
         self.languageServerConfigChangeTracker = LanguageServerConfigChangeTracker(

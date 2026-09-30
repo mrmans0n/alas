@@ -114,19 +114,33 @@ struct RemotePathMigrationTests {
         #expect(state.externalAbsolutePath == (remote ? RemotePath.virtual(host: "mini", realPath: external) : external))
     }
 
-    @Test func rewritesWorktreeIdsInRecentsAndSpaces() {
+    /// Saved right away: once projects.json is re-saved the legacy map is
+    /// gone, so an unsaved rewrite would leave stale ids forever.
+    @Test func rewritesAndSavesRecentsAndSpacesOnlyWhenChanged() {
         var config = AppConfig.defaults
         config.recentWorktreeIdsByProject = ["p": [old, "/local"]]
         config.recentWorktreeRefs = [.init(projectId: "p", worktreeId: old)]
-        var spaces = SpacesFile(activeSpaceId: "s", spaces: [
+        var spaces: SpacesFile? = SpacesFile(activeSpaceId: "s", spaces: [
             SpaceConfig(id: "s", name: "S", emoji: "x", projectIds: ["p"], lastSelectedWorktreeId: old, createdAt: .distantPast),
         ])
+        let store = RecordingStore()
 
-        RemotePathMigration.rewrite(&config, idMap: [old: new])
-        RemotePathMigration.rewrite(&spaces, idMap: [old: new])
+        RemotePathMigration.rewrite(&config, &spaces, idMap: [old: new], saving: store)
 
         #expect(config.recentWorktreeIdsByProject == ["p": [new, "/local"]])
         #expect(config.recentWorktreeRefs.map(\.worktreeId) == [new])
-        #expect(spaces.spaces.map(\.lastSelectedWorktreeId) == [new])
+        #expect(spaces?.spaces.map(\.lastSelectedWorktreeId) == [new])
+        #expect(store.writes.map(\.url) == [Paths.appConfigFile, Paths.spacesFile])
+        #expect(store.writes.first?.value as? AppConfig == config)
+        #expect(store.writes.last?.value as? SpacesFile == spaces)
+
+        RemotePathMigration.rewrite(&config, &spaces, idMap: [old: new], saving: store)
+        #expect(store.writes.count == 2)
     }
+}
+
+private final class RecordingStore: PersistenceStoreProtocol {
+    private(set) var writes: [(url: URL, value: Any)] = []
+    func write(_ value: some Encodable, to url: URL) throws { writes.append((url, value)) }
+    func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
 }
