@@ -23,6 +23,10 @@ struct ACPMentionPickerView: View {
 
     private let maxDisplay = 80
 
+    private var isAbsoluteQuery: Bool {
+        MentionAbsolutePath.isAbsolute(query: query.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             search
@@ -45,7 +49,7 @@ struct ACPMentionPickerView: View {
             Image(systemName: "at")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(theme.color("accent"))
-            TextField("Search files & folders…", text: $query)
+            TextField("Search files & folders… (/ or ~/ to browse)", text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, design: .monospaced))
                 .focused($searchFocused)
@@ -101,8 +105,8 @@ struct ACPMentionPickerView: View {
     private func row(idx: Int, file: URL) -> some View {
         let isOn = idx == highlight
         let name = file.lastPathComponent
-        let rel = file.path.replacingOccurrences(of: worktreeRoot.path + "/", with: "")
-        let parent = (rel as NSString).deletingLastPathComponent
+        let rel = isAbsoluteQuery ? name : file.path.replacingOccurrences(of: worktreeRoot.path + "/", with: "")
+        let parent = isAbsoluteQuery ? "" : (rel as NSString).deletingLastPathComponent
 
         Button { onPick(file) } label: {
             HStack(spacing: 8) {
@@ -148,7 +152,13 @@ struct ACPMentionPickerView: View {
             moveHighlight(by: 1)
             return .handled
         case .return, .tab:
-            if ranked.indices.contains(highlight) { onPick(ranked[highlight]) }
+            guard ranked.indices.contains(highlight) else { return .handled }
+            let file = ranked[highlight]
+            if press.key == .tab, isAbsoluteQuery, file.hasDirectoryPath {
+                query = MentionAbsolutePath.query(entering: file)
+            } else {
+                onPick(file)
+            }
             return .handled
         default:
             return .ignored
@@ -194,7 +204,9 @@ struct ACPMentionPickerView: View {
             if q.isEmpty {
                 result = Array(files.prefix(maxDisplay))
             } else {
-                result = MentionFuzzy.rank(files: files, query: q, limit: maxDisplay, relativeTo: root)
+                result = MentionAbsolutePath.isAbsolute(query: q)
+                    ? MentionAbsolutePath.entries(forQuery: q, limit: maxDisplay)
+                    : MentionFuzzy.rank(files: files, query: q, limit: maxDisplay, relativeTo: root)
             }
             if Task.isCancelled { return }
             await MainActor.run {
@@ -349,5 +361,71 @@ enum MentionFuzzy {
         let prefix = commonRoot.hasSuffix("/") ? commonRoot : commonRoot + "/"
         guard path.hasPrefix(prefix) else { return path }
         return String(path.dropFirst(prefix.count))
+    }
+}
+
+// MARK: - Absolute path browsing
+
+/// A query starting with `/` or `~/` leaves the worktree index and browses
+/// the filesystem one directory at a time: everything before the last `/` is
+/// the directory, the rest filters its entries.
+enum MentionAbsolutePath {
+    static func isAbsolute(query: String) -> Bool {
+        query.hasPrefix("/") || query.hasPrefix("~/") || query == "~"
+    }
+
+    /// `query` with `~` expanded, split into the directory to list and the
+    /// name fragment being typed.
+    static func split(_ query: String) -> (directory: String, filter: String) {
+        let expanded: String
+        if query == "~" {
+            expanded = NSHomeDirectory() + "/"
+        } else if query.hasPrefix("~/") {
+            expanded = NSHomeDirectory() + query.dropFirst()
+        } else {
+            expanded = query
+        }
+        guard let slash = expanded.lastIndex(of: "/") else { return ("/", expanded) }
+        let directory = String(expanded[..<slash])
+        return (directory.isEmpty ? "/" : directory, String(expanded[expanded.index(after: slash)...]))
+    }
+
+    /// Entries of the directory named by `query`, folders first, filtered by
+    /// the fragment after the last `/` (prefix matches before substring
+    /// matches). Dotfiles only show once the fragment starts with `.`.
+    static func entries(forQuery query: String, limit: Int) -> [URL] {
+        let (directory, filter) = split(query)
+        let base = URL(fileURLWithPath: directory, isDirectory: true)
+        let keys: [URLResourceKey] = [.isDirectoryKey]
+        let options: FileManager.DirectoryEnumerationOptions = filter.hasPrefix(".") ? [] : [.skipsHiddenFiles]
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: base, includingPropertiesForKeys: keys, options: options
+        ) else { return [] }
+        let needle = filter.lowercased()
+        var prefixMatches: [(url: URL, isDirectory: Bool)] = []
+        var substringMatches: [(url: URL, isDirectory: Bool)] = []
+        for url in urls {
+            let name = url.lastPathComponent
+            let lowered = name.lowercased()
+            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let entry = (URL(fileURLWithPath: url.path, isDirectory: isDirectory), isDirectory)
+            if needle.isEmpty || lowered.hasPrefix(needle) {
+                prefixMatches.append(entry)
+            } else if lowered.contains(needle) {
+                substringMatches.append(entry)
+            }
+        }
+        func ordered(_ entries: [(url: URL, isDirectory: Bool)]) -> [URL] {
+            entries.sorted { lhs, rhs in
+                if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
+                return lhs.url.lastPathComponent.localizedStandardCompare(rhs.url.lastPathComponent) == .orderedAscending
+            }.map(\.url)
+        }
+        return Array((ordered(prefixMatches) + ordered(substringMatches)).prefix(limit))
+    }
+
+    /// Query that descends into `directory`.
+    static func query(entering directory: URL) -> String {
+        directory.path.hasSuffix("/") ? directory.path : directory.path + "/"
     }
 }

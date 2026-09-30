@@ -194,6 +194,9 @@ enum ACPUpstreamReferenceChip {
             if let spelling = attributes[.upstreamReference] as? String {
                 found = true
                 result += spelling
+            } else if let path = attributes[.pathReference] as? String {
+                found = true
+                result += path
             } else {
                 result += text.attributedSubstring(from: range).string
             }
