@@ -85,7 +85,7 @@ struct PluginStorageTests {
         #expect(PluginStorage(file: file).keys() == ["new"])
     }
 
-    @Test func anUnreadableFileThatCannotBeMovedAsideStaysIntactAndBlocksWrites() throws {
+    @Test func anUnreadableFileThatCannotBeMovedAsideStaysIntactAndMakesTheStoreUnavailable() throws {
         let file = makeFile()
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent().deletingLastPathComponent()) }
         let aside = file.appendingPathExtension("corrupt")
@@ -98,7 +98,7 @@ struct PluginStorageTests {
         try garbage.write(to: file)
         let storage = PluginStorage(file: file)
         #expect(storage.set("new", value: Data("1".utf8)) == .failed)
-        #expect(storage.keys().isEmpty)
+        #expect(!storage.isAvailable, "reads must not report an empty store")
         #expect(try Data(contentsOf: file) == garbage)
         #expect(try Data(contentsOf: marker) == Data("old".utf8))
     }

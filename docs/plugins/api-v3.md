@@ -156,7 +156,7 @@ because the data is the plugin's own. It is API 3 only.
 | Error | When |
 |---|---|
 | `-32602` | invalid key (empty or over 128 bytes, for `storage/get` too) or an invalid value |
-| `-32003` | "storage full" (nothing is written) or "storage unavailable" |
+| `-32003` | "storage full" (nothing is written), or "storage unavailable" on any request when the stored file cannot be read and could not be moved aside |
 
 The data is one JSON file per plugin and project at
 `PluginData/<pluginID>/<projectID>.json` under Alas's application support

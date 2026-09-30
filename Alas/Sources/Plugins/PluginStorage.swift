@@ -62,6 +62,11 @@ final class PluginStorage {
         return .stored
     }
 
+    /// False when the file is unreadable and could not be moved aside: reads would wrongly look empty.
+    var isAvailable: Bool {
+        load() != nil
+    }
+
     func keys() -> [String] {
         (load() ?? [:]).keys.sorted()
     }

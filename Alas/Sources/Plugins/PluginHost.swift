@@ -350,6 +350,7 @@ final class PluginHost {
                 return errorReply(id, code: -32602, "invalid params for \(method)")
             }
             guard PluginStorage.isValidKey(params.key) else { return errorReply(id, code: -32602, "invalid storage key") }
+            guard storage.isAvailable else { return errorReply(id, code: -32003, "storage unavailable") }
             // Splice the stored bytes in as they are; a typed model would re-type numbers.
             var reply = Data(#"{"jsonrpc":"2.0","id":"#.utf8)
             reply.append(encode(id))
@@ -380,6 +381,7 @@ final class PluginHost {
             case .failed: return errorReply(id, code: -32003, "storage unavailable")
             }
         case "storage/keys":
+            guard storage.isAvailable else { return errorReply(id, code: -32003, "storage unavailable") }
             return encode(PluginResponse(id: id, result: PluginStorageKeysResult(keys: storage.keys()), error: nil))
         default:
             return errorReply(id, code: -32601, "method not found: \(method)")
