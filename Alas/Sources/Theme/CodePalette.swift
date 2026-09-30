@@ -66,9 +66,18 @@ struct CodePalette: Equatable {
               let constant = c("constant"), let attribute = c("attribute") else { return nil }
         self.id = file.id
         self.name = file.name
-        self.bg = bg; self.fg = fg; self.gutterFG = gutterFG; self.selection = selection
-        self.comment = comment; self.keyword = keyword; self.string = string; self.number = number
-        self.type = type; self.function = function; self.constant = constant; self.attribute = attribute
+        self.bg = bg
+        self.fg = fg
+        self.gutterFG = gutterFG
+        self.selection = selection
+        self.comment = comment
+        self.keyword = keyword
+        self.string = string
+        self.number = number
+        self.type = type
+        self.function = function
+        self.constant = constant
+        self.attribute = attribute
     }
 
     /// Strict `#rrggbb`; anything else is rejected so typos fail the test.
