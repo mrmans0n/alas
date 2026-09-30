@@ -62,7 +62,7 @@ extension DragOutPayload {
         let absoluteURL = worktreePath.appendingPathComponent(relativePath)
         return .onDisk(
             absoluteURL,
-            insertion: .file(relativePath: relativePath, absolutePath: absoluteURL.path)
+            insertion: .file(relativePath: relativePath, absolutePath: RemotePath.realPath(absoluteURL.path))
         )
     }
 

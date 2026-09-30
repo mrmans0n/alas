@@ -74,7 +74,7 @@ struct DragOutPayloadTests {
 
         #expect(prepared.dropPayload == .file(
             relativePath: "a.txt",
-            absolutePath: dir.appendingPathComponent("a.txt").path
+            absolutePath: "/srv/remote-internal/a.txt"
         ))
         #expect(prepared.fileURL == nil)
         #expect(prepared.publicText == nil)

@@ -9,4 +9,10 @@ enum Clipboard {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
     }
+
+    /// Copies an absolute path as the real path: the in-app virtual form of a
+    /// remote path is meaningless outside Alas. Local paths pass through.
+    static func copyPath(_ path: String) {
+        copy(RemotePath.realPath(path))
+    }
 }

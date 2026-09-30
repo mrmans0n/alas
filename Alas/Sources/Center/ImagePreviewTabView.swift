@@ -19,7 +19,7 @@ struct ImagePreviewTabView: View {
                     if isLast {
                         return .file(BreadcrumbFileMenu(
                             onCopyRelativePath: { Clipboard.copy(relativePath) },
-                            onCopyFullPath: { Clipboard.copy(absoluteURL.path) },
+                            onCopyFullPath: { Clipboard.copyPath(absoluteURL.path) },
                             onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: absoluteURL) },
                             onOpenWithSystem: isRemote ? nil : { FileSystemOpen.open(url: absoluteURL) }
                         ))
@@ -27,7 +27,7 @@ struct ImagePreviewTabView: View {
                         return .folder(BreadcrumbFolderMenu(
                             onRevealInFinder: isRemote ? nil : { FileSystemOpen.reveal(url: worktreePath.appendingPathComponent(pathPrefix)) },
                             onFocusInFiles: { onRevealInFiles(pathPrefix) },
-                            onCopyFullPath: { Clipboard.copy(worktreePath.appendingPathComponent(pathPrefix).path) }
+                            onCopyFullPath: { Clipboard.copyPath(worktreePath.appendingPathComponent(pathPrefix).path) }
                         ))
                     }
                 }
