@@ -26,7 +26,7 @@ struct AgentEditView: View {
         _piExtensionCoverage = State(initialValue: targetID == ACPManagedAdapterDescriptor.pi.agentID
             ? ACPPiSubagentExtensions.coverage(
                 agentDirectory: ACPPiSubagentExtensions.agentDirectory(),
-                projects: Self.localPiRoots(state.projects),
+                projects: Self.localPiRoots(state.projects, checkouts: state.workspacesManager.checkouts),
                 customPiCommand: ProcessInfo.processInfo.environment[ACPPiSubagentExtensions.piCommandKey])
             : nil)
         switch target {
@@ -186,9 +186,12 @@ struct AgentEditView: View {
     }
 
     /// Every local checkout a Pi session can start in: each project's main
-    /// checkout and its linked worktrees, since Pi reads the session's own
-    /// `.pi` folder.
-    private static func localPiRoots(_ projects: [ProjectConfig]) -> [(name: String, root: URL)] {
+    /// checkout and its linked worktrees, and each workspace checkout root,
+    /// since Pi reads the session's own `.pi` folder.
+    private static func localPiRoots(
+        _ projects: [ProjectConfig],
+        checkouts: [WorkspaceCheckout]
+    ) -> [(name: String, root: URL)] {
         var seen = Set<String>()
         var roots: [(name: String, root: URL)] = []
         for project in projects where project.host == nil {
@@ -196,6 +199,10 @@ struct AgentEditView: View {
             for worktree in project.cachedWorktrees {
                 roots.append(("\(project.name), \(worktree.name)", worktree.path))
             }
+        }
+        for checkout in checkouts where checkout.executionLocation == .local {
+            roots.append(("workspace \(checkout.fallbackWorkspaceName), \(checkout.branch)",
+                          URL(fileURLWithPath: checkout.rootPath, isDirectory: true)))
         }
         return roots.filter { seen.insert($0.root.standardizedFileURL.path).inserted }
     }
