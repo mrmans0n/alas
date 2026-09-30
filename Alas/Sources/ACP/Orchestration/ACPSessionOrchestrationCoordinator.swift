@@ -810,7 +810,10 @@ final class ACPSessionOrchestrationCoordinator {
     }
 
     func initialPromptSource(for record: ACPDelegationRecord) -> ACPDelegatedPromptSource {
-        ACPDelegatedPromptSource(sessionId: record.parentSessionId, messageId: "initial-\(record.childSessionId)")
+        ACPDelegatedPromptSource(
+            sessionId: record.parentSessionId,
+            messageId: ACPSessionOrchestrationPolicy.initialPromptMessageId(childSessionId: record.childSessionId)
+        )
     }
 
     /// Applies a child's requested model/reasoning on its attached session

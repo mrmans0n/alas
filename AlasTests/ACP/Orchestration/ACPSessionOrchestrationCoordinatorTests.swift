@@ -519,7 +519,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             connectionFactory: { _, _, _ in ACPConnection(client: client) },
             delegatedSelectionHoldResolver: { id in
                 do {
-                    return ACPSessionOrchestrationPolicy.holdsPromptDispatch(
+                    return ACPSessionOrchestrationPolicy.selectionHoldDecision(
                         target: try await persistence.delegation(childSessionId: id)
                     )
                 } catch {
@@ -723,12 +723,16 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(childRequests(client) == ["set_model:opus", "prompt:Review the parser."])
     }
 
-    @Test("reasoning published only after the model switch is applied; one never published fails the child", arguments: [true, false])
-    func reasoningWaitsForPostSwitchOptions(agentPublishesReasoning: Bool) async throws {
+    enum ReasoningRefresh: CaseIterable {
+        case published, neverPublished, modelChangedMeanwhile
+    }
+
+    @Test("reasoning published only after the model switch is applied; otherwise the child fails", arguments: ReasoningRefresh.allCases)
+    func reasoningWaitsForPostSwitchOptions(refresh: ReasoningRefresh) async throws {
         let client = makeSelectionClient()
         let fixture = try makeModelSelectionFixture(
             client: client,
-            reasoningRefreshTimeout: agentPublishesReasoning ? .seconds(30) : .milliseconds(100)
+            reasoningRefreshTimeout: refresh == .neverPublished ? .milliseconds(100) : .seconds(30)
         )
         defer { fixture.manager.shutdownBackgroundTasks() }
 
@@ -740,22 +744,32 @@ struct ACPSessionOrchestrationCoordinatorTests {
         // The `session/set_model` reply is handled, and reasoning checked
         // against the default model's (absent) options, before the update.
         try await waitUntil { fixture.manager.liveSession(for: "child")?.currentModel == "opus" }
-        if agentPublishesReasoning {
+        if refresh == .modelChangedMeanwhile {
+            // The user picks another model in the child's tab during the wait.
+            await fixture.manager.enqueueModelSelection(for: "child", modelId: "default").value
+        }
+        if refresh != .neverPublished {
             client.emit(.init(sessionId: "remote-1", update: .sessionConfigOptionsUpdate([ACPConfigOption(
                 id: "effort", name: "Effort", currentValue: "low",
                 options: [.init(id: "low", name: "Low"), .init(id: "high", name: "High")]
             )])))
+        }
+        if refresh == .published {
             try await waitUntil { childRequests(client).count == 3 }
             #expect(childRequests(client) == [
                 "set_model:opus", "set_config_option:effort=\(ACPConfigValue.string("high"))", "prompt:Review the parser.",
             ])
-        } else {
-            let record = try await eventuallyLoadDelegation(
-                persistence: fixture.persistence, childSessionId: "child", matching: { $0.phase == .failed }
-            )
-            #expect(record.failureMessage == ACPDelegatedModelSelectionError.reasoningUnsupported(agentId: "claude").errorDescription)
-            #expect(childRequests(client) == ["set_model:opus"])
+            return
         }
+        let record = try await eventuallyLoadDelegation(
+            persistence: fixture.persistence, childSessionId: "child", matching: { $0.phase == .failed }
+        )
+        if refresh == .neverPublished {
+            #expect(record.failureMessage == ACPDelegatedModelSelectionError.reasoningUnsupported(agentId: "claude").errorDescription)
+        } else {
+            #expect(record.failureMessage?.contains("the model changed while the selection was being applied") == true)
+        }
+        #expect(!childRequests(client).contains { $0.hasPrefix("prompt:") })
     }
 
     @Test("after a model switch the reasoning is sent even when the old model's chip already shows it")
@@ -779,25 +793,34 @@ struct ACPSessionOrchestrationCoordinatorTests {
         ])
     }
 
-    /// Two instances sharing the store: this one attached the child while it
-    /// was starting, and the other one finished starting it.
-    @Test("a hold another instance resolved is lifted on the next attach")
-    func holdResolvedElsewhereIsLiftedOnAttach() async throws {
+    /// Two instances sharing the store: this one restored the child, with
+    /// its initial prompt queued, while it was starting; the other one then
+    /// finished starting it, or failed it.
+    @Test("a hold another instance resolved is lifted on the next attach, without a failed child's initial prompt", arguments: [
+        ACPDelegationPhase.ready, .failed,
+    ])
+    func holdResolvedElsewhereIsLiftedOnAttach(phase: ACPDelegationPhase) async throws {
         let client = makeSelectionClient()
         let fixture = try makeModelSelectionFixture(client: client)
         defer { fixture.manager.shutdownBackgroundTasks() }
-        try await fixture.persistence.insert(selectedChildRecord())
+        let record = selectedChildRecord()
+        try await fixture.persistence.insert(record)
         _ = fixture.manager.createSession(id: "child", agentId: "claude")
+        #expect(await fixture.manager.enqueueDelegatedPrompt(
+            text: "Review the parser.", source: fixture.coordinator.initialPromptSource(for: record), into: "child"
+        ))
         await fixture.manager.attach(to: "child", freshlyCreated: true)
         try #require(fixture.manager.runners["child"]).send(text: "Also check the lexer.", attachments: [])
-        let child = try #require(fixture.manager.liveSession(for: "child"))
-        #expect(child.queue.count == 1)
+        #expect(fixture.manager.liveSession(for: "child")?.queue.count == 2)
 
-        try await fixture.persistence.updatePhase(childSessionId: "child", phase: .ready, failureMessage: nil, updatedAt: 2)
+        try await fixture.persistence.updatePhase(childSessionId: "child", phase: phase, failureMessage: nil, updatedAt: 2)
         await fixture.manager.attach(to: "child", freshlyCreated: false)
 
-        try await waitUntil { childRequests(client).count == 1 }
-        #expect(childRequests(client) == ["prompt:Also check the lexer."])
+        let expected = phase == .ready
+            ? ["prompt:Review the parser.", "prompt:Also check the lexer."]
+            : ["prompt:Also check the lexer."]
+        try await waitUntil { childRequests(client).count == expected.count && fixture.manager.liveSession(for: "child")?.queue.isEmpty == true }
+        #expect(childRequests(client) == expected)
     }
 
     @Test("messages held for a child whose model selection failed are discarded, never delivered")

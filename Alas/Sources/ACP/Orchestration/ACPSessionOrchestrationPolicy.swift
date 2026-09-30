@@ -33,6 +33,12 @@ enum ACPDelegatedSelectionStep: Equatable, Sendable {
     case setConfigOption(id: String, value: String)
 }
 
+enum ACPDelegatedSelectionHoldDecision: Equatable {
+    case hold
+    case release
+    case discard(initialPromptMessageId: String)
+}
+
 enum ACPDelegatedModelSelectionError: Error, Equatable, LocalizedError {
     case modelSelectionUnsupported(agentId: String)
     case unknownModel(agentId: String, model: String, available: [String])
@@ -134,6 +140,23 @@ enum ACPSessionOrchestrationPolicy {
     static func defersInboxDelivery(target: ACPDelegationRecord?) -> Bool {
         guard let target, target.modelSelection != nil else { return false }
         return target.phase != .ready
+    }
+
+    /// The delegated source message id of a child's initial prompt.
+    static func initialPromptMessageId(childSessionId: String) -> String {
+        "initial-\(childSessionId)"
+    }
+
+    /// What an attach does with a session's prompt hold, from its delegation:
+    /// arm it while the selection is being applied, and once the child
+    /// failed with a selection, drop the parent's initial prompt before
+    /// lifting it, so the prompt never runs on the agent's default model.
+    static func selectionHoldDecision(target: ACPDelegationRecord?) -> ACPDelegatedSelectionHoldDecision {
+        if holdsPromptDispatch(target: target) { return .hold }
+        if let target, target.modelSelection != nil, target.phase == .failed {
+            return .discard(initialPromptMessageId: initialPromptMessageId(childSessionId: target.childSessionId))
+        }
+        return .release
     }
 
     /// Whether a child's session must hold every prompt, the composer's

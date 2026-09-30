@@ -1256,12 +1256,12 @@ final class ACPSessionManager: ObservableObject {
     private let isolatedBrokerServiceFactory: ACPBrokerServiceFactory?
     private let attachmentStartupTimeout: Duration
     private let restartTeardownTimeout: Duration
-    /// Answers, at attach, whether a session is a delegated child whose
-    /// requested model/reasoning is still unacknowledged (nil: unknown, e.g.
-    /// a store read failed). Every attach path (a restored tab, startup
-    /// recovery, a delegated start) runs it before the runner can drain the
-    /// queue, so none can dispatch a prompt first.
-    private let delegatedSelectionHoldResolver: (@MainActor (ACPSession.ID) async -> Bool?)?
+    /// Answers, at attach, what to do with a delegated child's prompt hold
+    /// (nil: unknown, e.g. a store read failed). Every attach path (a
+    /// restored tab, startup recovery, a delegated start) runs it before the
+    /// runner can drain the queue, so none can dispatch a prompt first.
+    private let delegatedSelectionHoldResolver:
+        (@MainActor (ACPSession.ID) async -> ACPDelegatedSelectionHoldDecision?)?
     /// How long delegated reasoning validation waits for the config options
     /// an agent publishes after `session/set_model` before rejecting.
     private let delegatedReasoningRefreshTimeout: Duration
@@ -1430,7 +1430,7 @@ final class ACPSessionManager: ObservableObject {
          isolatedBrokerServiceFactory: ACPBrokerServiceFactory? = nil,
          attachmentStartupTimeout: Duration = .seconds(2),
          restartTeardownTimeout: Duration = .seconds(2),
-         delegatedSelectionHoldResolver: (@MainActor (ACPSession.ID) async -> Bool?)? = nil,
+         delegatedSelectionHoldResolver: (@MainActor (ACPSession.ID) async -> ACPDelegatedSelectionHoldDecision?)? = nil,
          delegatedReasoningRefreshTimeout: Duration = .seconds(5),
          mcpProjectContextProvider: MCPProjectContextProvider? = nil,
          builtInMCPProvider: BuiltInMCPProvider? = nil,
@@ -7096,6 +7096,14 @@ extension ACPSessionManager {
            ) {
             try await applyDelegatedSelectionStep(step, setting: "reasoning", to: session)
         }
+        // The tab's model picker is not held; a change made while reasoning
+        // was being applied must not let the prompt run on another model.
+        if let model = selection.model, session.chipState.models?.currentId != model {
+            throw ACPDelegatedModelSelectionError.rejected(
+                agentId: session.agentId, setting: "model", value: model,
+                reason: "the model changed while the selection was being applied"
+            )
+        }
         persist(session)
     }
 
@@ -7112,6 +7120,7 @@ extension ACPSessionManager {
         in session: ACPSession,
         afterModelChange: Bool
     ) async throws -> ACPDelegatedSelectionStep? {
+        let runner = runners[session.id]
         let deadline = ContinuousClock.now.advanced(by: delegatedReasoningRefreshTimeout)
         var waitExpired = !afterModelChange
         while true {
@@ -7133,7 +7142,9 @@ extension ACPSessionManager {
             } else {
                 waitExpired = !(await configOptionsChange(of: session, within: remaining))
             }
-            guard sessions[session.id] === session, runners[session.id] != nil else {
+            // A reconnect during the wait means the replacement connection
+            // may not carry the model this selection set.
+            guard sessions[session.id] === session, runner != nil, runners[session.id] === runner else {
                 throw ACPDelegatedModelSelectionError.sessionUnavailable
             }
         }
@@ -7161,18 +7172,26 @@ extension ACPSessionManager {
 
     /// Arms the hold for a delegated child still applying its selection, or
     /// lifts a pending one whose delegation has since become ready or failed
-    /// (possibly in another instance sharing the store). A released hold is
-    /// never re-armed, and an unknown answer changes nothing.
+    /// (possibly in another instance sharing the store). For a failed child
+    /// the parent's initial prompt is dropped from the queue first, whether
+    /// or not a hold was armed here. A released hold is never re-armed, and
+    /// an unknown answer changes nothing.
     private func resolveDelegatedSelectionHold(_ id: ACPSession.ID) async {
         guard let resolver = delegatedSelectionHoldResolver,
               sessions[id]?.delegatedSelectionHold != .released,
-              let holds = await resolver(id),
+              let decision = await resolver(id),
               let session = sessions[id]
         else { return }
-        if holds {
+        switch decision {
+        case .hold:
             session.holdPromptsForDelegatedSelection()
-        } else if session.holdsPromptsForDelegatedSelection {
-            releaseDelegatedSelectionHold(id)
+        case .release:
+            if session.holdsPromptsForDelegatedSelection { releaseDelegatedSelectionHold(id) }
+        case .discard(let messageId):
+            let discarded = await discardDelegatedPrompt(messageId: messageId, in: id)
+            if discarded, sessions[id] === session, session.holdsPromptsForDelegatedSelection {
+                releaseDelegatedSelectionHold(id)
+            }
         }
     }
 

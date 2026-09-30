@@ -1834,7 +1834,9 @@ final class AppState {
                     text: prompt,
                     source: ACPDelegatedPromptSource(
                         sessionId: record.parentSessionId,
-                        messageId: "initial-\(record.childSessionId)"
+                        messageId: ACPSessionOrchestrationPolicy.initialPromptMessageId(
+                            childSessionId: record.childSessionId
+                        )
                     ),
                     into: record.childSessionId
                 )
@@ -12451,7 +12453,7 @@ final class AppState {
             delegatedSelectionHoldResolver: { [weak self] sessionId in
                 guard let self else { return nil }
                 do {
-                    return ACPSessionOrchestrationPolicy.holdsPromptDispatch(
+                    return ACPSessionOrchestrationPolicy.selectionHoldDecision(
                         target: try await self.acpOrchestrationPersistence.delegation(childSessionId: sessionId)
                     )
                 } catch {
