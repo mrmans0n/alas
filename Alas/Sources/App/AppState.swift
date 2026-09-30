@@ -5235,6 +5235,20 @@ final class AppState {
             .appendingPathComponent(preparedDestination.lastPathComponent)
     }
 
+    /// The destination persisted for a `.new` delegation, in the form the
+    /// created worktree's path will have so startup recovery can find it:
+    /// virtual for remote projects, parent-symlink-resolved for local ones.
+    /// The remote home swap needs an ssh round trip and is not applied here.
+    nonisolated static func delegatedWorktreeDestination(rendered: URL, projectPath: String) -> URL {
+        guard !URL(fileURLWithPath: projectPath).isRemoteAlasPath else {
+            return URL(fileURLWithPath: RemotePath.virtualizing(rendered.path, like: projectPath))
+        }
+        return rendered
+            .deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(rendered.lastPathComponent)
+    }
+
     nonisolated static func destinationPathReplacingLocalHome(
         _ path: String,
         localHome: String = NSHomeDirectory(),
@@ -6970,17 +6984,15 @@ final class AppState {
                     guard let self,
                           let project = self.projects.first(where: { $0.id == projectId })
                     else { return nil }
-                    let destination = WorktreePathTemplateRenderer.render(
-                        template: self.config.worktrees.pathTemplate,
-                        worktreeRoot: self.config.worktrees.rootPath,
-                        repoName: project.name,
-                        branch: branch
+                    return Self.delegatedWorktreeDestination(
+                        rendered: WorktreePathTemplateRenderer.render(
+                            template: self.config.worktrees.pathTemplate,
+                            worktreeRoot: self.config.worktrees.rootPath,
+                            repoName: project.name,
+                            branch: branch
+                        ),
+                        projectPath: project.path
                     )
-                    guard !URL(fileURLWithPath: project.path).isRemoteAlasPath else { return destination }
-                    return destination
-                        .deletingLastPathComponent()
-                        .resolvingSymlinksInPath()
-                        .appendingPathComponent(destination.lastPathComponent)
                 },
                 createWorktree: { [weak self] projectId, branch, base in
                     guard let self else {
