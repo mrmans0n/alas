@@ -13,11 +13,12 @@ enum ACPTranscriptQueuePolicy {
     }
 
     /// Whether `item` gets a row in the "Up next" list. A delegated prompt
-    /// (a child's report, a parent's prompt) never does: it is not the
-    /// user's to edit, reorder, or remove, and it dispatches on its own once
-    /// the current turn ends.
+    /// (a child's report, a parent's prompt) does not while it waits: it is
+    /// not the user's to edit, reorder, or remove, and it dispatches on its
+    /// own once the current turn ends. A failed one does, so it can be
+    /// retried or removed (see `QueuedPrompt.isShownToUser`).
     nonisolated static func shouldRenderQueueBubble(_ item: QueuedPrompt) -> Bool {
-        item.delegatedSource == nil && shouldRenderQueueBubble(status: item.status)
+        item.isShownToUser && shouldRenderQueueBubble(status: item.status)
     }
 
     nonisolated static func queueHeaderCount(queue: [QueuedPrompt]) -> Int {

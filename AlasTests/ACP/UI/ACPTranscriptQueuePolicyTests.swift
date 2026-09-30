@@ -50,6 +50,14 @@ struct ACPTranscriptQueuePolicyTests {
         #expect(ACPTranscriptQueuePolicy.queueHeaderCount(queue: queue(statuses, delegatedAt: Set(delegated))) == expected)
     }
 
+    @Test("a failed delegated prompt gets a row, so its Retry and Remove stay reachable")
+    func failedDelegatedPromptIsRendered() {
+        var items = queue([.pending], delegatedAt: [0])
+        #expect(!ACPTranscriptQueuePolicy.shouldRenderQueueBubble(items[0]))
+        items[0].lastError = "boom"
+        #expect(ACPTranscriptQueuePolicy.shouldRenderQueueBubble(items[0]))
+    }
+
     // MARK: - adjacentRenderedIndex
 
     @Test("adjacentRenderedIndex steps over hidden delegated prompts")

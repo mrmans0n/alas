@@ -2352,11 +2352,11 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Remove all `.pending` items. A `.sending` item is left in place —
     /// it's mid-RPC.
     @discardableResult
-    /// Removes the user's pending prompts. Delegated prompts stay: they are
-    /// hidden from the queue UI, and their inbox row is already gone, so
-    /// dropping one here would lose it for good.
+    /// Removes the pending prompts the queue UI lists. Hidden delegated
+    /// prompts stay: their inbox row is already gone, so dropping one here
+    /// would lose it for good.
     func clearPendingQueue() -> [QueuedPrompt] {
-        let isCleared: (QueuedPrompt) -> Bool = { $0.status == .pending && $0.delegatedSource == nil }
+        let isCleared: (QueuedPrompt) -> Bool = { $0.status == .pending && $0.isShownToUser }
         let snapshot = queue.filter(isCleared)
         queue.removeAll(where: isCleared)
         forceSendAfterSendingHeadId = nil

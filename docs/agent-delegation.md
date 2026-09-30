@@ -333,7 +333,7 @@ prompt.
 A delegated prompt that arrives while the target is mid-turn waits for the
 turn to end, but it is not listed in the target's **Up next** queue and does
 not count toward its queue badge: it is not the user's to edit, reorder, or
-remove, and **Clear all** leaves it in place.
+remove, and **Clear all** leaves it in place. If sending one fails, it appears in the queue with its error so you can retry or remove it.
 
 ## Across an app restart
 
