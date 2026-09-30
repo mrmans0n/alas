@@ -7,7 +7,9 @@ struct NativePeerTranscript: Equatable {
 
     private(set) var epoch: Int?
     private(set) var revision: Int?
-    private var messagesByStableID: [String: RemoteWireMessage] = [:]
+    private var messagesByStableID: [String: RemoteWireMessage] = [:] {
+        didSet { rebuildMessages() }
+    }
     private var driveAllowed = false
 
     private(set) var streamingState = "idle"
@@ -40,12 +42,12 @@ struct NativePeerTranscript: Equatable {
 
     var canDrive: Bool { epoch != nil && driveAllowed && !isClosed }
     var olderPageBeforeIndex: Int? { firstIndex > 0 ? firstIndex : nil }
-    var messages: [RemoteWireMessage] {
-        messagesByStableID.values.sorted {
-            if $0.index != $1.index { return $0.index < $1.index }
-            return $0.stableId < $1.stableId
-        }
-    }
+    /// Rows in transcript order, rebuilt only when a frame changes them so
+    /// the view never re-sorts on read.
+    private(set) var messages: [RemoteWireMessage] = []
+    /// Bumped whenever `messages` changes; a cheap memo key for anything
+    /// derived from the row list.
+    private(set) var messagesGeneration: UInt64 = 0
 
     mutating func markUnavailable() {
         isClosed = true
@@ -84,15 +86,22 @@ struct NativePeerTranscript: Equatable {
             streamingState = state
             driveAllowed = drive
             needsResubscribe = false
-            for row in upserts { messagesByStableID[row.stableId] = row }
+            if !upserts.isEmpty {
+                // One assignment, so the sorted list rebuilds once per frame.
+                var updated = messagesByStableID
+                for row in upserts { updated[row.stableId] = row }
+                messagesByStableID = updated
+            }
             if let last = upserts.map(\.index).max() { totalCount = max(totalCount, last + 1) }
             return false
 
         case .transcriptPage(_, let incomingEpoch, let first, let rows):
             guard let epoch, incomingEpoch == epoch, first < firstIndex, !isClosed else { return false }
+            var updated = messagesByStableID
             for row in rows where row.index < firstIndex {
-                messagesByStableID[row.stableId] = row
+                updated[row.stableId] = row
             }
+            messagesByStableID = updated
             firstIndex = first
             return false
 
@@ -125,6 +134,14 @@ struct NativePeerTranscript: Equatable {
 
     mutating func resetResubscribeRequest() {
         needsResubscribe = false
+    }
+
+    private mutating func rebuildMessages() {
+        messages = messagesByStableID.values.sorted {
+            if $0.index != $1.index { return $0.index < $1.index }
+            return $0.stableId < $1.stableId
+        }
+        messagesGeneration &+= 1
     }
 
     private mutating func clearPendingRequests() {

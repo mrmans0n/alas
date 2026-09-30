@@ -7,27 +7,9 @@ struct NativePeerSessionView: View {
     @Bindable var client: NativePeerSessions
     let agentLookup: (String) -> AgentDefinition?
     var typography: ACPChatTypography = .default
+    var collapsesFinishedToolCalls = false
     @Environment(\.theme) private var theme
     @Environment(\.openURL) private var openURL
-    @State private var rowCache = NativePeerRowCache()
-    @State private var followsTranscriptTail = true
-    @State private var hasPositionedInitialTail = false
-    @State private var transcriptScrollPosition = ScrollPosition(idType: String.self)
-    @State private var paginationRestore: PaginationRestore?
-    @FocusState private var composerFocused: Bool
-
-    private struct PaginationRestore {
-        let firstIndex: Int
-        let contentOffset: CGFloat
-        let contentHeight: CGFloat
-    }
-
-    private struct ScrollMetrics: Equatable {
-        let contentOffset: CGFloat
-        let contentHeight: CGFloat
-        let shouldFetchOlder: Bool
-        let shouldFollowTail: Bool
-    }
 
     private var online: Bool { client.selectedPeer?.state.carriesSessions == true }
     private var canDrive: Bool { online && client.transcript?.canDrive == true }
@@ -57,7 +39,10 @@ struct NativePeerSessionView: View {
                     let contentMaxWidth = ACPChatLayout.contentMaxWidth(forChatColumnWidth: proxy.size.width)
                     ZStack(alignment: .bottom) {
                         transcriptList(transcript, contentMaxWidth: contentMaxWidth)
-                        composer(transcript, contentMaxWidth: contentMaxWidth)
+                        NativePeerComposer(
+                            client: client, transcript: transcript,
+                            typography: typography, contentMaxWidth: contentMaxWidth
+                        )
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height)
                 }
@@ -125,166 +110,27 @@ struct NativePeerSessionView: View {
     // MARK: - Transcript
 
     private func transcriptList(_ transcript: NativePeerTranscript, contentMaxWidth: CGFloat) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 14) {
-                if !online || transcript.isClosed {
-                    unavailableBanner.modifier(PeerRowFrame(contentMaxWidth: contentMaxWidth))
-                }
-                if let before = transcript.olderPageBeforeIndex, online {
-                    HStack(spacing: 6) {
-                        Spacer()
-                        if client.isFetchingOlderMessages {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Loading earlier messages…")
-                                .font(.system(size: 11))
-                                .foregroundStyle(theme.color("fg-muted"))
-                        }
-                        Spacer()
-                    }
-                    .frame(height: 26)
-                    .id("native-peer-older-\(before)")
-                }
-                ForEach(transcript.messages, id: \.stableId) { message in
-                    row(message, contentMaxWidth: contentMaxWidth)
-                        .modifier(PeerRowFrame(contentMaxWidth: contentMaxWidth))
-                }
-                pendingRequests(transcript)
-                    .modifier(PeerRowFrame(contentMaxWidth: contentMaxWidth))
-                Color.clear
-                    .frame(height: Self.composerSpacerHeight)
-                    .id(NativePeerTranscriptScrollPolicy.tailAnchorID)
-            }
-            .padding(.top, 20)
-            .scrollTargetLayout()
-        }
-        .defaultScrollAnchor(.bottom)
-        .scrollPosition($transcriptScrollPosition)
-        .task(id: transcript.epoch) {
-            hasPositionedInitialTail = false
-            followsTranscriptTail = true
-            paginationRestore = nil
-            guard transcript.epoch != nil else { return }
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            transcriptScrollPosition.scrollTo(
-                id: NativePeerTranscriptScrollPolicy.tailAnchorID,
-                anchor: .bottom
-            )
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            hasPositionedInitialTail = true
-        }
-        .onChange(of: transcript) { _, _ in
-            guard hasPositionedInitialTail, followsTranscriptTail else { return }
-            transcriptScrollPosition.scrollTo(
-                id: NativePeerTranscriptScrollPolicy.tailAnchorID,
-                anchor: .bottom
-            )
-        }
-        .onChange(of: client.isFetchingOlderMessages) { wasFetching, isFetching in
-            guard wasFetching, !isFetching, let restore = paginationRestore,
-                  transcript.firstIndex >= restore.firstIndex
-            else { return }
-            paginationRestore = nil
-        }
-        .onScrollGeometryChange(for: ScrollMetrics.self) { geometry in
-            let distanceFromBottom = geometry.contentSize.height - geometry.contentOffset.y
-                - geometry.containerSize.height
-            return ScrollMetrics(
-                contentOffset: geometry.contentOffset.y,
-                contentHeight: geometry.contentSize.height,
-                shouldFetchOlder: geometry.contentOffset.y <= 400,
-                shouldFollowTail: NativePeerTranscriptScrollPolicy.shouldFollow(
-                    distanceFromBottom: distanceFromBottom,
-                    hasPositionedInitialTail: hasPositionedInitialTail
-                )
-            )
-        } action: { _, metrics in
-            followsTranscriptTail = metrics.shouldFollowTail
-            if let restore = paginationRestore,
-               transcript.firstIndex < restore.firstIndex,
-               metrics.contentHeight > restore.contentHeight {
-                let restoredOffset = NativePeerTranscriptScrollPolicy.restoredContentOffset(
-                    previousOffset: restore.contentOffset,
-                    previousContentHeight: restore.contentHeight,
-                    currentContentHeight: metrics.contentHeight
-                )
-                paginationRestore = nil
-                transcriptScrollPosition.scrollTo(y: restoredOffset)
-            } else if metrics.shouldFetchOlder, hasPositionedInitialTail {
-                fetchOlderIfNeeded(transcript, metrics: metrics)
-            }
-        }
-        .onChange(of: transcript.messages, initial: true) { _, messages in
-            rowCache.sync(messages)
-        }
-    }
-
-    private func fetchOlderIfNeeded(_ transcript: NativePeerTranscript, metrics: ScrollMetrics) {
-        guard paginationRestore == nil, client.fetchOlder() else { return }
-        paginationRestore = PaginationRestore(
-            firstIndex: transcript.firstIndex,
-            contentOffset: metrics.contentOffset,
-            contentHeight: metrics.contentHeight
+        NativePeerTranscriptScroller(
+            transcript: transcript,
+            contentMaxWidth: contentMaxWidth,
+            typography: typography,
+            collapsesFinishedToolCalls: collapsesFinishedToolCalls,
+            canFetchOlder: online && transcript.olderPageBeforeIndex != nil,
+            isFetchingOlder: client.isFetchingOlderMessages,
+            leadingRows: leadingRows(transcript),
+            trailingRows: pendingRequestRows(transcript),
+            fetchOlder: { _ = client.fetchOlder() }
         )
     }
 
-    /// `scrollTo` targets this view, so the spacer must be the target itself;
-    /// padding after a one-point target leaves the last row under the composer.
-    private static let composerSpacerHeight: CGFloat = 220
-
-    @ViewBuilder
-    private func row(_ message: RemoteWireMessage, contentMaxWidth: CGFloat) -> some View {
-        switch NativePeerRow(message: message) {
-        case .user(let text):
-            HStack {
-                Spacer(minLength: 40)
-                ACPMarkdownText(raw: text, typography: typography)
-                    .acpUserBubble()
-                    .frame(maxWidth: contentMaxWidth * 0.75, alignment: .trailing)
-            }
-            .frame(maxWidth: .infinity)
-        case .agent(let text):
-            ACPMarkdownText(
-                raw: text,
-                cache: rowCache.markdownCache(for: message.stableId),
-                typography: typography
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
-        case .thought(let text):
-            ACPThoughtView(buffer: rowCache.thoughtBuffer(for: message.stableId, seed: text))
-        case .toolCall(let call):
-            ACPToolCallCard(toolCall: call, messageCreatedAt: nil)
-        case .fileEdit(let edit):
-            // The edited file lives on the peer, so there is no local diff
-            // to open; the card still shows the inline hunk.
-            ACPFileEditCard(edit: edit, onOpenDiff: nil)
-        case .plan(let items):
-            ACPPlanChecklist(items: items)
-        case .systemNotice(let text):
-            ACPSystemNoticeView(text: text)
-        }
-    }
-
-    private var unavailableBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "wifi.slash")
-                .foregroundStyle(theme.color("warn"))
-            Text("This peer session is unavailable. Your draft is preserved until you close it.")
-                .font(.system(size: 12))
-                .foregroundStyle(theme.color("fg"))
-            Spacer(minLength: 8)
-            Button("Return") { client.clearSelection() }
-                .buttonStyle(PeerChipButtonStyle(theme: theme))
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(theme.color("warn").opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(theme.color("warn").opacity(0.3), lineWidth: 0.5)
-        )
+    private func leadingRows(_ transcript: NativePeerTranscript) -> [NativePeerTranscriptExtraRow] {
+        guard !online || transcript.isClosed else { return [] }
+        let client = client
+        return [NativePeerTranscriptExtraRow(
+            id: "__peer_unavailable__",
+            token: ACPRowEqualityToken(true),
+            content: { AnyView(NativePeerUnavailableBanner { client.clearSelection() }) }
+        )]
     }
 
     // MARK: - Pending requests
@@ -300,60 +146,150 @@ struct NativePeerSessionView: View {
         "\(sessionKey):\(kind):\(transcript.requestGeneration(for: kind)):\(requestId)"
     }
 
-    @ViewBuilder
-    private func pendingRequests(_ transcript: NativePeerTranscript) -> some View {
-        if let request = transcript.pendingPermission {
-            ACPPermissionCard(content: .init(payload: request)) { option in
-                client.decidePermission(requestId: request.requestId, optionId: option.optionId)
-            }
-            .disabled(!canDrive)
-        }
-        if let request = transcript.pendingPlan {
-            ACPPlanApprovalPrompt(plan: NativePeerRequestBridge.planParams(request)) { response in
-                let reply = NativePeerRequestBridge.planReply(response)
-                client.respondToPlan(requestId: request.requestId, action: reply.action, reason: reply.reason)
-            }
-            .id(requestKey(.plan, request.requestId, in: transcript))
-            .disabled(!canDrive)
-        }
-        if let request = transcript.pendingQuestion {
-            ACPUserInputPrompt(
-                request: NativePeerRequestBridge.userInputRequest(question: request),
-                onRespond: { _, action in
-                    guard let answers = NativePeerRequestBridge.questionAnswers(for: action, question: request)
-                    else { return }
-                    client.answerQuestion(requestId: request.requestId, answers: answers)
-                },
-                onOpenURL: { _ in false },
-                showsDismissActions: false
-            )
-            .id(requestKey(.question, request.requestId, in: transcript))
-            .disabled(!canDrive)
-        }
-        if let request = transcript.pendingElicitation {
-            if let input = NativePeerRequestBridge.userInputRequest(elicitation: request) {
-                ACPUserInputPrompt(
-                    request: input,
-                    onRespond: { _, action in
-                        let reply = NativePeerRequestBridge.elicitationReply(for: action)
-                        client.respondToElicitation(
-                            requestId: request.requestId, action: reply.action, content: reply.content
-                        )
-                    },
-                    onOpenURL: { _ in await openElicitationURL(request.requestId) }
-                )
-                .id(requestKey(.elicitation, request.requestId, in: transcript))
-                .disabled(!canDrive)
-            } else {
-                unsupportedElicitation(request)
-                    .disabled(!canDrive)
-            }
-        }
+    private struct PendingRequestToken<Payload: Equatable>: Equatable {
+        let key: String
+        let payload: Payload
+        let canDrive: Bool
     }
 
-    /// A request the local prompt cannot render (unknown mode, bad URL)
-    /// still needs a way out, or the peer stays parked on it.
-    private func unsupportedElicitation(_ request: RemoteElicitationPayload) -> some View {
+    /// Pending requests trail the messages. Their prompts hold in-progress
+    /// form state, so they stay mounted while scrolled out of view, and each
+    /// request gets its own row id so a new request never inherits a form.
+    private func pendingRequestRows(_ transcript: NativePeerTranscript) -> [NativePeerTranscriptExtraRow] {
+        let client = client
+        let canDrive = canDrive
+        let openURL = openURL
+        var rows: [NativePeerTranscriptExtraRow] = []
+        if let request = transcript.pendingPermission {
+            let key = requestKey(.permission, request.requestId, in: transcript)
+            rows.append(NativePeerTranscriptExtraRow(
+                id: "__peer_\(key)",
+                token: ACPRowEqualityToken(PendingRequestToken(key: key, payload: request, canDrive: canDrive)),
+                content: {
+                    AnyView(ACPPermissionCard(content: .init(payload: request)) { option in
+                        client.decidePermission(requestId: request.requestId, optionId: option.optionId)
+                    }
+                    .disabled(!canDrive))
+                }
+            ))
+        }
+        if let request = transcript.pendingPlan {
+            let key = requestKey(.plan, request.requestId, in: transcript)
+            rows.append(NativePeerTranscriptExtraRow(
+                id: "__peer_\(key)",
+                token: ACPRowEqualityToken(PendingRequestToken(key: key, payload: request, canDrive: canDrive)),
+                keepsMountedOffscreen: true,
+                content: {
+                    AnyView(ACPPlanApprovalPrompt(plan: NativePeerRequestBridge.planParams(request)) { response in
+                        let reply = NativePeerRequestBridge.planReply(response)
+                        client.respondToPlan(requestId: request.requestId, action: reply.action, reason: reply.reason)
+                    }
+                    .disabled(!canDrive))
+                }
+            ))
+        }
+        if let request = transcript.pendingQuestion {
+            let key = requestKey(.question, request.requestId, in: transcript)
+            rows.append(NativePeerTranscriptExtraRow(
+                id: "__peer_\(key)",
+                token: ACPRowEqualityToken(PendingRequestToken(key: key, payload: request, canDrive: canDrive)),
+                keepsMountedOffscreen: true,
+                content: {
+                    AnyView(ACPUserInputPrompt(
+                        request: NativePeerRequestBridge.userInputRequest(question: request),
+                        onRespond: { _, action in
+                            guard let answers = NativePeerRequestBridge.questionAnswers(for: action, question: request)
+                            else { return }
+                            client.answerQuestion(requestId: request.requestId, answers: answers)
+                        },
+                        onOpenURL: { _ in false },
+                        showsDismissActions: false
+                    )
+                    .disabled(!canDrive))
+                }
+            ))
+        }
+        if let request = transcript.pendingElicitation {
+            let key = requestKey(.elicitation, request.requestId, in: transcript)
+            let input = NativePeerRequestBridge.userInputRequest(elicitation: request)
+            rows.append(NativePeerTranscriptExtraRow(
+                id: "__peer_\(key)",
+                token: ACPRowEqualityToken(PendingRequestToken(key: key, payload: request, canDrive: canDrive)),
+                keepsMountedOffscreen: input != nil,
+                content: {
+                    if let input {
+                        AnyView(ACPUserInputPrompt(
+                            request: input,
+                            onRespond: { _, action in
+                                let reply = NativePeerRequestBridge.elicitationReply(for: action)
+                                client.respondToElicitation(
+                                    requestId: request.requestId, action: reply.action, content: reply.content
+                                )
+                            },
+                            onOpenURL: { _ in
+                                await Self.openElicitationURL(request.requestId, client: client, openURL: openURL)
+                            }
+                        )
+                        .disabled(!canDrive))
+                    } else {
+                        AnyView(NativePeerUnsupportedElicitation(request: request, client: client)
+                            .disabled(!canDrive))
+                    }
+                }
+            ))
+        }
+        return rows
+    }
+
+    private static func openElicitationURL(
+        _ requestId: String, client: NativePeerSessions, openURL: OpenURLAction
+    ) async -> Bool {
+        await withCheckedContinuation { continuation in
+            client.openElicitationURL(requestId: requestId, openURL: { url, finish in
+                openURL(url) { accepted in
+                    Task { @MainActor in finish(accepted) }
+                }
+            }, completion: { didOpen in
+                continuation.resume(returning: didOpen)
+            })
+        }
+    }
+}
+
+/// Explains why a peer session stopped responding and offers a way back.
+private struct NativePeerUnavailableBanner: View {
+    let onReturn: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "wifi.slash")
+                .foregroundStyle(theme.color("warn"))
+            Text("This peer session is unavailable. Your draft is preserved until you close it.")
+                .font(.system(size: 12))
+                .foregroundStyle(theme.color("fg"))
+            Spacer(minLength: 8)
+            Button("Return", action: onReturn)
+                .buttonStyle(PeerChipButtonStyle(theme: theme))
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(theme.color("warn").opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(theme.color("warn").opacity(0.3), lineWidth: 0.5)
+        )
+    }
+}
+
+/// A request the local prompt cannot render (unknown mode, bad URL)
+/// still needs a way out, or the peer stays parked on it.
+private struct NativePeerUnsupportedElicitation: View {
+    let request: RemoteElicitationPayload
+    let client: NativePeerSessions
+    @Environment(\.theme) private var theme
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("This request cannot be shown here.")
                 .font(.system(size: 12.5, weight: .semibold))
@@ -381,27 +317,27 @@ struct NativePeerSessionView: View {
                 .strokeBorder(theme.color("accent").opacity(0.55), lineWidth: 1)
         )
     }
+}
 
-    private func openElicitationURL(_ requestId: String) async -> Bool {
-        await withCheckedContinuation { continuation in
-            client.openElicitationURL(requestId: requestId, openURL: { url, finish in
-                openURL(url) { accepted in
-                    Task { @MainActor in finish(accepted) }
-                }
-            }, completion: { didOpen in
-                continuation.resume(returning: didOpen)
-            })
-        }
-    }
+/// Its own view so draft edits re-render only the composer, not the
+/// transcript beside it.
+private struct NativePeerComposer: View {
+    @Bindable var client: NativePeerSessions
+    let transcript: NativePeerTranscript
+    let typography: ACPChatTypography
+    let contentMaxWidth: CGFloat
+    @Environment(\.theme) private var theme
+    @FocusState private var composerFocused: Bool
 
-    // MARK: - Composer
+    private var online: Bool { client.selectedPeer?.state.carriesSessions == true }
+    private var canDrive: Bool { online && transcript.canDrive }
 
-    private func composer(_ transcript: NativePeerTranscript, contentMaxWidth: CGFloat) -> some View {
+    var body: some View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
             HStack {
                 Spacer(minLength: 0)
-                composerPill(transcript).frame(maxWidth: contentMaxWidth)
+                composerPill.frame(maxWidth: contentMaxWidth)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 24)
@@ -422,7 +358,7 @@ struct NativePeerSessionView: View {
         )
     }
 
-    private func composerPill(_ transcript: NativePeerTranscript) -> some View {
+    private var composerPill: some View {
         let canSend = canDrive && !client.isPromptPending
             && !client.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return VStack(spacing: 6) {
@@ -513,20 +449,6 @@ struct NativePeerSessionView: View {
     }
 }
 
-/// Centers a row at the chat column width with the same side padding the
-/// local transcript scroller applies, so mirrored rows line up with the
-/// composer pill.
-private struct PeerRowFrame: ViewModifier {
-    let contentMaxWidth: CGFloat
-
-    func body(content: Content) -> some View {
-        content
-            .frame(maxWidth: contentMaxWidth, alignment: .leading)
-            .padding(.horizontal, 28 + ACPMessageGutterLayout.laneWidth)
-            .frame(maxWidth: .infinity, alignment: .center)
-    }
-}
-
 /// The small neutral chip the composer toolbar uses for secondary actions.
 private struct PeerChipButtonStyle: ButtonStyle {
     let theme: Theme
@@ -548,25 +470,5 @@ private struct PeerChipButtonStyle: ButtonStyle {
 enum NativePeerSessionControls {
     static func showsStop(for streamingState: String) -> Bool {
         streamingState != "idle"
-    }
-}
-
-enum NativePeerTranscriptScrollPolicy {
-    static let tailAnchorID = "native-peer-transcript-tail"
-    private static let bottomTolerance: CGFloat = 72
-
-    static func shouldFollow(
-        distanceFromBottom: CGFloat,
-        hasPositionedInitialTail: Bool = true
-    ) -> Bool {
-        !hasPositionedInitialTail || distanceFromBottom <= bottomTolerance
-    }
-
-    static func restoredContentOffset(
-        previousOffset: CGFloat,
-        previousContentHeight: CGFloat,
-        currentContentHeight: CGFloat
-    ) -> CGFloat {
-        previousOffset + max(0, currentContentHeight - previousContentHeight)
     }
 }
