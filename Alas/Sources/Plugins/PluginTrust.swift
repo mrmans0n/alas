@@ -27,7 +27,8 @@ struct PluginApprovalStore {
     private static let key = "pluginApprovals.v1"
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    /// The profile's suite, so an isolated instance never shares approvals or disabled plugins.
+    init(defaults: UserDefaults = AlasProfile.userDefaults) {
         self.defaults = defaults
     }
 

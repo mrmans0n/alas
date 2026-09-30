@@ -25,10 +25,9 @@ final class PluginManager {
         let projectID: String
     }
 
+    /// Follows the profile, so an isolated instance (`ALAS_APP_SUPPORT_DIR`) has its own plugins.
     static var defaultDirectory: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appending(path: "Library/Application Support")
-        return appSupport.appending(path: "Alas/Plugins")
+        Paths.appSupportRoot.appending(path: "Plugins")
     }
 
     private(set) var plugins: [Plugin] = []
