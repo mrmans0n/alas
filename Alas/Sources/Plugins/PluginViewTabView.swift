@@ -53,6 +53,7 @@ private struct PluginViewNodeView: View {
         switch node.kind {
         case .vstack:
             VStack(alignment: .leading, spacing: spacing) { children }
+                .frame(width: width, alignment: .leading)
         case .hstack:
             HStack(alignment: .top, spacing: spacing) { children }
         case .scroll:
@@ -104,17 +105,24 @@ private struct PluginViewNodeView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
                     .strokeBorder(node.tone.map { color($0) } ?? theme.color("line"), lineWidth: 1))
+            .frame(width: width)
             .contentShape(RoundedRectangle(cornerRadius: 8))
         if node.clickable {
-            Button { events.send(node.id, "click") } label: { content }
-                .buttonStyle(.plain)
+            // Not a Button: that would merge the card into one accessibility element and hide its
+            // inner buttons and menus. Inner controls still win the hit test over the tap gesture.
+            content
+                .onTapGesture { events.send(node.id, "click") }
+                .accessibilityElement(children: .contain)
                 .accessibilityAddTraits(.isButton)
+                .accessibilityAction { events.send(node.id, "click") }
         } else {
             content
         }
     }
 
     private var spacing: CGFloat? { node.spacing.map { CGFloat($0) } }
+    /// A fixed width lets text wrap where no width is proposed, e.g. inside a horizontal scroll.
+    private var width: CGFloat? { node.width.map { CGFloat($0) } }
 
     private var font: Font {
         switch node.style {
@@ -150,6 +158,7 @@ private struct PluginTextFieldView: View {
     let submit: (String) -> Void
     @State private var text: String
     @State private var lastIncoming: String
+    @FocusState private var editorFocused: Bool
     @Environment(\.theme) var theme
 
     init(node: PluginViewNode, submit: @escaping (String) -> Void) {
@@ -187,10 +196,18 @@ private struct PluginTextFieldView: View {
                     }
                 }
                 .accessibilityLabel(node.placeholder ?? "Text")
-                .onKeyPress(.return, phases: .down) { press in
-                    guard press.modifiers.contains(.command) else { return .ignored }
-                    submit(text)
-                    return .handled
+                .focused($editorFocused)
+                // ⌘Return submits through a key equivalent, which the text view cannot swallow; plain
+                // Return still inserts a newline. Only the focused editor installs it.
+                .background {
+                    if editorFocused {
+                        Button("") { submit(text) }
+                            .keyboardShortcut(.return, modifiers: .command)
+                            .frame(width: 0, height: 0)
+                            .opacity(0)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                 }
         } else {
             TextField(node.placeholder ?? "", text: $text)

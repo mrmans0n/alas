@@ -9,7 +9,7 @@ struct PluginViewTreeTests {
 
     @Test func aValidTreeDecodesAndIgnoresUnknownOptionalFields() throws {
         let tree = try decode(#"""
-        {"id":"root","kind":"vstack","spacing":8,"future":true,"children":[
+        {"id":"root","kind":"vstack","spacing":8,"width":280,"future":true,"children":[
           {"id":"t","kind":"text","text":"Hi","style":"title","tone":"dim"},
           {"id":"s","kind":"scroll","axis":"horizontal","child":{"id":"c","kind":"card","clickable":true,"children":[
             {"id":"b","kind":"button","label":"Start","style":"primary","icon":"play"},
@@ -17,6 +17,7 @@ struct PluginViewTreeTests {
             {"id":"m","kind":"menu","label":"Move to","items":[{"id":"done","label":"Done"}]}]}}]}
         """#).get()
         #expect(tree.children.count == 2)
+        #expect(tree.width == 280)
         #expect(tree.children[1].horizontal)
         #expect(tree.children[1].children.first?.clickable == true)
         #expect(tree.children[1].children.first?.children[2].items == [.init(id: "done", label: "Done")])
@@ -29,6 +30,8 @@ struct PluginViewTreeTests {
         (#"{"id":"a","kind":"button","label":5}"#, "not a valid view tree"),
         (#"{"id":"a","kind":"text","text":"x","style":"huge"}"#, "text \"a\" has unknown style \"huge\""),
         (#"{"id":"a","kind":"vstack","spacing":99,"children":[]}"#, "vstack \"a\" spacing must be 0 to 32"),
+        (#"{"id":"a","kind":"vstack","width":39,"children":[]}"#, "vstack \"a\" width must be 40 to 1000"),
+        (#"{"id":"a","kind":"card","width":1001,"children":[]}"#, "card \"a\" width must be 40 to 1000"),
         (#"{"id":"a","kind":"scroll","axis":"diagonal","child":{"id":"b","kind":"spacer"}}"#, "scroll \"a\" needs an axis"),
         (#"{"id":"","kind":"spacer"}"#, "node ids must be 1 to 64 bytes"),
         (#"{"id":"a","kind":"menu","label":"m","items":[{"id":"","label":"x"}]}"#, "menu item ids must be 1 to 64 bytes"),

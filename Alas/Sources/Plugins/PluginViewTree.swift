@@ -16,6 +16,7 @@ struct PluginViewNode: Equatable, Sendable {
     var tone: Tone? = nil
     var icon: String? = nil
     var spacing: Int? = nil
+    var width: Int? = nil                 // vstack, card: fixed width in points
     var horizontal = false                // scroll axis
     var multiline = false
     var disabled = false
@@ -96,6 +97,7 @@ enum PluginViewTree {
         var tone: String?
         var icon: String?
         var spacing: Int?
+        var width: Int?
         var multiline: Bool?
         var disabled: Bool?
         var clickable: Bool?
@@ -122,6 +124,10 @@ enum PluginViewTree {
         if let spacing = raw.spacing {
             guard (0...32).contains(spacing) else { throw err("\(prefix) spacing must be 0 to 32") }
             node.spacing = spacing
+        }
+        if let width = raw.width, kind == .vstack || kind == .card {
+            guard (40...1000).contains(width) else { throw err("\(prefix) width must be 40 to 1000") }
+            node.width = width
         }
         let allowedStyles: [String] = switch kind {
         case .text: ["body", "caption", "title", "monospaced"]
