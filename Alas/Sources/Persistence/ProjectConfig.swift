@@ -291,19 +291,39 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
                 self.host = RemotePath.unavailableHost
                 virtualizeLegacyRemotePaths(host: RemotePath.unavailableHost, replacing: host)
             }
+        } else if RemotePath.isReserved(path) || cachedWorktrees.contains(where: { RemotePath.isReserved($0.path.path) }) {
+            // A local project inside the reserved namespace would be routed
+            // to an ssh host named after its next path component. Fail closed
+            // the same way: it becomes unavailable, never local or remote.
+            let (projectID, projectPath) = (id, path)
+            projectConfigLogger.warning(
+                "Local project \(projectID, privacy: .public) at \(projectPath, privacy: .private) is inside the reserved remote namespace; it is unavailable until re-added"
+            )
+            host = RemotePath.unavailableHost
+            virtualizeLegacyRemotePaths(host: RemotePath.unavailableHost, wrappingReserved: true)
         }
     }
 
     /// Remote projects saved before virtual paths stored real remote paths.
     /// Move every path and worktree-id-keyed field under the host's virtual
     /// namespace; already-virtual values are left alone, except those under
-    /// `replacedHost`, which move to `host`.
-    private mutating func virtualizeLegacyRemotePaths(host: String, replacing replacedHost: String? = nil) {
+    /// `replacedHost`, which move to `host`. With `wrappingReserved`, a local
+    /// path inside the reserved namespace is itself the real path to wrap.
+    private mutating func virtualizeLegacyRemotePaths(
+        host: String,
+        replacing replacedHost: String? = nil,
+        wrappingReserved: Bool = false
+    ) {
         let anchor = RemotePath.virtual(host: host, realPath: "/")
         var renamed: [String: String] = [:]
         func v(_ old: String) -> String {
-            let real = RemotePath.split(old).flatMap { $0.host == replacedHost ? $0.realPath : nil } ?? old
-            let new = RemotePath.virtualizing(real, like: anchor)
+            let new: String
+            if wrappingReserved, old.hasPrefix("/"), RemotePath.split(old)?.host != host {
+                new = RemotePath.virtual(host: host, realPath: old)
+            } else {
+                let real = RemotePath.split(old).flatMap { $0.host == replacedHost ? $0.realPath : nil } ?? old
+                new = RemotePath.virtualizing(real, like: anchor)
+            }
             if new != old { renamed[old] = new }
             return new
         }

@@ -59,6 +59,33 @@ struct ProjectConfigTests {
         #expect(decoded.path == RemotePath.virtual(host: RemotePath.unavailableHost, realPath: "/srv/repo"))
     }
 
+    /// A host-less project persisted inside the reserved namespace fails
+    /// closed under the placeholder host instead of routing to an ssh host
+    /// named after its next path component; normal local projects are untouched.
+    @Test(arguments: [RemotePath.root + "/x/repo", "/srv/repo"])
+    func decodeMovesReservedLocalProjectsUnderThePlaceholder(path: String) throws {
+        let worktree = Worktree(
+            id: path + "-wt", projectId: "p", name: "wt", branch: "wt",
+            path: URL(fileURLWithPath: path + "-wt"), status: .clean, lastActivity: .distantPast
+        )
+        let legacy = ProjectConfig(
+            id: "p", name: "P", path: path, color: "#fff", addedAt: .distantPast, cachedWorktrees: [worktree]
+        )
+        let reserved = RemotePath.isReserved(path)
+        let v: (String) -> String = { reserved ? RemotePath.virtual(host: RemotePath.unavailableHost, realPath: $0) : $0 }
+
+        let decoded = try JSONDecoder().decode(ProjectConfig.self, from: JSONEncoder().encode(legacy))
+
+        #expect(decoded.host == (reserved ? RemotePath.unavailableHost : nil))
+        #expect(decoded.path == v(path))
+        #expect(decoded.cachedWorktrees.map(\.id) == [v(path + "-wt")])
+        #expect(RemoteHostRegistry.shared.host(forPath: decoded.path) == (reserved ? RemotePath.unavailableHost : nil))
+        let again = try JSONDecoder().decode(ProjectConfig.self, from: JSONEncoder().encode(decoded))
+        #expect(again.host == decoded.host)
+        #expect(again.path == decoded.path)
+        #expect(again.cachedWorktrees == decoded.cachedWorktrees)
+    }
+
     /// When a legacy key and its virtual form both exist, the virtual entry is
     /// the newer one and wins. Many keys so a random winner can't pass by luck.
     @Test func decodePrefersVirtualEntryOverLegacyDuplicate() throws {
