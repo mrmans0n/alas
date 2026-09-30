@@ -309,6 +309,26 @@ extension AppState {
         // and every later one would collide with what it left behind: the
         // destination it still occupies, or the branch it kept after the
         // worktree went away.
+        switch await reserveWorktreeDestination(rendered: rendered, project: project) {
+        case let .success((branch, destination, base)):
+            return await createWorktreeAndWait(
+                projectId: project.id,
+                base: base,
+                branch: branch,
+                destination: destination,
+                runStartup: true
+            )
+        case .failure(let failure):
+            return .failure(failure)
+        }
+    }
+
+    /// The first free branch and worktree path for `rendered` (suffixed when
+    /// the name is taken), plus the base branch a new worktree is cut from.
+    func reserveWorktreeDestination(
+        rendered: String,
+        project: ProjectConfig
+    ) async -> Result<(branch: String, destination: URL, base: String), WorktreeCreationFailure> {
         let repoPath = URL(fileURLWithPath: project.path)
         let git = GitService()
         // Local branches only: `WorktreeService.add` decides whether to reuse
@@ -345,13 +365,7 @@ extension AppState {
             availableBranches: availableBranches,
             configuredDefault: config.worktrees.baseBranch
         )
-        return await createWorktreeAndWait(
-            projectId: project.id,
-            base: base,
-            branch: branch,
-            destination: destination,
-            runStartup: true
-        )
+        return .success((branch, destination, base))
     }
 
     private func runScheduledScript(

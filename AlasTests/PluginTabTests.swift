@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import Testing
 @testable import Alas
 
@@ -35,5 +36,20 @@ struct PluginTabTests {
         #expect(PluginTabContent.resolve(
             pluginsOn: c.pluginsOn, found: c.found, approved: c.approved, enabled: c.enabled,
             hostState: c.hostState, hasFrame: c.hasFrame) == c.expected)
+    }
+
+    @Test(arguments: [
+        ("Fix login flow", nil as String?, "task/fix-login-flow"),
+        ("  Añadir 🚀 soporte / para  X ", nil, "task/anadir-soporte-para-x"),
+        ("..--..", nil, "task/task"),
+        ("", nil, "task/task"),
+        ("x", "feature/my-branch", "feature/my-branch"),
+        ("x", "bad..name", "task/bad-name"),
+        (String(repeating: "word ", count: 40), nil, "task/" + Array(repeating: "word", count: 40).joined(separator: "-").prefix(48).trimmingCharacters(in: CharacterSet(charactersIn: "-"))),
+    ])
+    func taskBranchNamesAreAlwaysValid(title: String, requested: String?, expected: String) {
+        let name = PluginTaskBranch.name(title: title, requested: requested)
+        #expect(name == expected)
+        #expect(GitNameValidator.validateBranchName(name) == .valid)
     }
 }

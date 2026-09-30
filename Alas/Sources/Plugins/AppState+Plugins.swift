@@ -50,8 +50,86 @@ extension AppState {
                 }
                 return false
             },
-            // Replaced by the real start once tasks land.
-            startTask: { _, _ in .rejected(code: -32003, message: "tasks are not available yet") })
+            startTask: { [weak self] request, completion in
+                self?.startPluginTask(request, project: project, completion: completion)
+                    ?? .rejected(code: -32003, message: "Alas is shutting down")
+            })
+    }
+
+    /// Starts a plugin task on the scheduled-run path: a new worktree, created without changing
+    /// the selection, with an agent chat session that sends `request.prompt` straight away.
+    /// Returns before any of that happens; `completion` is called once, later, with nil on
+    /// success or the reason it failed.
+    func startPluginTask(
+        _ request: PluginTaskRequest,
+        project: ProjectConfig,
+        completion: @escaping @MainActor (String?) -> Void
+    ) -> PluginTaskStart {
+        guard let agentId = request.agent
+            ?? defaultAgentID(projectId: project.id, worktreeRoot: URL(fileURLWithPath: project.path))
+        else {
+            return .rejected(code: -32003, message: "no agent is configured for \(project.name)")
+        }
+        // Also catches an unknown id: only a known ACP agent can take the prompt as a message.
+        guard ACPLaunchCatalog.spec(for: agentId) != nil else {
+            return .rejected(code: -32602, message: "agent \(agentId) cannot take a prompt")
+        }
+        let branch = PluginTaskBranch.name(title: request.title, requested: request.branch)
+        let prepared = PreparedWorktreeACPPrompt(
+            sessionID: UUID().uuidString,
+            promptID: UUID(),
+            text: request.prompt,
+            sendsAutomatically: true,
+            modelID: nil)
+        // Spawned, never awaited here: the host records the session id only after this returns,
+        // so the completion must not run before then.
+        Task { @MainActor in
+            completion(await self.runPluginTask(prepared, agentId: agentId, branch: branch, project: project))
+        }
+        // The reply names the requested branch. When it is taken, `reserveWorktreeDestination`
+        // creates a suffixed one instead, and the plugin learns the real name from the snapshot.
+        return .started(sessionId: prepared.sessionID, branch: branch)
+    }
+
+    /// Nil when the agent came up with the prompt, otherwise why not.
+    private func runPluginTask(
+        _ prepared: PreparedWorktreeACPPrompt,
+        agentId: String,
+        branch: String,
+        project: ProjectConfig
+    ) async -> String? {
+        let cancelled = "The task was cancelled before its agent started."
+        let worktree: Worktree
+        switch await reserveWorktreeDestination(rendered: branch, project: project) {
+        case .failure(let failure):
+            return failure.message
+        case let .success((branch, destination, base)):
+            guard !Task.isCancelled else { return cancelled }
+            switch await createWorktreeAndWait(
+                projectId: project.id, base: base, branch: branch, destination: destination, runStartup: true
+            ) {
+            case .failure(let failure): return failure.message
+            case .success(let created): worktree = created
+            }
+        }
+        let surface = WorktreeLaunchSurface.acp(agentId: agentId, preparedPrompt: prepared)
+        do {
+            try await launchWorktreeSurface(surface, worktree: worktree, project: project)
+        } catch {
+            if Task.isCancelled || error is CancellationError { return cancelled }
+            markWorktreeLaunchFailed(worktree: worktree, projectId: project.id, error: error, launchSurface: surface)
+            return error.localizedDescription
+        }
+        // As for scheduled chat sessions: the launch returns normally when the session could not
+        // be opened or its agent did not start, so check what it left behind.
+        guard !Task.isCancelled else { return cancelled }
+        guard let session = acpManager(forWorktreeId: worktree.id)?.liveSession(for: prepared.sessionID) else {
+            return "Could not open a chat session for \(agentId) in \(worktree.branch)."
+        }
+        if let reason = session.lastError {
+            return "\(agentId) could not start in \(worktree.branch): \(reason)"
+        }
+        return nil
     }
 
     private func pluginWorkspaceSnapshot(projectId: String) -> PluginWorkspaceSnapshot {
