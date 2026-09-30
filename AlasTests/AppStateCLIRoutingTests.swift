@@ -207,7 +207,7 @@ struct AppStateCLIRoutingTests {
         let project = ProjectConfig(
             id: "remote-project",
             name: "Remote",
-            path: "/repo",
+            path: RemotePath.virtual(host: "devbox", realPath: "/repo"),
             color: "#000000",
             addedAt: .distantPast,
             host: "devbox"
@@ -227,7 +227,7 @@ struct AppStateCLIRoutingTests {
                     workspaceMemberID: UUID(),
                     projectID: project.id,
                     fallbackProjectName: "Remote",
-                    fallbackRepositoryRoot: project.path,
+                    fallbackRepositoryRoot: "/repo",
                     worktreePath: "/checkout/member",
                     availability: .available
                 )
@@ -258,7 +258,7 @@ struct AppStateCLIRoutingTests {
             projectId: project.id,
             name: "member",
             branch: "main",
-            path: URL(fileURLWithPath: "/checkout/member"),
+            path: URL(fileURLWithPath: RemotePath.virtual(host: "devbox", realPath: "/checkout/member")),
             status: .clean,
             lastActivity: .distantPast
         ))
