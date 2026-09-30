@@ -591,13 +591,6 @@ struct ACPSessionOrchestrationCoordinatorTests {
         }
     }
 
-    private func waitUntil(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-        while !condition() {
-            try #require(ContinuousClock.now < deadline)
-            try await Task.sleep(for: .milliseconds(10))
-        }
-    }
 
     private func selectedChildRecord(phase: ACPDelegationPhase = .starting) -> ACPDelegationRecord {
         .init(
@@ -1003,17 +996,21 @@ struct ACPSessionOrchestrationCoordinatorTests {
         childSessionId: String,
         matching predicate: (ACPDelegationRecord) -> Bool
     ) async throws -> ACPDelegationRecord {
-        // A deadline, not a fixed number of short polls: a child start that
-        // attaches a session can take well over half a second on loaded CI.
-        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-        while ContinuousClock.now < deadline {
-            if let record = try await persistence.delegation(childSessionId: childSessionId),
-               predicate(record) {
-                return record
-            }
-            try await Task.sleep(for: .milliseconds(10))
+        try await waitUntil {
+            (try? await persistence.delegation(childSessionId: childSessionId)).flatMap { $0 }.map(predicate) == true
         }
         return try #require(try await persistence.delegation(childSessionId: childSessionId))
+    }
+
+    /// The suite's one polling helper. A deadline, not a fixed number of
+    /// short polls: a child start that attaches a session can take well over
+    /// half a second on loaded CI.
+    private func waitUntil(_ condition: () async -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while await !condition() {
+            try #require(ContinuousClock.now < deadline)
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     private func testBlocker(_ key: String = "n42") -> ACPChildBlocker {

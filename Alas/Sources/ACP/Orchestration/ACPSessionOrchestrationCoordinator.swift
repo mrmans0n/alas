@@ -564,7 +564,11 @@ final class ACPSessionOrchestrationCoordinator {
             outcome: outcome,
             discardingHeldMessages: record.modelSelection != nil
         )) ?? false
-        if ACPSessionOrchestrationPolicy.holdsPromptDispatch(target: record) {
+        // Lift the hold only once `.failed` is durable: a claim that threw
+        // (busy timeout, I/O) left the child `starting`, and a released hold
+        // cannot be re-armed on this session object.
+        if ACPSessionOrchestrationPolicy.holdsPromptDispatch(target: record),
+           (try? await environment.persistence.delegation(childSessionId: childSessionId))??.phase == .failed {
             releaseSelectionHold(for: record, discardingInitialPrompt: true)
         }
         environment.notifyChanged()
