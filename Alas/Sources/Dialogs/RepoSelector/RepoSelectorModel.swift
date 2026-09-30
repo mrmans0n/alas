@@ -243,9 +243,12 @@ final class RepoSelectorModel {
                         return index - titleStart
                     }
                     scored.append(Scored(worktree: w, indices: titleIndices, score: r.score - 1))
-                } else if w.isDetached, let r = FuzzyMatch.score(query: query, target: w.branch) {
-                    // "detached" still lists every detached worktree; the
-                    // matched text is the tag, not the title, so nothing highlights.
+                } else if w.isDetached,
+                          let r = FuzzyMatch.score(query: query, target: w.branch)
+                              ?? FuzzyMatch.score(query: query, target: "\(project.name) \(w.branch)") {
+                    // "detached" (optionally scoped by project name) still lists
+                    // detached worktrees; the matched text is the tag, not the
+                    // title, so nothing highlights.
                     scored.append(Scored(worktree: w, indices: [], score: r.score - 1))
                 }
             }

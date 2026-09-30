@@ -477,6 +477,15 @@ struct RepoSelectorModelTests {
             if case .worktree(let w, _, _) = $0 { return w.id } else { return nil }
         }
         #expect(ids == ["fix-flicker", "scratch"])
+
+        model.query = "acme detached"
+        let acme = project("p2", name: "acme")
+        let other = worktree("other", projectId: "p2", branch: "(detached)")
+        let scoped = env(projects: [p1, acme], worktrees: ["p1": [flicker], "p2": [other]])
+        let scopedIds: [String] = model.rows(environment: scoped).compactMap {
+            if case .worktree(let w, _, _) = $0 { return w.id } else { return nil }
+        }
+        #expect(scopedIds == ["other"])
     }
 
     @Test func filterModePropagatesCurrentFlag() {
