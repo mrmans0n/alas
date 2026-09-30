@@ -53,7 +53,7 @@ struct AlasProfile: Equatable, Sendable {
             }
             let runtime = runtimeDirectory(for: root, uid: getuid())
             guard AgentHookSocketServer.prepareSocketDirectory(runtime.path, ownerUid: getuid()) else {
-                fatalError("\(environmentKey): runtime directory \(runtime.path) must be a directory owned by this user that Alas can set to 0700; remove it or fix its owner and mode")
+                fatalError("\(environmentKey): runtime directory \(runtime.path) must be a directory owned by this user, not writable by group or others, that Alas can set to 0700; remove it so Alas recreates it")
             }
             return AlasProfile(appSupportOverride: root, runtimeDirectory: runtime)
         case .invalid(let value):
@@ -76,7 +76,7 @@ struct AlasProfile: Equatable, Sendable {
 
     /// Creates `url` (and missing parents) owner-only, or tightens an existing
     /// directory this user owns to `0700`. Refuses a symlink, a non-directory,
-    /// or a directory owned by someone else.
+    /// a directory owned by someone else, or one group or others could write.
     static func preparePrivateDirectory(_ url: URL, ownerUid: uid_t) -> Bool {
         try? FileManager.default.createDirectory(
             at: url,

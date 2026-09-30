@@ -202,9 +202,14 @@ struct AgentHookSocketServerTests {
 
     /// A missing directory is created and an existing one we own is set to
     /// `0700`, including owner-only but untraversable modes that would
-    /// otherwise make socket binding fail later. `nil` means "does not exist".
-    @Test(arguments: [nil, 0o700, 0o755, 0o777, 0o600, 0o500] as [mode_t?])
-    func prepareSocketDirectory_createsOrTightensToOwnerOnly(existingMode: mode_t?) throws {
+    /// otherwise make socket binding fail later. A directory group or others
+    /// could write is refused: tightening it would keep sockets they planted.
+    /// A `nil` mode means the directory does not exist yet.
+    @Test(arguments: [
+        (nil, true), (0o700, true), (0o755, true), (0o600, true), (0o500, true),
+        (0o777, false), (0o720, false), (0o702, false),
+    ] as [(mode_t?, Bool)])
+    func prepareSocketDirectory_tightensOrRefusesExistingMode(existingMode: mode_t?, accepted: Bool) throws {
         let dir = "/tmp/alas-test-mode-\(UUID().uuidString)"
         defer { try? FileManager.default.removeItem(atPath: dir) }
         if let existingMode {
@@ -212,10 +217,10 @@ struct AgentHookSocketServerTests {
             try #require(chmod(dir, existingMode) == 0)
         }
 
-        #expect(AgentHookSocketServer.prepareSocketDirectory(dir, ownerUid: getuid()))
+        #expect(AgentHookSocketServer.prepareSocketDirectory(dir, ownerUid: getuid()) == accepted)
         var st = Darwin.stat()
         #expect(Darwin.lstat(dir, &st) == 0)
-        #expect((st.st_mode & 0o777) == 0o700)
+        #expect((st.st_mode & 0o777) == (accepted ? 0o700 : existingMode))
     }
 
     /// Codex review (#102): `/tmp/alas-<uid>` is a predictable path. Another
