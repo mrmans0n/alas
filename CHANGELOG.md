@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Let "Disable native subagents" cover Pi: sessions start through an Alas-owned `PI_ACP_PI_COMMAND` wrapper that excludes the `subagent`, `bg_wait`, and `subagent_supervisor` tools of the `pi-subagents` extension, chaining to any `PI_ACP_PI_COMMAND` you already set. Settings names installed Pi extensions Alas does not recognize instead of claiming full enforcement. Local sessions only.
+
 ## [0.19.19] - 2026-09-29
 
 ### ✨ Features

@@ -19,6 +19,10 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
     /// global and project settings, which removes the `task` and `hub` tools
     /// and makes eval's `agent()`/`workpool()` fail their spawn preflight.
     case ompConfigOverlay
+    /// `pi-acp`: `PI_ACP_PI_COMMAND` pointing at an Alas-owned wrapper that
+    /// runs `pi` with `--exclude-tools` for every tool of the known Pi
+    /// subagent extensions (`ACPPiSubagentExtensions`).
+    case piCommandWrapper
 
     /// The `agentInfo.name` of the adapter whose contract was verified. A
     /// different ACP server that happens to share the binary name (Alas
@@ -29,6 +33,7 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
         case .codexConfigEnvironment: ACPManagedAdapterDescriptor.codex.packageName
         case .openCodeConfigContent: ACPOpenCodeTaskPolicy.adapterName
         case .ompConfigOverlay: "oh-my-pi"
+        case .piCommandWrapper: ACPManagedAdapterDescriptor.pi.packageName
         }
     }
 
@@ -41,6 +46,7 @@ enum ACPNativeDelegationMechanism: Equatable, Sendable {
         case .codexConfigEnvironment: "1.13.1"
         case .openCodeConfigContent: "1.18.33"
         case .ompConfigOverlay: "18.2.11"
+        case .piCommandWrapper: "0.0.34"
         }
     }
 }
@@ -54,9 +60,6 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
     case toolOmission(ACPNativeDelegationMechanism)
     /// The native tool stays visible but its calls are rejected.
     case runtimeDenial(ACPNativeDelegationMechanism)
-    /// The agent has no core subagent tool; extensions may add one, and
-    /// Alas does not disable extensions.
-    case extensionDependent
     /// The agent has native subagents, but no control is verified yet.
     case unverified
     /// Custom or unknown agents.
@@ -67,7 +70,7 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
         case ACPManagedAdapterDescriptor.claude.agentID: .toolOmission(.claudeDisallowedTools)
         case ACPManagedAdapterDescriptor.codex.agentID: .toolOmission(.codexConfigEnvironment)
         case ACPOpenCodeTaskPolicy.agentID: .toolOmission(.openCodeConfigContent)
-        case ACPManagedAdapterDescriptor.pi.agentID: .extensionDependent
+        case ACPManagedAdapterDescriptor.pi.agentID: .toolOmission(.piCommandWrapper)
         case "omp": .toolOmission(.ompConfigOverlay)
         case "cursor-agent", "gemini", "copilot": .unverified
         default: .unsupported
@@ -77,7 +80,7 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
     var mechanism: ACPNativeDelegationMechanism? {
         switch self {
         case .toolOmission(let mechanism), .runtimeDenial(let mechanism): mechanism
-        case .extensionDependent, .unverified, .unsupported: nil
+        case .unverified, .unsupported: nil
         }
     }
 
@@ -110,12 +113,15 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
                 + "and makes eval's agent() and workpool() fail; eval otherwise "
                 + "works. Your ~/.omp and project settings are not changed. "
                 + "Local sessions only."
+        case .toolOmission(.piCommandWrapper):
+            return "Pi has no built-in subagent tool. This removes the subagent tools of "
+                + "known Pi extensions (" + Self.piCoveredToolsDescription + ") from the "
+                + "model's tool list, by starting Pi through an Alas wrapper that adds "
+                + "--exclude-tools. Tools from other extensions are not affected. Your Pi "
+                + "settings and any PI_ACP_PI_COMMAND you set are kept. Local sessions only."
         case .runtimeDenial:
             return "The native subagent tool stays visible to the model, but "
                 + "its calls are rejected."
-        case .extensionDependent:
-            return "Pi has no built-in subagent tool. Pi extensions may add one; "
-                + "Alas does not disable extensions."
         case .unverified:
             return "Alas has not verified a way to turn off this agent's native "
                 + "subagents, so this option is unavailable."
@@ -129,12 +135,31 @@ enum ACPNativeDelegationSupport: Equatable, Sendable {
         + "subagents already running are not stopped. This is not a sandbox: "
         + "shell commands and extensions can still start other agents."
 
+    /// `subagent, bg_wait, and subagent_supervisor (pi-subagents)`.
+    static var piCoveredToolsDescription: String {
+        ACPPiSubagentExtensions.known.map { ext in
+            var tools = ext.delegationTools
+            let last = tools.removeLast()
+            let list = tools.isEmpty ? last : tools.joined(separator: ", ") + ", and " + last
+            return "\(list) from \(ext.packageName)"
+        }.joined(separator: "; ")
+    }
+
     /// Full settings-row copy: what the control does (or why it is
-    /// unavailable), when it takes effect, and whether Alas delegation is
-    /// left as the alternative.
-    func settingsRowDescription(isOn: Bool, alasToolsExposed: Bool) -> String {
+    /// unavailable), what the installed extensions leave uncovered (Pi),
+    /// when it takes effect, and whether Alas delegation is left as the
+    /// alternative.
+    func settingsRowDescription(
+        isOn: Bool,
+        alasToolsExposed: Bool,
+        extensionCoverage: ACPPiSubagentExtensions.Coverage? = nil
+    ) -> String {
         guard canEnforce else { return settingsDescription }
-        var text = settingsDescription + " " + Self.activationDescription
+        var text = settingsDescription
+        if mechanism == .piCommandWrapper, let extensionCoverage {
+            text += " " + extensionCoverage.settingsDescription
+        }
+        text += " " + Self.activationDescription
         if isOn {
             text += alasToolsExposed
                 ? " Sessions are told to delegate through Alas child sessions instead."
@@ -154,6 +179,7 @@ enum ACPNativeDelegationError: LocalizedError, Equatable {
     case adapterVersionUnverified(agentID: String, found: String?, minimum: String)
     case adapterUnverified(agentID: String, found: String?, expected: String)
     case launchOverlayUnavailable(agentID: String, detail: String)
+    case piCommandUnavailable(command: String, isUserCommand: Bool)
 
     var errorDescription: String? {
         switch self {
@@ -203,10 +229,18 @@ enum ACPNativeDelegationError: LocalizedError, Equatable {
                 + "then start a new session."
         case .launchOverlayUnavailable(let agentID, let detail):
             return "Native subagents are disabled for this session, but Alas could "
-                + "not write the \(agentID) launch settings file: \(detail). Check "
+                + "not write the \(agentID) launch file: \(detail). Check "
                 + "that Alas's Application Support folder is writable or turn off "
                 + "\"Disable native subagents\" in Settings → Agents, then start a "
                 + "new session."
+        case .piCommandUnavailable(let command, let isUserCommand):
+            let fix = isUserCommand
+                ? "Fix PI_ACP_PI_COMMAND"
+                : "Install Pi (npm install -g @earendil-works/pi-coding-agent)"
+            return "Native subagents are disabled for this session, but Alas could "
+                + "not find the Pi command \"\(command)\" that its launch wrapper runs. "
+                + "\(fix) or turn off \"Disable native subagents\" for Pi in "
+                + "Settings → Agents, then start a new session."
         }
     }
 }
@@ -263,8 +297,9 @@ enum ACPNativeDelegationControls {
               let mechanism = ACPNativeDelegationSupport.resolve(agentID: spec.agentID).mechanism
         else { return spec }
         // Remote launches either drop extraEnv or cannot see the remote
-        // user's CODEX_CONFIG, OPENCODE_CONFIG_CONTENT, or a local overlay file, so enforcement there
-        // would be unverifiable.
+        // user's CODEX_CONFIG, OPENCODE_CONFIG_CONTENT, PI_ACP_PI_COMMAND, or
+        // a local overlay or wrapper file, so enforcement there would be
+        // unverifiable.
         func requireLocal() throws {
             if isRemote { throw ACPNativeDelegationError.remoteHostUnsupported(agentID: spec.agentID) }
         }
@@ -294,6 +329,25 @@ enum ACPNativeDelegationControls {
             // Appended last: OMP applies `--config` files in order, so this
             // one wins over any overlay passed earlier on the command line.
             return spec.appendingArguments(["--config", overlay.path])
+        case .piCommandWrapper:
+            try requireLocal()
+            let wrapper: URL
+            do {
+                wrapper = try ACPLaunchOverlay.ensure(
+                    ACPPiSubagentExtensions.wrapperContents,
+                    named: ACPPiSubagentExtensions.wrapperFileName,
+                    in: overlayDirectory,
+                    permissions: 0o700
+                )
+            } catch {
+                throw ACPNativeDelegationError.launchOverlayUnavailable(
+                    agentID: spec.agentID, detail: error.localizedDescription)
+            }
+            return spec.mergingExtraEnv(try ACPPiSubagentExtensions.launchEnvironment(
+                extraEnv: spec.extraEnv,
+                inheritedEnvironment: inheritedEnvironment,
+                wrapper: wrapper
+            ))
         }
     }
 
@@ -402,13 +456,15 @@ enum ACPNativeDelegationControls {
     }
 }
 
-/// Alas-owned settings files passed to adapters on their command line.
+/// Alas-owned files passed to adapters on their command line (OMP settings
+/// overlays) or through their environment (the Pi launch wrapper).
 ///
 /// An OMP process re-reads its `--config` files after startup (eval's
 /// `agent()` loads settings again, and fails with "Config overlay not found"
 /// if the file is gone), so an overlay must outlive every process launched
 /// with it, including processes a broker keeps running across Alas restarts.
-/// Each overlay is therefore one fixed file per policy, rewritten atomically
+/// The same holds for the Pi wrapper: `pi-acp` runs it again for every new or
+/// loaded session. Each file is therefore one fixed file per policy, rewritten atomically
 /// before every launch that uses it and never deleted while Alas runs. Its
 /// contents are fixed and hold no user data.
 enum ACPLaunchOverlay {
@@ -416,9 +472,15 @@ enum ACPLaunchOverlay {
         Paths.appSupportRoot.appendingPathComponent("acp-launch-overlays", isDirectory: true)
     }
 
-    /// Makes `directory/name` hold exactly `contents` (owner-only) and
-    /// returns its URL. A reader never sees a partial file.
-    static func ensure(_ contents: String, named name: String, in directory: URL) throws -> URL {
+    /// Makes `directory/name` hold exactly `contents` (owner-only;
+    /// `permissions` 0o700 for an executable) and returns its URL. A reader
+    /// never sees a partial file.
+    static func ensure(
+        _ contents: String,
+        named name: String,
+        in directory: URL,
+        permissions: Int = 0o600
+    ) throws -> URL {
         let fileManager = FileManager.default
         try fileManager.createDirectory(
             at: directory,
@@ -428,7 +490,7 @@ enum ACPLaunchOverlay {
         let url = directory.appendingPathComponent(name)
         let data = Data(contents.utf8)
         let staging = directory.appendingPathComponent(".\(name).\(UUID().uuidString)")
-        guard fileManager.createFile(atPath: staging.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+        guard fileManager.createFile(atPath: staging.path, contents: data, attributes: [.posixPermissions: permissions]) else {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
         }
         guard rename(staging.path, url.path) == 0 else {

@@ -1924,6 +1924,7 @@
 		E4A023A8C0072C451B557C84 /* WorktreeCheckpointStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AA4014F03AFB7CB1DDA8048 /* WorktreeCheckpointStoreTests.swift */; };
 		E4BE423D04F69D25C520A80B /* PairedReviewComposerSurfaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F88DEFC78E8D8AF65CB740A /* PairedReviewComposerSurfaceTests.swift */; };
 		E4C6E2BE1C7F20AD29C66DF0 /* ACPPermissionDecisionLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F128D8543DA5FC5C39C22E9 /* ACPPermissionDecisionLog.swift */; };
+		E4D80CD011AD79BD6918840E /* ACPPiSubagentExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB7C87C7E67689F4F312536E /* ACPPiSubagentExtensions.swift */; };
 		E4E04048352D9CBC77D954C5 /* RightPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE66950F2226F1182DCDD39A /* RightPaneView.swift */; };
 		E4E15059DF3094C1079A7BDE /* PluginWATFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CCFEFF11D18DF8CF1290FAC /* PluginWATFixture.swift */; };
 		E4EAC28F55CBE987E0AB1F85 /* WorktreeWatcherFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 670C7B064EA079D045F0D0DE /* WorktreeWatcherFilterTests.swift */; };
@@ -3981,6 +3982,7 @@
 		DB1415E5F17DB2DF2038EE54 /* GitServiceStackCommitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceStackCommitTests.swift; sourceTree = "<group>"; };
 		DB3A201BB87075FB20E88FBC /* NewRunScriptDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewRunScriptDialog.swift; sourceTree = "<group>"; };
 		DB5A2BDAA7ABD74C42BC51F8 /* CommitDetailsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitDetailsTests.swift; sourceTree = "<group>"; };
+		DB7C87C7E67689F4F312536E /* ACPPiSubagentExtensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPiSubagentExtensions.swift; sourceTree = "<group>"; };
 		DB94BF97B7E1E0C78DDDE441 /* FileContextMenuActionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileContextMenuActionsTests.swift; sourceTree = "<group>"; };
 		DBA6A9F78C8E8CDF6D170BDD /* StatusParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusParserTests.swift; sourceTree = "<group>"; };
 		DBCEDCD8B33C492723BD58E3 /* AppState+PairingApproval.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+PairingApproval.swift"; sourceTree = "<group>"; };
@@ -4500,6 +4502,7 @@
 				DA89D4C70102BCF7B6B2450B /* ACPManagedAdapterDescriptor.swift */,
 				9E5D831638E003D6F8DE472B /* ACPNativeDelegationControls.swift */,
 				9EADB4F55B795183E9980993 /* ACPOpenCodeTaskPolicy.swift */,
+				DB7C87C7E67689F4F312536E /* ACPPiSubagentExtensions.swift */,
 				FC8E722C16FFBEEEC43337D5 /* ACPSetupCheck.swift */,
 				3E9864A515B0ED49C68739B6 /* ACPSetupChecker.swift */,
 				3F239EBD79AA346B7976B544 /* AdapterUpdateState.swift */,
@@ -8174,6 +8177,7 @@
 				0BBFEE487AF71AD858B19EC5 /* ACPPermissionPrompt.swift in Sources */,
 				52A5CDD852333A0C4BDC6995 /* ACPPermissionRequest.swift in Sources */,
 				823AA3E801A11C535C9438BD /* ACPPermissionScope.swift in Sources */,
+				E4D80CD011AD79BD6918840E /* ACPPiSubagentExtensions.swift in Sources */,
 				AB81A1DA27A87F7C7E49D9CF /* ACPPlanChecklist.swift in Sources */,
 				B055F47062645975A500E2EF /* ACPPlanPill.swift in Sources */,
 				CF6CC4CD0C7841CA79DB0E4E /* ACPPlanPillState.swift in Sources */,

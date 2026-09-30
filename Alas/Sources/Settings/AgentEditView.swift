@@ -9,6 +9,9 @@ struct AgentEditView: View {
     @State private var draft: AgentDefinition
     @State private var nativeSubagentsDisabled: Bool
     @State private var deleteConfirmShown = false
+    /// Pi only: what the installed Pi extensions leave uncovered. Read once
+    /// when the sheet opens.
+    @State private var piExtensionCoverage: ACPPiSubagentExtensions.Coverage?
 
     @Environment(\.theme) var theme
 
@@ -20,6 +23,12 @@ struct AgentEditView: View {
         _nativeSubagentsDisabled = State(initialValue: targetID.map {
             state.config.agents.nativeSubagentsDisabled(for: $0)
         } ?? false)
+        _piExtensionCoverage = State(initialValue: targetID == ACPManagedAdapterDescriptor.pi.agentID
+            ? ACPPiSubagentExtensions.coverage(
+                agentDirectory: ACPPiSubagentExtensions.agentDirectory(),
+                projects: state.projects.filter { $0.host == nil }
+                    .map { ($0.name, URL(fileURLWithPath: $0.path, isDirectory: true)) })
+            : nil)
         switch target {
         case .new:
             _draft = State(initialValue: AgentDefinition(
@@ -135,7 +144,8 @@ struct AgentEditView: View {
                 name: "Disable native subagents",
                 desc: nativeDelegationSupport.settingsRowDescription(
                     isOn: nativeSubagentsDisabled,
-                    alasToolsExposed: state.config.harness.exposeAlasMCP
+                    alasToolsExposed: state.config.harness.exposeAlasMCP,
+                    extensionCoverage: piExtensionCoverage
                 )
             ) {
                 AlasToggle(on: $nativeSubagentsDisabled)
