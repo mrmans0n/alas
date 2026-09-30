@@ -44,10 +44,15 @@ private struct PluginViewEvents {
     }
 }
 
+private extension EnvironmentValues {
+    @Entry var inClickableCard = false
+}
+
 private struct PluginViewNodeView: View {
     let node: PluginViewNode
     let events: PluginViewEvents
     @Environment(\.theme) var theme
+    @Environment(\.inClickableCard) private var inClickableCard
 
     var body: some View {
         switch node.kind {
@@ -59,10 +64,16 @@ private struct PluginViewNodeView: View {
         case .scroll:
             ScrollView(node.horizontal ? .horizontal : .vertical) { children }
         case .text:
-            Text(node.text ?? "")
+            let text = Text(node.text ?? "")
                 .font(font)
                 .foregroundColor(color(node.tone))
-                .textSelection(.enabled)
+            // Selectable text takes the mouse-down, so inside a clickable card the click never
+            // reaches the card's tap gesture.
+            if inClickableCard {
+                text
+            } else {
+                text.textSelection(.enabled)
+            }
         case .badge:
             Text(node.text ?? "")
                 .font(.caption)
@@ -111,6 +122,7 @@ private struct PluginViewNodeView: View {
             // Not a Button: that would merge the card into one accessibility element and hide its
             // inner buttons and menus. Inner controls still win the hit test over the tap gesture.
             content
+                .environment(\.inClickableCard, true)
                 .onTapGesture { events.send(node.id, "click") }
                 .accessibilityElement(children: .contain)
                 .accessibilityAddTraits(.isButton)
@@ -182,7 +194,8 @@ private struct PluginTextFieldView: View {
                 .font(.body)
                 .scrollContentBackground(.hidden)
                 .padding(4)
-                .frame(minHeight: 60)
+                // Capped so a long prompt scrolls inside the editor instead of pushing the rest of the view down.
+                .frame(minHeight: 64, maxHeight: 140)
                 .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("field-bg")))
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
                 .overlay(alignment: .topLeading) {
