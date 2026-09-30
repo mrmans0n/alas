@@ -45,6 +45,49 @@ struct RemotePathMigrationTests {
         }
     }
 
+    /// Sidecars hold committed rows: a partial run must resume without losing
+    /// them and without pairing an old WAL with a database that is not its own.
+    @Test(arguments: ["walMovedBeforeMain", "mainMovedWalLeftBehind", "bothMainsExist"])
+    func acpSidecarsSurviveInterruptedMigration(state: String) throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let from = RemotePathMigration.Store.acpSessions.url(root: root, id: old)
+        let to = RemotePathMigration.Store.acpSessions.url(root: root, id: new)
+        func put(_ url: URL, _ text: String) throws {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url)
+        }
+        func read(_ url: URL) -> String? { try? String(contentsOf: url, encoding: .utf8) }
+        switch state {
+        case "walMovedBeforeMain":
+            try put(from, "db")
+            try put(URL(fileURLWithPath: from.path + "-shm"), "shm")
+            try put(URL(fileURLWithPath: to.path + "-wal"), "moved-wal")
+        case "mainMovedWalLeftBehind":
+            try put(to, "db")
+            try put(URL(fileURLWithPath: from.path + "-wal"), "wal")
+        default:
+            try put(from, "old-db")
+            try put(to, "new-db")
+            try put(URL(fileURLWithPath: from.path + "-wal"), "old-wal")
+        }
+
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+
+        let toWal = URL(fileURLWithPath: to.path + "-wal")
+        switch state {
+        case "walMovedBeforeMain":
+            #expect(read(to) == "db" && read(from) == nil)
+            #expect(read(toWal) == "moved-wal")
+            #expect(read(URL(fileURLWithPath: to.path + "-shm")) == "shm")
+        case "mainMovedWalLeftBehind":
+            #expect(read(toWal) == "wal")
+        default:
+            #expect(read(to) == "new-db" && read(from) == "old-db")
+            #expect(read(toWal) == nil)
+        }
+    }
+
     @Test func existingDestinationIsKeptAndRerunIsNoOp() throws {
         let root = makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }

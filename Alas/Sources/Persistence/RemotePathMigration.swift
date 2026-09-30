@@ -92,10 +92,17 @@ enum RemotePathMigration {
                 case .tabs:
                     move(from, to, fileManager)
                 case .acpSessions:
-                    guard move(from, to, fileManager) else { continue }
+                    // Sidecars hold committed rows, so they move before the main
+                    // file: an interrupted run leaves the main file at the old
+                    // path and the next launch resumes. Skip only when both
+                    // main files exist (never pair an old WAL with a new database).
+                    let mainAtSource = fileManager.fileExists(atPath: from.path)
+                    let mainAtDestination = fileManager.fileExists(atPath: to.path)
+                    guard mainAtSource != mainAtDestination else { continue }
                     for sidecar in ["-wal", "-shm"] {
                         move(URL(fileURLWithPath: from.path + sidecar), URL(fileURLWithPath: to.path + sidecar), fileManager)
                     }
+                    move(from, to, fileManager)
                 case .buffers:
                     // Files only: a subdirectory is another worktree's
                     // buffers nested under this path, migrated on its own.
