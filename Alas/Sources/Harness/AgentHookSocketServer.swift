@@ -146,21 +146,26 @@ final class AgentHookSocketServer: @unchecked Sendable {
     }
 
     /// Ensures `path` is a real directory (no symlink) owned by `ownerUid`
-    /// with mode `0700`. Refuses to use it otherwise: another local user
-    /// could pre-create a world-writable `/tmp/alas-<uid>` for our predictable
-    /// UID and then connect to our `pid-<pid>` socket to spoof hook events,
-    /// driving false UI state and notifications.
+    /// with mode `0700`, creating it or tightening an existing one's mode.
+    /// Refuses a symlink, a non-directory, a directory owned by someone else,
+    /// one that group or others could write, or one whose mode cannot be set.
+    /// Another local user could pre-create `/tmp/alas-<uid>` for our
+    /// predictable UID, or plant a `pid-<pid>` socket in a directory they
+    /// could write, and then spoof hook events or intercept CLI requests;
+    /// tightening the mode afterwards would not remove what they planted.
+    /// Owner-only but untraversable modes (`0600`, `0500`) are tightened so
+    /// the directory stays usable for sockets.
     static func prepareSocketDirectory(_ path: String, ownerUid: uid_t) -> Bool {
         var st = Darwin.stat()
         if Darwin.lstat(path, &st) != 0 {
             guard mkdir(path, 0o700) == 0 else { return false }
             guard Darwin.lstat(path, &st) == 0 else { return false }
         }
-        let isDir = (st.st_mode & S_IFMT) == S_IFDIR
-        let modeBits = st.st_mode & 0o777
-        return isDir
-            && st.st_uid == ownerUid
-            && (modeBits & 0o077) == 0
+        guard (st.st_mode & S_IFMT) == S_IFDIR,
+              st.st_uid == ownerUid,
+              (st.st_mode & 0o022) == 0
+        else { return false }
+        return (st.st_mode & 0o777) == 0o700 || chmod(path, 0o700) == 0
     }
 
     static func sweepStaleSockets(in directory: String) {

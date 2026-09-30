@@ -10,6 +10,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Let "Disable native subagents" cover Pi: sessions start through an Alas-owned `PI_ACP_PI_COMMAND` wrapper that excludes the `subagent`, `bg_wait`, and `subagent_supervisor` tools of the `pi-subagents` extension, chaining to any `PI_ACP_PI_COMMAND` you already set. Settings names installed Pi extensions Alas does not recognize instead of claiming full enforcement. Local sessions only (#1643).
 
+### 🐛 Fixes
+
+- Set an existing hook socket or isolated-profile runtime directory owned by the user to `0700` instead of accepting an owner-only mode that cannot be traversed, which left hooks, persistent terminals, and ACP brokers unable to start. Refuse such a directory, or an isolated profile root, that group or others could write (#1640).
+
 ## [0.19.19] - 2026-09-29
 
 ### ✨ Features
