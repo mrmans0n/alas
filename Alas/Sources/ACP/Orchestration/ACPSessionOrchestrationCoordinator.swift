@@ -792,10 +792,13 @@ final class ACPSessionOrchestrationCoordinator {
             ) else { return }
         }
         try? await environment.persistence.clearPendingInitialPrompt(childSessionId: childID, updatedAt: environment.now())
-        try? await environment.persistence.updatePhase(
+        let markedReady = (try? await environment.persistence.updatePhase(
             childSessionId: childID, phase: .ready, failureMessage: nil, updatedAt: environment.now()
-        )
-        if record.modelSelection != nil {
+        )) != nil
+        // Unless `.ready` is durable, the child stays held: other instances
+        // and the next launch still treat it as starting and reapply the
+        // selection.
+        if record.modelSelection != nil, markedReady {
             manager.releaseDelegatedSelectionHold(childID)
         }
         environment.notifyChanged()

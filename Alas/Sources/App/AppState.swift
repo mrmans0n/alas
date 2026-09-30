@@ -1873,13 +1873,14 @@ final class AppState {
                     updatedAt: Int64(Date().timeIntervalSince1970)
                 )
             }
-            try? await acpOrchestrationPersistence.updatePhase(
+            let markedReady = (try? await acpOrchestrationPersistence.updatePhase(
                 childSessionId: record.childSessionId,
                 phase: .ready,
                 failureMessage: nil,
                 updatedAt: Int64(Date().timeIntervalSince1970)
-            )
-            if record.modelSelection != nil {
+            )) != nil
+            // Held until `.ready` is durable, as in the coordinator's start.
+            if record.modelSelection != nil, markedReady {
                 manager.releaseDelegatedSelectionHold(record.childSessionId)
             }
             await deliverPendingDelegatedMessages(to: record.childSessionId, manager: manager)
