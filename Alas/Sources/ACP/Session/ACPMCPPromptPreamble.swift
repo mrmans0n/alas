@@ -106,12 +106,13 @@ enum ACPMCPPromptPreamble {
         mode: ACPMCPPreambleMode,
         mechanism: ACPNativeDelegationMechanism?
     ) -> String {
-        // Pi has no native subagent tool and only the registry's extension
-        // tools are removed, so claim no more than that.
+        // Pi has no native subagent tool, and Alas can only verify the
+        // exclusion for known extensions without a custom
+        // PI_ACP_PI_COMMAND, so instruct rather than claim.
         let off = mechanism == .piCommandWrapper
-            ? "The subagent tools of known Pi extensions ("
+            ? "Do not use subagent tools from Pi extensions (such as "
                 + ACPPiSubagentExtensions.excludedTools.joined(separator: ", ")
-                + ") are turned off for this session."
+                + ") in this session."
             : "Your native subagent tool is turned off for this session."
         if isDelegated {
             return off + " Do the work in this session."

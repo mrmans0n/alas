@@ -234,9 +234,10 @@ extensions:
     nothing unrecognized is.
   - *Not enforced for extensions or commands Alas does not recognize*: names
     the packages, local extensions, and custom `PI_ACP_PI_COMMAND` Alas does
-    not know. A subagent tool one of them adds stays available. `pi-mcp-adapter` and Alas's own `alas-notify.ts` hook
-    count as recognized; project extensions are listed even if Pi has not
-    been told to trust that project.
+    not know. A subagent tool one of them adds stays available.
+    `pi-mcp-adapter` and Alas's own `alas-notify.ts` hook (while it carries
+    Alas's marker) count as recognized; project extensions are listed even if
+    Pi has not been told to trust that project.
 
 The option makes no claim about other extensions, extensions passed with `-e`
 by your own command, or Pi started from a shell.

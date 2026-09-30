@@ -319,6 +319,8 @@ struct ACPNativeDelegationControlsTests {
         arguments: [
             (nil, [], nil, [], ACPPiSubagentExtensions.Coverage.nothingToDisable),
             (#"{"packages":["npm:pi-mcp-adapter"],"extensions":null}"#, ["alas-notify.ts"], nil, [], .nothingToDisable),
+            // A user's own file with the hook's name is not Alas's hook.
+            (nil, ["alas-notify.ts"], nil, ["alas-notify.ts"], .unrecognized(covered: [], unrecognized: ["alas-notify.ts (project demo)"])),
             (
                 #"{"packages":["npm:pi-subagents",{"source":"npm:pi-mcp-adapter"}]}"#, [], nil, [],
                 .enforced(covered: ["pi-subagents"])
@@ -361,7 +363,9 @@ struct ACPNativeDelegationControlsTests {
             }
             for name in extensions {
                 let url = folder.appendingPathComponent(name)
-                if name.contains(".") {
+                if name == "alas-notify.ts", base == agentDir {
+                    try Data("// alas-managed-pi-hook-v3\n".utf8).write(to: url)
+                } else if name.contains(".") {
                     try Data().write(to: url)
                 } else {
                     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

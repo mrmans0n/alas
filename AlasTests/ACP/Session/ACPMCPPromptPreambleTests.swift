@@ -314,10 +314,10 @@ struct ACPMCPPromptPreambleTests {
         arguments: [
             (ACPMCPPreambleMode.mcp, "session_new tool", nil, "native subagent tool is turned off"),
             (.cli(serverAvailability: .noServers), "alas session new", nil, "native subagent tool is turned off"),
-            // Pi has no native tool; only the registry's extension tools are named.
+            // Pi has no native tool; the registry's extension tools are named, without claiming they are gone.
             (
                 .cli(serverAvailability: .noServers), "alas session new", .piCommandWrapper,
-                "known Pi extensions (subagent, bg_wait, subagent_supervisor) are turned off"
+                "Do not use subagent tools from Pi extensions (such as subagent, bg_wait, subagent_supervisor)"
             ),
         ] as [(ACPMCPPreambleMode, String, ACPNativeDelegationMechanism?, String)]
     )

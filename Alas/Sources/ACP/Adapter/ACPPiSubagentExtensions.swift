@@ -42,9 +42,15 @@ enum ACPPiSubagentExtensions {
     /// Packages Alas integrates with that register no delegation tool.
     /// `pi-mcp-adapter` bridges MCP servers, including Alas's own, into Pi.
     static let knownSafePackages: Set<String> = ["pi-mcp-adapter"]
-    /// The notification hook Alas installs in the global extensions folder
-    /// (`PiInstaller`).
-    static let knownSafeGlobalExtensions: Set<String> = ["alas-notify.ts"]
+    /// The notification hook Alas installs in the global extensions folder.
+    /// Recognized only while it still carries `PiInstaller`'s managed
+    /// marker; `PiInstaller` never overwrites a user's file of that name.
+    static func isAlasManagedGlobalExtension(_ file: URL) -> Bool {
+        guard file.lastPathComponent == "alas-notify.ts",
+              let contents = try? String(contentsOf: file, encoding: .utf8)
+        else { return false }
+        return PiInstaller.isManaged(contents)
+    }
 
     /// Every registry tool, always excluded together: an absent name is a
     /// no-op, and a package installed after detection is still covered.
@@ -205,7 +211,7 @@ enum ACPPiSubagentExtensions {
             }
             let folder = base.appendingPathComponent("extensions", isDirectory: true)
             for name in autoDiscoveredExtensions(in: folder) {
-                if isGlobal, knownSafeGlobalExtensions.contains(name) { continue }
+                if isGlobal, isAlasManagedGlobalExtension(folder.appendingPathComponent(name)) { continue }
                 guard isEnabled(folder.appendingPathComponent(name), base: base, overrides: overrides) else { continue }
                 note(name + suffix, into: &unrecognized)
             }
