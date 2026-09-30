@@ -36,8 +36,16 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var fileDiffResult: RemoteFileDiffResult = .failure(reason: .sessionUnknown, message: nil)
     var fileTreeResult: RemoteFileTreeResult = .failure(reason: .sessionUnknown, message: nil)
     var fileContentsResult: RemoteFileContentsResult = .failure(reason: .sessionUnknown, byteSize: nil, message: nil)
-    var changeListRequests: [String] = []
-    var fileDiffRequests: [(sessionId: String, path: String, stage: String?)] = []
+    var changeListRequests: [(
+        sessionId: String,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    )] = []
+    var fileDiffRequests: [(
+        sessionId: String,
+        path: String,
+        stage: String?,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    )] = []
     var fileTreeRequests: [(sessionId: String, path: String?)] = []
     var fileContentsRequests: [(sessionId: String, path: String)] = []
     var queueForceSends: [(id: String, itemId: UUID)] = []
@@ -289,13 +297,21 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     }
     func sessionConfig(for id: String) -> RemoteSessionConfig? { configs[id] }
 
-    func remoteChangeList(sessionId: String) async -> RemoteChangeListResult {
-        changeListRequests.append(sessionId)
+    func remoteChangeList(
+        sessionId: String,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    ) async -> RemoteChangeListResult {
+        changeListRequests.append((sessionId, comparisonMode))
         return changeListResult
     }
 
-    func remoteFileDiff(sessionId: String, path: String, stage: String?) async -> RemoteFileDiffResult {
-        fileDiffRequests.append((sessionId, path, stage))
+    func remoteFileDiff(
+        sessionId: String,
+        path: String,
+        stage: String?,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    ) async -> RemoteFileDiffResult {
+        fileDiffRequests.append((sessionId, path, stage, comparisonMode))
         resumeWaiters(&fileDiffCallWaiters, through: fileDiffRequests.count)
         if pauseFileDiff {
             return await withCheckedContinuation { continuation in
@@ -2462,9 +2478,10 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
-        await gateway.handle(.listChanges(sessionId: "s1"))
+        await gateway.handle(.listChanges(sessionId: "s1", comparisonMode: .branchUpstream))
 
-        #expect(provider.changeListRequests == ["s1"])
+        #expect(provider.changeListRequests.map(\.sessionId) == ["s1"])
+        #expect(provider.changeListRequests.map(\.comparisonMode) == [.branchUpstream])
         #expect(sent == [.changeList(
             sessionId: "s1", comparisonRef: "origin/main", metricsAvailable: true,
             files: [file], staged: [file], unstaged: [], commits: [], truncated: false)])
@@ -2479,9 +2496,15 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
-        await gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt", stage: "staged"))
+        await gateway.handle(.fileDiff(
+            sessionId: "s1",
+            path: "a.txt",
+            stage: "staged",
+            comparisonMode: .manual
+        ))
         #expect(provider.fileDiffRequests.map(\.path) == ["a.txt"])
         #expect(provider.fileDiffRequests.map(\.stage) == ["staged"])
+        #expect(provider.fileDiffRequests.map(\.comparisonMode) == [.manual])
         #expect(sent == [.fileDiffResult(
             sessionId: "s1", path: "a.txt", stage: "staged", hunks: [hunk], truncated: true)])
 

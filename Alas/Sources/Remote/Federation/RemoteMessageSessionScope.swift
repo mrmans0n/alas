@@ -14,14 +14,13 @@ extension RemoteClientMessage {
         case .helloAck, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
              .createWorktreeSession, .createSession:
             return nil
-        case .subscribe(let id), .unsubscribe(let id), .takeOver(let id), .stop(let id), .queueClear(let id),
-             .listChanges(let id):
+        case .subscribe(let id), .unsubscribe(let id), .takeOver(let id), .stop(let id), .queueClear(let id):
             return id
         case .permissionDecision(let id, _, _, _), .questionAnswer(let id, _, _), .planResponse(let id, _, _, _),
              .elicitationResponse(let id, _, _, _), .sendPrompt(let id, _, _, _), .setModel(let id, _),
              .setMode(let id, _), .setAutoRun(let id, _), .renameSession(let id, _), .fetchOlder(let id, _, _),
              .queueForceSend(let id, _), .queueRemove(let id, _), .queueRetry(let id, _), .queueEdit(let id, _),
-             .fileDiff(let id, _, _), .listFiles(let id, _), .readFile(let id, _):
+             .listChanges(let id, _), .fileDiff(let id, _, _, _), .listFiles(let id, _), .readFile(let id, _):
             return id
         }
     }
@@ -56,8 +55,15 @@ extension RemoteClientMessage {
         case .queueRetry(_, let itemId): return .queueRetry(sessionId: new, itemId: itemId)
         case .queueEdit(_, let itemId): return .queueEdit(sessionId: new, itemId: itemId)
         case .queueClear: return .queueClear(sessionId: new)
-        case .listChanges: return .listChanges(sessionId: new)
-        case .fileDiff(_, let path, let stage): return .fileDiff(sessionId: new, path: path, stage: stage)
+        case .listChanges(_, let comparisonMode):
+            return .listChanges(sessionId: new, comparisonMode: comparisonMode)
+        case .fileDiff(_, let path, let stage, let comparisonMode):
+            return .fileDiff(
+                sessionId: new,
+                path: path,
+                stage: stage,
+                comparisonMode: comparisonMode
+            )
         case .listFiles(_, let path): return .listFiles(sessionId: new, path: path)
         case .readFile(_, let path): return .readFile(sessionId: new, path: path)
         }

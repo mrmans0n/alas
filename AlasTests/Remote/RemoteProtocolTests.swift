@@ -55,6 +55,38 @@ struct RemoteProtocolTests {
         #expect(decoded == .helloAck(protocolVersion: 1, challenge: nil))
     }
 
+    @Test func fileInspectionRequestsCarryComparisonModeAndDecodeOlderPayloads() throws {
+        let listChanges = RemoteClientMessage.listChanges(
+            sessionId: "s1",
+            comparisonMode: .branchUpstream
+        )
+        let fileDiff = RemoteClientMessage.fileDiff(
+            sessionId: "s1",
+            path: "Sources/App.swift",
+            stage: nil,
+            comparisonMode: .manual
+        )
+
+        #expect(try roundTrip(listChanges) == listChanges)
+        #expect(try roundTrip(fileDiff) == fileDiff)
+
+        let oldListChanges = try JSONDecoder().decode(
+            RemoteClientMessage.self,
+            from: Data(#"{"type":"listChanges","sessionId":"s1"}"#.utf8)
+        )
+        let oldFileDiff = try JSONDecoder().decode(
+            RemoteClientMessage.self,
+            from: Data(#"{"type":"fileDiff","sessionId":"s1","path":"Sources/App.swift"}"#.utf8)
+        )
+        #expect(oldListChanges == .listChanges(sessionId: "s1", comparisonMode: nil))
+        #expect(oldFileDiff == .fileDiff(
+            sessionId: "s1",
+            path: "Sources/App.swift",
+            stage: nil,
+            comparisonMode: nil
+        ))
+    }
+
     @Test func identityProofRoundTripsAndEncodesItsFields() throws {
         let proof = RemoteServerMessage.identityProof(challenge: "nonce-1", publicKey: "pk", signature: "sig")
         #expect(try roundTrip(proof) == proof)

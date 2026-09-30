@@ -282,13 +282,19 @@ struct NativePeerSessionsTests {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
         let federation = FederatedSessionsProvider(links: links)
-        let client = NativePeerSessions(federation: federation, peers: {
-            [.init(serverId: "B", name: "Mac B", state: "online")]
-        })
+        let client = NativePeerSessions(
+            federation: federation,
+            peers: {
+                [.init(serverId: "B", name: "Mac B", state: "online")]
+            },
+            comparisonMode: { .branchUpstream }
+        )
         client.start()
         links.receive(.sessionList(sessions: [row("s")]), from: "B")
         client.select("B:s")
-        #expect(links.sent(to: "B").contains(.listChanges(sessionId: "s")))
+        #expect(links.sent(to: "B").contains(
+            .listChanges(sessionId: "s", comparisonMode: .branchUpstream)
+        ))
         #expect(links.sent(to: "B").contains(.listFiles(sessionId: "s", path: nil)))
 
         links.receive(.changeList(sessionId: "s", comparisonRef: "origin/main", metricsAvailable: true,
@@ -298,7 +304,14 @@ struct NativePeerSessionsTests {
             truncated: false, commitsTruncated: false)))
 
         client.open(.diff(path: "a.swift", stage: nil))
-        #expect(links.sent(to: "B").contains(.fileDiff(sessionId: "s", path: "a.swift", stage: nil)))
+        #expect(links.sent(to: "B").contains(
+            .fileDiff(
+                sessionId: "s",
+                path: "a.swift",
+                stage: nil,
+                comparisonMode: .branchUpstream
+            )
+        ))
         // Clicking the selected session again returns to the transcript.
         client.select("B:s")
         #expect(client.workspace.document == nil)
