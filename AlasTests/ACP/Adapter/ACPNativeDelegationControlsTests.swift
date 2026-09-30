@@ -324,6 +324,43 @@ struct ACPNativeDelegationControlsTests {
         #expect(ACPPiSubagentExtensions.classifyPackage(["source": source, "extensions": ["-x.ts"]] as [String: Any]) == expected)
     }
 
+    /// Writes `pi-subagents`'s `package.json` where Pi installs npm and git
+    /// sources under `base`; a nil version writes one without `version`.
+    private static func installPiSubagents(version: String?, in base: URL) throws {
+        let json = version.map { #"{"name":"pi-subagents","version":"\#($0)"}"# } ?? #"{"name":"pi-subagents"}"#
+        for folder in ["npm/node_modules/pi-subagents", "git/github.com/nicobailon/pi-subagents"] {
+            let root = base.appendingPathComponent(folder, isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try Data(json.utf8).write(to: root.appendingPathComponent("package.json"))
+        }
+    }
+
+    @Test(
+        "only a verified pi-subagents version counts as covered",
+        arguments: [
+            ("npm:pi-subagents", "0.68.0", nil),
+            ("npm:pi-subagents@0.68.4", "0.68.4", nil),
+            ("git:github.com/nicobailon/pi-subagents@v0.68.2", "0.68.2", nil),
+            ("npm:pi-subagents", "0.69.0", "pi-subagents 0.69.0 not verified"),
+            ("npm:pi-subagents", "0.67.9", "pi-subagents 0.67.9 not verified"),
+            ("npm:pi-subagents", "0.68.0-beta.1", "pi-subagents 0.68.0-beta.1 not verified"),
+            ("npm:pi-subagents", nil, "pi-subagents (unreadable version) not verified"),
+        ] as [(String, String?, String?)]
+    )
+    func piSubagentsVersionCoverage(source: String, version: String?, notVerified: String?) throws {
+        let agentDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pi-version-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: agentDir) }
+        try Self.installPiSubagents(version: version, in: agentDir)
+        try Data(#"{"packages":["\#(source)"]}"#.utf8).write(to: agentDir.appendingPathComponent("settings.json"))
+        let coverage = ACPPiSubagentExtensions.coverage(agentDirectory: agentDir)
+        if let notVerified {
+            #expect(coverage == .unrecognized(covered: [], unrecognized: [notVerified]))
+        } else {
+            #expect(coverage == .enforced(covered: ["pi-subagents"]))
+        }
+    }
+
     @Test(
         "Pi extension inventory reports coverage from global and project settings and folders",
         arguments: [
@@ -371,6 +408,7 @@ struct ACPNativeDelegationControlsTests {
             if let settings {
                 try Data(settings.utf8).write(to: base.appendingPathComponent("settings.json"))
             }
+            try Self.installPiSubagents(version: "0.68.0", in: base)
             for name in extensions {
                 let url = folder.appendingPathComponent(name)
                 if name == "alas-notify.ts", base == agentDir {

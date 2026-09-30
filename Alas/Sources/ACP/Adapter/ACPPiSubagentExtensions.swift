@@ -21,20 +21,38 @@ enum ACPPiSubagentExtensions {
         let packageName: String
         /// `host/owner/repo` of the package's `git:` source.
         let gitRepository: String
+        /// Installed versions whose tool list was verified: at least
+        /// `lowerBound`, below `upperBound`. Any other version is reported
+        /// as not verified, though its tools are still excluded.
+        let verifiedVersions: (lowerBound: String, upperBound: String)
         /// Every tool the package registers that starts, waits on, or
         /// steers a subagent.
         let delegationTools: [String]
+
+        func isVerified(_ version: String) -> Bool {
+            ACPNativeDelegationControls.isVersion(version, atLeast: verifiedVersions.lowerBound)
+                && !ACPNativeDelegationControls.isVersion(version, atLeast: verifiedVersions.upperBound)
+        }
+
+        static func == (lhs: Extension, rhs: Extension) -> Bool {
+            lhs.packageName == rhs.packageName && lhs.gitRepository == rhs.gitRepository
+                && lhs.verifiedVersions == rhs.verifiedVersions && lhs.delegationTools == rhs.delegationTools
+        }
     }
 
     /// Bump when an entry changes.
     static let registryVersion = 1
 
+    /// To cover a new release, capture its model request with and without
+    /// the exclusion (see docs/agent-delegation.md), then widen
+    /// `verifiedVersions` or add its new tools here.
     static let known: [Extension] = [
         // Verified on pi-subagents 0.68.0: excluding only `subagent` leaves
         // `bg_wait` and `subagent_supervisor` in the request.
         Extension(
             packageName: "pi-subagents",
             gitRepository: "github.com/nicobailon/pi-subagents",
+            verifiedVersions: ("0.68.0", "0.69.0"),
             delegationTools: ["subagent", "bg_wait", "subagent_supervisor"]
         ),
     ]
@@ -224,7 +242,14 @@ enum ACPPiSubagentExtensions {
                     overrides = settings.extensions.filter(isOverride)
                     for entry in settings.packages {
                         switch classifyPackage(entry) {
-                        case .known(let name): note(name, into: &covered)
+                        case .known(let name):
+                            guard let ext = known.first(where: { $0.packageName == name }) else { continue }
+                            let version = packageSource(entry).flatMap { installedVersion(source: $0, base: base) }
+                            if let version, ext.isVerified(version) {
+                                note(name, into: &covered)
+                            } else {
+                                note("\(name) \(version ?? "(unreadable version)") not verified\(suffix)", into: &unrecognized)
+                            }
                         case .safe: break
                         case .unrecognized(let name): note(name + suffix, into: &unrecognized)
                         }
@@ -269,15 +294,7 @@ enum ACPPiSubagentExtensions {
     /// `source`. Per-package resource filters do not matter; excluding a
     /// tool the package no longer loads is harmless.
     static func classifyPackage(_ entry: Any) -> PackageClass {
-        let source: String
-        if let string = entry as? String {
-            source = string
-        } else if let object = entry as? [String: Any], let string = object["source"] as? String {
-            source = string
-        } else {
-            return .unrecognized("invalid packages entry")
-        }
-        let trimmed = source.trimmingCharacters(in: .whitespaces)
+        guard let trimmed = packageSource(entry) else { return .unrecognized("invalid packages entry") }
         if let name = npmPackageName(trimmed) {
             if let known = known.first(where: { $0.packageName == name }) { return .known(known.packageName) }
             return knownSafePackages.contains(name) ? .safe : .unrecognized(name)
@@ -287,6 +304,35 @@ enum ACPPiSubagentExtensions {
             return .unrecognized(repository)
         }
         return .unrecognized(trimmed)
+    }
+
+    /// The source string of a `packages` entry: a string, or an object's
+    /// `source`.
+    static func packageSource(_ entry: Any) -> String? {
+        let source = (entry as? String) ?? (entry as? [String: Any])?["source"] as? String
+        return source?.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// The `version` in the installed package's `package.json`, where Pi
+    /// 0.85.1 installs it: `<base>/npm/node_modules/<name>` for `npm:`
+    /// sources and `<base>/git/<host>/<owner>/<repo>` for git sources, with
+    /// `base` the agent directory or a project's `.pi`. Pi can also reuse a
+    /// legacy global npm install; that one reads as unreadable, which only
+    /// withholds the enforced state.
+    static func installedVersion(source: String, base: URL) -> String? {
+        let root: URL
+        if let name = npmPackageName(source) {
+            root = base.appendingPathComponent("npm/node_modules", isDirectory: true).appendingPathComponent(name)
+        } else if let repository = gitRepository(source, lowercased: false) {
+            root = base.appendingPathComponent("git", isDirectory: true).appendingPathComponent(repository)
+        } else {
+            return nil
+        }
+        guard let data = try? Data(contentsOf: root.appendingPathComponent("package.json")),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = object["version"] as? String, !version.isEmpty
+        else { return nil }
+        return version
     }
 
     /// `npm:name`, `npm:name@1.2.3`, `npm:@scope/name@^1` → the package name.
@@ -299,8 +345,9 @@ enum ACPPiSubagentExtensions {
     }
 
     /// `git:host/owner/repo@ref`, `https://host/owner/repo.git`,
-    /// `git@host:owner/repo` → lowercased `host/owner/repo`.
-    static func gitRepository(_ source: String) -> String? {
+    /// `git@host:owner/repo` → `host/owner/repo`, lowercased unless asked
+    /// for the path as written (Pi's install folder keeps its case).
+    static func gitRepository(_ source: String, lowercased: Bool = true) -> String? {
         var rest = source
         if rest.hasPrefix("git:") {
             rest.removeFirst(4)
@@ -319,7 +366,8 @@ enum ACPPiSubagentExtensions {
         }
         if rest.hasSuffix(".git") { rest.removeLast(4) }
         while rest.hasSuffix("/") { rest.removeLast() }
-        return rest.isEmpty ? nil : rest.lowercased()
+        guard !rest.isEmpty else { return nil }
+        return lowercased ? rest.lowercased() : rest
     }
 
     private struct Settings {

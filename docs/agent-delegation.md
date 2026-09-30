@@ -204,9 +204,18 @@ instance). The wrapper runs the Pi command with every argument `pi-acp` passed,
 plus `--exclude-tools` with every tool in Alas's registry of known subagent
 extensions:
 
-| Extension | Excluded tools |
-|---|---|
-| `pi-subagents` (`npm:pi-subagents` or its GitHub source) | `subagent`, `bg_wait`, `subagent_supervisor` |
+| Extension | Verified versions | Excluded tools |
+|---|---|---|
+| `pi-subagents` (`npm:pi-subagents` or its GitHub source) | 0.68.x | `subagent`, `bg_wait`, `subagent_supervisor` |
+
+The tools are excluded whatever version is installed. Settings counts the
+extension as covered only when the installed version (the `version` in its
+`package.json` under Pi's `npm/node_modules/` or `git/` folder) is verified.
+Any other version, or one Alas cannot read, shows as *pi-subagents
+&lt;version&gt; not verified*. To verify a new release, capture its model
+request with and without the wrapper (see the #1620 section of
+`docs/research/2026-09-25-bb-cross-harness-delegation-research.md`), then widen
+`verifiedVersions` or add its new tools in `ACPPiSubagentExtensions.known`.
 
 - **Your own command is kept.** If `PI_ACP_PI_COMMAND` is already set (in the
   agent's environment or Alas's), the wrapper runs that command instead of
