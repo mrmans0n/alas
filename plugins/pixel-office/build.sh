@@ -15,7 +15,8 @@ if [ "${#wasm[@]}" -ne 1 ]; then
   echo "expected exactly one .wasm in target/wasm32-unknown-unknown/release, found ${#wasm[@]}" >&2
   exit 1
 fi
-dest="$HOME/Library/Application Support/Alas/Plugins/$(basename "$PWD")"
+# ALAS_APP_SUPPORT_DIR installs into an isolated Alas profile instead of the everyday one.
+dest="${ALAS_APP_SUPPORT_DIR:-$HOME/Library/Application Support/Alas}/Plugins/$(basename "$PWD")"
 mkdir -p "$dest"
 cp plugin.json "$dest/plugin.json"
 cp "${wasm[0]}" "$dest/plugin.wasm"

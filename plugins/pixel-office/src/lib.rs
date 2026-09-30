@@ -8,7 +8,7 @@ pub mod render;
 pub mod sim;
 pub mod sprites;
 
-use alas_plugin::{export_plugin, log, present, request, set_regions, Event, Plugin, Region, Snapshot};
+use alas_plugin::{export_plugin, log, present, request, request_snapshot, set_regions, Event, Plugin, Region, Snapshot};
 use layout::Layout;
 use render::{Renderer, Target};
 use serde_json::json;
@@ -19,7 +19,6 @@ pub struct Office {
     layout: Option<Layout>,
     world: World,
     renderer: Renderer,
-    snapshot_request: i64,
     regions: Vec<Region>,
     targets: Vec<Target>,
 }
@@ -35,13 +34,10 @@ impl Office {
 impl Plugin for Office {
     fn handle(&mut self, event: Event) {
         match event {
-            Event::Activate { .. } => self.snapshot_request = request("workspace/snapshot", json!({})),
-            Event::WorkspaceChanged(snapshot) => self.apply(snapshot),
-            Event::Reply { id, result: Ok(value) } if id == self.snapshot_request => {
-                if let Ok(snapshot) = serde_json::from_value(value["snapshot"].clone()) {
-                    self.apply(snapshot);
-                }
+            Event::Activate { .. } => {
+                request_snapshot();
             }
+            Event::WorkspaceChanged(snapshot) | Event::Snapshot(snapshot) => self.apply(snapshot),
             // Review focus 4: e.g. a session that ended between the snapshot and the click.
             Event::Reply { result: Err(error), .. } => log("warn", &format!("request failed: {} {}", error.code, error.message)),
             Event::Tick { dt } => {
