@@ -6,8 +6,6 @@ import Foundation
 enum RemotePath {
     static let root = "/.alas-remote"
 
-    /// Error for a local path inside the reserved namespace: such a path
-    /// would be classified as remote and run on a made-up ssh host.
     /// True for the namespace root itself and anything under it, as written
     /// or once standardized. The bare root is not a remote path, but a local
     /// project there would make its children parse as remote.
@@ -15,14 +13,24 @@ enum RemotePath {
         [path, URL(fileURLWithPath: path).standardizedFileURL.path].contains { $0 == root || $0.hasPrefix(root + "/") }
     }
 
+    /// Error for a local path inside the reserved namespace: such a path
+    /// would be classified as remote and run on a made-up ssh host.
     static func reservedForRemoteError(_ path: String) -> NSError {
         NSError(domain: "ProjectsManager", code: 3, userInfo: [
             NSLocalizedDescriptionKey: "\(path) is inside \(root)/, which is reserved for remote projects.",
         ])
     }
 
+    /// A host must survive `virtual` → path standardization → `split`
+    /// unchanged: no `/`, no `.`/`..` segment (standardizing collapses them),
+    /// and no whitespace or control characters. A leading `-` would read as
+    /// an ssh option. Every ordinary alias, `host.domain`, and `user@host`
+    /// stays valid.
     static func isValidHost(_ host: String) -> Bool {
-        !host.isEmpty && !host.contains("/")
+        !host.isEmpty && host != "." && host != ".." && !host.hasPrefix("-")
+            && !host.unicodeScalars.contains {
+                $0 == "/" || CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0)
+            }
     }
 
     static func virtual(host: String, realPath: String) -> String {

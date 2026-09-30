@@ -114,7 +114,9 @@ struct WorkspaceCheckoutPreflight: Sendable {
         if rootPath.isEmpty {
             messages.append("Checkout root is required.")
         }
-        if location == .local, !rootPath.isEmpty, RemotePath.isReserved(rootPath) {
+        if case .ssh(let host) = location, !RemotePath.isValidHost(host) {
+            messages.append("SSH host '\(host)' is not valid.")
+        } else if location == .local, !rootPath.isEmpty, RemotePath.isReserved(rootPath) {
             // A local checkout there would be classified as remote, with its
             // next path component taken for an ssh host.
             messages.append("Checkout root '\(rootPath)' is inside \(RemotePath.root)/, which is reserved for remote projects.")

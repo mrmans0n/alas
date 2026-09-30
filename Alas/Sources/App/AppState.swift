@@ -9634,6 +9634,8 @@ final class AppState {
     }
 
     private func remotePhysicalPath(_ path: String, host: String) async -> String? {
+        // A legacy project host that cannot form a virtual path never matches.
+        guard RemotePath.isValidHost(host) else { return nil }
         let result = try? await workspaceRemoteTransport.run(
             host: host,
             command: "cd \(SSHCommand.shellQuote(RemotePath.realPath(path))) 2>/dev/null && pwd -P"

@@ -106,7 +106,7 @@ struct ProjectsManagerTests {
 
     /// `RemotePath.virtual` traps on a malformed host, so user input must
     /// fail as a normal error before it gets that far.
-    @Test(arguments: ["", "user@host/x"])
+    @Test(arguments: ["", "user@host/x", ".", ".."])
     func addProjectRejectsInvalidRemoteHost(host: String) async {
         let mgr = ProjectsManager(persistedProjects: [])
         await #expect(throws: (any Error).self) {

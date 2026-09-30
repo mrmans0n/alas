@@ -34,6 +34,20 @@ struct RemoteHostRegistryTests {
         #expect(RemotePath.realPath(path) == path)
     }
 
+    /// A host must survive `virtual` → standardization → `split` unchanged.
+    @Test(arguments: [
+        ("mini", true), ("mini.lan", true), ("user@mini", true), ("a.b", true), ("mini:2222", true),
+        ("", false), (".", false), ("..", false), ("a/b", false), (" ", false), ("mini lan", false),
+        ("mini\n", false), ("mini\u{0}", false), ("-oProxyCommand=x", false),
+    ])
+    func hostValidityMatchesVirtualPathRoundTrip(host: String, valid: Bool) {
+        #expect(RemotePath.isValidHost(host) == valid)
+        if valid {
+            let standardized = URL(fileURLWithPath: RemotePath.virtual(host: host, realPath: "/srv/repo")).standardizedFileURL.path
+            #expect(RemotePath.split(standardized)?.host == host)
+        }
+    }
+
     @Test func strippingOnlyTouchesTheExactHost() {
         let script = "cd '/.alas-remote/mini/a' && ls '/.alas-remote/mini.lan/b'"
         #expect(RemotePath.stripping(host: "mini", in: script) == "cd '/a' && ls '/.alas-remote/mini.lan/b'")
