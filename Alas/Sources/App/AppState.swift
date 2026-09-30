@@ -1928,11 +1928,15 @@ final class AppState {
         // The attach repoints the child's socket link once it holds the
         // session's lease (the env providers run after lease acquisition).
         await manager.attach(to: childId, freshlyCreated: false)
-        // Another instance holding the child's lease runs it and owns the
-        // outcome.
-        guard manager.isWriter(for: childId) else { return }
+        // Another live instance holding the child's lease runs it and owns
+        // the outcome. Anything else that is not a ready writer is a failed
+        // attach: a failure releases the lease, so ownership alone cannot
+        // tell the two apart.
+        guard !manager.isMirror(sessionId: childId) else { return }
         let session = manager.liveSession(for: childId)
-        let attachFailure = session?.agentState == .ready ? nil : recoveredDelegatedSessionFailureMessage(session)
+        let attachFailure = manager.isWriter(for: childId) && session?.agentState == .ready
+            ? nil
+            : recoveredDelegatedSessionFailureMessage(session)
         if let loss = ACPSessionOrchestrationPolicy.restartedTurnLoss(
             attachFailure: attachFailure,
             queueHead: session?.queue.first
