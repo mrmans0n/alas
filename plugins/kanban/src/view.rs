@@ -9,6 +9,10 @@ const MAX_CARDS_PER_COLUMN: usize = 30;
 const MAX_TEXT: usize = 500;
 
 fn clip(s: &str, max: usize) -> String {
+    // A string has at least as many bytes as chars, so short ones skip the char scan.
+    if s.len() <= max {
+        return s.to_string();
+    }
     match s.char_indices().nth(max) {
         Some((i, _)) => format!("{}…", &s[..i]),
         None => s.to_string(),

@@ -70,6 +70,9 @@ pub enum Event {
     ViewEvent { tab: u32, id: String, kind: String, value: Option<String> },
     /// A task started with `task_start` failed to launch in the background.
     TaskFailed { session_id: String, reason: String },
+    /// The reply to `storage_get`: the stored JSON as raw text, `None` when unset.
+    /// Raw, so a large value is parsed once, straight into the plugin's own types.
+    Stored { id: i64, value: Result<Option<String>, RpcError> },
     Reply { id: i64, result: Result<Value, RpcError> },
 }
 
@@ -86,6 +89,97 @@ mod sys {
     }
 }
 
+/// Alas meters plugins by fuel, and charges a function or loop body in full each time it
+/// is entered. The default allocator's `malloc`/`free` are large bodies, so every
+/// allocation cost thousands of fuel. This one is a handful of instructions: power-of-two
+/// size classes with a free list each, carved from a bump region grown with `memory.grow`.
+// ponytail: freed blocks are never coalesced or returned, so a plugin's memory stays at its
+// peak per size class (at most 2x of what it has live). Fine for the 64 MiB cap and
+// JSON-sized payloads; switch back to dlmalloc for plugins with widely varying large buffers.
+#[cfg(target_arch = "wasm32")]
+mod allocator {
+    use std::alloc::{GlobalAlloc, Layout};
+    use std::cell::UnsafeCell;
+
+    /// Blocks are aligned to their size, capped at this.
+    const MAX_ALIGN: usize = 4096;
+    const PAGE: usize = 65536;
+
+    struct Heap {
+        /// Head of each size class's free list; a free block stores the next head.
+        free: [usize; usize::BITS as usize],
+        next: usize,
+        end: usize,
+    }
+
+    struct SizeClasses(UnsafeCell<Heap>);
+
+    // Plugins are single-threaded wasm modules.
+    unsafe impl Sync for SizeClasses {}
+
+    #[global_allocator]
+    static HEAP: SizeClasses = SizeClasses(UnsafeCell::new(Heap { free: [0; usize::BITS as usize], next: 0, end: 0 }));
+
+    /// log2 of the block size that holds `layout`, at least one pointer.
+    fn class(layout: Layout) -> usize {
+        let size = layout.size().max(layout.align()).max(size_of::<usize>());
+        (usize::BITS - (size - 1).leading_zeros()) as usize
+    }
+
+    unsafe impl GlobalAlloc for SizeClasses {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if layout.align() > MAX_ALIGN {
+                return std::ptr::null_mut();
+            }
+            let heap = &mut *self.0.get();
+            let class = class(layout);
+            let head = heap.free[class];
+            if head != 0 {
+                heap.free[class] = *(head as *const usize);
+                return head as *mut u8;
+            }
+            let size = 1usize << class;
+            let align = size.min(MAX_ALIGN);
+            let mut start = (heap.next + align - 1) & !(align - 1);
+            if start + size > heap.end {
+                let pages = size.div_ceil(PAGE) + 1;
+                let old = core::arch::wasm32::memory_grow(0, pages);
+                if old == usize::MAX {
+                    return std::ptr::null_mut();
+                }
+                // The first region starts at the grown memory; later ones extend the last.
+                if old * PAGE != heap.end {
+                    heap.next = old * PAGE;
+                }
+                heap.end = (old + pages) * PAGE;
+                start = (heap.next + align - 1) & !(align - 1);
+            }
+            heap.next = start + size;
+            start as *mut u8
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            let heap = &mut *self.0.get();
+            let class = class(layout);
+            *(ptr as *mut usize) = heap.free[class];
+            heap.free[class] = ptr as usize;
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let new = Layout::from_size_align_unchecked(new_size, layout.align());
+            if class(new) == class(layout) {
+                return ptr;
+            }
+            let grown = self.alloc(new);
+            if !grown.is_null() {
+                std::ptr::copy_nonoverlapping(ptr, grown, layout.size().min(new_size));
+                self.dealloc(ptr, layout);
+            }
+            grown
+        }
+    }
+}
+
 /// Records what a plugin sends when it is compiled for the host, for tests.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod test_host {
@@ -93,8 +187,8 @@ pub mod test_host {
     use std::cell::RefCell;
 
     thread_local! {
-        pub(crate) static SENT: RefCell<Vec<Value>> = RefCell::new(Vec::new());
-        pub(crate) static FRAMES: RefCell<Vec<(u32, u32, Vec<u8>)>> = RefCell::new(Vec::new());
+        pub(crate) static SENT: RefCell<Vec<Value>> = const { RefCell::new(Vec::new()) };
+        pub(crate) static FRAMES: RefCell<Vec<(u32, u32, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
     }
 
     pub fn take_sent() -> Vec<Value> {
@@ -107,18 +201,33 @@ pub mod test_host {
     }
 }
 
-fn send(message: &Value) {
+/// Serialises straight to text: going through `json!` would copy large payloads
+/// (a view tree, a stored board) into a `Value` tree first, which costs fuel.
+fn send<T: Serialize + ?Sized>(message: &T) {
+    let Ok(text) = serde_json::to_string(message) else { return };
     #[cfg(target_arch = "wasm32")]
-    {
-        let text = message.to_string();
-        unsafe { sys::send(text.as_ptr(), text.len()) }
+    unsafe {
+        sys::send(text.as_ptr(), text.len())
     }
     #[cfg(not(target_arch = "wasm32"))]
-    test_host::SENT.with(|sent| sent.borrow_mut().push(message.clone()));
+    test_host::SENT.with(|sent| sent.borrow_mut().push(serde_json::from_str(&text).expect("sent JSON")));
+}
+
+#[derive(Serialize)]
+struct Outgoing<'a, P> {
+    jsonrpc: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<i64>,
+    method: &'a str,
+    params: P,
+}
+
+fn notify<P: Serialize>(method: &str, params: P) {
+    send(&Outgoing { jsonrpc: "2.0", id: None, method, params });
 }
 
 pub fn log(level: &str, message: &str) {
-    send(&json!({"jsonrpc": "2.0", "method": "log", "params": {"level": level, "message": message}}));
+    notify("log", json!({"level": level, "message": message}));
 }
 
 thread_local! {
@@ -126,26 +235,45 @@ thread_local! {
 }
 
 /// Sends a request and returns its id. The reply arrives in a later call as `Event::Reply`.
-pub fn request(method: &str, params: Value) -> i64 {
+pub fn request<P: Serialize>(method: &str, params: P) -> i64 {
     let id = NEXT_ID.with(|next| {
         let id = next.get();
         next.set(id + 1);
         id
     });
-    send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+    send(&Outgoing { jsonrpc: "2.0", id: Some(id), method, params });
     id
 }
 
+/// Requests whose replies are decoded into their own event instead of `Event::Reply`.
+#[derive(Clone, Copy, PartialEq)]
+enum Typed {
+    Snapshot,
+    Storage,
+}
+
 thread_local! {
-    static SNAPSHOT_REQUESTS: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
+    static TYPED_REQUESTS: RefCell<Vec<(i64, Typed)>> = const { RefCell::new(Vec::new()) };
+}
+
+fn typed_request<P: Serialize>(method: &str, params: P, kind: Typed) -> i64 {
+    let id = request(method, params);
+    TYPED_REQUESTS.with(|ids| ids.borrow_mut().push((id, kind)));
+    id
+}
+
+fn take_typed(id: i64) -> Option<Typed> {
+    TYPED_REQUESTS.with(|ids| {
+        let mut ids = ids.borrow_mut();
+        let index = ids.iter().position(|&(pending, _)| pending == id)?;
+        Some(ids.remove(index).1)
+    })
 }
 
 /// Requests the whole workspace snapshot. The reply arrives as `Event::Snapshot`,
 /// decoded straight into typed structs (it is the one large payload).
 pub fn request_snapshot() -> i64 {
-    let id = request("workspace/snapshot", json!({}));
-    SNAPSHOT_REQUESTS.with(|ids| ids.borrow_mut().push(id));
-    id
+    typed_request("workspace/snapshot", json!({}), Typed::Snapshot)
 }
 
 /// Hands Alas one RGBA8 frame for tab `tab`. Alas copies it during this call.
@@ -159,7 +287,12 @@ pub fn present(tab: u32, pixels: &[u8], width: u32) {
 }
 
 pub fn set_regions(tab: u32, regions: &[Region]) {
-    send(&json!({"jsonrpc": "2.0", "method": "canvas/regions", "params": {"tab": tab, "regions": regions}}));
+    #[derive(Serialize)]
+    struct Params<'a> {
+        tab: u32,
+        regions: &'a [Region],
+    }
+    notify("canvas/regions", Params { tab, regions });
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -252,7 +385,12 @@ pub enum Node {
 
 /// Replaces the tree shown in view tab `tab`.
 pub fn render(tab: u32, root: &Node) {
-    send(&json!({"jsonrpc": "2.0", "method": "view/render", "params": {"tab": tab, "root": root}}));
+    #[derive(Serialize)]
+    struct Params<'a> {
+        tab: u32,
+        root: &'a Node,
+    }
+    notify("view/render", Params { tab, root });
 }
 
 /// Starts a task in a new worktree. The reply (`Event::Reply`) holds `{sessionId, branch}`.
@@ -260,14 +398,19 @@ pub fn task_start(title: &str, prompt: &str) -> i64 {
     request("task/start", json!({"title": title, "prompt": prompt}))
 }
 
-/// The reply holds the value at `result["value"]` (`null` when unset).
+/// The reply arrives as `Event::Stored`.
 pub fn storage_get(key: &str) -> i64 {
-    request("storage/get", json!({"key": key}))
+    typed_request("storage/get", json!({"key": key}), Typed::Storage)
 }
 
 /// A `null` value deletes the key.
-pub fn storage_set(key: &str, value: &Value) -> i64 {
-    request("storage/set", json!({"key": key, "value": value}))
+pub fn storage_set<T: Serialize + ?Sized>(key: &str, value: &T) -> i64 {
+    #[derive(Serialize)]
+    struct Params<'a, T: ?Sized> {
+        key: &'a str,
+        value: &'a T,
+    }
+    request("storage/set", Params { key, value })
 }
 
 /// Payloads stay raw until their method is known, so the snapshot is parsed once,
@@ -284,6 +427,12 @@ struct Incoming<'a> {
     result: Option<&'a RawValue>,
     #[serde(borrow, default)]
     error: Option<&'a RawValue>,
+}
+
+#[derive(Deserialize)]
+struct StoragePayload<'a> {
+    #[serde(borrow, default)]
+    value: Option<&'a RawValue>,
 }
 
 #[derive(Deserialize)]
@@ -369,21 +518,22 @@ pub fn dispatch<P: Plugin>(plugin: &mut P, bytes: &[u8]) {
         Some(_) => return,
         None => {
             let Some(id) = message.id.as_ref().and_then(Value::as_i64) else { return };
-            if let Some(error) = parse::<RpcError>(message.error) {
-                SNAPSHOT_REQUESTS.with(|ids| ids.borrow_mut().retain(|&pending| pending != id));
-                Event::Reply { id, result: Err(error) }
-            } else if SNAPSHOT_REQUESTS.with(|ids| {
-                let mut ids = ids.borrow_mut();
-                let found = ids.iter().position(|&pending| pending == id);
-                found.map(|index| ids.remove(index)).is_some()
-            }) {
-                match parse::<SnapshotPayload>(message.result) {
+            let typed = take_typed(id);
+            match (parse::<RpcError>(message.error), typed) {
+                (Some(error), Some(Typed::Storage)) => Event::Stored { id, value: Err(error) },
+                (Some(error), _) => Event::Reply { id, result: Err(error) },
+                (None, Some(Typed::Snapshot)) => match parse::<SnapshotPayload>(message.result) {
                     Some(payload) => Event::Snapshot(payload.snapshot),
                     None => return,
+                },
+                (None, Some(Typed::Storage)) => match parse::<StoragePayload>(message.result) {
+                    Some(payload) => Event::Stored { id, value: Ok(payload.value.map(|raw| raw.get().to_string())) },
+                    None => return,
+                },
+                (None, None) => {
+                    let result = message.result.and_then(|raw| serde_json::from_str(raw.get()).ok()).unwrap_or(Value::Null);
+                    Event::Reply { id, result: Ok(result) }
                 }
-            } else {
-                let result = message.result.and_then(|raw| serde_json::from_str(raw.get()).ok()).unwrap_or(Value::Null);
-                Event::Reply { id, result: Ok(result) }
             }
         }
     };
@@ -500,6 +650,20 @@ mod tests {
         let Event::Snapshot(snapshot) = &plugin.0[0] else { panic!("expected a snapshot, got {:?}", plugin.0[0]) };
         assert_eq!(snapshot.worktrees[0].dirty, Some(Dirty { files: 2, conflicts: 0 }));
         assert_eq!(plugin.0[1], Event::Reply { id: other_id, result: Ok(json!({})) });
+    }
+
+    #[test]
+    fn storage_replies_arrive_as_raw_text() {
+        let (set, unset, failed) = (storage_get("a"), storage_get("b"), storage_get("c"));
+        let mut plugin = Recorder::default();
+        feed(&mut plugin, json!({"jsonrpc":"2.0","id":set,"result":{"value":{"n":1.0}}}));
+        feed(&mut plugin, json!({"jsonrpc":"2.0","id":unset,"result":{"value":null}}));
+        feed(&mut plugin, json!({"jsonrpc":"2.0","id":failed,"error":{"code":-32003,"message":"no"}}));
+        assert_eq!(plugin.0, vec![
+            Event::Stored { id: set, value: Ok(Some(r#"{"n":1.0}"#.into())) },
+            Event::Stored { id: unset, value: Ok(None) },
+            Event::Stored { id: failed, value: Err(RpcError { code: -32003, message: "no".into() }) },
+        ]);
     }
 
     #[test]

@@ -51,17 +51,17 @@ pub struct Card {
     pub title: String,
     pub prompt: String,
     pub column: Column,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub following: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub seen: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_state: Option<String>,
 }
 
@@ -150,25 +150,32 @@ impl Board {
         }
     }
 
-    /// `sessions` is (session id, state) from the snapshot.
-    pub fn sync(&mut self, sessions: &[(String, String)]) {
+    /// `sessions` is (session id, state) from the snapshot. Returns whether any card changed.
+    pub fn sync(&mut self, sessions: &[(String, String)]) -> bool {
+        let mut changed = false;
         for c in self.cards.iter_mut().filter(|c| c.following) {
             let Some(sid) = c.session_id.as_deref() else { continue };
-            match sessions.iter().find(|(id, _)| id == sid) {
+            let column = match sessions.iter().find(|(id, _)| id == sid) {
                 Some((_, state)) => {
-                    c.seen = true;
-                    c.agent_state = Some(state.clone());
+                    if !c.seen || c.agent_state.as_deref() != Some(state) {
+                        c.seen = true;
+                        c.agent_state = Some(state.clone());
+                        changed = true;
+                    }
                     match state.as_str() {
-                        "running" => c.column = Column::Running,
-                        "awaiting_input" | "permission_request" => c.column = Column::NeedsYou,
-                        "idle" => c.column = Column::Review,
-                        _ => {}
+                        "running" => Column::Running,
+                        "awaiting_input" | "permission_request" => Column::NeedsYou,
+                        "idle" => Column::Review,
+                        _ => c.column,
                     }
                 }
-                None if c.seen => c.column = Column::Review,
-                None => {}
-            }
+                None if c.seen => Column::Review,
+                None => c.column,
+            };
+            changed |= c.column != column;
+            c.column = column;
         }
+        changed
     }
 
     pub fn in_column(&self, column: Column) -> Vec<&Card> {

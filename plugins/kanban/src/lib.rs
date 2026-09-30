@@ -17,7 +17,8 @@ pub struct Kanban {
     loaded: bool,
     load_request: i64,
     /// The latest (session id, state) list, kept so a snapshot that beats the stored board still applies.
-    sessions: Vec<(String, String)>,
+    /// `None` until the first snapshot, so a board loaded first is not synced against no sessions.
+    sessions: Option<Vec<(String, String)>>,
     /// The stored board could not be read, so it is never overwritten.
     load_failed: bool,
     /// storage/set request ids awaiting a reply.
@@ -32,7 +33,7 @@ impl Kanban {
             return;
         }
         if !self.load_failed {
-            self.saves.push(storage_set("board", &serde_json::to_value(&self.board).unwrap_or_default()));
+            self.saves.push(storage_set("board", &self.board));
         }
         self.render();
     }
@@ -45,15 +46,17 @@ impl Kanban {
         self.pending.iter().any(|&(_, p)| p == card)
     }
 
+    /// Syncs the board with the latest sessions; returns whether any card changed.
+    fn sync(&mut self) -> bool {
+        self.sessions.as_deref().is_some_and(|sessions| self.board.sync(sessions))
+    }
+
     fn apply(&mut self, snapshot: Snapshot) {
-        self.sessions = snapshot
-            .worktrees
-            .into_iter()
-            .flat_map(|w| w.sessions)
-            .map(|s| (s.id, s.state))
-            .collect();
-        self.board.sync(&self.sessions);
-        self.changed();
+        self.sessions = Some(snapshot.worktrees.into_iter().flat_map(|w| w.sessions).map(|s| (s.id, s.state)).collect());
+        // Most snapshots move nothing; saving and re-rendering the whole board for them is wasted fuel.
+        if self.sync() {
+            self.changed();
+        }
     }
 
     fn view_event(&mut self, id: &str, kind: &str, value: Option<String>) {
@@ -110,12 +113,12 @@ impl Plugin for Kanban {
                 self.load_request = storage_get("board");
                 request_snapshot();
             }
-            Event::Reply { id, result } if id == self.load_request && !self.loaded => {
+            Event::Stored { id, value } if id == self.load_request && !self.loaded => {
                 // A missing board starts empty. One that cannot be read also starts empty,
                 // but is never overwritten, so the stored copy survives.
-                let loaded = match result {
-                    Ok(r) if r["value"].is_null() => Ok(Board::default()),
-                    Ok(r) => serde_json::from_value(r["value"].clone()).map_err(|e| e.to_string()),
+                let loaded = match value {
+                    Ok(None) => Ok(Board::default()),
+                    Ok(Some(text)) => serde_json::from_str(&text).map_err(|e| e.to_string()),
                     Err(e) => Err(e.message),
                 };
                 match loaded {
@@ -126,8 +129,12 @@ impl Plugin for Kanban {
                     }
                 }
                 self.loaded = true;
-                self.board.sync(&self.sessions);
-                self.changed();
+                // The stored board needs saving only when the sync changed it.
+                if self.sync() {
+                    self.changed();
+                } else {
+                    self.render();
+                }
             }
             Event::Snapshot(snapshot) | Event::WorkspaceChanged(snapshot) => self.apply(snapshot),
             Event::ViewEvent { id, kind, value, .. } => self.view_event(&id, &kind, value),
@@ -199,6 +206,10 @@ mod tests {
     fn rendered_column(card: &str) -> (String, Value) {
         let sent = test_host::take_sent();
         assert!(sent.iter().any(|m| m["method"] == "storage/set"), "every change is saved");
+        column_in(&sent, card)
+    }
+
+    fn column_in(sent: &[Value], card: &str) -> (String, Value) {
         let root = sent.iter().rev().find(|m| m["method"] == "view/render").expect("a render")["params"]["root"].clone();
         let scroll = root["children"].as_array().unwrap().last().unwrap();
         for col in scroll["child"]["children"].as_array().unwrap() {
@@ -238,6 +249,32 @@ mod tests {
         let (col, card) = rendered_column("card-1");
         assert_eq!(col, "col-backlog");
         assert!(card.to_string().contains("Start failed: no worktree"));
+    }
+
+    #[test]
+    fn a_snapshot_that_moves_nothing_is_neither_saved_nor_rendered() {
+        let mut k = loaded_with_a_card();
+        let req = start(&mut k);
+        feed(&mut k, json!({"jsonrpc":"2.0","id":req,"result":{"sessionId":"s","branch":"task/x"}}));
+        let changed = json!({"jsonrpc":"2.0","method":"workspace/changed","params":{"snapshot":{"worktrees":[
+            {"id":"w","branch":"task/x","current":false,"sessions":[{"id":"s","agent":"a","title":"T","state":"running"}]}]}}});
+        feed(&mut k, changed.clone());
+        assert_eq!(rendered_column("card-1").0, "col-running");
+        feed(&mut k, changed);
+        assert!(test_host::take_sent().is_empty());
+    }
+
+    #[test]
+    fn a_board_loaded_before_the_first_snapshot_keeps_its_columns_and_is_not_resaved() {
+        test_host::take_sent();
+        let mut k = Kanban::default();
+        feed(&mut k, json!({"jsonrpc":"2.0","id":0,"method":"alas/activate","params":{"project":{"id":"p","name":"P"}}}));
+        let load = k.load_request;
+        feed(&mut k, json!({"jsonrpc":"2.0","id":load,"result":{"value":{"cards":[
+            {"id":1,"title":"Fix it","prompt":"do","column":"Running","session_id":"s","following":true,"seen":true}],"next_id":1}}}));
+        let sent = test_host::take_sent();
+        assert!(!sent.iter().any(|m| m["method"] == "storage/set"));
+        assert_eq!(column_in(&sent, "card-1").0, "col-running");
     }
 
     #[test]
