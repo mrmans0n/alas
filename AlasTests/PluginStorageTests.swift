@@ -1,0 +1,63 @@
+import Foundation
+import Testing
+@testable import Alas
+
+@MainActor
+struct PluginStorageTests {
+    private func makeFile() -> URL {
+        FileManager.default.temporaryDirectory.appending(path: "PluginStorage-\(UUID().uuidString)/io.x.p/proj.json")
+    }
+
+    @Test func valuesRoundTripThroughTheFileAndNullDeletes() throws {
+        let file = makeFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent().deletingLastPathComponent()) }
+        let storage = PluginStorage(file: file)
+        #expect(storage.set("board", value: Data(#"{"cards":[1,2]}"#.utf8)) == .stored)
+        #expect(storage.set("other", value: Data("3".utf8)) == .stored)
+        #expect(storage.set("other", value: nil) == .stored)
+
+        let reopened = PluginStorage(file: file)
+        #expect(reopened.keys() == ["board"])
+        let value = try #require(reopened.get("board"))
+        #expect(try JSONSerialization.jsonObject(with: value) as? [String: [Int]] == ["cards": [1, 2]])
+        #expect(reopened.get("other") == nil)
+    }
+
+    @Test func rawValueBytesSurviveReloadUnchanged() throws {
+        let file = makeFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent().deletingLastPathComponent()) }
+        let storage = PluginStorage(file: file)
+        let raw = Data(#"{"a":1.0,"big":12345678901234567890,"s":"x,}\"y"}"#.utf8)
+        #expect(storage.set("k\"/", value: raw) == .stored)
+        #expect(PluginStorage(file: file).get("k\"/") == raw)
+    }
+
+    @Test func aWriteOverTheLimitChangesNothing() throws {
+        let file = makeFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent().deletingLastPathComponent()) }
+        let storage = PluginStorage(file: file)
+        #expect(storage.set("a", value: Data("1".utf8)) == .stored)
+        let before = try Data(contentsOf: file)
+        let huge = Data(("\"" + String(repeating: "x", count: PluginStorage.maxTotalBytes) + "\"").utf8)
+        #expect(storage.set("b", value: huge) == .full)
+        #expect(try Data(contentsOf: file) == before)
+        #expect(storage.keys() == ["a"])
+    }
+
+    @Test(arguments: ["", String(repeating: "k", count: 129)])
+    func invalidKeysAreRejected(key: String) {
+        #expect(PluginStorage(file: makeFile()).set(key, value: Data("1".utf8)) == .invalidKey)
+    }
+
+    @Test func invalidJSONValuesAreRejected() {
+        #expect(PluginStorage(file: makeFile()).set("k", value: Data("{oops".utf8)) == .invalidValue)
+    }
+
+    @Test(arguments: ["..", ".", "a/b", "../../x", ""])
+    func projectIDsCannotEscapeThePluginFolder(projectID: String) {
+        let root = URL(filePath: "/tmp/root")
+        let file = PluginStorage.file(pluginID: "io.x.p", projectID: projectID, root: root)
+        #expect(file.deletingLastPathComponent().path == "/tmp/root/PluginData/io.x.p")
+        #expect(file.lastPathComponent.hasSuffix(".json"))
+    }
+}
