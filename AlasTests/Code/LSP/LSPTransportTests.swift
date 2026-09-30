@@ -321,4 +321,29 @@ struct RemotePathLSPTransportTests {
         }
         #expect(frames == [#"{"uri":"file:///.alas-remote/mini/usr/include/x.h"}"#])
     }
+
+    /// Document text and edits are content: rewriting them would shift
+    /// positions for incremental sync and insert altered completions.
+    @Test("rewrites only URI fields, never document or edit text")
+    func leavesDocumentTextUntouched() async throws {
+        let inner = FakeTransport()
+        let transport = RemotePathLSPTransport(inner: inner, host: "mini")
+
+        try transport.send(Data(#"{"params":{"textDocument":{"uri":"file:///.alas-remote/mini/srv/a.md","text":"see /.alas-remote/mini/x"}}}"#.utf8))
+        let sent = try #require(inner.sent.first)
+        #expect(sent.contains(#""uri":"file:///srv/a.md""#))
+        #expect(sent.contains(#""text":"see /.alas-remote/mini/x""#))
+
+        inner.deliverFrame(#"{"result":[{"targetUri":"file:///srv/b.swift","newText":"file:///tmp","edit":{"changes":{"file:///srv/c.swift":[{"newText":"file:///d"}]}}}]}"#)
+        inner.finish()
+        var frames: [String] = []
+        for await event in transport.incoming {
+            if case .frame(let data) = event { frames.append(String(decoding: data, as: UTF8.self)) }
+        }
+        let frame = try #require(frames.first)
+        #expect(frame.contains(#""targetUri":"file:///.alas-remote/mini/srv/b.swift""#))
+        #expect(frame.contains(#""file:///.alas-remote/mini/srv/c.swift":"#))
+        #expect(frame.contains(#""newText":"file:///tmp""#))
+        #expect(frame.contains(#""newText":"file:///d""#))
+    }
 }

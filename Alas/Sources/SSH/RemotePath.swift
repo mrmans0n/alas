@@ -37,11 +37,6 @@ enum RemotePath {
         text.replacingOccurrences(of: "\(root)/\(host)/", with: "/")
     }
 
-    /// Inbound for protocols whose paths are all `file://` URIs (LSP).
-    static func virtualizingFileURIs(host: String, in text: String) -> String {
-        text.replacingOccurrences(of: "file:///", with: "file://\(root)/\(host)/")
-    }
-
     /// Re-encodes a decoded JSON-RPC frame after passing each string, and each
     /// object key, through `rewrite` with the object keys leading to it (a key
     /// gets its own object's path). Returning the input unchanged leaves that

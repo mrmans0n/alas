@@ -39,14 +39,6 @@ struct RemoteHostRegistryTests {
         #expect(RemotePath.stripping(host: "mini", in: script) == "cd '/a' && ls '/.alas-remote/mini.lan/b'")
     }
 
-    @Test func virtualizingFileURIsPrefixesEveryFileURI() {
-        let json = #"{"uri":"file:///srv/a.swift","other":"file:///usr/include/x.h"}"#
-        #expect(
-            RemotePath.virtualizingFileURIs(host: "mini", in: json)
-                == #"{"uri":"file:///.alas-remote/mini/srv/a.swift","other":"file:///.alas-remote/mini/usr/include/x.h"}"#
-        )
-    }
-
     /// Prompt text is stripped (the app writes worktree paths into it), but
     /// embedded resources are file contents and must arrive unchanged.
     @Test(arguments: ["/", #"\/"#])
