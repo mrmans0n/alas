@@ -61,16 +61,17 @@ Every node has `id` (a string, unique within the tree, at most 64 bytes) and
 
 | Kind | Fields | Events |
 |---|---|---|
-| `vstack`, `hstack` | `children`, `spacing?` (0–32) | – |
+| `vstack`, `hstack` | `children`, `spacing?` (0–32), `width?` (vstack only) | – |
 | `scroll` | `child`, `axis: "vertical" \| "horizontal"` | – |
 | `text` | `text`, `style?: body \| caption \| title \| monospaced`, `tone?: normal \| dim \| accent \| warn \| danger` | – |
 | `badge` | `text`, `tone?` | – |
 | `button` | `label`, `icon?` (SF Symbol name), `style?: normal \| primary \| plain`, `disabled?` | `click` |
 | `textField` | `value`, `placeholder?`, `multiline?` | `submit` with `value` |
 | `menu` | `label`, `items: [{id, label}]` | `select` with the item's `id` as `value` |
-| `card` | `children`, `tone?`, `clickable?` | `click` when clickable |
+| `card` | `children`, `tone?`, `clickable?`, `width?` | `click` when clickable |
 | `divider`, `spacer` | – | – |
 
+- `width` is an optional integer in points (40–1000) on `vstack` and `card`; it is ignored on other kinds.
 - Colours, fonts and spacing come from the Alas theme; a plugin chooses only
   the semantic `style` and `tone`.
 - `textField` keeps its editing state on the host. `value` is the initial text,
@@ -135,8 +136,9 @@ text "Create worktrees and start agents in this project".
   `{sessionId, branch}`. It then creates the worktree and starts the agent with
   the prompt in the background, on the path scheduled runs use
   (`createWorktree` with an ACP launch surface carrying a prepared prompt).
-- **No focus change:** starting a task does not change the selected worktree
-  or open a tab.
+- **No selection change:** starting a task neither changes the selected
+  worktree nor the selection. The agent's chat tab opens inside the new
+  worktree, so the user's current view is not moved.
 - **Failure:** if the background launch fails, the host sends
   `task/failed {sessionId, reason}` and records the failure on the worktree the
   way scheduled runs do.
