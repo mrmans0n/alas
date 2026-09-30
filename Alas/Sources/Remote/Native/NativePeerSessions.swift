@@ -6,6 +6,7 @@ import Observation
 final class NativePeerSessions {
     private let federation: FederatedSessionsProvider
     private let peers: @MainActor () -> [RemoteHelloPeer]
+    private let comparisonMode: @MainActor () -> AppConfig.Changes.ChangesComparisonMode?
     @ObservationIgnored private var downstream: FederatedDownstream?
     @ObservationIgnored private var pendingPromptExpectedIndex: Int?
     private(set) var isFetchingOlderMessages = false
@@ -55,10 +56,14 @@ final class NativePeerSessions {
     /// it queues has been sent.
     @ObservationIgnored private var documentRequestOutdated = false
 
-    init(federation: FederatedSessionsProvider,
-         peers: @escaping @MainActor () -> [RemoteHelloPeer]) {
+    init(
+        federation: FederatedSessionsProvider,
+        peers: @escaping @MainActor () -> [RemoteHelloPeer],
+        comparisonMode: @escaping @MainActor () -> AppConfig.Changes.ChangesComparisonMode? = { nil }
+    ) {
         self.federation = federation
         self.peers = peers
+        self.comparisonMode = comparisonMode
     }
 
     var selectedRow: RemoteSessionSummary? {
@@ -236,7 +241,9 @@ final class NativePeerSessions {
         guard !changesRequestInFlight else { return false }
         changesRequestInFlight = true
         workspace.beginChangesLoad()
-        if !routeWhileOnline({ .listChanges(sessionId: $0) }) {
+        if !routeWhileOnline({
+            .listChanges(sessionId: $0, comparisonMode: comparisonMode())
+        }) {
             changesRequestInFlight = false
             workspace.markUnavailable()
             return false
@@ -249,7 +256,9 @@ final class NativePeerSessions {
         guard selectedSessionId != nil, workspace.beginRootLoad() else { return false }
         guard !fileTreeRequestInFlight else { return false }
         fileTreeRequestInFlight = true
-        if !routeWhileOnline({ .listFiles(sessionId: $0, path: nil) }) {
+        if !routeWhileOnline({
+            .listFiles(sessionId: $0, path: nil, comparisonMode: comparisonMode())
+        }) {
             fileTreeRequestInFlight = false
             workspace.markUnavailable()
             return false
@@ -259,7 +268,11 @@ final class NativePeerSessions {
 
     func loadFileTreeChildren(path: String) {
         guard selectedSessionId != nil, workspace.beginChildrenLoad(path: path) else { return }
-        if !routeWhileOnline({ .listFiles(sessionId: $0, path: path) }) { workspace.markUnavailable() }
+        if !routeWhileOnline({
+            .listFiles(sessionId: $0, path: path, comparisonMode: comparisonMode())
+        }) {
+            workspace.markUnavailable()
+        }
     }
 
     /// Opens `document`, or — when it's already the open one — refreshes it.
@@ -285,7 +298,14 @@ final class NativePeerSessions {
         documentRequestsInFlight.insert(document)
         let sent = switch document {
         case .diff(let path, let stage):
-            routeWhileOnline { .fileDiff(sessionId: $0, path: path, stage: stage?.rawValue) }
+            routeWhileOnline {
+                .fileDiff(
+                    sessionId: $0,
+                    path: path,
+                    stage: stage?.rawValue,
+                    comparisonMode: comparisonMode()
+                )
+            }
         case .file(let path):
             routeWhileOnline { .readFile(sessionId: $0, path: path) }
         }

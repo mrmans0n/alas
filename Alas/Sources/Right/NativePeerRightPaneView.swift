@@ -54,6 +54,9 @@ struct NativePeerRightPaneView: View {
             handle(RightPaneRailAction.resolve(tapped: tab, active: activeTab, collapsed: collapsed))
         }
         .onChange(of: client.selectedSessionId) { _, _ in openPaths = [] }
+        .onChange(of: state.config.changes.comparisonMode) { _, _ in
+            client.reloadWorkspace()
+        }
     }
 
     private var toolbar: some View {

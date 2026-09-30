@@ -85,6 +85,26 @@ final class FederatedSessionsProvider {
             return messages
         }
     }
+    private enum ComparisonRequestKey: Hashable {
+        case changes(sessionId: String)
+        case diff(sessionId: String, path: String, stage: String?)
+        case files(sessionId: String, path: String?)
+
+        var sessionId: String {
+            switch self {
+            case .changes(let sessionId),
+                 .diff(let sessionId, _, _),
+                 .files(let sessionId, _):
+                sessionId
+            }
+        }
+    }
+
+    private struct PendingComparisonRequest {
+        var downstreamId: UUID?
+        let serverId: String
+        let message: RemoteClientMessage
+    }
 
     private let links: FederatedPeerLinks
     private var downstreams: [UUID: WeakDownstream] = [:]
@@ -98,6 +118,9 @@ final class FederatedSessionsProvider {
     /// A new downstream needs these independently of the upstream gateway's
     /// per-connection request de-duplication.
     private var pendingRequests: [String: PendingPeerRequests] = [:]
+    /// Comparison-sensitive replies do not carry a request id. Serialize
+    /// equivalent requests and return each reply only to its requester.
+    private var comparisonRequests: [ComparisonRequestKey: [PendingComparisonRequest]] = [:]
     private var pollTimer: Task<Void, Never>?
     private var lastListRequestAt: Date?
     private let now: () -> Date
@@ -137,6 +160,7 @@ final class FederatedSessionsProvider {
         for (namespaced, ids) in subscribers where ids.contains(id) {
             removeSubscriber(id, from: namespaced)
         }
+        removeComparisonRequests(for: id)
     }
 
     /// Drops entries whose downstream deallocated without detaching, then
@@ -181,7 +205,21 @@ final class FederatedSessionsProvider {
         case .unsubscribe:
             removeSubscriber(downstream.id, from: namespaced)
         default:
-            links.sendToPeer(message.replacingSessionId(target.sessionId), serverId: target.serverId)
+            let forwarded = message.replacingSessionId(target.sessionId)
+            if let key = comparisonRequestKey(for: message, namespacedSessionId: namespaced) {
+                var queue = comparisonRequests[key, default: []]
+                queue.append(PendingComparisonRequest(
+                    downstreamId: downstream.id,
+                    serverId: target.serverId,
+                    message: forwarded
+                ))
+                comparisonRequests[key] = queue
+                if queue.count == 1 {
+                    links.sendToPeer(forwarded, serverId: target.serverId)
+                }
+            } else {
+                links.sendToPeer(forwarded, serverId: target.serverId)
+            }
         }
         return true
     }
@@ -207,6 +245,7 @@ final class FederatedSessionsProvider {
             case .sessionClosed(let sessionId):
                 let namespaced = RemoteFederatedSessionID.compose(serverId: serverId, sessionId: sessionId)
                 pendingRequests[namespaced] = nil
+                comparisonRequests = comparisonRequests.filter { $0.key.sessionId != namespaced }
                 fanOut(.sessionClosed(sessionId: namespaced), to: namespaced)
                 subscribers[namespaced] = nil
             default:
@@ -224,7 +263,12 @@ final class FederatedSessionsProvider {
                 default:
                     break
                 }
-                fanOut(message.replacingSessionId(namespaced), to: namespaced)
+                let routed = message.replacingSessionId(namespaced)
+                if let key = comparisonResponseKey(for: message, namespacedSessionId: namespaced),
+                   deliverComparisonReply(routed, for: key) {
+                    return
+                }
+                fanOut(routed, to: namespaced)
             }
         }
     }
@@ -248,6 +292,7 @@ final class FederatedSessionsProvider {
             for namespaced in Array(pendingRequests.keys) where namespaced.hasPrefix(prefix) {
                 pendingRequests[namespaced] = nil
             }
+            comparisonRequests = comparisonRequests.filter { !$0.key.sessionId.hasPrefix(prefix) }
         }
         for serverId in current.keys where previous[serverId] == nil {
             links.sendToPeer(.listSessions, serverId: serverId)
@@ -293,6 +338,67 @@ final class FederatedSessionsProvider {
         } else if !shouldRun {
             pollTimer?.cancel()
             pollTimer = nil
+        }
+    }
+
+    private func comparisonRequestKey(
+        for message: RemoteClientMessage,
+        namespacedSessionId: String
+    ) -> ComparisonRequestKey? {
+        switch message {
+        case .listChanges:
+            .changes(sessionId: namespacedSessionId)
+        case .fileDiff(_, let path, let stage, _):
+            .diff(sessionId: namespacedSessionId, path: path, stage: stage)
+        case .listFiles(_, let path, _):
+            .files(sessionId: namespacedSessionId, path: path)
+        default:
+            nil
+        }
+    }
+
+    private func comparisonResponseKey(
+        for message: RemoteServerMessage,
+        namespacedSessionId: String
+    ) -> ComparisonRequestKey? {
+        switch message {
+        case .changeList, .changeListFailed:
+            .changes(sessionId: namespacedSessionId)
+        case .fileDiffResult(_, let path, let stage, _, _, _),
+             .fileDiffFailed(_, let path, let stage, _, _):
+            .diff(sessionId: namespacedSessionId, path: path, stage: stage)
+        case .fileTree(_, let path, _, _),
+             .fileTreeFailed(_, let path, _, _):
+            .files(sessionId: namespacedSessionId, path: path)
+        default:
+            nil
+        }
+    }
+
+    private func deliverComparisonReply(
+        _ message: RemoteServerMessage,
+        for key: ComparisonRequestKey
+    ) -> Bool {
+        guard var queue = comparisonRequests[key], !queue.isEmpty else { return false }
+        let completed = queue.removeFirst()
+        if let next = queue.first {
+            comparisonRequests[key] = queue
+            links.sendToPeer(next.message, serverId: next.serverId)
+        } else {
+            comparisonRequests[key] = nil
+        }
+        completed.downstreamId.flatMap { downstreams[$0]?.value }?.send(message)
+        return true
+    }
+
+    private func removeComparisonRequests(for downstreamId: UUID) {
+        for key in Array(comparisonRequests.keys) {
+            guard var queue = comparisonRequests[key], !queue.isEmpty else { continue }
+            if queue[0].downstreamId == downstreamId {
+                queue[0].downstreamId = nil
+            }
+            queue = [queue[0]] + queue.dropFirst().filter { $0.downstreamId != downstreamId }
+            comparisonRequests[key] = queue
         }
     }
 

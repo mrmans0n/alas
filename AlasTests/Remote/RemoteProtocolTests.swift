@@ -55,6 +55,49 @@ struct RemoteProtocolTests {
         #expect(decoded == .helloAck(protocolVersion: 1, challenge: nil))
     }
 
+    @Test func fileInspectionRequestsCarryComparisonModeAndDecodeOlderPayloads() throws {
+        let listChanges = RemoteClientMessage.listChanges(
+            sessionId: "s1",
+            comparisonMode: .branchUpstream
+        )
+        let fileDiff = RemoteClientMessage.fileDiff(
+            sessionId: "s1",
+            path: "Sources/App.swift",
+            stage: nil,
+            comparisonMode: .manual
+        )
+        let listFiles = RemoteClientMessage.listFiles(
+            sessionId: "s1",
+            path: nil,
+            comparisonMode: .branchUpstream
+        )
+
+        #expect(try roundTrip(listChanges) == listChanges)
+        #expect(try roundTrip(fileDiff) == fileDiff)
+        #expect(try roundTrip(listFiles) == listFiles)
+
+        let oldListChanges = try JSONDecoder().decode(
+            RemoteClientMessage.self,
+            from: Data(#"{"type":"listChanges","sessionId":"s1"}"#.utf8)
+        )
+        let oldFileDiff = try JSONDecoder().decode(
+            RemoteClientMessage.self,
+            from: Data(#"{"type":"fileDiff","sessionId":"s1","path":"Sources/App.swift"}"#.utf8)
+        )
+        let oldListFiles = try JSONDecoder().decode(
+            RemoteClientMessage.self,
+            from: Data(#"{"type":"listFiles","sessionId":"s1"}"#.utf8)
+        )
+        #expect(oldListChanges == .listChanges(sessionId: "s1", comparisonMode: nil))
+        #expect(oldFileDiff == .fileDiff(
+            sessionId: "s1",
+            path: "Sources/App.swift",
+            stage: nil,
+            comparisonMode: nil
+        ))
+        #expect(oldListFiles == .listFiles(sessionId: "s1", path: nil, comparisonMode: nil))
+    }
+
     @Test func identityProofRoundTripsAndEncodesItsFields() throws {
         let proof = RemoteServerMessage.identityProof(challenge: "nonce-1", publicKey: "pk", signature: "sig")
         #expect(try roundTrip(proof) == proof)
