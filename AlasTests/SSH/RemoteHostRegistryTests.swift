@@ -47,18 +47,26 @@ struct RemoteHostRegistryTests {
         )
     }
 
-    @Test(arguments: [
-        #"{"cwd":"/.alas-remote/mini/srv/repo","n":"/.alas-remote/mini.lan/x"}"#,
-        #"{"cwd":"\/.alas-remote\/mini\/srv\/repo","n":"\/.alas-remote\/mini.lan\/x"}"#,
-    ])
-    func outboundTransportStripsPlainAndEscapedSlashes(payload: String) throws {
+    /// Prompt text is stripped (the app writes worktree paths into it), but
+    /// embedded resources are file contents and must arrive unchanged.
+    @Test(arguments: ["/", #"\/"#])
+    func outboundTransportStripsPathsButNotEmbeddedResourceContents(slash: String) throws {
         let inner = RecordingTransport()
         let transport = RemotePathStrippingTransport(host: "mini", inner: inner)
-        try transport.send(Data(payload.utf8))
-        try transport.send(Data(payload.utf8), onWritten: {})
-        let sent = inner.sent.map { String(decoding: $0, as: UTF8.self) }
-        #expect(sent.count == 2)
-        #expect(sent.allSatisfy { $0.contains("mini.lan") && !$0.contains("alas-remote/mini/") && !$0.contains("alas-remote\\/mini\\/") })
+        let virtual = ["", ".alas-remote", "mini", "srv", "a.md"].joined(separator: slash)
+        let prompt = #"{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"prompt":["#
+            + #"{"type":"text","text":"Repository: \#(virtual)"},"#
+            + #"{"type":"resource","resource":{"uri":"file://\#(virtual)","text":"see \#(virtual)","blob":"\#(virtual)"}}]}}"#
+        try transport.send(Data(prompt.utf8))
+
+        let frame = try #require(inner.sent.first)
+        let sent = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
+        let blocks = try #require((sent["params"] as? [String: Any])?["prompt"] as? [[String: Any]])
+        let resource = try #require(blocks[1]["resource"] as? [String: String])
+        #expect(blocks[0]["text"] as? String == "Repository: /srv/a.md")
+        #expect(resource["uri"] == "file:///srv/a.md")
+        #expect(resource["text"] == "see /.alas-remote/mini/srv/a.md")
+        #expect(resource["blob"] == "/.alas-remote/mini/srv/a.md")
     }
 
     @Test func outboundTransportLeavesSuccessResponsesByteIdentical() throws {

@@ -42,6 +42,26 @@ enum RemotePath {
         text.replacingOccurrences(of: "file:///", with: "file://\(root)/\(host)/")
     }
 
+    /// Re-encodes a decoded JSON-RPC frame after passing each string, and each
+    /// object key, through `rewrite` with the object keys leading to it (a key
+    /// gets its own object's path). Returning the input unchanged leaves that
+    /// string byte-for-byte intact, so callers pick which fields are paths.
+    static func rewritingJSONStrings(in json: Any, _ rewrite: ([String], String) -> String) -> Data? {
+        func walk(_ node: Any, _ path: [String]) -> Any {
+            switch node {
+            case let string as String:
+                return rewrite(path, string)
+            case let array as [Any]:
+                return array.map { walk($0, path) }
+            case let object as [String: Any]:
+                return Dictionary(object.map { (rewrite(path, $0.key), walk($0.value, path + [$0.key])) }) { a, _ in a }
+            default:
+                return node
+            }
+        }
+        return try? JSONSerialization.data(withJSONObject: walk(json, []), options: .withoutEscapingSlashes)
+    }
+
     /// Inbound: an absolute real path reported by a process on the same host
     /// as `anchor` becomes virtual; everything else is returned unchanged.
     static func virtualizing(_ path: String, like anchor: String) -> String {
@@ -50,9 +70,10 @@ enum RemotePath {
     }
 }
 
-/// Strips this host's virtual paths from every ACP request and notification sent to a remote
-/// agent. Frames come from JSONSerialization/JSONEncoder, which escape `/` as
-/// `\/`, so both spellings are stripped rather than changing every encoder.
+/// Strips this host's virtual paths from every ACP request and notification
+/// sent to a remote agent. The frame is decoded, so `\/`-escaped encoders
+/// need no special case. Prompt text blocks are stripped too: the app writes
+/// worktree paths into them (review feedback's `Repository:` line).
 final class RemotePathStrippingTransport: JSONRPCStdioTransporting, @unchecked Sendable {
     private let host: String
     private let inner: JSONRPCStdioTransporting
@@ -74,14 +95,17 @@ final class RemotePathStrippingTransport: JSONRPCStdioTransporting, @unchecked S
     /// Success responses are left alone: they carry file contents
     /// (`fs/read_text_file`) and terminal output that must reach the agent
     /// byte-identical, and never an in-app path the agent has to resolve.
+    /// Embedded prompt resources (`resource.text`/`blob`) are file contents
+    /// for the same reason.
     private func strip(_ data: Data) -> Data {
-        let text = String(decoding: data, as: UTF8.self)
-        guard text.contains(".alas-remote"),
-              (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["result"] == nil
+        guard String(decoding: data, as: UTF8.self).contains(".alas-remote"),
+              let frame = try? JSONSerialization.jsonObject(with: data),
+              (frame as? [String: Any])?["result"] == nil
         else { return data }
-        let plain = RemotePath.stripping(host: host, in: text)
-        return Data(plain.replacingOccurrences(
-            of: "\\/.alas-remote\\/\(host)\\/", with: "\\/"
-        ).utf8)
+        return RemotePath.rewritingJSONStrings(in: frame) { path, string in
+            path.dropLast().last == "resource" && ["text", "blob"].contains(path.last)
+                ? string
+                : RemotePath.stripping(host: host, in: string)
+        } ?? data
     }
 }
