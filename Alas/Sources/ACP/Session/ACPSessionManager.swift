@@ -3631,7 +3631,7 @@ final class ACPSessionManager: ObservableObject {
                 onFreshProcSpawn: onFreshHelperProcSpawn,
                 onOutputOffsetsChanged: onHelperProcOffsetsChanged
             )
-            client = ACPStdioClient.makeForTesting(transport: RemotePathStrippingTransport(host: host, inner: transport))
+            client = ACPStdioClient(transport: RemotePathStrippingTransport(host: host, inner: transport))
         } else if let host {
             let invocation = ACPRemoteLaunch.channelInvocation(
                 host: host,
@@ -3642,7 +3642,7 @@ final class ACPSessionManager: ObservableObject {
             )
             // Keep ssh's parent environment intact for SSH_AUTH_SOCK,
             // HOME, and any host-specific connection configuration.
-            client = ACPStdioClient.makeForTesting(transport: RemotePathStrippingTransport(
+            client = ACPStdioClient(transport: RemotePathStrippingTransport(
                 host: host,
                 inner: JSONRPCStdioTransport(
                     executable: URL(fileURLWithPath: invocation.executable),
