@@ -49,7 +49,9 @@ extension AppState {
                     return true
                 }
                 return false
-            })
+            },
+            // Replaced by the real start once tasks land.
+            startTask: { _, _ in .rejected(code: -32003, message: "tasks are not available yet") })
     }
 
     private func pluginWorkspaceSnapshot(projectId: String) -> PluginWorkspaceSnapshot {

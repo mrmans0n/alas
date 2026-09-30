@@ -5,6 +5,15 @@ import Testing
 // File scope so `@Test(arguments:)` can read them outside the main actor.
 private let activateOK = #"{"jsonrpc":"2.0","id":0,"result":{}}"#
 private let switchToWT = #"{"jsonrpc":"2.0","id":1,"method":"worktree/switch","params":{"id":"wt"}}"#
+private let buttonTree = #"{"id":"root","kind":"vstack","children":[{"id":"go","kind":"button","label":"Go"}]}"#
+
+private func render(tab: Int = 0, _ root: String = buttonTree) -> String {
+    #"{"jsonrpc":"2.0","method":"view/render","params":{"tab":\#(tab),"root":\#(root)}}"#
+}
+
+private func taskStart(id: Int = 1, title: String = "Fix it", prompt: String = "Please fix it") -> String {
+    #"{"jsonrpc":"2.0","id":\#(id),"method":"task/start","params":{"title":"\#(title)","prompt":"\#(prompt)"}}"#
+}
 
 /// `PluginHost` is main-actor isolated because it applies actions to AppState.
 @MainActor
@@ -15,19 +24,28 @@ struct PluginHostTests {
     final class Recorder {
         var switched: [String] = []
         var focused: [String] = []
+        var tasks: [PluginTaskRequest] = []
+        var completions: [@MainActor (String?) -> Void] = []
+        /// How many upcoming starts are rejected before any is accepted.
+        var rejections = 0
     }
 
     static let v1Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":1,"entry":"p.wasm"}"#
     static let v2Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":2,"entry":"p.wasm","contributes":{"tabs":[{"id":"t","title":"T"}]}}"#
+    static let v3Manifest = #"{"id":"io.test.plugin","name":"Test","version":"1","api":3,"entry":"p.wasm","capabilities":["tasks.start"],"contributes":{"tabs":[{"id":"v","title":"V","kind":"view"},{"id":"c","title":"C"}]}}"#
 
     func makeHost(
         _ script: [[PluginFixtureStep]],
         grants: Set<PluginCapability> = [],
         recorder: Recorder = Recorder(),
         limits: PluginLimits = PluginHostTests.limits,
-        manifest: String = PluginHostTests.v1Manifest
+        manifest: String = PluginHostTests.v1Manifest,
+        storage: PluginStorage? = nil
     ) throws -> PluginHost {
-        PluginHost(
+        // Nothing is written unless a test stores something, and those tests pass their own storage.
+        let storage = storage ?? PluginStorage(
+            file: FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString).json"))
+        return PluginHost(
             manifest: try PluginManifest.parse(Data(manifest.utf8)),
             wasm: try PluginWATFixture.wasm(script),
             project: PluginProjectRef(id: "proj", name: "Project"),
@@ -41,7 +59,17 @@ struct PluginHostTests {
                 focusSession: { id in
                     recorder.focused.append(id)
                     return id == "s1"
+                },
+                startTask: { request, completion in
+                    if recorder.rejections > 0 {
+                        recorder.rejections -= 1
+                        return .rejected(code: -32003, message: "no")
+                    }
+                    recorder.tasks.append(request)
+                    recorder.completions.append(completion)
+                    return .started(sessionId: "s\(recorder.tasks.count)", branch: "task/x")
                 }),
+            storage: storage,
             limits: limits)
     }
 
@@ -229,7 +257,11 @@ struct PluginHostTests {
             grants: [.worktreeSwitch], expectedReply: #""code":-32602"#, expectedSwitches: []),
         RequestCase(
             request: #"{"jsonrpc":"2.0","id":1,"method":"nope/x"}"#,
-            grants: [.worktreeSwitch], expectedReply: #""code":-32601"#, expectedSwitches: []),
+            grants: [], expectedReply: #""code":-32601"#, expectedSwitches: []),
+        // Storage is API 3 only; the host under test runs an API 1 manifest.
+        RequestCase(
+            request: #"{"jsonrpc":"2.0","id":1,"method":"storage/get","params":{"key":"k"}}"#,
+            grants: [], expectedReply: #""code":-32601"#, expectedSwitches: []),
     ])
     func requestsAreCheckedAgainstGrants(_ testCase: RequestCase) async throws {
         let recorder = Recorder()
@@ -395,5 +427,143 @@ struct PluginHostTests {
         await host.activate()
         #expect(host.log.count == 1)
         #expect(host.log.first?.message.unicodeScalars.count == PluginHost.logMessageLimit)
+    }
+
+    // MARK: - API 3
+
+    func replies(_ host: PluginHost) -> [String] {
+        host.trace.filter { $0.direction == .toPlugin && $0.text.contains(#""id":"#) }.map(\.text)
+    }
+
+    @Test func aValidRenderReplacesTheTabsTree() async throws {
+        let host = try makeHost(
+            [[.send(activateOK), .send(render(#"{"id":"root","kind":"vstack","children":[]}"#)), .send(render())]],
+            manifest: Self.v3Manifest)
+        await host.activate()
+        #expect(host.state == .active)
+        #expect(host.views[0]?.children.count == 1)
+    }
+
+    @Test(arguments: [
+        ([PluginFixtureStep.send(render(#"{"id":"a","kind":"vstack","children":[{"id":"a","kind":"divider"}]}"#))], "view/render"),
+        ([.send(render(#"{"id":"a","kind":"nope"}"#))], "view/render"),
+        ([.send(render(tab: 1))], "view/render"),
+        ([.send(render(tab: 9))], "view/render"),
+        ([.send(#"{"jsonrpc":"2.0","method":"canvas/regions","params":{"tab":0,"regions":[]}}"#)], "canvas/regions"),
+        ([.present(tab: 0, ptr: 0, len: 16, width: 2)], "view tab"),
+    ])
+    func malformedOrMisdirectedViewMessagesStopThePlugin(steps: [PluginFixtureStep], fragment: String) async throws {
+        let host = try makeHost([[.send(activateOK)] + steps], manifest: Self.v3Manifest)
+        await host.activate()
+        guard case .failed(let reason) = host.state else {
+            Issue.record("expected failed, got \(host.state)")
+            return
+        }
+        #expect(reason.contains(fragment))
+    }
+
+    @Test func viewEventsOnlyReachNodesInTheCurrentTree() async throws {
+        let host = try makeHost([[.send(activateOK), .send(render())]], manifest: Self.v3Manifest)
+        await host.activate()
+        await host.viewEvent(tab: 0, id: "nope", kind: "click", value: nil)
+        await host.viewEvent(tab: 0, id: "go", kind: "click", value: nil)
+        let events = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("view/event") }
+        #expect(events.count == 1)
+        #expect(events.first?.text.contains(#""id":"go""#) == true)
+    }
+
+    @Test func taskStartNeedsTheGrant() async throws {
+        let recorder = Recorder()
+        let host = try makeHost([[.send(activateOK), .send(taskStart())]], recorder: recorder, manifest: Self.v3Manifest)
+        await host.activate()
+        #expect(lastReply(host)?.contains(#""code":-32001"#) == true)
+        #expect(recorder.tasks.isEmpty)
+    }
+
+    /// The gate reopens on success and on failure, and a stale completion is ignored.
+    @Test func taskStartAllowsOneInFlightAndReopens() async throws {
+        let recorder = Recorder()
+        let host = try makeHost(
+            [[.send(activateOK), .send(taskStart(id: 1)), .send(taskStart(id: 2))], [], [], [.send(taskStart(id: 3))]],
+            grants: [.tasksStart, .workspaceRead], recorder: recorder, manifest: Self.v3Manifest)
+        await host.activate()
+        let first = replies(host)
+        try #require(first.count == 3)
+        #expect(first[1].contains(#""sessionId":"s1""#))
+        #expect(first[2].contains(#""code":-32003"#))
+
+        recorder.completions[0](nil)
+        await host.workspaceChanged(PluginWorkspaceSnapshot(worktrees: []))
+        #expect(lastReply(host)?.contains(#""sessionId":"s2""#) == true)
+
+        recorder.completions[0]("stale")
+        recorder.completions[1]("boom")
+        let delivered = await awaitCondition { host.trace.contains { $0.text.contains("task/failed") } }
+        #expect(delivered)
+        let failed = host.trace.filter { $0.direction == .toPlugin && $0.text.contains("task/failed") }
+        #expect(failed.count == 1)
+        #expect(failed.first?.text.contains(#""reason":"boom""#) == true)
+        #expect(failed.first?.text.contains(#""sessionId":"s2""#) == true)
+        #expect(recorder.tasks.count == 2)
+    }
+
+    @Test func aRejectedTaskStartReopensTheGate() async throws {
+        let recorder = Recorder()
+        recorder.rejections = 1
+        let host = try makeHost(
+            [[.send(activateOK), .send(taskStart(id: 1)), .send(taskStart(id: 2))]],
+            grants: [.tasksStart], recorder: recorder, manifest: Self.v3Manifest)
+        await host.activate()
+        let sent = replies(host)
+        try #require(sent.count == 3)
+        #expect(sent[1].contains(#""code":-32003"#))
+        #expect(sent[2].contains(#""sessionId":"s1""#))
+    }
+
+    @Test(arguments: [
+        ("", "p"),
+        ("t", ""),
+        ("t", String(repeating: "x", count: 32 * 1024 + 1)),
+    ])
+    func invalidTaskParamsAreRejected(title: String, prompt: String) async throws {
+        let recorder = Recorder()
+        var limits = Self.limits
+        limits.maxMessageBytes = 1 << 16
+        let host = try makeHost(
+            [[.send(activateOK), .send(taskStart(title: title, prompt: prompt))]],
+            grants: [.tasksStart], recorder: recorder, limits: limits, manifest: Self.v3Manifest)
+        await host.activate()
+        #expect(lastReply(host)?.contains(#""code":-32602"#) == true)
+        #expect(recorder.tasks.isEmpty)
+    }
+
+    /// Storage needs no grant.
+    @Test func storageRoundTripsAndEnforcesItsLimits() async throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "plugin-storage-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let storage = PluginStorage(file: file)
+        let big = Data(("\"" + String(repeating: "x", count: PluginStorage.maxTotalBytes - 100) + "\"").utf8)
+        try #require(storage.set("big", value: big) == .stored)
+        func request(_ id: Int, _ method: String, _ params: String) -> PluginFixtureStep {
+            .send(#"{"jsonrpc":"2.0","id":\#(id),"method":"\#(method)","params":\#(params)}"#)
+        }
+        let host = try makeHost([[
+            .send(activateOK),
+            request(1, "storage/set", #"{"key":"k","value":{"a":1}}"#),
+            request(2, "storage/get", #"{"key":"k"}"#),
+            request(3, "storage/keys", "{}"),
+            request(4, "storage/set", #"{"key":"","value":1}"#),
+            request(5, "storage/set", #"{"key":"k2","value":"\#(String(repeating: "y", count: 200))"}"#),
+        ]], manifest: Self.v3Manifest, storage: storage)
+        await host.activate()
+        #expect(host.state == .active)
+        let sent = replies(host)
+        try #require(sent.count == 6)
+        #expect(sent[1].contains(#""result":{}"#))
+        #expect(sent[2].contains(#""value":{"a":1}"#))
+        #expect(sent[3].contains(#"["big","k"]"#))
+        #expect(sent[4].contains(#""code":-32602"#))
+        #expect(sent[5].contains(#""code":-32003"#) && sent[5].contains("storage full"))
+        #expect(storage.get("k2") == nil)
     }
 }
