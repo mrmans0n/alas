@@ -60,6 +60,14 @@ struct RemoteHostRegistryTests {
         #expect(sent.count == 2)
         #expect(sent.allSatisfy { $0.contains("mini.lan") && !$0.contains("alas-remote/mini/") && !$0.contains("alas-remote\\/mini\\/") })
     }
+
+    @Test func outboundTransportLeavesSuccessResponsesByteIdentical() throws {
+        let inner = RecordingTransport()
+        let transport = RemotePathStrippingTransport(host: "mini", inner: inner)
+        let response = Data(#"{"jsonrpc":"2.0","id":7,"result":{"content":"cd /.alas-remote/mini/srv"}}"#.utf8)
+        try transport.send(response)
+        #expect(inner.sent == [response])
+    }
 }
 
 private final class RecordingTransport: JSONRPCStdioTransporting, @unchecked Sendable {

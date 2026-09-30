@@ -851,6 +851,23 @@ struct RemoteHelperClientTests {
         #expect(!text.contains(".alas-remote"))
     }
 
+    @Test func fsWriteMakesItsPathRealButKeepsFileContentsByteIdentical() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(host: "mini", idleShutdownNanoseconds: 0, transportFactory: { transport })
+        let text = "let fixture = \"/.alas-remote/mini/srv/a\"\n"
+        let write = Task {
+            try await client.write(path: "/.alas-remote/mini/srv/a", content: text, expectedContent: text)
+        }
+        try await waitUntil { transport.sentFrames.count == 1 }
+        let frame = try #require(JSONSerialization.jsonObject(with: transport.sentFrames[0]) as? [String: Any])
+        let params = try #require(frame["params"] as? [String: Any])
+        #expect(params["path"] as? String == "/srv/a")
+        #expect(params["content"] as? String == text)
+        #expect(params["expectedContent"] as? String == text)
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"mtime":1}}"#.utf8))
+        _ = try await write.value
+    }
+
     @Test func legacyWatchEventBufferDropsOldestEventsAtItsLimit() async throws {
         let transport = FakeJSONRPCTransport()
         let client = RemoteHelperClient(

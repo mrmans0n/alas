@@ -50,7 +50,7 @@ enum RemotePath {
     }
 }
 
-/// Strips this host's virtual paths from every ACP frame sent to a remote
+/// Strips this host's virtual paths from every ACP request and notification sent to a remote
 /// agent. Frames come from JSONSerialization/JSONEncoder, which escape `/` as
 /// `\/`, so both spellings are stripped rather than changing every encoder.
 final class RemotePathStrippingTransport: JSONRPCStdioTransporting, @unchecked Sendable {
@@ -71,8 +71,14 @@ final class RemotePathStrippingTransport: JSONRPCStdioTransporting, @unchecked S
         try inner.send(strip(data), onWritten: onWritten)
     }
 
+    /// Success responses are left alone: they carry file contents
+    /// (`fs/read_text_file`) and terminal output that must reach the agent
+    /// byte-identical, and never an in-app path the agent has to resolve.
     private func strip(_ data: Data) -> Data {
         let text = String(decoding: data, as: UTF8.self)
+        guard text.contains(".alas-remote"),
+              (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["result"] == nil
+        else { return data }
         let plain = RemotePath.stripping(host: host, in: text)
         return Data(plain.replacingOccurrences(
             of: "\\/.alas-remote\\/\(host)\\/", with: "\\/"
