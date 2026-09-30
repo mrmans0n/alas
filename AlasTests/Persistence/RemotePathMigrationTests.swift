@@ -88,6 +88,31 @@ struct RemotePathMigrationTests {
         #expect(loaded.tabs(forWorktree: new).map(\.id) == [tab.id])
     }
 
+    /// Migrated tab files keep real external paths; a remote worktree must
+    /// load them virtual, or reads and saves hit the local disk.
+    @MainActor
+    @Test(arguments: [true, false])
+    func loadVirtualizesExternalEditorPathsOnlyForRemoteWorktrees(remote: Bool) throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let tabsDir = root.appendingPathComponent("tabs", isDirectory: true)
+        let id = remote ? new : old
+        let external = "/opt/sdk/x.h"
+        let editor = EditorTabState(id: "e", title: "x.h", relativePath: "", externalAbsolutePath: external)
+        try PersistenceStore().write(
+            TabsFile(tabs: [.editor(editor)], activeTabId: nil),
+            to: tabsDir.appendingPathComponent("\(id).json")
+        )
+
+        let loaded = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDir)
+        loaded.loadAll(worktreeIds: [id])
+
+        guard case .editor(let state) = loaded.tabs(forWorktree: id).first else {
+            Issue.record("editor tab not restored"); return
+        }
+        #expect(state.externalAbsolutePath == (remote ? RemotePath.virtual(host: "mini", realPath: external) : external))
+    }
+
     @Test func rewritesWorktreeIdsInRecentsAndSpaces() {
         var config = AppConfig.defaults
         config.recentWorktreeIdsByProject = ["p": [old, "/local"]]

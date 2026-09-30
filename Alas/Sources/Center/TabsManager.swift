@@ -266,6 +266,7 @@ final class TabsManager {
     func loadAll(worktreeIds: [String], restoringActiveTabs: Bool = true) {
         for id in worktreeIds {
             if var file = try? store.readIfExists(TabsFile.self, from: tabsFile(forWorktreeId: id)) {
+                Self.virtualizeExternalPaths(&file, worktreeId: id)
                 if !restoringActiveTabs {
                     file.activeTabId = nil
                 }
@@ -281,6 +282,7 @@ final class TabsManager {
     func load(owner: SessionOwnerID, restoringActiveTabs: Bool = true) {
         let key = owner.storageKey
         if var file = try? store.readIfExists(TabsFile.self, from: tabsFile(forOwner: owner)) {
+            Self.virtualizeExternalPaths(&file, worktreeId: key)
             if !restoringActiveTabs {
                 file.activeTabId = nil
             }
@@ -290,6 +292,18 @@ final class TabsManager {
             }
         }
         hasLoaded = true
+    }
+
+    /// Tab files migrated from a legacy remote id keep real external editor
+    /// paths; under a virtual worktree they must be virtual too, or they read
+    /// and save the local disk. Remote worktrees never hold local external
+    /// paths (`openExternalEditor` requires a matching host); no-op locally.
+    private static func virtualizeExternalPaths(_ file: inout TabsFile, worktreeId: String) {
+        for i in file.tabs.indices {
+            guard case .editor(var state) = file.tabs[i], let path = state.externalAbsolutePath else { continue }
+            state.externalAbsolutePath = RemotePath.virtualizing(path, like: worktreeId)
+            file.tabs[i] = .editor(state)
+        }
     }
 
     /// Loads every persisted tab file, including files whose worktree is not
