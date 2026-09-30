@@ -808,7 +808,7 @@ struct RemoteHelperClientTests {
         #expect((try await listing.value).entries == [RemoteHelperFSListEntry(name: "src", isDirectory: true)])
     }
 
-    @Test func watchEventNotificationsAreYielded() async throws {
+    @Test func watchEventNotificationsAreYieldedWithVirtualPaths() async throws {
         let transport = FakeJSONRPCTransport()
         let client = RemoteHelperClient(
             host: "devbox",
@@ -833,10 +833,39 @@ struct RemoteHelperClientTests {
 
         #expect(await iterator.next() == RemoteHelperWatchEvent(
             subscriptionId: "sub-1",
-            root: "/srv/repo",
+            root: "/.alas-remote/devbox/srv/repo",
             kind: .files,
-            paths: ["/srv/repo/README.md"]
+            paths: ["/.alas-remote/devbox/srv/repo/README.md"]
         ))
+    }
+
+    @Test func requestsStripVirtualPathPrefixBeforeReachingHelper() throws {
+        let body = try RemoteHelperClient.encodeRequest(
+            method: "fs/read",
+            params: RemoteHelperFSReadParams(path: "/.alas-remote/mini/srv/a"),
+            id: .number(1),
+            host: "mini"
+        )
+        let text = String(decoding: body, as: UTF8.self)
+        #expect(text.contains("\"/srv/a\""))
+        #expect(!text.contains(".alas-remote"))
+    }
+
+    @Test func fsWriteMakesItsPathRealButKeepsFileContentsByteIdentical() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(host: "mini", idleShutdownNanoseconds: 0, transportFactory: { transport })
+        let text = "let fixture = \"/.alas-remote/mini/srv/a\"\n"
+        let write = Task {
+            try await client.write(path: "/.alas-remote/mini/srv/a", content: text, expectedContent: text)
+        }
+        try await waitUntil { transport.sentFrames.count == 1 }
+        let frame = try #require(JSONSerialization.jsonObject(with: transport.sentFrames[0]) as? [String: Any])
+        let params = try #require(frame["params"] as? [String: Any])
+        #expect(params["path"] as? String == "/srv/a")
+        #expect(params["content"] as? String == text)
+        #expect(params["expectedContent"] as? String == text)
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"mtime":1}}"#.utf8))
+        _ = try await write.value
     }
 
     @Test func legacyWatchEventBufferDropsOldestEventsAtItsLimit() async throws {
@@ -905,9 +934,9 @@ struct RemoteHelperClientTests {
         """#.utf8))
         #expect(await updates.next() == .event(RemoteHelperWatchEvent(
             subscriptionId: "client-1",
-            root: "/srv/repo",
+            root: "/.alas-remote/devbox/srv/repo",
             kind: .files,
-            paths: ["/srv/repo/README.md"]
+            paths: ["/.alas-remote/devbox/srv/repo/README.md"]
         )))
 
         transport.send(exitStatus: 1)

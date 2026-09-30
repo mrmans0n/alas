@@ -13,7 +13,7 @@ enum ZmxSessionName {
     }
 
     static func derive(worktreeId: String, leafId: String) -> String {
-        "alas-\(hash16(worktreeId))-\(hash16(leafId))"
+        "alas-\(worktreeHash(worktreeId))-\(hash16(leafId))"
     }
 
     /// Worktree owners retain their exact historical name. Checkout owners
@@ -26,6 +26,19 @@ enum ZmxSessionName {
         case .workspaceCheckout(let checkoutID, let location):
             "alas-workspace-\(checkoutID.uuidString.lowercased())-\(hash16(location.identityComponent))-\(hash16(leafId))"
         }
+    }
+
+    /// A zmx session lives on the worktree's own host, so remote ids hash
+    /// their real path: unique there, and stable across the move to virtual
+    /// ids so upgraded sessions stay attached.
+    static func worktreeHash(_ worktreeId: String) -> String {
+        hash16(RemotePath.realPath(worktreeId))
+    }
+
+    /// Known worktree ids in the hash space of `derive`'s first half, for the
+    /// orphan sweeps' membership checks.
+    static func worktreeHashes(_ worktreeIds: Set<String>) -> Set<String> {
+        Set(worktreeIds.map(worktreeHash))
     }
 
     static func legacy(leafId: String) -> String {

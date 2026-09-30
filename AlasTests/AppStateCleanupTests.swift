@@ -1599,12 +1599,11 @@ struct AppStateCleanupTests {
         let project = ProjectConfig(
             id: UUID().uuidString,
             name: "remote",
-            path: "/srv/offline-repo-\(UUID().uuidString)",
+            path: RemotePath.virtual(host: "localhost", realPath: "/srv/offline-repo-\(UUID().uuidString)"),
             color: "#5fb7c4",
             addedAt: Date(),
             host: "localhost"
         )
-        defer { RemoteHostRegistry.shared.unregister(root: project.path) }
         let state = AppState(
             store: MemoryStore(projectsFile: ProjectsFile(projects: [project]))
         )

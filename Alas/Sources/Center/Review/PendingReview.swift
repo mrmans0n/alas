@@ -81,10 +81,12 @@ struct StagedComment: Identifiable, Equatable, Codable, Sendable {
 
     private static func storageURL(worktreePath: URL, prNumber: Int?) -> URL {
         let base = Paths.pendingReviewsDir
-        let pathHash = worktreePath.path.data(using: .utf8).map {
-            $0.reduce(UInt64(14695981039346656037)) { acc, byte in (acc ^ UInt64(byte)) &* 1099511628211 }
-        } ?? 0
         let prSuffix = prNumber.map { "-pr\($0)" } ?? ""
-        return base.appending(path: "\(pathHash)\(prSuffix).json")
+        return base.appending(path: "\(pathHash(worktreePath.path))\(prSuffix).json")
+    }
+
+    /// FNV-1a of the worktree path: the stem of its pending-review files.
+    nonisolated static func pathHash(_ path: String) -> UInt64 {
+        path.utf8.reduce(UInt64(14695981039346656037)) { acc, byte in (acc ^ UInt64(byte)) &* 1099511628211 }
     }
 }

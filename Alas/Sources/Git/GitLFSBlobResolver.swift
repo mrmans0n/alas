@@ -45,7 +45,7 @@ enum GitLFSBlobResolver {
         let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else { return nil }
         if path.hasPrefix("/") {
-            return URL(fileURLWithPath: path)
+            return URL(fileURLWithPath: RemotePath.virtualizing(path, like: worktreePath.path))
         }
         return worktreePath.appendingPathComponent(path)
     }

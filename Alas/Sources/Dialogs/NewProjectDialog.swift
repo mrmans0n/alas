@@ -690,7 +690,7 @@ private struct ProjectDialog: View {
     }
 
     private var readOnlyPath: some View {
-        Text(path)
+        Text(RemotePath.display(path))
             .foregroundColor(theme.color("fg"))
             .font(.system(size: 12, design: .monospaced))
             .lineLimit(1)

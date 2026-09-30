@@ -8,7 +8,7 @@ struct AttentionInboxRowPresentation: Identifiable {
         item.presentation == .unverified ? "Last known: \(item.title)" : item.title
     }
     var attribution: String {
-        [item.display.projectName, item.display.branch.isEmpty ? item.display.path : item.display.branch,
+        [item.display.projectName, item.display.branch.isEmpty ? RemotePath.display(item.display.path) : item.display.branch,
          item.display.host].compactMap { $0 }.joined(separator: " · ")
     }
     var timestampText: String { Self.timestamp(item.occurredAt, now: now) }

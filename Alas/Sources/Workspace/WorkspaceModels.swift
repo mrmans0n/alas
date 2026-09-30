@@ -623,6 +623,14 @@ struct WorkspaceCheckout: Codable, Equatable, Identifiable, Sendable {
         stopAfterCurrentOperations = try container.decodeIfPresent(Bool.self, forKey: .stopAfterCurrentOperations) ?? false
     }
 
+    /// Members persist real host paths, while an ssh project lists the same
+    /// worktree under its virtual path. Joins against in-app worktrees go
+    /// through this; local checkouts are unchanged.
+    func inAppWorktreePath(_ path: String) -> String {
+        guard let host = executionLocation.sshHost, RemotePath.isValidHost(host) else { return path }
+        return RemotePath.virtualizing(path, like: RemotePath.virtual(host: host, realPath: "/"))
+    }
+
     var health: WorkspaceCheckoutHealth {
         if members.contains(where: { $0.availability == .identityConflict || $0.checkpoint == .failed || $0.deletionFailed }) {
             return .needsAttention

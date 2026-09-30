@@ -50,7 +50,10 @@ final class ACPSessionOrchestrationCoordinator {
         let sessionLocation: (String) -> SessionLocation?
         let manager: (Worktree) -> ACPSessionManager?
         let newWorktreeDestination: (String, String) -> URL?
-        let createWorktree: (String, String, String?) async -> Result<Worktree, WorktreeCreationError>
+        /// Creates the worktree for `(projectId, branch, base)`. The last
+        /// argument records the prepared destination on the delegation and
+        /// must be awaited before the checkout is created.
+        let createWorktree: (String, String, String?, @escaping @MainActor (URL) async throws -> Void) async -> Result<Worktree, WorktreeCreationError>
         let rememberParent: (String, String) -> Void
         let autoRunDefault: () -> Bool
         let notifyChanged: () -> Void
@@ -73,7 +76,7 @@ final class ACPSessionOrchestrationCoordinator {
             sessionLocation: @escaping (String) -> SessionLocation?,
             manager: @escaping (Worktree) -> ACPSessionManager?,
             newWorktreeDestination: @escaping (String, String) -> URL?,
-            createWorktree: @escaping (String, String, String?) async -> Result<Worktree, WorktreeCreationError>,
+            createWorktree: @escaping (String, String, String?, @escaping @MainActor (URL) async throws -> Void) async -> Result<Worktree, WorktreeCreationError>,
             rememberParent: @escaping (String, String) -> Void,
             autoRunDefault: @escaping () -> Bool,
             notifyChanged: @escaping () -> Void
@@ -351,7 +354,15 @@ final class ACPSessionOrchestrationCoordinator {
             environment.notifyChanged()
             Task { @MainActor in
                 defer { parentSession.nextPromptWorkCount -= 1 }
-                let result = await self.environment.createWorktree(origin.projectId, branch, base)
+                let result = await self.environment.createWorktree(origin.projectId, branch, base) { prepared in
+                    // Recovery matches an interrupted create by this path, so it
+                    // must be the prepared one (remote home, virtual path).
+                    try await self.environment.persistence.updateWorktreeRequest(
+                        childSessionId: childID,
+                        request: .new(branch: branch, base: base, destinationPath: prepared.path, optimisticId: optimisticID),
+                        updatedAt: self.environment.now()
+                    )
+                }
                 switch result {
                 case .success(let worktree):
                     await self.startPersistedChild(childID: childID, prompt: prompt, worktree: worktree)

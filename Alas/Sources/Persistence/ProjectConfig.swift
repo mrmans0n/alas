@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let projectConfigLogger = Logger(subsystem: "io.nlopez.alas", category: "project-config")
 
 enum ProjectAgentSelection: Hashable {
     case global
@@ -172,13 +175,19 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var disabledRepoMCPServers: [String] = []
     /// SHA-256 hashes of exact repository hook bytes approved for this project.
     var approvedRepoHookHashes: [String] = []
+    /// Worktree ids renamed to virtual ones (legacy real path → virtual)
+    /// whose stores have not all migrated yet. Persisted as
+    /// `pendingLegacyWorktreeIDs` (omitted when empty) so a failed store move
+    /// is retried on the next launch even after this file is re-saved with
+    /// the virtual ids; cleared once a migration run fully succeeds.
+    var legacyWorktreeIDs: [String: String] = [:]
 
     enum CodingKeys: String, CodingKey {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              cachedWorktrees, worktreeOrderIsManual, startupScripts,
              mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, host, ggMode,
              ggWorktreeModes, issueAttachments, fileBookmarks,
-             repoMCPTrust, disabledRepoMCPServers, approvedRepoHookHashes
+             repoMCPTrust, disabledRepoMCPServers, approvedRepoHookHashes, pendingLegacyWorktreeIDs
     }
 
     init(
@@ -270,6 +279,81 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         repoMCPTrust = (try? c.decode([String: RepoMCPTrustState].self, forKey: .repoMCPTrust)) ?? [:]
         disabledRepoMCPServers = (try? c.decode([String].self, forKey: .disabledRepoMCPServers)) ?? []
         approvedRepoHookHashes = (try? c.decode([String].self, forKey: .approvedRepoHookHashes)) ?? []
+        legacyWorktreeIDs = (try? c.decode([String: String].self, forKey: .pendingLegacyWorktreeIDs)) ?? [:]
+        if let host {
+            if RemotePath.isValidHost(host) {
+                virtualizeLegacyRemotePaths(host: host)
+            } else {
+                // Fail closed: a remote project must never fall back to local
+                // path semantics (a same-path local repo would be operated
+                // on), and the raw host must never reach ssh. The placeholder
+                // never resolves, so the project stays visible but unavailable.
+                let projectID = id
+                projectConfigLogger.warning(
+                    "Remote project \(projectID, privacy: .public) has an invalid ssh host \(host, privacy: .private); it is unavailable until re-added"
+                )
+                self.host = RemotePath.unavailableHost
+                virtualizeLegacyRemotePaths(host: RemotePath.unavailableHost, replacing: host)
+            }
+        } else if RemotePath.isReserved(path) || cachedWorktrees.contains(where: { RemotePath.isReserved($0.path.path) }) {
+            // A local project inside the reserved namespace would be routed
+            // to an ssh host named after its next path component. Fail closed
+            // the same way: it becomes unavailable, never local or remote.
+            let (projectID, projectPath) = (id, path)
+            projectConfigLogger.warning(
+                "Local project \(projectID, privacy: .public) at \(projectPath, privacy: .private) is inside the reserved remote namespace; it is unavailable until re-added"
+            )
+            host = RemotePath.unavailableHost
+            virtualizeLegacyRemotePaths(host: RemotePath.unavailableHost, wrappingReserved: true)
+        }
+    }
+
+    /// Remote projects saved before virtual paths stored real remote paths.
+    /// Move every path and worktree-id-keyed field under the host's virtual
+    /// namespace; already-virtual values are left alone, except those under
+    /// `replacedHost`, which move to `host`. With `wrappingReserved`, a local
+    /// path inside the reserved namespace is itself the real path to wrap.
+    private mutating func virtualizeLegacyRemotePaths(
+        host: String,
+        replacing replacedHost: String? = nil,
+        wrappingReserved: Bool = false
+    ) {
+        let anchor = RemotePath.virtual(host: host, realPath: "/")
+        var renamed: [String: String] = [:]
+        func v(_ old: String) -> String {
+            let new: String
+            if wrappingReserved, old.hasPrefix("/"), RemotePath.split(old)?.host != host {
+                new = RemotePath.virtual(host: host, realPath: old)
+            } else {
+                let real = RemotePath.split(old).flatMap { $0.host == replacedHost ? $0.realPath : nil } ?? old
+                new = RemotePath.virtualizing(real, like: anchor)
+            }
+            if new != old { renamed[old] = new }
+            return new
+        }
+        path = v(path)
+        hiddenWorktreePaths = hiddenWorktreePaths.map(v)
+        worktreeOrder = worktreeOrder.map(v)
+        cachedWorktrees = cachedWorktrees.map { wt in
+            Worktree(
+                id: v(wt.id), projectId: wt.projectId, name: wt.name, branch: wt.branch,
+                path: URL(fileURLWithPath: v(wt.path.path)), isMainWorktree: wt.isMainWorktree,
+                status: wt.status, lastActivity: wt.lastActivity, createdAt: wt.createdAt,
+                lineageID: wt.lineageID, addedLines: wt.addedLines, deletedLines: wt.deletedLines
+            )
+        }
+        // A key present in both forms keeps the already-virtual (newer) value.
+        func vKeys<Value>(_ dict: [String: Value]) -> [String: Value] {
+            var out: [String: Value] = [:]
+            for (key, value) in dict {
+                let new = v(key)
+                if new == key || out[new] == nil { out[new] = value }
+            }
+            return out
+        }
+        ggWorktreeModes = vKeys(ggWorktreeModes)
+        issueAttachments = vKeys(issueAttachments)
+        legacyWorktreeIDs.merge(renamed) { _, new in new }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -310,6 +394,9 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         let approvedRepoHookHashes = Array(Set(approvedRepoHookHashes)).sorted()
         if !approvedRepoHookHashes.isEmpty {
             try c.encode(approvedRepoHookHashes, forKey: .approvedRepoHookHashes)
+        }
+        if !legacyWorktreeIDs.isEmpty {
+            try c.encode(legacyWorktreeIDs, forKey: .pendingLegacyWorktreeIDs)
         }
     }
 

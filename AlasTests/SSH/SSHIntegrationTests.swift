@@ -32,15 +32,14 @@ struct SSHIntegrationTests {
             .appendingPathComponent("alas-ssh-itest-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer {
-            RemoteHostRegistry.shared.unregister(root: directory.path)
             try? FileManager.default.removeItem(at: directory)
         }
 
         _ = try await Process.run("/usr/bin/env", args: ["git", "init"], cwd: directory)
-        RemoteHostRegistry.shared.register(root: directory.path, host: "localhost")
-        let status = try await Process.git(["status", "--porcelain=v2"], cwd: directory)
+        let remote = URL(fileURLWithPath: RemotePath.virtual(host: "localhost", realPath: directory.path))
+        let status = try await Process.git(["status", "--porcelain=v2"], cwd: remote)
         #expect(status.exitCode == 0)
-        let repository = try await Process.git(["rev-parse", "--is-inside-work-tree"], cwd: directory)
+        let repository = try await Process.git(["rev-parse", "--is-inside-work-tree"], cwd: remote)
         #expect(repository.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "true")
     }
 
@@ -51,7 +50,6 @@ struct SSHIntegrationTests {
             .appendingPathComponent("alas-ssh-branches-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer {
-            RemoteHostRegistry.shared.unregister(root: directory.path)
             try? FileManager.default.removeItem(at: directory)
         }
 
@@ -63,7 +61,7 @@ struct SSHIntegrationTests {
         let project = ProjectConfig(
             id: "ssh-branches",
             name: "SSH Branches",
-            path: directory.path,
+            path: RemotePath.virtual(host: "localhost", realPath: directory.path),
             color: "blue",
             addedAt: Date(),
             host: "localhost"
@@ -92,7 +90,6 @@ struct SSHIntegrationTests {
             .appendingPathComponent("alas-ssh-worktree-root-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
         defer {
-            RemoteHostRegistry.shared.unregister(root: repository.path)
             try? FileManager.default.removeItem(at: worktreeRoot)
             try? FileManager.default.removeItem(at: repository)
         }
@@ -104,7 +101,7 @@ struct SSHIntegrationTests {
         let project = ProjectConfig(
             id: "ssh-worktree-session",
             name: "SSH Worktree Session",
-            path: repository.path,
+            path: RemotePath.virtual(host: "localhost", realPath: repository.path),
             color: "blue",
             addedAt: Date(),
             host: "localhost"
@@ -134,18 +131,21 @@ struct SSHIntegrationTests {
             Issue.record("expected remote worktree session creation, got \(result)")
             return
         }
-        let worktree = try #require(summary.worktree)
-        let worktreeId = Worktree.makeId(path: URL(fileURLWithPath: worktree.path))
+        // The summary carries the display form (`host:/path`); the in-app
+        // identity comes from the selected worktree itself.
+        let summaryWorktree = try #require(summary.worktree)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        let worktree = try #require(state.worktree(withId: worktreeId))
         defer {
-            RemoteHostRegistry.shared.unregister(root: worktree.path)
             try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
             let database = Paths.acpSessionsDB(forWorktreeId: worktreeId)
             try? FileManager.default.removeItem(at: database)
             try? FileManager.default.removeItem(at: URL(fileURLWithPath: database.path + "-wal"))
             try? FileManager.default.removeItem(at: URL(fileURLWithPath: database.path + "-shm"))
         }
-        #expect(FileManager.default.fileExists(atPath: worktree.path))
-        #expect(state.selectedWorktreeId == worktreeId)
+        #expect(worktree.projectId == project.id)
+        #expect(summaryWorktree.path == RemotePath.display(worktree.path.path))
+        #expect(FileManager.default.fileExists(atPath: RemotePath.realPath(worktree.path.path)))
         #expect(state.tabs.tabs(forWorktree: worktreeId).contains { tab in
             if case let .acpSession(session) = tab { return session.sessionId == summary.id }
             return false
@@ -280,7 +280,6 @@ struct SSHIntegrationTests {
             .appendingPathComponent("alas-ssh-discard-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer {
-            RemoteHostRegistry.shared.unregister(root: directory.path)
             try? FileManager.default.removeItem(at: directory)
         }
 
@@ -291,9 +290,9 @@ struct SSHIntegrationTests {
         _ = try await Process.run("/usr/bin/env", args: ["git", "add", "seed.txt"], cwd: directory)
         _ = try await Process.run("/usr/bin/env", args: ["git", "commit", "-q", "-m", "seed"], cwd: directory)
         try Data("remote\n".utf8).write(to: directory.appendingPathComponent("untracked.txt"))
-        RemoteHostRegistry.shared.register(root: directory.path, host: "localhost")
+        let remote = URL(fileURLWithPath: RemotePath.virtual(host: "localhost", realPath: directory.path))
 
-        try await GitService().discardPaths(worktreePath: directory, files: ["untracked.txt"])
+        try await GitService().discardPaths(worktreePath: remote, files: ["untracked.txt"])
 
         let exists = try await RemoteExec.run(
             host: "localhost",
@@ -396,7 +395,6 @@ struct SSHIntegrationTests {
             .appendingPathComponent("alas-ssh-ignored-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer {
-            RemoteHostRegistry.shared.unregister(root: directory.path)
             try? FileManager.default.removeItem(at: directory)
         }
         _ = try await Process.run("/usr/bin/env", args: ["git", "init", "-q", "-b", "main"], cwd: directory)
@@ -411,9 +409,9 @@ struct SSHIntegrationTests {
         try Data("keep".utf8).write(to: directory.appendingPathComponent("keep.txt"))
         _ = try await Process.run("/usr/bin/env", args: ["git", "add", "keep.txt"], cwd: directory)
         _ = try await Process.run("/usr/bin/env", args: ["git", "commit", "-q", "-m", "add keep"], cwd: directory)
-        RemoteHostRegistry.shared.register(root: directory.path, host: "localhost")
+        let remote = URL(fileURLWithPath: RemotePath.virtual(host: "localhost", realPath: directory.path))
 
-        let children = try await GitService().fileTreeChildren(worktreePath: directory, path: "")
+        let children = try await GitService().fileTreeChildren(worktreePath: remote, path: "")
 
         let ignoredNode = try #require(children.first { $0.path == "node_modules" })
         #expect(ignoredNode.visibility == .ignored)
@@ -431,7 +429,6 @@ struct SSHIntegrationTests {
             .appendingPathComponent("alas-ssh-linecounts-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer {
-            RemoteHostRegistry.shared.unregister(root: directory.path)
             try? FileManager.default.removeItem(at: directory)
         }
         _ = try await Process.run("/usr/bin/env", args: ["git", "init", "-q", "-b", "main"], cwd: directory)
@@ -440,9 +437,9 @@ struct SSHIntegrationTests {
         _ = try await Process.run("/usr/bin/env", args: ["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd: directory)
         _ = try await Process.run("/usr/bin/env", args: ["git", "branch", "start"], cwd: directory)
         try Data("one\ntwo\nthree\n".utf8).write(to: directory.appendingPathComponent("untracked.txt"))
-        RemoteHostRegistry.shared.register(root: directory.path, host: "localhost")
+        let remote = URL(fileURLWithPath: RemotePath.virtual(host: "localhost", realPath: directory.path))
 
-        let files = try await GitService().changedFilesAgainstRef(worktreePath: directory, ref: "start")
+        let files = try await GitService().changedFilesAgainstRef(worktreePath: remote, ref: "start")
 
         let untracked = try #require(files.first { $0.path == "untracked.txt" })
         #expect(untracked.add == 3)

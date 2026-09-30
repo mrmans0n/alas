@@ -23,6 +23,33 @@ struct AppStateRemoteWorktreePathTests {
         #expect(path == "/srv/worktrees/repo-feature")
     }
 
+    /// Startup recovery matches an interrupted delegation by this path, so it
+    /// must have the created worktree's form: virtual for a remote project.
+    @Test(arguments: [
+        ("/srv/repo", "/srv/worktrees/repo-feature"),
+        ("/.alas-remote/mini/srv/repo", "/.alas-remote/mini/srv/worktrees/repo-feature"),
+    ])
+    func delegatedDestinationHasTheCreatedWorktreesForm(projectPath: String, expected: String) {
+        let destination = AppState.delegatedWorktreeDestination(
+            rendered: URL(fileURLWithPath: "/srv/worktrees/repo-feature"),
+            projectPath: projectPath
+        )
+
+        #expect(destination.path == expected)
+    }
+
+    /// Local worktree destinations may not land in the reserved namespace,
+    /// including its bare root.
+    @Test(arguments: [RemotePath.root, RemotePath.root + "/x/wt"])
+    func localDestinationRefusesTheReservedNamespace(destination: String) async {
+        await #expect(throws: (any Error).self) {
+            try await AppState.preparedCreateWorktreeDestination(
+                repoPath: URL(fileURLWithPath: "/srv/repo"),
+                destination: URL(fileURLWithPath: destination)
+            )
+        }
+    }
+
     @Test func remoteSaveAsNormalizesRelativePath() throws {
         let path = try AppState.normalizedRemoteRelativePath(" nested\\file.txt ")
 

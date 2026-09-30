@@ -36,6 +36,17 @@ struct ACPRemoteFileServerTests {
         #expect(throws: (any Error).self) { try server.lexicallyResolveInsideWorktree(path: "/srv/repo-other/x") }
     }
 
+    @Test func realAgentPathsResolveAgainstAVirtualRoot() throws {
+        let root = "/.alas-remote/mini/srv/repo"
+        #expect(
+            try RemotePathContainment.lexicallyResolveInsideWorktree(path: "/srv/repo/a.txt", worktreeRoot: root)
+                == "/.alas-remote/mini/srv/repo/a.txt"
+        )
+        #expect(throws: (any Error).self) {
+            try RemotePathContainment.lexicallyResolveInsideWorktree(path: "/etc/passwd", worktreeRoot: root)
+        }
+    }
+
     @Test func containmentProbeUsesPhysicalParentCheck() {
         let command = server.containmentProbeCommand(path: "/srv/repo/link/passwd")
 

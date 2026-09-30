@@ -457,7 +457,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                         .background(focused ? theme.color("bg-3") : .clear, in: RoundedRectangle(cornerRadius: 5))
                     }
                     .buttonStyle(.plain)
-                    .help(member.worktreePath)
+                    .help(RemotePath.display(member.worktreePath))
                 }
             }
         }

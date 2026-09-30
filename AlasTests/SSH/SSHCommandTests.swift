@@ -78,4 +78,39 @@ struct SSHCommandTests {
             #expect(argv.contains("ServerAliveCountMax=3"))
         }
     }
+
+    /// The unavailable placeholder must never connect, even when the user's
+    /// ssh config has an alias of that name: every argv starts by ignoring
+    /// the config and forcing a failing proxy without a control socket.
+    /// Ordinary hosts are unchanged.
+    @Test(arguments: [RemotePath.unavailableHost, "mini"])
+    func unavailableHostIsRefusedBeforeConnecting(host: String) {
+        let refusal = [
+            "-F", "/dev/null", "-o", "ProxyCommand=/usr/bin/false", "-o", "ControlMaster=no", "-o", "ControlPath=none",
+        ]
+        let invocations = [
+            SSHCommand(host: host, mode: .batch).argv(remoteScript: "true"),
+            SSHCommand(host: host, mode: .interactive).argv(remoteScript: "true"),
+            SSHCommand(host: host, mode: .batch).controlArgv(.check),
+            SSHCommand.scpArgv(localPath: "/tmp/a", host: host, remotePath: ".alas/a"),
+        ]
+        for argv in invocations {
+            if host == RemotePath.unavailableHost {
+                #expect(Array(argv.prefix(refusal.count)) == refusal)
+            } else {
+                #expect(!argv.contains("ProxyCommand=/usr/bin/false"))
+                #expect(!argv.contains("/dev/null"))
+            }
+        }
+    }
+
+    @Test func argvStripsThisHostsVirtualPaths() {
+        let script = SSHCommand.remoteScript(
+            cwd: "/.alas-remote/mini/srv/repo",
+            command: "git -C '/.alas-remote/mini/srv/repo' status"
+        )
+        let argv = SSHCommand(host: "mini", mode: .batch).argv(remoteScript: script)
+        #expect(argv.last?.contains("/.alas-remote") == false)
+        #expect(argv.last?.contains("/srv/repo") == true)
+    }
 }

@@ -924,7 +924,7 @@ struct ChangesTabView: View {
             },
             onCopyRelative: { Clipboard.copy($0.path) },
             onCopyFull: { file in
-                Clipboard.copy(rps.worktree.path.appendingPathComponent(file.path).path)
+                Clipboard.copyPath(rps.worktree.path.appendingPathComponent(file.path).path)
             },
             onCopyDiff: { rps.copyDiff(for: $0.path, renameFrom: $0.renameFrom) },
             onViewAtHEAD: { file in

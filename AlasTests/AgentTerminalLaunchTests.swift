@@ -457,14 +457,14 @@ struct AgentTerminalLaunchTests {
 
     @Test func launchingCopilotForRemoteWorktreeRequiresHostAvailability() throws {
         var project = project(mode: .useGlobal, useBypass: false)
-        project.path = "/srv/project"
+        project.path = RemotePath.virtual(host: "devbox", realPath: "/srv/project")
         project.host = "devbox"
         let worktree = Worktree(
             id: "wt",
             projectId: project.id,
             name: "main",
             branch: "main",
-            path: URL(fileURLWithPath: "/srv/project"),
+            path: URL(fileURLWithPath: project.path),
             status: .clean,
             lastActivity: Date()
         )

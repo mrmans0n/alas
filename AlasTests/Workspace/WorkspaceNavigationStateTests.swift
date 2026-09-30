@@ -108,6 +108,23 @@ struct WorkspaceNavigationStateTests {
         #expect(ids.isEmpty)
     }
 
+    @Test(arguments: [
+        (ExecutionLocation.local, "/tmp/project"),
+        (ExecutionLocation.ssh("mini"), "/.alas-remote/mini/tmp/project"),
+    ])
+    func memberRealPathResolvesToTheInAppWorktree(location: ExecutionLocation, inAppPath: String) {
+        var checkout = fixtureCheckout(members: [availableMember])
+        checkout.executionLocation = location
+        let worktree = Worktree(
+            id: inAppPath, projectId: "project", name: "main", branch: "main",
+            path: URL(fileURLWithPath: inAppPath), status: .clean, lastActivity: .distantPast
+        )
+
+        let ids = WorkspaceMemberWorktreeResolver.resolvedWorktreeIDs(checkout: checkout, worktrees: [worktree])
+
+        #expect(ids == [availableMember.id: inAppPath])
+    }
+
     private let availableMember = Self.member(id: "11111111-1111-1111-1111-111111111111", availability: .available)
     private let unavailableMember = Self.member(id: "22222222-2222-2222-2222-222222222222", availability: .missing)
 

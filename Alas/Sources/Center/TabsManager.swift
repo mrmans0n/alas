@@ -266,6 +266,7 @@ final class TabsManager {
     func loadAll(worktreeIds: [String], restoringActiveTabs: Bool = true) {
         for id in worktreeIds {
             if var file = try? store.readIfExists(TabsFile.self, from: tabsFile(forWorktreeId: id)) {
+                Self.virtualizeLegacyPaths(&file, worktreeId: id)
                 if !restoringActiveTabs {
                     file.activeTabId = nil
                 }
@@ -281,6 +282,7 @@ final class TabsManager {
     func load(owner: SessionOwnerID, restoringActiveTabs: Bool = true) {
         let key = owner.storageKey
         if var file = try? store.readIfExists(TabsFile.self, from: tabsFile(forOwner: owner)) {
+            Self.virtualizeLegacyPaths(&file, worktreeId: key)
             if !restoringActiveTabs {
                 file.activeTabId = nil
             }
@@ -290,6 +292,35 @@ final class TabsManager {
             }
         }
         hasLoaded = true
+    }
+
+    /// Tab files migrated from a legacy remote id keep real paths. Under a
+    /// virtual worktree, external editor paths must be virtual too, or they
+    /// read and save the local disk (remote worktrees never hold local
+    /// external paths: `openExternalEditor` requires a matching host). Tab
+    /// states and ids embedding the worktree id must use the virtual id, or
+    /// review, commit, and similar tabs target nothing or a local twin.
+    /// Terminal tabs are skipped: zmx session names hash their leaf ids.
+    /// No-op for local worktrees and already-virtual values.
+    private static func virtualizeLegacyPaths(_ file: inout TabsFile, worktreeId: String) {
+        guard RemotePath.split(worktreeId) != nil else { return }
+        for i in file.tabs.indices {
+            guard case .editor(var state) = file.tabs[i], let path = state.externalAbsolutePath else { continue }
+            state.externalAbsolutePath = RemotePath.virtualizing(path, like: worktreeId)
+            file.tabs[i] = .editor(state)
+        }
+        let rewriter = LegacyIDRewriter(
+            idMap: [RemotePath.realPath(worktreeId): worktreeId],
+            idKeys: ["id", "viewID", "worktreeId", "worktreeID", "ownerKey", "sessionID", "rawValue", "activeTabId"],
+            skippedKeys: ["terminal"]
+        )
+        guard let data = try? JSONEncoder().encode(file),
+              let object = try? JSONSerialization.jsonObject(with: data) else { return }
+        let rewritten = rewriter.rewrite(object)
+        guard !(rewritten as AnyObject).isEqual(object),
+              let encoded = try? JSONSerialization.data(withJSONObject: rewritten),
+              let decoded = try? JSONDecoder().decode(TabsFile.self, from: encoded) else { return }
+        file = decoded
     }
 
     /// Loads every persisted tab file, including files whose worktree is not

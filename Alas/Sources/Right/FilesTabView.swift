@@ -188,7 +188,7 @@ struct FilesTabView: View {
             onNewFile: { onCreateFile("") },
             onNewFolder: { onCreateFolder("") },
             onCopyRelativePath: { Clipboard.copy(".") },
-            onCopyFullPath: { Clipboard.copy(worktreePath.path) }
+            onCopyFullPath: { Clipboard.copyPath(worktreePath.path) }
         )
     }
 }

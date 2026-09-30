@@ -44,7 +44,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
                 guard manager.liveSession(for: id) != nil else { return nil }
                 return .init(origin: .init(sessionId: id, projectId: "p", worktreeId: "w"), manager: manager)
             }, manager: { _ in manager }, newWorktreeDestination: { _, _ in nil },
-            createWorktree: { _, _, _ in .failure(.init(message: "unused")) }, rememberParent: { _, _ in },
+            createWorktree: { _, _, _, _ in .failure(.init(message: "unused")) }, rememberParent: { _, _ in },
             autoRunDefault: { false }, notifyChanged: {
                 observedPendingDelivery = true
                 #expect(parent.queue.isEmpty)
@@ -117,7 +117,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             },
             manager: { _ in manager },
             newWorktreeDestination: { _, _ in nil },
-            createWorktree: { _, _, _ in .failure(.init(message: "unused")) },
+            createWorktree: { _, _, _, _ in .failure(.init(message: "unused")) },
             rememberParent: { _, _ in },
             autoRunDefault: { false },
             notifyChanged: {}
@@ -187,7 +187,12 @@ struct ACPSessionOrchestrationCoordinatorTests {
             },
             manager: { _ in manager },
             newWorktreeDestination: { _, _ in URL(fileURLWithPath: "/tmp/feature") },
-            createWorktree: { _, _, _ in .failure(.init(message: "branch exists")) },
+            createWorktree: { _, _, _, recordDestination in
+                // The prepared destination (remote home swapped, virtual) is
+                // recorded before the checkout would be created.
+                try? await recordDestination(URL(fileURLWithPath: "/.alas-remote/mini/home/remote/feature"))
+                return .failure(.init(message: "branch exists"))
+            },
             rememberParent: { _, _ in },
             autoRunDefault: { false },
             notifyChanged: {}
@@ -209,6 +214,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         )
         #expect(record.failureMessage == "branch exists")
         #expect(record.pendingInitialPrompt == "Investigate the parser.")
+        #expect(record.worktreeRequest.destinationPath == "/.alas-remote/mini/home/remote/feature")
     }
 
     @Test("delegated new worktree rejects invalid agents before creation")
@@ -258,7 +264,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             },
             manager: { _ in manager },
             newWorktreeDestination: { _, _ in URL(fileURLWithPath: "/tmp/feature") },
-            createWorktree: { _, _, _ in
+            createWorktree: { _, _, _, _ in
                 didCreateWorktree = true
                 return .failure(.init(message: "unused"))
             },
@@ -329,7 +335,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             },
             manager: { _ in manager },
             newWorktreeDestination: { _, _ in nil },
-            createWorktree: { _, _, _ in .failure(.init(message: "unused")) },
+            createWorktree: { _, _, _, _ in .failure(.init(message: "unused")) },
             rememberParent: { _, _ in },
             autoRunDefault: { false },
             notifyChanged: {}
@@ -407,7 +413,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             },
             manager: { worktree in worktree.id == destination.id ? manager : nil },
             newWorktreeDestination: { _, _ in nil },
-            createWorktree: { _, _, _ in .failure(.init(message: "unused")) },
+            createWorktree: { _, _, _, _ in .failure(.init(message: "unused")) },
             rememberParent: { _, _ in },
             autoRunDefault: { false },
             notifyChanged: {}
@@ -478,7 +484,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             },
             manager: { _ in manager },
             newWorktreeDestination: { _, _ in nil },
-            createWorktree: { _, _, _ in .failure(.init(message: "unused")) },
+            createWorktree: { _, _, _, _ in .failure(.init(message: "unused")) },
             rememberParent: { _, _ in },
             autoRunDefault: { false },
             notifyChanged: {}
@@ -533,7 +539,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
                     : nil
             },
             manager: { _ in manager }, newWorktreeDestination: { _, _ in nil },
-            createWorktree: { _, _, _ in .failure(.init(message: "unused")) }, rememberParent: { _, _ in },
+            createWorktree: { _, _, _, _ in .failure(.init(message: "unused")) }, rememberParent: { _, _ in },
             autoRunDefault: { false }, notifyChanged: {}
         ))
         return (coordinator, persistence, manager)
@@ -703,7 +709,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             },
             manager: { _ in parentReachable ? manager : nil },
             newWorktreeDestination: { _, _ in nil },
-            createWorktree: { _, _, _ in .failure(.init(message: "unused")) },
+            createWorktree: { _, _, _, _ in .failure(.init(message: "unused")) },
             rememberParent: { _, _ in },
             autoRunDefault: { false },
             notifyChanged: {}

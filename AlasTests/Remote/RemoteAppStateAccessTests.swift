@@ -1112,13 +1112,12 @@ struct RemoteAppStateAccessTests {
     @Test func remoteCreateWorktreeSessionRejectsRemoteDestinationBeforeCreating() async throws {
         let repository = try await makeRemoteBranchesRepository()
         defer {
-            RemoteHostRegistry.shared.unregister(root: repository.path)
             try? FileManager.default.removeItem(at: repository)
         }
         let project = ProjectConfig(
             id: "project-remote-collision",
             name: "Remote Collision",
-            path: repository.path,
+            path: RemotePath.virtual(host: "remote.test", realPath: repository.path),
             color: "blue",
             addedAt: Date(),
             host: "remote.test"
@@ -1159,6 +1158,86 @@ struct RemoteAppStateAccessTests {
         #expect(command?.command == "test -e '/remote worktrees/Remote Collision-feature-phone'")
         #expect(state.projectsManager.visibleWorktrees(projectId: project.id).isEmpty)
         #expect(!sessionCreationAttempted)
+    }
+
+    /// A remote project may reuse a destination path that also exists on this
+    /// Mac; only the project's own host decides whether it is taken.
+    @Test func cliCreateWorktreeChecksARemoteDestinationOnItsHostNotOnThisMac() async throws {
+        let worktreeRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-twin-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: worktreeRoot) }
+        let localTwin = worktreeRoot.appendingPathComponent("Remote Twin-feature-twin")
+        try FileManager.default.createDirectory(at: localTwin, withIntermediateDirectories: true)
+        let project = ProjectConfig(
+            id: "project-remote-twin",
+            name: "Remote Twin",
+            path: RemotePath.virtual(host: "remote.test", realPath: "/srv/remote-twin"),
+            color: "blue",
+            addedAt: Date(),
+            host: "remote.test"
+        )
+        let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        state.config.worktrees.rootPath = worktreeRoot.path
+        state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
+        state.remoteWorktreeDestinationPreparer = { repo, destination in
+            URL(fileURLWithPath: RemotePath.virtualizing(destination.path, like: repo.path))
+        }
+        var probedHost: String?
+        state.remoteWorktreeCommandRunner = { host, _, _ in
+            probedHost = host
+            return ProcessResult(exitCode: 0, stdout: "", stderr: "")
+        }
+        let origin = Worktree(
+            id: project.path, projectId: project.id, name: "main", branch: "main",
+            path: URL(fileURLWithPath: project.path), status: .clean, lastActivity: .distantPast
+        )
+
+        let response = await state.cliCreateWorktree(origin: origin, branch: "feature/twin", base: "main")
+
+        #expect(probedHost == "remote.test")
+        #expect(response == .error("A worktree already exists at this path."))
+    }
+
+    /// Startup recovery finds an interrupted delegated create by its recorded
+    /// destination, so the prepared one (remote home swapped, virtual) must be
+    /// recorded before anything is created.
+    @Test func delegatedWorktreeRecordsThePreparedDestinationBeforeCreating() async throws {
+        let project = ProjectConfig(
+            id: "project-remote-delegated",
+            name: "Remote Delegated",
+            path: RemotePath.virtual(host: "remote.test", realPath: "/srv/remote-delegated"),
+            color: "blue",
+            addedAt: Date(),
+            host: "remote.test"
+        )
+        let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        state.config.worktrees.rootPath = "/Users/local/.alas/worktrees"
+        state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
+        let prepared = URL(fileURLWithPath: RemotePath.virtual(
+            host: "remote.test",
+            realPath: "/home/remote/.alas/worktrees/Remote Delegated-feature-child"
+        ))
+        state.remoteWorktreeDestinationPreparer = { _, _ in prepared }
+        state.remoteWorktreeCommandRunner = { _, _, _ in ProcessResult(exitCode: 1, stdout: "", stderr: "") }
+        var recorded: URL?
+
+        let result = await state.createDelegatedWorktree(
+            projectId: project.id,
+            branch: "feature/child",
+            base: "main",
+            recordDestination: { destination in
+                recorded = destination
+                throw CocoaError(.fileWriteUnknown)
+            }
+        )
+
+        #expect(recorded == prepared)
+        guard case .failure(let error) = result else {
+            Issue.record("expected the create to stop when the destination cannot be recorded")
+            return
+        }
+        #expect(error.message == "Could not record the worktree destination.")
+        #expect(state.projectsManager.visibleWorktrees(projectId: project.id).isEmpty)
     }
 
     @Test func remoteCreateWorktreeSessionPreservesWorktreeWhenSessionCreationFails() async throws {
@@ -1594,7 +1673,6 @@ struct RemoteAppStateAccessTests {
     @Test func remoteFileTreeVerifiesRemoteContainmentBeforeListingANonRootDirectory() async throws {
         let repository = try await makeRemoteBranchesRepository()
         defer {
-            RemoteHostRegistry.shared.unregister(root: repository.path)
             try? FileManager.default.removeItem(at: repository)
         }
         let aliasDir = repository.appendingPathComponent("alias")
@@ -1603,7 +1681,7 @@ struct RemoteAppStateAccessTests {
         _ = try await Process.git(["add", "alias"], cwd: repository)
         _ = try await Process.git(["commit", "-q", "-m", "add alias dir"], cwd: repository)
 
-        RemoteHostRegistry.shared.register(root: repository.path, host: "nonexistent-host.invalid")
+        let remoteRepository = URL(fileURLWithPath: RemotePath.virtual(host: "nonexistent-host.invalid", realPath: repository.path))
 
         var cleanupWorktreeId: String?
         defer {
@@ -1611,7 +1689,7 @@ struct RemoteAppStateAccessTests {
                 cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
             }
         }
-        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let state = makeRemoteGitBackedState(repositoryPath: remoteRepository)
         let worktreeId = try #require(state.selectedWorktreeId)
         cleanupWorktreeId = worktreeId
         state.openNewACPSession(agentID: "test-agent")

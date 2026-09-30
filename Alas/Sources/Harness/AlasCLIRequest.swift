@@ -57,6 +57,43 @@ struct AlasCLIRequest: Equatable {
         case resolve
     }
 
+    /// A CLI run inside a remote terminal reports paths on the remote host;
+    /// re-key absolute `open` paths and worktree targets onto the caller's virtual namespace. Local anchors
+    /// leave the request unchanged.
+    func virtualizingPaths(like anchor: String) -> AlasCLIRequest {
+        let mapped: Command
+        switch command {
+        case .open(let paths):
+            mapped = .open(paths: paths.map { RemotePath.virtualizing($0, like: anchor) })
+        case .openAt(let path, let line, let endLine):
+            mapped = .openAt(path: RemotePath.virtualizing(path, like: anchor), line: line, endLine: endLine)
+        case .worktree(.switch(let target)):
+            mapped = .worktree(.switch(target: RemotePath.virtualizing(target, like: anchor)))
+        case .worktree(.delete(let target, let force, let keepBranch)):
+            mapped = .worktree(.delete(target: RemotePath.virtualizing(target, like: anchor), force: force, keepBranch: keepBranch))
+        case .review(.localChanges(let worktree)):
+            mapped = .review(.localChanges(worktree: worktree.map { RemotePath.virtualizing($0, like: anchor) }))
+        case .review(.target(let target, let worktree)):
+            mapped = .review(.target(target, worktree: worktree.map { RemotePath.virtualizing($0, like: anchor) }))
+        case .review(.commentAdd(let path, let startLine, let endLine, let side, let body, let sessionID)):
+            mapped = .review(.commentAdd(
+                path: RemotePath.virtualizing(path, like: anchor), startLine: startLine, endLine: endLine,
+                side: side, body: body, sessionID: sessionID
+            ))
+        case .agentList(let worktree):
+            mapped = .agentList(worktree: worktree.map { RemotePath.virtualizing($0, like: anchor) })
+        case .sessionNew(let prompt, let agentID, .existing(let id), let model, let reasoning):
+            mapped = .sessionNew(
+                prompt: prompt, agentID: agentID,
+                worktree: .existing(worktreeID: RemotePath.virtualizing(id, like: anchor)),
+                model: model, reasoning: reasoning
+            )
+        default:
+            return self
+        }
+        return AlasCLIRequest(version: version, sessionId: sessionId, cwd: cwd, command: mapped)
+    }
+
     enum WorktreeCommand: Equatable {
         case list
         case `switch`(target: String)

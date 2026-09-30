@@ -489,7 +489,7 @@ private struct ACPSessionView: View {
             },
             onOpenTranscriptLink: { url in
                 switch state.transcriptLinkRoute(url, worktreeId: worktree.id) {
-                case .opened:
+                case .opened, .ignored:
                     return true
                 case .systemOpen(let fileURL):
                     // Claimed either way: the destination this came from is
