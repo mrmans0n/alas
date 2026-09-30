@@ -34,7 +34,11 @@ enum ReviewSessionConsolidation {
     }
 }
 
-private struct RemoteWorktreeDestinationCheckError: Error {}
+private struct RemoteWorktreeDestinationCheckError: LocalizedError {
+    var errorDescription: String? {
+        "The remote host did not report whether the destination already exists."
+    }
+}
 
 enum WorkspaceDefinitionSaveError: LocalizedError {
     case spacePlacementFailed
