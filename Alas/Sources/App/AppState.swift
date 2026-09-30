@@ -4660,14 +4660,13 @@ final class AppState {
             return .error("invalid branch name: \(message)")
         }
 
-        let destination = WorktreePathTemplateRenderer.render(
-            template: config.worktrees.pathTemplate,
-            worktreeRoot: config.worktrees.rootPath,
-            repoName: project.name,
-            branch: branch
-        )
-        if FileManager.default.fileExists(atPath: destination.path) {
-            return .error("A worktree already exists at this path.")
+        let destination: URL
+        do {
+            let prepared = try await preparedCreationDestination(project: project, branch: branch)
+            guard !prepared.exists else { return .error("A worktree already exists at this path.") }
+            destination = prepared.destination
+        } catch {
+            return .error("Could not check the worktree destination: \(error.localizedDescription)")
         }
         let resolvedBase: String
         if let base {
@@ -4686,12 +4685,13 @@ final class AppState {
             branch: branch,
             destination: destination,
             runStartup: true,
-            launchSurface: .none
+            launchSurface: .none,
+            destinationAlreadyPrepared: true
         )
         guard !id.isEmpty else {
             return .error("A worktree already exists at this path.")
         }
-        return .text(["creating \(branch) at \(destination.path)"])
+        return .text(["creating \(branch) at \(RemotePath.display(destination.path))"])
     }
 
     /// Starts a delegated worktree creation and waits for its reconciled row.
@@ -4743,14 +4743,13 @@ final class AppState {
         case .invalid(let message):
             return .failure(.init(message: "invalid branch name: \(message)"))
         }
-        let destination = WorktreePathTemplateRenderer.render(
-            template: config.worktrees.pathTemplate,
-            worktreeRoot: config.worktrees.rootPath,
-            repoName: project.name,
-            branch: branch
-        )
-        if FileManager.default.fileExists(atPath: destination.path) {
-            return .failure(.init(message: "A worktree already exists at this path."))
+        let destination: URL
+        do {
+            let prepared = try await preparedCreationDestination(project: project, branch: branch)
+            guard !prepared.exists else { return .failure(.init(message: "A worktree already exists at this path.")) }
+            destination = prepared.destination
+        } catch {
+            return .failure(.init(message: "Could not check the worktree destination: \(error.localizedDescription)"))
         }
         let selectedBase: String
         if let base {
@@ -4767,7 +4766,8 @@ final class AppState {
             base: selectedBase,
             branch: branch,
             destination: destination,
-            runStartup: true
+            runStartup: true,
+            destinationAlreadyPrepared: true
         )
         switch result {
         case .success(let worktree):
@@ -14678,24 +14678,11 @@ extension AppState: RemoteSessionsProvider {
             return .failure(stage: .worktree, message: "Could not load branches.", worktreeId: nil)
         }
 
-        let renderedDestination = WorktreePathTemplateRenderer.render(
-            template: config.worktrees.pathTemplate,
-            worktreeRoot: config.worktrees.rootPath,
-            repoName: project.name,
-            branch: branch
-        )
         let destination: URL
         do {
-            let repoPath = URL(fileURLWithPath: project.path)
-            destination = if let remoteWorktreeDestinationPreparer {
-                try await remoteWorktreeDestinationPreparer(repoPath, renderedDestination)
-            } else {
-                try await Self.preparedCreateWorktreeDestination(
-                    repoPath: repoPath,
-                    destination: renderedDestination
-                )
-            }
-            if try await remoteCreationDestinationExists(project: project, destination: destination) {
+            let prepared = try await preparedCreationDestination(project: project, branch: branch)
+            destination = prepared.destination
+            if prepared.exists {
                 return .failure(
                     stage: .worktree,
                     message: "A worktree already exists at this path.",
@@ -14749,7 +14736,30 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
-    private func remoteCreationDestinationExists(
+    /// Renders the configured destination, prepares it for the project's own
+    /// host (remote home and virtual path), and checks whether it is taken
+    /// there. A same-path directory on this Mac says nothing about a remote
+    /// project, so existence is never checked before preparation.
+    private func preparedCreationDestination(
+        project: ProjectConfig,
+        branch: String
+    ) async throws -> (destination: URL, exists: Bool) {
+        let rendered = WorktreePathTemplateRenderer.render(
+            template: config.worktrees.pathTemplate,
+            worktreeRoot: config.worktrees.rootPath,
+            repoName: project.name,
+            branch: branch
+        )
+        let repoPath = URL(fileURLWithPath: project.path)
+        let destination = if let remoteWorktreeDestinationPreparer {
+            try await remoteWorktreeDestinationPreparer(repoPath, rendered)
+        } else {
+            try await Self.preparedCreateWorktreeDestination(repoPath: repoPath, destination: rendered)
+        }
+        return (destination, try await creationDestinationExists(project: project, destination: destination))
+    }
+
+    private func creationDestinationExists(
         project: ProjectConfig,
         destination: URL
     ) async throws -> Bool {

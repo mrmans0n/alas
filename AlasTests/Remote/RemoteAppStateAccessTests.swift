@@ -1160,6 +1160,44 @@ struct RemoteAppStateAccessTests {
         #expect(!sessionCreationAttempted)
     }
 
+    /// A remote project may reuse a destination path that also exists on this
+    /// Mac; only the project's own host decides whether it is taken.
+    @Test func cliCreateWorktreeChecksARemoteDestinationOnItsHostNotOnThisMac() async throws {
+        let worktreeRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-twin-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: worktreeRoot) }
+        let localTwin = worktreeRoot.appendingPathComponent("Remote Twin-feature-twin")
+        try FileManager.default.createDirectory(at: localTwin, withIntermediateDirectories: true)
+        let project = ProjectConfig(
+            id: "project-remote-twin",
+            name: "Remote Twin",
+            path: RemotePath.virtual(host: "remote.test", realPath: "/srv/remote-twin"),
+            color: "blue",
+            addedAt: Date(),
+            host: "remote.test"
+        )
+        let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        state.config.worktrees.rootPath = worktreeRoot.path
+        state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
+        state.remoteWorktreeDestinationPreparer = { repo, destination in
+            URL(fileURLWithPath: RemotePath.virtualizing(destination.path, like: repo.path))
+        }
+        var probedHost: String?
+        state.remoteWorktreeCommandRunner = { host, _, _ in
+            probedHost = host
+            return ProcessResult(exitCode: 0, stdout: "", stderr: "")
+        }
+        let origin = Worktree(
+            id: project.path, projectId: project.id, name: "main", branch: "main",
+            path: URL(fileURLWithPath: project.path), status: .clean, lastActivity: .distantPast
+        )
+
+        let response = await state.cliCreateWorktree(origin: origin, branch: "feature/twin", base: "main")
+
+        #expect(probedHost == "remote.test")
+        #expect(response == .error("A worktree already exists at this path."))
+    }
+
     @Test func remoteCreateWorktreeSessionPreservesWorktreeWhenSessionCreationFails() async throws {
         let repository = try await makeRemoteBranchesRepository()
         let worktreeRoot = FileManager.default.temporaryDirectory
