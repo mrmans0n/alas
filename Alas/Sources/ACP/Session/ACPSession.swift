@@ -386,6 +386,38 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var queue: [QueuedPrompt] = [] { willSet { nextPromptActivity.send() } }
     var pendingQueuePersistenceCount = 0 { willSet { nextPromptActivity.send() } }
 
+    /// Where a delegated child stands on its requested model/reasoning.
+    /// `.pending` holds every prompt in the queue, including ones typed in
+    /// the composer, until the selection is acknowledged or the child fails.
+    /// `.released` is terminal for this session object, so an attach that
+    /// read a stale `starting` phase cannot re-arm a hold nothing would
+    /// clear. Runtime only: each attach re-derives it from the delegation.
+    enum DelegatedSelectionHold: Equatable {
+        case none
+        case pending
+        case released
+    }
+    @Published private(set) var delegatedSelectionHold: DelegatedSelectionHold = .none {
+        willSet { nextPromptActivity.send() }
+    }
+
+    var holdsPromptsForDelegatedSelection: Bool { delegatedSelectionHold == .pending }
+
+    /// Returns whether the hold is now pending.
+    @discardableResult
+    func holdPromptsForDelegatedSelection() -> Bool {
+        if delegatedSelectionHold == .none { delegatedSelectionHold = .pending }
+        return delegatedSelectionHold == .pending
+    }
+
+    /// Returns whether a pending hold was lifted.
+    @discardableResult
+    func releaseDelegatedSelectionHold() -> Bool {
+        let wasPending = delegatedSelectionHold == .pending
+        delegatedSelectionHold = .released
+        return wasPending
+    }
+
     struct ContextRestoreWarning: Equatable {
         var message: String
         var canSendTranscript: Bool
@@ -2213,15 +2245,19 @@ final class ACPSession: ObservableObject, Identifiable {
 
     /// Append a new pending item to the tail of the queue. Used by the
     /// runner when the user submits while the agent is busy (or while
-    /// the queue is already non-empty — see ACPSubmitRoute).
+    /// the queue is already non-empty — see ACPSubmitRoute). `ahead` puts it
+    /// before every item that has not gone out yet instead.
     func enqueue(
         id: UUID = UUID(),
         blocks: [ACPContentBlock],
         draft: ACPComposerDraft? = nil,
-        delegatedSource: ACPDelegatedPromptSource? = nil
+        delegatedSource: ACPDelegatedPromptSource? = nil,
+        ahead: Bool = false
     ) {
         let item = QueuedPrompt(id: id, blocks: blocks, draft: draft, delegatedSource: delegatedSource)
-        let insertAt = queue.firstIndex { $0.status == .pending && $0.scheduledAt != nil } ?? queue.endIndex
+        let insertAt = ahead
+            ? queue.firstIndex { $0.status == .pending } ?? queue.endIndex
+            : queue.firstIndex { $0.status == .pending && $0.scheduledAt != nil } ?? queue.endIndex
         queue.insert(item, at: insertAt)
     }
 

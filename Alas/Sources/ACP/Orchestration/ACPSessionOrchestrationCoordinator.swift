@@ -466,8 +466,13 @@ final class ACPSessionOrchestrationCoordinator {
             prompt: deliveredPrompt,
             createdAt: environment.now()
         )
+        // The phase was checked above, but another instance sharing the store
+        // can fail the target in between; the store rechecks it atomically
+        // with the insert, so a failed child never gets a stranded row.
         do {
-            try await environment.persistence.enqueue(message)
+            guard try await environment.persistence.enqueueUnlessTargetEnded(message) else {
+                return .error("The target delegated session is not available.")
+            }
         } catch {
             return .error("Could not queue delegated message.")
         }
@@ -560,14 +565,33 @@ final class ACPSessionOrchestrationCoordinator {
             createdAt: environment.now(),
             kind: .prompt
         )
+        // A child still waiting on its model selection must never run the
+        // parent's prompt on the agent's default model: drop it from the
+        // session's queue, durably, before `.failed` lifts the prompt hold
+        // (a later hydration of a failed child is not held).
+        let holdsDispatch = ACPSessionOrchestrationPolicy.holdsPromptDispatch(target: record)
+        let heldManager = holdsDispatch ? environment.sessionLocation(childSessionId)?.manager : nil
+        let initialPromptGone = await heldManager?.discardDelegatedPrompt(
+            messageId: initialPromptSource(for: record).messageId,
+            in: childSessionId
+        ) ?? true
+        // A child whose model selection never took effect loses its held
+        // inbox rows in the same transaction, so no path (startup recovery
+        // included) can later run them on the agent's default model.
         let wonTransition = (try? await environment.persistence.claimFailedPhase(
             childSessionId: childSessionId,
             failureMessage: message,
             updatedAt: environment.now(),
-            outcome: outcome
+            outcome: outcome,
+            discardingHeldMessages: record.modelSelection != nil
         )) ?? false
-        if record.modelSelection != nil {
-            await discardHeldMessages(to: childSessionId)
+        // Lift the hold only once `.failed` is durable: a claim that threw
+        // (busy timeout, I/O) left the child `starting`, and a released hold
+        // cannot be re-armed on this session object. If the prompt could not
+        // be written out of the queue, the hold stays for this process.
+        if let heldManager, initialPromptGone,
+           (try? await environment.persistence.delegation(childSessionId: childSessionId))??.phase == .failed {
+            heldManager.releaseDelegatedSelectionHold(childSessionId)
         }
         environment.notifyChanged()
         guard wonTransition else { return }
@@ -576,25 +600,6 @@ final class ACPSessionOrchestrationCoordinator {
             callerParent: record,
             targetParent: nil
         )
-    }
-
-    /// Drops inbox rows held for a child whose model selection never took
-    /// effect, so no path (including startup recovery) can later run them on
-    /// the agent's default model. A row another instance holds a live claim
-    /// on is left to that instance, which sees the failed phase.
-    private func discardHeldMessages(to childSessionId: String) async {
-        guard let held = try? await environment.persistence.pendingMessages(targetSessionId: childSessionId)
-        else { return }
-        for message in held {
-            guard let claimed = try? await environment.persistence.claimMessage(
-                id: message.id,
-                instanceId: environment.instanceId,
-                token: environment.makeID(),
-                now: environment.now(),
-                staleAfter: 60
-            ) else { continue }
-            try? await environment.persistence.removeDeliveredMessage(id: message.id, claim: claimed.claim)
-        }
     }
 
     /// A delegated child stopped on something only a human can resolve. The
@@ -768,8 +773,11 @@ final class ACPSessionOrchestrationCoordinator {
         }
         // Without a model selection the prompt is queued before attach, as it
         // always was, and goes out once the runner registers. With one, it is
-        // queued only after the selection is acknowledged.
-        if record.modelSelection == nil {
+        // queued only after the selection is acknowledged, and the session
+        // holds every prompt (a human's in the open tab too) until then.
+        if record.modelSelection != nil {
+            manager.holdPromptsForDelegatedSelection(childID)
+        } else {
             guard await manager.enqueueDelegatedPrompt(
                 text: prompt,
                 source: initialPromptSource(for: record),
@@ -795,9 +803,15 @@ final class ACPSessionOrchestrationCoordinator {
             ) else { return }
         }
         try? await environment.persistence.clearPendingInitialPrompt(childSessionId: childID, updatedAt: environment.now())
-        try? await environment.persistence.updatePhase(
+        let markedReady = (try? await environment.persistence.updatePhase(
             childSessionId: childID, phase: .ready, failureMessage: nil, updatedAt: environment.now()
-        )
+        )) != nil
+        // Unless `.ready` is durable, the child stays held: other instances
+        // and the next launch still treat it as starting and reapply the
+        // selection.
+        if record.modelSelection != nil, markedReady {
+            manager.releaseDelegatedSelectionHold(childID)
+        }
         environment.notifyChanged()
         await deliverPendingMessages(
             to: childID,
@@ -807,14 +821,20 @@ final class ACPSessionOrchestrationCoordinator {
     }
 
     func initialPromptSource(for record: ACPDelegationRecord) -> ACPDelegatedPromptSource {
-        ACPDelegatedPromptSource(sessionId: record.parentSessionId, messageId: "initial-\(record.childSessionId)")
+        ACPDelegatedPromptSource(
+            sessionId: record.parentSessionId,
+            messageId: ACPSessionOrchestrationPolicy.initialPromptMessageId(childSessionId: record.childSessionId)
+        )
     }
 
     /// Applies a child's requested model/reasoning on its attached session
     /// and only then queues the initial prompt, so no prompt can run on the
     /// agent's default. Any failure marks the child failed, which wakes the
     /// parent with the reason, and nothing is queued. Also used by startup
-    /// recovery, so a restarted child reapplies the same selection.
+    /// recovery, so a restarted child reapplies the same selection. The
+    /// session's prompt hold stays on: the caller lifts it once the child is
+    /// marked ready, and the prompt is queued ahead of anything a human typed
+    /// in the tab meanwhile.
     func queueInitialPromptAfterModelSelection(
         _ selection: ACPDelegatedModelSelection,
         record: ACPDelegationRecord,
@@ -824,21 +844,17 @@ final class ACPSessionOrchestrationCoordinator {
         do {
             try await manager.applyDelegatedModelSelection(selection, to: record.childSessionId)
         } catch {
-            // Recovery may have withheld an already-queued copy of the prompt
-            // in memory; persist the queue without it, and wait for that write,
-            // before the failed phase takes the child out of recovery, so a
-            // later reopen cannot run it on the default model.
-            if let session = manager.liveSession(for: record.childSessionId) {
-                manager.persistQueue(for: session)
-                await manager.flushAllPersistence()
-            }
+            // `markChildFailed` writes the queue without the prompt, which
+            // recovery may have withheld in memory, before the failed phase
+            // takes the child out of recovery.
             await markChildFailed(childSessionId: record.childSessionId, message: error.localizedDescription)
             return false
         }
         guard await manager.enqueueDelegatedPrompt(
             text: prompt,
             source: initialPromptSource(for: record),
-            into: record.childSessionId
+            into: record.childSessionId,
+            ahead: true
         ) else {
             await markChildFailed(childSessionId: record.childSessionId, message: "Could not queue initial prompt.")
             return false

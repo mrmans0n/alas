@@ -63,13 +63,15 @@ actor ACPOrchestrationPersistence {
         childSessionId: String,
         failureMessage: String,
         updatedAt: Int64,
-        outcome: ACPDelegatedMessage
+        outcome: ACPDelegatedMessage,
+        discardingHeldMessages: Bool = false
     ) throws -> Bool {
         try openedStore().claimFailedPhase(
             childSessionId: childSessionId,
             failureMessage: failureMessage,
             updatedAt: updatedAt,
-            outcome: outcome
+            outcome: outcome,
+            discardingHeldMessages: discardingHeldMessages
         )
     }
 
@@ -105,6 +107,10 @@ actor ACPOrchestrationPersistence {
 
     func enqueue(_ message: ACPDelegatedMessage) throws {
         try openedStore().enqueue(message)
+    }
+
+    func enqueueUnlessTargetEnded(_ message: ACPDelegatedMessage) throws -> Bool {
+        try openedStore().enqueueUnlessTargetEnded(message)
     }
 
     func pendingMessages(targetSessionId: String) throws -> [ACPDelegatedMessage] {
