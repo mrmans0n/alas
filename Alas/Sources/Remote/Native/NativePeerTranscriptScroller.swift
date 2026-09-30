@@ -61,6 +61,18 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
         private var followsTail = true
         private var epoch: Int?
         private var isFetchScheduled = false
+        /// Fires once a gesture's tail-pin suppression has expired, so an
+        /// update that landed inside it cannot strand a following reader
+        /// above the newest row.
+        private let scrollSettleTimer = DebounceTimer(
+            interval: ACPTranscriptScrollerReconciler.userScrollSuppressionWindow
+        )
+
+        init() {
+            scrollSettleTimer.onFire = { [weak self] in
+                MainActor.assumeIsolated { self?.settleUserScroll() }
+            }
+        }
 
         private struct FoldKey: Equatable {
             let generation: UInt64
@@ -374,6 +386,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
 
             reconciler.invalidatePendingAnchorRestore()
             reconciler.noteUserScroll()
+            scrollSettleTimer.poke()
             switch ACPScrollDirectionClassifier.decide(
                 previousOffsetY: previousY,
                 newOffsetY: newY,
@@ -404,10 +417,20 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
             reconciler.setFollowsTail(atTail)
             reconciler.invalidatePendingAnchorRestore()
             reconciler.noteUserScroll()
+            scrollSettleTimer.poke()
             let maxY = max(0, scroller.contentHeight - scroller.viewportHeight)
             scroller.setScrollY(maxY * CGFloat(min(max(value, 0), 1)))
             reconciler.layoutMountedRowsForScroll()
             scheduleFetchOlderIfNeeded()
+        }
+
+        private func settleUserScroll() {
+            guard let scroller, let host else { return }
+            guard !scroller.isUserScrollActive else {
+                scrollSettleTimer.poke()
+                return
+            }
+            if followsTail { update(host: host) }
         }
 
         /// Requests the previous page once the reader is within the same
