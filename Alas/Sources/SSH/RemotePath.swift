@@ -6,6 +6,14 @@ import Foundation
 enum RemotePath {
     static let root = "/.alas-remote"
 
+    /// Error for a local path inside the reserved namespace: such a path
+    /// would be classified as remote and run on a made-up ssh host.
+    static func reservedForRemoteError(_ path: String) -> NSError {
+        NSError(domain: "ProjectsManager", code: 3, userInfo: [
+            NSLocalizedDescriptionKey: "\(path) is inside \(root)/, which is reserved for remote projects.",
+        ])
+    }
+
     static func isValidHost(_ host: String) -> Bool {
         !host.isEmpty && !host.contains("/")
     }

@@ -120,6 +120,25 @@ struct ProjectsManagerTests {
         #expect(mgr.projects.isEmpty)
     }
 
+    /// A local repository under the reserved prefix would be classified as
+    /// remote and run on a made-up ssh host, so it is refused before any git.
+    @Test(arguments: [false, true])
+    func addLocalProjectRefusesTheReservedRemotePrefix(underReservedPrefix: Bool) async throws {
+        let repo = try await makeRepo(name: "reserved")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let path = underReservedPrefix ? URL(fileURLWithPath: RemotePath.root + "/x" + repo.path) : repo
+        let mgr = ProjectsManager(persistedProjects: [])
+
+        do {
+            _ = try await mgr.addProject(path: path, displayName: "repo", color: "#fff")
+            #expect(!underReservedPrefix)
+        } catch let error as NSError {
+            #expect(underReservedPrefix)
+            #expect(error.domain == "ProjectsManager" && error.code == 3)
+        }
+        #expect(mgr.projects.count == (underReservedPrefix ? 0 : 1))
+    }
+
     @Test func refreshWorktreesPopulatesIt() async throws {
         let repo = try await makeRepo(name: "beta")
         defer { try? FileManager.default.removeItem(at: repo) }

@@ -130,6 +130,7 @@ final class ProjectsManager {
             try await RemoteRepoValidator.validate(host: host, path: path.path)
             storedPath = RemotePath.virtual(host: host, realPath: path.path)
         } else {
+            guard !path.isRemoteAlasPath else { throw RemotePath.reservedForRemoteError(path.path) }
             storedPath = path.path
             let isRepo = try await git.isGitRepository(path)
             guard isRepo else {
