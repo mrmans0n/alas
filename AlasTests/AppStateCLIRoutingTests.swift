@@ -566,21 +566,26 @@ struct AppStateCLIRoutingTests {
         #expect(route == .unhandled)
     }
 
+    /// A remote session's absolute links open in the remote editor or are
+    /// claimed without opening anything; they never reach a local lookup, so
+    /// a same-path local twin (`/etc/hosts` exists on every Mac) is never
+    /// opened. Local worktrees keep the local routing.
     @Test(arguments: [
-        ("/Volumes/Workspace/alas", "/Volumes/Workspace/alas/Foo.swift"),
-        ("/.alas-remote/mini/Volumes/Workspace/alas", "/.alas-remote/mini/Volumes/Workspace/alas/Foo.swift"),
+        ("/.alas-remote/mini/srv/repo", "/srv/repo/Sources/a.swift", AppState.AbsoluteLinkRoute.remoteEditor(relativePath: "Sources/a.swift", line: nil, column: nil)),
+        ("/.alas-remote/mini/srv/repo", "/srv/repo/a.swift:12:3", .remoteEditor(relativePath: "a.swift", line: 12, column: 3)),
+        ("/.alas-remote/mini/srv/repo", "/srv/repo/a.swift:12.", .remoteEditor(relativePath: "a.swift", line: 12, column: nil)),
+        ("/.alas-remote/mini/srv/repo", "file:///srv/repo/a%20b.swift:7", .remoteEditor(relativePath: "a b.swift", line: 7, column: nil)),
+        ("/.alas-remote/mini/etc", "/etc/hosts", .remoteEditor(relativePath: "hosts", line: nil, column: nil)),
+        ("/.alas-remote/mini/srv/repo", "/srv/other/b.swift", .ignored),
+        ("/.alas-remote/mini/srv/repo", "file:///etc/hosts", .ignored),
+        ("/.alas-remote/mini/srv/repo", "/.alas-remote/other/srv/repo/a.swift", .ignored),
+        ("/.alas-remote/mini/srv/repo", "Sources/a.swift", .local),
+        ("/.alas-remote/mini/srv/repo", "https://example.com/a", .local),
+        ("/srv/repo", "/srv/repo/a.swift", .local),
+        ("/srv/repo", "file:///etc/hosts", .local),
     ])
-    func absoluteLinkPathResolvesOnTheWorktreesOwnHost(root: String, expected: String) {
-        let worktree = Worktree(
-            id: root, projectId: "project", name: "main", branch: "main",
-            path: URL(fileURLWithPath: root), status: .clean, lastActivity: .distantPast
-        )
-
-        let resolved = AppState.resolveLocalFilePath(
-            "/Volumes/Workspace/alas/Foo.swift", worktree: worktree, baseDirectory: nil
-        )
-
-        #expect(resolved.path == expected)
+    func absoluteLinkRoutesOnTheWorktreesOwnHost(root: String, raw: String, expected: AppState.AbsoluteLinkRoute) {
+        #expect(AppState.absoluteLinkRoute(raw, worktreeRoot: root) == expected)
     }
 
     @Test func routeTerminalOpenURLReturnsFalseForPathOutsideWorkspace() async throws {

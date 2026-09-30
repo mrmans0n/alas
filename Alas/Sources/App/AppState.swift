@@ -9960,6 +9960,64 @@ final class AppState {
         case systemOpen(URL)
         /// Not a local path we can resolve; let the default URL action run.
         case unhandled
+        /// A remote worktree's absolute link outside it: claimed, nothing opens.
+        case ignored
+    }
+
+    /// How a clicked absolute link from a session in `worktreeRoot` is routed
+    /// before any local lookup.
+    enum AbsoluteLinkRoute: Equatable {
+        /// Not a remote absolute link; the local routing decides.
+        case local
+        /// Inside the remote worktree: open in the editor, which reads the
+        /// file on its host. `line`/`column` are 1-based.
+        case remoteEditor(relativePath: String, line: Int?, column: Int?)
+        /// A remote absolute link outside the worktree. It is claimed and
+        /// opens nothing, so the system never opens a same-path local twin.
+        case ignored
+    }
+
+    /// A remote session's absolute paths (plain or `file:`, optionally
+    /// `:line[:column]`) name files on its host. They are never probed or
+    /// opened locally; containment is decided lexically on the virtual path.
+    nonisolated static func absoluteLinkRoute(_ raw: String, worktreeRoot: String) -> AbsoluteLinkRoute {
+        guard RemotePath.split(worktreeRoot) != nil else { return .local }
+        var path = raw
+        if let url = URL(string: raw), url.isFileURL { path = url.path }
+        guard path.hasPrefix("/") else { return .local }
+        // Without an existence probe, trailing sentence punctuation is
+        // dropped lexically instead of retried.
+        if path.hasSuffix("."), path.count > 1 { path.removeLast() }
+        var line: Int?
+        var column: Int?
+        if let parsed = parseLocalPathPosition(path) {
+            path = parsed.path
+            line = parsed.line
+            column = parsed.column
+        }
+        let target = URL(fileURLWithPath: RemotePath.virtualizing(path, like: worktreeRoot)).standardizedFileURL.path
+        let root = URL(fileURLWithPath: worktreeRoot).standardizedFileURL.path
+        guard target.hasPrefix(root + "/") else { return .ignored }
+        return .remoteEditor(relativePath: String(target.dropFirst(root.count + 1)), line: line, column: column)
+    }
+
+    /// Opens or claims a remote absolute link; nil lets local routing run.
+    private func routeRemoteAbsoluteLink(_ raw: String, worktree: Worktree) -> TranscriptLinkRoute? {
+        switch Self.absoluteLinkRoute(raw, worktreeRoot: worktree.path.path) {
+        case .local:
+            return nil
+        case .ignored:
+            return .ignored
+        case let .remoteEditor(relativePath, line, column):
+            openFile(
+                relativePath: relativePath,
+                worktreeId: worktree.id,
+                revealLine: line.map { $0 - 1 },
+                revealCharacter: line.map { _ in (column ?? 1) - 1 }
+            )
+            NSApp.activate(ignoringOtherApps: true)
+            return .opened
+        }
     }
 
     /// Route a clicked markdown link from an ACP transcript. Paths inside
@@ -9982,6 +10040,7 @@ final class AppState {
             return .unhandled
         }
         guard !rawPath.isEmpty else { return .unhandled }
+        if let remote = routeRemoteAbsoluteLink(rawPath, worktree: worktree) { return remote }
 
         var candidates = [rawPath]
         // Trailing-period fallback: transcript prose can include sentence
@@ -9997,7 +10056,7 @@ final class AppState {
                 return .opened
             case .systemOpen(let fileURL):
                 return .systemOpen(fileURL)
-            case .unhandled:
+            case .unhandled, .ignored:
                 continue
             }
         }
@@ -10042,6 +10101,7 @@ final class AppState {
     func routeTerminalOpenURL(rawURL: String, sessionId: String) -> Bool {
         guard let session = terminal.registry.session(for: sessionId),
               let worktree = worktree(withId: session.worktreeId) else { return false }
+        if routeRemoteAbsoluteLink(rawURL, worktree: worktree) != nil { return true }
 
         let path: String
         if let parsed = URL(string: rawURL), parsed.isFileURL {
@@ -10157,16 +10217,13 @@ final class AppState {
         return relativePath.isEmpty ? nil : relativePath
     }
 
-    /// An absolute path clicked in a remote worktree names a file on that
-    /// host, so it is made virtual: a same-path local twin must never be
-    /// opened in its place.
-    nonisolated static func resolveLocalFilePath(
+    nonisolated private static func resolveLocalFilePath(
         _ rawPath: String,
         worktree: Worktree,
         baseDirectory: URL?
     ) -> URL {
         if (rawPath as NSString).isAbsolutePath {
-            return URL(fileURLWithPath: RemotePath.virtualizing(rawPath, like: worktree.path.path)).standardizedFileURL
+            return URL(fileURLWithPath: rawPath).standardizedFileURL
         }
         let base = baseDirectory ?? worktree.path
         let baseRelative = base.appendingPathComponent(rawPath).standardizedFileURL
