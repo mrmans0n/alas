@@ -5194,9 +5194,11 @@ final class AppState {
         if isRemote,
            let host = RemoteHostRegistry.shared.host(forPath: repoPath.path) {
             let remoteHome = try await Self.remoteHomeDirectory(host: host)
-            preparedDestination = URL(fileURLWithPath: Self.destinationPathReplacingLocalHome(
-                destination.path,
-                remoteHome: remoteHome
+            // The home swap works on the real remote path; the result goes back
+            // to the virtual form the rest of the app keys worktrees by.
+            preparedDestination = URL(fileURLWithPath: RemotePath.virtualizing(
+                Self.destinationPathReplacingLocalHome(destination.path, remoteHome: remoteHome),
+                like: repoPath.path
             ))
         } else {
             preparedDestination = destination
@@ -9576,11 +9578,11 @@ final class AppState {
     private func remotePhysicalPath(_ path: String, host: String) async -> String? {
         let result = try? await workspaceRemoteTransport.run(
             host: host,
-            command: "cd \(SSHCommand.shellQuote(path)) 2>/dev/null && pwd -P"
+            command: "cd \(SSHCommand.shellQuote(RemotePath.realPath(path))) 2>/dev/null && pwd -P"
         )
         guard result?.exitCode == 0 else { return nil }
         let resolved = result?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return resolved.isEmpty ? nil : resolved
+        return resolved.isEmpty ? nil : RemotePath.virtual(host: host, realPath: resolved)
     }
 
     private func acpQuestionNotificationBody(from params: ACPQuestionRequestParams) -> String? {

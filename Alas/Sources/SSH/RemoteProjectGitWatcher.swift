@@ -135,7 +135,7 @@ final class RemoteProjectGitWatcher {
         if let host { RemoteHostStatusStore.shared.reportSuccess(host: host) }
         guard result.exitCode == 0 else { return true }
 
-        let entries = RemoteWorktreePoll.parse(porcelain: result.stdout)
+        let entries = RemoteWorktreePoll.parse(porcelain: result.stdout, anchor: projectPath.path)
         let sharedRefsSignature = await pollSharedRefsSignature(entries: entries)
         defer {
             lastEntries = entries
@@ -420,7 +420,7 @@ final class RemoteProjectGitWatcher {
         else { return "" }
         let gitDirPath = gitDirResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !gitDirPath.isEmpty else { return "" }
-        let gitDir = URL(fileURLWithPath: gitDirPath)
+        let gitDir = URL(fileURLWithPath: RemotePath.virtualizing(gitDirPath, like: worktreePath.path))
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: gitDir,
             includingPropertiesForKeys: [.isRegularFileKey],

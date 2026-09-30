@@ -31,7 +31,7 @@ struct WorktreeService {
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         let host = RemoteHostRegistry.shared.host(forPath: repoPath.path)
         let absentLockedPaths = if let host {
-            await Self.absentRemoteLockedPaths(in: result.stdout, host: host)
+            await Self.absentRemoteLockedPaths(in: result.stdout, host: host, anchor: repoPath.path)
         } else {
             Set<String>()
         }
@@ -39,7 +39,8 @@ struct WorktreeService {
             result.stdout,
             projectId: projectId,
             isRemote: host != nil,
-            absentLockedPaths: absentLockedPaths
+            absentLockedPaths: absentLockedPaths,
+            anchor: repoPath.path
         )
         if let host {
             trees = await Self.fillingRemoteMetadata(trees, host: host)
@@ -290,7 +291,8 @@ struct WorktreeService {
         _ out: String,
         projectId: String,
         isRemote: Bool = false,
-        absentLockedPaths: Set<String> = []
+        absentLockedPaths: Set<String> = [],
+        anchor: String = ""
     ) -> [Worktree] {
         var result: [Worktree] = []
         var currentPath: URL?
@@ -333,7 +335,9 @@ struct WorktreeService {
         for line in out.split(separator: "\n") {
             if line.hasPrefix("worktree ") {
                 flush()
-                currentPath = URL(fileURLWithPath: String(line.dropFirst("worktree ".count)))
+                currentPath = URL(fileURLWithPath: RemotePath.virtualizing(
+                    String(line.dropFirst("worktree ".count)), like: anchor
+                ))
             } else if line.hasPrefix("branch ") {
                 let raw = String(line.dropFirst("branch ".count))
                 // refs/heads/foo → foo
@@ -348,7 +352,7 @@ struct WorktreeService {
         return result
     }
 
-    private static func absentRemoteLockedPaths(in porcelain: String, host: String) async -> Set<String> {
+    private static func absentRemoteLockedPaths(in porcelain: String, host: String, anchor: String) async -> Set<String> {
         var lockedPaths: [String] = []
         var currentPath: String?
         for line in porcelain.split(separator: "\n") {
@@ -361,7 +365,8 @@ struct WorktreeService {
         return await withTaskGroup(of: String?.self) { group in
             for path in lockedPaths {
                 group.addTask {
-                    await RemoteFileAccess.existence(host: host, path: path) == .missing ? path : nil
+                    await RemoteFileAccess.existence(host: host, path: path) == .missing
+                        ? RemotePath.virtualizing(path, like: anchor) : nil
                 }
             }
             var absent: Set<String> = []
@@ -602,7 +607,7 @@ struct WorktreeService {
         }
         guard registrations.exitCode == 0,
               Self.staleRegistration(registrations.stdout, destination: destination, lockedDestinationIsMissing: false) == nil,
-              !registrations.stdout.split(separator: "\n").contains(where: { $0 == "worktree \(destination.path)" })
+              !registrations.stdout.split(separator: "\n").contains(where: { $0 == "worktree \(RemotePath.realPath(destination.path))" })
         else { throw WorktreeError.gitFailed("Frozen Workspace destination is already registered.") }
         let expectedCommit: String
         switch intent {
@@ -718,7 +723,7 @@ struct WorktreeService {
 
         func currentRegistration() -> StaleWorktreeRegistration? {
             guard let currentPath,
-                  canonicalPath(URL(fileURLWithPath: currentPath)) == destinationPath
+                  canonicalPath(URL(fileURLWithPath: RemotePath.virtualizing(currentPath, like: destination.path))) == destinationPath
             else { return nil }
             if currentPrunable { return .prunable }
             if currentLocked, lockedDestinationIsMissing {
@@ -1345,7 +1350,8 @@ struct WorktreeService {
 
         func matchesCurrent() -> Bool {
             guard let currentPath else { return false }
-            return URL(fileURLWithPath: currentPath).standardizedFileURL.path == target && currentLocked
+            return URL(fileURLWithPath: RemotePath.virtualizing(currentPath, like: target)).standardizedFileURL.path == target
+                && currentLocked
         }
 
         for line in porcelain.split(separator: "\n") {
