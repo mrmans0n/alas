@@ -47,19 +47,13 @@ struct PathsTests {
         #expect(dir != AlasProfile.runtimeDirectory(for: other, uid: 501))
     }
 
-    @Test func privateDirectoryIsCreatedOrTightenedToOwnerOnly() throws {
+    @Test func privateDirectoryIsCreatedWithMissingParentsOwnerOnly() throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent("alas-profile-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: base) }
-        let fresh = base.appendingPathComponent("fresh")
-        let loose = base.appendingPathComponent("loose")
-        let untraversable = base.appendingPathComponent("untraversable")
-        try FileManager.default.createDirectory(at: loose, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
-        try FileManager.default.createDirectory(at: untraversable, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o600])
-        for url in [fresh, loose, untraversable] {
-            #expect(AlasProfile.preparePrivateDirectory(url, ownerUid: getuid()))
-            let mode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
-            #expect(mode == 0o700)
-        }
+        let fresh = base.appendingPathComponent("nested/fresh")
+        #expect(AlasProfile.preparePrivateDirectory(fresh, ownerUid: getuid()))
+        let mode = try FileManager.default.attributesOfItem(atPath: fresh.path)[.posixPermissions] as? Int
+        #expect(mode == 0o700)
     }
 
     @Test func privateDirectoryRefusesASymlink() throws {

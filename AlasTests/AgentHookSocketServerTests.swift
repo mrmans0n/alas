@@ -200,20 +200,27 @@ struct AgentHookSocketServerTests {
         #expect(received == nil)
     }
 
-    /// Codex review (#102): `/tmp/alas-<uid>` is a predictable path. If
-    /// another local user pre-creates it with permissive bits before our
-    /// first launch, we must refuse to use it instead of binding our
-    /// `pid-<pid>` socket there (where the attacker could connect and spoof
-    /// hook envelopes).
-    @Test func prepareSocketDirectory_rejectsInsecurePerms() throws {
-        let dir = "/tmp/alas-test-insecure-\(UUID().uuidString)"
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    /// A missing directory is created and an existing one we own is set to
+    /// `0700`, including owner-only but untraversable modes that would
+    /// otherwise make socket binding fail later. `nil` means "does not exist".
+    @Test(arguments: [nil, 0o700, 0o755, 0o777, 0o600, 0o500] as [mode_t?])
+    func prepareSocketDirectory_createsOrTightensToOwnerOnly(existingMode: mode_t?) throws {
+        let dir = "/tmp/alas-test-mode-\(UUID().uuidString)"
         defer { try? FileManager.default.removeItem(atPath: dir) }
-        _ = chmod(dir, 0o777)
+        if let existingMode {
+            try #require(mkdir(dir, 0o700) == 0)
+            try #require(chmod(dir, existingMode) == 0)
+        }
 
-        #expect(AgentHookSocketServer.prepareSocketDirectory(dir, ownerUid: getuid()) == false)
+        #expect(AgentHookSocketServer.prepareSocketDirectory(dir, ownerUid: getuid()))
+        var st = Darwin.stat()
+        #expect(Darwin.lstat(dir, &st) == 0)
+        #expect((st.st_mode & 0o777) == 0o700)
     }
 
+    /// Codex review (#102): `/tmp/alas-<uid>` is a predictable path. Another
+    /// local user can pre-create it, but not owned by us, so a foreign owner
+    /// is refused instead of binding our `pid-<pid>` socket there.
     @Test func prepareSocketDirectory_rejectsWrongOwner() throws {
         let dir = "/tmp/alas-test-wrong-owner-\(UUID().uuidString)"
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -221,16 +228,6 @@ struct AgentHookSocketServerTests {
         _ = chmod(dir, 0o700)
 
         #expect(AgentHookSocketServer.prepareSocketDirectory(dir, ownerUid: 0xDEAD) == false)
-    }
-
-    @Test func prepareSocketDirectory_acceptsFreshDirectory() throws {
-        let dir = "/tmp/alas-test-fresh-\(UUID().uuidString)"
-        defer { try? FileManager.default.removeItem(atPath: dir) }
-
-        #expect(AgentHookSocketServer.prepareSocketDirectory(dir, ownerUid: getuid()) == true)
-        var st = Darwin.stat()
-        #expect(Darwin.lstat(dir, &st) == 0)
-        #expect((st.st_mode & 0o777) == 0o700)
     }
 
     @Test func staleSocketSweep_removesDeadPidFiles() throws {

@@ -53,7 +53,7 @@ struct AlasProfile: Equatable, Sendable {
             }
             let runtime = runtimeDirectory(for: root, uid: getuid())
             guard AgentHookSocketServer.prepareSocketDirectory(runtime.path, ownerUid: getuid()) else {
-                fatalError("\(environmentKey): cannot create a private runtime directory at \(runtime.path)")
+                fatalError("\(environmentKey): runtime directory \(runtime.path) must be a directory owned by this user that Alas can set to 0700; remove it or fix its owner and mode")
             }
             return AlasProfile(appSupportOverride: root, runtimeDirectory: runtime)
         case .invalid(let value):
@@ -83,12 +83,7 @@ struct AlasProfile: Equatable, Sendable {
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: NSNumber(value: 0o700)]
         )
-        var st = Darwin.stat()
-        guard Darwin.lstat(url.path, &st) == 0,
-              (st.st_mode & S_IFMT) == S_IFDIR,
-              st.st_uid == ownerUid
-        else { return false }
-        return (st.st_mode & 0o777) == 0o700 || chmod(url.path, 0o700) == 0
+        return AgentHookSocketServer.prepareSocketDirectory(url.path, ownerUid: ownerUid)
     }
 
     /// The filesystem's own spelling of an existing directory: symlinks in any

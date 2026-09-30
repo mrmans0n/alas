@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Set an existing hook socket or isolated-profile runtime directory owned by the user to `0700` instead of accepting an owner-only mode that cannot be traversed, which left hooks, persistent terminals, and ACP brokers unable to start.
+
 ## [0.19.19] - 2026-09-29
 
 ### ✨ Features
