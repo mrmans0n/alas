@@ -65,6 +65,17 @@ pub struct Card {
     pub agent_state: Option<String>,
 }
 
+/// Alas gives each plugin call a fixed fuel budget, and a board costs fuel per card and
+/// per byte of text on every load, save and render. Measured with a real plugin host, the
+/// costliest call on a full board (a snapshot that moves a card: parse it, save, render)
+/// stays near 11M fuel, under half the 25M default. Adding past a cap removes the oldest
+/// Done cards; with none to remove, the card is not added.
+pub const MAX_CARDS: usize = 50;
+/// Title and prompt bytes across all cards.
+pub const MAX_TEXT_BYTES: usize = 96_000;
+/// The most text one card can add: a 200-char title and an 8,000-char prompt, ASCII.
+pub const MAX_CARD_TEXT_BYTES: usize = 8_200;
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Board {
@@ -73,7 +84,8 @@ pub struct Board {
 }
 
 impl Board {
-    /// Returns the new card id, or 0 when both title and prompt are empty.
+    /// Returns the new card id, or 0 when both title and prompt are empty or the board is
+    /// full of cards that are not Done.
     pub fn add(&mut self, title: &str, prompt: &str) -> u64 {
         let (title, prompt) = (title.trim(), prompt.trim());
         let title = if title.is_empty() {
@@ -83,6 +95,14 @@ impl Board {
         };
         if title.is_empty() {
             return 0;
+        }
+        let bytes = title.len() + prompt.len();
+        if !self.fits(bytes, |c| c.column != Column::Done) {
+            return 0;
+        }
+        while !self.fits(bytes, |_| true) {
+            let Some(oldest_done) = self.cards.iter().position(|c| c.column == Column::Done) else { return 0 };
+            self.cards.remove(oldest_done);
         }
         // A stale stored next_id must not reuse an existing id.
         self.next_id = self.next_id.max(self.cards.iter().map(|c| c.id).max().unwrap_or(0)) + 1;
@@ -99,6 +119,18 @@ impl Board {
             agent_state: None,
         });
         self.next_id
+    }
+
+    /// Whether a card with `text_bytes` of text fits beside the cards that `keep`.
+    fn fits(&self, text_bytes: usize, keep: impl Fn(&Card) -> bool) -> bool {
+        let kept = self.cards.iter().filter(|c| keep(c));
+        let (count, used) = kept.fold((0, 0), |(n, b), c| (n + 1, b + c.title.len() + c.prompt.len()));
+        count < MAX_CARDS && used + text_bytes <= MAX_TEXT_BYTES
+    }
+
+    /// Whether the next card, at its largest, might not fit without removing Done cards.
+    pub fn nearly_full(&self) -> bool {
+        !self.fits(MAX_CARD_TEXT_BYTES, |_| true)
     }
 
     pub fn delete(&mut self, id: u64) {
@@ -266,6 +298,44 @@ mod tests {
         assert_eq!(b.in_column(Column::Backlog)[0].id, id);
         b.delete(id);
         assert_ne!(b.add("again", ""), id);
+    }
+
+    #[test]
+    fn a_full_board_makes_room_by_removing_the_oldest_done_cards() {
+        let mut b = Board::default();
+        for i in 0..MAX_CARDS {
+            b.add(&format!("c{i}"), "p");
+        }
+        let (first, second) = (b.cards[0].id, b.cards[1].id);
+        b.move_to(second, Column::Done);
+        b.move_to(first, Column::Done);
+        assert!(b.nearly_full());
+        let added = b.add("new", "p");
+        assert_ne!(added, 0);
+        assert_eq!(b.cards.len(), MAX_CARDS);
+        assert!(b.cards.iter().all(|c| c.id != first), "the oldest Done card goes first");
+
+        b.move_to(second, Column::Backlog);
+        assert_eq!(b.add("more", "p"), 0, "only Done cards make room");
+        assert_eq!(b.cards.len(), MAX_CARDS);
+    }
+
+    #[test]
+    fn text_over_the_byte_cap_also_removes_done_cards() {
+        let mut b = Board::default();
+        let long = "x".repeat(MAX_CARD_TEXT_BYTES - 10);
+        let done = b.add("done", &long);
+        b.move_to(done, Column::Done);
+        while !b.nearly_full() {
+            b.add("big", &long);
+        }
+        let count = b.cards.len();
+        assert_ne!(b.add("big", &long), 0);
+        assert!(b.cards.iter().all(|c| c.id != done) && b.cards.len() == count);
+        let small = b.add("small", "p");
+        b.move_to(small, Column::Done);
+        assert_eq!(b.add("big", &long), 0);
+        assert!(b.cards.iter().any(|c| c.id == small), "a card that cannot fit removes nothing");
     }
 
     #[test]

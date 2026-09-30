@@ -62,6 +62,14 @@ fn column(board: &Board, col: Column, form: u64) -> Node {
             multiline: true,
         });
     }
+    if col == Column::Backlog && board.nearly_full() {
+        let text = if board.cards.iter().any(|c| c.column == Column::Done) {
+            "The board is nearly full: new cards remove the oldest Done cards."
+        } else {
+            "The board is full: delete cards or move them to Done to add more."
+        };
+        children.push(self::text("board-full".into(), text, Some(TextStyle::Caption), Some(Tone::Dim)));
+    }
     // The newest cards stay visible; older ones are summarised first.
     let hidden = cards.len().saturating_sub(MAX_CARDS_PER_COLUMN);
     if hidden > 0 {

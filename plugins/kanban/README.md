@@ -43,3 +43,10 @@ The board is saved per project in the plugin's storage and survives restarts.
 If Alas quits while a card is starting, the card can stay in Backlog even
 though its worktree and agent were created; starting it again makes a second
 worktree.
+
+The board holds at most 50 cards and 96,000 bytes of title and prompt text.
+Alas gives every plugin call a fixed fuel budget, and loading, saving and
+drawing the board costs fuel per card and per byte; at these caps the costliest
+call stays under half the budget. Past a cap, adding a card removes the oldest
+Done cards to make room. When removing every Done card would not be enough,
+the card is not added. Backlog says so once the board is nearly full.
