@@ -459,40 +459,41 @@ struct RepoSelectorModelTests {
         #expect(indices == [0, 1, 2])
     }
 
-    @Test func filterModeMatchesDetachedWorktreesByDirectoryName() {
+    private func worktreeIds(_ model: RepoSelectorModel, _ e: RepoSelectorEnvironment) -> [String] {
+        model.rows(environment: e).compactMap {
+            if case .worktree(let w, _, _) = $0 { return w.id } else { return nil }
+        }
+    }
+
+    @Test(arguments: [
+        ("flick", ["fix-flicker"]),                    // directory name tells detached worktrees apart
+        ("detached", ["fix-flicker", "scratch"]),      // the state still lists all of them
+    ])
+    func filterModeMatchesDetachedWorktrees(query: String, expected: [String]) {
         let model = RepoSelectorModel()
         let p1 = project("p1")
         let flicker = worktree("fix-flicker", projectId: "p1", branch: "(detached)")
         let scratch = worktree("scratch", projectId: "p1", branch: "(detached)")
-        let e = env(projects: [p1], worktrees: ["p1": [flicker, scratch]])
+        model.query = query
+        #expect(worktreeIds(model, env(projects: [p1], worktrees: ["p1": [flicker, scratch]])) == expected)
+    }
 
-        model.query = "flick"
-        let flickIds: [String] = model.rows(environment: e).compactMap {
-            if case .worktree(let w, _, _) = $0 { return w.id } else { return nil }
-        }
-        #expect(flickIds == ["fix-flicker"])
-
-        model.query = "detached"
-        let ids: [String] = model.rows(environment: e).compactMap {
-            if case .worktree(let w, _, _) = $0 { return w.id } else { return nil }
-        }
-        #expect(ids == ["fix-flicker", "scratch"])
-
-        model.query = "acme detached"
+    @Test func filterModeScopesDetachedTagSearchByProjectName() {
+        let model = RepoSelectorModel()
+        let p1 = project("p1")
         let acme = project("p2", name: "acme")
+        let flicker = worktree("fix-flicker", projectId: "p1", branch: "(detached)")
         let other = worktree("other", projectId: "p2", branch: "(detached)")
-        let scoped = env(projects: [p1, acme], worktrees: ["p1": [flicker], "p2": [other]])
-        let scopedIds: [String] = model.rows(environment: scoped).compactMap {
-            if case .worktree(let w, _, _) = $0 { return w.id } else { return nil }
-        }
-        #expect(scopedIds == ["other"])
+        model.query = "acme detached"
+        #expect(worktreeIds(model, env(projects: [p1, acme], worktrees: ["p1": [flicker], "p2": [other]])) == ["other"])
+    }
 
-        model.query = ""
-        let unordered = env(projects: [p1], worktrees: ["p1": [scratch, flicker]])
-        let emptyQueryIds: [String] = model.rows(environment: unordered).compactMap {
-            if case .worktree(let w, _, _) = $0 { return w.id } else { return nil }
-        }
-        #expect(emptyQueryIds == ["fix-flicker", "scratch"])
+    @Test func emptyQuerySortsDetachedWorktreesByDirectoryName() {
+        let model = RepoSelectorModel()
+        let p1 = project("p1")
+        let flicker = worktree("fix-flicker", projectId: "p1", branch: "(detached)")
+        let scratch = worktree("scratch", projectId: "p1", branch: "(detached)")
+        #expect(worktreeIds(model, env(projects: [p1], worktrees: ["p1": [scratch, flicker]])) == ["fix-flicker", "scratch"])
     }
 
     @Test func filterModePropagatesCurrentFlag() {
