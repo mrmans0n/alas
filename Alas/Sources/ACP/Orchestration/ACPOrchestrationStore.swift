@@ -131,14 +131,30 @@ final class ACPOrchestrationStore {
     /// permanently `.failed` with no parent notification and no recovery —
     /// a later call would correctly lose the claim, and startup
     /// reconciliation only reloads creating/starting records.
+    ///
+    /// `discardingHeldMessages` (a child whose model selection never took
+    /// effect) also deletes the child's inbox rows in the same transaction,
+    /// except ones another instance holds a live claim on; that instance
+    /// sees the failed phase (claims expire against `updatedAt`, the clock
+    /// `claimMessage` uses). Together with `enqueueUnlessTargetEnded`, which
+    /// checks the phase under the same write lock, no row can be accepted
+    /// for the child once this commits, and none accepted before survives.
     func claimFailedPhase(
         childSessionId: String,
         failureMessage: String,
         updatedAt: Int64,
-        outcome: ACPDelegatedMessage
+        outcome: ACPDelegatedMessage,
+        discardingHeldMessages: Bool = false
     ) throws -> Bool {
         try db.exec("BEGIN IMMEDIATE")
         do {
+            if discardingHeldMessages {
+                _ = try db.execChanges("""
+                DELETE FROM delegated_messages
+                WHERE target_session_id = ?
+                  AND (claim_token IS NULL OR claim_expires_at < ?)
+                """, bindings: [childSessionId, updatedAt])
+            }
             let changed = try db.execChanges("""
             UPDATE delegations
             SET phase = ?, failure_message = ?, updated_at = ?
@@ -200,6 +216,35 @@ final class ACPOrchestrationStore {
             message.createdAt,
             message.kind.rawValue,
         ])
+    }
+
+    /// Enqueues a message unless its target is a delegated child that has
+    /// already failed or closed, returning whether it was accepted. The phase
+    /// read and the insert share one write transaction, so an instance
+    /// failing the same child (`claimFailedPhase`) commits wholly before or
+    /// after it. A duplicate id counts as accepted, like `enqueue`.
+    func enqueueUnlessTargetEnded(_ message: ACPDelegatedMessage) throws -> Bool {
+        try db.exec("BEGIN IMMEDIATE")
+        do {
+            let ended = try db.query(
+                "SELECT 1 FROM delegations WHERE child_session_id = ? AND phase IN (?, ?) LIMIT 1",
+                bindings: [
+                    message.targetSessionId,
+                    ACPDelegationPhase.failed.rawValue,
+                    ACPDelegationPhase.closed.rawValue,
+                ]
+            )
+            guard ended.isEmpty else {
+                try db.exec("COMMIT")
+                return false
+            }
+            try enqueue(message)
+            try db.exec("COMMIT")
+            return true
+        } catch {
+            try? db.exec("ROLLBACK")
+            throw error
+        }
     }
 
     func pendingMessages(targetSessionId: String) throws -> [ACPDelegatedMessage] {

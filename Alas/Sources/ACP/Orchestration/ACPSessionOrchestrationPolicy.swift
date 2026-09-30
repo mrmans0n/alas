@@ -136,6 +136,15 @@ enum ACPSessionOrchestrationPolicy {
         return target.phase != .ready
     }
 
+    /// Whether a child's session must hold every prompt, the composer's
+    /// included, because its model selection is still being applied. Unlike
+    /// `defersInboxDelivery` this ends at `.failed`: the parent's prompt is
+    /// dropped then, and what a human types in the tab is theirs to send.
+    static func holdsPromptDispatch(target: ACPDelegationRecord?) -> Bool {
+        guard let target, target.modelSelection != nil else { return false }
+        return target.phase == .creatingWorktree || target.phase == .starting
+    }
+
     static func acceptsMessages(target: ACPDelegationRecord?) -> Bool {
         guard let target else { return true }
         return target.phase != .failed && target.phase != .closed

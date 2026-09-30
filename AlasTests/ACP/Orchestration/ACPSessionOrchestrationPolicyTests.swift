@@ -105,6 +105,20 @@ struct ACPSessionOrchestrationPolicyTests {
         #expect(ACPSessionOrchestrationPolicy.acceptsMessages(target: nil))
     }
 
+    @Test("a selected child holds prompt dispatch only until it is ready or failed", arguments: [
+        (ACPDelegationPhase.creatingWorktree, true), (.starting, true), (.ready, false), (.failed, false), (.closed, false),
+    ])
+    func selectedChildHoldsPromptDispatch(phase: ACPDelegationPhase, holds: Bool) {
+        var selected = child
+        selected.phase = phase
+        selected.modelSelection = ACPDelegatedModelSelection(model: "opus", reasoning: nil)
+        var unselected = child
+        unselected.phase = phase
+
+        #expect(ACPSessionOrchestrationPolicy.holdsPromptDispatch(target: selected) == holds)
+        #expect(!ACPSessionOrchestrationPolicy.holdsPromptDispatch(target: unselected))
+    }
+
     @Test("list visibility contains only self and direct relatives")
     func visibility() {
         let sibling = ACPDelegationRecord(

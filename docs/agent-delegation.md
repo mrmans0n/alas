@@ -117,6 +117,8 @@ Alas checks a selection twice:
    initial prompt is queued only after the agent acknowledges every change.
    Reasoning is checked after the model is set, because an agent can offer
    different levels per model (Claude offers no effort setting for `haiku`).
+   An agent that publishes the new model's levels only after acknowledging
+   the switch gets a few seconds to do so before the reasoning is rejected.
 
 If the live check or the agent rejects the selection, the child is marked
 `failed` with the reason, its prompt is never sent, and the parent receives
@@ -133,8 +135,12 @@ worktree, or interrupted by an app restart before its first prompt, applies
 it again before that prompt, or fails visibly if the agent no longer offers
 it. Messages sent to such a child with `session_send` while it starts are
 held until its first prompt is queued, so the task prompt always runs first
-and on the selected model. If the child fails instead, the held messages are
-discarded rather than delivered. After that the model is part of the
+and on the selected model. The same holds for the child's tab: a prompt typed
+there while the selection is being applied waits in the queue and runs after
+the task prompt, and a tab restored at launch cannot send anything before the
+selection is re-verified. If the child fails instead, the held messages are
+discarded rather than delivered, and a message sent after the failure is
+refused, even by another Alas instance sharing the same profile. After that the model is part of the
 child's session like any model picked in the composer: it is restored when the
 session is reopened, and the user can change it.
 

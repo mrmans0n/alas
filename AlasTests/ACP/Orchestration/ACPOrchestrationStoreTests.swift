@@ -456,4 +456,40 @@ struct ACPOrchestrationStoreTests {
         // The losing caller must not overwrite the recorded reason either.
         #expect(try store.delegation(childSessionId: "child")?.failureMessage == "boom")
     }
+
+    /// Two instances sharing one database: one fails a selected child while
+    /// the other queues a message for it. Either commit order must leave the
+    /// failed child with no inbox row, and a message sent after the failure
+    /// must be refused rather than reported as queued. A row another instance
+    /// is delivering under a live claim is left to it.
+    @Test("failing a selected child and queueing a message for it serialize across instances", arguments: [true, false])
+    func failedPhaseAndEnqueueSerialize(failFirst: Bool) throws {
+        let path = temporaryPath()
+        let failing = try ACPOrchestrationStore(path: path)
+        let sending = try ACPOrchestrationStore(path: path)
+        try failing.insert(newRecord())
+        try sending.enqueue(.init(
+            id: "claimed", sourceSessionId: "parent", targetSessionId: "child", prompt: "In flight.", createdAt: 690
+        ))
+        _ = try #require(try sending.claimMessage(id: "claimed", instanceId: "b", token: "t", now: 690, staleAfter: 60))
+        let message = ACPDelegatedMessage(
+            id: "late", sourceSessionId: "parent", targetSessionId: "child", prompt: "Also check the lexer.", createdAt: 700
+        )
+        func fail() throws {
+            #expect(try failing.claimFailedPhase(
+                childSessionId: "child", failureMessage: "Model opus is not offered.", updatedAt: 700,
+                outcome: failureOutcome(), discardingHeldMessages: true
+            ))
+        }
+
+        if failFirst {
+            try fail()
+            #expect(try sending.enqueueUnlessTargetEnded(message) == false)
+        } else {
+            #expect(try sending.enqueueUnlessTargetEnded(message))
+            try fail()
+        }
+
+        #expect(try sending.pendingMessages(targetSessionId: "child").map(\.id) == ["claimed"])
+    }
 }

@@ -2372,7 +2372,9 @@ extension ACPSessionRunner {
             })
             return
         }
-        if nativeForkBarrierActive {
+        // A native fork barrier, or a delegated child whose requested model
+        // is not acknowledged yet, holds every submit in the queue.
+        if nativeForkBarrierActive || session.holdsPromptsForDelegatedSelection {
             guard !blocks.isEmpty else {
                 onDispatchRegistered?()
                 Task { @MainActor in onPromptFinished?(false) }
@@ -2591,6 +2593,7 @@ extension ACPSessionRunner {
         guard !stopped else { return }
         guard holdsLeaseForWrite() else { return }
         guard !nativeForkBarrierActive,
+              !session.holdsPromptsForDelegatedSelection,
               !steerInProgress,
               session.agentState == .ready,
               session.pendingQueuePersistenceCount == 0,
@@ -2798,7 +2801,7 @@ extension ACPSessionRunner {
             return
         }
 
-        if nativeForkBarrierActive {
+        if nativeForkBarrierActive || session.holdsPromptsForDelegatedSelection {
             guard session.forceQueueItem(id: id) else { return }
             persistQueue()
             return
@@ -3344,7 +3347,7 @@ extension ACPSessionRunner {
         flushQueueOnCompletion: Bool = true,
         onCompleted: (@MainActor (_ delivered: Bool) -> Void)? = nil
     ) -> Bool {
-        guard !nativeForkBarrierActive else { return false }
+        guard !nativeForkBarrierActive, !session.holdsPromptsForDelegatedSelection else { return false }
         turnPublicationGeneration += 1
         pendingCompletedOutputBoundary?.successfulTurn = nil
         flushPendingIncomingUpdates()

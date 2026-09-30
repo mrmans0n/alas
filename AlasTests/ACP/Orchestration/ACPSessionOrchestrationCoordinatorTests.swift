@@ -504,17 +504,25 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
     private func makeModelSelectionFixture(
         client: ACPMockClient,
-        launchModels: [ACPAgentModelCatalog.Model]? = nil
+        launchModels: [ACPAgentModelCatalog.Model]? = nil,
+        reasoningRefreshTimeout: Duration = .seconds(30)
     ) throws -> (coordinator: ACPSessionOrchestrationCoordinator, persistence: ACPOrchestrationPersistence, manager: ACPSessionManager) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("acp-model-selection-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let persistence = ACPOrchestrationPersistence(path: root.appendingPathComponent("delegations.sqlite").path)
+        // Wired as AppState wires it.
         let manager = ACPSessionManager(
             worktreeId: "worktree",
             worktreePath: root.path,
             store: try ACPSessionStore(path: root.appendingPathComponent("sessions.sqlite").path),
             setupEvaluator: { _ in .ready },
-            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+            connectionFactory: { _, _, _ in ACPConnection(client: client) },
+            delegatedSelectionHoldResolver: { id in
+                ACPSessionOrchestrationPolicy.holdsPromptDispatch(
+                    target: try? await persistence.delegation(childSessionId: id)
+                )
+            },
+            delegatedReasoningRefreshTimeout: reasoningRefreshTimeout
         )
         _ = manager.createSession(id: "parent", agentId: "claude", autoRunDefault: false)
         let worktree = Worktree(
@@ -528,9 +536,9 @@ struct ACPSessionOrchestrationCoordinatorTests {
             configuredAgents: { [claude] }, availableAgents: { _, _ in [claude] },
             launchModels: { _, _ in launchModels },
             sessionLocation: { sessionId in
-                sessionId == "parent"
-                    ? .init(origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"), manager: manager)
-                    : nil
+                manager.liveSession(for: sessionId) == nil
+                    ? nil
+                    : .init(origin: .init(sessionId: sessionId, projectId: "project", worktreeId: "worktree"), manager: manager)
             },
             manager: { _ in manager }, newWorktreeDestination: { _, _ in nil },
             createWorktree: { _, _, _ in .failure(.init(message: "unused")) }, rememberParent: { _, _ in },
@@ -539,8 +547,10 @@ struct ACPSessionOrchestrationCoordinatorTests {
         return (coordinator, persistence, manager)
     }
 
-    @Test("a requested model is acknowledged before the first prompt; a refused one fails the child without prompting", arguments: [true, false])
-    func modelSelectionPrecedesFirstPrompt(agentAcceptsModel: Bool) async throws {
+    /// A Claude-shaped agent: models through `session/set_model`, reasoning
+    /// through the `effort` config option. The child connects first, so it
+    /// owns `remote-1`.
+    private func makeSelectionClient(configOptions: [ACPConfigOption] = []) -> ACPMockClient {
         let client = ACPMockClient()
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1, agentCapabilities: nil, authMethods: []))
@@ -551,16 +561,63 @@ struct ACPSessionOrchestrationCoordinatorTests {
             return try JSONEncoder().encode(ACPSessionNewResult(
                 sessionId: "remote-\(remoteSessions)",
                 availableModels: [.init(id: "default", name: "Default"), .init(id: "opus", name: "Opus")],
-                availableModes: [], currentModel: "default", currentMode: nil, promptSuggestions: []
+                availableModes: [], currentModel: "default", currentMode: nil, promptSuggestions: [],
+                configOptions: configOptions
             ))
         }
+        client.script(method: "session/set_model") { _ in Data("{}".utf8) }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        client.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        return client
+    }
+
+    /// The child's selection changes and prompts, in the order it sent them.
+    private func childRequests(_ client: ACPMockClient) -> [String] {
+        client.sent.compactMap { request -> String? in
+            switch request.params {
+            case let params as ACPSessionSetModelParams where params.sessionId == "remote-1":
+                return "set_model:\(params.modelId)"
+            case let params as ACPSessionSetConfigOptionParams where params.sessionId == "remote-1":
+                return "set_config_option:\(params.configId)=\(params.value)"
+            case let params as ACPSessionPromptParams where params.sessionId == "remote-1":
+                let text = params.prompt.compactMap { block -> String? in
+                    guard case .text(let text) = block else { return nil }
+                    return text
+                }.joined()
+                return "prompt:" + (text.components(separatedBy: "\n").last ?? text)
+            default:
+                return nil
+            }
+        }
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while !condition() {
+            try #require(ContinuousClock.now < deadline)
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private func selectedChildRecord(phase: ACPDelegationPhase = .starting) -> ACPDelegationRecord {
+        .init(
+            childSessionId: "child", parentSessionId: "parent", projectId: "project",
+            parentWorktreeId: "worktree", childWorktreeId: "worktree", agentId: "claude",
+            worktreeRequest: .current(worktreeId: "worktree"), pendingInitialPrompt: "Review the parser.",
+            phase: phase, failureMessage: nil, createdAt: 1, updatedAt: 1,
+            modelSelection: ACPDelegatedModelSelection(model: "opus", reasoning: nil)
+        )
+    }
+
+    @Test("a requested model is acknowledged before the first prompt; a refused one fails the child without prompting", arguments: [true, false])
+    func modelSelectionPrecedesFirstPrompt(agentAcceptsModel: Bool) async throws {
+        let client = makeSelectionClient()
         client.script(method: "session/set_model") { _ in
             guard agentAcceptsModel else {
                 throw JSONRPCError(code: -32602, message: "Unknown model", data: nil)
             }
             return Data("{}".utf8)
         }
-        client.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         let fixture = try makeModelSelectionFixture(client: client)
         defer { fixture.manager.shutdownBackgroundTasks() }
 
@@ -575,26 +632,9 @@ struct ACPSessionOrchestrationCoordinatorTests {
         }
         #expect(try await fixture.persistence.delegation(childSessionId: "child")?.modelSelection?.model == "opus")
 
-        // The child is the first session to connect, so it owns `remote-1`.
-        func childRequests() -> [String] {
-            client.sent.compactMap { request -> String? in
-                switch request.params {
-                case let params as ACPSessionSetModelParams where params.sessionId == "remote-1":
-                    return "set_model:\(params.modelId)"
-                case let params as ACPSessionPromptParams where params.sessionId == "remote-1":
-                    return "prompt"
-                default:
-                    return nil
-                }
-            }
-        }
         if agentAcceptsModel {
-            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-            while !childRequests().contains("prompt") {
-                try #require(ContinuousClock.now < deadline)
-                try await Task.sleep(for: .milliseconds(10))
-            }
-            #expect(childRequests() == ["set_model:opus", "prompt"])
+            try await waitUntil { childRequests(client).count == 2 }
+            #expect(childRequests(client) == ["set_model:opus", "prompt:Review the parser."])
             #expect(fixture.manager.liveSession(for: "child")?.currentModel == "opus")
         } else {
             let record = try await eventuallyLoadDelegation(
@@ -603,7 +643,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
             #expect(record.phase == .failed)
             #expect(record.failureMessage?.contains("did not apply model opus") == true)
             #expect(record.pendingInitialPrompt == "Review the parser.")
-            #expect(childRequests() == ["set_model:opus"])
+            #expect(childRequests(client) == ["set_model:opus"])
             #expect(fixture.manager.liveSession(for: "child")?.queue.isEmpty == true)
         }
     }
@@ -627,17 +667,106 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(fixture.manager.liveSession(for: "child") == nil)
     }
 
+    @Test("a prompt typed in a selected child's tab waits for the model, and runs after the initial prompt")
+    func composerPromptWaitsForModelSelection() async throws {
+        let client = makeSelectionClient()
+        let setModel = GenerationGate()
+        client.scriptAsync(method: "session/set_model") { _ in
+            await setModel.wait()
+            return Data("{}".utf8)
+        }
+        let fixture = try makeModelSelectionFixture(client: client)
+        defer { fixture.manager.shutdownBackgroundTasks() }
+
+        _ = await fixture.coordinator.create(
+            origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
+            request: .init(prompt: "Review the parser.", agentId: nil, worktree: .current,
+                           modelSelection: ACPDelegatedModelSelection(model: "opus", reasoning: nil))
+        )
+        await setModel.waitUntilStarted()
+        let child = try #require(fixture.manager.liveSession(for: "child"))
+        #expect(child.agentState == .ready)
+        try #require(fixture.manager.runners["child"]).send(text: "Also check the lexer.", attachments: [])
+
+        #expect(child.queue.count == 1)
+        await setModel.release()
+        try await waitUntil { childRequests(client).count == 3 }
+        #expect(childRequests(client) == [
+            "set_model:opus", "prompt:Review the parser.", "prompt:Also check the lexer.",
+        ])
+    }
+
+    /// Startup recovery of a child that crashed after queueing its initial
+    /// prompt, when the child's tab was also restored and attached first.
+    @Test("a restored tab attaching a selected child before recovery cannot run its queued initial prompt")
+    func restoredAttachHoldsInitialPromptForRecovery() async throws {
+        let client = makeSelectionClient()
+        let fixture = try makeModelSelectionFixture(client: client)
+        defer { fixture.manager.shutdownBackgroundTasks() }
+        let record = selectedChildRecord()
+        try await fixture.persistence.insert(record)
+        _ = fixture.manager.createSession(id: "child", agentId: "claude")
+        let initial = fixture.coordinator.initialPromptSource(for: record)
+        #expect(await fixture.manager.enqueueDelegatedPrompt(text: "Review the parser.", source: initial, into: "child"))
+
+        // The tab's attach wins the race with recovery.
+        await fixture.manager.attach(to: "child", freshlyCreated: true)
+        #expect(fixture.manager.liveSession(for: "child")?.agentState == .ready)
+        #expect(childRequests(client).isEmpty)
+
+        // Recovery still takes the prompt back and reapplies the selection.
+        let withheld = fixture.manager.withholdQueuedDelegatedPrompt(messageId: initial.messageId, in: "child")
+        #expect(withheld == "Review the parser.")
+        let selection = try #require(record.modelSelection)
+        #expect(await fixture.coordinator.queueInitialPromptAfterModelSelection(
+            selection, record: record, prompt: "Review the parser.", manager: fixture.manager
+        ))
+        #expect(childRequests(client) == ["set_model:opus"])
+        fixture.manager.releaseDelegatedSelectionHold("child")
+        try await waitUntil { childRequests(client).count == 2 }
+        #expect(childRequests(client) == ["set_model:opus", "prompt:Review the parser."])
+    }
+
+    @Test("reasoning published only after the model switch is applied; one never published fails the child", arguments: [true, false])
+    func reasoningWaitsForPostSwitchOptions(agentPublishesReasoning: Bool) async throws {
+        let client = makeSelectionClient()
+        let fixture = try makeModelSelectionFixture(
+            client: client,
+            reasoningRefreshTimeout: agentPublishesReasoning ? .seconds(30) : .milliseconds(100)
+        )
+        defer { fixture.manager.shutdownBackgroundTasks() }
+
+        _ = await fixture.coordinator.create(
+            origin: .init(sessionId: "parent", projectId: "project", worktreeId: "worktree"),
+            request: .init(prompt: "Review the parser.", agentId: nil, worktree: .current,
+                           modelSelection: ACPDelegatedModelSelection(model: "opus", reasoning: "high"))
+        )
+        // The `session/set_model` reply is handled, and reasoning checked
+        // against the default model's (absent) options, before the update.
+        try await waitUntil { fixture.manager.liveSession(for: "child")?.currentModel == "opus" }
+        if agentPublishesReasoning {
+            client.emit(.init(sessionId: "remote-1", update: .sessionConfigOptionsUpdate([ACPConfigOption(
+                id: "effort", name: "Effort", currentValue: "low",
+                options: [.init(id: "low", name: "Low"), .init(id: "high", name: "High")]
+            )])))
+            try await waitUntil { childRequests(client).count == 3 }
+            #expect(childRequests(client) == [
+                "set_model:opus", "set_config_option:effort=\(ACPConfigValue.string("high"))", "prompt:Review the parser.",
+            ])
+        } else {
+            let record = try await eventuallyLoadDelegation(
+                persistence: fixture.persistence, childSessionId: "child", matching: { $0.phase == .failed }
+            )
+            #expect(record.failureMessage == ACPDelegatedModelSelectionError.reasoningUnsupported(agentId: "claude").errorDescription)
+            #expect(childRequests(client) == ["set_model:opus"])
+        }
+    }
+
     @Test("messages held for a child whose model selection failed are discarded, never delivered")
     func failedSelectedChildDropsHeldMessages() async throws {
         let fixture = try makeModelSelectionFixture(client: ACPMockClient())
         defer { fixture.manager.shutdownBackgroundTasks() }
-        try await fixture.persistence.insert(.init(
-            childSessionId: "child", parentSessionId: "parent", projectId: "project",
-            parentWorktreeId: "worktree", childWorktreeId: "worktree", agentId: "claude",
-            worktreeRequest: .current(worktreeId: "worktree"), pendingInitialPrompt: "Review the parser.",
-            phase: .starting, failureMessage: nil, createdAt: 1, updatedAt: 1,
-            modelSelection: ACPDelegatedModelSelection(model: "opus", reasoning: nil)
-        ))
+        try await fixture.persistence.insert(selectedChildRecord())
         try await fixture.persistence.enqueue(.init(
             id: "follow-up", sourceSessionId: "parent", targetSessionId: "child",
             prompt: "Also check the lexer.", createdAt: 2

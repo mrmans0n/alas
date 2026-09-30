@@ -1817,6 +1817,10 @@ final class AppState {
             // pending copy was already cleared.
             var promptAwaitingSelection: String?
             if record.modelSelection != nil {
+                // A restored tab may already be attaching this session; its
+                // attach arms the same hold, and with it held the prompt can
+                // be withheld even from an attached runner.
+                manager.holdPromptsForDelegatedSelection(record.childSessionId)
                 let withheld = manager.withholdQueuedDelegatedPrompt(
                     messageId: acpOrchestration.initialPromptSource(for: record).messageId,
                     in: record.childSessionId
@@ -1875,6 +1879,9 @@ final class AppState {
                 failureMessage: nil,
                 updatedAt: Int64(Date().timeIntervalSince1970)
             )
+            if record.modelSelection != nil {
+                manager.releaseDelegatedSelectionHold(record.childSessionId)
+            }
             await deliverPendingDelegatedMessages(to: record.childSessionId, manager: manager)
         }
         await attachDelegatedChildrenWithPendingTurns()
@@ -12439,6 +12446,12 @@ final class AppState {
             isolatedBrokerServiceFactory: {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
                 return try LocalACPBrokerService(resourceURL: resourceURL)
+            },
+            delegatedSelectionHoldResolver: { [weak self] sessionId in
+                guard let self else { return false }
+                return ACPSessionOrchestrationPolicy.holdsPromptDispatch(
+                    target: try? await self.acpOrchestrationPersistence.delegation(childSessionId: sessionId)
+                )
             },
             mcpProjectContextProvider: { [weak self] in
                 guard let project = self?.projects.first(where: { $0.id == worktree.projectId }) else {
