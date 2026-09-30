@@ -854,6 +854,15 @@ final class ACPSessionRunner {
     /// `persistSessionRow` gates the config-options ack on its own write.
     /// A failure leaves the cursor where it is, so the broker replays the
     /// update (and its acknowledgement) on the next attach.
+    ///
+    /// An EMPTY catalog is intentionally not persisted (a retracted list
+    /// never erases the stored one), but the update itself was delivered and
+    /// applied to the live session — leaving it unacknowledged would starve
+    /// every later durable acknowledgement (`ack(cursor:)` defers anything
+    /// behind an unresolved cursor) and replay the same empty update on
+    /// every reconnect. It acknowledges through
+    /// `acknowledgeAfterQueuedPersistence`, whose empty write still
+    /// re-validates the lease fence behind this cursor.
     private func persistPromptSuggestionsAndAcknowledge(
         _ suggestions: [ACPPromptSuggestion],
         acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
@@ -862,9 +871,8 @@ final class ACPSessionRunner {
             persistPromptSuggestions(suggestions)
             return
         }
-        guard !suggestions.isEmpty else {
-            // Nothing to store; don't let the cursor advance past an update
-            // whose content was never persisted.
+        if suggestions.isEmpty {
+            acknowledgeAfterQueuedPersistence(acknowledgement)
             return
         }
         guard holdsLeaseForWrite() else { return }
