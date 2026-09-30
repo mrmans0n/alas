@@ -93,9 +93,9 @@ enum ACPPiSubagentExtensions {
         inheritedEnvironment: [String: String],
         wrapper: URL
     ) throws -> [String: String] {
-        let existing = userPiCommand(extraEnv[piCommandKey] ?? inheritedEnvironment[piCommandKey])
-        let target = existing ?? "pi"
         let path = extraEnv["PATH"] ?? ACPProcessEnvironment.augmented(inheritedEnvironment)["PATH"] ?? ""
+        let existing = userPiCommand(extraEnv[piCommandKey] ?? inheritedEnvironment[piCommandKey], path: path)
+        let target = existing ?? "pi"
         guard isRunnable(target, path: path) else {
             throw ACPNativeDelegationError.piCommandUnavailable(command: target, isUserCommand: existing != nil)
         }
@@ -106,12 +106,24 @@ enum ACPPiSubagentExtensions {
     /// an Alas wrapper (this one, a symlink to it, or another Alas
     /// profile's copy carried in through the environment). Chaining to an
     /// Alas wrapper would make it run itself forever, since every copy reads
-    /// the same `ALAS_PI_ACP_PI_TARGET`.
-    static func userPiCommand(_ value: String?) -> String? {
+    /// the same `ALAS_PI_ACP_PI_TARGET`. A bare name is resolved through
+    /// `path` first, as the wrapper's `exec` would.
+    static func userPiCommand(_ value: String?, path: String) -> String? {
         guard let value, !value.isEmpty else { return nil }
-        guard value.contains("/") else { return value }
-        let data = FileManager.default.contents(atPath: value) ?? Data()
-        return String(decoding: data.prefix(4096), as: UTF8.self).contains(wrapperMarker) ? nil : value
+        guard let file = executablePath(value, path: path) else { return value }
+        return startsWithWrapperMarker(file) ? nil : value
+    }
+
+    /// Reads at most the first 4 KiB, and only from a regular file, so a
+    /// large binary or a FIFO never costs more than that.
+    private static func startsWithWrapperMarker(_ file: String) -> Bool {
+        var info = stat()
+        guard stat(file, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              let handle = FileHandle(forReadingAtPath: file)
+        else { return false }
+        defer { try? handle.close() }
+        let head = (try? handle.read(upToCount: 4096)) ?? Data()
+        return String(decoding: head, as: UTF8.self).contains(wrapperMarker)
     }
 
     /// The line that identifies an Alas wrapper, whichever profile wrote it.
@@ -121,12 +133,18 @@ enum ACPPiSubagentExtensions {
     /// resolve it: a path as is, a bare name through `path`. A relative path
     /// depends on the session directory, so it is left to the wrapper.
     static func isRunnable(_ command: String, path: String) -> Bool {
+        if command.contains("/"), !command.hasPrefix("/") { return true }
+        return executablePath(command, path: path) != nil
+    }
+
+    /// The file `exec` would run for `command`: a path as is, a bare name
+    /// through `path`.
+    static func executablePath(_ command: String, path: String) -> String? {
         let fileManager = FileManager.default
-        if command.hasPrefix("/") { return fileManager.isExecutableFile(atPath: command) }
-        if command.contains("/") { return true }
-        return path.split(separator: ":").contains { directory in
-            fileManager.isExecutableFile(atPath: "\(directory)/\(command)")
-        }
+        if command.contains("/") { return fileManager.isExecutableFile(atPath: command) ? command : nil }
+        return path.split(separator: ":").lazy
+            .map { "\($0)/\(command)" }
+            .first { fileManager.isExecutableFile(atPath: $0) }
     }
 
     // MARK: - Inventory
@@ -233,7 +251,8 @@ enum ACPPiSubagentExtensions {
         for project in projects {
             scan(base: project.root.appendingPathComponent(".pi", isDirectory: true), label: project.name, isGlobal: false)
         }
-        if let customPiCommand = userPiCommand(customPiCommand) {
+        if let customPiCommand = userPiCommand(
+            customPiCommand, path: ACPProcessEnvironment.augmented()["PATH"] ?? "") {
             note("PI_ACP_PI_COMMAND \(customPiCommand)", into: &unrecognized)
         }
         if !unrecognized.isEmpty { return .unrecognized(covered: covered, unrecognized: unrecognized) }

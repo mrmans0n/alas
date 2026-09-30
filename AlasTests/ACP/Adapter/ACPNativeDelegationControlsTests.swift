@@ -214,6 +214,7 @@ struct ACPNativeDelegationControlsTests {
             // Alas profile's copy, must not loop.
             ("WRAPPER", nil, "pi"),
             (nil, "OTHER-PROFILE-WRAPPER", "pi"),
+            ("other-profile.sh", nil, "pi"),
         ] as [(String?, String?, String)]
     )
     func piLaunchWrapper(agentValue: String?, inheritedValue: String?, expectedTarget: String) throws {
@@ -223,10 +224,12 @@ struct ACPNativeDelegationControlsTests {
         func resolve(_ value: String?) -> String? {
             guard let value else { return nil }
             if value == "WRAPPER" { return wrapper.path }
-            if value == "OTHER-PROFILE-WRAPPER" {
+            if value == "OTHER-PROFILE-WRAPPER" || value == "other-profile.sh" {
+                // Another profile's wrapper, by path or as a bare name on PATH.
                 let other = directory.appendingPathComponent("other-profile.sh")
                 try? Data(ACPPiSubagentExtensions.wrapperContents.utf8).write(to: other)
-                return other.path
+                try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: other.path)
+                return value == "other-profile.sh" ? value : other.path
             }
             // Every user command must exist for the launch to pass.
             if value.hasPrefix("/") {
