@@ -3906,7 +3906,7 @@ final class AppState {
             let qualifiedWorktreeID = WorkspaceReviewSessionIdentity.worktreeID(
                 projectID: member.projectID,
                 executionLocation: checkout.executionLocation,
-                repositoryPath: member.worktreePath
+                repositoryPath: checkout.inAppWorktreePath(member.worktreePath)
             )
             stacks[qualifiedWorktreeID] = stack
         }

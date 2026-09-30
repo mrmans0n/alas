@@ -34,12 +34,18 @@ struct WorkspaceMemberReviewRollupTests {
         #expect(awaitingMutationCount(reviews, gg) == 0)
     }
 
-    @Test func sessionContextRefreshKeepsReviewActionsExactMemberOwned() throws {
+    /// An ssh member's real path must resolve to the in-app (virtual) worktree
+    /// its reviews are recorded under and its review tabs open in.
+    @Test(arguments: [
+        (ExecutionLocation.local, "/checkouts/release/app"),
+        (ExecutionLocation.ssh("builder.example"), "/.alas-remote/builder.example/checkouts/release/app"),
+    ])
+    func sessionContextRefreshKeepsReviewActionsExactMemberOwned(location: ExecutionLocation, inAppPath: String) throws {
         let memberID = uuid(1)
-        let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .local, branch: "shared-branch", rootPath: "/checkouts/release", members: [
+        let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: location, branch: "shared-branch", rootPath: "/checkouts/release", members: [
             Self.member(id: memberID, projectID: "app", name: "App", worktreeID: "/checkouts/release/app"),
         ])
-        let record = Self.record(id: "branch-review", worktreeID: "/checkouts/release/app", status: .active, updatedAt: 1)
+        let record = Self.record(id: "branch-review", worktreeID: inAppPath, executionLocation: location, status: .active, updatedAt: 1)
         let rollup = try MemberReviewRollupBuilder(
             reviews: InMemoryWorkspaceReviewSessionReader(records: [record]),
             gg: InMemoryWorkspaceGGStackReader(stacks: [:])
@@ -47,7 +53,7 @@ struct WorkspaceMemberReviewRollupTests {
 
         let action = try #require(rollup.members.first?.reviewActions.first)
         #expect(action.memberID == memberID)
-        #expect(action.worktreeID == "/checkouts/release/app")
+        #expect(action.worktreeID == inAppPath)
         #expect(action.reviewSessionID == record.id)
         #expect(action.sharedCheckoutBranch == nil)
     }
@@ -114,8 +120,8 @@ struct WorkspaceMemberReviewRollupTests {
             Self.member(id: uuid(1), projectID: "remote-project", name: "Remote", worktreeID: path),
         ])
         let reviews = InMemoryWorkspaceReviewSessionReader(records: [
-            Self.record(id: "builder-review", projectID: "remote-project", worktreeID: path, executionLocation: .ssh("builder.example"), status: .active, updatedAt: 2),
-            Self.record(id: "other-review", projectID: "remote-project", worktreeID: path, executionLocation: .ssh("other.example"), status: .active, updatedAt: 1),
+            Self.record(id: "builder-review", projectID: "remote-project", worktreeID: RemotePath.virtual(host: "builder.example", realPath: path), executionLocation: .ssh("builder.example"), status: .active, updatedAt: 2),
+            Self.record(id: "other-review", projectID: "remote-project", worktreeID: RemotePath.virtual(host: "other.example", realPath: path), executionLocation: .ssh("other.example"), status: .active, updatedAt: 1),
         ])
 
         let rollup = try MemberReviewRollupBuilder(reviews: reviews, gg: InMemoryWorkspaceGGStackReader(stacks: [:])).build(for: checkout)
@@ -131,12 +137,12 @@ struct WorkspaceMemberReviewRollupTests {
         let builderKey = WorkspaceReviewSessionIdentity.worktreeID(
             projectID: "remote-project",
             executionLocation: .ssh("builder.example"),
-            repositoryPath: path
+            repositoryPath: RemotePath.virtual(host: "builder.example", realPath: path)
         )
         let otherHostKey = WorkspaceReviewSessionIdentity.worktreeID(
             projectID: "remote-project",
             executionLocation: .ssh("other.example"),
-            repositoryPath: path
+            repositoryPath: RemotePath.virtual(host: "other.example", realPath: path)
         )
         let rollup = try MemberReviewRollupBuilder(
             reviews: InMemoryWorkspaceReviewSessionReader(records: []),
@@ -158,7 +164,7 @@ struct WorkspaceMemberReviewRollupTests {
         let rollup = try MemberReviewRollupBuilder(
             reviews: InMemoryWorkspaceReviewSessionReader(records: []),
             gg: WorkspaceCachedGGStackReader(stacksByWorktreeID: [
-                path: Self.stack(name: "legacy-raw")
+                RemotePath.virtual(host: "builder.example", realPath: path): Self.stack(name: "legacy-raw")
             ])
         ).build(for: checkout)
 
@@ -170,9 +176,10 @@ struct WorkspaceMemberReviewRollupTests {
         let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .ssh("builder.example"), branch: "shared-branch", rootPath: "/srv/checkouts/release", members: [
             Self.member(id: uuid(1), projectID: "remote-project", name: "Remote", worktreeID: path),
         ])
-        let qualified = Self.record(id: "qualified-review", projectID: "remote-project", worktreeID: path, executionLocation: .ssh("builder.example"), status: .active, updatedAt: 2)
-        let legacy = Self.rawRecord(id: "legacy-review", worktreeID: path, status: .active, updatedAt: 1)
-        let wrongPath = Self.rawRecord(id: "wrong-path", worktreeID: path, repositoryPath: "/srv/other", status: .active, updatedAt: 3)
+        let inAppPath = RemotePath.virtual(host: "builder.example", realPath: path)
+        let qualified = Self.record(id: "qualified-review", projectID: "remote-project", worktreeID: inAppPath, executionLocation: .ssh("builder.example"), status: .active, updatedAt: 2)
+        let legacy = Self.rawRecord(id: "legacy-review", worktreeID: inAppPath, status: .active, updatedAt: 1)
+        let wrongPath = Self.rawRecord(id: "wrong-path", worktreeID: inAppPath, repositoryPath: "/srv/other", status: .active, updatedAt: 3)
         let reviews = InMemoryWorkspaceReviewSessionReader(records: [qualified, legacy, wrongPath])
 
         let rollup = try MemberReviewRollupBuilder(reviews: reviews, gg: InMemoryWorkspaceGGStackReader(stacks: [:])).build(for: checkout)
@@ -269,10 +276,10 @@ private struct QualifiedWorkspaceReviewSessionReader: WorkspaceReviewSessionRead
         executionLocation: ExecutionLocation,
         repositoryPath: String
     ) throws -> [ReviewSessionRecord] {
-        guard worktreeID == "/srv/checkouts/release/remote",
+        guard worktreeID == "/.alas-remote/builder.example/srv/checkouts/release/remote",
               projectID == "remote-project",
               executionLocation == .ssh("builder.example"),
-              repositoryPath == "/srv/checkouts/release/remote" else {
+              repositoryPath == "/.alas-remote/builder.example/srv/checkouts/release/remote" else {
             return []
         }
         return [record]
@@ -287,10 +294,10 @@ private struct QualifiedWorkspaceGGStackReader: WorkspaceGGStackReading {
     }
 
     func stack(worktreeID: String, projectID: String, executionLocation: ExecutionLocation, repositoryPath: String) throws -> GGStack? {
-        guard worktreeID == "/srv/checkouts/release/remote",
+        guard worktreeID == "/.alas-remote/builder.example/srv/checkouts/release/remote",
               projectID == "remote-project",
               executionLocation == .ssh("builder.example"),
-              repositoryPath == "/srv/checkouts/release/remote" else {
+              repositoryPath == "/.alas-remote/builder.example/srv/checkouts/release/remote" else {
             return nil
         }
         return stack
