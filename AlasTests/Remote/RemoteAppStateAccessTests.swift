@@ -1198,6 +1198,48 @@ struct RemoteAppStateAccessTests {
         #expect(response == .error("A worktree already exists at this path."))
     }
 
+    /// Startup recovery finds an interrupted delegated create by its recorded
+    /// destination, so the prepared one (remote home swapped, virtual) must be
+    /// recorded before anything is created.
+    @Test func delegatedWorktreeRecordsThePreparedDestinationBeforeCreating() async throws {
+        let project = ProjectConfig(
+            id: "project-remote-delegated",
+            name: "Remote Delegated",
+            path: RemotePath.virtual(host: "remote.test", realPath: "/srv/remote-delegated"),
+            color: "blue",
+            addedAt: Date(),
+            host: "remote.test"
+        )
+        let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        state.config.worktrees.rootPath = "/Users/local/.alas/worktrees"
+        state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
+        let prepared = URL(fileURLWithPath: RemotePath.virtual(
+            host: "remote.test",
+            realPath: "/home/remote/.alas/worktrees/Remote Delegated-feature-child"
+        ))
+        state.remoteWorktreeDestinationPreparer = { _, _ in prepared }
+        state.remoteWorktreeCommandRunner = { _, _, _ in ProcessResult(exitCode: 1, stdout: "", stderr: "") }
+        var recorded: URL?
+
+        let result = await state.createDelegatedWorktree(
+            projectId: project.id,
+            branch: "feature/child",
+            base: "main",
+            recordDestination: { destination in
+                recorded = destination
+                throw CocoaError(.fileWriteUnknown)
+            }
+        )
+
+        #expect(recorded == prepared)
+        guard case .failure(let error) = result else {
+            Issue.record("expected the create to stop when the destination cannot be recorded")
+            return
+        }
+        #expect(error.message == "Could not record the worktree destination.")
+        #expect(state.projectsManager.visibleWorktrees(projectId: project.id).isEmpty)
+    }
+
     @Test func remoteCreateWorktreeSessionPreservesWorktreeWhenSessionCreationFails() async throws {
         let repository = try await makeRemoteBranchesRepository()
         let worktreeRoot = FileManager.default.temporaryDirectory

@@ -106,6 +106,18 @@ final class ACPOrchestrationStore {
         """, bindings: [worktreeId, phase.rawValue, updatedAt, childSessionId])
     }
 
+    func updateWorktreeRequest(
+        childSessionId: String,
+        request: ACPDelegatedWorktreeRequest,
+        updatedAt: Int64
+    ) throws {
+        try db.exec("""
+        UPDATE delegations
+        SET worktree_request = ?, updated_at = ?
+        WHERE child_session_id = ?
+        """, bindings: [try encoder.encode(request), updatedAt, childSessionId])
+    }
+
     func updatePhase(
         childSessionId: String,
         phase: ACPDelegationPhase,

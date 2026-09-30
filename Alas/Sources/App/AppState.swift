@@ -4732,11 +4732,15 @@ final class AppState {
     }
 
     /// Creates a worktree for delegated ACP work without changing the visible
-    /// project/worktree selection.
-    private func createDelegatedWorktree(
+    /// project/worktree selection. The prepared destination (remote home and
+    /// virtual path applied) is recorded through `recordDestination` before
+    /// anything is created, so startup recovery can find a checkout created
+    /// just before the app stopped.
+    func createDelegatedWorktree(
         projectId: String,
         branch: String,
-        base: String?
+        base: String?,
+        recordDestination: @MainActor (URL) async throws -> Void
     ) async -> Result<Worktree, ACPSessionOrchestrationCoordinator.WorktreeCreationError> {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             return .failure(.init(message: "The project is no longer available."))
@@ -4754,6 +4758,11 @@ final class AppState {
             destination = prepared.destination
         } catch {
             return .failure(.init(message: "Could not check the worktree destination: \(error.localizedDescription)"))
+        }
+        do {
+            try await recordDestination(destination)
+        } catch {
+            return .failure(.init(message: "Could not record the worktree destination."))
         }
         let selectedBase: String
         if let base {
@@ -6998,11 +7007,16 @@ final class AppState {
                         projectPath: project.path
                     )
                 },
-                createWorktree: { [weak self] projectId, branch, base in
+                createWorktree: { [weak self] projectId, branch, base, recordDestination in
                     guard let self else {
                         return .failure(.init(message: "Alas is not available."))
                     }
-                    return await self.createDelegatedWorktree(projectId: projectId, branch: branch, base: base)
+                    return await self.createDelegatedWorktree(
+                        projectId: projectId,
+                        branch: branch,
+                        base: base,
+                        recordDestination: recordDestination
+                    )
                 },
                 rememberParent: { [weak self] childID, parentID in
                     self?.rememberDelegatedSessionParent(childID: childID, parentID: parentID)
