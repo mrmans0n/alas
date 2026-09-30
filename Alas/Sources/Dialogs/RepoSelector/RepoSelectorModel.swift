@@ -97,7 +97,7 @@ final class RepoSelectorModel {
             let rest = worktrees
                 .filter { !recentSet.contains($0.id) }
                 .sorted { a, b in
-                    a.branch.localizedCaseInsensitiveCompare(b.branch) == .orderedAscending
+                    a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
                 }
             for w in rest {
                 rows.append(.worktree(w, indices: [], isCurrent: w.id == currentId))

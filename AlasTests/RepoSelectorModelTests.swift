@@ -486,6 +486,13 @@ struct RepoSelectorModelTests {
             if case .worktree(let w, _, _) = $0 { return w.id } else { return nil }
         }
         #expect(scopedIds == ["other"])
+
+        model.query = ""
+        let unordered = env(projects: [p1], worktrees: ["p1": [scratch, flicker]])
+        let emptyQueryIds: [String] = model.rows(environment: unordered).compactMap {
+            if case .worktree(let w, _, _) = $0 { return w.id } else { return nil }
+        }
+        #expect(emptyQueryIds == ["fix-flicker", "scratch"])
     }
 
     @Test func filterModePropagatesCurrentFlag() {
