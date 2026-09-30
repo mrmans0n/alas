@@ -6,8 +6,14 @@ struct ProjectConfigTests {
     /// Remote projects persisted before virtual paths carry real paths in
     /// every worktree-keyed field; decoding moves them under the host's
     /// namespace and reports the id renames. Local projects are untouched.
-    @Test(arguments: [nil, "mini"] as [String?])
-    func decodeVirtualizesLegacyRemoteProjectPaths(host: String?) throws {
+    /// A host that is no longer valid fails closed: the project moves under
+    /// an unresolvable placeholder host instead of routing locally.
+    @Test(arguments: [
+        (nil, nil), ("mini", "mini"),
+        (".", RemotePath.unavailableHost), ("-oProxyCommand=x", RemotePath.unavailableHost),
+        ("mini lan", RemotePath.unavailableHost),
+    ] as [(String?, String?)])
+    func decodeVirtualizesLegacyRemoteProjectPaths(persistedHost: String?, host: String?) throws {
         let worktree = Worktree(
             id: "/srv/wt/a", projectId: "p", name: "a", branch: "a",
             path: URL(fileURLWithPath: "/srv/wt/a"), status: .clean, lastActivity: .distantPast
@@ -15,12 +21,14 @@ struct ProjectConfigTests {
         let legacy = ProjectConfig(
             id: "p", name: "P", path: "/srv/repo", color: "#fff", addedAt: .distantPast,
             hiddenWorktreePaths: ["/srv/wt/h"], worktreeOrder: ["/srv/wt/a"],
-            cachedWorktrees: [worktree], host: host, ggWorktreeModes: ["/srv/wt/a": .on]
+            cachedWorktrees: [worktree], host: persistedHost, ggWorktreeModes: ["/srv/wt/a": .on]
         )
         let v: (String) -> String = { real in host.map { RemotePath.virtual(host: $0, realPath: real) } ?? real }
 
         let decoded = try JSONDecoder().decode(ProjectConfig.self, from: JSONEncoder().encode(legacy))
 
+        #expect(decoded.host == host)
+        #expect(RemoteHostRegistry.shared.host(forPath: decoded.path) == host)
         #expect(decoded.path == v("/srv/repo"))
         #expect(decoded.cachedWorktrees.map(\.id) == [v("/srv/wt/a")])
         #expect(decoded.cachedWorktrees.map(\.path.path) == [v("/srv/wt/a")])
@@ -36,6 +44,19 @@ struct ProjectConfigTests {
         var expected = decoded
         expected.legacyWorktreeIDs = [:]
         #expect(again == expected)
+    }
+
+    /// Paths already virtual under a host that is no longer valid move to the
+    /// placeholder too, so the path never routes to the raw host.
+    @Test func decodeMovesVirtualPathsOfAnInvalidHostToThePlaceholder() throws {
+        let legacy = ProjectConfig(
+            id: "p", name: "P", path: RemotePath.root + "/mini lan/srv/repo", color: "#fff", addedAt: .distantPast,
+            host: "mini lan"
+        )
+
+        let decoded = try JSONDecoder().decode(ProjectConfig.self, from: JSONEncoder().encode(legacy))
+
+        #expect(decoded.path == RemotePath.virtual(host: RemotePath.unavailableHost, realPath: "/srv/repo"))
     }
 
     /// When a legacy key and its virtual form both exist, the virtual entry is

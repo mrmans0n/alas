@@ -280,22 +280,30 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
             if RemotePath.isValidHost(host) {
                 virtualizeLegacyRemotePaths(host: host)
             } else {
+                // Fail closed: a remote project must never fall back to local
+                // path semantics (a same-path local repo would be operated
+                // on), and the raw host must never reach ssh. The placeholder
+                // never resolves, so the project stays visible but unavailable.
                 let projectID = id
                 projectConfigLogger.warning(
-                    "Remote project \(projectID, privacy: .public) has an invalid ssh host \(host, privacy: .private); its paths stay local"
+                    "Remote project \(projectID, privacy: .public) has an invalid ssh host \(host, privacy: .private); it is unavailable until re-added"
                 )
+                self.host = RemotePath.unavailableHost
+                virtualizeLegacyRemotePaths(host: RemotePath.unavailableHost, replacing: host)
             }
         }
     }
 
     /// Remote projects saved before virtual paths stored real remote paths.
     /// Move every path and worktree-id-keyed field under the host's virtual
-    /// namespace; already-virtual values are left alone.
-    private mutating func virtualizeLegacyRemotePaths(host: String) {
+    /// namespace; already-virtual values are left alone, except those under
+    /// `replacedHost`, which move to `host`.
+    private mutating func virtualizeLegacyRemotePaths(host: String, replacing replacedHost: String? = nil) {
         let anchor = RemotePath.virtual(host: host, realPath: "/")
         var renamed: [String: String] = [:]
         func v(_ old: String) -> String {
-            let new = RemotePath.virtualizing(old, like: anchor)
+            let real = RemotePath.split(old).flatMap { $0.host == replacedHost ? $0.realPath : nil } ?? old
+            let new = RemotePath.virtualizing(real, like: anchor)
             if new != old { renamed[old] = new }
             return new
         }
