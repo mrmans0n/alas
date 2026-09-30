@@ -114,6 +114,128 @@ struct RemotePathMigrationTests {
         #expect(state.externalAbsolutePath == (remote ? RemotePath.virtual(host: "mini", realPath: external) : external))
     }
 
+    /// A restored commit-range review must run git on the virtual worktree,
+    /// not on the bare real path (which may be a local twin). Its ids are
+    /// composites of worktree id and path, so they must match the factory's.
+    @Test func reviewSessionTargetsBecomeVirtualAndRerunIsNoOp() throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("review-sessions.json")
+        let target = ReviewSessionTarget.commitRange(
+            worktreeID: old, repositoryPath: URL(fileURLWithPath: old), base: "main", head: "topic"
+        )
+        try ReviewSessionStore(url: url).save(ReviewSessionRecord(
+            id: target.id, target: target, createdAt: .distantPast, updatedAt: .distantPast
+        ))
+
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+
+        let expected = ReviewSessionTarget.commitRange(
+            worktreeID: new, repositoryPath: URL(fileURLWithPath: new), base: "main", head: "topic"
+        )
+        let migrated = try ReviewSessionStore(url: url).load(id: expected.id)
+        #expect(migrated?.id == expected.id)
+        #expect(migrated?.target == expected)
+    }
+
+    @Test func runHistoryRowsFollowTheVirtualId() async throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let path = root.appendingPathComponent("run-history.sqlite").path
+        let conflict = RunPortConflict.ownedByRun(worktreeID: old, branch: "b", scriptName: "s")
+        try await RunHistoryStore(path: path).append(RunHistoryEntry(
+            id: "run", scriptKey: "k", scriptName: "s", worktreeID: old, branch: "b",
+            target: .init(host: "mini", workingDirectory: old), endpoint: nil, outcome: .succeeded,
+            startedAt: .distantPast, finishedAt: .distantPast, portConflict: conflict, output: .available(text: "", truncated: false)
+        ))
+
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+
+        let entry = try await RunHistoryStore(path: path).entry(id: "run")
+        #expect(entry?.worktreeID == new)
+        #expect(entry?.portConflict == .ownedByRun(worktreeID: new, branch: "b", scriptName: "s"))
+    }
+
+    /// Pending review files are named by a hash of the worktree path.
+    @Test(arguments: ["", "-pr7"])
+    func pendingReviewMovesToVirtualPathHash(suffix: String) throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("pending-reviews", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let from = dir.appendingPathComponent("\(PendingReview.pathHash(old))\(suffix).json")
+        try Data("[]".utf8).write(to: from)
+
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+
+        #expect(!FileManager.default.fileExists(atPath: from.path))
+        #expect(FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("\(PendingReview.pathHash(new))\(suffix).json").path
+        ))
+    }
+
+    /// Owners without a lineage id are keyed by path; their events and
+    /// source keys must follow, or the inbox can't resolve the worktree.
+    @Test func attentionPathIdentitiesBecomeVirtualAndRerunIsNoOp() throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("attention-events.json")
+        func owner(_ path: String) -> AttentionWorktreeIdentity {
+            .init(projectID: "p", location: .ssh("mini"), lineageID: nil, legacyPath: path)
+        }
+        func event(_ path: String) -> AttentionEvent {
+            AttentionEvent(
+                id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+                sourceKey: .init(rawValue: "git:\(owner(path).storageKey):operation"), fingerprint: "f",
+                owner: owner(path), kind: .gitOperation, title: "t", body: nil, jumpTarget: .gitOperation,
+                display: .init(projectName: "P", branch: "b", path: path, host: "mini"),
+                occurredAt: .distantPast, requiresAction: false
+            )
+        }
+        try PersistenceStore().write(AttentionDocument(events: [event(old)]), to: url)
+
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+        RemotePathMigration.migrate(idMap: [old: new], root: root)
+
+        let migrated = try PersistenceStore().readIfExists(AttentionDocument.self, from: url)
+        #expect(migrated?.events == [event(new)])
+    }
+
+    /// Restored review, commit and similar tabs carry the worktree id in
+    /// their state and tab id; a remote worktree must load them virtual.
+    @MainActor
+    @Test func loadRemapsEmbeddedWorktreeIdsOfRemoteTabs() throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let tabsDir = root.appendingPathComponent("tabs", isDirectory: true)
+        let legacy = Tab.commit(CommitTabState(worktreeId: old, sha: "abc", title: "c"))
+        try PersistenceStore().write(
+            TabsFile(tabs: [legacy, .reviewChanges(ReviewChangesTabState(worktreeId: old))], activeTabId: legacy.id),
+            to: tabsDir.appendingPathComponent("\(new).json")
+        )
+
+        let loaded = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDir)
+        loaded.loadAll(worktreeIds: [new])
+
+        let expected = Tab.commit(CommitTabState(worktreeId: new, sha: "abc", title: "c"))
+        #expect(loaded.tabs(forWorktree: new) == [expected, .reviewChanges(ReviewChangesTabState(worktreeId: new))])
+        #expect(loaded.activeTabId(forWorktree: new) == expected.id)
+    }
+
+    /// A local project at the same real path keeps its state.
+    @Test func legacyIDMapSkipsIdsStillUsedByLocalProjects() {
+        var remote = ProjectConfig(id: "r", name: "R", path: new, color: "#fff", addedAt: .distantPast, host: "mini")
+        remote.legacyWorktreeIDs = [old: new, "/srv/wt/b": RemotePath.virtual(host: "mini", realPath: "/srv/wt/b")]
+        let local = ProjectConfig(id: "l", name: "L", path: old, color: "#fff", addedAt: .distantPast)
+
+        #expect(RemotePathMigration.legacyIDMap(projects: [remote, local]) == [
+            "/srv/wt/b": RemotePath.virtual(host: "mini", realPath: "/srv/wt/b"),
+        ])
+    }
+
     /// Saved right away: once projects.json is re-saved the legacy map is
     /// gone, so an unsaved rewrite would leave stale ids forever.
     @Test func rewritesAndSavesRecentsAndSpacesOnlyWhenChanged() {

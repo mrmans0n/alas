@@ -1414,6 +1414,17 @@ final class AppState {
         nextPromptInference: (any NextPromptRuntime)? = nil,
         localTextSupported: Bool = NextPromptInference.isSupported()
     ) {
+        // Legacy remote worktrees were renamed to virtual ids on decode. Move
+        // their id-keyed state first: the attention store and run scheduler
+        // below load their files, and tabs must be in place before
+        // `reloadTabs` and the zmx orphan sweep, or live remote sessions look
+        // orphaned. The test host shares the user's app support dir, so it
+        // skips the files.
+        let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
+        let legacyWorktreeIDs = RemotePathMigration.legacyIDMap(projects: projectsFile.projects)
+        if !legacyWorktreeIDs.isEmpty, !Self.isRunningUnitTests {
+            RemotePathMigration.migrate(idMap: legacyWorktreeIDs, defaults: AlasProfile.userDefaults)
+        }
         self.store = store
         let suggestionStore = localTextModelStore ?? LocalTextModelStore()
         self.localTextModelStore = suggestionStore
@@ -1453,19 +1464,8 @@ final class AppState {
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
         self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceBridge)
         var config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
-        let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         var spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
-        // Legacy remote worktrees were renamed to virtual ids on decode. Move
-        // their id-keyed state now: tabs must be in place before `reloadTabs`
-        // and the zmx orphan sweep, or live remote sessions look orphaned.
-        // The test host shares the user's app support dir, so it skips files.
-        let legacyWorktreeIDs = projectsFile.projects.reduce(into: [String: String]()) {
-            $0.merge($1.legacyWorktreeIDs) { a, _ in a }
-        }
         if !legacyWorktreeIDs.isEmpty {
-            if !Self.isRunningUnitTests {
-                RemotePathMigration.migrate(idMap: legacyWorktreeIDs)
-            }
             RemotePathMigration.rewrite(
                 &config, &spacesFile, idMap: legacyWorktreeIDs, saving: Self.isRunningUnitTests ? nil : store
             )
