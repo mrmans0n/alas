@@ -71,6 +71,8 @@ enum DiffCodeText {
             .filter { isValid($0.range, in: visibleLength) }
             .sorted { $0.range.location < $1.range.location }
 
+        let editorTheme = EditorTheme(theme: theme)
+        let onChangedLine = inlineTone == .add || inlineTone == .del
         var cursor = 0
         for span in spans {
             guard span.range.location >= cursor else { continue }
@@ -78,7 +80,7 @@ enum DiffCodeText {
             guard isValid(outputRange, in: output.length) else { continue }
             output.addAttribute(
                 .foregroundColor,
-                value: NSColor(syntaxColor(for: span.capture, inlineTone: inlineTone, theme: theme)),
+                value: editorTheme.color(for: span.capture, onChangedLine: onChangedLine),
                 range: outputRange
             )
             cursor = NSMaxRange(span.range)
@@ -115,30 +117,6 @@ enum DiffCodeText {
             return theme.color("del")
         case .accent:
             return theme.color("accent")
-        }
-    }
-
-    private static func syntaxColor(for capture: HighlightCapture, inlineTone: DiffInlineTone, theme: Theme) -> Color {
-        switch capture {
-        case .keyword:
-            return theme.color("syntax-keyword")
-        case .type:
-            return theme.color("syntax-type")
-        case .function:
-            return theme.color("syntax-function")
-        case .string:
-            return theme.color("add")
-        case .number:
-            return theme.color("mod")
-        case .comment:
-            if inlineTone == .add || inlineTone == .del {
-                return theme.color("fg")
-            }
-            return theme.color("fg-faint")
-        case .attribute, .constant:
-            return theme.color("syntax-keyword")
-        case .variable, .parameter, .property, .operator, .punctuation, .plain:
-            return theme.color("fg")
         }
     }
 
