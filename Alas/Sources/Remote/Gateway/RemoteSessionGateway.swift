@@ -344,11 +344,19 @@ final class RemoteSessionGateway {
             case .failure(let reason, let message):
                 send(.fileDiffFailed(sessionId: id, path: path, stage: stage, reason: reason, message: message))
             }
-        case .listFiles(let id, let path):
-            let key = "listFiles\u{0}\(id)\u{0}\(path ?? "")"
+        case .listFiles(let id, let path, let comparisonMode):
+            let key = if let comparisonMode {
+                "listFiles\u{0}\(id)\u{0}\(path ?? "")\u{0}\(comparisonMode.rawValue)"
+            } else {
+                "listFiles\u{0}\(id)\u{0}\(path ?? "")"
+            }
             guard inFlightFileRequests.insert(key).inserted else { return }
             defer { inFlightFileRequests.remove(key) }
-            switch await provider.remoteFileTree(sessionId: id, path: path) {
+            switch await provider.remoteFileTree(
+                sessionId: id,
+                path: path,
+                comparisonMode: comparisonMode
+            ) {
             case .success(let nodes, let truncated):
                 send(.fileTree(sessionId: id, path: path, nodes: nodes, truncated: truncated))
             case .failure(let reason, let message):

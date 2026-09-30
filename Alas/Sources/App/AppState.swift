@@ -15403,7 +15403,11 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
-    func remoteFileTree(sessionId: String, path: String?) async -> RemoteFileTreeResult {
+    func remoteFileTree(
+        sessionId: String,
+        path: String?,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode? = nil
+    ) async -> RemoteFileTreeResult {
         let worktree: Worktree
         switch remoteWorktreeContext(sessionId: sessionId) {
         case .sessionUnknown:
@@ -15433,7 +15437,9 @@ extension AppState: RemoteSessionsProvider {
                 at: worktree.path,
                 baseBranch: config.worktrees.baseBranch,
                 resolution: GitService.BaseResolution.forCommits(
-                    mode: config.changes.comparisonMode, userOverrodeBaseBranch: false))
+                    mode: comparisonMode ?? config.changes.comparisonMode,
+                    userOverrodeBaseBranch: false
+                ))
             let changedEntries = try await git.changedFileBadges(
                 worktreePath: worktree.path, ref: commits.comparisonRef)
 

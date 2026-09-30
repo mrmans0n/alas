@@ -67,7 +67,11 @@ protocol RemoteSessionsProvider: AnyObject {
         stage: String?,
         comparisonMode: AppConfig.Changes.ChangesComparisonMode?
     ) async -> RemoteFileDiffResult
-    func remoteFileTree(sessionId: String, path: String?) async -> RemoteFileTreeResult
+    func remoteFileTree(
+        sessionId: String,
+        path: String?,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    ) async -> RemoteFileTreeResult
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult
 }
 

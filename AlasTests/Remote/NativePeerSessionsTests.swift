@@ -295,7 +295,9 @@ struct NativePeerSessionsTests {
         #expect(links.sent(to: "B").contains(
             .listChanges(sessionId: "s", comparisonMode: .branchUpstream)
         ))
-        #expect(links.sent(to: "B").contains(.listFiles(sessionId: "s", path: nil)))
+        #expect(links.sent(to: "B").contains(
+            .listFiles(sessionId: "s", path: nil, comparisonMode: .branchUpstream)
+        ))
 
         links.receive(.changeList(sessionId: "s", comparisonRef: "origin/main", metricsAvailable: true,
                                   files: [], staged: [], unstaged: [], commits: [], truncated: false), from: "B")

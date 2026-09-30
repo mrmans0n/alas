@@ -46,7 +46,11 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         stage: String?,
         comparisonMode: AppConfig.Changes.ChangesComparisonMode?
     )] = []
-    var fileTreeRequests: [(sessionId: String, path: String?)] = []
+    var fileTreeRequests: [(
+        sessionId: String,
+        path: String?,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    )] = []
     var fileContentsRequests: [(sessionId: String, path: String)] = []
     var queueForceSends: [(id: String, itemId: UUID)] = []
     var queueRemoves: [(id: String, itemId: UUID)] = []
@@ -321,8 +325,12 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         return fileDiffResult
     }
 
-    func remoteFileTree(sessionId: String, path: String?) async -> RemoteFileTreeResult {
-        fileTreeRequests.append((sessionId, path))
+    func remoteFileTree(
+        sessionId: String,
+        path: String?,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    ) async -> RemoteFileTreeResult {
+        fileTreeRequests.append((sessionId, path, comparisonMode))
         return fileTreeResult
     }
 
@@ -2525,8 +2533,13 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
-        await gateway.handle(.listFiles(sessionId: "s1", path: nil))
+        await gateway.handle(.listFiles(
+            sessionId: "s1",
+            path: nil,
+            comparisonMode: .branchUpstream
+        ))
         await gateway.handle(.readFile(sessionId: "s1", path: "README.md"))
+        #expect(provider.fileTreeRequests.map(\.comparisonMode) == [.branchUpstream])
 
         #expect(sent == [
             .fileTree(sessionId: "s1", path: nil, nodes: [node], truncated: false),

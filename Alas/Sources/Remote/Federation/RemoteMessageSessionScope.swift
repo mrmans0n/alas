@@ -20,7 +20,7 @@ extension RemoteClientMessage {
              .elicitationResponse(let id, _, _, _), .sendPrompt(let id, _, _, _), .setModel(let id, _),
              .setMode(let id, _), .setAutoRun(let id, _), .renameSession(let id, _), .fetchOlder(let id, _, _),
              .queueForceSend(let id, _), .queueRemove(let id, _), .queueRetry(let id, _), .queueEdit(let id, _),
-             .listChanges(let id, _), .fileDiff(let id, _, _, _), .listFiles(let id, _), .readFile(let id, _):
+             .listChanges(let id, _), .fileDiff(let id, _, _, _), .listFiles(let id, _, _), .readFile(let id, _):
             return id
         }
     }
@@ -64,7 +64,8 @@ extension RemoteClientMessage {
                 stage: stage,
                 comparisonMode: comparisonMode
             )
-        case .listFiles(_, let path): return .listFiles(sessionId: new, path: path)
+        case .listFiles(_, let path, let comparisonMode):
+            return .listFiles(sessionId: new, path: path, comparisonMode: comparisonMode)
         case .readFile(_, let path): return .readFile(sessionId: new, path: path)
         }
     }

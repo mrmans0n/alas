@@ -256,7 +256,9 @@ final class NativePeerSessions {
         guard selectedSessionId != nil, workspace.beginRootLoad() else { return false }
         guard !fileTreeRequestInFlight else { return false }
         fileTreeRequestInFlight = true
-        if !routeWhileOnline({ .listFiles(sessionId: $0, path: nil) }) {
+        if !routeWhileOnline({
+            .listFiles(sessionId: $0, path: nil, comparisonMode: comparisonMode())
+        }) {
             fileTreeRequestInFlight = false
             workspace.markUnavailable()
             return false
@@ -266,7 +268,11 @@ final class NativePeerSessions {
 
     func loadFileTreeChildren(path: String) {
         guard selectedSessionId != nil, workspace.beginChildrenLoad(path: path) else { return }
-        if !routeWhileOnline({ .listFiles(sessionId: $0, path: path) }) { workspace.markUnavailable() }
+        if !routeWhileOnline({
+            .listFiles(sessionId: $0, path: path, comparisonMode: comparisonMode())
+        }) {
+            workspace.markUnavailable()
+        }
     }
 
     /// Opens `document`, or — when it's already the open one — refreshes it.

@@ -104,7 +104,11 @@ enum RemoteClientMessage: Equatable, Sendable {
         stage: String?,
         comparisonMode: AppConfig.Changes.ChangesComparisonMode? = nil
     )
-    case listFiles(sessionId: String, path: String?)
+    case listFiles(
+        sessionId: String,
+        path: String?,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode? = nil
+    )
     case readFile(sessionId: String, path: String)
 }
 
@@ -227,8 +231,14 @@ extension RemoteClientMessage: Codable {
                 )
             )
         case "listFiles":
-            self = .listFiles(sessionId: try c.decode(String.self, forKey: .sessionId),
-                              path: try c.decodeIfPresent(String.self, forKey: .path))
+            self = .listFiles(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                path: try c.decodeIfPresent(String.self, forKey: .path),
+                comparisonMode: try c.decodeIfPresent(
+                    AppConfig.Changes.ChangesComparisonMode.self,
+                    forKey: .comparisonMode
+                )
+            )
         case "readFile":
             self = .readFile(sessionId: try c.decode(String.self, forKey: .sessionId),
                              path: try c.decode(String.self, forKey: .path))
@@ -353,10 +363,11 @@ extension RemoteClientMessage: Codable {
             try c.encode(path, forKey: .path)
             try c.encodeIfPresent(stage, forKey: .stage)
             try c.encodeIfPresent(comparisonMode, forKey: .comparisonMode)
-        case .listFiles(let s, let path):
+        case .listFiles(let s, let path, let comparisonMode):
             try c.encode("listFiles", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encodeIfPresent(path, forKey: .path)
+            try c.encodeIfPresent(comparisonMode, forKey: .comparisonMode)
         case .readFile(let s, let path):
             try c.encode("readFile", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -403,7 +414,10 @@ extension RemoteClientMessage {
                 return "fileDiff\u{0}\(sessionId)\u{0}\(path)\u{0}\(stage ?? "")\u{0}\(comparisonMode.rawValue)"
             }
             return "fileDiff\u{0}\(sessionId)\u{0}\(path)\u{0}\(stage ?? "")"
-        case .listFiles(let sessionId, let path):
+        case .listFiles(let sessionId, let path, let comparisonMode):
+            if let comparisonMode {
+                return "listFiles\u{0}\(sessionId)\u{0}\(path ?? "")\u{0}\(comparisonMode.rawValue)"
+            }
             return "listFiles\u{0}\(sessionId)\u{0}\(path ?? "")"
         case .readFile(let sessionId, let path):
             return "readFile\u{0}\(sessionId)\u{0}\(path)"
