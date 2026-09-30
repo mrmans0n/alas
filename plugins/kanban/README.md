@@ -40,3 +40,6 @@ Columns: **Backlog**, **Running**, **Needs you**, **Review** and **Done**.
   that was never started can only move to Backlog or Done.
 
 The board is saved per project in the plugin's storage and survives restarts.
+If Alas quits while a card is starting, the card can stay in Backlog even
+though its worktree and agent were created; starting it again makes a second
+worktree.

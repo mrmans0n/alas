@@ -18,6 +18,12 @@ pub struct Kanban {
     load_request: i64,
     /// The latest (session id, state) list, kept so a snapshot that beats the stored board still applies.
     sessions: Vec<(String, String)>,
+    /// The stored board could not be read, so it is never overwritten.
+    load_failed: bool,
+    /// storage/set request ids awaiting a reply.
+    saves: Vec<i64>,
+    /// A danger line at the top of the board, e.g. a failed save.
+    notice: Option<String>,
 }
 
 impl Kanban {
@@ -25,8 +31,18 @@ impl Kanban {
         if !self.loaded {
             return;
         }
-        storage_set("board", &serde_json::to_value(&self.board).unwrap_or_default());
-        render(0, &view::render(&self.board, self.form));
+        if !self.load_failed {
+            self.saves.push(storage_set("board", &serde_json::to_value(&self.board).unwrap_or_default()));
+        }
+        self.render();
+    }
+
+    fn render(&self) {
+        render(0, &view::render(&self.board, self.form, self.notice.as_deref()));
+    }
+
+    fn starting(&self, card: u64) -> bool {
+        self.pending.iter().any(|&(_, p)| p == card)
     }
 
     fn apply(&mut self, snapshot: Snapshot) {
@@ -48,23 +64,32 @@ impl Kanban {
             return;
         }
         if id.starts_with("new-prompt-") && kind == "submit" {
-            if self.board.add(&self.draft_title, &value.unwrap_or_default()) == 0 {
+            // Caps keep one pasted card from filling the plugin's 1 MiB of storage.
+            let title: String = self.draft_title.chars().take(200).collect();
+            let prompt: String = value.unwrap_or_default().chars().take(8000).collect();
+            if self.board.add(&title, &prompt) == 0 {
                 return;
             }
             self.draft_title.clear();
             self.form += 1;
         } else if let Some(card) = card_id("start-") {
             let Some(c) = self.board.cards.iter().find(|c| c.id == card) else { return };
-            if self.pending.iter().any(|&(_, p)| p == card) {
+            if self.starting(card) {
                 return;
             }
             let request = task_start(&c.title, &c.prompt);
             self.pending.push((request, card));
             return;
         } else if let Some(card) = card_id("delete-") {
+            if self.starting(card) {
+                return;
+            }
             self.board.delete(card);
         } else if let Some(card) = card_id("move-") {
             let Some(column) = value.as_deref().and_then(Column::from_key) else { return };
+            if self.starting(card) {
+                return;
+            }
             self.board.move_to(card, column);
         } else if let Some(card) = card_id("card-") {
             if let Some(session) = self.board.cards.iter().find(|c| c.id == card).and_then(|c| c.session_id.clone()) {
@@ -86,19 +111,36 @@ impl Plugin for Kanban {
                 request_snapshot();
             }
             Event::Reply { id, result } if id == self.load_request && !self.loaded => {
-                // A missing, unreadable or invalid board starts empty.
-                self.board = result
-                    .ok()
-                    .and_then(|r| serde_json::from_value(r["value"].clone()).ok())
-                    .unwrap_or_default();
+                // A missing board starts empty. One that cannot be read also starts empty,
+                // but is never overwritten, so the stored copy survives.
+                let loaded = match result {
+                    Ok(r) if r["value"].is_null() => Ok(Board::default()),
+                    Ok(r) => serde_json::from_value(r["value"].clone()).map_err(|e| e.to_string()),
+                    Err(e) => Err(e.message),
+                };
+                match loaded {
+                    Ok(board) => self.board = board,
+                    Err(reason) => {
+                        self.load_failed = true;
+                        self.notice = Some(format!("Could not load the board, so changes are not saved: {reason}"));
+                    }
+                }
                 self.loaded = true;
                 self.board.sync(&self.sessions);
                 self.changed();
             }
             Event::Snapshot(snapshot) | Event::WorkspaceChanged(snapshot) => self.apply(snapshot),
             Event::ViewEvent { id, kind, value, .. } => self.view_event(&id, &kind, value),
+            Event::Reply { id, result } if self.saves.contains(&id) => {
+                self.saves.retain(|&s| s != id);
+                let notice = result.err().map(|e| format!("Could not save the board: {}", e.message));
+                if notice != self.notice {
+                    self.notice = notice;
+                    self.render();
+                }
+            }
             Event::Reply { id, result } if self.pending.iter().any(|&(r, _)| r == id) => {
-                let index = self.pending.iter().position(|&(r, _)| r == id).unwrap();
+                let Some(index) = self.pending.iter().position(|&(r, _)| r == id) else { return };
                 let (_, card) = self.pending.remove(index);
                 match result {
                     Ok(r) => self.board.started(
@@ -158,7 +200,8 @@ mod tests {
         let sent = test_host::take_sent();
         assert!(sent.iter().any(|m| m["method"] == "storage/set"), "every change is saved");
         let root = sent.iter().rev().find(|m| m["method"] == "view/render").expect("a render")["params"]["root"].clone();
-        for col in root["children"][0]["child"]["children"].as_array().unwrap() {
+        let scroll = root["children"].as_array().unwrap().last().unwrap();
+        for col in scroll["child"]["children"].as_array().unwrap() {
             if let Some(node) = col["children"].as_array().unwrap().iter().find(|n| n["id"] == card) {
                 return (col["id"].as_str().unwrap().to_string(), node.clone());
             }
@@ -195,5 +238,23 @@ mod tests {
         let (col, card) = rendered_column("card-1");
         assert_eq!(col, "col-backlog");
         assert!(card.to_string().contains("Start failed: no worktree"));
+    }
+
+    #[test]
+    fn a_snapshot_before_the_board_loads_is_applied_after_load_without_saving_an_empty_board() {
+        test_host::take_sent();
+        let mut k = Kanban::default();
+        feed(&mut k, json!({"jsonrpc":"2.0","id":0,"method":"alas/activate","params":{"project":{"id":"p","name":"P"}}}));
+        let snapshot = test_host::take_sent().iter().find(|m| m["method"] == "workspace/snapshot").unwrap()["id"].clone();
+        feed(&mut k, json!({"jsonrpc":"2.0","id":snapshot,"result":{"snapshot":{"worktrees":[
+            {"id":"w","branch":"task/x","current":false,"sessions":[{"id":"s","agent":"a","title":"T","state":"idle"}]}]}}}));
+        assert!(test_host::take_sent().is_empty(), "nothing is saved or rendered before the board loads");
+
+        let load = k.load_request;
+        feed(&mut k, json!({"jsonrpc":"2.0","id":load,"result":{"value":{"cards":[
+            {"id":1,"title":"Fix it","prompt":"do","column":"Running","session_id":"s","following":true}],"next_id":1}}}));
+        let sent = test_host::take_sent();
+        let saved = &sent.iter().find(|m| m["method"] == "storage/set").expect("the loaded board is saved")["params"]["value"];
+        assert_eq!(saved["cards"][0]["column"], "Review");
     }
 }

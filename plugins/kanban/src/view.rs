@@ -23,18 +23,15 @@ fn hstack(id: String, children: Vec<Node>) -> Node {
     Node::Hstack { id, children, spacing: None }
 }
 
-pub fn render(board: &Board, form: u64) -> Node {
+pub fn render(board: &Board, form: u64, notice: Option<&str>) -> Node {
     let columns = Column::ALL.into_iter().map(|col| column(board, col, form)).collect();
-    Node::Vstack {
-        id: "root".into(),
-        spacing: None,
-        width: None,
-        children: vec![Node::Scroll {
-            id: "scroll".into(),
-            axis: Axis::Horizontal,
-            child: Box::new(Node::Hstack { id: "columns".into(), children: columns, spacing: Some(12) }),
-        }],
-    }
+    let mut children: Vec<Node> = notice.map(|n| text("notice".into(), n, None, Some(Tone::Danger))).into_iter().collect();
+    children.push(Node::Scroll {
+        id: "scroll".into(),
+        axis: Axis::Horizontal,
+        child: Box::new(Node::Hstack { id: "columns".into(), children: columns, spacing: Some(12) }),
+    });
+    Node::Vstack { id: "root".into(), spacing: None, width: None, children }
 }
 
 fn column(board: &Board, col: Column, form: u64) -> Node {
@@ -61,11 +58,13 @@ fn column(board: &Board, col: Column, form: u64) -> Node {
             multiline: true,
         });
     }
-    children.extend(cards.iter().take(MAX_CARDS_PER_COLUMN).map(|c| card(c)));
-    if cards.len() > MAX_CARDS_PER_COLUMN {
-        let more = format!("+{} more", cards.len() - MAX_CARDS_PER_COLUMN);
-        children.push(text(format!("col-{key}-more"), &more, Some(TextStyle::Caption), Some(Tone::Dim)));
+    // The newest cards stay visible; older ones are summarised first.
+    let hidden = cards.len().saturating_sub(MAX_CARDS_PER_COLUMN);
+    if hidden > 0 {
+        let older = format!("+{hidden} older");
+        children.push(text(format!("col-{key}-older"), &older, Some(TextStyle::Caption), Some(Tone::Dim)));
     }
+    children.extend(cards[hidden..].iter().map(|c| card(c)));
     Node::Vstack { id: format!("col-{key}"), children, spacing: Some(8), width: Some(280) }
 }
 
@@ -153,7 +152,7 @@ mod tests {
         b.add("a", "p");
         let id = b.add("b", "p");
         b.started(id, "s".into(), "br".into());
-        let tree = render(&b, 0);
+        let tree = render(&b, 0, None);
         let Node::Vstack { children, .. } = &tree else { panic!() };
         let Node::Scroll { child, axis: Axis::Horizontal, .. } = &children[0] else { panic!() };
         let Node::Hstack { children: cols, .. } = child.as_ref() else { panic!() };
@@ -182,7 +181,7 @@ mod tests {
         let started = b.add("b", "p");
         b.started(started, "s".into(), "task/b".into());
         b.start_failed(fresh, "boom");
-        let tree = render(&b, 0);
+        let tree = render(&b, 0, None);
 
         let Some(Node::Card { clickable: false, .. }) = find(&tree, &format!("card-{fresh}")) else { panic!() };
         assert!(find(&tree, &format!("start-{fresh}")).is_some());
@@ -202,8 +201,8 @@ mod tests {
     #[test]
     fn form_field_ids_change_with_the_form_generation() {
         let b = Board::default();
-        assert!(find(&render(&b, 0), "new-prompt-0").is_some());
-        let tree = render(&b, 1);
+        assert!(find(&render(&b, 0, None), "new-prompt-0").is_some());
+        let tree = render(&b, 1, None);
         assert!(find(&tree, "new-title-1").is_some() && find(&tree, "new-prompt-1").is_some());
         assert!(find(&tree, "new-title-0").is_none());
     }
