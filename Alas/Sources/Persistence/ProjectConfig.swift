@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let projectConfigLogger = Logger(subsystem: "io.nlopez.alas", category: "project-config")
 
 enum ProjectAgentSelection: Hashable {
     case global
@@ -273,8 +276,15 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         repoMCPTrust = (try? c.decode([String: RepoMCPTrustState].self, forKey: .repoMCPTrust)) ?? [:]
         disabledRepoMCPServers = (try? c.decode([String].self, forKey: .disabledRepoMCPServers)) ?? []
         approvedRepoHookHashes = (try? c.decode([String].self, forKey: .approvedRepoHookHashes)) ?? []
-        if let host, RemotePath.isValidHost(host) {
-            virtualizeLegacyRemotePaths(host: host)
+        if let host {
+            if RemotePath.isValidHost(host) {
+                virtualizeLegacyRemotePaths(host: host)
+            } else {
+                let projectID = id
+                projectConfigLogger.warning(
+                    "Remote project \(projectID, privacy: .public) has an invalid ssh host \(host, privacy: .private); its paths stay local"
+                )
+            }
         }
     }
 
