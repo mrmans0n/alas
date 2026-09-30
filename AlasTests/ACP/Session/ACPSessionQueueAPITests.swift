@@ -247,14 +247,15 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue.map { $0.blocks } == [[.text("a")]])
     }
 
-    @Test("clearPendingQueue() removes all .pending items but leaves .sending head")
-    func clearPendingKeepsSending() {
+    @Test("clearPendingQueue() removes the user's .pending items but leaves .sending head and delegated prompts")
+    func clearPendingKeepsSendingAndDelegated() {
         let s = mkSession()
         s.enqueue(blocks: [.text("a")])
         s.enqueue(blocks: [.text("b")])
+        s.enqueue(blocks: [.text("report")], delegatedSource: ACPDelegatedPromptSource(sessionId: "child", messageId: "m"))
         s.markQueueHeadSending()
         let snapshot = s.clearPendingQueue()
-        #expect(s.queue.count == 1)
+        #expect(s.queue.map { $0.blocks } == [[.text("a")], [.text("report")]])
         #expect(s.queue[0].status == .sending)
         #expect(snapshot.map { $0.blocks } == [[.text("b")]])
     }

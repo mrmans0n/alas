@@ -326,13 +326,20 @@ agent can tell a report from its user's prompt:
 ```
 
 The worktree clause is omitted when the worktree is unknown. In the parent's
-transcript the bubble is captioned **Report from \<agent\> child ·
-\<first 8 characters of the session id\>**. The prompts Alas sends a parent
-about its child (a failure, or a turn that ended without a report) already
-start with `[alas system] Delegated session …` and carry the same caption.
+transcript the report renders as a full-width card, not a user bubble, headed
+**Report from \<agent\> child · \<first 8 characters of the session id\>**.
+The prompts Alas sends a parent about its child (a failure, or a turn that
+ended without a report) already start with `[alas system] Delegated session …`
+and carry the same header.
 
-A parent's message to its child is delivered unchanged and captioned
-**Delegated prompt**, as is the child's initial task prompt.
+A parent's message to its child is delivered unchanged and rendered as the
+same kind of card headed **Delegated prompt**, as is the child's initial task
+prompt.
+
+A delegated prompt that arrives while the target is mid-turn waits for the
+turn to end, but it is not listed in the target's **Up next** queue and does
+not count toward its queue badge: it is not the user's to edit, reorder, or
+remove, and **Clear all** leaves it in place. If sending one fails, it appears in the queue with its error so you can retry or remove it.
 
 ## Across an app restart
 
