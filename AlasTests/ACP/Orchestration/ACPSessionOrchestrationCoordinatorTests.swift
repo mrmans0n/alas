@@ -591,7 +591,6 @@ struct ACPSessionOrchestrationCoordinatorTests {
         }
     }
 
-
     private func selectedChildRecord(phase: ACPDelegationPhase = .starting) -> ACPDelegationRecord {
         .init(
             childSessionId: "child", parentSessionId: "parent", projectId: "project",
