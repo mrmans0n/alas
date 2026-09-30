@@ -838,6 +838,7 @@ final class ACPSessionRunner {
     /// never erases the stored one — a replayed pill beats a guaranteed
     /// absence.
     private func persistPromptSuggestions(_ suggestions: [ACPPromptSuggestion]) {
+        guard !suggestions.isEmpty else { return }
         guard holdsLeaseForWrite() else { return }
         let fence = leaseFenceProvider()
         let sessionId = sessionId

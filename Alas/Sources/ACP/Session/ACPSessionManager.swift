@@ -1657,7 +1657,15 @@ final class ACPSessionManager: ObservableObject {
                 currentModel: nil,
                 currentMode: nil,
                 nativeSubagentsDisabled: nativeSubagentsPreference(agentId: targetAgentID),
-                promptSuggestions: source.promptSuggestions.isEmpty ? nil : source.promptSuggestions,
+                // Seed the fork's composer suggestions only when the target
+                // agent is the SAME agent: its attach would re-advertise the
+                // identical list. A cross-agent fork gets nothing — the
+                // source agent's commands wouldn't exist on the new agent,
+                // and a persisted non-empty list would keep them offered
+                // until that agent broadcasts its own.
+                promptSuggestions: targetAgentID == source.agentId && !source.promptSuggestions.isEmpty
+                    ? source.promptSuggestions
+                    : nil,
                 autoRun: autoRunDefault,
                 createdAt: now,
                 updatedAt: now,
@@ -1694,9 +1702,10 @@ final class ACPSessionManager: ObservableObject {
             )
             target.autoRunEnabled = targetRow.autoRun
             target.forkRecord = forkRecord
-            // The fork starts with the source agent's command/skill list in
-            // the persisted row; mirror the live session too so pills render
-            // before any attach re-advertises them.
+            // Same-agent forks start with the source's command/skill list
+            // (carried on the persisted row); pills render before the attach
+            // re-advertises the identical list. Cross-agent forks seed
+            // nothing — see the targetRow comment above.
             if let suggestions = targetRow.promptSuggestions {
                 target.promptSuggestions = suggestions
             }
