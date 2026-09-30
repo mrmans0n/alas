@@ -86,10 +86,10 @@ a canvas tab, also stops the plugin.
 
 ### Lifecycle
 
-The tab keeps its last tree while the plugin restarts and until a new tree
-arrives. With nothing to show it displays the usual placeholders: unavailable,
-stopped (with Restart), or loading until the first tree. A failed or stopped
-plugin drops its trees.
+A plugin's trees are dropped when it activates, so a restarting plugin shows
+the loading state until it renders its first new tree. With nothing to show the
+tab displays the usual placeholders: unavailable, stopped (with Restart), or
+loading. A failed or stopped plugin drops its trees.
 
 ## `view/event`
 
@@ -132,8 +132,8 @@ Request `task/start {title, prompt, branch?, agent?}` returns
 | Error | When |
 |---|---|
 | `-32001` | `tasks.start` not granted |
-| `-32602` | missing or empty `title` or `prompt`, prompt over 32 KiB, or an agent that is unknown or cannot take a prompt |
-| `-32003` | "a task is already starting", or the project has no usable agent |
+| `-32602` | missing or empty `title` or `prompt`, prompt over 32 KiB, or an agent that is unknown or "cannot take a prompt" (also when the project's default agent is not a chat agent) |
+| `-32003` | "a task is already starting", or the project has no default agent at all |
 
 ## Storage
 

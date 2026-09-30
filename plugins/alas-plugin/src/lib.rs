@@ -66,7 +66,7 @@ pub enum Event {
     Snapshot(Snapshot),
     Tick { dt: u32 },
     Click { tab: u32, region: String },
-    /// A control in a view tab was used (`kind` is e.g. `click`, `change`, `submit`).
+    /// A control in a view tab was used: `kind` is `click` (button, card), `submit` (text field) or `select` (menu).
     ViewEvent { tab: u32, id: String, kind: String, value: Option<String> },
     /// A task started with `task_start` failed to launch in the background.
     TaskFailed { session_id: String, reason: String },
@@ -333,6 +333,7 @@ pub enum Node {
     Vstack {
         id: String,
         children: Vec<Node>,
+        /// Points between children. The host rejects a tree with spacing above 32.
         #[serde(skip_serializing_if = "Option::is_none")]
         spacing: Option<u8>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -341,6 +342,7 @@ pub enum Node {
     Hstack {
         id: String,
         children: Vec<Node>,
+        /// Points between children. The host rejects a tree with spacing above 32.
         #[serde(skip_serializing_if = "Option::is_none")]
         spacing: Option<u8>,
     },
@@ -715,11 +717,11 @@ mod tests {
     #[test]
     fn view_events_and_task_failures_decode() {
         let mut plugin = Recorder::default();
-        feed(&mut plugin, json!({"jsonrpc":"2.0","method":"view/event","params":{"tab":1,"id":"f","kind":"change","value":"x"}}));
+        feed(&mut plugin, json!({"jsonrpc":"2.0","method":"view/event","params":{"tab":1,"id":"f","kind":"select","value":"x"}}));
         feed(&mut plugin, json!({"jsonrpc":"2.0","method":"view/event","params":{"tab":1,"id":"b","kind":"click"}}));
         feed(&mut plugin, json!({"jsonrpc":"2.0","method":"task/failed","params":{"sessionId":"s","reason":"boom"}}));
         assert_eq!(plugin.0, vec![
-            Event::ViewEvent { tab: 1, id: "f".into(), kind: "change".into(), value: Some("x".into()) },
+            Event::ViewEvent { tab: 1, id: "f".into(), kind: "select".into(), value: Some("x".into()) },
             Event::ViewEvent { tab: 1, id: "b".into(), kind: "click".into(), value: None },
             Event::TaskFailed { session_id: "s".into(), reason: "boom".into() },
         ]);

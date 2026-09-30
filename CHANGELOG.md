@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### ✨ Features
 
+- Add plugin API 3: native view tabs described as a tree of controls, a `tasks.start` capability that creates a worktree and starts the default agent with a prompt without changing the selection, and per-project plugin storage. Add a Kanban plugin whose cards start agents in new worktrees and follow their sessions through Running, Needs you and Review.
 - Let "Disable native subagents" cover Pi: sessions start through an Alas-owned `PI_ACP_PI_COMMAND` wrapper that excludes the `subagent`, `bg_wait`, and `subagent_supervisor` tools of the `pi-subagents` extension, chaining to any `PI_ACP_PI_COMMAND` you already set. Settings names installed Pi extensions Alas does not recognize instead of claiming full enforcement. Local sessions only (#1643).
 
 ### 🐛 Fixes

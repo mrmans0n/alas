@@ -41,7 +41,7 @@ clock, or environment access.
 
 ## What it cannot do yet
 
-Draw native panels or sidebars, make network requests, or read or write
+Add sidebars or panels outside a tab, make network requests, or read or write
 files. These are planned; see the roadmap in
 [#1560](https://github.com/mrmans0n/alas/issues/1560).
 
