@@ -392,6 +392,7 @@ struct AppConfig: Codable, Equatable {
         var warningCharacters: [WarningCharacter] = WarningCharacter.defaults
         var inlayHints = InlayHintSettings()
         var inlayHintsByLanguage: [String: InlayHintSettings] = [:]
+        var codeThemeFamily: String = "default"
 
         func inlayHints(for language: String) -> InlayHintSettings {
             inlayHintsByLanguage[language] ?? inlayHints
@@ -407,7 +408,8 @@ struct AppConfig: Codable, Equatable {
             case fontFamily, fontSize, formatOnSave, showLineNumbers, showMinimap,
                  languageServers, dismissedInstallNudges, userDefinedRecipes,
                  showInvisibleCharacters, showSpaces, showTabs, showLineEndings,
-                 showWarningCharacters, warningCharacters, inlayHints, inlayHintsByLanguage
+                 showWarningCharacters, warningCharacters, inlayHints, inlayHintsByLanguage,
+                 codeThemeFamily
         }
     }
 
@@ -812,7 +814,8 @@ extension AppConfig {
                 showWarningCharacters: showWarningCharacters,
                 warningCharacters: warningCharacters,
                 inlayHints: (try? codeContainer.decode(InlayHintSettings.self, forKey: .inlayHints)) ?? .init(),
-                inlayHintsByLanguage: (try? codeContainer.decode([String: InlayHintSettings].self, forKey: .inlayHintsByLanguage)) ?? [:]
+                inlayHintsByLanguage: (try? codeContainer.decode([String: InlayHintSettings].self, forKey: .inlayHintsByLanguage)) ?? [:],
+                codeThemeFamily: (try? codeContainer.decode(String.self, forKey: .codeThemeFamily)) ?? "default"
             )
         } else {
             code = Code(

@@ -1505,6 +1505,7 @@ final class AppState {
         // survives relaunches; otherwise launches always show the theme's
         // built-in accent until the user re-clicks the picker.
         themeStore.setAccent(config.accent)
+        themeStore.setCodeTheme(family: config.code.codeThemeFamily)
         // Same for "Match system" — the toggle's state needs to drive the
         // current theme on launch, not just on subsequent toggle events.
         if config.matchSystemTheme {

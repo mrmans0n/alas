@@ -13,6 +13,17 @@ struct CodePane: View {
     var onStatusRenderedForTesting: ((String, LanguageServerAvailability.Status) -> Void)?
     #endif
 
+    /// Keyword / string / function dots of the active code theme, so the
+    /// row shows what the pick looks like without opening a file.
+    private var codeThemeSwatch: some View {
+        let editorTheme = EditorTheme(theme: theme)
+        return HStack(spacing: 3) {
+            ForEach(Array([HighlightCapture.keyword, .string, .function].enumerated()), id: \.offset) { _, capture in
+                Circle().fill(Color(nsColor: editorTheme.color(for: capture))).frame(width: 8, height: 8)
+            }
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -22,6 +33,26 @@ struct CodePane: View {
                     .padding(.bottom, 12)
 
                 SettingsGroup(title: "Appearance") {
+                    SettingsRow(name: "Theme",
+                                desc: "Follows the app's light/dark theme; dark-only themes use Default in light mode.") {
+                        HStack(spacing: 8) {
+                            codeThemeSwatch
+                            Picker("", selection: Binding(
+                                get: { state.config.code.codeThemeFamily },
+                                set: {
+                                    state.config.code.codeThemeFamily = $0
+                                    state.saveConfig()
+                                    state.themeStore.setCodeTheme(family: $0)
+                                }
+                            )) {
+                                ForEach(CodePalette.families) { family in
+                                    Text(family.name).tag(family.id)
+                                }
+                            }
+                            .labelsHidden()
+                            .settingsDropdownFrame()
+                        }
+                    }
                     SettingsRow(name: "Font family") {
                         FontFamilyPicker(
                             family: state.bind(\.code.fontFamily),
