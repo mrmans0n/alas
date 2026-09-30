@@ -384,7 +384,7 @@ struct WorktreeRowView: View {
                 size: 12,
                 color: theme.color(iconColorToken(harnessState: harnessSummary?.state))
             )
-            Text(worktree.branch)
+            Text(worktree.title)
                 // Pre-E1 metrics, restored: E1 shrank this to 11.5pt, muted it
                 // until hover, and tightened it with negative tracking. Those
                 // compounded into a branch name that was harder to read, and a
@@ -396,6 +396,9 @@ struct WorktreeRowView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if worktree.isDetached {
+                DetachedTag()
+            }
             if let summary = harnessSummary {
                 agentBadges(summary: summary)
             }
@@ -710,6 +713,23 @@ struct StatusDot: View {
             }
             .onAppear { animating = true }
             .accessibilityHidden(true)
+    }
+}
+
+/// Neutral marker beside a detached worktree's directory-name title, so the
+/// row still says HEAD is detached without spending the title on it.
+struct DetachedTag: View {
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Text("detached")
+            .font(.system(size: 9.5, weight: .medium))
+            .foregroundColor(theme.color("fg-dim"))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(theme.color("bg-3"), in: RoundedRectangle(cornerRadius: 4))
+            .fixedSize()
+            .help("HEAD is detached")
     }
 }
 

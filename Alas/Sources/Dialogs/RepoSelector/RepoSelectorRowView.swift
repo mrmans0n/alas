@@ -93,11 +93,14 @@ struct RepoSelectorRowView: View {
                             .stroke(theme.color("accent").opacity(0.25), lineWidth: 2)
                     )
             }
-            Highlighted(text: worktree.branch, indices: indices)
+            Highlighted(text: worktree.title, indices: indices)
                 .font(.system(size: 12.5, weight: isCurrent ? .semibold : .medium, design: .monospaced))
                 .foregroundColor(theme.color("fg"))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
+            if worktree.isDetached {
+                DetachedTag()
+            }
             Spacer(minLength: 8)
             statusText(for: worktree)
             if let project = projectsById[worktree.projectId] {

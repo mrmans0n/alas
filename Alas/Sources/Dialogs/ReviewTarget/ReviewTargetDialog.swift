@@ -98,7 +98,7 @@ struct ReviewTargetDialog: View {
                     .buttonStyle(.plain)
                     .help("Back to worktrees")
                 }
-                Text(worktree.branch)
+                Text(worktree.title)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(1)
@@ -185,7 +185,7 @@ struct ReviewTargetDialog: View {
                 .foregroundColor(theme.color("fg-muted"))
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    Text(entry.worktree.branch)
+                    Text(entry.worktree.title)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(theme.color("fg"))
                         .lineLimit(1)

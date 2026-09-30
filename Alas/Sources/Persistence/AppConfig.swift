@@ -437,7 +437,7 @@ struct AppConfig: Codable, Equatable {
         ///   local `<base>`); stable across rebases.
         /// - `branchUpstream`: compare against the branch's own `@{u}`.
         /// - `manual`: compare against the per-worktree selected base branch.
-        enum ChangesComparisonMode: String, Codable {
+        enum ChangesComparisonMode: String, Codable, Sendable {
             case auto
             case branchUpstream
             case manual

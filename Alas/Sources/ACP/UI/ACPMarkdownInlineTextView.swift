@@ -37,7 +37,8 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             role: role,
             theme: theme,
             memoizesInlineMarkdown: memoizesInlineMarkdown,
-            chipping: context.environment.acpUpstreamReferenceChipping
+            chipping: context.environment.acpUpstreamReferenceChipping,
+            chipsAbsolutePaths: context.environment.acpAbsolutePathChipping
         )
         guard context.coordinator.shouldRender(renderState) else { return }
 
@@ -54,6 +55,12 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
         // paragraphs in a long transcript have no reference in them at
         // all, and without this guard every one of them still repaints and
         // tracks the mouse on every store revision bump.
+        if context.environment.acpAbsolutePathChipping {
+            ACPPathChip.chipify(rendered, excluding: { range in
+                let attributes = rendered.attributes(at: range.location, effectiveRange: nil)
+                return attributes[.link] != nil || ACPMarkdownInlineRenderer.isInlineCode(attributes)
+            })
+        }
         let chippedCount = chipping.map { ACPUpstreamReferenceChip.chipifyRendered(rendered, chipping: $0) } ?? 0
         (textView as? ACPMarkdownInlineNSTextView)?.upstreamReferences = chippedCount > 0 ? chipping?.store : nil
         textView.textStorage?.setAttributedString(rendered)
@@ -223,6 +230,7 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
         let theme: Theme
         let memoizesInlineMarkdown: Bool
         let chipping: ACPUpstreamReferenceChipping?
+        let chipsAbsolutePaths: Bool
     }
 }
 
@@ -375,6 +383,10 @@ final class ACPMarkdownInlineNSTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if let chip = ACPPathChip.hit(at: convert(event.locationInWindow, from: nil), in: self) {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: chip.path)])
+            return
+        }
         if openUpstreamReference(at: convert(event.locationInWindow, from: nil), event: event) { return }
         super.mouseDown(with: event)
     }

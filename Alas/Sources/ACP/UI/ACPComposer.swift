@@ -612,6 +612,7 @@ struct ACPInputField: NSViewRepresentable {
             restoringDraft = true
             storage.setAttributedString(Self.attributedString(from: draft, typography: typography))
             ACPSlashCommand.chipify(storage, suggestions: promptSuggestions, font: typography.appKitFont())
+            (textView as? ACPNSTextView)?.chipAbsolutePathsInRestoredStorage()
             if let store = upstreamReferences, let host = store.hostKind {
                 // Revalidate explicit chips against the assembled text first:
                 // queue edits can place a formerly chipped reference inside a
@@ -790,7 +791,9 @@ struct ACPInputField: NSViewRepresentable {
                 }
             }
             attributed.enumerateAttributes(in: full) { keys, range, _ in
-                if let command = keys[.commandChipName] as? String {
+                if let path = keys[.pathReference] as? String {
+                    appendText(String(repeating: path, count: range.length))
+                } else if let command = keys[.commandChipName] as? String {
                     appendText(command)
                 } else if keys[.upstreamReference] != nil {
                     if let reference = persistedUpstreamReference(
@@ -879,7 +882,9 @@ struct ACPInputField: NSViewRepresentable {
             var atts: [ACPMessage.Attachment] = []
             let full = NSRange(location: 0, length: attributed.length)
             attributed.enumerateAttributes(in: full) { keys, range, _ in
-                if let command = keys[.commandChipName] as? String {
+                if let path = keys[.pathReference] as? String {
+                    text += String(repeating: path, count: range.length)
+                } else if let command = keys[.commandChipName] as? String {
                     text += command
                 } else if keys[.upstreamReference] != nil {
                     if let reference = persistedUpstreamReference(
@@ -920,6 +925,7 @@ extension Dictionary where Key == NSAttributedString.Key, Value == Any {
     var isComposerChip: Bool {
         self[.attachmentURI] != nil || self[.imageAttachmentURI] != nil
             || self[.commandChipName] != nil || self[.upstreamReference] != nil
+            || self[.pathReference] != nil
     }
 }
 
@@ -1330,6 +1336,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
             )
             chip.append(NSAttributedString(string: text, attributes: baseTypingAttributes))
             replaceUndoably(range: target.range, with: chip)
+            return
+        }
+        if let text = insertString as? String,
+           let target = absolutePathChipTarget(completing: text, at: range) {
+            replaceUndoably(range: target.range, with: target.replacement)
             return
         }
         if let text = insertString as? String,
@@ -2397,6 +2408,7 @@ final class ACPNSTextView: PairedDelimiterTextView {
                 suggestions: coordinator.promptSuggestions, font: chatTypography.appKitFont()
             )
         }
+        chipAbsolutePaths(in: fragment, replacing: replacementRange)
         chipUpstreamReferences(in: fragment, replacing: replacementRange)
         let attrs = baseTypingAttributes
         typingAttributes = attrs
@@ -2426,7 +2438,8 @@ final class ACPNSTextView: PairedDelimiterTextView {
                 suggestions: $0.promptSuggestions, font: chatTypography.appKitFont()
             )
         } ?? false
-        let chipped = chipUpstreamReferences(in: fragment, replacing: boundedRange) || chippedCommands
+        let chippedPaths = chipAbsolutePaths(in: fragment, replacing: boundedRange)
+        let chipped = chipUpstreamReferences(in: fragment, replacing: boundedRange) || chippedCommands || chippedPaths
         performNativeTextInsertion {
             // Plain strings keep going through the String path so paired
             // delimiter handling is unchanged when nothing was chipped.
