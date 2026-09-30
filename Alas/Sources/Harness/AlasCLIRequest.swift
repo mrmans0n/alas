@@ -57,6 +57,22 @@ struct AlasCLIRequest: Equatable {
         case resolve
     }
 
+    /// A CLI run inside a remote terminal reports paths on the remote host;
+    /// re-key `open` paths onto the caller's virtual namespace. Local anchors
+    /// leave the request unchanged.
+    func virtualizingPaths(like anchor: String) -> AlasCLIRequest {
+        let mapped: Command
+        switch command {
+        case .open(let paths):
+            mapped = .open(paths: paths.map { RemotePath.virtualizing($0, like: anchor) })
+        case .openAt(let path, let line, let endLine):
+            mapped = .openAt(path: RemotePath.virtualizing(path, like: anchor), line: line, endLine: endLine)
+        default:
+            return self
+        }
+        return AlasCLIRequest(version: version, sessionId: sessionId, cwd: cwd, command: mapped)
+    }
+
     enum WorktreeCommand: Equatable {
         case list
         case `switch`(target: String)

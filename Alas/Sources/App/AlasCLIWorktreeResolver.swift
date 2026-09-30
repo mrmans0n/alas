@@ -13,7 +13,7 @@ enum AlasCLIWorktreeResolver {
         return worktrees.map { worktree in
             let marker = worktree.id == currentWorktreeId ? "*" : " "
             let label = worktree.branch.padding(toLength: width, withPad: " ", startingAt: 0)
-            return "\(marker) \(label)\(worktree.path.path)"
+            return "\(marker) \(label)\(RemotePath.realPath(worktree.path.path))"
         }
     }
 
@@ -96,7 +96,7 @@ enum AlasCLIWorktreeResolver {
         )
 
         return zip(worktrees, baseLabels).map { worktree, label in
-            duplicateLabels.contains(label) ? "\(label) (\(worktree.path.path))" : label
+            duplicateLabels.contains(label) ? "\(label) (\(RemotePath.display(worktree.path.path)))" : label
         }
         .sorted()
     }

@@ -144,7 +144,7 @@ struct SidebarView: View {
                                     onCopyPath: { wt in
                                         let pb = NSPasteboard.general
                                         pb.clearContents()
-                                        pb.setString(wt.path.path, forType: .string)
+                                        pb.setString(RemotePath.realPath(wt.path.path), forType: .string)
                                     },
                                     onCopyBranch: { wt in
                                         let pb = NSPasteboard.general

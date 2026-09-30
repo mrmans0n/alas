@@ -187,6 +187,7 @@ struct AlasCLICommandRouter {
         }
 
         let projectWorktrees = service.visibleWorktrees().filter { $0.projectId == origin.projectId }
+        let request = request.virtualizingPaths(like: origin.path.path)
         switch request.command {
         case .resolve:
             return .ok

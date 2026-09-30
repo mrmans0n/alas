@@ -172,7 +172,7 @@ private struct WorktreeCleanupRow: View {
                             .frame(width: 11, height: 11)
                     }
                 }
-                Text(row.worktree.path.path)
+                Text(RemotePath.display(row.worktree.path.path))
                     .font(.system(size: 10.5, design: .monospaced))
                     .foregroundColor(theme.color("fg-faint"))
                     .lineLimit(1)

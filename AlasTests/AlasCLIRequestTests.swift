@@ -11,6 +11,18 @@ struct AlasCLIRequestTests {
         #expect(request == AlasCLIRequest(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: ["/tmp/a.txt", "/tmp/b.txt"])))
     }
 
+    @Test(arguments: [
+        ("/.alas-remote/mini/home/me/repo", "/home/me/repo/a.txt", "/.alas-remote/mini/home/me/repo/a.txt"),
+        ("/Users/me/repo", "/Users/me/repo/a.txt", "/Users/me/repo/a.txt"),
+    ])
+    func virtualizesOpenPathsOnlyForRemoteCaller(anchor: String, path: String, expected: String) {
+        let open = AlasCLIRequest(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [path]))
+        let openAt = AlasCLIRequest(version: 1, sessionId: "s1", cwd: nil, command: .openAt(path: path, line: 3, endLine: nil))
+
+        #expect(open.virtualizingPaths(like: anchor).command == .open(paths: [expected]))
+        #expect(openAt.virtualizingPaths(like: anchor).command == .openAt(path: expected, line: 3, endLine: nil))
+    }
+
     @Test func decodesOpenLineRangeRequest() throws {
         let json = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"],"params":{"line":12,"end_line":15}}"#
 
