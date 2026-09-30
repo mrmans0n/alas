@@ -4665,10 +4665,14 @@ final class AppState {
         }
 
         let destination: URL
+        let shownPath: String
         do {
             let prepared = try await preparedCreationDestination(project: project, branch: branch)
             guard !prepared.exists else { return .error("A worktree already exists at this path.") }
             destination = prepared.destination
+            // Local output keeps the configured path as typed; a remote one
+            // shows where it lands on its host.
+            shownPath = destination.isRemoteAlasPath ? RemotePath.display(destination.path) : prepared.rendered.path
         } catch {
             return .error("Could not check the worktree destination: \(error.localizedDescription)")
         }
@@ -4695,7 +4699,7 @@ final class AppState {
         guard !id.isEmpty else {
             return .error("A worktree already exists at this path.")
         }
-        return .text(["creating \(branch) at \(RemotePath.display(destination.path))"])
+        return .text(["creating \(branch) at \(shownPath)"])
     }
 
     /// Starts a delegated worktree creation and waits for its reconciled row.
@@ -14831,7 +14835,7 @@ extension AppState: RemoteSessionsProvider {
     private func preparedCreationDestination(
         project: ProjectConfig,
         branch: String
-    ) async throws -> (destination: URL, exists: Bool) {
+    ) async throws -> (destination: URL, rendered: URL, exists: Bool) {
         let rendered = WorktreePathTemplateRenderer.render(
             template: config.worktrees.pathTemplate,
             worktreeRoot: config.worktrees.rootPath,
@@ -14844,7 +14848,7 @@ extension AppState: RemoteSessionsProvider {
         } else {
             try await Self.preparedCreateWorktreeDestination(repoPath: repoPath, destination: rendered)
         }
-        return (destination, try await creationDestinationExists(project: project, destination: destination))
+        return (destination, rendered, try await creationDestinationExists(project: project, destination: destination))
     }
 
     private func creationDestinationExists(
