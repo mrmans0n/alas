@@ -26,9 +26,8 @@ Kanban, and open **View → Plugins → Board**.
 
 Columns: **Backlog**, **Running**, **Needs you**, **Review** and **Done**.
 
-- Add a card at the top of Backlog: type a title and press Return, then type
-  the prompt and press ⌘Return. Without a title, the first line of the prompt
-  is used.
+- Add a card at the top of Backlog: type the prompt and press ⌘Return. Its
+  first line becomes the card's title.
 - **Start** creates a new worktree (branch `task/<title>`) and starts the
   project's default agent there with the prompt. Every Start makes a new
   worktree. If the start fails, the card stays in Backlog with the reason;

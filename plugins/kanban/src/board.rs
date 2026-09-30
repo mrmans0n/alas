@@ -93,6 +93,8 @@ impl Board {
         } else {
             title
         };
+        // A title is one line; a long first line of the prompt is cut.
+        let title: String = title.chars().take(200).collect();
         if title.is_empty() {
             return 0;
         }
@@ -108,7 +110,7 @@ impl Board {
         self.next_id = self.next_id.max(self.cards.iter().map(|c| c.id).max().unwrap_or(0)) + 1;
         self.cards.push(Card {
             id: self.next_id,
-            title: title.into(),
+            title,
             prompt: prompt.into(),
             column: Column::Backlog,
             session_id: None,

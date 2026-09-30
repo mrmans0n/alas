@@ -13,7 +13,6 @@ const BOARD_FULL: &str = "The board is full: delete or finish some cards first."
 pub struct Kanban {
     board: Board,
     form: u64,
-    draft_title: String,
     /// task/start request id → card id.
     pending: Vec<(i64, u64)>,
     loaded: bool,
@@ -63,18 +62,13 @@ impl Kanban {
 
     fn view_event(&mut self, id: &str, kind: &str, value: Option<String>) {
         let card_id = |prefix: &str| id.strip_prefix(prefix).and_then(|n| n.parse::<u64>().ok());
-        if id.starts_with("new-title-") && kind == "submit" {
-            // Not a board change: nothing to save or render.
-            self.draft_title = value.unwrap_or_default();
-            return;
-        }
         if id.starts_with("new-prompt-") && kind == "submit" {
-            // Caps keep one pasted card from filling the plugin's 1 MiB of storage.
-            let title: String = self.draft_title.chars().take(200).collect();
+            // The cap keeps one pasted card from filling the plugin's 1 MiB of storage.
             let prompt: String = value.unwrap_or_default().chars().take(8000).collect();
-            if self.board.add(&title, &prompt) == 0 {
+            // The card's title is the prompt's first line.
+            if self.board.add("", &prompt) == 0 {
                 // Empty input adds nothing; otherwise the board is full. The form keeps its text.
-                if !(title.trim().is_empty() && prompt.trim().is_empty()) && !self.load_failed {
+                if !prompt.trim().is_empty() && !self.load_failed {
                     self.notice = Some(BOARD_FULL.into());
                     self.render();
                 }
@@ -83,7 +77,6 @@ impl Kanban {
             if self.notice.as_deref() == Some(BOARD_FULL) {
                 self.notice = None;
             }
-            self.draft_title.clear();
             self.form += 1;
         } else if let Some(card) = card_id("start-") {
             let Some(c) = self.board.cards.iter().find(|c| c.id == card) else { return };
@@ -269,12 +262,11 @@ mod tests {
             let id = format!("{field}-{}", k.form);
             feed(k, json!({"jsonrpc":"2.0","method":"view/event","params":{"tab":0,"id":id,"kind":"submit","value":value}}));
         };
-        submit(&mut k, "new-title", "T");
         submit(&mut k, "new-prompt", "P");
         let sent = test_host::take_sent();
         assert!(!sent.iter().any(|m| m["method"] == "storage/set"));
         assert!(sent.last().unwrap()["params"]["root"].to_string().contains(BOARD_FULL));
-        assert_eq!((k.draft_title.as_str(), k.form), ("T", 0), "the form keeps its text");
+        assert_eq!(k.form, 0, "the form keeps its text");
 
         k.board.delete(1);
         submit(&mut k, "new-prompt", "P");

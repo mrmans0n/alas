@@ -50,15 +50,9 @@ fn column(board: &Board, col: Column, form: u64) -> Node {
     )];
     if col == Column::Backlog {
         children.push(Node::TextField {
-            id: format!("new-title-{form}"),
-            value: String::new(),
-            placeholder: Some("Title".into()),
-            multiline: false,
-        });
-        children.push(Node::TextField {
             id: format!("new-prompt-{form}"),
             value: String::new(),
-            placeholder: Some("Prompt — ⌘Return to add".into()),
+            placeholder: Some("What should the agent do? First line becomes the title — ⌘Return to add".into()),
             multiline: true,
         });
     }
@@ -215,7 +209,7 @@ mod tests {
         let b = Board::default();
         assert!(find(&render(&b, 0, None), "new-prompt-0").is_some());
         let tree = render(&b, 1, None);
-        assert!(find(&tree, "new-title-1").is_some() && find(&tree, "new-prompt-1").is_some());
-        assert!(find(&tree, "new-title-0").is_none());
+        assert!(find(&tree, "new-prompt-1").is_some());
+        assert!(find(&tree, "new-prompt-0").is_none());
     }
 }
